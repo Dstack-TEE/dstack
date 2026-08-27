@@ -92,6 +92,7 @@ type VmListItem = {
   shutdown_progress?: string;
   image_version?: string;
   interfaces?: VmmTypes.INetworkInterfaceStatus[];
+  running?: boolean;
   configuration?: VmConfiguration;
   appCompose?: AppCompose;
 };
@@ -111,6 +112,15 @@ type PortFormEntry = {
 type NetworkFormEntry = {
   mode: string;
   bridge_name?: string;
+  /** Pinned at deployment for macvtap NICs; carried through edits unchanged. */
+  parent?: string;
+  /** '' inherits the node default, otherwise 'on' or 'off'. */
+  vhost?: string;
+  /**
+   * '' lets the queue count follow the vCPU count. A `number` once the operator
+   * types into the input: `v-model` casts for `<input type="number">`.
+   */
+  queues?: string | number;
 };
 
 type VmFormState = {
@@ -351,6 +361,18 @@ fi
     return Array.from(new Set(fallback));
   });
   const defaultBridge = computed(() => config.value.networking?.default_bridge || '');
+  const maxNetQueues = computed(() => config.value.networking?.max_queues || 0);
+  const defaultVhostOn = computed(() => !!config.value.networking?.default_vhost);
+  // Whether the node's own default backend can carry vhost-net and multiqueue.
+  // The RPC accepts the two tuning fields on a mode-less entry regardless --
+  // deliberately, so a NIC that inherits its backend stays tunable across a node
+  // change -- but on a node whose default is user or custom they lie dormant,
+  // and an operator who sets them deserves to be told that rather than discover
+  // it in the interfaces panel afterwards.
+  const defaultModeTunable = computed(() => {
+    const mode = config.value.networking?.default_mode || '';
+    return mode === 'bridge' || mode === 'macvtap';
+  });
   const defaultNetworkingLabel = computed(() => {
     const mode = config.value.networking?.default_mode || '';
     if (mode === 'bridge') {
@@ -450,16 +472,67 @@ fi
     return configured.map((network) => ({
       mode: network.mode || '',
       bridge_name: network.bridge_name || '',
+      parent: network.parent || '',
+      vhost: network.vhost === null || network.vhost === undefined ? '' : (network.vhost ? 'on' : 'off'),
+      queues: network.queues ? String(network.queues) : '',
     }));
   };
 
+  // Queue pairs, whatever shape the model is in.
+  //
+  // Not a string: Vue's `v-model` casts for `<input type="number">`, so this
+  // field is a `string` while it holds a value loaded from `GetInfo` and a
+  // `number` the moment the operator types into it. Assuming either one is how
+  // this threw a `TypeError` out of every deploy that set a queue count.
+  //
+  // The number input already refuses everything but a numeric literal, and the
+  // cast turns `2.7` into `2.7` rather than into `parseInt`'s `2`, so what is
+  // left to check is that the value is a whole number at least one. The node's
+  // cap is deliberately *not* checked here: the server widens it by whatever a
+  // VM already holds, so a client-side copy would refuse an update the server
+  // accepts and leave that VM's networking uneditable.
+  const parseQueueCount = (raw: unknown, label: string): number | undefined => {
+    if (raw === null || raw === undefined || raw === '') {
+      return undefined;
+    }
+    const queues = typeof raw === 'number' ? raw : Number(String(raw).trim());
+    if (!Number.isInteger(queues) || queues < 1) {
+      throw new Error(`${label}: queue pairs must be a whole number of at least 1, or empty to follow the vCPU count; got '${raw}'`);
+    }
+    return queues;
+  };
+
+  // Nothing is filtered out. A mode-less entry is the "keep the node's backend,
+  // change only the data plane" override the RPC accepts, and is what a VM
+  // deployed that way reports back; dropping it would delete a NIC and renumber
+  // the ones after it, which changes their MAC addresses.
+  // A row added here starts with no mode, which the RPC reads as "keep the
+  // node's backend" rather than as a missing field, so the only way to reach an
+  // entry it refuses is to empty a loaded one's bridge or parent, and that
+  // earns an error rather than silence.
   const normalizeNetworks = (networks: NetworkFormEntry[] = []): VmmTypes.INetworkingConfig[] =>
     networks
-      .map((network) => ({
-        mode: (network.mode || '').trim(),
-        bridge_name: network.mode === 'bridge' ? (network.bridge_name || '').trim() : '',
-      }))
-      .filter((network) => network.mode.length > 0);
+      .map((network, index) => {
+        // Leave vhost and queues unset unless the operator picked something, so
+        // the node keeps owning them and can still change them later.
+        const entry: VmmTypes.INetworkingConfig = {
+          mode: (network.mode || '').trim(),
+          bridge_name: network.mode === 'bridge' ? (network.bridge_name || '').trim() : '',
+          parent: network.mode === 'macvtap' ? (network.parent || '').trim() : '',
+        };
+        // The tuning controls are hidden for user mode, so sending values the
+        // operator cannot see would fail the deploy with nothing to fix.
+        if (network.mode !== 'user') {
+          if (network.vhost === 'on' || network.vhost === 'off') {
+            entry.vhost = network.vhost === 'on';
+          }
+          const queues = parseQueueCount(network.queues, `network ${index + 1}`);
+          if (queues !== undefined) {
+            entry.queues = queues;
+          }
+        }
+        return entry;
+      });
 
   function networkModeLabel(mode?: string | null) {
     if (!mode) {
@@ -1014,6 +1087,11 @@ type CreateVmPayloadSource = {
   function showDeployDialog() {
     showCreateDialog.value = true;
     vmForm.value.encryptedEnvs = [];
+    // A cancelled deploy and "Clone config" both leave their networking behind
+    // in the shared form. Carrying it into the next deploy would silently pin
+    // that VM's backend, bridge, macvtap parent and data plane to another VM's
+    // -- invisibly, since the operator never opened the Networking section.
+    vmForm.value.networks = [];
     vmForm.value.app_id = null;
     vmForm.value.swapValue = 0;
     vmForm.value.swapUnit = 'GB';
@@ -1833,7 +1911,10 @@ type CreateVmPayloadSource = {
     config,
     networkingModes,
     defaultBridge,
+    maxNetQueues,
     defaultNetworkingLabel,
+    defaultModeTunable,
+    defaultVhostOn,
     composeHashPreview,
     updateComposeHashPreview,
     showDeployDialog,

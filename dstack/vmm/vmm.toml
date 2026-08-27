@@ -54,6 +54,16 @@ allowed_network_modes = ["user", "bridge"]
 # Empty allowlists mean callers can only use the node networking defaults.
 allowed_bridges = []
 allowed_macvtap_parents = []
+# Largest virtio-net queue pair count a deployment request may ask for. With
+# vhost on, queue pairs otherwise default to the VM's vCPU count, capped at
+# 16 (without vhost the default is a single queue pair); raising this
+# above 16 widens what a caller may request without moving that default, and
+# lowering it below 16 lowers the default too. Bridge mode needs netd for
+# anything above 1, because qemu-bridge-helper cannot create a multiqueue TAP.
+# Without netd an unfiltered bridge NIC that took the default drops to one
+# queue; one that asked for a count keeps it and fails to launch instead, so
+# the caller learns their request was not met.
+max_net_queues = 16
 use_mrconfigid = true
 
 # QEMU flags
@@ -62,6 +72,10 @@ use_mrconfigid = true
 #qemu_version = ""
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
+# Path to qemu-bridge-helper, needed by vhost bridge networking because QEMU's
+# `tap` netdev, unlike its `bridge` netdev, has no compiled-in default. Empty
+# probes the known distribution locations.
+#qemu_bridge_helper = "/usr/lib/qemu/qemu-bridge-helper"
 # TDX attestation/hash scheme policy:
 # - "legacy": digest.txt + legacy verifier
 # - "lite": digest.txt + measurement.tdx.cbor + no-QEMU verifier
@@ -111,6 +125,16 @@ product_name = "dstack"
 [cvm.networking]
 mode = "user"
 
+# Kernel vhost-net data plane. Off by default: enabling it changes the
+# virtio-net device of every bridge/macvtap VM on its next boot (vhost plus
+# vCPU-scaled queue pairs) and requires /dev/vhost-net to be accessible to
+# the account QEMU runs under — verify that first, or QEMU exits at launch.
+# With it off, QEMU drains every packet on its single main loop thread, so a
+# CVM cannot exceed one core's worth of packet processing no matter how many
+# vCPUs it has. The user-mode backend has no vhost support and ignores this.
+# Individual VMs may override it.
+vhost = false
+
 # for mode = "user"
 net = "10.0.2.0/24"
 dhcp_start = "10.0.2.10"
@@ -120,21 +144,36 @@ restrict = false
 # bridge = "virbr0"
 
 # Optional filtering for bridge interfaces only. It does not apply to macvtap.
-# "none" preserves the existing QEMU bridge-helper behavior and has no
-# netd/libvirt dependency.
+# "none" installs no nwfilter binding. It does not by itself remove the netd
+# dependency: netd also builds the multiqueue TAP that qemu-bridge-helper
+# cannot create, so a bridge node without netd is limited to one queue pair.
 [cvm.network_filter]
 mode = "none"
 filter = "clean-traffic"
 parameters = {}
 
-# Shared privileged networking service. Only used when network_filter.mode is
-# "libvirt". Socket filesystem permissions authorize clients.
+# Shared privileged networking service. Used for macvtap NICs, for libvirt
+# filtering, and for multiqueue bridge NICs. Socket filesystem permissions
+# authorize clients.
 [netd]
 socket = "/run/dstack/netd.sock"
 # Applied when netd creates the socket itself. A systemd socket unit controls
 # its own SocketMode instead.
 socket_mode = 0o660
 libvirt_uri = "qemu:///system"
+# The bridge filtering policy netd enforces and applies: whether a binding is
+# required, which nwfilter it names, and with what parameters. netd holds this
+# itself rather than taking it from each request, because a caller that chose
+# the filter could name one that drops nothing and still satisfy a policy that
+# only asked for "some filter". Left unset it follows [cvm.network_filter] in
+# this same file, which is the whole answer when netd and the VMM share one
+# vmm.toml. Set it explicitly when netd runs with a config that has no [cvm]
+# section, so the daemon holding the privilege never infers policy from a file
+# that does not state it.
+#[netd.network_filter]
+#mode = "libvirt"
+#filter = "clean-traffic"
+#parameters = {}
 
 [cvm.port_mapping]
 enabled = false

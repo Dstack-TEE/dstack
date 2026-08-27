@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    config::{Config, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation, Protocol},
+    config::{
+        Config, NetdInterface, Networking, NetworkingMode, NicNetworking, ProcessAnnotation,
+        Protocol,
+    },
     logrotate,
     netd::{
         self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest,
@@ -32,6 +35,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -42,9 +46,15 @@ use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub(crate) use network::{
-    resolve_networking, resolved_networks, validate_resolved_network, validate_resolved_networks,
+    clamp_queues_without_netd, filters_bridge_traffic, needs_netd_interface, netd_available,
+    netd_teardown, resolve_networking, resolved_networks, settle_vhost, validate_resolved_network,
+    validate_resolved_networks,
 };
 pub use qemu::VmConfig;
+// Exported so the RPC layer can assert that everything it reports is
+// something it also accepts.
+#[cfg(test)]
+pub(crate) use vm_info::networking_to_proto;
 pub use workdir::VmWorkDir;
 
 mod host_share;
@@ -126,7 +136,7 @@ pub struct Manifest {
     #[serde(default)]
     pub swtpm: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub networks: Vec<Networking>,
+    pub networks: Vec<NicNetworking>,
     #[serde(default)]
     pub volumes: Vec<VmVolume>,
 }
@@ -355,7 +365,7 @@ impl App {
         let vm_id = manifest.id.clone();
         let mut runtime_networks = vm_work_dir.runtime_networks();
         if runtime_networks.is_empty() && cids_assigned.contains_key(&vm_id) {
-            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
+            runtime_networks = self.inferred_runtime_networks(&manifest);
             if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
                 warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
             }
@@ -454,7 +464,7 @@ impl App {
                 append_boot_separator(&path);
             }
 
-            let mut runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
+            let mut runtime_networks = self.runtime_networks(&vm_config.manifest);
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let gpu_host_config = self.config.cvm.gpu.clone();
             let devices_to_sanitize = devices.clone();
@@ -547,19 +557,16 @@ impl App {
         vm: &VmConfig,
         networks: &mut [Networking],
     ) -> Result<()> {
-        if self.config.cvm.network_filter.mode == NetworkFilterMode::None
-            && !networks
-                .iter()
-                .any(|network| network.mode == NetworkingMode::Macvtap)
+        if !networks
+            .iter()
+            .any(|network| needs_netd_interface(network, &self.config.cvm))
         {
             return Ok(());
         }
         let qemu_uid = Uid::effective().as_raw();
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter_mut().enumerate() {
-            if network.mode == NetworkingMode::Bridge
-                && self.config.cvm.network_filter.mode == NetworkFilterMode::None
-            {
+            if !needs_netd_interface(network, &self.config.cvm) {
                 continue;
             }
             let identity = InterfaceIdentity {
@@ -572,21 +579,28 @@ impl App {
                 &network.mac_prefix_bytes(),
                 nic_index,
             );
-            let request = match network.mode {
+            let queues = network.queue_pairs();
+            let filtered = filters_bridge_traffic(network, &self.config.cvm);
+            let request = match network.nic.mode {
                 NetworkingMode::Bridge => NetdRequest::PrepareBridge(PrepareBridgeRequest {
                     identity: identity.clone(),
-                    bridge: network.bridge.clone(),
+                    bridge: network.nic.bridge.clone(),
                     mac,
                     qemu_uid,
-                    filter: self.config.cvm.network_filter.filter.clone(),
-                    parameters: self.config.cvm.network_filter.parameters.clone(),
+                    // Which filter, and with what parameters, is netd's to
+                    // decide from its own configuration. An unfiltered TAP is
+                    // only asked for by multiqueue, where the node may not run
+                    // libvirt at all.
+                    filtered,
+                    queues,
                 }),
                 NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
                     identity: identity.clone(),
-                    parent: network.parent.clone(),
+                    parent: network.nic.parent.clone(),
                     mac,
                     qemu_uid,
                     mode: network.macvtap_mode.clone(),
+                    queues,
                 }),
                 NetworkingMode::User | NetworkingMode::Custom => continue,
             };
@@ -600,33 +614,190 @@ impl App {
                         &self.config.netd.socket,
                         &NetdRequest::Remove {
                             identity: identity.clone(),
+                            filtered,
                         },
                     )
                     .await
                     {
                         warn!(%cleanup_error, "failed to roll back in-flight filtered network");
                     }
-                    for identity in prepared.into_iter().rev() {
-                        if let Err(cleanup_error) = netd::request(
-                            &self.config.netd.socket,
-                            &NetdRequest::Remove { identity },
-                        )
-                        .await
-                        {
-                            warn!(%cleanup_error, "failed to roll back prepared filtered network");
-                        }
-                    }
-                    return Err(error).context("failed to prepare libvirt-filtered networking");
+                    self.roll_back_prepared_networks(prepared).await;
+                    // netd's own message is about a TAP, not about queues, so
+                    // a caller who asked for multiqueue would not see their
+                    // request named anywhere in the failure.
+                    let unreachable = netd::is_unreachable(&error);
+                    let error = Err(error).context("failed to prepare netd-managed networking");
+                    return if queues > 1 && unreachable {
+                        error.with_context(|| {
+                            format!(
+                                "interface {nic_index} asked for {queues} queue pairs, which needs \
+                                 a netd running on this host"
+                            )
+                        })
+                    } else if queues > 1 {
+                        error.with_context(|| {
+                            format!("interface {nic_index} asked for {queues} queue pairs")
+                        })
+                    } else {
+                        error
+                    };
                 }
             };
-            if network.mode == NetworkingMode::Macvtap {
-                network.device = response
-                    .device
-                    .context("netd response omitted macvtap device")?;
+            prepared.push((identity.clone(), filtered));
+            // netd built this one. Record it now, before anything else can
+            // fail, so teardown never has to re-derive it from a node
+            // configuration the operator may since have changed.
+            network.netd_interface = if filtered {
+                NetdInterface::Filtered
+            } else {
+                NetdInterface::Unfiltered
+            };
+            // Everything below runs after netd already built a host interface,
+            // so a failure has to unwind the same way a failed Prepare does.
+            let accepted = (|| {
+                if network.nic.mode == NetworkingMode::Macvtap {
+                    network.device = response
+                        .device
+                        .clone()
+                        .context("netd response omitted macvtap device")?;
+                }
+                // QEMU refuses a TAP whose IFF_MULTI_QUEUE state disagrees with
+                // its own `queues=`, and reports it from inside the per-VM
+                // launcher. netd echoes what it built, so a netd too old to
+                // understand the request fails here, where the reason is
+                // legible.
+                if queues > 1 && response.queues != Some(queues) {
+                    bail!(
+                        "netd prepared interface {nic_index} with {} queue pairs instead of \
+                         {queues}; its version may predate multiqueue support",
+                        response.queues.map_or_else(
+                            || "an unreported number of".to_string(),
+                            |q| q.to_string()
+                        )
+                    );
+                }
+                Ok(())
+            })();
+            if let Err(error) = accepted {
+                self.roll_back_prepared_networks(prepared).await;
+                return Err(error);
             }
-            prepared.push(identity);
         }
         Ok(())
+    }
+
+    /// The NICs a VM has now, or would get if it were started.
+    ///
+    /// While QEMU is up this is what the launch actually built. Once it is
+    /// down the snapshot describes a boot that is over: the node configuration
+    /// and the VM's own manifest can both have changed since, so reporting it
+    /// would answer a question about the past with the grammar of the present.
+    /// Predict instead, the same way the next launch will -- including the
+    /// drop to a single queue pair on a node with no netd.
+    ///
+    /// `netd_reachable` is shared across a request rather than probed here:
+    /// the probe is a blocking connect that netd's serialized accept loop has
+    /// to service, and one status query covers many VMs.
+    fn effective_networks(
+        &self,
+        info: &vm_info::VmInfo,
+        netd_reachable: &OnceCell<bool>,
+    ) -> Vec<Networking> {
+        if info.running && !info.runtime_networks.is_empty() {
+            return info.runtime_networks.clone();
+        }
+        let available = *netd_reachable.get_or_init(|| netd_available(&self.config.netd.socket));
+        self.merge_networks(&info.manifest, available).0
+    }
+
+    /// Launch-time view of a VM's NICs: node defaults merged in, the
+    /// vCPU-scaled queue count made concrete, and multiqueue dropped when this
+    /// node has no netd to build the interface.
+    pub(crate) fn runtime_networks(&self, manifest: &Manifest) -> Vec<Networking> {
+        let available = netd_available(&self.config.netd.socket);
+        let (networks, clamped, vhost_denied) = self.merge_networks(manifest, available);
+        if clamped > 0 {
+            warn!(
+                id = %manifest.id,
+                "netd is not available, so {clamped} bridge interface(s) fall back to a single \
+                 queue pair; run dstack-vmm netd to let queue pairs scale with vCPUs"
+            );
+        }
+        if vhost_denied > 0 {
+            warn!(
+                id = %manifest.id,
+                "no qemu-bridge-helper found, so {vhost_denied} bridge interface(s) fall back to \
+                 the non-vhost bridge netdev; set cvm.qemu_bridge_helper to enable vhost"
+            );
+        }
+        networks
+    }
+
+    /// A running VM whose snapshot is missing, because a VMM that predates the
+    /// snapshot -- or predates it recording what netd built -- started it.
+    ///
+    /// Guessing is all that is left, so guess the way that VMM would have, and
+    /// then write the guess down. Leaving the marker unset would make every
+    /// later teardown re-derive it from node configuration that may by then
+    /// have moved, which is the failure this snapshot exists to prevent.
+    ///
+    /// The way *that* VMM would have, not this one: a build old enough to leave
+    /// no snapshot had no vhost and no multiqueue at all, so whatever this
+    /// node's defaults say now, the QEMU process actually running was given one
+    /// queue pair and no vhost. Asking `runtime_networks` would apply today's
+    /// defaults to a launch that predates them, and the guess is persisted, so
+    /// it would keep describing that VM wrongly for the life of its boot.
+    ///
+    /// `merge_networks` rather than `runtime_networks` for the same reason: the
+    /// latter probes netd and warns about a multiqueue fallback, which says
+    /// nothing about a VM that is already up.
+    fn inferred_runtime_networks(&self, manifest: &Manifest) -> Vec<Networking> {
+        let mut networks = self.merge_networks(manifest, false).0;
+        for network in &mut networks {
+            network.nic.vhost = Some(false);
+            network.nic.queues = Some(1);
+        }
+        for network in &mut networks {
+            network.netd_interface = match netd_teardown(network, &self.config.cvm) {
+                Some(true) => NetdInterface::Filtered,
+                Some(false) => NetdInterface::Unfiltered,
+                None => NetdInterface::None,
+            };
+        }
+        networks
+    }
+
+    /// The merge itself, without the launch-time logging, plus how many NICs
+    /// lost multiqueue for want of netd.
+    fn merge_networks(
+        &self,
+        manifest: &Manifest,
+        netd_reachable: bool,
+    ) -> (Vec<Networking>, usize, usize) {
+        let requested = if manifest.networks.is_empty() {
+            vec![self.config.cvm.networking.nic.clone()]
+        } else {
+            manifest.networks.clone()
+        };
+        let mut resolved = resolved_networks(manifest, &self.config.cvm);
+        let clamped =
+            clamp_queues_without_netd(&requested, &mut resolved, &self.config.cvm, netd_reachable);
+        let vhost_denied = settle_vhost(&mut resolved, &self.config.cvm);
+        (resolved, clamped, vhost_denied)
+    }
+
+    /// Removes interfaces netd already built for a launch that then failed.
+    async fn roll_back_prepared_networks(&self, prepared: Vec<(InterfaceIdentity, bool)>) {
+        for (identity, filtered) in prepared.into_iter().rev() {
+            if let Err(cleanup_error) = netd::request(
+                &self.config.netd.socket,
+                &NetdRequest::Remove { identity, filtered },
+            )
+            .await
+            {
+                warn!(%cleanup_error, "failed to roll back prepared network interface");
+            }
+        }
     }
 
     pub(crate) async fn remove_filtered_networks(
@@ -634,39 +805,33 @@ impl App {
         vm_id: &str,
         networks: &[Networking],
     ) -> Result<()> {
-        if self.config.cvm.network_filter.mode == NetworkFilterMode::None
-            && !networks
-                .iter()
-                .any(|network| network.mode == NetworkingMode::Macvtap)
+        if networks
+            .iter()
+            .all(|network| netd_teardown(network, &self.config.cvm).is_none())
         {
             return Ok(());
         }
         let mut first_error = None;
         for (nic_index, network) in networks.iter().enumerate().rev() {
-            if network.mode == NetworkingMode::Bridge
-                && self.config.cvm.network_filter.mode == NetworkFilterMode::None
-            {
+            let Some(filtered) = netd_teardown(network, &self.config.cvm) else {
                 continue;
-            }
-            if !matches!(
-                network.mode,
-                NetworkingMode::Bridge | NetworkingMode::Macvtap
-            ) {
-                continue;
-            }
+            };
             let identity = InterfaceIdentity {
                 instance_id: self.config.cvm.instance_id.clone(),
                 vm_id: vm_id.to_string(),
                 nic_index,
             };
-            if let Err(error) =
-                netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity }).await
+            if let Err(error) = netd::request(
+                &self.config.netd.socket,
+                &NetdRequest::Remove { identity, filtered },
+            )
+            .await
             {
                 first_error.get_or_insert(error);
             }
         }
         if let Some(error) = first_error {
-            return Err(error).context("failed to remove libvirt-filtered networking");
+            return Err(error).context("failed to remove netd-managed networking");
         }
         Ok(())
     }
@@ -1059,7 +1224,7 @@ impl App {
         let already_running = cids_assigned.contains_key(&vm_id);
         let mut runtime_networks = vm_work_dir.runtime_networks();
         if runtime_networks.is_empty() && already_running {
-            runtime_networks = resolved_networks(&manifest, &self.config.cvm);
+            runtime_networks = self.inferred_runtime_networks(&manifest);
             if let Err(err) = vm_work_dir.set_runtime_networks(&runtime_networks) {
                 warn!(id = %vm_id, "failed to persist inferred runtime networks: {err}");
             }
@@ -1160,11 +1325,15 @@ impl App {
         });
 
         let total = infos.len() as u32;
+        // One probe for the whole page, and none at all when every VM is
+        // running and has its own snapshot to report.
+        let netd_reachable = OnceCell::new();
         let vms = paginate(infos, request.page, request.page_size)
             .map(|vm| {
                 let work_dir = self.work_dir(&vm.config.manifest.id)?;
                 let info = vm.merged_info(vms.get(&vm.config.manifest.id), &work_dir);
-                Ok(info.to_pb(&self.config.gateway, &self.config.cvm, request.brief))
+                let networks = self.effective_networks(&info, &netd_reachable);
+                Ok(info.to_pb(&self.config.gateway, request.brief, &networks))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(StatusResponse {
@@ -1188,14 +1357,19 @@ impl App {
 
     pub async fn vm_info(&self, id: &str) -> Result<Option<pb::VmInfo>> {
         let proc_state = self.supervisor.info(id).await?;
-        let state = self.lock();
-        let Some(vm_state) = state.get(id) else {
-            return Ok(None);
+        // Snapshot under the lock, then release it: describing the VM can
+        // probe netd, and that is a blocking connect the global state lock has
+        // no business being held across.
+        let info = {
+            let state = self.lock();
+            let Some(vm_state) = state.get(id) else {
+                return Ok(None);
+            };
+            vm_state.merged_info(proc_state.as_ref(), &self.work_dir(id)?)
         };
-        let info = vm_state
-            .merged_info(proc_state.as_ref(), &self.work_dir(id)?)
-            .to_pb(&self.config.gateway, &self.config.cvm, false);
-        Ok(Some(info))
+        let netd_reachable = OnceCell::new();
+        let networks = self.effective_networks(&info, &netd_reachable);
+        Ok(Some(info.to_pb(&self.config.gateway, false, &networks)))
     }
 
     pub(crate) fn vm_event_report(&self, cid: u32, event: &str, body: String) -> Result<()> {
@@ -1917,7 +2091,7 @@ mod tests {
     }
 
     use crate::config::{
-        load_config_figment, CvmPlatform, Networking, NetworkingMode, TdxAttestationVariantConfig,
+        load_config_figment, CvmPlatform, NetworkingMode, TdxAttestationVariantConfig,
     };
     use dstack_types::{
         TdxImageMeasurement, TdxMrtdCandidates, TdxOsImageMeasurement,
@@ -2230,17 +2404,10 @@ mod tests {
         ));
         let workdir = VmWorkDir::new(&temp);
         let mut manifest = test_manifest(1024);
-        manifest.networks = vec![Networking {
+        manifest.networks = vec![NicNetworking {
             mode: NetworkingMode::Bridge,
             bridge: "dstack-br0".to_string(),
-            parent: String::new(),
-            macvtap_mode: String::new(),
-            device: String::new(),
-            mac_prefix: String::new(),
-            net: String::new(),
-            dhcp_start: String::new(),
-            restrict: false,
-            netdev: String::new(),
+            ..NicNetworking::default()
         }];
 
         workdir.put_manifest(&manifest)?;
@@ -2495,17 +2662,10 @@ mod tests {
     fn vm_measurement_config_ignores_networking_changes() -> Result<()> {
         let config = test_tdx_config()?;
         let mut bridge_manifest = test_manifest(2048);
-        bridge_manifest.networks = vec![Networking {
+        bridge_manifest.networks = vec![NicNetworking {
             mode: NetworkingMode::Bridge,
             bridge: "dstack-br0".to_string(),
-            parent: String::new(),
-            macvtap_mode: String::new(),
-            device: String::new(),
-            mac_prefix: "02:aa:bb".to_string(),
-            net: String::new(),
-            dhcp_start: String::new(),
-            restrict: false,
-            netdev: String::new(),
+            ..NicNetworking::default()
         }];
         let user_manifest = test_manifest(2048);
         let image = test_tdx_image(true);

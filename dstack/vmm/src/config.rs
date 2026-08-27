@@ -357,6 +357,10 @@ pub struct CvmConfig {
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,
+    /// Path to `qemu-bridge-helper`, used to attach an unprivileged TAP to a
+    /// host bridge. Empty probes the known distribution locations.
+    #[serde(default)]
+    pub qemu_bridge_helper: String,
 
     /// TDX attestation/hash scheme policy. `legacy` keeps the existing
     /// digest.txt measurement path; `lite` opts into split measurement CBOR;
@@ -383,6 +387,12 @@ pub struct CvmConfig {
     /// macvtap parents. An empty list permits only the node default parent.
     #[serde(default)]
     pub allowed_macvtap_parents: Vec<String>,
+
+    /// Largest virtio-net queue pair count a deployment RPC caller may request.
+    /// There is no node-wide count for it to bind; lowering it below the
+    /// scaling cap does lower the vCPU-scaled default too.
+    #[serde(default = "default_max_net_queues")]
+    pub max_net_queues: u32,
 
     /// Optional host-side filtering for bridge interfaces. This filter does
     /// not apply to macvtap interfaces.
@@ -592,6 +602,13 @@ pub struct NetworkFilterConfig {
     pub parameters: BTreeMap<String, String>,
 }
 
+impl NetworkFilterConfig {
+    /// Whether every bridge TAP on this node must carry an nwfilter binding.
+    pub fn requires_binding(&self) -> bool {
+        self.mode == NetworkFilterMode::Libvirt
+    }
+}
+
 impl Default for NetworkFilterConfig {
     fn default() -> Self {
         Self {
@@ -615,6 +632,23 @@ pub struct NetdConfig {
     pub socket_mode: u32,
     #[serde(default = "default_libvirt_uri")]
     pub libvirt_uri: String,
+    /// The bridge filtering policy netd enforces and applies: whether a binding
+    /// is required, which nwfilter it names, and with what parameters.
+    ///
+    /// netd holds this itself rather than taking it from each request. It is
+    /// the privileged side of the socket, and a caller that chose the filter
+    /// could name one that drops nothing -- `allow-arp` has no drop rule at all
+    /// -- or pin `clean-traffic` to the gateway's MAC and IP through its
+    /// parameters, and still satisfy a policy that only asked for "some
+    /// filter".
+    ///
+    /// Unset derives it from `cvm.network_filter` in the same file, which is
+    /// the whole answer whenever netd and the VMM share one `vmm.toml` -- the
+    /// normal deployment. Set it explicitly when netd runs with a config that
+    /// carries no `[cvm]` section, so the daemon holding the privilege is never
+    /// left inferring policy from a file that does not state it.
+    #[serde(default)]
+    pub network_filter: Option<NetworkFilterConfig>,
 }
 
 impl Default for NetdConfig {
@@ -623,11 +657,21 @@ impl Default for NetdConfig {
             socket: default_netd_socket(),
             socket_mode: 0o660,
             libvirt_uri: default_libvirt_uri(),
+            network_filter: None,
         }
     }
 }
 
 impl NetdConfig {
+    /// Resolved policy. Unset means the config named no `[cvm]` section to
+    /// derive it from, and an unfiltered node is the historical shape.
+    pub fn filter_policy(&self) -> &NetworkFilterConfig {
+        static UNFILTERED: std::sync::OnceLock<NetworkFilterConfig> = std::sync::OnceLock::new();
+        self.network_filter
+            .as_ref()
+            .unwrap_or_else(|| UNFILTERED.get_or_init(NetworkFilterConfig::default))
+    }
+
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
             self.socket_mode & !0o777 == 0,
@@ -715,6 +759,29 @@ impl Config {
         }
 
         validate_networking(&self.cvm.networking)?;
+        // netd creates an unfiltered TAP when the filter name is empty, which
+        // is what unfiltered multiqueue bridges need. Libvirt mode must never
+        // reach that path: it would silently produce an unbound TAP where the
+        // operator asked for a filtered one.
+        anyhow::ensure!(
+            self.cvm.network_filter.mode != NetworkFilterMode::Libvirt
+                || !self.cvm.network_filter.filter.trim().is_empty(),
+            "cvm.network_filter.filter must not be empty when mode is libvirt"
+        );
+        anyhow::ensure!(
+            (1..=MAX_NET_QUEUES).contains(&self.cvm.max_net_queues),
+            "cvm.max_net_queues must be between 1 and {MAX_NET_QUEUES}"
+        );
+        // The helper path is interpolated into QEMU's `-netdev` option list,
+        // which QEMU splits on ',' and '='. A path carrying either would not be
+        // passed through, it would end the option and start a bogus one, and the
+        // launch failure names neither this setting nor the file. Volume sources
+        // are rejected for the same reason.
+        anyhow::ensure!(
+            !self.cvm.qemu_bridge_helper.contains([',', '=']),
+            "cvm.qemu_bridge_helper must not contain ',' or '=': {}",
+            self.cvm.qemu_bridge_helper
+        );
         anyhow::ensure!(
             !self
                 .cvm
@@ -828,9 +895,28 @@ fn validate_networking(networking: &Networking) -> Result<()> {
             "cvm.networking.mac_prefix must contain 1 to 3 two-digit hexadecimal bytes"
         );
     }
-    match networking.mode {
+    anyhow::ensure!(
+        networking.nic.queues.is_none(),
+        "cvm.networking.queues is not a node setting; queue pairs follow each VM's vCPU count, \
+         bounded by cvm.max_net_queues, and a deployment overrides them per NIC"
+    );
+    // Both describe a per-VM entry's relationship to this configuration, so
+    // neither means anything on the node default itself.
+    anyhow::ensure!(
+        !networking.nic.inherit_mode,
+        "cvm.networking.inherit_mode is per-deployment state and cannot be set on the node default"
+    );
+    anyhow::ensure!(
+        networking.netd_interface.is_none(),
+        "cvm.networking.netd_interface is runtime state and cannot be set in configuration"
+    );
+    anyhow::ensure!(
+        networking.device.is_empty(),
+        "cvm.networking.device is runtime state and cannot be set in configuration"
+    );
+    match networking.nic.mode {
         NetworkingMode::Bridge => anyhow::ensure!(
-            !networking.bridge.trim().is_empty(),
+            !networking.nic.bridge.trim().is_empty(),
             "cvm.networking.bridge must not be empty in bridge mode"
         ),
         NetworkingMode::Custom => anyhow::ensure!(
@@ -839,7 +925,7 @@ fn validate_networking(networking: &Networking) -> Result<()> {
         ),
         NetworkingMode::Macvtap => {
             anyhow::ensure!(
-                !networking.parent.trim().is_empty(),
+                !networking.nic.parent.trim().is_empty(),
                 "cvm.networking.parent must not be empty in macvtap mode"
             );
             anyhow::ensure!(
@@ -850,6 +936,7 @@ fn validate_networking(networking: &Networking) -> Result<()> {
                 "cvm.networking.macvtap_mode must be private, bridge, vepa, or passthru"
             );
         }
+        // User mode has no identity fields of its own to check.
         NetworkingMode::User => {}
     }
     Ok(())
@@ -859,20 +946,49 @@ fn default_allowed_network_modes() -> Vec<NetworkingMode> {
     vec![NetworkingMode::User, NetworkingMode::Bridge]
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+fn default_max_net_queues() -> u32 {
+    DEFAULT_MAX_NET_QUEUES
+}
+
+/// Where the vCPU-scaled default stops growing. Each queue pair costs a host
+/// vhost thread and two MSI-X vectors, and cross-vCPU wakeups are expensive
+/// under TDX, so the benefit runs out well before a large VM's vCPU count.
+/// Raising `cvm.max_net_queues` lets a deployment ask for more; it does not
+/// move this, because a bigger VM should not silently get a worse default.
+pub const DEFAULT_QUEUE_SCALING_CAP: u32 = 16;
+
+/// Default ceiling on what a deployment RPC caller may request.
+pub const DEFAULT_MAX_NET_QUEUES: u32 = 16;
+
+/// Hard bound on queue pairs from any source, well below anything QEMU or the
+/// guest driver would refuse. It exists so a malformed or hostile request
+/// cannot ask the host kernel for an unbounded device, not because 64 is a
+/// property of virtio-net.
+pub const MAX_NET_QUEUES: u32 = 64;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkingMode {
+    /// The backend that needs nothing from the host, so it is what a NIC that
+    /// names none falls back to.
+    #[default]
     User,
     Bridge,
     Custom,
     Macvtap,
 }
 
-/// Flat networking configuration. The `mode` field selects which backend is
-/// active; the remaining fields are only relevant for their respective mode
-/// and carry serde defaults so they can be omitted in the config file.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Networking {
+/// What a single NIC pins: the fields a deployment may name, a VM's manifest
+/// stores, and `GetInfo` reports back.
+///
+/// Separate from [`Networking`] because the node's `[cvm.networking]` is not a
+/// NIC -- it is a NIC *plus* the backend settings only the node may set. When
+/// the two were one type, resolution copied the whole node value into every
+/// VM, so a bridge NIC's manifest entry carried whatever macvtap parent the
+/// node happened to have configured, and every consumer that asked "what does
+/// this VM pin?" had to know which fields to ignore. Several did not.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct NicNetworking {
     pub mode: NetworkingMode,
 
     // ── Bridge fields ──────────────────────────────────────────────
@@ -884,6 +1000,44 @@ pub struct Networking {
     /// Parent host interface for macvtap (e.g., "eth0").
     #[serde(default)]
     pub parent: String,
+
+    // ── Data plane tuning ──────────────────────────────────────────
+    /// Move packet processing from the QEMU main loop into the host kernel's
+    /// vhost-net data plane. `None` inherits the node default. Ignored by the
+    /// user-mode backend, which has no vhost support, and by custom mode,
+    /// which owns its whole netdev string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vhost: Option<bool>,
+    /// virtio-net queue pairs. `None` scales with the VM's vCPU count. Only a
+    /// deployment sets this; there is no node-wide value, because the useful
+    /// number depends on the VM rather than the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queues: Option<u32>,
+
+    // ── Ownership markers ──────────────────────────────────────────
+    /// Take `mode` from node configuration at every launch instead of from
+    /// this entry.
+    ///
+    /// A deployment that only tunes the data plane never named a backend, so
+    /// the node still owns which one this NIC uses. `mode` is not an `Option`
+    /// -- every consumer matches on it -- so the entry carries the node's
+    /// current mode and this flag says not to trust it across a node
+    /// configuration change.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherit_mode: bool,
+}
+
+/// `[cvm.networking]`, and the resolved value a launch hands to QEMU: one NIC
+/// plus the backend settings that belong to the node rather than to any VM.
+///
+/// Resolution produces this same type because a launch needs both halves; what
+/// it must never do is hand the node half back to a VM to store.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Networking {
+    #[serde(flatten)]
+    pub nic: NicNetworking,
+
+    // ── Macvtap fields ────────────────────────────────────────────
     /// macvtap forwarding mode. Empty selects "private".
     #[serde(default)]
     pub macvtap_mode: String,
@@ -908,11 +1062,108 @@ pub struct Networking {
     // ── Custom fields ──────────────────────────────────────────────
     #[serde(default)]
     pub netdev: String,
+
+    // ── Runtime markers ────────────────────────────────────────────
+    /// What netd built for this NIC, recorded when it was built.
+    ///
+    /// Runtime state, like `device`: resolution always clears it. Teardown
+    /// reads this rather than re-deriving it from node configuration, because
+    /// an operator may change `network_filter.mode` or `max_net_queues` while
+    /// the VM runs, and what has to be removed is what was created.
+    #[serde(default, skip_serializing_if = "NetdInterface::is_none")]
+    pub netd_interface: NetdInterface,
+}
+
+/// The host interface netd created for a NIC, if any.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetdInterface {
+    /// netd was not involved: user mode, custom mode, or a bridge NIC that
+    /// QEMU's own bridge helper attaches.
+    #[default]
+    None,
+    /// netd created the interface and bound no libvirt nwfilter to it.
+    Unfiltered,
+    /// netd created the interface and bound a libvirt nwfilter to it, which
+    /// removal has to delete before the interface goes away.
+    Filtered,
+}
+
+impl NetdInterface {
+    pub fn is_none(&self) -> bool {
+        matches!(self, NetdInterface::None)
+    }
+
+    pub fn is_filtered(&self) -> bool {
+        matches!(self, NetdInterface::Filtered)
+    }
 }
 
 impl Networking {
     pub fn is_bridge(&self) -> bool {
-        self.mode == NetworkingMode::Bridge
+        self.nic.mode == NetworkingMode::Bridge
+    }
+
+    /// Whether the vhost-net data plane applies to this interface.
+    ///
+    /// Defaults to disabled: an upgraded node keeps the exact device shape its
+    /// VMs booted with (one queue pair, userspace virtio) until the operator
+    /// opts in, because `vhost = true` requires `/dev/vhost-net` to be
+    /// accessible to the account QEMU runs under — a precondition the VMM
+    /// cannot verify on the operator's behalf.
+    pub fn vhost_enabled(&self) -> bool {
+        self.nic.vhost.unwrap_or(false) && self.supports_vhost()
+    }
+
+    /// Whether the backend selected by `mode` can carry a vhost-net data plane
+    /// at all. Custom mode is excluded because the operator supplies the whole
+    /// netdev string, including any vhost options.
+    pub fn supports_vhost(&self) -> bool {
+        Self::mode_supports_vhost(self.nic.mode)
+    }
+
+    /// The same question about a mode on its own, for a caller deciding
+    /// whether a request it has not built an entry for yet can be honoured.
+    pub fn mode_supports_vhost(mode: NetworkingMode) -> bool {
+        matches!(mode, NetworkingMode::Bridge | NetworkingMode::Macvtap)
+    }
+
+    /// Whether the backend selected by `mode` can carry more than one queue
+    /// pair.
+    ///
+    /// Custom mode is excluded for the same reason as vhost: the operator
+    /// supplies the whole netdev string and the VMM cannot edit it, so a
+    /// multiqueue device line would have nothing to pair with. The RPC refuses
+    /// such a request, but a node that switches its default to custom must not
+    /// be able to produce one behind the RPC's back.
+    pub fn supports_multiqueue(&self) -> bool {
+        Self::mode_supports_multiqueue(self.nic.mode)
+    }
+
+    /// The same question about a mode on its own, for a caller deciding
+    /// whether a request it has not built an entry for yet can be honoured.
+    pub fn mode_supports_multiqueue(mode: NetworkingMode) -> bool {
+        matches!(mode, NetworkingMode::Bridge | NetworkingMode::Macvtap)
+    }
+
+    /// Effective virtio-net queue pair count of a resolved NIC, never below
+    /// one. Resolution makes the vCPU-scaled default concrete, so an entry that
+    /// still carries none is read conservatively as single-queue.
+    pub fn queue_pairs(&self) -> u32 {
+        if !self.supports_multiqueue() {
+            return 1;
+        }
+        self.nic.queues.unwrap_or(1).max(1)
+    }
+
+    /// Queue pairs a VM with this many vCPUs gets when it asks for none.
+    ///
+    /// The guest driver uses at most one queue pair per vCPU, so the default
+    /// follows the vCPU count up to a fixed cap. A node that lowers
+    /// `max_net_queues` below that cap means it, so the default follows it
+    /// down; raising it above the cap only widens what a caller may request.
+    pub fn default_queue_pairs(vcpu: u32, max_net_queues: u32) -> u32 {
+        vcpu.clamp(1, DEFAULT_QUEUE_SCALING_CAP.min(max_net_queues).max(1))
     }
 
     /// Parse the mac_prefix into bytes. Returns 0-3 bytes.
@@ -1198,6 +1449,31 @@ mod tests {
             .expect("default VMM config should parse")
     }
 
+    /// The two ownership markers are additive on disk: manifests and runtime
+    /// network snapshots written before they existed still load, and an entry
+    /// that carries neither serializes exactly as it used to.
+    #[test]
+    fn ownership_markers_are_omitted_when_unset_and_default_when_absent() {
+        let mut networking: Networking =
+            serde_json::from_str(r#"{"mode":"bridge","bridge":"br0"}"#).unwrap();
+        assert!(!networking.nic.inherit_mode);
+        assert_eq!(networking.netd_interface, NetdInterface::None);
+
+        let json = serde_json::to_string(&networking).unwrap();
+        assert!(!json.contains("inherit_mode"), "{json}");
+        assert!(!json.contains("netd_interface"), "{json}");
+
+        networking.nic.inherit_mode = true;
+        networking.netd_interface = NetdInterface::Filtered;
+        let json = serde_json::to_string(&networking).unwrap();
+        assert!(json.contains(r#""inherit_mode":true"#), "{json}");
+        assert!(json.contains(r#""netd_interface":"filtered""#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<Networking>(&json).unwrap(),
+            networking
+        );
+    }
+
     #[test]
     fn config_validation_accepts_defaults() {
         let config = default_config();
@@ -1233,6 +1509,42 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("range start"));
+
+        // An empty filter tells netd to create an unfiltered TAP, so libvirt
+        // mode must never carry one.
+        let mut config = default_config();
+        config.cvm.network_filter.mode = NetworkFilterMode::Libvirt;
+        config.cvm.network_filter.filter = String::new();
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("network_filter.filter"));
+
+        let mut config = default_config();
+        config.cvm.max_net_queues = 0;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("max_net_queues"));
+
+        let mut config = default_config();
+        config.cvm.max_net_queues = MAX_NET_QUEUES + 1;
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("max_net_queues"));
+
+        // The node-wide value is gone; say so rather than ignoring it.
+        let mut config = default_config();
+        config.cvm.networking.nic.queues = Some(4);
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("cvm.networking.queues is not a node setting"));
 
         let mut config = default_config();
         config.cvm.networking.mac_prefix = "02:not-hex".into();
@@ -1270,8 +1582,8 @@ mod tests {
             .contains("supervisor.sock"));
 
         let mut config = default_config();
-        config.cvm.networking.mode = NetworkingMode::Bridge;
-        config.cvm.networking.bridge.clear();
+        config.cvm.networking.nic.mode = NetworkingMode::Bridge;
+        config.cvm.networking.nic.bridge.clear();
         assert!(config
             .validate()
             .unwrap_err()
@@ -1326,5 +1638,91 @@ mod tests {
     fn tee_platform_auto_falls_back_to_tdx_without_tee_flag() {
         let cpuinfo = "flags : fpu vmx";
         assert_eq!(CvmPlatform::resolve_from_cpuinfo(cpuinfo), CvmPlatform::Tdx);
+    }
+}
+
+#[cfg(test)]
+mod networking_shape_tests {
+    use super::{Config, Networking, NetworkingMode, NicNetworking, DEFAULT_CONFIG};
+
+    /// Splitting the type must not split the wire format. `[cvm.networking]`
+    /// is flattened, so a node config, a stored manifest and a runtime-networks
+    /// snapshot written by an earlier build all still parse, and what this
+    /// build writes is byte-for-byte what the old one did.
+    #[test]
+    fn the_split_types_keep_one_flat_serialized_shape() {
+        let legacy = serde_json::json!({
+            "mode": "bridge",
+            "bridge": "br0",
+            "parent": "eth0",
+            "macvtap_mode": "private",
+            "device": "/dev/tap7",
+            "mac_prefix": "02:aa:bb",
+            "net": "10.0.2.0/24",
+            "dhcp_start": "10.0.2.15",
+            "restrict": true,
+            "netdev": "",
+            "vhost": false,
+            "queues": 4,
+            "inherit_mode": true,
+            "netd_interface": "filtered",
+        });
+
+        // A resolved value keeps every field, at the same names as before.
+        let resolved: Networking = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(resolved.nic.mode, NetworkingMode::Bridge);
+        assert_eq!(resolved.nic.bridge, "br0");
+        assert_eq!(resolved.nic.queues, Some(4));
+        assert!(resolved.nic.inherit_mode);
+        assert_eq!(resolved.macvtap_mode, "private");
+        assert_eq!(resolved.net, "10.0.2.0/24");
+        assert!(resolved.restrict);
+        let round_tripped = serde_json::to_value(&resolved).unwrap();
+        assert_eq!(round_tripped["mode"], "bridge");
+        assert_eq!(round_tripped["macvtap_mode"], "private");
+        assert_eq!(round_tripped["queues"], 4);
+
+        // A manifest entry written by a build that stored the whole thing
+        // still loads; the node's half is simply dropped on the way in.
+        let pinned: NicNetworking = serde_json::from_value(legacy).unwrap();
+        assert_eq!(pinned.bridge, "br0");
+        assert_eq!(pinned.parent, "eth0");
+        assert_eq!(pinned.vhost, Some(false));
+        let stored = serde_json::to_value(&pinned).unwrap();
+        assert_eq!(stored.as_object().unwrap().len(), 6);
+        assert!(stored.get("macvtap_mode").is_none());
+        assert!(stored.get("net").is_none());
+    }
+
+    /// The path is interpolated into QEMU's `-netdev` option list, which QEMU
+    /// splits on ',' and '='. A path carrying either would end the option and
+    /// start a bogus one, and the launch failure names neither the setting nor
+    /// the file.
+    #[test]
+    fn a_bridge_helper_path_cannot_end_the_qemu_option_it_sits_in() {
+        use rocket::figment::providers::Format as _;
+        let mut config: Config = rocket::figment::Figment::from(
+            rocket::figment::providers::Toml::string(DEFAULT_CONFIG),
+        )
+        .extract()
+        .unwrap();
+        config.cvm.qemu_bridge_helper = "/opt/qemu,helper".into();
+        let error = config.validate().unwrap_err();
+        assert!(error.to_string().contains("qemu_bridge_helper"), "{error}");
+
+        config.cvm.qemu_bridge_helper = "/usr/libexec/qemu-bridge-helper".into();
+        config.validate().unwrap();
+    }
+
+    /// The TOML section still deserializes through the flatten.
+    #[test]
+    fn the_node_section_still_parses_from_toml() {
+        use rocket::figment::providers::Format as _;
+        let config: Config = rocket::figment::Figment::from(
+            rocket::figment::providers::Toml::string(DEFAULT_CONFIG),
+        )
+        .extract()
+        .unwrap();
+        assert_eq!(config.cvm.networking.nic.mode, NetworkingMode::User);
     }
 }

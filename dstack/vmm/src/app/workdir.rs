@@ -303,7 +303,7 @@ mod tests {
 
         let persisted = workdir.runtime_networks();
         assert_eq!(persisted.len(), 1);
-        assert_eq!(persisted[0].parent, "br0");
+        assert_eq!(persisted[0].nic.parent, "br0");
         assert!(persisted[0].device.is_empty());
         assert!(!fs::read_to_string(workdir.runtime_networks_path())?.contains("/dev/tap42"));
         fs::remove_dir_all(temp)?;

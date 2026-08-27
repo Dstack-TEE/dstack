@@ -28,7 +28,7 @@ use crate::app::{
     needs_swtpm, resolve_networking, validate_resolved_network, validate_resolved_networks, App,
     AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
 };
-use crate::config::{CvmConfig, Networking, NetworkingMode};
+use crate::config::{CvmConfig, Networking, NetworkingMode, NicNetworking};
 
 fn hex_sha256(data: &str) -> String {
     use sha2::Digest;
@@ -352,18 +352,37 @@ fn resolve_volume_source(base: &Path, source: &str) -> Result<PathBuf> {
 fn networking_from_proto(
     proto: &rpc::NetworkingConfig,
     cvm_config: &CvmConfig,
-) -> Result<Option<Networking>> {
+) -> Result<Option<NicNetworking>> {
     let bridge = proto.bridge_name.trim().to_string();
-    let mode = match proto.mode.as_str() {
-        "bridge" => NetworkingMode::Bridge,
-        "user" => NetworkingMode::User,
-        "macvtap" => NetworkingMode::Macvtap,
-        "" if bridge.is_empty() => return Ok(None),
-        "" => bail!("networking mode is required when bridge is set"),
+    let parent = proto.parent.trim().to_string();
+    // Checked before anything reads `queues`, because the "no override at all"
+    // arm below returns early: a request of `{queues: 0}` and nothing else
+    // would otherwise be answered with the vCPU-scaled default -- up to
+    // sixteen queue pairs -- for a caller who asked for none.
+    if proto.queues == Some(0) {
+        bail!("networking queues must be at least 1, or unset to follow the vCPU count");
+    }
+    let tuned = proto.vhost.is_some() || proto.queues.is_some();
+    // Naming a bridge or a macvtap parent is naming a backend, and a backend
+    // needs a mode to go with it. Without one the entry would freeze whichever
+    // mode the node happened to have, then report a mode-less override still
+    // carrying a field only one mode accepts -- something nothing can send
+    // back once the node moves on.
+    let names_backend = !bridge.is_empty() || !parent.is_empty();
+    // A request that only tunes the data plane keeps the node's backend. Node
+    // policy governs which backend a caller may *choose*, so inheriting one
+    // must not be denied by it.
+    let (mode, chosen) = match proto.mode.as_str() {
+        "bridge" => (NetworkingMode::Bridge, true),
+        "user" => (NetworkingMode::User, true),
+        "macvtap" => (NetworkingMode::Macvtap, true),
+        "" if !names_backend && !tuned => return Ok(None),
+        "" if !names_backend => (cvm_config.networking.nic.mode, false),
+        "" => bail!("networking mode is required when a bridge or macvtap parent is set"),
         "custom" => bail!("custom networking mode is manifest-only"),
         other => bail!("unsupported networking mode '{other}'"),
     };
-    if !cvm_config.allowed_network_modes.contains(&mode) {
+    if chosen && !cvm_config.allowed_network_modes.contains(&mode) {
         bail!(
             "networking mode '{}' is not allowed by node policy",
             proto.mode
@@ -372,45 +391,161 @@ fn networking_from_proto(
     if mode != NetworkingMode::Bridge && !bridge.is_empty() {
         bail!("bridge_name is only valid for bridge networking mode");
     }
-    if mode != NetworkingMode::Macvtap && !proto.parent.trim().is_empty() {
+    if mode != NetworkingMode::Macvtap && !parent.is_empty() {
         bail!("parent is only valid for macvtap networking mode");
     }
-    if !proto.macvtap_mode.trim().is_empty() {
+    // `GetInfo` reports the resolved node defaults, and both vmm-cli and the
+    // web UI read that, change one field, and send the rest back. Naming a
+    // value the node would have supplied anyway therefore has to be accepted:
+    // leaving the field empty already yields exactly it, so echoing it grants
+    // nothing that policy was withholding.
+    // Node values are compared trimmed, the way the request's are: node
+    // configuration validation tolerates surrounding whitespace, and a value
+    // resolution would supply must not become unsendable over a space.
+    let node = &cvm_config.networking;
+    let macvtap_mode = proto.macvtap_mode.trim();
+    if !macvtap_mode.is_empty() && macvtap_mode != node.macvtap_mode.trim() {
         bail!("macvtap_mode is node-controlled and cannot be set by deployment RPCs");
     }
-    if !bridge.is_empty() && !cvm_config.allowed_bridges.contains(&bridge) {
+    if !bridge.is_empty()
+        && bridge != node.nic.bridge.trim()
+        && !cvm_config.allowed_bridges.contains(&bridge)
+    {
         bail!("bridge_name '{bridge}' is not allowed by node policy");
     }
-    let parent = proto.parent.trim().to_string();
-    if !parent.is_empty() && !cvm_config.allowed_macvtap_parents.contains(&parent) {
+    if !parent.is_empty()
+        && parent != node.nic.parent.trim()
+        && !cvm_config.allowed_macvtap_parents.contains(&parent)
+    {
         bail!("macvtap parent '{parent}' is not allowed by node policy");
     }
-    Ok(Some(Networking {
+    // Same rule as the queue count below: a backend the caller chose and that
+    // has no vhost data plane is a request they can fix, so say so. An
+    // inherited one is not, and reads as off until the node moves.
+    if chosen && proto.vhost == Some(true) && !Networking::mode_supports_vhost(mode) {
+        bail!("{} networking has no vhost data plane", proto.mode);
+    }
+    // Queue pairs cost a host vhost thread and a pair of MSI-X vectors each, so
+    // the node caps what a deployment may ask for.
+    //
+    let queues = proto.queues;
+    if let Some(queues) = queues {
+        if queues > cvm_config.max_net_queues {
+            bail!(
+                "networking queues must not exceed {} on this node",
+                cvm_config.max_net_queues
+            );
+        }
+        // Only a backend the caller *chose* is theirs to be wrong about. One
+        // they inherited can change under them -- that is the point of
+        // inheriting -- and refusing the request afterwards would strand the
+        // VM: GetInfo would keep reporting a queue count that nothing is
+        // allowed to send back. `queue_pairs()` already reads as one on both
+        // of these, so the request simply lies dormant until the node moves to
+        // a backend that can honour it.
+        if chosen && queues > 1 && !Networking::mode_supports_multiqueue(mode) {
+            bail!("{} networking does not support multiple queues", proto.mode);
+        }
+    }
+    // Every field the node owns -- the macvtap forwarding mode, the MAC prefix,
+    // the user-mode network parameters, a custom netdev string -- is absent by
+    // construction now rather than by remembering to write `String::new()` for
+    // each of them.
+    Ok(Some(NicNetworking {
         mode,
+        // The caller named no backend, so the node keeps owning which one this
+        // NIC uses. `mode` above is only the node's current choice.
+        inherit_mode: !chosen,
         bridge,
         parent,
-        // The forwarding mode is always inherited from node configuration.
-        macvtap_mode: String::new(),
-        device: String::new(),
-        mac_prefix: String::new(),
-        net: String::new(),
-        dhcp_start: String::new(),
-        restrict: false,
-        netdev: String::new(),
+        vhost: proto.vhost,
+        queues,
     }))
+}
+
+/// Networking modes a client should offer.
+///
+/// A mode the host could serve but node policy forbids is not one of them:
+/// offering it puts a choice in the deploy dialog whose only outcome is "not
+/// allowed by node policy", with nothing for the operator to do about it. A VM
+/// can still be given a data plane override without naming any mode, which is
+/// how a node whose own backend is not caller-selectable stays tunable.
+fn advertised_modes(cvm_config: &CvmConfig, host_can_bridge: bool) -> Vec<String> {
+    [
+        (NetworkingMode::User, "user", true),
+        (NetworkingMode::Bridge, "bridge", host_can_bridge),
+        (NetworkingMode::Macvtap, "macvtap", true),
+    ]
+    .into_iter()
+    .filter(|(mode, _, host_supports)| {
+        *host_supports && cvm_config.allowed_network_modes.contains(mode)
+    })
+    .map(|(_, name, _)| name.to_string())
+    .collect()
+}
+
+/// The node's policy, widened by what this VM's own NICs already pin.
+///
+/// Deployment allowlists govern what a caller may *newly* select. A value one
+/// of this VM's interfaces is already running on was selected when it was
+/// still allowed, and it is reported back on every `GetInfo`; refusing it
+/// would strand the VM rather than withhold anything.
+fn held_networking_config(cvm_config: &CvmConfig, held: &[NicNetworking]) -> CvmConfig {
+    let mut widened = cvm_config.clone();
+    for networking in held {
+        // Only a field the entry's own mode owns. Resolution starts from the
+        // node's whole `[cvm.networking]` value, so a bridge entry also carries
+        // whatever macvtap parent the node happened to have configured, and a
+        // macvtap entry carries its bridge -- baggage the VM never used. Reading
+        // those as "already running on it" would widen policy from a value
+        // nothing ever attached to, and let a VM move to a backend the node
+        // forbids.
+        if networking.mode == NetworkingMode::Bridge && !networking.bridge.is_empty() {
+            widened.allowed_bridges.push(networking.bridge.clone());
+        }
+        if networking.mode == NetworkingMode::Macvtap && !networking.parent.is_empty() {
+            widened
+                .allowed_macvtap_parents
+                .push(networking.parent.clone());
+        }
+        // Same rule for the queue cap. Lowering `max_net_queues` bounds what a
+        // deployment may newly ask for; it does not retroactively re-tune VMs
+        // that are already pinned above it, and those keep reporting their
+        // count on every `GetInfo`. Without this, lowering the cap makes every
+        // networking update on such a VM fail on a field the operator never
+        // typed -- including the `--net-queues auto` that would unpin it.
+        if let Some(queues) = networking.queues {
+            widened.max_net_queues = widened.max_net_queues.max(queues);
+        }
+    }
+    widened
+}
+
+/// A NIC that overrides nothing: whatever the node's `[cvm.networking]` says,
+/// now and after the operator changes it.
+fn node_default_networking(cvm_config: &CvmConfig) -> NicNetworking {
+    NicNetworking {
+        mode: cvm_config.networking.nic.mode,
+        inherit_mode: true,
+        ..NicNetworking::default()
+    }
 }
 
 fn network_from_required_proto(
     proto: &rpc::NetworkingConfig,
     cvm_config: &CvmConfig,
-) -> Result<Networking> {
-    networking_from_proto(proto, cvm_config)?.context("networking mode is required")
+) -> Result<NicNetworking> {
+    // An entry in a list that overrides nothing is not a missing mode: it is a
+    // NIC that follows the node entirely. Only the singular `networking` field
+    // can mean "no override at all", because there the absence is the message.
+    Ok(networking_from_proto(proto, cvm_config)?
+        .unwrap_or_else(|| node_default_networking(cvm_config)))
 }
 
 fn networks_from_proto(
     networks: &[rpc::NetworkingConfig],
     cvm_config: &CvmConfig,
-) -> Result<Vec<Networking>> {
+) -> Result<Vec<NicNetworking>> {
     networks
         .iter()
         .map(|network| network_from_required_proto(network, cvm_config))
@@ -422,15 +557,68 @@ fn validate_default_network(cvm_config: &CvmConfig) -> Result<()> {
 }
 
 fn resolve_requested_networks(
-    networks: &[Networking],
+    requests: &[NicNetworking],
     cvm_config: &CvmConfig,
-) -> Result<Vec<Networking>> {
-    let resolved = networks
+    vcpu: u32,
+) -> Result<Vec<NicNetworking>> {
+    let merged = requests
         .iter()
-        .map(|networking| resolve_networking(networking, cvm_config))
+        .map(|request| resolve_networking(request, cvm_config, vcpu))
         .collect::<Vec<_>>();
-    validate_resolved_networks(&resolved)?;
-    Ok(resolved)
+    // Validate the merged view, because that is what the launch sees, then
+    // record the narrower view the manifest keeps.
+    validate_resolved_networks(&merged)?;
+    Ok(manifest_networks(merged, requests))
+}
+
+/// What a deployment records against the VM, given the merged view its launch
+/// would see.
+///
+/// The backend a deployment *chose* is pinned here -- its mode, and the bridge
+/// or macvtap parent that names it -- so a VM keeps the segment it was put on
+/// for life. Everything else stays owned by the node and is re-read at every
+/// launch: the MAC prefix, the user-mode subnet and DHCP start, the macvtap
+/// forwarding mode, and the data plane an operator may want to roll back
+/// node-wide. A VM's own record cannot carry any of those.
+fn manifest_networks(merged: Vec<Networking>, requests: &[NicNetworking]) -> Vec<NicNetworking> {
+    merged
+        .into_iter()
+        .zip(requests)
+        .map(|(entry, request)| {
+            if request.inherit_mode {
+                // The caller named no backend, so none of the node's matching
+                // identity fields are theirs to keep.
+                return request.clone();
+            }
+            // Taking `entry.nic` rather than the whole resolved value is what
+            // keeps the node's half out of the VM's record; it used to take the
+            // whole thing and then clear the one node field anybody noticed.
+            //
+            // The two identity fields still share one type, and resolution
+            // fills both from the node, so scope them here -- once, where the
+            // record is written -- rather than leaving every later reader to
+            // remember which one its mode owns. Two already have to.
+            let mode = entry.nic.mode;
+            NicNetworking {
+                bridge: if mode == NetworkingMode::Bridge {
+                    entry.nic.bridge
+                } else {
+                    String::new()
+                },
+                parent: if mode == NetworkingMode::Macvtap {
+                    entry.nic.parent
+                } else {
+                    String::new()
+                },
+                // Data plane tuning is not identity: leave what the caller did
+                // not ask for unset.
+                vhost: request.vhost,
+                queues: request.queues,
+                mode,
+                inherit_mode: entry.nic.inherit_mode,
+            }
+        })
+        .collect()
 }
 
 fn has_host_bridge_interface() -> bool {
@@ -445,13 +633,13 @@ fn has_host_bridge_interface() -> bool {
 fn networks_from_vm_config(
     request: &VmConfiguration,
     cvm_config: &CvmConfig,
-) -> Result<Vec<Networking>> {
+) -> Result<Vec<NicNetworking>> {
     if !request.networks.is_empty() {
         let networks = networks_from_proto(&request.networks, cvm_config)?;
-        resolve_requested_networks(&networks, cvm_config)
+        resolve_requested_networks(&networks, cvm_config, request.vcpu)
     } else if let Some(networking) = request.networking.as_ref() {
         match networking_from_proto(networking, cvm_config)? {
-            Some(networking) => resolve_requested_networks(&[networking], cvm_config),
+            Some(networking) => resolve_requested_networks(&[networking], cvm_config, request.vcpu),
             None => Ok(vec![]),
         }
     } else {
@@ -747,8 +935,14 @@ impl VmmRpc for RpcHandler {
                 validate_default_network(&self.app.config.cvm)?;
                 vec![]
             } else {
-                let networks = networks_from_proto(&request.networks, &self.app.config.cvm)?;
-                resolve_requested_networks(&networks, &self.app.config.cvm)?
+                // A bridge or parent this VM already holds is not a new grant.
+                // `GetInfo` keeps reporting it, and read-modify-write keeps
+                // sending it back, so refusing it once the node changes its own
+                // default would make the VM's configuration unsendable -- with
+                // no flag anywhere to clear a field the caller never typed.
+                let cvm = held_networking_config(&self.app.config.cvm, &manifest.networks);
+                let networks = networks_from_proto(&request.networks, &cvm)?;
+                resolve_requested_networks(&networks, &cvm, manifest.vcpu)?
             };
             let is_running = self
                 .app
@@ -859,14 +1053,12 @@ impl VmmRpc for RpcHandler {
     }
 
     async fn get_meta(self) -> Result<GetMetaResponse> {
-        let mut supported_modes = vec!["user".to_string()];
         let default_networking = &self.app.config.cvm.networking;
         let mut bridge_networking = default_networking.clone();
-        bridge_networking.mode = NetworkingMode::Bridge;
-        if validate_resolved_network(&bridge_networking).is_ok() || has_host_bridge_interface() {
-            supported_modes.push("bridge".to_string());
-        }
-        supported_modes.push("macvtap".to_string());
+        bridge_networking.nic.mode = NetworkingMode::Bridge;
+        let host_can_bridge =
+            validate_resolved_network(&bridge_networking).is_ok() || has_host_bridge_interface();
+        let supported_modes = advertised_modes(&self.app.config.cvm, host_can_bridge);
         Ok(GetMetaResponse {
             kms: Some(KmsSettings {
                 url: self
@@ -900,13 +1092,15 @@ impl VmmRpc for RpcHandler {
             }),
             networking: Some(rpc::NetworkingCapabilities {
                 supported_modes,
-                default_mode: match default_networking.mode {
+                default_mode: match default_networking.nic.mode {
                     NetworkingMode::User => "user".to_string(),
                     NetworkingMode::Bridge => "bridge".to_string(),
                     NetworkingMode::Custom => String::new(),
                     NetworkingMode::Macvtap => "macvtap".to_string(),
                 },
-                default_bridge: default_networking.bridge.clone(),
+                default_bridge: default_networking.nic.bridge.clone(),
+                max_queues: self.app.config.cvm.max_net_queues,
+                default_vhost: default_networking.vhost_enabled(),
             }),
         })
     }
@@ -1282,7 +1476,9 @@ mod tests {
 
         assert_eq!(manifest.networks.len(), 1);
         assert_eq!(manifest.networks[0].mode, NetworkingMode::User);
-        assert!(!manifest.networks[0].net.is_empty());
+        // The node's user-mode network parameters are not the VM's to store;
+        // the type it stores cannot carry them at all now.
+        assert!(manifest.networks[0].bridge.is_empty());
     }
 
     #[test]
@@ -1292,7 +1488,7 @@ mod tests {
             .allowed_network_modes
             .push(NetworkingMode::Macvtap);
         cvm_config.allowed_macvtap_parents.push("eth0".to_string());
-        cvm_config.networking.parent = "node-default".to_string();
+        cvm_config.networking.nic.parent = "node-default".to_string();
         cvm_config.networking.macvtap_mode = "private".to_string();
         let networks = networks_from_proto(
             &[rpc::NetworkingConfig {
@@ -1306,11 +1502,789 @@ mod tests {
 
         assert_eq!(networks[0].mode, NetworkingMode::Macvtap);
         assert_eq!(networks[0].parent, "eth0");
-        assert!(networks[0].macvtap_mode.is_empty());
 
-        let resolved = resolve_requested_networks(&networks, &cvm_config).unwrap();
-        assert_eq!(resolved[0].parent, "eth0");
-        assert_eq!(resolved[0].macvtap_mode, "private");
+        // The manifest keeps the parent, which is identity. The forwarding mode
+        // the node owns and supplies at every launch is not a field this type
+        // has.
+        let stored = resolve_requested_networks(&networks, &cvm_config, 4).unwrap();
+        assert_eq!(stored[0].parent, "eth0");
+
+        let at_launch = resolve_networking(&stored[0], &cvm_config, 4);
+        assert_eq!(at_launch.nic.parent, "eth0");
+        assert_eq!(at_launch.macvtap_mode, "private");
+
+        // Repointing the node's forwarding mode reaches the VM.
+        cvm_config.networking.macvtap_mode = "bridge".to_string();
+        assert_eq!(
+            resolve_networking(&stored[0], &cvm_config, 4).macvtap_mode,
+            "bridge"
+        );
+    }
+
+    /// Node shapes a deployment can be reported against, each with the node
+    /// default fields that mode populates.
+    fn node_shapes() -> Vec<(&'static str, CvmConfig)> {
+        let mut bridge = test_cvm_config();
+        bridge.networking.nic.mode = NetworkingMode::Bridge;
+        bridge.networking.nic.bridge = "br-node".into();
+
+        let mut macvtap = test_cvm_config();
+        macvtap.networking.nic.mode = NetworkingMode::Macvtap;
+        macvtap.networking.nic.parent = "eth-node".into();
+        macvtap.networking.macvtap_mode = "private".into();
+        macvtap.allowed_network_modes.push(NetworkingMode::Macvtap);
+
+        let user = test_cvm_config();
+        vec![
+            ("bridge node", bridge),
+            ("macvtap node", macvtap),
+            ("user node", user),
+        ]
+    }
+
+    /// Every override a caller can express, including the tuning-only shape
+    /// that names no backend.
+    fn request_shapes(node: &CvmConfig) -> Vec<(String, rpc::NetworkingConfig)> {
+        let mode = networking_mode_name_for_test(node.networking.nic.mode);
+        // The user-mode backend has neither multiqueue nor vhost, and naming it
+        // and then asking for either is a refusal rather than a round-trip
+        // failure. Asking to turn vhost off is always legal.
+        let multiqueue = Networking::mode_supports_multiqueue(node.networking.nic.mode);
+        let vhost_on = Networking::mode_supports_vhost(node.networking.nic.mode).then_some(true);
+        // Naming a backend's identity field is only legal alongside a mode, so
+        // it varies with the named case. The node's own values are used because
+        // that is what GetInfo reports back.
+        let identity: &[(&str, &str, &str)] = &[
+            ("", "", ""),
+            ("+ bridge", node.networking.nic.bridge.as_str(), ""),
+            ("+ parent", "", node.networking.nic.parent.as_str()),
+        ];
+        let mut shapes = vec![];
+        for (named, mode) in [("named", mode.to_string()), ("inherited", String::new())] {
+            for (tuning, vhost, queues) in [
+                ("untuned", None, None),
+                ("vhost off", Some(false), None),
+                ("queues", None, multiqueue.then_some(2)),
+                ("both", vhost_on, multiqueue.then_some(2)),
+            ] {
+                for (label, bridge, parent) in identity {
+                    // An inherited entry may not name a backend at all, which
+                    // is a refusal covered by its own test.
+                    let inherited = mode.is_empty();
+                    if inherited && !(bridge.is_empty() && parent.is_empty()) {
+                        continue;
+                    }
+                    // Only the mode that owns a field may carry it.
+                    let bridge_ok = node.networking.nic.mode == NetworkingMode::Bridge;
+                    let parent_ok = node.networking.nic.mode == NetworkingMode::Macvtap;
+                    if (!bridge.is_empty() && !bridge_ok) || (!parent.is_empty() && !parent_ok) {
+                        continue;
+                    }
+                    shapes.push((
+                        format!("{named} + {tuning} {label}"),
+                        rpc::NetworkingConfig {
+                            mode: mode.clone(),
+                            bridge_name: bridge.to_string(),
+                            parent: parent.to_string(),
+                            vhost,
+                            queues,
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+        }
+        shapes
+    }
+
+    /// A backend's identity field without a mode would freeze whichever mode
+    /// the node had at deploy time, and then be reported alongside an empty
+    /// mode -- a combination the RPC itself rejects, which would leave the VM's
+    /// tuning permanently uneditable.
+    #[test]
+    fn an_inherited_entry_may_not_name_a_backend() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.mode = NetworkingMode::Macvtap;
+        cvm.networking.nic.parent = "eth-node".into();
+        cvm.allowed_macvtap_parents.push("eth1".into());
+        cvm.allowed_network_modes.push(NetworkingMode::Macvtap);
+
+        let err = networking_from_proto(
+            &rpc::NetworkingConfig {
+                parent: "eth1".into(),
+                queues: Some(2),
+                ..Default::default()
+            },
+            &cvm,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("networking mode is required"));
+
+        // Naming the mode alongside it is fine.
+        networking_from_proto(
+            &rpc::NetworkingConfig {
+                mode: "macvtap".into(),
+                parent: "eth1".into(),
+                queues: Some(2),
+                ..Default::default()
+            },
+            &cvm,
+        )
+        .unwrap()
+        .expect("a named backend is an override");
+    }
+
+    fn networking_mode_name_for_test(mode: NetworkingMode) -> &'static str {
+        match mode {
+            NetworkingMode::Bridge => "bridge",
+            NetworkingMode::User => "user",
+            NetworkingMode::Macvtap => "macvtap",
+            NetworkingMode::Custom => "custom",
+        }
+    }
+
+    /// `GetInfo` reports the configuration that `UpdateVm` and `UpgradeApp`
+    /// take back, and both vmm-cli and the web UI read it, change one field,
+    /// and resend the rest. So everything reportable has to be acceptable, and
+    /// accepting it has to land on the same VM.
+    ///
+    /// This asserts the property over every mode and tuning combination on
+    /// purpose. Asserting one shape is how an inherited `parent` on a bridge
+    /// NIC, and then `macvtap_mode` and `bridge_name`, each reached a release:
+    /// every one of them was a case the fixed example did not cover.
+    #[test]
+    fn everything_get_info_reports_is_accepted_back_unchanged() {
+        for (node_label, cvm) in node_shapes() {
+            for (shape_label, request) in request_shapes(&cvm) {
+                let case = format!("{node_label} / {shape_label}");
+                let Some(requested) = networking_from_proto(&request, &cvm)
+                    .unwrap_or_else(|error| panic!("{case}: deployment rejected: {error:#}"))
+                else {
+                    // No override at all; nothing is recorded, nothing to report.
+                    continue;
+                };
+                // Skip the host-dependent bridge existence check: this is
+                // about what the RPC reports versus what it accepts.
+                let merged = resolve_networking(&requested, &cvm, 4);
+                let stored = manifest_networks(vec![merged.clone()], &[requested]);
+
+                let reported = crate::app::networking_to_proto(&stored[0]);
+                let accepted = networking_from_proto(&reported, &cvm)
+                    .unwrap_or_else(|error| {
+                        panic!("{case}: GetInfo output was rejected on the way back: {error:#}")
+                    })
+                    .unwrap_or_else(|| panic!("{case}: the override was lost in the round trip"));
+
+                let restored =
+                    manifest_networks(vec![resolve_networking(&accepted, &cvm, 4)], &[accepted]);
+                assert_eq!(stored, restored, "{case}: round trip changed the manifest");
+                assert_eq!(
+                    resolve_networking(&restored[0], &cvm, 4),
+                    merged,
+                    "{case}: round trip changed what the launch sees"
+                );
+            }
+        }
+    }
+
+    /// A VM must not become uneditable because its node moved somewhere its
+    /// tuning does not apply. The report and the deployment RPC have to agree
+    /// on every backend the node can be pointed at, not just the one it had
+    /// when the VM was deployed.
+    #[test]
+    fn an_inherited_override_still_round_trips_after_the_node_moves() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.mode = NetworkingMode::Bridge;
+        cvm.networking.nic.bridge = "br-node".into();
+
+        let requested = networking_from_proto(
+            &rpc::NetworkingConfig {
+                queues: Some(4),
+                ..Default::default()
+            },
+            &cvm,
+        )
+        .unwrap()
+        .expect("tuning must produce an override");
+        let stored = manifest_networks(vec![resolve_networking(&requested, &cvm, 8)], &[requested]);
+
+        for mode in [
+            NetworkingMode::User,
+            NetworkingMode::Custom,
+            NetworkingMode::Macvtap,
+            NetworkingMode::Bridge,
+        ] {
+            cvm.networking.nic.mode = mode;
+            cvm.networking.nic.parent = "eth-node".into();
+            cvm.networking.netdev = "tap,id=net0,ifname=custom0".into();
+
+            let reported = crate::app::networking_to_proto(&stored[0]);
+            let accepted = networking_from_proto(&reported, &cvm)
+                .unwrap_or_else(|error| panic!("{mode:?}: report was rejected: {error:#}"))
+                .unwrap_or_else(|| panic!("{mode:?}: the override was lost"));
+            let restored =
+                manifest_networks(vec![resolve_networking(&accepted, &cvm, 8)], &[accepted]);
+            // An inherited entry still has to hold *some* mode -- every
+            // consumer matches on one -- and it is rewritten to whatever the
+            // node has now. Resolution ignores it, so compare what the launch
+            // sees rather than the field nothing reads.
+            assert!(restored[0].inherit_mode, "{mode:?}: pinned a backend");
+            assert_eq!(
+                resolve_networking(&restored[0], &cvm, 8),
+                resolve_networking(&stored[0], &cvm, 8),
+                "{mode:?}: round trip changed what the launch sees"
+            );
+            assert_eq!(restored[0].queues, Some(4), "{mode:?}: lost the request");
+        }
+    }
+
+    /// The counterpart: a node that changes its mind still reaches VMs that
+    /// never named a backend, and never reaches ones that did.
+    #[test]
+    fn a_node_backend_change_reaches_exactly_the_vms_that_inherited_it() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.mode = NetworkingMode::Bridge;
+        cvm.networking.nic.bridge = "br-node".into();
+
+        let tuning_only = networking_from_proto(
+            &rpc::NetworkingConfig {
+                queues: Some(2),
+                ..Default::default()
+            },
+            &cvm,
+        )
+        .unwrap()
+        .expect("tuning must produce an override");
+        let named = networking_from_proto(
+            &rpc::NetworkingConfig {
+                mode: "bridge".into(),
+                queues: Some(2),
+                ..Default::default()
+            },
+            &cvm,
+        )
+        .unwrap()
+        .expect("a named backend is an override");
+
+        let requests = vec![tuning_only, named];
+        let merged = requests
+            .iter()
+            .map(|request| resolve_networking(request, &cvm, 4))
+            .collect::<Vec<_>>();
+        let stored = manifest_networks(merged, &requests);
+
+        // The operator repoints the node at a different backend.
+        cvm.networking.nic.mode = NetworkingMode::User;
+        assert_eq!(
+            resolve_networking(&stored[0], &cvm, 4).nic.mode,
+            NetworkingMode::User,
+            "a VM that never named a backend must follow the node"
+        );
+        assert_eq!(
+            resolve_networking(&stored[1], &cvm, 4).nic.mode,
+            NetworkingMode::Bridge,
+            "a VM that named its backend keeps it for life"
+        );
+        // User mode has no multiqueue backend, so the inherited NIC drops to
+        // one queue pair while it is there -- but the request is not lost.
+        assert_eq!(resolve_networking(&stored[0], &cvm, 4).queue_pairs(), 1);
+        assert_eq!(stored[0].queues, Some(2));
+        cvm.networking.nic.mode = NetworkingMode::Bridge;
+        assert_eq!(
+            resolve_networking(&stored[0], &cvm, 4).queue_pairs(),
+            2,
+            "tuning must survive an excursion through a backend that ignores it"
+        );
+    }
+
+    #[test]
+    fn queue_requests_are_bounded_by_node_policy() {
+        let mut cvm_config = test_cvm_config();
+        cvm_config.max_net_queues = 4;
+        cvm_config.allowed_bridges.push("tenant-br0".to_string());
+        let request = |queues: u32| {
+            [rpc::NetworkingConfig {
+                mode: "bridge".to_string(),
+                bridge_name: "tenant-br0".to_string(),
+                queues: Some(queues),
+                ..Default::default()
+            }]
+        };
+
+        let networks = networks_from_proto(&request(4), &cvm_config).unwrap();
+        assert_eq!(networks[0].queues, Some(4));
+
+        let err = networks_from_proto(&request(5), &cvm_config).unwrap_err();
+        assert!(err.to_string().contains("must not exceed 4"));
+    }
+
+    /// A mode the deploy dialog offers has to be one the deployment RPC will
+    /// take. Offering one node policy forbids puts a choice in front of an
+    /// operator whose only outcome is "not allowed by node policy".
+    #[test]
+    fn advertised_modes_are_ones_the_rpc_would_accept() {
+        let mut cvm = test_cvm_config();
+        cvm.allowed_network_modes = vec![NetworkingMode::User];
+        for mode in ["bridge", "macvtap"] {
+            assert!(
+                networking_from_proto(
+                    &rpc::NetworkingConfig {
+                        mode: mode.to_string(),
+                        ..Default::default()
+                    },
+                    &cvm,
+                )
+                .is_err(),
+                "{mode} should be refused by this policy"
+            );
+        }
+        assert_eq!(advertised_modes(&cvm, true), vec!["user".to_string()]);
+
+        cvm.allowed_network_modes = vec![NetworkingMode::User, NetworkingMode::Macvtap];
+        assert_eq!(
+            advertised_modes(&cvm, true),
+            vec!["user".to_string(), "macvtap".to_string()]
+        );
+
+        // A mode policy allows but the host cannot serve is still not offered.
+        cvm.allowed_network_modes.push(NetworkingMode::Bridge);
+        assert!(!advertised_modes(&cvm, false).contains(&"bridge".to_string()));
+        assert!(advertised_modes(&cvm, true).contains(&"bridge".to_string()));
+    }
+
+    /// A VM keeps its bridge for life, so the node dropping that bridge from
+    /// its own configuration must not make the VM's reported configuration
+    /// unsendable -- there is no flag anywhere to clear a field the caller
+    /// never typed.
+    /// Deployment allowlists govern what a caller may newly select. Widening
+    /// them from a VM's own holdings is what keeps read-modify-write working
+    /// across a node change -- but only from a field the entry's own mode
+    /// owns. Resolution used to copy the node's whole networking value into
+    /// every VM, so a bridge NIC carried whatever macvtap parent the node had
+    /// configured, and widening from that let the VM move to a parent policy
+    /// forbids. The split types make the node's other fields unreachable; the
+    /// two identity fields still share one type, so the scoping stays explicit.
+    #[test]
+    fn holdings_widen_policy_only_for_the_mode_that_owns_them() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.mode = NetworkingMode::Bridge;
+        cvm.networking.nic.parent = "eth1".into();
+        cvm.allowed_network_modes = vec![
+            NetworkingMode::Bridge,
+            NetworkingMode::Macvtap,
+            NetworkingMode::User,
+        ];
+        assert!(cvm.allowed_macvtap_parents.is_empty());
+
+        // What a bridge NIC deployed on this node used to end up holding.
+        let held = [NicNetworking {
+            mode: NetworkingMode::Bridge,
+            bridge: "br0".into(),
+            parent: "eth0".into(),
+            ..NicNetworking::default()
+        }];
+        let widened = held_networking_config(&cvm, &held);
+        assert!(widened.allowed_bridges.contains(&"br0".to_string()));
+        assert!(!widened
+            .allowed_macvtap_parents
+            .contains(&"eth0".to_string()));
+
+        let request = [rpc::NetworkingConfig {
+            mode: "macvtap".into(),
+            parent: "eth0".into(),
+            ..Default::default()
+        }];
+        let err = networks_from_proto(&request, &widened).unwrap_err();
+        assert!(
+            err.to_string().contains("not allowed by node policy"),
+            "{err}"
+        );
+    }
+
+    /// Lowering the node's queue cap bounds what a deployment may newly ask
+    /// for. It does not retune VMs already pinned above it, and those keep
+    /// reporting their count on every GetInfo -- so without this, lowering the
+    /// cap makes every networking update on such a VM fail on a field the
+    /// operator never typed, including the one that would unpin it.
+    #[test]
+    fn a_vm_may_restate_a_queue_count_the_node_has_since_capped() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.mode = NetworkingMode::Bridge;
+        cvm.max_net_queues = 2;
+
+        let held = [NicNetworking {
+            mode: NetworkingMode::Bridge,
+            queues: Some(8),
+            ..NicNetworking::default()
+        }];
+        let request = [rpc::NetworkingConfig {
+            mode: "bridge".into(),
+            queues: Some(8),
+            vhost: Some(false),
+            ..Default::default()
+        }];
+
+        let err = networks_from_proto(&request, &cvm).unwrap_err();
+        assert!(err.to_string().contains("must not exceed 2"), "{err}");
+
+        let widened = held_networking_config(&cvm, &held);
+        let networks = networks_from_proto(&request, &widened).unwrap();
+        assert_eq!(networks[0].queues, Some(8));
+
+        // Only up to what it holds, though.
+        let more = [rpc::NetworkingConfig {
+            mode: "bridge".into(),
+            queues: Some(9),
+            ..Default::default()
+        }];
+        let err = networks_from_proto(&more, &widened).unwrap_err();
+        assert!(err.to_string().contains("must not exceed 8"), "{err}");
+    }
+
+    /// `optional uint32` tells an absent field from a typed zero, so reading
+    /// zero as "unset" would answer a request for no queues with the
+    /// vCPU-scaled default. Resize says the same about a zero vCPU count.
+    #[test]
+    fn an_explicit_zero_queue_count_is_an_error_not_an_absent_field() {
+        let cvm = test_cvm_config();
+        let request = rpc::NetworkingConfig {
+            mode: "bridge".into(),
+            queues: Some(0),
+            ..Default::default()
+        };
+        let err = networking_from_proto(&request, &cvm).unwrap_err();
+        assert!(err.to_string().contains("must be at least 1"), "{err}");
+
+        // Including when it is the only thing the request says. That arm
+        // returns "no override at all" before anything reads the count, so a
+        // zero here used to be answered with up to sixteen queue pairs.
+        let bare = rpc::NetworkingConfig {
+            queues: Some(0),
+            ..Default::default()
+        };
+        let err = networking_from_proto(&bare, &cvm).unwrap_err();
+        assert!(err.to_string().contains("must be at least 1"), "{err}");
+    }
+
+    /// Resolution fills both identity fields from the node, so a bridge NIC's
+    /// resolved value carries whatever macvtap parent the node happens to have
+    /// configured. Storing that made every later reader responsible for knowing
+    /// which field its mode owns, and the one that widens deployment policy
+    /// from a VM's holdings got it wrong: repoint the node's parent and a
+    /// bridge VM could move itself to a parent policy forbids.
+    #[test]
+    fn a_vm_records_only_the_identity_field_its_own_mode_owns() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.mode = NetworkingMode::Bridge;
+        cvm.networking.nic.bridge = "br-node".into();
+        cvm.networking.nic.parent = "eth-node".into();
+
+        let networks = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "bridge".into(),
+                ..Default::default()
+            }],
+            &cvm,
+        )
+        .unwrap();
+        // `manifest_networks` directly: what a VM records is the question, and
+        // `resolve_requested_networks` would first validate the merged view
+        // against this host's real interfaces.
+        let merged = networks
+            .iter()
+            .map(|request| resolve_networking(request, &cvm, 4))
+            .collect::<Vec<_>>();
+        let stored = manifest_networks(merged, &networks);
+        assert_eq!(stored[0].bridge, "br-node");
+        assert!(stored[0].parent.is_empty(), "{:?}", stored[0]);
+
+        // And the launch still gets the node's parent, because that half was
+        // never the VM's to hold in the first place.
+        let at_launch = resolve_networking(&stored[0], &cvm, 4);
+        assert_eq!(at_launch.nic.parent, "eth-node");
+    }
+
+    #[test]
+    fn a_vm_may_restate_a_bridge_it_already_holds() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.mode = NetworkingMode::Bridge;
+        cvm.networking.nic.bridge = "br-new".into();
+        assert!(cvm.allowed_bridges.is_empty());
+
+        let held = [NicNetworking {
+            mode: NetworkingMode::Bridge,
+            bridge: "br-old".into(),
+            ..NicNetworking::default()
+        }];
+        let request = [rpc::NetworkingConfig {
+            mode: "bridge".into(),
+            bridge_name: "br-old".into(),
+            queues: Some(2),
+            ..Default::default()
+        }];
+
+        // Without the VM's own holdings this is a bridge it may not select.
+        let err = networks_from_proto(&request, &cvm).unwrap_err();
+        assert!(err.to_string().contains("not allowed by node policy"));
+
+        let widened = held_networking_config(&cvm, &held);
+        let networks = networks_from_proto(&request, &widened).unwrap();
+        assert_eq!(networks[0].bridge, "br-old");
+
+        // And it is still only this VM's own values that are permitted.
+        let other = [rpc::NetworkingConfig {
+            mode: "bridge".into(),
+            bridge_name: "br-someone-else".into(),
+            ..Default::default()
+        }];
+        assert!(networks_from_proto(&other, &widened).is_err());
+    }
+
+    /// vhost follows the same rule as the queue count: refused for a backend
+    /// the caller chose and that has none, accepted and dormant for one they
+    /// inherited. Accepting it silently on a chosen backend would leave the
+    /// deploy dialog reporting `vhost: on` next to a NIC running without it.
+    #[test]
+    fn vhost_is_refused_only_for_a_backend_the_caller_chose() {
+        let cvm_config = test_cvm_config();
+        let err = networking_from_proto(
+            &rpc::NetworkingConfig {
+                mode: "user".into(),
+                vhost: Some(true),
+                ..Default::default()
+            },
+            &cvm_config,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no vhost data plane"), "{err:#}");
+
+        // Turning it off is a no-op that matches reality, so it is allowed.
+        networking_from_proto(
+            &rpc::NetworkingConfig {
+                mode: "user".into(),
+                vhost: Some(false),
+                ..Default::default()
+            },
+            &cvm_config,
+        )
+        .unwrap()
+        .expect("tuning must produce an override");
+
+        // Inherited from a user-mode node: accepted, dormant, and live again
+        // when the node moves to a backend that has one.
+        let mut cvm_config = test_cvm_config();
+        assert_eq!(cvm_config.networking.nic.mode, NetworkingMode::User);
+        let requested = networking_from_proto(
+            &rpc::NetworkingConfig {
+                vhost: Some(true),
+                ..Default::default()
+            },
+            &cvm_config,
+        )
+        .unwrap()
+        .expect("tuning must produce an override");
+        assert!(!resolve_networking(&requested, &cvm_config, 4).vhost_enabled());
+
+        cvm_config.networking.nic.mode = NetworkingMode::Bridge;
+        cvm_config.networking.nic.bridge = "br-node".into();
+        assert!(resolve_networking(&requested, &cvm_config, 4).vhost_enabled());
+    }
+
+    /// A queue count is refused for a backend the caller chose and that cannot
+    /// honour it, because the caller can fix the request. It is accepted for
+    /// one they inherited, because they cannot: the node picked that backend
+    /// and may pick another tomorrow, and refusing would leave GetInfo
+    /// reporting a count nothing is allowed to send back.
+    #[test]
+    fn a_queue_count_is_refused_only_for_a_backend_the_caller_chose() {
+        let cvm_config = test_cvm_config();
+        let err = networking_from_proto(
+            &rpc::NetworkingConfig {
+                mode: "user".into(),
+                queues: Some(4),
+                ..Default::default()
+            },
+            &cvm_config,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("does not support multiple queues"));
+
+        // Inherited: accepted, and dormant until the node moves to a backend
+        // that can honour it.
+        for mode in [NetworkingMode::Custom, NetworkingMode::User] {
+            let mut cvm_config = test_cvm_config();
+            cvm_config.networking.nic.mode = mode;
+            cvm_config.networking.netdev = "tap,id=net0,ifname=custom0".into();
+            let requested = networking_from_proto(
+                &rpc::NetworkingConfig {
+                    queues: Some(4),
+                    ..Default::default()
+                },
+                &cvm_config,
+            )
+            .unwrap()
+            .expect("tuning must produce an override");
+            assert_eq!(requested.queues, Some(4));
+            assert_eq!(
+                resolve_networking(&requested, &cvm_config, 8).queue_pairs(),
+                1,
+                "{mode:?} cannot carry multiqueue, whatever was asked for"
+            );
+
+            // And the request is still there when the node moves back.
+            cvm_config.networking.nic.mode = NetworkingMode::Bridge;
+            cvm_config.networking.nic.bridge = "br-node".into();
+            assert_eq!(
+                resolve_networking(&requested, &cvm_config, 8).queue_pairs(),
+                4
+            );
+        }
+    }
+
+    #[test]
+    fn user_mode_rejects_multiqueue_but_a_single_queue_is_fine() {
+        let cvm_config = test_cvm_config();
+        let request = |queues: u32| {
+            [rpc::NetworkingConfig {
+                mode: "user".to_string(),
+                queues: Some(queues),
+                ..Default::default()
+            }]
+        };
+
+        networks_from_proto(&request(1), &cvm_config).unwrap();
+        let err = networks_from_proto(&request(2), &cvm_config).unwrap_err();
+        assert!(err.to_string().contains("does not support multiple queues"));
+    }
+
+    #[test]
+    fn tuning_alone_keeps_the_node_backend_without_tripping_mode_policy() {
+        let mut cvm_config = test_cvm_config();
+        // A backend the node uses but does not let callers choose.
+        cvm_config.networking.nic.mode = NetworkingMode::Macvtap;
+        cvm_config.networking.nic.parent = "eth0".to_string();
+        assert!(!cvm_config
+            .allowed_network_modes
+            .contains(&NetworkingMode::Macvtap));
+
+        let networking = networking_from_proto(
+            &rpc::NetworkingConfig {
+                vhost: Some(false),
+                ..Default::default()
+            },
+            &cvm_config,
+        )
+        .unwrap()
+        .expect("tuning must produce an override");
+        assert_eq!(networking.mode, NetworkingMode::Macvtap);
+        assert_eq!(networking.vhost, Some(false));
+
+        // Naming that backend explicitly is still a choice, and still denied.
+        let err = networking_from_proto(
+            &rpc::NetworkingConfig {
+                mode: "macvtap".to_string(),
+                vhost: Some(false),
+                ..Default::default()
+            },
+            &cvm_config,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not allowed by node policy"));
+
+        // An untouched request still means "no override at all".
+        assert!(
+            networking_from_proto(&rpc::NetworkingConfig::default(), &cvm_config)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_inherited_backend_is_never_pinned_into_the_manifest() {
+        // Tuning must not become a way to pin a backend the caller was never
+        // allowed to choose, nor to freeze one the node still owns.
+        let mut cvm_config = test_cvm_config();
+        cvm_config.networking.nic.mode = NetworkingMode::Macvtap;
+        cvm_config.networking.nic.parent = "eth0".to_string();
+        cvm_config.networking.macvtap_mode = "private".to_string();
+
+        let requested = networking_from_proto(
+            &rpc::NetworkingConfig {
+                queues: Some(2),
+                ..Default::default()
+            },
+            &cvm_config,
+        )
+        .unwrap()
+        .expect("tuning must produce an override");
+        assert!(requested.inherit_mode);
+
+        let persisted = resolve_requested_networks(&[requested], &cvm_config, 4).unwrap();
+        assert_eq!(persisted[0].queues, Some(2));
+        // Nothing the node owns was copied in. The forwarding mode, the MAC
+        // prefix and the user-mode network parameters are not fields this type
+        // has any more; the parent is, and a NIC that named no backend does not
+        // get to keep the node's.
+        assert!(persisted[0].parent.is_empty());
+        assert!(persisted[0].bridge.is_empty());
+
+        // Repointing the node moves the VM with it.
+        cvm_config.networking.nic.parent = "eth1".to_string();
+        let at_launch = resolve_networking(&persisted[0], &cvm_config, 4);
+        assert_eq!(at_launch.nic.parent, "eth1");
+        assert_eq!(at_launch.queue_pairs(), 2);
+    }
+
+    #[test]
+    fn deployment_pins_identity_but_not_data_plane_tuning() {
+        let mut cvm_config = test_cvm_config();
+        cvm_config.networking.nic.vhost = Some(true);
+        cvm_config.networking.nic.queues = Some(2);
+        let networks = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "user".to_string(),
+                vhost: Some(false),
+                ..Default::default()
+            }],
+            &cvm_config,
+        )
+        .unwrap();
+
+        let resolved = resolve_requested_networks(&networks, &cvm_config, 4).unwrap();
+        // The backend the caller chose is pinned.
+        assert_eq!(resolved[0].mode, NetworkingMode::User);
+        assert!(!resolved[0].inherit_mode);
+        // The explicit request is kept.
+        assert_eq!(resolved[0].vhost, Some(false));
+        // What the caller never asked for stays unset, so the node still owns
+        // it: an operator disabling vhost node-wide must reach this VM too.
+        assert_eq!(resolved[0].queues, None);
+    }
+
+    #[test]
+    fn a_node_wide_vhost_rollback_reaches_a_vm_deployed_with_an_override() {
+        // macvtap keeps this independent of which interfaces the test host has.
+        let mut cvm_config = test_cvm_config();
+        cvm_config
+            .allowed_network_modes
+            .push(NetworkingMode::Macvtap);
+        cvm_config.allowed_macvtap_parents.push("eth0".to_string());
+        cvm_config.networking.nic.parent = "eth0".to_string();
+        let networks = networks_from_proto(
+            &[rpc::NetworkingConfig {
+                mode: "macvtap".to_string(),
+                parent: "eth0".to_string(),
+                ..Default::default()
+            }],
+            &cvm_config,
+        )
+        .unwrap();
+        let persisted = resolve_requested_networks(&networks, &cvm_config, 4).unwrap();
+        assert!(persisted[0].vhost.is_none());
+
+        cvm_config.networking.nic.vhost = Some(false);
+        let at_launch = resolve_networking(&persisted[0], &cvm_config, 4);
+        assert!(!at_launch.vhost_enabled());
     }
 
     #[test]
@@ -1399,18 +2373,35 @@ mod tests {
     }
 
     #[test]
-    fn repeated_networks_rejects_empty_entries() {
-        let err = networks_from_proto(
+    /// An entry in a list that overrides nothing describes a NIC that follows
+    /// the node entirely -- which is a thing an operator can mean, and the
+    /// only way the web UI can leave a NIC's backend unpinned. Rejecting it
+    /// would make an inherited NIC uneditable the moment its tuning is cleared.
+    fn repeated_networks_accepts_an_entry_that_overrides_nothing() {
+        let mut cvm_config = test_cvm_config();
+        cvm_config.networking.nic.mode = NetworkingMode::Bridge;
+        cvm_config.networking.nic.bridge = "br-node".into();
+
+        let networks = networks_from_proto(
             &[rpc::NetworkingConfig {
                 mode: String::new(),
                 bridge_name: String::new(),
                 ..Default::default()
             }],
-            &test_cvm_config(),
+            &cvm_config,
         )
-        .unwrap_err();
+        .unwrap();
+        assert_eq!(networks.len(), 1);
+        assert!(networks[0].inherit_mode);
+        assert_eq!(networks[0].queues, None);
+        assert!(networks[0].bridge.is_empty());
 
-        assert!(err.to_string().contains("networking mode is required"));
+        // It follows the node, like a VM with no networks at all.
+        cvm_config.networking.nic.mode = NetworkingMode::User;
+        assert_eq!(
+            resolve_networking(&networks[0], &cvm_config, 4).nic.mode,
+            NetworkingMode::User
+        );
     }
 
     #[test]

@@ -22,7 +22,44 @@ const CreateVmDialogComponent = {
     portMappingEnabled: { type: Boolean, required: true },
     networkingModes: { type: Array, required: true },
     defaultBridge: { type: String, default: '' },
+    maxNetQueues: { type: Number, default: 0 },
     defaultNetworkingLabel: { type: String, required: true },
+    defaultModeTunable: { type: Boolean, default: false },
+    defaultVhostOn: { type: Boolean, default: false },
+  },
+  methods: {
+    // Whether this NIC will end up on the vhost data plane. An unset select
+    // means it follows the node, and a node with vhost off gives one queue pair
+    // however many vCPUs the VM has -- so the answer is not readable from this
+    // row alone.
+    vhostOn(network: { vhost?: string }) {
+      if (network.vhost === 'on') {
+        return true;
+      }
+      if (network.vhost === 'off') {
+        return false;
+      }
+      return (this as any).defaultVhostOn;
+    },
+    // What an empty queues field actually resolves to. It is the vCPU count
+    // only when vhost is on: with vhost off the backend has no multiqueue data
+    // plane and the NIC gets exactly one queue pair.
+    queuesHint(network: { vhost?: string }) {
+      if (!this.vhostOn(network)) {
+        return 'virtio-net queue pairs. Empty means one queue pair, because vhost is off.';
+      }
+      const cap = (this as any).maxNetQueues
+        ? `, capped at ${(this as any).maxNetQueues} on this node`
+        : '';
+      return `virtio-net queue pairs. Empty follows the VM's vCPU count${cap}.`;
+    },
+    queuesPlaceholder(network: { vhost?: string }) {
+      if (!this.vhostOn(network)) {
+        return 'queues: auto (1, vhost off)';
+      }
+      const cap = (this as any).maxNetQueues ? ` (max ${(this as any).maxNetQueues})` : '';
+      return `queues: auto${cap}`;
+    },
   },
   emits: ['close', 'submit', 'load-compose'],
   template: /* html */ `
@@ -161,6 +198,7 @@ const CreateVmDialogComponent = {
                 <div v-if="!form.networks.length" class="network-config-empty">{{ defaultNetworkingLabel }}</div>
                 <div v-for="(network, index) in form.networks" :key="index" class="network-config-row">
                   <select v-model="network.mode">
+                    <option :value="''">Node default</option>
                     <option v-for="mode in networkingModes" :key="mode" :value="mode">
                       {{ mode.charAt(0).toUpperCase() + mode.slice(1) }}
                     </option>
@@ -169,16 +207,48 @@ const CreateVmDialogComponent = {
                     v-if="network.mode === 'bridge'"
                     v-model="network.bridge_name"
                     type="text"
+                    aria-label="Bridge name"
                     :placeholder="defaultBridge ? 'Override bridge (empty = ' + defaultBridge + ')' : 'Bridge name'"
                   >
+                  <input
+                    v-else-if="network.mode === 'macvtap'"
+                    v-model="network.parent"
+                    type="text"
+                    aria-label="Macvtap parent interface"
+                    placeholder="Override parent interface (empty = node default)"
+                  >
+                  <span v-else class="network-config-placeholder"></span>
+                  <span v-if="network.mode !== 'user'" class="network-config-tuning">
+                    <select v-model="network.vhost" aria-label="vhost-net data plane" title="Kernel vhost-net data plane">
+                      <option value="">vhost: default</option>
+                      <option value="on">vhost: on</option>
+                      <option value="off">vhost: off</option>
+                    </select>
+                    <input
+                      v-model="network.queues"
+                      type="number"
+                      min="1"
+                      :max="maxNetQueues || undefined"
+                      aria-label="virtio-net queue pairs"
+                      :placeholder="queuesPlaceholder(network)"
+                      :title="queuesHint(network)"
+                    >
+                  </span>
                   <span v-else class="network-config-placeholder"></span>
                   <button type="button" class="action-btn danger" @click="form.networks.splice(index, 1)">Remove</button>
                   <small v-if="network.mode === 'bridge'" class="hint network-config-hint">
                     {{ defaultBridge ? 'Leave empty to use the VMM default bridge from vmm.toml: ' + defaultBridge + '.' : 'No default bridge is configured in vmm.toml; enter a bridge interface name.' }}
                     Guest IP is assigned by host DHCP on that bridge and reported after boot.
                   </small>
+                  <small v-else-if="network.mode === 'macvtap'" class="hint network-config-hint">
+                    Leave empty to use the macvtap parent from vmm.toml. The forwarding mode stays node-controlled.
+                  </small>
+                  <small v-else-if="network.mode === '' && !defaultModeTunable" class="hint network-config-hint">
+                    {{ defaultNetworkingLabel }} has no vhost-net or multiqueue data plane, so these two settings are recorded
+                    but stay dormant until this node's default backend can carry them.
+                  </small>
                 </div>
-                <button type="button" class="action-btn" @click="form.networks.push({ mode: networkingModes[0] || 'user', bridge_name: '' })">Add Network</button>
+                <button type="button" class="action-btn" @click="form.networks.push({ mode: '', bridge_name: '', vhost: '', queues: '' })">Add Network</button>
               </div>
             </div>
 

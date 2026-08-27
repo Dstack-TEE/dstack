@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::app::{
-    make_sys_config, resolved_networks, simulator_config_for_manifest, sync_tee_simulator_config,
-    Image, VmConfig, VmWorkDir,
+    clamp_queues_without_netd, make_sys_config, needs_netd_interface, resolved_networks,
+    settle_vhost, simulator_config_for_manifest, sync_tee_simulator_config, Image, VmConfig,
+    VmWorkDir,
 };
-use crate::config::{Config, NetworkFilterMode, NetworkingMode};
+use crate::config::Config;
 use crate::main_service;
 use anyhow::{Context, Result};
 use fs_err as fs;
@@ -279,18 +280,45 @@ Compose file content (first 200 chars):
         gateway_enabled: app_compose.gateway_enabled(),
     };
 
+    // One-shot has no netd lifecycle, so a bridge NIC that only wanted the
+    // vCPU-scaled default drops to a single queue here exactly as it would on a
+    // server without netd. Anything still needing an interface was asked for
+    // explicitly, and is refused rather than silently downgraded.
+    let requested = if manifest.networks.is_empty() {
+        vec![config.cvm.networking.nic.clone()]
+    } else {
+        manifest.networks.clone()
+    };
+    let mut runtime_networks = resolved_networks(&manifest, &config.cvm);
+    let clamped = clamp_queues_without_netd(&requested, &mut runtime_networks, &config.cvm, false);
+    // The server settles vhost after clamping, because clamping changes whether
+    // a NIC needs netd and that changes which netdev it gets. Skipping it here
+    // left `vhost_enabled()` reading as a request rather than a decision, so
+    // the launch warned about a `/dev/vhost-net` the netdev it then built does
+    // not open.
+    let vhost_denied = settle_vhost(&mut runtime_networks, &config.cvm);
+    if vhost_denied > 0 {
+        tracing::warn!(
+            "no qemu-bridge-helper found, so {vhost_denied} bridge interface(s) fall back to the \
+             non-vhost bridge netdev; set cvm.qemu_bridge_helper to enable vhost"
+        );
+    }
+    if clamped > 0 {
+        tracing::warn!(
+            "one-shot execution has no netd, so {clamped} bridge interface(s) fall back to a \
+             single queue pair; run the VMM server to let queue pairs scale with vCPUs"
+        );
+    }
     if !dry_run
-        && config.cvm.network_filter.mode == NetworkFilterMode::Libvirt
-        && resolved_networks(&manifest, &config.cvm)
+        && runtime_networks
             .iter()
-            .any(|network| network.mode == NetworkingMode::Bridge)
+            .any(|network| needs_netd_interface(network, &config.cvm))
     {
         anyhow::bail!(
-            "one-shot execution does not manage libvirt-filtered TAP lifecycle; run the VMM server directly or use --dry-run"
+            "one-shot execution does not manage netd interface lifecycle; run the VMM server directly or use --dry-run"
         );
     }
 
-    let runtime_networks = resolved_networks(&manifest, &config.cvm);
     let process_configs = vm_builder_config
         .config_qemu(&workdir_path, &config.cvm, &gpus, &runtime_networks)
         .context("Failed to build QEMU configuration")?;

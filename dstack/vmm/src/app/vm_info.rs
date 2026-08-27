@@ -11,16 +11,16 @@ use dstack_vmm_rpc as pb;
 use fs_err as fs;
 use supervisor_client::supervisor::ProcessInfo;
 
-use super::{
-    network::{mac_address_for_vm_index, resolved_networks},
-    Manifest, VmState, VmWorkDir,
-};
-use crate::config::{CvmConfig, GatewayConfig, Networking, NetworkingMode};
+use super::{network::mac_address_for_vm_index, Manifest, VmState, VmWorkDir};
+use crate::config::{GatewayConfig, Networking, NetworkingMode, NicNetworking};
 
 pub(crate) struct VmInfo {
     pub manifest: Manifest,
     pub workdir: PathBuf,
     pub status: &'static str,
+    /// Whether a QEMU process exists for this VM right now. The NICs it built
+    /// are real only while it does.
+    pub running: bool,
     pub uptime: String,
     pub exited_at: Option<String>,
     pub instance_id: Option<String>,
@@ -51,16 +51,83 @@ fn networking_backend_name(mode: NetworkingMode) -> &'static str {
     }
 }
 
-fn networking_to_proto(networking: &Networking) -> pb::NetworkingConfig {
+/// The resolved NICs a launch built, or would build, as the RPC reports them.
+fn interfaces_to_proto(
+    vm_id: &str,
+    effective_networks: &[Networking],
+) -> Vec<pb::NetworkInterfaceStatus> {
+    effective_networks
+        .iter()
+        .enumerate()
+        .map(|(index, networking)| {
+            let mac = mac_address_for_vm_index(vm_id, &networking.mac_prefix_bytes(), index);
+            pb::NetworkInterfaceStatus {
+                mode: networking_mode_name(networking.nic.mode).into(),
+                backend: networking_backend_name(networking.nic.mode).into(),
+                mac,
+                bridge_name: (networking.nic.mode == NetworkingMode::Bridge)
+                    .then(|| networking.nic.bridge.clone()),
+                netdev_id: Some(format!("net{index}")),
+                // Custom mode hands the operator the whole netdev string and the
+                // VMM never parses it, so it has no data-plane state to report.
+                // Reporting the resolved fields anyway would assert "vhost: off,
+                // queues: 1" over a netdev the operator may have written with
+                // `vhost=on,queues=8`.
+                //
+                // Otherwise: settled at launch, so an entry carrying no decision
+                // was written before this VMM recorded one -- by a build that
+                // had no vhost at all, which is what it should read as.
+                // Recomputing here instead would let an edit to node
+                // configuration change what a running VM is said to use.
+                vhost: (networking.nic.mode != NetworkingMode::Custom)
+                    .then(|| networking.nic.vhost.is_some() && networking.vhost_enabled()),
+                queues: (networking.nic.mode != NetworkingMode::Custom)
+                    .then(|| networking.queue_pairs()),
+                // Node-decided, so it belongs with the rest of the resolved
+                // state. The VM's own record cannot carry one.
+                macvtap_mode: (networking.nic.mode == NetworkingMode::Macvtap)
+                    .then(|| networking.macvtap_mode.clone()),
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn networking_to_proto(networking: &NicNetworking) -> pb::NetworkingConfig {
+    // An entry that inherited its backend reports no mode, so it must report
+    // none of the fields that only make sense alongside one: a mode-less
+    // override carrying, say, a parent is something the deployment RPC
+    // rejects, which would strand the VM's tuning as uneditable.
+    let pins_backend = !networking.inherit_mode;
     pb::NetworkingConfig {
-        mode: networking_mode_name(networking.mode).into(),
-        bridge_name: if networking.mode == NetworkingMode::Bridge {
+        // An entry that only tuned the data plane named no backend, and the
+        // deployment RPC spells that as an empty mode. Reporting the node's
+        // current mode here would turn a read-modify-write into a request to
+        // pin it -- which policy may not even permit the caller to make.
+        mode: if networking.inherit_mode {
+            String::new()
+        } else {
+            networking_mode_name(networking.mode).into()
+        },
+        bridge_name: if pins_backend && networking.mode == NetworkingMode::Bridge {
             networking.bridge.clone()
         } else {
             String::new()
         },
-        parent: networking.parent.clone(),
-        macvtap_mode: networking.macvtap_mode.clone(),
+        // Scope the macvtap fields to macvtap, the way bridge_name is scoped to
+        // bridge. Reporting an inherited parent on a bridge NIC produced a
+        // configuration that could be read but not sent back: the deployment
+        // RPC rejects `parent` outside macvtap mode.
+        parent: if pins_backend && networking.mode == NetworkingMode::Macvtap {
+            networking.parent.clone()
+        } else {
+            String::new()
+        },
+        // The forwarding mode is node-controlled, so a VM never pins one and
+        // the type it stores can no longer carry one. It stays on the wire
+        // because the deployment RPC still has to reject a caller that sets it.
+        macvtap_mode: String::new(),
+        vhost: networking.vhost,
+        queues: networking.queues,
     }
 }
 
@@ -69,15 +136,20 @@ fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
 }
 
 impl VmInfo {
-    pub fn effective_networks(&self, cvm: &CvmConfig) -> Vec<Networking> {
-        if self.runtime_networks.is_empty() {
-            resolved_networks(&self.manifest, cvm)
-        } else {
-            self.runtime_networks.clone()
-        }
-    }
-
-    pub fn to_pb(&self, gateway: &GatewayConfig, cvm: &CvmConfig, brief: bool) -> pb::VmInfo {
+    /// Takes no `CvmConfig` on purpose. Everything it reports about a VM's
+    /// data plane was decided when that VM launched and written into
+    /// `effective_networks`; consulting node configuration here is what let an
+    /// operator's edit change what a running VM was said to be using.
+    ///
+    /// `effective_networks` is passed in rather than derived for the same
+    /// reason, plus one more: a stopped VM's NICs are a prediction, and only
+    /// the caller can consult netd to make the prediction its launch would.
+    pub fn to_pb(
+        &self,
+        gateway: &GatewayConfig,
+        brief: bool,
+        effective_networks: &[Networking],
+    ) -> pb::VmInfo {
         let workdir = VmWorkDir::new(&self.workdir);
         let vm_config = workdir.manifest();
         let custom_gateway_urls = vm_config
@@ -91,30 +163,17 @@ impl VmInfo {
             .map(networking_to_proto)
             .collect::<Vec<_>>();
         let configured_networking = configured_networks.first().cloned();
-        let interfaces = self
-            .effective_networks(cvm)
-            .iter()
-            .enumerate()
-            .map(|(index, networking)| {
-                let mac = mac_address_for_vm_index(
-                    &self.manifest.id,
-                    &networking.mac_prefix_bytes(),
-                    index,
-                );
-                pb::NetworkInterfaceStatus {
-                    mode: networking_mode_name(networking.mode).into(),
-                    backend: networking_backend_name(networking.mode).into(),
-                    mac,
-                    bridge_name: (networking.mode == NetworkingMode::Bridge)
-                        .then(|| networking.bridge.clone()),
-                    netdev_id: Some(format!("net{index}")),
-                }
-            })
-            .collect();
+        let interfaces = interfaces_to_proto(&self.manifest.id, effective_networks);
         pb::VmInfo {
             id: self.manifest.id.clone(),
             name: self.manifest.name.clone(),
             status: self.status.into(),
+            // The one predicate that says whether `interfaces` above is what a
+            // process built or what the next launch would build. Clients used to
+            // re-derive it from `status`, which answers a different question:
+            // a VM being removed with QEMU still up is not "running" by that
+            // string, yet its NICs are real.
+            running: self.running,
             uptime: self.uptime.clone(),
             boot_progress: self.boot_progress.clone(),
             boot_error: self.boot_error.clone(),
@@ -261,6 +320,7 @@ impl VmState {
             workdir: workdir.path().to_path_buf(),
             instance_id,
             status,
+            running: is_running,
             uptime,
             exited_at: Some(exited_at),
             boot_progress: self.state.boot_progress.clone(),
@@ -276,7 +336,68 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_optional;
+    use super::{interfaces_to_proto, networking_to_proto, sanitize_optional};
+    use crate::config::{NetworkingMode, NicNetworking};
+
+    /// Custom mode hands the operator the whole netdev string and the VMM never
+    /// parses it, so it has no data-plane state to report. Reporting the
+    /// resolved defaults instead asserted "vhost off, one queue" over a netdev
+    /// the operator may well have written as `vhost=on,queues=8`.
+    #[test]
+    fn a_custom_netdev_reports_no_data_plane_rather_than_the_wrong_one() {
+        use crate::config::Networking;
+
+        let custom = Networking {
+            nic: NicNetworking {
+                mode: NetworkingMode::Custom,
+                ..NicNetworking::default()
+            },
+            netdev: "tap,id=net0,ifname=custom0,vhost=on,queues=8".into(),
+            ..Networking::default()
+        };
+        let interfaces = interfaces_to_proto("vm-1", &[custom]);
+        assert_eq!(interfaces[0].backend, "custom");
+        assert_eq!(interfaces[0].vhost, None);
+        assert_eq!(interfaces[0].queues, None);
+
+        // Every other backend still answers the question.
+        let bridge = Networking {
+            nic: NicNetworking {
+                mode: NetworkingMode::Bridge,
+                vhost: Some(true),
+                queues: Some(4),
+                ..NicNetworking::default()
+            },
+            ..Networking::default()
+        };
+        let interfaces = interfaces_to_proto("vm-1", &[bridge]);
+        assert_eq!(interfaces[0].vhost, Some(true));
+        assert_eq!(interfaces[0].queues, Some(4));
+    }
+
+    #[test]
+    fn a_reported_interface_can_be_sent_back_unchanged() {
+        // GetInfo output feeds UpdateVm, so anything it reports has to satisfy
+        // the deployment RPC's own validation. What a VM stores can no longer
+        // carry a node-owned field at all -- `parent` here belongs to bridge
+        // mode's own entry only because the type still allows both backends'
+        // identity fields, and reporting still scopes it to the owning mode.
+        let networking = NicNetworking {
+            mode: NetworkingMode::Bridge,
+            bridge: "br0".into(),
+            parent: "eth0".into(),
+            vhost: Some(false),
+            queues: Some(2),
+            ..NicNetworking::default()
+        };
+        let proto = networking_to_proto(&networking);
+        assert_eq!(proto.mode, "bridge");
+        assert_eq!(proto.bridge_name, "br0");
+        assert!(proto.parent.is_empty());
+        assert!(proto.macvtap_mode.is_empty());
+        assert_eq!(proto.vhost, Some(false));
+        assert_eq!(proto.queues, Some(2));
+    }
 
     #[test]
     fn sanitize_optional_filters_empty_owned_values() {
