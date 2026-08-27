@@ -31,8 +31,28 @@ impl CertRequestClient {
     ) -> Result<Vec<String>> {
         match self {
             CertRequestClient::Local { ca } => {
+                // KMS stamps the app_id it verified into the certificate. The
+                // local CA has the same value already -- the CSR carries the
+                // attestation it comes from -- but used to drop it, so a peer
+                // that pins app_id rejected every certificate issued here.
+                // dstack-gateway's cluster mTLS does exactly that, which left
+                // clustering working under a KMS key provider and silently
+                // broken under every other one.
+                //
+                // Best effort on purpose: an app whose attestation carries no
+                // app-id event decodes to an empty one, and stamping that
+                // would make every such peer match every other. Absent stays
+                // absent, and the peer rejects it as before.
+                let app_id = csr
+                    .attestation
+                    .clone()
+                    .into_v1()
+                    .decode_app_info(false)
+                    .ok()
+                    .map(|info| info.app_id)
+                    .filter(|app_id| !app_id.is_empty());
                 let cert = ca
-                    .sign_csr(csr, None, "app:custom")
+                    .sign_csr(csr, app_id.as_deref(), "app:custom")
                     .context("Failed to sign certificate")?;
                 Ok(vec![cert.pem(), ca.pem_cert.clone()])
             }
