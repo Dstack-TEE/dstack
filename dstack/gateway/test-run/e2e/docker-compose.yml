@@ -51,7 +51,7 @@ services:
       - PORT=8080
       - DEBUG=true
       # The zones certbot writes into and Pebble reads back out of.
-      - MOCK_CF_ZONES=test0.local,test1.local,test2.local,persist0.local,persist1.local,persist2.local
+      - MOCK_CF_ZONES=test0.local,test1.local,test2.local,persist0.local,persist1.local,persist2.local,selfcheck0.local
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 5s
@@ -117,6 +117,12 @@ services:
       timeout: 3s
       retries: 10
       start_period: 30s
+    # Resolve through the mock, which owns the test zones and forwards
+    # everything else. certbot's pre-order self-check reads DNS like any
+    # client; without this it queries a resolver that has never heard of the
+    # challenge names, so the check can only ever time out.
+    dns:
+      - 172.30.0.10
     cap_add:
       - NET_ADMIN
     extra_hosts:
@@ -152,6 +158,12 @@ services:
       timeout: 3s
       retries: 10
       start_period: 30s
+    # Resolve through the mock, which owns the test zones and forwards
+    # everything else. certbot's pre-order self-check reads DNS like any
+    # client; without this it queries a resolver that has never heard of the
+    # challenge names, so the check can only ever time out.
+    dns:
+      - 172.30.0.10
     cap_add:
       - NET_ADMIN
 
@@ -184,6 +196,12 @@ services:
       timeout: 3s
       retries: 10
       start_period: 30s
+    # Resolve through the mock, which owns the test zones and forwards
+    # everything else. certbot's pre-order self-check reads DNS like any
+    # client; without this it queries a resolver that has never heard of the
+    # challenge names, so the check can only ever time out.
+    dns:
+      - 172.30.0.10
     cap_add:
       - NET_ADMIN
 
