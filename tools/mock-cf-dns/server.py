@@ -409,7 +409,9 @@ def dns_response(packet: bytes) -> bytes:
         except Exception as exc:  # pragma: no cover - diagnostic only
             _debug(f"forwarding {name} failed: {exc}")
             _record_query(name, qtype, 0, True)
-            return txid + struct.pack("!HHHHH", 0x8182, 1, 0, 0, 0) + packet[12:qend + 4]
+            return (
+                txid + struct.pack("!HHHHH", 0x8182, 1, 0, 0, 0) + packet[12 : qend + 4]
+            )
 
     with STATE_LOCK:
         stored = [
@@ -426,11 +428,7 @@ def dns_response(packet: bytes) -> bytes:
     header = txid + struct.pack("!HHHHH", 0x8180, 1, len(answers), 0, 0)
     body = question
     for rtype, rdata in answers:
-        body += (
-            b"\xc0\x0c"
-            + struct.pack("!HHIH", rtype, 1, 60, len(rdata))
-            + rdata
-        )
+        body += b"\xc0\x0c" + struct.pack("!HHIH", rtype, 1, 60, len(rdata)) + rdata
     return header + body
 
 
