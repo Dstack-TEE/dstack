@@ -319,11 +319,17 @@ data_op() {
 
 # Wipe a stopped node's store but let it keep the identity it already published,
 # which is what a node looks like after losing its disk but not its config.
+# Fails loudly. The `&&` after the first `cp` short-circuits the wipe if
+# node_uuid is not there, and errexit is off inside a test body (they run as the
+# condition of an `if`), so an unchecked call let
+# `test_bootstrap_after_data_dir_loss` "recover" a store that was never lost.
 wipe_data_keeping_uuid() {
     local node_id=$1
-    data_op "cp /data/node${node_id}/wavekv/node_uuid /tmp/uuid &&
-             rm -rf /data/node${node_id}/wavekv/* /data/node${node_id}/wavekv/.[!.]* 2>/dev/null;
-             cp /tmp/uuid /data/node${node_id}/wavekv/node_uuid"
+    data_op "set -e
+             cp /data/node${node_id}/wavekv/node_uuid /tmp/uuid
+             rm -rf /data/node${node_id}/wavekv/* /data/node${node_id}/wavekv/.[!.]* 2>/dev/null || true
+             cp /tmp/uuid /data/node${node_id}/wavekv/node_uuid" \
+        || { log_error "could not wipe node ${node_id}'s store; the test below would prove nothing"; return 1; }
 }
 
 # Wipe a stopped node completely, identity included -- a stranger turning up
@@ -331,6 +337,9 @@ wipe_data_keeping_uuid() {
 # bind-mount source, and replacing it swaps the inode the mount was set against.
 wipe_data() {
     local node_id=$1
-    data_op "rm -rf /data/node${node_id}/..?* /data/node${node_id}/.[!.]* /data/node${node_id}/*" \
-        2>/dev/null || true
+    # Same reasoning as `wipe_data_keeping_uuid`: a silently skipped wipe leaves
+    # the following assertions testing the wrong starting state. The globs are
+    # allowed to match nothing; the operation as a whole is not allowed to fail.
+    data_op "rm -rf /data/node${node_id}/..?* /data/node${node_id}/.[!.]* /data/node${node_id}/* 2>/dev/null; exit 0" \
+        || { log_error "could not wipe node ${node_id}'s data directory"; return 1; }
 }

@@ -263,7 +263,7 @@ test_bootstrap_after_data_dir_loss() {
         log_error "node 2 did not report its identity before recovery"; return 1; }
 
     stop_node 2
-    wipe_data_keeping_uuid 2
+    wipe_data_keeping_uuid 2 || return 1
     start_node 2 || return 1
 
     wait_for_instances 2 1 15 || {
@@ -490,7 +490,7 @@ test_node_id_reuse_rejected() {
 
 
     stop_node 2
-    wipe_data 2
+    wipe_data 2 || return 1
     start_node 2 || return 1
 
     new_uuid=$(get_node_uuid 2)

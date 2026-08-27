@@ -121,6 +121,11 @@ cert_carries_app_id() {
 no_peer_was_rejected() {
     local node_id=$1 log
     log=$(dump_log "$node_id")
+    # `dump_log` ends in `|| true`, and `! grep -q` on an empty file is true, so
+    # without this the assertion passed whenever the log could not be collected
+    # at all -- the failure mode a negative assertion is most exposed to. Prove
+    # there is something to have searched first.
+    [ -s "$log" ] || { log_error "node ${node_id} produced no log to check"; return 1; }
     ! grep -qE "does not contain app_id|invalid quote|app_id mismatch" "$log"
 }
 
@@ -221,6 +226,16 @@ ALL_TESTS=(test_persistence test_status_endpoint test_prpc_register \
          test_three_node_bootnode test_periodic_persistence \
          test_admin_set_node_url test_admin_set_node_status \
          test_node_status_register_exclude test_node_status_register_reject)
+
+# An unknown --only name used to select nothing, leave TESTS_FAILED at 0 and
+# exit 0: a green run of zero tests, which is the one result this suite must
+# never produce.
+if [ -n "$ONLY" ]; then
+    printf '%s\n' "${ALL_TESTS[@]}" | grep -qx -- "$ONLY" || {
+        log_error "unknown test: $ONLY"
+        exit 1
+    }
+fi
 
 for t in "${ALL_TESTS[@]}"; do
     [ -n "$ONLY" ] && [ "$t" != "$ONLY" ] && continue
