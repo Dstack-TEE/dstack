@@ -8,6 +8,12 @@ name: Gateway proxy tests
 # `ktls`) whose behaviour depends on kernel capabilities and on a per-connection
 # gate. Unit tests cover the relay functions; this runs a real gateway process
 # and asserts on what actually reaches the wire.
+#
+# The suite runs in containers. One of them has a seccomp profile that makes
+# `setsockopt(IPPROTO_TCP, TCP_ULP)` fail, which is how the no-TLS-ULP fallback
+# is exercised now -- the suite used to `rmmod tls`, which needed passwordless
+# sudo, took the module from the whole host, and skipped itself whenever
+# anything else was using TLS.
 on:
   push:
     branches: [ next, 'release/**' ]
@@ -32,13 +38,21 @@ jobs:
   proxy-integration:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     # Each of the ~25 arms restarts the gateway, and the idle-timeout arms wait
-    # out a real timeout, so this is minutes rather than seconds.
-    timeout-minutes: 30
+    # out a real timeout. On top of that the suite now builds the shared
+    # attestation fixture, whose two images compile Rust from a cold docker cache
+    # on every run -- the cargo cache above does not reach inside a docker build.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          # The container image is built around a static binary.
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -49,10 +63,6 @@ jobs:
             dstack/target
           key: gateway-proxy-${{ runner.os }}-${{ hashFiles('dstack/Cargo.lock') }}
           restore-keys: gateway-proxy-${{ runner.os }}-
-
-      - name: Build the gateway
-        working-directory: dstack
-        run: cargo build --release -p dstack-gateway
 
       - name: Record kernel capabilities
         # The suite adapts to what the kernel offers, so the log needs to say
@@ -66,16 +76,28 @@ jobs:
             | paste - - | sort -u || true
 
       - name: Proxy integration tests
-        working-directory: dstack/gateway/test-run
-        env:
-          GATEWAY_BIN: ${{ github.workspace }}/dstack/target/release/dstack-gateway
-        run: ./test_proxy.sh
+        working-directory: dstack/gateway/test-run/proxy-e2e
+        run: ./run-proxy-tests.sh
+
+      - name: Collect container logs on failure
+        if: failure()
+        working-directory: dstack/gateway/test-run/proxy-e2e
+        run: |
+          mkdir -p run/logs
+          for svc in $(docker compose config --services); do
+            docker compose logs --no-color "$svc" > "run/logs/container-$svc.log" 2>&1 || true
+          done
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: gateway-proxy-test-logs
-          path: /tmp/dstack-gw-proxy-test.*/logs/
+          path: dstack/gateway/test-run/proxy-e2e/run/logs/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Tear down
+        if: always()
+        working-directory: dstack/gateway/test-run/proxy-e2e
+        run: ./run-proxy-tests.sh down

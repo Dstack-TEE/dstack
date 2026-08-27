@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Gateway cluster tests
+
+# WaveKV replication between gateway nodes: push and periodic sync, anti-entropy
+# repair, bootstrap after losing a store, partition recovery, node identity, and
+# the admin RPCs that gate registration. Unit tests cover the store; this runs
+# three real gateways and stops, wipes and restarts them.
+#
+# The nodes authenticate each other for real, so the cluster mTLS path is
+# exercised rather than switched off -- which is what the process-based suite
+# this replaces could not do.
+on:
+  push:
+    branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/cert-client/**'
+      - 'dstack/ra-tls/**'
+      - 'dstack/guest-agent-simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - '.github/workflows/gateway-cluster-tests.yml'
+  pull_request:
+    branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/cert-client/**'
+      - 'dstack/ra-tls/**'
+      - 'dstack/guest-agent-simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - '.github/workflows/gateway-cluster-tests.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gateway-cluster:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # 28 tests, most of which restart nodes and then wait out a 5s sync interval.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      # The gateways create real WireGuard interfaces inside their containers.
+      - name: Record kernel capabilities
+        run: |
+          echo "kernel: $(uname -r)"
+          sudo modprobe wireguard 2>&1 || echo "no wireguard module available"
+          echo "wireguard loaded: $(lsmod | grep -c '^wireguard ' || true)"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dstack/target
+          key: gateway-cluster-${{ runner.os }}-${{ hashFiles('dstack/Cargo.lock') }}
+          restore-keys: gateway-cluster-${{ runner.os }}-
+
+      - name: Cluster suite
+        working-directory: dstack/gateway/test-run/cluster
+        run: ./run-cluster-tests.sh
+
+      # The suite only materialises node logs for the two tests that assert on
+      # them, so the mounted directory is close to empty for any other failure.
+      # Pull them from the daemon instead, by compose service so the shared
+      # fixture's project-scoped names do not have to be guessed.
+      - name: Collect node logs on failure
+        if: failure()
+        working-directory: dstack/gateway/test-run/cluster
+        run: |
+          mkdir -p run/logs
+          for svc in $(docker compose config --services); do
+            docker compose logs --no-color "$svc" > "run/logs/$svc.log" 2>&1 || true
+          done
+          # The attestation fixture is a project of its own now, so it is not in
+          # this suite's service list and its logs have to be asked for
+          # separately -- they are where a quote-verification failure explains
+          # itself.
+          docker compose -p dstack-fixture -f ../attestation/fixture.yml logs \
+            --no-color > "run/logs/fixture.log" 2>&1 || true
+          docker compose ps -a > run/logs/compose-ps.txt 2>&1 || true
+
+      - name: Upload node logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-cluster-logs
+          path: dstack/gateway/test-run/cluster/run/logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        working-directory: dstack/gateway/test-run/cluster
+        run: ./run-cluster-tests.sh down
