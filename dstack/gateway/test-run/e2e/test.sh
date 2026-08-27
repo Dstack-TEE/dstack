@@ -69,9 +69,14 @@ TESTS_FAILED=0
 
 # ==================== Logging ====================
 
-log_info()    { printf "${BLUE}[INFO]${NC} %s\n" "$1"; }
-log_warn()    { printf "${YELLOW}[WARN]${NC} %s\n" "$1"; }
-log_error()   { printf "${RED}[ERROR]${NC} %s\n" "$1"; }
+# Diagnostics go to stderr. `run_test` reads a test's exit code out of a command
+# substitution, which captures stdout -- so a test that logs on stdout is
+# reported failed no matter what it returns, and a `log_error` explaining a real
+# failure is swallowed into the comparison instead of being shown. Keeping these
+# off stdout fixes both, and means no test has to remember to redirect.
+log_info()    { printf "${BLUE}[INFO]${NC} %s\n" "$1" >&2; }
+log_warn()    { printf "${YELLOW}[WARN]${NC} %s\n" "$1" >&2; }
+log_error()   { printf "${RED}[ERROR]${NC} %s\n" "$1" >&2; }
 log_success() { printf "${GREEN}[PASS]${NC} %s\n" "$1"; }
 log_fail()    { printf "${RED}[FAIL]${NC} %s\n" "$1"; }
 
@@ -525,7 +530,7 @@ test_certificates_match() {
 
     for proxy in $GATEWAY_PROXIES; do
         eval "serial${i}=\"\$(get_cert_serial \"\$proxy\" \"\$sni\")\""
-        log_info "Gateway $i cert serial ($sni): $(eval echo \$serial$i)" >&2
+        log_info "Gateway $i cert serial ($sni): $(eval echo \$serial$i)"
         i=$((i + 1))
     done
 
