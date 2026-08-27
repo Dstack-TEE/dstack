@@ -263,9 +263,12 @@ stop_node() {
 wait_for_debug() {
     local node_id=$1
     local timeout=${2:-60}
-    local waited=0
+    # Wall clock, not an iteration count: each pass forks `docker compose port`
+    # and a curl, so counting `sleep 1`s overshot the stated timeout by half
+    # again. See `wait_until` in rpc.sh for the same fix on the sync waits.
+    local deadline=$((SECONDS + timeout))
     local port
-    while [ "$waited" -lt "$timeout" ]; do
+    while [ "$SECONDS" -lt "$deadline" ]; do
         # Resolved inside the loop on purpose: docker only reports the mapping
         # once the container is running, so looking it up once up front would
         # leave every later request aimed at an empty port.
@@ -274,7 +277,7 @@ wait_for_debug() {
              -H 'Content-Type: application/json' -d '{}' >/dev/null 2>&1; then
             return 0
         fi
-        sleep 1; waited=$((waited + 1))
+        sleep 1
     done
     return 1
 }

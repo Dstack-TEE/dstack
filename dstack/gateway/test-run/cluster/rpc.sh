@@ -156,16 +156,42 @@ setup_peers() {
     done
 }
 
+# Wall-clock deadline, not an iteration count.
+#
+# These loops used to run `$((timeout_seconds * 10))` iterations of "probe, then
+# sleep 0.1", on the assumption that an iteration costs 0.1s. Every probe forks
+# a curl and a python3, so an iteration costs closer to 0.15s and the real
+# window was ~1.5x what the caller asked for. That is not a rounding error here:
+# `test_push_fast_path` passes 3 to prove a push arrived *before* the 5s
+# periodic sync could have done it anyway, and the true window was ~4.8s -- so a
+# completely dead push path was caught by the periodic round and the test still
+# went green. Bound on time and the number means what it says.
+wait_until() {
+    local timeout_seconds=$1; shift
+    local deadline=$((SECONDS + timeout_seconds))
+    while :; do
+        "$@" && return 0
+        [ "$SECONDS" -lt "$deadline" ] || return 1
+        sleep 0.1
+    done
+}
+
+_has_n_instances() {
+    [ "$(get_n_instances "$1")" -ge "$2" ] 2>/dev/null
+}
+
 wait_for_instances() {
     local node_id=$1
     local expected=$2
     local timeout_seconds=$3
-    local _
-    for _ in $(seq 1 $((timeout_seconds * 10))); do
-        [ "$(get_n_instances "$node_id")" -ge "$expected" ] 2>/dev/null && return 0
-        sleep 0.1
-    done
-    return 1
+    wait_until "$timeout_seconds" _has_n_instances "$node_id" "$expected"
+}
+
+_digests_match() {
+    local d1 d2
+    d1=$(get_store_digest "$2" "$1")
+    d2=$(get_store_digest "$3" "$1")
+    [ -n "$d1" ] && [ "$d1" = "$d2" ]
 }
 
 wait_for_digest_match() {
@@ -173,14 +199,7 @@ wait_for_digest_match() {
     local node_a=$2
     local node_b=$3
     local timeout_seconds=$4
-    local d1 d2 _
-    for _ in $(seq 1 $((timeout_seconds * 10))); do
-        d1=$(get_store_digest "$node_a" "$store")
-        d2=$(get_store_digest "$node_b" "$store")
-        if [ -n "$d1" ] && [ "$d1" = "$d2" ]; then return 0; fi
-        sleep 0.1
-    done
-    return 1
+    wait_until "$timeout_seconds" _digests_match "$store" "$node_a" "$node_b"
 }
 
 get_n_keys() {

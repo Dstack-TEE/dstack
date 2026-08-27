@@ -528,7 +528,20 @@ test_node_id_reuse_rejected() {
 
     wait_for_instances 2 1 20 || {
         log_error "fresh node did not recover after the UUID rejection"; return 1; }
-    wait_for_digest_match persistent 1 2 15 || {
+    # 40s, not the 15 this asked for before.
+    #
+    # Recovery here needs the rejected node's fresh identity record to reach
+    # node 1 in a sync *response* -- its own requests still fail node 1's
+    # inbound check -- and then an anti-entropy round to carry the store, so it
+    # costs several 5s intervals rather than one. Measured three times on an
+    # idle machine: 16s, 17s, 18s.
+    #
+    # It passed at 15 only because the wait helpers used to count iterations
+    # instead of seconds and so ran roughly twice as long as they claimed (see
+    # `wait_until` in rpc.sh). With the timer made honest this became a coin
+    # flip -- it passed on one full run and failed on the next. The number now
+    # says what the operation needs, with headroom for a loaded runner.
+    wait_for_digest_match persistent 1 2 40 || {
         log_error "stores did not converge after UUID recovery"; return 1; }
 
     verify_register_response \
