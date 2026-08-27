@@ -6,7 +6,14 @@
 # Uses mock services: Pebble (ACME) + mock-cf-dns-api (Cloudflare DNS)
 # Uses a test-local dstack Guest Agent simulator for certificate and app identity flows.
 
+# Same long-lived fixture project the cluster suite uses; run-e2e.sh brings it
+# up. Referencing it rather than including it keeps one instance of the seed and
+# the roots derived from it, and keeps this suite's network to itself.
 networks:
+  attestation:
+    external: true
+    name: dstack-attestation
+
   certbot-test:
     driver: bridge
     ipam:
@@ -14,23 +21,14 @@ networks:
         - subnet: 172.30.0.0/24
 
 volumes:
-  pebble-certs:
   dstack-socket:
+    external: true
+    name: dstack-attestation-socket
+  attestation-roots:
+    external: true
+    name: dstack-attestation-roots
 
 services:
-  dstack-simulator:
-    build:
-      context: ../../../..
-      dockerfile: dstack/gateway/test-run/e2e/Dockerfile.simulator
-    image: dstack-simulator:gateway-e2e
-    volumes:
-      - dstack-socket:/var/run/dstack
-    healthcheck:
-      test: ["CMD-SHELL", "test -S /var/run/dstack/dstack.sock"]
-      interval: 1s
-      timeout: 1s
-      retries: 30
-
   # ==================== Mock Services ====================
 
   # Mock Cloudflare DNS API. Built from the repo rather than pulled, and the
@@ -100,6 +98,7 @@ services:
     image: ${GATEWAY_IMAGE:-dstack-gateway:test}
     container_name: gateway-1
     networks:
+      attestation:
       certbot-test:
         ipv4_address: 172.30.0.21
     ports:
@@ -110,14 +109,15 @@ services:
     volumes:
       - ./configs/gateway-1.toml:/etc/gateway/gateway.toml:ro
       - dstack-socket:/var/run/dstack
+      - attestation-roots:/var/lib/attestation:ro
     tmpfs:
       - /var/lib/gateway
     environment:
       - RUST_LOG=info,dstack_gateway=debug,certbot=debug
       - DSTACK_AGENT_ADDRESS=unix:/var/run/dstack/dstack.sock
+    # The fixture is a separate project now; run-e2e.sh brings it up and waits
+    # for it before this one starts, so it cannot be a depends_on here.
     depends_on:
-      dstack-simulator:
-        condition: service_healthy
       mock-cf-dns-api:
         condition: service_healthy
       pebble:
@@ -145,6 +145,7 @@ services:
     image: ${GATEWAY_IMAGE:-dstack-gateway:test}
     container_name: gateway-2
     networks:
+      attestation:
       certbot-test:
         ipv4_address: 172.30.0.22
     ports:
@@ -155,6 +156,7 @@ services:
     volumes:
       - ./configs/gateway-2.toml:/etc/gateway/gateway.toml:ro
       - dstack-socket:/var/run/dstack
+      - attestation-roots:/var/lib/attestation:ro
     tmpfs:
       - /var/lib/gateway
     environment:
@@ -183,6 +185,7 @@ services:
     image: ${GATEWAY_IMAGE:-dstack-gateway:test}
     container_name: gateway-3
     networks:
+      attestation:
       certbot-test:
         ipv4_address: 172.30.0.23
     ports:
@@ -193,6 +196,7 @@ services:
     volumes:
       - ./configs/gateway-3.toml:/etc/gateway/gateway.toml:ro
       - dstack-socket:/var/run/dstack
+      - attestation-roots:/var/lib/attestation:ro
     tmpfs:
       - /var/lib/gateway
     environment:
