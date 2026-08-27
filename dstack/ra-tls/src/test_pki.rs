@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use rcgen::{Certificate, KeyPair};
 
+use crate::attestation::AppInfo;
 use crate::cert::CertRequest;
 
 /// A certificate and the key that signs for it.
@@ -99,6 +100,7 @@ pub struct TestCert {
     subject: String,
     alt_names: Vec<String>,
     app_id: Option<Vec<u8>>,
+    app_info: Option<AppInfo>,
     server_auth: bool,
     client_auth: bool,
 }
@@ -136,6 +138,27 @@ impl TestCert {
         self
     }
 
+    /// Stamp `PHALA_RATLS_APP_INFO`, the fuller identity a KMS-issued certificate
+    /// carries alongside the app id.
+    ///
+    /// Separate from [`Self::app_id`] on purpose, so a test can mint the shape that
+    /// used to be accepted by a fallback -- app info present, app id absent -- and pin
+    /// that it no longer is.
+    pub fn app_info(mut self, app_id: &[u8]) -> Self {
+        self.app_info = Some(AppInfo {
+            app_id: app_id.to_vec(),
+            compose_hash: Vec::new(),
+            instance_id: Vec::new(),
+            device_id: Vec::new(),
+            mr_system: [0u8; 32],
+            mr_aggregated: [0u8; 32],
+            os_image_hash: Vec::new(),
+            key_provider_info: Vec::new(),
+            init_script_hashes: None,
+        });
+        self
+    }
+
     /// Mark the leaf usable for server authentication.
     pub fn server_auth(mut self, yes: bool) -> Self {
         self.server_auth = yes;
@@ -154,6 +177,7 @@ impl TestCert {
             .key(key)
             .alt_names(&self.alt_names)
             .maybe_app_id(self.app_id.as_deref())
+            .maybe_app_info(self.app_info.as_ref())
             .usage_server_auth(self.server_auth)
             .usage_client_auth(self.client_auth)
             .build()

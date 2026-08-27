@@ -108,23 +108,26 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
 /// Split out from `verify_gateway_peer` because that function's other half — the
 /// attestation bypass and Rocket's certificate guard — cannot be exercised from a test,
 /// which left this decision, the actual authorization rule, uncovered.
+///
+/// The app-id extension is the only identity accepted. There used to be a fallback to
+/// the app-info extension here, and it existed because certificates issued through a
+/// local CA carried app-info but not app-id — so without it, clustering under any
+/// non-KMS key provider failed. That is fixed at the source now (`local_ca_app_id` in
+/// cert-client stamps the app id the way KMS does), which matters because the fallback
+/// only ever covered *this* side of the connection: `AppIdValidator` in the sync client
+/// and `ensure_from_gateway` in the RPC handler both read app-id with no fallback, so a
+/// certificate the fallback rescued here was still rejected in both other places. One
+/// rule across all three is worth more than a second path that was untested, disagreed
+/// with its neighbours, and read an issuer claim the cluster does not otherwise
+/// authorize on.
 fn authorize_peer(cert: &impl CertExt, my_app_id: Option<&[u8]>) -> Result<(), Status> {
-    let remote_app_id = match cert.get_app_id().map_err(|e| {
+    let remote_app_id = cert.get_app_id().map_err(|e| {
         warn!("WaveKV sync: failed to extract app_id from certificate: {e}");
         Status::Unauthorized
-    })? {
-        Some(app_id) => Some(app_id),
-        None => cert
-            .get_app_info()
-            .map_err(|e| {
-                warn!("WaveKV sync: failed to extract app_info from certificate: {e}");
-                Status::Unauthorized
-            })?
-            .map(|info| info.app_id),
-    };
+    })?;
 
     let Some(remote_app_id) = remote_app_id else {
-        warn!("WaveKV sync: certificate does not contain app identity");
+        warn!("WaveKV sync: certificate does not contain an app_id extension");
         return Err(Status::Unauthorized);
     };
 
@@ -415,6 +418,32 @@ mod tests {
             authorize(&cert_with_app_id(b"a-different-app"), Some(&ours)),
             Err(Status::Forbidden),
             "a valid certificate from another app must not reach the sync routes"
+        );
+    }
+
+    /// App info is not app id.
+    ///
+    /// This check used to fall back to the app-info extension when app-id was absent,
+    /// which made it the only one of the cluster's three identity checks that would
+    /// accept such a certificate -- `AppIdValidator` in the sync client and
+    /// `ensure_from_gateway` in the RPC handler both refuse it. The fallback existed to
+    /// paper over locally issued certificates that carried no app id; that is fixed
+    /// where it is caused now, in cert-client.
+    ///
+    /// Restoring the fallback turns this red. Nothing did before: the branch had no
+    /// test at all, and deleting it left all 308 gateway tests green.
+    #[test]
+    fn app_info_alone_does_not_authorize_a_peer() {
+        let ours = b"app-id-of-this-cluster".to_vec();
+        let cert = ra_tls::test_pki::TestCert::new("peer.test")
+            .app_info(&ours)
+            .self_signed_der()
+            .expect("self-signed cert");
+
+        assert_eq!(
+            authorize(&cert, Some(&ours)),
+            Err(Status::Unauthorized),
+            "the app-id extension is the only identity the sync routes accept"
         );
     }
 
