@@ -567,46 +567,32 @@ mod transport_tests {
     }
 
     /// A server certificate carrying an app id, signed by the same test CA.
+    ///
+    /// The client config that comes back validates against that same app id, which is
+    /// what the HTTP-level tests want. `a_peer_from_another_app_cannot_complete_the_handshake`
+    /// overrides `cert_validator` to make the two disagree.
     fn app_id_server_cert(
         dir: &std::path::Path,
         app_id: &[u8],
     ) -> (HttpsClientConfig, Vec<u8>, Vec<u8>) {
-        use ra_tls::cert::CertRequest;
-        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
-
-        let ca_key = KeyPair::generate().expect("ca key");
-        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
-
-        let leaf_key = KeyPair::generate().expect("leaf key");
-        let alt_names = vec!["127.0.0.1".to_string()];
-        let leaf_cert = CertRequest::builder()
-            .key(&leaf_key)
-            .subject("peer.test")
-            .alt_names(&alt_names)
-            .app_id(app_id)
-            .usage_server_auth(true)
-            .build()
-            .signed_by(&ca_cert, &ca_key)
-            .expect("leaf cert");
-
-        let cert_path = dir.join("node.crt");
-        let key_path = dir.join("node.key");
-        let ca_path = dir.join("ca.crt");
-        std::fs::write(&cert_path, leaf_cert.pem()).expect("write cert");
-        std::fs::write(&key_path, leaf_key.serialize_pem()).expect("write key");
-        std::fs::write(&ca_path, ca_cert.pem()).expect("write ca");
+        let pki = ra_tls::test_pki::write_mtls_pki(
+            dir,
+            ra_tls::test_pki::TestCert::new("peer.test")
+                .alt_name("127.0.0.1")
+                .app_id(app_id)
+                .server_auth(true),
+        )
+        .expect("write test PKI");
 
         (
             HttpsClientConfig {
-                cert_path: cert_path.to_string_lossy().into_owned(),
-                key_path: key_path.to_string_lossy().into_owned(),
-                ca_cert_path: ca_path.to_string_lossy().into_owned(),
+                cert_path: pki.cert_path.to_string_lossy().into_owned(),
+                key_path: pki.key_path.to_string_lossy().into_owned(),
+                ca_cert_path: pki.ca_cert_path.to_string_lossy().into_owned(),
                 cert_validator: Arc::new(AppIdValidator::new(app_id.to_vec())),
             },
-            leaf_cert.der().to_vec(),
-            leaf_key.serialize_der(),
+            pki.leaf.cert_der(),
+            pki.leaf.key_der(),
         )
     }
 
