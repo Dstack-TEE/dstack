@@ -166,14 +166,15 @@ async fn main() -> Result<()> {
         set_max_ulimit()?;
     }
 
-    let my_app_id = {
-        let dstack_client = dstack_agent().context("Failed to create dstack client")?;
-        let info = dstack_client
-            .info()
-            .await
-            .context("Failed to get app info")?;
-        Some(info.app_id)
-    };
+    // Required, not best-effort: `my_app_id` is what every peer check compares against,
+    // so a gateway that cannot learn its own identity must not start rather than start
+    // without one. A host with no guest agent fails here.
+    let dstack_client = dstack_agent().context("Failed to create dstack client")?;
+    let my_app_id = dstack_client
+        .info()
+        .await
+        .context("Failed to get app info")?
+        .app_id;
     let proxy_config = config.proxy.clone();
     let attestation_verifier = Arc::new(
         AttestationVerifier::load(&config.attestation)

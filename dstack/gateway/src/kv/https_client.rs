@@ -60,7 +60,12 @@ pub struct HttpsClientConfig {
     pub key_path: String,
     pub ca_cert_path: String,
     /// Optional custom certificate validator (checked during TLS handshake)
-    pub cert_validator: Option<Arc<dyn CertValidator>>,
+    /// Checked against the peer's certificate during the handshake.
+    ///
+    /// Not optional: this is the only thing that distinguishes a gateway in our own
+    /// cluster from any other holder of a certificate the shared CA signed, and CA-path
+    /// validation alone does not make that distinction.
+    pub cert_validator: Arc<dyn CertValidator>,
 }
 
 /// Wrapper that adapts a CertValidator to rustls ServerCertVerifier
@@ -147,10 +152,10 @@ impl ServerCertVerifier for CustomCertVerifier {
 
 type HyperClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
 
-/// HTTPS client with mTLS and optional custom certificate validation.
+/// HTTPS client with mTLS and peer identity validation.
 ///
-/// When a `cert_validator` is set in `TlsConfig`, the client runs the validator
-/// during the TLS handshake, before any application data is sent.
+/// The `cert_validator` runs during the TLS handshake, before any application data is
+/// sent, on top of the chain verification against the configured CA.
 #[derive(Clone)]
 pub struct HttpsClient {
     client: HyperClient,
@@ -221,22 +226,17 @@ impl HttpsClient {
             .next()
             .context("no CA certificate found")?;
 
-        // Build rustls config with custom verifier if validator is provided
-        let tls_config_builder = rustls::ClientConfig::builder();
-
-        let tls_config = if let Some(ref validator) = tls.cert_validator {
-            let verifier = CustomCertVerifier::new(validator.clone(), ca_cert)?;
-            tls_config_builder
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(verifier))
-        } else {
-            // Standard verification without custom validator
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.add(ca_cert).context("failed to add CA cert")?;
-            tls_config_builder.with_root_certificates(root_store)
-        }
-        .with_client_auth_cert(certs, key)
-        .context("failed to set client auth cert")?;
+        // `CustomCertVerifier` runs the validator *after* rustls has verified the chain
+        // against `ca_cert`, so this is the CA path plus an identity check, never a
+        // replacement for it. There is deliberately no validator-less branch: it would
+        // accept any certificate the CA signed, which is every gateway in every cluster
+        // that shares the CA.
+        let verifier = CustomCertVerifier::new(tls.cert_validator.clone(), ca_cert)?;
+        let tls_config = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(verifier))
+            .with_client_auth_cert(certs, key)
+            .context("failed to set client auth cert")?;
 
         let https = HttpsConnectorBuilder::new()
             .with_tls_config(tls_config)
@@ -433,39 +433,13 @@ mod transport_tests {
     use tokio::net::TcpListener;
     use tokio_rustls::TlsAcceptor;
 
+    /// The app id the HTTP-level tests below run under. They are not about identity,
+    /// but the validator is not optional, so their server and client agree on one.
+    const TEST_APP_ID: &[u8] = b"app-id-of-this-cluster";
+
     /// A CA plus a leaf valid for 127.0.0.1, written where `HttpsClient::new` expects.
     fn tls_material(dir: &std::path::Path) -> (HttpsClientConfig, Vec<u8>, Vec<u8>) {
-        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
-
-        let ca_key = KeyPair::generate().expect("ca key");
-        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
-
-        let leaf_key = KeyPair::generate().expect("leaf key");
-        let leaf_params =
-            CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("leaf params");
-        let leaf_cert = leaf_params
-            .signed_by(&leaf_key, &ca_cert, &ca_key)
-            .expect("leaf cert");
-
-        let cert_path = dir.join("node.crt");
-        let key_path = dir.join("node.key");
-        let ca_path = dir.join("ca.crt");
-        std::fs::write(&cert_path, leaf_cert.pem()).expect("write cert");
-        std::fs::write(&key_path, leaf_key.serialize_pem()).expect("write key");
-        std::fs::write(&ca_path, ca_cert.pem()).expect("write ca");
-
-        (
-            HttpsClientConfig {
-                cert_path: cert_path.to_string_lossy().into_owned(),
-                key_path: key_path.to_string_lossy().into_owned(),
-                ca_cert_path: ca_path.to_string_lossy().into_owned(),
-                cert_validator: None,
-            },
-            leaf_cert.der().to_vec(),
-            leaf_key.serialize_der(),
-        )
+        app_id_server_cert(dir, TEST_APP_ID)
     }
 
     /// Serve one fixed response over TLS and return the URL to reach it.
@@ -629,7 +603,7 @@ mod transport_tests {
                 cert_path: cert_path.to_string_lossy().into_owned(),
                 key_path: key_path.to_string_lossy().into_owned(),
                 ca_cert_path: ca_path.to_string_lossy().into_owned(),
-                cert_validator: None,
+                cert_validator: Arc::new(AppIdValidator::new(app_id.to_vec())),
             },
             leaf_cert.der().to_vec(),
             leaf_key.serialize_der(),
@@ -652,7 +626,7 @@ mod transport_tests {
         {
             let dir = tempfile::tempdir().expect("tempdir");
             let (mut config, cert, key) = app_id_server_cert(dir.path(), &server_app_id);
-            config.cert_validator = Some(Arc::new(AppIdValidator::new(ours.clone())));
+            config.cert_validator = Arc::new(AppIdValidator::new(ours.clone()));
             let url = serve(StatusCode::OK, gzip(b"response"), cert, key).await;
 
             let got = HttpsClient::new(&config)
