@@ -581,10 +581,15 @@ impl DistributedCertBot {
         }
 
         if !failed.is_empty() {
+            // Out of the domains actually attempted. Counting the skipped
+            // dns-persist-01 ones in the denominator would read as though they
+            // had succeeded, which is the same miscount `RepinTally::attempted`
+            // exists to avoid on the rotation path.
             bail!(
-                "failed to set CAA records for {}/{total} domains: {}; \
+                "failed to set CAA records for {}/{} domains: {}; \
                  they may retain guard CAA records that block issuance until a rerun succeeds",
                 failed.len(),
+                total - skipped,
                 failed.join(", ")
             );
         }
