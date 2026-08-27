@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, ensure, Context, Result};
+use certbot::ChallengeKind;
 use dstack_gateway_rpc::{
     admin_server::{AdminRpc, AdminServer},
     CertAttestationInfo, CertbotConfigResponse, ClearInstancePortPolicyRequest,
@@ -110,10 +111,12 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn rotate_acme_credentials(self) -> Result<RotateAcmeCredentialsResponse> {
-        let (account_uri, domains_updated) = self.state.rotate_acme_credentials().await?;
+        let outcome = self.state.rotate_acme_credentials().await?;
         Ok(RotateAcmeCredentialsResponse {
-            account_uri,
-            domains_updated: domains_updated.try_into().unwrap_or(u32::MAX),
+            account_uri: outcome.account_uri,
+            domains_updated: outcome.domains_updated.try_into().unwrap_or(u32::MAX),
+            required_dns_records: outcome.required_dns_records,
+            repin_failed_domains: outcome.repin_failed,
         })
     }
 
@@ -554,11 +557,15 @@ impl AdminRpc for AdminRpcHandler {
     async fn list_zt_domains(self) -> Result<ListZtDomainsResponse> {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
+        let certbot = &self.state.certbot;
 
         let domains = kv_store
             .list_zt_domain_configs()
             .into_iter()
-            .map(|config| zt_domain_to_proto(config, kv_store, cert_resolver))
+            .map(|config| {
+                let records = certbot.required_dns_records(&config);
+                zt_domain_to_proto(config, kv_store, cert_resolver, records)
+            })
             .collect();
 
         Ok(ListZtDomainsResponse { domains })
@@ -573,14 +580,16 @@ impl AdminRpc for AdminRpcHandler {
             .get_zt_domain_config(&domain)
             .context("ZT-Domain config not found")?;
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+        let records = self.state.certbot.required_dns_records(&config);
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
     }
 
     async fn add_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
-        let config = proto_to_zt_domain_config(&request, kv_store)?;
+        // Nothing stored to preserve: an omitted challenge is the default.
+        let config = proto_to_zt_domain_config(&request, kv_store, None)?;
 
         // Uniqueness is checked after normalization so wildcard, case, and a
         // trailing root dot cannot silently overwrite the same DNS name.
@@ -591,24 +600,29 @@ impl AdminRpc for AdminRpcHandler {
         kv_store.save_zt_domain_config(&config)?;
         info!("Added ZT-Domain config: {}", config.domain);
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+        let records = self.state.certbot.required_dns_records(&config);
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
     }
 
     async fn update_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
         let kv_store = self.state.kv_store();
         let cert_resolver = &self.state.cert_resolver;
 
-        let config = proto_to_zt_domain_config(&request, kv_store)?;
-
-        // Check the normalized key rather than the caller's presentation.
-        kv_store
-            .get_zt_domain_config(&config.domain)
+        // Read the stored record first: an omitted `challenge` means "leave it
+        // alone", and this is the only place its current value is known. Looked
+        // up on the normalized key rather than the caller's presentation.
+        let domain = normalize_zt_domain(&request.domain)?;
+        let stored = kv_store
+            .get_zt_domain_config(&domain)
             .context("ZT-Domain config not found")?;
+
+        let config = proto_to_zt_domain_config(&request, kv_store, Some(stored.challenge))?;
 
         kv_store.save_zt_domain_config(&config)?;
         info!("Updated ZT-Domain config: {}", config.domain);
 
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver))
+        let records = self.state.certbot.required_dns_records(&config);
+        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
     }
 
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
@@ -708,6 +722,7 @@ impl AdminRpc for AdminRpcHandler {
             renew_before_expiration_secs: config.renew_before_expiration.as_secs(),
             renew_timeout_secs: config.renew_timeout.as_secs(),
             acme_url: config.acme_url,
+            issuer_domain_name: config.issuer_domain_name,
         })
     }
 
@@ -716,11 +731,12 @@ impl AdminRpc for AdminRpcHandler {
         let config = merge_certbot_config(kv_store.get_certbot_config(), request)?;
         kv_store.set_certbot_config(&config)?;
         info!(
-            "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}",
+            "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}, issuer_domain_name={:?}",
             config.renew_interval,
             config.renew_before_expiration,
             config.renew_timeout,
-            config.acme_url
+            config.acme_url,
+            config.issuer_domain_name
         );
         Ok(())
     }
@@ -953,9 +969,14 @@ fn validate_zt_domain(domain: &str) -> Result<()> {
 }
 
 /// Convert proto ZtDomainConfig to internal ZtDomainConfig
+///
+/// `current` is the challenge already stored for this domain, on an update.
+/// An omitted `challenge` resolves to it rather than to the default, so a caller
+/// that predates the field leaves it alone instead of downgrading the domain.
 fn proto_to_zt_domain_config(
     proto: &ProtoZtDomainConfig,
     kv_store: &crate::kv::KvStore,
+    current: Option<ChallengeKind>,
 ) -> Result<ZtDomainConfig> {
     // Normalize dns_cred_id: treat empty string as None (use default)
     let dns_cred_id = proto
@@ -976,20 +997,42 @@ fn proto_to_zt_domain_config(
         bail!("port must be between 1 and 65535");
     }
 
+    let challenge = match proto.challenge.as_deref() {
+        // Absent means "leave it as it is". UpdateZtDomain replaces the whole
+        // record, so reading absence as the default would let any edit from a
+        // caller that does not know the field -- a cached dashboard bundle, a
+        // script, an older SDK -- downgrade a dns-persist-01 domain to dns-01
+        // cluster-wide, after which its hand-published CAA naming
+        // dns-persist-01 refuses every order. On an add there is nothing to
+        // preserve, so it falls back to the historical default.
+        None => current.unwrap_or_default(),
+        // Present but empty is still the default: that is what an explicit
+        // proto3 zero value carries, and every ZT domain predates the choice.
+        Some("" | "dns-01") => ChallengeKind::Dns01,
+        Some("dns-persist-01") => ChallengeKind::DnsPersist01,
+        Some(other) => bail!("unsupported challenge {other:?}, expected dns-01 or dns-persist-01"),
+    };
+
     Ok(ZtDomainConfig {
         domain,
         dns_cred_id,
         port: proto.port.try_into().context("port out of range")?,
         node: proto.node,
         priority: proto.priority,
+        challenge,
     })
 }
 
 /// Convert internal ZtDomainConfig to proto ZtDomainInfo (with cert status)
+///
+/// `required_dns_records` is best effort: rendering it needs the ACME account
+/// URI, and a domain whose ACME client cannot be built yet still has to be
+/// listable. It comes back empty in that case rather than failing the call.
 fn zt_domain_to_proto(
     config: ZtDomainConfig,
     kv_store: &crate::kv::KvStore,
     cert_resolver: &crate::cert_store::CertResolver,
+    required_dns_records: Vec<String>,
 ) -> ZtDomainInfo {
     // Get certificate data for status
     let cert_data = kv_store.get_cert_data(&config.domain);
@@ -1003,6 +1046,11 @@ fn zt_domain_to_proto(
         loaded_in_memory,
     });
 
+    let challenge = match config.challenge {
+        ChallengeKind::Dns01 => "dns-01",
+        ChallengeKind::DnsPersist01 => "dns-persist-01",
+    };
+
     ZtDomainInfo {
         config: Some(ProtoZtDomainConfig {
             domain: config.domain,
@@ -1010,8 +1058,10 @@ fn zt_domain_to_proto(
             port: config.port.into(),
             node: config.node,
             priority: config.priority,
+            challenge: Some(challenge.to_string()),
         }),
         cert_status,
+        required_dns_records,
     }
 }
 
@@ -1042,10 +1092,12 @@ fn merge_certbot_config(
                 request.renew_interval_secs.is_some()
                     && request.renew_before_expiration_secs.is_some()
                     && request.renew_timeout_secs.is_some()
-                    && request.acme_url.is_some(),
+                    && request.acme_url.is_some()
+                    && request.issuer_domain_name.is_some(),
                 "the stored certbot config is unreadable ({err:#}), so it can only be \
                  replaced as a whole: resend with renew_interval_secs, \
-                 renew_before_expiration_secs, renew_timeout_secs and acme_url all set"
+                 renew_before_expiration_secs, renew_timeout_secs, acme_url and \
+                 issuer_domain_name all set"
             );
             warn!("certbot config is unreadable ({err:#}); replacing it wholesale");
             GlobalCertbotConfig::default()
@@ -1060,10 +1112,22 @@ fn merge_certbot_config(
         config.renew_before_expiration = Duration::from_secs(secs);
     }
     if let Some(secs) = request.renew_timeout_secs {
+        // Zero would abort every order before it starts, and the DNS wait is
+        // derived from this value.
+        ensure!(secs > 0, "renew_timeout_secs must be greater than zero");
         config.renew_timeout = Duration::from_secs(secs);
     }
     if let Some(url) = request.acme_url {
         config.acme_url = url;
+    }
+    if let Some(name) = request.issuer_domain_name {
+        // Checked here rather than where it is used: it is written verbatim into
+        // CAA records, and those are rewritten by deleting the old ones first,
+        // so a value that cannot be a DNS name takes the zone's issuance
+        // permission down with it. Stored as configured -- empty keeps meaning
+        // the default -- but only once it is known to be usable.
+        certbot::resolve_issuer_domain_name(&name).context("invalid issuer_domain_name")?;
+        config.issuer_domain_name = name;
     }
     Ok(config)
 }
@@ -1119,11 +1183,180 @@ mod certbot_config_tests {
                 renew_before_expiration_secs: Some(86400),
                 renew_timeout_secs: Some(30),
                 acme_url: Some("https://acme-staging.example/directory".to_string()),
+                issuer_domain_name: Some("pebble.letsencrypt.org".to_string()),
             },
         )
         .expect("a complete request replaces the record");
         assert_eq!(merged.renew_interval, Duration::from_secs(60));
         assert_eq!(merged.acme_url, "https://acme-staging.example/directory");
+        assert_eq!(merged.issuer_domain_name, "pebble.letsencrypt.org");
+    }
+
+    /// Repairing from the defaults would reset the issuer name to empty --
+    /// Let's Encrypt -- for a deployment pointed at another CA, which then
+    /// publishes CAA and validation records naming a CA its orders never reach.
+    /// That is the same hazard `acme_url` is in the required set for.
+    #[test]
+    fn repairing_an_unreadable_record_cannot_forget_the_issuer_name() {
+        let err = merge_certbot_config(
+            Err(anyhow::anyhow!("corrupt record")),
+            SetCertbotConfigRequest {
+                renew_interval_secs: Some(60),
+                renew_before_expiration_secs: Some(86400),
+                renew_timeout_secs: Some(30),
+                acme_url: Some("https://pebble.example/dir".to_string()),
+                issuer_domain_name: None,
+            },
+        )
+        .expect_err("a repair that omits the issuer name must be refused");
+        assert!(err.to_string().contains("issuer_domain_name"), "{err:#}");
+    }
+
+    /// The name is written verbatim into CAA records, and writing them deletes
+    /// the records they replace, so a value that cannot be a DNS name is
+    /// refused where it is set rather than where it would corrupt a zone.
+    #[test]
+    fn a_malformed_issuer_name_is_refused() {
+        let err = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                issuer_domain_name: Some("lets encrypt.org".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect_err("a name with a space must be refused");
+        assert!(err.to_string().contains("issuer_domain_name"), "{err:#}");
+    }
+
+    /// Zero would abort every order before it began, and the DNS wait is
+    /// derived from this value.
+    #[test]
+    fn a_zero_renew_timeout_is_refused() {
+        let err = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                renew_timeout_secs: Some(0),
+                ..Default::default()
+            },
+        )
+        .expect_err("a zero renew timeout must be refused");
+        assert!(err.to_string().contains("renew_timeout_secs"), "{err:#}");
+    }
+
+    /// The name the CA is known by has to be settable, or a deployment pointed
+    /// at a non-Let's-Encrypt ACME server publishes records naming the wrong CA
+    /// with no way to correct them.
+    #[test]
+    fn the_issuer_domain_name_round_trips() {
+        let merged = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                issuer_domain_name: Some("pebble.letsencrypt.org".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("a partial update keeps the rest");
+        assert_eq!(merged.issuer_domain_name, "pebble.letsencrypt.org");
+        assert_eq!(merged.acme_url, stored().acme_url);
+    }
+}
+
+/// An omitted `challenge` has to mean "leave it as it is", or every caller that
+/// predates the field silently downgrades a dns-persist-01 domain.
+#[cfg(test)]
+mod zt_domain_challenge_tests {
+    use super::*;
+
+    fn kv_store(dir: &std::path::Path) -> crate::kv::KvStore {
+        crate::kv::KvStore::new(1, vec![], dir, None).expect("failed to create kv store")
+    }
+
+    fn request(challenge: Option<&str>) -> ProtoZtDomainConfig {
+        ProtoZtDomainConfig {
+            domain: "example.com".to_string(),
+            dns_cred_id: None,
+            port: 443,
+            node: None,
+            priority: 7,
+            challenge: challenge.map(ToString::to_string),
+        }
+    }
+
+    /// The case the field is `optional` for: a cached dashboard bundle, a curl
+    /// script, or an older SDK edits an unrelated field and must not take the
+    /// domain's challenge down with it.
+    #[test]
+    fn an_omitted_challenge_keeps_the_stored_one() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config = proto_to_zt_domain_config(
+            &request(None),
+            &kv_store(dir.path()),
+            Some(ChallengeKind::DnsPersist01),
+        )
+        .expect("an update without a challenge is valid");
+        assert_eq!(config.challenge, ChallengeKind::DnsPersist01);
+        assert_eq!(config.priority, 7);
+    }
+
+    /// On an add there is no stored value to preserve, so absence is the
+    /// historical default rather than an error.
+    #[test]
+    fn an_omitted_challenge_on_an_add_is_dns01() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config = proto_to_zt_domain_config(&request(None), &kv_store(dir.path()), None)
+            .expect("an add without a challenge is valid");
+        assert_eq!(config.challenge, ChallengeKind::Dns01);
+    }
+
+    /// Preserving an omitted value must not make the field unsettable: a caller
+    /// that names dns-01 is asking to switch back, and gets it.
+    #[test]
+    fn an_explicit_challenge_overrides_the_stored_one() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let store = kv_store(dir.path());
+        let config = proto_to_zt_domain_config(
+            &request(Some("dns-01")),
+            &store,
+            Some(ChallengeKind::DnsPersist01),
+        )
+        .expect("an explicit challenge is valid");
+        assert_eq!(config.challenge, ChallengeKind::Dns01);
+
+        let config = proto_to_zt_domain_config(
+            &request(Some("dns-persist-01")),
+            &store,
+            Some(ChallengeKind::Dns01),
+        )
+        .expect("an explicit challenge is valid");
+        assert_eq!(config.challenge, ChallengeKind::DnsPersist01);
+    }
+
+    /// An explicit empty string is what a proto3 zero value carries, and every
+    /// ZT domain predates the choice, so it still reads as the default.
+    #[test]
+    fn an_explicitly_empty_challenge_is_the_default() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config = proto_to_zt_domain_config(
+            &request(Some("")),
+            &kv_store(dir.path()),
+            Some(ChallengeKind::DnsPersist01),
+        )
+        .expect("an empty challenge is valid");
+        assert_eq!(config.challenge, ChallengeKind::Dns01);
+    }
+
+    /// An unrecognized value is refused rather than silently defaulted: a typo
+    /// that read as dns-01 would be the downgrade this field exists to prevent.
+    #[test]
+    fn an_unknown_challenge_is_refused() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let err = proto_to_zt_domain_config(
+            &request(Some("dns-persist-02")),
+            &kv_store(dir.path()),
+            None,
+        )
+        .expect_err("an unknown challenge must be refused");
+        assert!(err.to_string().contains("dns-persist-02"), "{err:#}");
     }
 }
 

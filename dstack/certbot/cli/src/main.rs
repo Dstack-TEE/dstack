@@ -6,7 +6,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result};
-use certbot::{CertBotConfig, WorkDir};
+use certbot::{CertBotConfig, ChallengeKind, WorkDir, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
 use clap::Parser;
 use documented::DocumentedFields;
 use fs_err as fs;
@@ -40,6 +40,15 @@ enum Command {
         #[arg(short, long, default_value = "certbot.toml")]
         config: PathBuf,
     },
+    /// Print the DNS records the configured domains need
+    ///
+    /// With `challenge = "dns-persist-01"` these are not written by certbot and
+    /// have to be published once, by hand, before the first issuance.
+    DnsRecords {
+        /// Path to the configuration file
+        #[arg(short, long, default_value = "certbot.toml")]
+        config: PathBuf,
+    },
     /// Generate configuration template
     Cfg {
         /// Write to file
@@ -60,7 +69,23 @@ struct Config {
     workdir: PathBuf,
     /// ACME server URL
     acme_url: String,
-    /// Cloudflare API token
+    /// ACME challenge used to prove control of the domains
+    ///
+    /// "dns-01" (default) writes a TXT record per order through the Cloudflare
+    /// API and needs cf_api_token.
+    ///
+    /// "dns-persist-01" proves control with a _validation-persist TXT record
+    /// published once, by hand: no API token, and the zone can be hosted
+    /// anywhere. Run `certbot init` then `certbot dns-records` to get the
+    /// records to publish. Experimental: the draft is still changing and
+    /// Let's Encrypt serves this challenge on staging only.
+    #[serde(default)]
+    challenge: ChallengeKind,
+    /// Issuer Domain Name naming the CA in dns-persist-01 and CAA records
+    #[serde(default = "default_issuer_domain_name")]
+    issuer_domain_name: String,
+    /// Cloudflare API token (unused with dns-persist-01)
+    #[serde(default)]
     cf_api_token: String,
     /// Optional Cloudflare-compatible API base URL
     #[serde(default)]
@@ -90,6 +115,8 @@ impl Default for Config {
         Self {
             workdir: ".".into(),
             acme_url: "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
+            challenge: ChallengeKind::default(),
+            issuer_domain_name: default_issuer_domain_name(),
             cf_api_token: "".into(),
             cf_api_url: None,
             dns_txt_ttl: default_dns_txt_ttl(),
@@ -106,6 +133,10 @@ impl Default for Config {
 
 const fn default_dns_txt_ttl() -> u32 {
     60
+}
+
+fn default_issuer_domain_name() -> String {
+    LETS_ENCRYPT_ISSUER_DOMAIN_NAME.to_string()
 }
 
 impl Config {
@@ -152,6 +183,8 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
         .key_file(workdir.key_path())
         .auto_create_account(true)
         .cert_subject_alt_names(config.domains)
+        .challenge(config.challenge)
+        .issuer_domain_name(config.issuer_domain_name)
         .cf_api_token(config.cf_api_token)
         .maybe_cf_api_url(config.cf_api_url)
         .dns_txt_ttl(config.dns_txt_ttl)
@@ -231,6 +264,16 @@ async fn main() -> Result<()> {
                 .context("Failed to build bot")?;
             bot.set_caa().await?;
         }
+        Command::DnsRecords { config } => {
+            let bot_config = load_config(&config).context("Failed to load configuration")?;
+            let bot = bot_config
+                .build_bot()
+                .await
+                .context("Failed to build bot")?;
+            for record in bot.required_dns_records() {
+                println!("{record}");
+            }
+        }
         Command::Cfg { write_to } => {
             let toml_str = Config::default().to_commented_toml()?;
             match write_to {
@@ -240,4 +283,63 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod config_template_tests {
+    use super::*;
+
+    /// Every key has to carry its own doc comment. `toml_edit` drops `None`
+    /// fields from the serialized document -- `cf_api_url` is unset by default
+    /// -- so indexing `FIELD_DOCS` by position shifts every comment after the
+    /// gap onto the wrong setting.
+    #[test]
+    fn every_key_is_labelled_with_its_own_doc_comment() {
+        let rendered = Config::default()
+            .to_commented_toml()
+            .expect("the default config renders");
+
+        // Pair each key with the comment block immediately above it.
+        let mut comment = String::new();
+        let mut pairs = Vec::new();
+        for line in rendered.lines() {
+            match line.strip_prefix('#') {
+                Some(text) => comment.push_str(text.trim()),
+                None => {
+                    if let Some((key, _)) = line.split_once('=') {
+                        pairs.push((key.trim().to_string(), std::mem::take(&mut comment)));
+                    }
+                }
+            }
+        }
+        assert!(!pairs.is_empty(), "no keys rendered:\n{rendered}");
+
+        for (key, comment) in &pairs {
+            let expected = Config::get_field_docs(key)
+                .unwrap_or_else(|err| panic!("no doc comment for {key:?}: {err}"));
+            let expected: String = expected.lines().map(str::trim).collect();
+            assert_eq!(
+                comment, &expected,
+                "key {key:?} is labelled with another field's doc comment"
+            );
+        }
+    }
+
+    /// The field that made the misalignment visible: it sat after the dropped
+    /// `cf_api_url` and was labelled "Renew timeout in seconds", next to the one
+    /// value whose interaction with `renew_timeout` this crate clamps.
+    #[test]
+    fn max_dns_wait_is_not_labelled_as_a_renew_timeout() {
+        let rendered = Config::default()
+            .to_commented_toml()
+            .expect("the default config renders");
+        let (before, _) = rendered
+            .split_once("max_dns_wait")
+            .expect("max_dns_wait is rendered");
+        let label = before.lines().last().expect("it has a comment above it");
+        assert!(
+            label.contains("DNS propagation"),
+            "max_dns_wait is labelled {label:?}"
+        );
+    }
 }

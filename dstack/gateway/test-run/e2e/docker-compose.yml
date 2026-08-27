@@ -33,9 +33,14 @@ services:
 
   # ==================== Mock Services ====================
 
-  # Mock Cloudflare DNS API
+  # Mock Cloudflare DNS API. Built from the repo rather than pulled, and the
+  # same image the full-stack suite builds, so both suites answer DNS the same
+  # way and neither depends on a prebuilt image nobody can rebuild.
+  # Source: tools/mock-cf-dns.
   mock-cf-dns-api:
-    image: kvin/mock-cf-dns-api:latest
+    build:
+      context: ../../../../tools/mock-cf-dns
+    image: dstack-e2e-mock-cf-dns:local
     container_name: mock-cf-dns-api
     networks:
       certbot-test:
@@ -45,15 +50,24 @@ services:
     environment:
       - PORT=8080
       - DEBUG=true
+      # The zones certbot writes into and Pebble reads back out of.
+      - MOCK_CF_ZONES=test0.local,test1.local,test2.local,persist0.local,persist1.local,persist2.local,selfcheck0.local
+      # Advertise this container as the authoritative nameserver for those
+      # zones, so certbot's self-check can reach it the way it reaches a real
+      # one -- NS for the zone, A for the answer -- instead of failing that
+      # lookup and quietly falling back to its system resolver.
+      - MOCK_CF_NS_ADDR=172.30.0.10
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 5s
       timeout: 3s
       retries: 5
 
-  # Pebble - Let's Encrypt test server (custom build with HTTP support)
+  # Pebble - Let's Encrypt test server. Upstream plus a `-http` flag, so a
+  # client in another container can reach it by service name without trusting
+  # the Pebble root: github.com/kvinwang/pebble branch http-flag.
   pebble:
-    image: kvin/pebble:latest
+    image: kvin/pebble:v2.10.1-http
     container_name: pebble
     command: ["-http", "-dnsserver", "172.30.0.10:53"]
     networks:
@@ -64,7 +78,15 @@ services:
       - "15000:15000"  # Management interface
     environment:
       - PEBBLE_VA_NOSLEEP=1
-      - PEBBLE_VA_ALWAYS_VALID=1  # Skip actual DNS validation for testing
+      # No PEBBLE_VA_ALWAYS_VALID: the mock answers DNS over TCP, which is the
+      # only transport Pebble uses once it is given -dnsserver, so challenges
+      # are validated against the records rather than waved through.
+      #
+      # CAA is not, and cannot be here: Pebble only advertises `caaIdentities`
+      # in its directory metadata and never queries CAA, so no CAA record in
+      # this harness can permit or forbid an order. Every CAA assertion below
+      # is against the mock's record store -- what certbot wrote -- and none of
+      # them is evidence that a CA would accept or refuse it.
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:14000/dir"]
       interval: 5s
@@ -106,6 +128,12 @@ services:
       timeout: 3s
       retries: 10
       start_period: 30s
+    # Resolve through the mock, which owns the test zones and forwards
+    # everything else. certbot's pre-order self-check reads DNS like any
+    # client; without this it queries a resolver that has never heard of the
+    # challenge names, so the check can only ever time out.
+    dns:
+      - 172.30.0.10
     cap_add:
       - NET_ADMIN
     extra_hosts:
@@ -141,6 +169,12 @@ services:
       timeout: 3s
       retries: 10
       start_period: 30s
+    # Resolve through the mock, which owns the test zones and forwards
+    # everything else. certbot's pre-order self-check reads DNS like any
+    # client; without this it queries a resolver that has never heard of the
+    # challenge names, so the check can only ever time out.
+    dns:
+      - 172.30.0.10
     cap_add:
       - NET_ADMIN
 
@@ -173,6 +207,12 @@ services:
       timeout: 3s
       retries: 10
       start_period: 30s
+    # Resolve through the mock, which owns the test zones and forwards
+    # everything else. certbot's pre-order self-check reads DNS like any
+    # client; without this it queries a resolver that has never heard of the
+    # challenge names, so the check can only ever time out.
+    dns:
+      - 172.30.0.10
     cap_add:
       - NET_ADMIN
 

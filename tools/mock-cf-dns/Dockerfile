@@ -5,5 +5,5 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY server.py /app/server.py
-EXPOSE 8080/tcp 53/udp
+EXPOSE 8080/tcp 53/udp 53/tcp
 CMD ["python", "/app/server.py"]
