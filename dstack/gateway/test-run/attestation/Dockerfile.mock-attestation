@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
+FROM rust:1.92-bookworm AS builder
+WORKDIR /src
+COPY . .
+RUN cargo build --manifest-path dstack/Cargo.toml --locked --release \
+    -p mock-attestation
+
+FROM debian:bookworm-slim
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder /src/dstack/target/release/dstack-mock-attestation /usr/local/bin/
+COPY dstack/gateway/test-run/attestation/tee-simulator.json /etc/dstack/tee-simulator.json
+ENTRYPOINT ["/usr/local/bin/dstack-mock-attestation"]

@@ -18,6 +18,12 @@ data_disks = ["/"]
 [default.core.simulator]
 attestation_file = "/opt/dstack-simulator/attestation.bin"
 patch_report_data = true
+# Re-sign the fixture quote under trust anchors derived from this seed instead
+# of shipping the fixture's original, now-stale signature. The mock collateral
+# service derives the matching roots from the same seed, so the gateways verify
+# each other's quotes through the normal production path rather than skipping
+# the check. Must stay in sync with configs/tee-simulator.json.
+mock_attestation_seed = "4747474747474747474747474747474747474747474747474747474747474747"
 
 [internal]
 address = "unix:/var/run/dstack/dstack.sock"

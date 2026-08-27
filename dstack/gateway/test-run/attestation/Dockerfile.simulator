@@ -15,5 +15,5 @@ WORKDIR /opt/dstack-simulator
 COPY --from=builder /src/dstack/target/release/dstack-simulator /usr/local/bin/dstack-simulator
 COPY sdk/simulator/app-compose.json sdk/simulator/appkeys.json \
     sdk/simulator/sys-config.json sdk/simulator/attestation.bin ./
-COPY dstack/gateway/test-run/e2e/configs/simulator.toml ./simulator.toml
+COPY dstack/gateway/test-run/attestation/simulator.toml ./simulator.toml
 CMD ["dstack-simulator", "--config", "/opt/dstack-simulator/simulator.toml"]
