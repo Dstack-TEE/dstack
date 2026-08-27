@@ -72,8 +72,14 @@ async fn read_compressed_body(data: Data<'_>) -> Result<Vec<u8>, Status> {
 }
 
 /// Read a sync envelope from a bounded request body.
-async fn read_envelope(data: Data<'_>) -> Result<SyncEnvelope, Status> {
-    let decompressed = gunzip(&read_compressed_body(data).await?)?;
+/// Decode a gzipped sync envelope.
+///
+/// Split from the `Data` read so the request-handling half of these endpoints
+/// can be driven from a test. Rocket's local client presents no certificate, so
+/// a test that went through the real route would be stopped at the peer check
+/// before reaching any of this.
+fn decode_envelope(compressed: &[u8]) -> Result<SyncEnvelope, Status> {
+    let decompressed = gunzip(compressed)?;
     // `SyncEnvelope::decode` enforces the schema version and rejects trailing bytes;
     // it is deliberately not the generic `decode` used for KV values.
     SyncEnvelope::decode(&decompressed).map_err(|e| {
@@ -139,12 +145,21 @@ pub async fn sync_store(
     data: Data<'_>,
 ) -> Result<(ContentType, Vec<u8>), Status> {
     verify_gateway_peer(state, cert)?;
+    let body = read_compressed_body(data).await?;
+    handle_sync(state, store, &body)
+}
 
+/// Everything `sync_store` does once the caller is known to be a peer.
+pub(crate) fn handle_sync(
+    state: &Proxy,
+    store: &str,
+    body: &[u8],
+) -> Result<(ContentType, Vec<u8>), Status> {
     let Some(ref wavekv_sync) = state.wavekv_sync else {
         return Err(Status::ServiceUnavailable);
     };
 
-    let env = read_envelope(data).await?;
+    let env = decode_envelope(body)?;
     if env.sender_id == 0 {
         warn!("rejected sync from invalid node_id 0");
         return Err(Status::BadRequest);
@@ -199,12 +214,17 @@ pub async fn push_store(
     data: Data<'_>,
 ) -> Result<Status, Status> {
     verify_gateway_peer(state, cert)?;
+    let body = read_compressed_body(data).await?;
+    handle_push(state, store, &body)
+}
 
+/// Everything `push_store` does once the caller is known to be a peer.
+pub(crate) fn handle_push(state: &Proxy, store: &str, body: &[u8]) -> Result<Status, Status> {
     let Some(ref wavekv_sync) = state.wavekv_sync else {
         return Err(Status::ServiceUnavailable);
     };
 
-    let env = read_envelope(data).await?;
+    let env = decode_envelope(body)?;
     if env.sender_id == 0 {
         warn!("rejected push from invalid node_id 0");
         return Err(Status::BadRequest);
@@ -233,6 +253,9 @@ mod tests {
 
     const ME: u32 = 1;
     const PEER: u32 = 2;
+    /// Both sides of the local mTLS test are this gateway, so one id serves for
+    /// the certificate it presents and the identity it expects of a peer.
+    const TEST_APP_ID: &[u8] = b"test-app-id-0000-0001";
 
     fn peer_uuid() -> Vec<u8> {
         b"the-real-peer-2".to_vec()
@@ -250,8 +273,24 @@ mod tests {
         let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
 
         let leaf_key = KeyPair::generate().expect("leaf key");
-        let leaf_params =
+        let mut leaf_params =
             CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("leaf params");
+        // No test here turns the peer check off, so a certificate without an app_id
+        // is refused before any of them reach what they are about. Stamping one
+        // here is also what a real peer's certificate carries.
+        // A DER OCTET STRING, which is what `ra_tls` writes into this extension.
+        // Hand-encoded rather than pulling in an ASN.1 crate for three bytes of
+        // header; the short-form length is valid because the payload is under 128
+        // bytes, which a debug_assert pins.
+        debug_assert!(TEST_APP_ID.len() < 128);
+        let mut app_id_der = vec![0x04, TEST_APP_ID.len() as u8];
+        app_id_der.extend_from_slice(TEST_APP_ID);
+        leaf_params
+            .custom_extensions
+            .push(ra_tls::rcgen::CustomExtension::from_oid_content(
+                ra_tls::oids::PHALA_RATLS_APP_ID,
+                app_id_der,
+            ));
         let leaf_cert = leaf_params
             .signed_by(&leaf_key, &ca_cert, &ca_key)
             .expect("leaf cert");
@@ -272,27 +311,41 @@ mod tests {
         }
     }
 
-    /// A gateway serving the real sync routes over Rocket's local client.
+    /// A gateway whose request-handling half these tests drive directly.
     ///
-    /// `insecure_skip_attestation` is on, which makes `verify_gateway_peer` return
-    /// immediately: these tests are about everything below it — route dispatch, the gzip
-    /// framing, the store split, the uuid check. `enforcing_gateway` covers the gate
-    /// itself, which this fixture cannot, because Rocket's local client speaks no TLS
-    /// and so can never present a certificate.
-    async fn serving_gateway(sync_enabled: bool) -> (Client, Proxy, TempDir) {
-        serving_gateway_with(sync_enabled, true).await
+    /// They are about everything below the peer check — the gzip framing, the store
+    /// split, the uuid check, the removed-sender refusal — and they call `handle_sync`
+    /// and `handle_push` rather than going through the routes, because the peer check runs
+    /// on every request these tests make and Rocket's local client speaks no TLS, so a
+    /// request through the route can never get past it. `enforcing_gateway` covers the check itself.
+    async fn serving_gateway(sync_enabled: bool) -> (Proxy, TempDir) {
+        let (_client, proxy, tmp) = serving_gateway_with(sync_enabled).await;
+        (proxy, tmp)
     }
 
-    /// The same gateway with the attestation bypass switched off, so the peer check runs
-    /// for real.
+    /// The same gateway, reached through the real routes, where every request is refused
+    /// for want of a certificate. That refusal is the assertion.
     async fn enforcing_gateway() -> (Client, Proxy, TempDir) {
-        serving_gateway_with(true, false).await
+        serving_gateway_with(true).await
     }
 
-    async fn serving_gateway_with(
-        sync_enabled: bool,
-        skip_attestation: bool,
-    ) -> (Client, Proxy, TempDir) {
+    /// Drive the sync endpoint's body the way its route would.
+    fn post_sync(proxy: &Proxy, store: &str, body: Vec<u8>) -> (Status, Vec<u8>) {
+        match handle_sync(proxy, store, &body) {
+            Ok((_content_type, bytes)) => (Status::Ok, bytes),
+            Err(status) => (status, Vec::new()),
+        }
+    }
+
+    /// Drive the push endpoint's body the way its route would.
+    fn post_push(proxy: &Proxy, store: &str, body: Vec<u8>) -> Status {
+        match handle_push(proxy, store, &body) {
+            Ok(status) => status,
+            Err(status) => status,
+        }
+    }
+
+    async fn serving_gateway_with(sync_enabled: bool) -> (Client, Proxy, TempDir) {
         // `main` installs this once at startup; the sync client builds a rustls config,
         // so a test that skips it panics inside rustls rather than failing an assertion.
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -310,12 +363,11 @@ mod tests {
             .join("wg.conf")
             .to_string_lossy()
             .into_owned();
-        config.debug.insecure_skip_attestation = skip_attestation;
 
         let tls_config = write_tls_material(temp_dir.path());
         let proxy = Proxy::new(ProxyOptions {
             config,
-            my_app_id: None,
+            my_app_id: Some(TEST_APP_ID.to_vec()),
             tls_config,
         })
         .await
@@ -330,10 +382,9 @@ mod tests {
 
     /// The sync routes are the cluster's write surface: anything that reaches them can
     /// insert entries that replicate to every gateway. `verify_gateway_peer` is the only
-    /// thing standing in front of them, and with `insecure_skip_attestation` set — which
-    /// every other test here sets — its first statement returns `Ok(())`, so the gate
-    /// itself was never executed by any test. Replacing the whole function body with
-    /// `Ok(())` did not turn the suite red.
+    /// thing standing in front of them, and no test had ever executed it: every test
+    /// here reached the body below by turning the check off. Replacing the whole
+    /// function body with `Ok(())` did not turn the suite red.
     ///
     /// Rocket's local client speaks no TLS and so presents no certificate, which is
     /// exactly the case that must be refused.
@@ -395,7 +446,7 @@ mod tests {
     /// The rule the sync routes are defended by: same app id or nothing.
     ///
     /// Every case below was previously unreachable, because the only tests that touched
-    /// this code set `insecure_skip_attestation` and returned before it. Inverting the
+    /// this code returned before it without checking anything. Inverting the
     /// comparison to `==` left the suite green.
     #[test]
     fn a_peer_is_authorized_only_when_its_app_id_matches_ours() {
@@ -488,16 +539,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_stamped_push_is_accepted_and_lands_in_the_store() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
 
-        let response = client
-            .post("/wavekv/push/persistent")
-            .body(body(&push_envelope(peer_uuid(), "node/9")))
-            .dispatch()
-            .await;
+        let status = post_push(
+            &proxy,
+            "persistent",
+            body(&push_envelope(peer_uuid(), "node/9")),
+        );
 
-        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(status, Status::Ok);
         assert!(
             proxy.kv_store().persistent().read().get("node/9").is_some(),
             "a well-formed push must reach the store"
@@ -509,16 +560,16 @@ mod tests {
     /// `check_uuid` — which only the manager runs, not `merge_push` — rejected it.
     #[tokio::test]
     async fn an_unstamped_push_is_refused_at_the_route() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
 
-        let response = client
-            .post("/wavekv/push/persistent")
-            .body(body(&push_envelope(Vec::new(), "node/9")))
-            .dispatch()
-            .await;
+        let status = post_push(
+            &proxy,
+            "persistent",
+            body(&push_envelope(Vec::new(), "node/9")),
+        );
 
-        assert_eq!(response.status(), Status::InternalServerError);
+        assert_eq!(status, Status::InternalServerError);
         assert!(
             proxy.kv_store().persistent().read().get("node/9").is_none(),
             "a push that fails the identity check must not write anything"
@@ -527,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_sync_round_trip_returns_a_decodable_envelope() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
         proxy
             .kv_store()
@@ -537,14 +588,9 @@ mod tests {
             .expect("seed");
 
         let request = SyncEnvelope::new(PEER, peer_uuid());
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(body(&request))
-            .dispatch()
-            .await;
+        let (status, bytes) = post_sync(&proxy, "persistent", body(&request));
 
-        assert_eq!(response.status(), Status::Ok);
-        let bytes = response.into_bytes().await.expect("body");
+        assert_eq!(status, Status::Ok);
         let decoded = SyncEnvelope::decode(&gunzip(&bytes).expect("gunzip")).expect("decode");
         assert_eq!(decoded.sender_id, ME);
         assert!(
@@ -560,7 +606,7 @@ mod tests {
     async fn sync_and_push_cross_a_real_mutually_authenticated_tls_connection() {
         use rocket::{mtls::MtlsConfig, tls::TlsConfig as RocketTlsConfig};
 
-        let (_local, proxy, tmp) = serving_gateway(true).await;
+        let (proxy, tmp) = serving_gateway(true).await;
         register_peer(&proxy);
         let tls = write_tls_material(tmp.path());
 
@@ -651,9 +697,42 @@ mod tests {
         server.await.expect("server task");
     }
 
+    /// The production routes with the peer check removed.
+    ///
+    /// Mounted by one test, and only because the body cap it asserts lives in
+    /// the route half: `handle_sync` never sees a `Data`, so a test calling it
+    /// directly cannot reach the limit, and Rocket's local client cannot present
+    /// the certificate the real route now requires. Two duplicated lines are
+    /// cheaper than losing coverage of a bound that exists to stop a peer -- or a
+    /// stranger who got that far -- from making the gateway read without end.
+    #[post("/wavekv/sync/<store>", data = "<data>")]
+    async fn ungated_sync(
+        state: &State<Proxy>,
+        store: &str,
+        data: Data<'_>,
+    ) -> Result<(ContentType, Vec<u8>), Status> {
+        let body = read_compressed_body(data).await?;
+        handle_sync(state, store, &body)
+    }
+
+    #[post("/wavekv/push/<store>", data = "<data>")]
+    async fn ungated_push(
+        state: &State<Proxy>,
+        store: &str,
+        data: Data<'_>,
+    ) -> Result<Status, Status> {
+        let body = read_compressed_body(data).await?;
+        handle_push(state, store, &body)
+    }
+
     #[tokio::test]
     async fn an_oversized_compressed_request_is_rejected_explicitly() {
-        let (client, _proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
+        let rocket = rocket::build()
+            .manage(proxy)
+            .mount("/", rocket::routes![ungated_sync, ungated_push]);
+        let client = Client::tracked(rocket).await.expect("rocket client");
+
         for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
             let response = client
                 .post(path)
@@ -667,16 +746,12 @@ mod tests {
     /// Unknown stores are rejected rather than being routed to either replicated store.
     #[tokio::test]
     async fn an_unknown_store_is_rejected() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
 
-        let response = client
-            .post("/wavekv/sync/bogus")
-            .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
-            .dispatch()
-            .await;
+        let (status, _) = post_sync(&proxy, "bogus", body(&SyncEnvelope::new(PEER, peer_uuid())));
 
-        assert_eq!(response.status(), Status::NotFound);
+        assert_eq!(status, Status::NotFound);
     }
 
     /// The lockout at the door. The app-identity check proves the sender is
@@ -686,53 +761,65 @@ mod tests {
     /// SetNodeUrl re-admission path -- opens the door again.
     #[tokio::test]
     async fn a_removed_nodes_envelopes_are_refused_at_the_door() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
         proxy.kv_store().mark_peer_removed(PEER).expect("mark");
 
-        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
-            let response = client
-                .post(path)
-                .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
-                .dispatch()
-                .await;
-            assert_eq!(
-                response.status(),
-                Status::Forbidden,
-                "{path} must refuse a removed sender"
-            );
-        }
+        let (sync_status, _) = post_sync(
+            &proxy,
+            "persistent",
+            body(&SyncEnvelope::new(PEER, peer_uuid())),
+        );
+        assert_eq!(
+            sync_status,
+            Status::Forbidden,
+            "sync must refuse a removed sender"
+        );
+        let push_status = post_push(
+            &proxy,
+            "persistent",
+            body(&SyncEnvelope::new(PEER, peer_uuid())),
+        );
+        assert_eq!(
+            push_status,
+            Status::Forbidden,
+            "push must refuse a removed sender"
+        );
 
         proxy.kv_store().clear_peer_removed(PEER).expect("clear");
-        let response = client
-            .post("/wavekv/sync/persistent")
-            .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
-            .dispatch()
-            .await;
-        assert_eq!(
-            response.status(),
-            Status::Ok,
-            "re-admission opens the door again"
+        let (readmitted, _) = post_sync(
+            &proxy,
+            "persistent",
+            body(&SyncEnvelope::new(PEER, peer_uuid())),
         );
+        assert_eq!(readmitted, Status::Ok, "re-admission opens the door again");
     }
 
     /// A node with synchronization disabled reports that the service is unavailable.
     #[tokio::test]
     async fn a_sync_disabled_node_answers_503() {
-        let (client, _proxy, _tmp) = serving_gateway(false).await;
+        let (proxy, _tmp) = serving_gateway(false).await;
 
-        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
-            let response = client
-                .post(path)
-                .body(body(&SyncEnvelope::new(PEER, peer_uuid())))
-                .dispatch()
-                .await;
-            assert_eq!(
-                response.status(),
-                Status::ServiceUnavailable,
-                "{path} must not look like a missing v2 route"
-            );
-        }
+        let (sync_status, _) = post_sync(
+            &proxy,
+            "persistent",
+            body(&SyncEnvelope::new(PEER, peer_uuid())),
+        );
+        assert_eq!(
+            sync_status,
+            Status::ServiceUnavailable,
+            "sync must not look like a missing v2 route"
+        );
+        let push_status = post_push(
+            &proxy,
+            "persistent",
+            body(&SyncEnvelope::new(PEER, peer_uuid())),
+        );
+        assert_eq!(
+            push_status,
+            Status::ServiceUnavailable,
+            "push must not look like a missing v2 route"
+        );
     }
 
     /// gzip expands by three orders of magnitude on attacker-chosen input, so the
@@ -741,7 +828,7 @@ mod tests {
     /// has to hold against a peer running a buggy build, not just against a stranger.
     #[tokio::test]
     async fn a_compression_bomb_is_refused_before_it_is_decompressed() {
-        let (client, _proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
 
         // ~130 MiB of zeroes compresses to well under the request cap.
         let bomb = gzip(&vec![0u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]).expect("gzip");
@@ -751,14 +838,18 @@ mod tests {
             bomb.len()
         );
 
-        for path in ["/wavekv/sync/persistent", "/wavekv/push/persistent"] {
-            let response = client.post(path).body(bomb.clone()).dispatch().await;
-            assert_eq!(
-                response.status(),
-                Status::BadRequest,
-                "{path} must refuse an over-sized expansion"
-            );
-        }
+        let (sync_status, _) = post_sync(&proxy, "persistent", bomb.clone());
+        assert_eq!(
+            sync_status,
+            Status::BadRequest,
+            "sync must refuse an over-sized expansion"
+        );
+        let push_status = post_push(&proxy, "persistent", bomb);
+        assert_eq!(
+            push_status,
+            Status::BadRequest,
+            "push must refuse an over-sized expansion"
+        );
     }
 
     /// The limits must leave room for the largest legitimate message.
@@ -805,17 +896,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_push_from_node_id_zero_is_refused() {
-        let (client, proxy, _tmp) = serving_gateway(true).await;
+        let (proxy, _tmp) = serving_gateway(true).await;
         register_peer(&proxy);
 
         let mut env = push_envelope(peer_uuid(), "node/9");
         env.sender_id = 0;
-        let response = client
-            .post("/wavekv/push/persistent")
-            .body(body(&env))
-            .dispatch()
-            .await;
+        let status = post_push(&proxy, "persistent", body(&env));
 
-        assert_eq!(response.status(), Status::BadRequest);
+        assert_eq!(status, Status::BadRequest);
     }
 }
