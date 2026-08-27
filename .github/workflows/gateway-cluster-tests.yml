@@ -84,9 +84,18 @@ jobs:
         working-directory: dstack/gateway/test-run/cluster
         run: |
           mkdir -p run/logs
-          for svc in $(docker compose config --services); do
-            docker compose logs --no-color "$svc" > "run/logs/$svc.log" 2>&1 || true
-          done
+          # By project, discovered from the daemon. A bare `docker compose` here
+          # addresses the project named after this directory (`cluster`), which
+          # no test ever uses -- every test runs under `cluster-<testname>`, so
+          # the loop that used `compose config --services` collected nothing.
+          docker ps -a --filter 'label=com.docker.compose.project' \
+            --format '{{.Label "com.docker.compose.project"}}' \
+            | grep -E '^cluster-' | sort -u | while read -r project; do
+              docker compose -p "$project" -f docker-compose.yml logs --no-color \
+                > "run/logs/project-$project.log" 2>&1 || true
+            done
+          # The suite's own per-test dumps are root-owned inside the bind mount.
+          docker run --rm -v "$PWD/run:/r" alpine:latest chmod -R a+rX /r || true
           # The attestation fixture is a project of its own now, so it is not in
           # this suite's service list and its logs have to be asked for
           # separately -- they are where a quote-verification failure explains

@@ -24,7 +24,12 @@ while [[ $# -gt 0 ]]; do
         --keep-running) KEEP_RUNNING=true; shift ;;
         --only)         ONLY="$2"; shift 2 ;;
         down)
-            compose down -v --remove-orphans 2>/dev/null || true
+            # Every per-test project, not just the one CURRENT_TEST happens to
+            # name, plus the shared fixture -- otherwise CI's teardown leaves
+            # the fixture project and its global network and volumes behind on
+            # any runner that outlives the job.
+            down_all
+            fixture_compose down -v --remove-orphans >/dev/null 2>&1 || true
             exit 0 ;;
         -h|--help)
             echo "Usage: $0 [--skip-build] [--keep-running] [--only <test>] | down"
@@ -125,12 +130,14 @@ log_info "=========================================="
 log_info "dstack-gateway cluster suite"
 log_info "=========================================="
 
-rm -rf "$LOG_DIR"
+# Discard anything a previous run left: node state is a bind mount that
+# `compose down -v` does not remove and the host user cannot delete.
+down_all
+wipe_run_tree
 mkdir -p "$DATA_DIR"
 
 log_info "starting the attestation fixture"
 fixture_compose build >/dev/null
-FIXTURE_WAS_UP=$(fixture_compose ps -q 2>/dev/null | wc -l)
 fixture_compose up -d --wait >/dev/null
 
 "$SCRIPT_DIR/../build-gateway-image.sh" "$SCRIPT_DIR" $SKIP_BUILD

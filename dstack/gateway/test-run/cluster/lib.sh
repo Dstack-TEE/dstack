@@ -178,6 +178,59 @@ fixture_compose() {
         -f "$SCRIPT_DIR/../attestation/fixture.yml" "$@"
 }
 
+# Every project this suite may have created, asked of the daemon rather than
+# guessed.
+#
+# `compose down` with CURRENT_TEST unset addresses `cluster-suite`, which no
+# test ever uses -- the runner sets CURRENT_TEST before the first one -- so the
+# `down` subcommand tore down nothing and a killed run leaked one project per
+# test, containers still attached to the shared attestation network. Label
+# lookup finds them whatever they are called and whatever went wrong.
+cluster_projects() {
+    # Matched on the compose file's absolute path, not on a `cluster-*` name
+    # pattern. The name is this suite's convention, not something the daemon
+    # guarantees, and a pattern wide enough to catch every per-test project is
+    # also wide enough to tear down an unrelated `cluster-…` project that
+    # happens to be on the same machine. `config_files` is set by compose to the
+    # file the container came from, so this selects exactly this checkout's
+    # containers -- another worktree running the same suite is left alone.
+    docker ps -a \
+        --filter "label=com.docker.compose.project.config_files=$SCRIPT_DIR/docker-compose.yml" \
+        --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null \
+        | sort -u
+}
+
+down_all() {
+    local project
+    while read -r project; do
+        [ -n "$project" ] || continue
+        docker compose -p "$project" -f "$SCRIPT_DIR/docker-compose.yml" \
+            down -v --remove-orphans >/dev/null 2>&1 || true
+    done < <(cluster_projects)
+}
+
+# Clear the run tree's contents, from inside a container.
+#
+# The gateway runs as root and writes its certificates 0600 (see
+# `safe_write_with_mode` in gateway/src/main.rs), so the host user cannot delete
+# what a previous run left. Node state is a bind mount, which `compose down -v`
+# does not touch either -- so without this every test resumed from the previous
+# run's store. Test names are fixed, so the stale directory is always the one
+# the test is about to use: `test_cross_node_data_sync` found its instance
+# already replicated and passed with sync entirely broken, and
+# `test_partial_cluster_bootstrap` never had to bootstrap. Only the first run on
+# a fresh checkout -- which is what CI does, and what this was verified on --
+# behaved as the comments describe.
+#
+# Contents only. `run` is what the suite's lock is held on, and replacing the
+# directory would detach that lock exactly the way a deleted lock file does.
+wipe_run_tree() {
+    mkdir -p "$RUN_DIR"
+    docker run --rm -v "$RUN_DIR:/r" alpine:latest \
+        find /r -mindepth 1 -delete >/dev/null 2>&1 \
+        || log_warn "could not clear $RUN_DIR; a stale store may make assertions vacuous"
+}
+
 # Discard whatever the previous test used and start this one from nothing.
 new_test_project() {
     compose down -v --remove-orphans >/dev/null 2>&1 || true
