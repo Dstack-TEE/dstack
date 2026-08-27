@@ -581,7 +581,12 @@ setup_certbot_config() {
         return 1
     fi
 
-    # Create DNS credential
+    # Create DNS credential.
+    #
+    # max_dns_wait is short but not zero: the API rejects zero outright
+    # ("max_dns_wait must be greater than zero"), and a rejected credential
+    # leaves the cluster with none -- which fails every dns-01 test downstream
+    # rather than this one call.
     log_info "Creating DNS credential..."
     if ! curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.CreateDnsCredential" \
         -H "${ADMIN_AUTH_HEADER}" \
@@ -593,7 +598,7 @@ setup_certbot_config() {
             "cf_api_url": "'"${CF_API_URL}"'",
             "set_as_default": true,
             "dns_txt_ttl": 1,
-            "max_dns_wait": 0
+            "max_dns_wait": 5
         }' > /dev/null; then
         log_error "Failed to create DNS credential"
         return 1
@@ -669,8 +674,13 @@ main() {
 
     # Phase 4: Configure certbot
     log_phase 4 "Configure certbot"
+    # Fatal, not noted in passing. Every certificate test downstream needs this
+    # to have worked, so carrying on turns one broken precondition into twenty
+    # failures that all point somewhere else -- and the run still has to wait
+    # out the full issuance poll before reporting any of them.
     if ! setup_certbot_config; then
         log_error "Failed to setup certbot configuration"
+        exit 1
     fi
 
     # Phase 5: Certificate issuance
