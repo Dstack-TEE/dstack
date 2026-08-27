@@ -53,14 +53,14 @@ pub trait CertValidator: Debug + Send + Sync + 'static {
     fn validate(&self, cert_der: &[u8]) -> Result<(), String>;
 }
 
-/// TLS configuration for mTLS with optional custom certificate validation
+/// TLS configuration for mTLS with custom certificate validation
 #[derive(Clone)]
 pub struct HttpsClientConfig {
     pub cert_path: String,
     pub key_path: String,
     pub ca_cert_path: String,
-    /// Optional custom certificate validator (checked during TLS handshake)
-    /// Checked against the peer's certificate during the handshake.
+    /// Custom certificate validator, checked against the peer's certificate
+    /// during the handshake.
     ///
     /// Not optional: this is the only thing that distinguishes a gateway in our own
     /// cluster from any other holder of a certificate the shared CA signed, and CA-path
