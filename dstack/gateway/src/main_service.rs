@@ -69,7 +69,7 @@ pub struct ProxyInner {
     pub(crate) config: Arc<Config>,
     /// Multi-domain certbot (from KvStore DNS credentials and domain configs)
     pub(crate) certbot: Arc<DistributedCertBot>,
-    my_app_id: Option<Vec<u8>>,
+    my_app_id: Vec<u8>,
     state: Mutex<ProxyState>,
     pub(crate) notify_state_updated: Notify,
     auth_client: AuthClient,
@@ -136,7 +136,12 @@ pub(crate) struct ProxyState {
 /// Options for creating a Proxy instance
 pub struct ProxyOptions {
     pub config: Config,
-    pub my_app_id: Option<Vec<u8>>,
+    /// This gateway's own app id, from the guest agent.
+    ///
+    /// Not optional: it is the only thing `authorize_peer` and `AppIdValidator`
+    /// compare a peer against, so a gateway that does not know it cannot decide
+    /// who belongs in the cluster. `main` fails to start rather than construct one.
+    pub my_app_id: Vec<u8>,
     /// TLS configuration (from Rocket's tls config)
     pub tls_config: TlsConfig,
 }
@@ -372,9 +377,7 @@ impl ProxyInner {
         // Build HttpsClientConfig for mTLS communication
         let https_config = {
             let tls = &tls_config;
-            let cert_validator = my_app_id
-                .clone()
-                .map(|app_id| Arc::new(AppIdValidator::new(app_id)) as _);
+            let cert_validator = Arc::new(AppIdValidator::new(my_app_id.clone()));
             HttpsClientConfig {
                 cert_path: tls.certs.clone(),
                 key_path: tls.key.clone(),
@@ -552,8 +555,8 @@ impl ProxyInner {
         &self.kv_store
     }
 
-    pub(crate) fn my_app_id(&self) -> Option<&[u8]> {
-        self.my_app_id.as_deref()
+    pub(crate) fn my_app_id(&self) -> &[u8] {
+        &self.my_app_id
     }
 }
 
@@ -2668,13 +2671,10 @@ pub struct RpcHandler {
 
 impl RpcHandler {
     fn ensure_from_gateway(&self) -> Result<()> {
-        if self.state.config.debug.insecure_skip_attestation {
-            return Ok(());
-        }
         if self.remote_app_id.is_none() {
             bail!("Client authentication is required");
         }
-        if self.state.my_app_id != self.remote_app_id {
+        if Some(&self.state.my_app_id) != self.remote_app_id.as_ref() {
             bail!("Remote app id is not from dstack-gateway");
         }
         Ok(())

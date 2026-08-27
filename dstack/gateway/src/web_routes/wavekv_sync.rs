@@ -90,11 +90,6 @@ fn decode_envelope(compressed: &[u8]) -> Result<SyncEnvelope, Status> {
 
 /// Verify that the request is from a gateway with the same app_id (mTLS verification)
 fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(), Status> {
-    // Skip verification if not running in dstack (test mode)
-    if state.config.debug.insecure_skip_attestation {
-        return Ok(());
-    }
-
     let Some(cert) = cert else {
         warn!("WaveKV sync: client certificate required but not provided");
         return Err(Status::Unauthorized);
@@ -105,9 +100,9 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
 
 /// Decide whether a certificate's app identity is one we accept.
 ///
-/// Split out from `verify_gateway_peer` because that function's other half — the
-/// attestation bypass and Rocket's certificate guard — cannot be exercised from a test,
-/// which left this decision, the actual authorization rule, uncovered.
+/// Split out from `verify_gateway_peer` because that function's other half — Rocket's
+/// certificate guard — cannot be exercised from a test, which left this decision, the
+/// actual authorization rule, uncovered.
 ///
 /// The app-id extension is the only identity accepted. There used to be a fallback to
 /// the app-info extension here, and it existed because certificates issued through a
@@ -120,7 +115,7 @@ fn verify_gateway_peer(state: &Proxy, cert: Option<Certificate<'_>>) -> Result<(
 /// rule across all three is worth more than a second path that was untested, disagreed
 /// with its neighbours, and read an issuer claim the cluster does not otherwise
 /// authorize on.
-fn authorize_peer(cert: &impl CertExt, my_app_id: Option<&[u8]>) -> Result<(), Status> {
+fn authorize_peer(cert: &impl CertExt, my_app_id: &[u8]) -> Result<(), Status> {
     let remote_app_id = cert.get_app_id().map_err(|e| {
         warn!("WaveKV sync: failed to extract app_id from certificate: {e}");
         Status::Unauthorized
@@ -131,7 +126,7 @@ fn authorize_peer(cert: &impl CertExt, my_app_id: Option<&[u8]>) -> Result<(), S
         return Err(Status::Unauthorized);
     };
 
-    if my_app_id != Some(remote_app_id.as_slice()) {
+    if my_app_id != remote_app_id.as_slice() {
         warn!("WaveKV sync: app_id mismatch, expected {my_app_id:?}, got {remote_app_id:?}");
         return Err(Status::Forbidden);
     }
@@ -268,9 +263,9 @@ mod tests {
     /// from disk to build its rustls client config, and the root store only accepts a
     /// trust anchor with `CA:TRUE` — so a lone self-signed leaf is not enough.
     ///
-    /// The leaf carries an app_id because no test here turns the peer check off, so a
-    /// certificate without one is refused before any of them reach what they are about.
-    /// It is also what a real peer's certificate carries.
+    /// The leaf carries an app_id because the peer check is unconditional, so a
+    /// certificate without one is refused before any of these tests reach what they are
+    /// about. It is also what a real peer's certificate carries.
     fn write_tls_material(dir: &std::path::Path) -> TlsConfig {
         let pki = ra_tls::test_pki::write_mtls_pki(
             dir,
@@ -291,9 +286,9 @@ mod tests {
     ///
     /// They are about everything below the peer check — the gzip framing, the store
     /// split, the uuid check, the removed-sender refusal — and they call `handle_sync`
-    /// and `handle_push` rather than going through the routes, because the peer check runs
-    /// on every request these tests make and Rocket's local client speaks no TLS, so a
-    /// request through the route can never get past it. `enforcing_gateway` covers the check itself.
+    /// and `handle_push` rather than going through the routes, because the peer check is
+    /// now unconditional and Rocket's local client speaks no TLS, so a request through
+    /// the route can never get past it. `enforcing_gateway` covers the check itself.
     async fn serving_gateway(sync_enabled: bool) -> (Proxy, TempDir) {
         let (_client, proxy, tmp) = serving_gateway_with(sync_enabled).await;
         (proxy, tmp)
@@ -343,7 +338,7 @@ mod tests {
         let tls_config = write_tls_material(temp_dir.path());
         let proxy = Proxy::new(ProxyOptions {
             config,
-            my_app_id: Some(TEST_APP_ID.to_vec()),
+            my_app_id: TEST_APP_ID.to_vec(),
             tls_config,
         })
         .await
@@ -358,9 +353,8 @@ mod tests {
 
     /// The sync routes are the cluster's write surface: anything that reaches them can
     /// insert entries that replicate to every gateway. `verify_gateway_peer` is the only
-    /// thing standing in front of them, and no test had ever executed it: every test
-    /// here reached the body below by turning the check off. Replacing the whole
-    /// function body with `Ok(())` did not turn the suite red.
+    /// thing standing in front of them, and no test had ever executed it. Replacing the
+    /// whole function body with `Ok(())` did not turn the suite red.
     ///
     /// Rocket's local client speaks no TLS and so presents no certificate, which is
     /// exactly the case that must be refused.
@@ -397,7 +391,7 @@ mod tests {
             .expect("self-signed cert")
     }
 
-    fn authorize(der: &[u8], my_app_id: Option<&[u8]>) -> Result<(), Status> {
+    fn authorize(der: &[u8], my_app_id: &[u8]) -> Result<(), Status> {
         use rocket::mtls::x509::{FromDer, X509Certificate};
         let (_, parsed) = X509Certificate::from_der(der).expect("parse cert");
         authorize_peer(&RocketCert(parsed.extensions()), my_app_id)
@@ -412,10 +406,10 @@ mod tests {
     fn a_peer_is_authorized_only_when_its_app_id_matches_ours() {
         let ours = b"app-id-of-this-cluster".to_vec();
 
-        assert_eq!(authorize(&cert_with_app_id(&ours), Some(&ours)), Ok(()));
+        assert_eq!(authorize(&cert_with_app_id(&ours), &ours), Ok(()));
 
         assert_eq!(
-            authorize(&cert_with_app_id(b"a-different-app"), Some(&ours)),
+            authorize(&cert_with_app_id(b"a-different-app"), &ours),
             Err(Status::Forbidden),
             "a valid certificate from another app must not reach the sync routes"
         );
@@ -441,7 +435,7 @@ mod tests {
             .expect("self-signed cert");
 
         assert_eq!(
-            authorize(&cert, Some(&ours)),
+            authorize(&cert, &ours),
             Err(Status::Unauthorized),
             "the app-id extension is the only identity the sync routes accept"
         );
@@ -452,18 +446,8 @@ mod tests {
     #[test]
     fn a_certificate_without_an_app_id_is_refused() {
         assert_eq!(
-            authorize(&cert_without_app_id(), Some(b"app-id-of-this-cluster")),
+            authorize(&cert_without_app_id(), b"app-id-of-this-cluster"),
             Err(Status::Unauthorized)
-        );
-    }
-
-    /// A gateway that does not know its own app id cannot authorize anyone. Comparing
-    /// `None` against a present remote id must reject, never match.
-    #[test]
-    fn a_gateway_without_an_app_id_authorizes_nobody() {
-        assert_eq!(
-            authorize(&cert_with_app_id(b"anything"), None),
-            Err(Status::Forbidden)
         );
     }
 
@@ -621,7 +605,9 @@ mod tests {
             cert_path: tls.certs.clone(),
             key_path: tls.key.clone(),
             ca_cert_path: tls.mutual.ca_certs.clone(),
-            cert_validator: None,
+            cert_validator: std::sync::Arc::new(crate::kv::AppIdValidator::new(
+                TEST_APP_ID.to_vec(),
+            )),
         })
         .expect("HTTPS client");
         let base = format!("https://127.0.0.1:{port}");

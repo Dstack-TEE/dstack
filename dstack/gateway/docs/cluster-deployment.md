@@ -241,7 +241,6 @@ address = "0.0.0.0"
 
 [core.debug]
 insecure_enable_debug_rpc = true
-insecure_skip_attestation = false
 port = 9015
 address = "0.0.0.0"
 

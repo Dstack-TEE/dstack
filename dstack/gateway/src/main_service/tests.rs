@@ -43,7 +43,7 @@ async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
     tweak(&mut config);
     let options = ProxyOptions {
         config,
-        my_app_id: None,
+        my_app_id: b"test-app-id".to_vec(),
         tls_config: TlsConfig {
             certs: "".to_string(),
             key: "".to_string(),

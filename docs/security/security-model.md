@@ -329,9 +329,11 @@ The one case dstack does not leave to downstream is a genuinely invalid TCB: `dc
 
 ### Development modes are auditable, not production-safe
 
-dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `attest_rpc_cert = false`, gateway `core.debug.insecure_skip_attestation = true`, KMS `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
+dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `attest_rpc_cert = false`, KMS `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
 
 This is intentional. Runtime configuration that affects the trust boundary is visible in attestation measurements or public contract state. Cargo feature gates are not automatically more auditable because feature unification can enable a feature through a dependency graph, and the resulting runtime behavior is not represented as a measured deployment setting.
+
+This argument has a limit, and it is worth stating because it is what keeps the list short. A switch qualifies only if the trust decision still happens and is merely recorded as a measured setting. A switch that decides *whether* attestation happens at all does not qualify: there is then no measurement to audit, because the thing that would have produced it was skipped. Gateway `core.debug.insecure_skip_attestation` was such a switch -- it turned off both the peer identity check on WaveKV sync and the gateway's own app id lookup -- and it was removed rather than documented.
 
 Production verifiers should reject deployments that use these development settings. Operators should treat them the same way they treat debug-mode TEE quotes: useful for testing, invalid for production trust.
 
