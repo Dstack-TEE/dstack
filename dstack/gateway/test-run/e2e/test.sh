@@ -428,6 +428,60 @@ test_set_caa_skips_a_persist_domain() {
         | grep -qF '"type": "CAA"'
 }
 
+# A run of SetCaa that dies between installing the `;` guards and dropping them
+# leaves the guards behind, and the operator is told to rerun. The rerun has to
+# work -- re-adding a byte-identical guard is what a provider that refuses
+# duplicates rejects -- and it has to get there without ever lifting the
+# deny-all, because a name with no issuer CAA is one any CA may issue for.
+#
+# The stranded state is planted directly: that is exactly what the dead run
+# left, and it needs no way to kill a run mid-flight.
+test_caa_rerun_recovers_without_lifting_deny_all() {
+    local domain="${CERT_DOMAINS%% *}"
+    local zone="zone-${domain//./-}"
+    local id tag
+
+    # Plant the guards a dead run would have left, and remove the real records
+    # it had already deleted by that point.
+    for id in $(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null \
+        | tr '{' '\n' \
+        | grep -F "\"name\": \"${domain}\"" \
+        | grep -F '"type": "CAA"' \
+        | sed -e 's/.*"id": "//' -e 's/".*//'); do
+        curl -sf -X DELETE "${MOCK_CF_API}/client/v4/zones/${zone}/dns_records/${id}" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" > /dev/null 2>&1 || true
+    done
+    for tag in issue issuewild; do
+        curl -sf -X POST "${MOCK_CF_API}/client/v4/zones/${zone}/dns_records" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"type": "CAA", "name": "'"${domain}"'", "content": "0 '"${tag}"' \";\"", "ttl": 60}' \
+            > /dev/null || return 1
+    done
+
+    # From here the name is deny-all, and must stay that way.
+    curl -sf -X DELETE "${MOCK_CF_API}/api/caa-gaps" > /dev/null 2>&1 || true
+    admin_post SetCaa '{}' > /dev/null || return 1
+
+    # Recovered: real issuer records, and none of the guards left behind.
+    local caa
+    caa=$(curl -sf "${MOCK_CF_API}/api/records" 2>/dev/null \
+        | tr '{' '\n' \
+        | grep -F "\"name\": \"${domain}\"" \
+        | grep -F '"type": "CAA"')
+    echo "$caa" | grep -qF 'accounturi=' || return 1
+    # An `if`, not `&& return 1`: under `set -e` a failing left-hand side makes
+    # the whole list non-zero and aborts the function.
+    if echo "$caa" | grep -qF '0 issue \";\"'; then
+        return 1
+    fi
+
+    # And never fell open on the way. This is the half that separates reusing
+    # the stranded guard from deleting it and adding a fresh one: both end here,
+    # only one of them stays denied throughout.
+    ! curl -sf "${MOCK_CF_API}/api/caa-gaps" 2>/dev/null | grep -qF "\"${domain}\""
+}
+
 # Rotation registers a new account, and every published record names the old
 # one. The response has to carry the replacements, because the gateway cannot
 # publish them and nothing else reports them.
@@ -546,7 +600,8 @@ setup_certbot_config() {
         curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.AddZtDomain" \
             -H "${ADMIN_AUTH_HEADER}" \
             -H "Content-Type: application/json" \
-            -d '{"domain": "'"${domain}"'"}' > /dev/null || true
+            -d '{"domain": "'"${domain}"'", "port": 443}' > /dev/null \
+            || log_warn "AddZtDomain failed for $domain (may already exist)"
 
         log_info "Triggering renewal for: $domain"
         curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.RenewZtDomainCert" \
@@ -712,6 +767,8 @@ main() {
     # Gateway operations that change shape for a domain it cannot write.
     run_test "SetCaa skips it instead of failing or writing" \
         "$(test_set_caa_skips_a_persist_domain; echo $?)"
+    run_test "A stranded CAA guard is recovered without falling open" \
+        "$(test_caa_rerun_recovers_without_lifting_deny_all; echo $?)"
     run_test "Rotation reports the records to republish" \
         "$(test_rotation_reports_the_records_to_republish; echo $?)"
 
