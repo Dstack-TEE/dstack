@@ -20,13 +20,35 @@ on:
     paths:
       - 'dstack/gateway/**'
       - 'dstack/vendor/ktls/**'
+      # The suite runs the gateway with attestation on, so it depends on the
+      # shared fixture: the simulator, the mock collateral service, and the
+      # fixture payloads baked into the simulator image.
+      - 'dstack/guest-agent-simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - 'sdk/simulator/**'
       - '.github/workflows/gateway-proxy-tests.yml'
   pull_request:
     branches: [ next, 'release/**' ]
     paths:
       - 'dstack/gateway/**'
       - 'dstack/vendor/ktls/**'
+      # The suite runs the gateway with attestation on, so it depends on the
+      # shared fixture: the simulator, the mock collateral service, and the
+      # fixture payloads baked into the simulator image.
+      - 'dstack/guest-agent-simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - 'sdk/simulator/**'
       - '.github/workflows/gateway-proxy-tests.yml'
+
+# The three gateway suites share one attestation fixture project and one set of
+# globally-named docker resources (`dstack-attestation`, its two volumes, the
+# `dstack-gateway:test` tag). All three trigger on `dstack/gateway/**`, so a
+# single gateway PR launches all three at once -- and on a self-hosted runner
+# they land on the same machine and tear down each other's fixture. Serialise
+# them under one group across all three workflows.
+concurrency:
+  group: gateway-suites-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

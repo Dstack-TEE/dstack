@@ -22,6 +22,7 @@ on:
       - 'dstack/certbot/**'
       - 'dstack/ra-tls/**'
       - 'dstack/guest-agent-simulator/**'
+      - 'sdk/simulator/**'
       - 'dstack/crates/mock-attestation/**'
       - 'tools/mock-cf-dns/**'
       - '.github/workflows/gateway-e2e-tests.yml'
@@ -33,9 +34,20 @@ on:
       - 'dstack/certbot/**'
       - 'dstack/ra-tls/**'
       - 'dstack/guest-agent-simulator/**'
+      - 'sdk/simulator/**'
       - 'dstack/crates/mock-attestation/**'
       - 'tools/mock-cf-dns/**'
       - '.github/workflows/gateway-e2e-tests.yml'
+
+# The three gateway suites share one attestation fixture project and one set of
+# globally-named docker resources (`dstack-attestation`, its two volumes, the
+# `dstack-gateway:test` tag). All three trigger on `dstack/gateway/**`, so a
+# single gateway PR launches all three at once -- and on a self-hosted runner
+# they land on the same machine and tear down each other's fixture. Serialise
+# them under one group across all three workflows.
+concurrency:
+  group: gateway-suites-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
