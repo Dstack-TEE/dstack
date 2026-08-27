@@ -16,7 +16,7 @@
 volumes:
   dstack-socket:
     external: true
-    name: dstack-attestation-socket
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-socket
 
 x-suite: &suite
   build:

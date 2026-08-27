@@ -10,6 +10,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEST_RUN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+FIXTURE_NS="dstack-fixture-proxy"
+export FIXTURE_NS
+
 SKIP_BUILD=""
 case "${1:-}" in
     --skip-build) SKIP_BUILD="--skip-build" ;;
@@ -17,7 +20,7 @@ case "${1:-}" in
         docker compose -f "$SCRIPT_DIR/docker-compose.yml" down -v --remove-orphans
         # The fixture too: it is a project of its own, so a suite-only teardown
         # leaves it and its global network and volumes on the runner forever.
-        docker compose -p dstack-fixture -f "$TEST_RUN_DIR/attestation/fixture.yml" \
+        docker compose -p "$FIXTURE_NS" -f "$TEST_RUN_DIR/attestation/fixture.yml" \
             down -v --remove-orphans >/dev/null 2>&1 || true
         exit 0 ;;
     -h|--help) echo "Usage: $0 [--skip-build] | down"; exit 0 ;;
@@ -50,9 +53,15 @@ fi
 
 compose() { docker compose -f "$SCRIPT_DIR/docker-compose.yml" "$@"; }
 
-# The attestation fixture is a long-lived project shared with the other suites.
+# The attestation fixture, namespaced to this suite.
+#
+# Each suite runs its own copy rather than sharing one project. The seed that
+# signs quotes and the seed that derives the verifying roots come from files in
+# `attestation/`, so separate instances agree by construction -- while a shared
+# instance meant whichever suite finished first tore it down under the others,
+# and meant the three CI workflows could not run at the same time.
 fixture_compose() {
-    docker compose -p dstack-fixture -f "$TEST_RUN_DIR/attestation/fixture.yml" "$@"
+    docker compose -p "$FIXTURE_NS" -f "$TEST_RUN_DIR/attestation/fixture.yml" "$@"
 }
 
 # Both arms share one work directory; wipe it so a run never reads a previous

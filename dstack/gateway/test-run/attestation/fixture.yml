@@ -55,15 +55,27 @@ services:
       timeout: 2s
       retries: 30
 
-# Named explicitly. A per-test project has to reference these from outside, and
-# compose's default `<project>_<name>` would make that a guess about which
-# project happened to create them first.
+# Named explicitly, and namespaced per suite.
+#
+# A per-test project has to reference these from outside, and compose's default
+# `<project>_<name>` would make that a guess about which project happened to
+# create them first -- so the names are pinned. `FIXTURE_NS` then keeps each
+# suite's copy to itself.
+#
+# One instance shared by all three suites was the earlier arrangement, on the
+# reasoning that the seed signing the quotes and the seed deriving the verifying
+# roots must not drift apart. They cannot: both come from files in this
+# directory, so three instances started from them agree by construction. What
+# sharing the *running* instance bought instead was a teardown race -- whichever
+# suite finished first tore down a fixture the others were still using -- and,
+# in CI, three workflows that could not run at the same time. Neither is worth
+# paying for something the files already guarantee.
 networks:
   attestation:
-    name: dstack-attestation
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}
 
 volumes:
   dstack-socket:
-    name: dstack-attestation-socket
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-socket
   attestation-roots:
-    name: dstack-attestation-roots
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-roots

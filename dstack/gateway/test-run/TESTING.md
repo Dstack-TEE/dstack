@@ -29,13 +29,19 @@ That is the point of the arrangement rather than a detail of it: the cluster's
 mTLS is what `cluster/` exists to exercise, and a suite that switched the checks
 off would be testing the switch.
 
-## One fixture, one seed
+## One seed, one fixture per suite
 
-`attestation/fixture.yml` runs as its own long-lived compose project, started by
-whichever suite you run. The suites reference its network and volumes rather
-than each building a copy, so there is one simulator, one collateral service and
-one seed. Two copies would drift apart, and every peer quote would then fail to
-verify with nothing saying why.
+`attestation/fixture.yml` describes the simulator and the collateral service;
+each suite brings up its own copy under its own `FIXTURE_NS`, and tears down
+only that copy.
+
+The seed that signs the quotes and the seed that derives the verifying roots
+must not drift apart, and they cannot: both come from files in `attestation/`,
+so separate instances started from them agree by construction. Sharing one
+running instance across the suites was the earlier arrangement and bought
+nothing the files did not already guarantee -- while costing a teardown race,
+where whichever suite finished first removed a fixture the others were still
+using, and, in CI, three workflows that could not run at the same time.
 
 ## One project per test
 

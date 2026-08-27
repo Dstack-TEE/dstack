@@ -32,15 +32,15 @@
 networks:
   attestation:
     external: true
-    name: dstack-attestation
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}
 
 volumes:
   dstack-socket:
     external: true
-    name: dstack-attestation-socket
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-socket
   attestation-roots:
     external: true
-    name: dstack-attestation-roots
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-roots
 
 services:
   gateway-1: &node

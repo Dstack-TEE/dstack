@@ -172,9 +172,18 @@ compose() {
         -f "$SCRIPT_DIR/docker-compose.yml" "$@"
 }
 
-# The attestation fixture is a separate, long-lived project; the runner owns it.
+# The attestation fixture, namespaced to this suite.
+#
+# Each suite runs its own copy rather than sharing one project. The seed that
+# signs quotes and the seed that derives the verifying roots come from files in
+# `attestation/`, so separate instances agree by construction -- while a shared
+# instance meant whichever suite finished first tore it down under the others,
+# and meant the three CI workflows could not run at the same time.
+FIXTURE_NS="dstack-fixture-cluster"
+export FIXTURE_NS
+
 fixture_compose() {
-    docker compose -p dstack-fixture \
+    docker compose -p "$FIXTURE_NS" \
         -f "$SCRIPT_DIR/../attestation/fixture.yml" "$@"
 }
 

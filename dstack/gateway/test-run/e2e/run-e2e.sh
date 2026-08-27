@@ -19,8 +19,18 @@ TEST_RUN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 #
 # Defined here, above the EXIT trap that calls it -- a cleanup handler naming a
 # function defined later fails on exactly the error paths it exists for.
+# The attestation fixture, namespaced to this suite.
+#
+# Each suite runs its own copy rather than sharing one project. The seed that
+# signs quotes and the seed that derives the verifying roots come from files in
+# `attestation/`, so separate instances agree by construction -- while a shared
+# instance meant whichever suite finished first tore it down under the others,
+# and meant the three CI workflows could not run at the same time.
+FIXTURE_NS="dstack-fixture-e2e"
+export FIXTURE_NS
+
 fixture_compose() {
-    docker compose -p dstack-fixture -f "$TEST_RUN_DIR/attestation/fixture.yml" "$@"
+    docker compose -p "$FIXTURE_NS" -f "$TEST_RUN_DIR/attestation/fixture.yml" "$@"
 }
 
 # Colors for output
