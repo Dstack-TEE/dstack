@@ -70,6 +70,10 @@ jobs:
         # covered it otherwise.
         run: |
           echo "kernel: $(uname -r)"
+          # Without this the suite falls back to a dummy link and skips
+          # test_accel_status entirely -- including the only positive proof that
+          # splice engaged. The other two workflows already modprobe it.
+          sudo modprobe wireguard 2>&1 || echo "no wireguard module available"
           sudo modprobe tls 2>&1 || echo "no TLS ULP available"
           echo "tls module loaded: $(lsmod | grep -c '^tls ' || true)"
           grep -B2 -A3 'gcm(aes)' /proc/crypto | grep -E '^(driver|priority)' \
@@ -79,21 +83,28 @@ jobs:
         working-directory: dstack/gateway/test-run/proxy-e2e
         run: ./run-proxy-tests.sh
 
-      - name: Collect container logs on failure
+      # No `docker compose logs` here: the suite is driven with `compose run
+      # --rm`, so its containers are deleted on exit and the script's own trap
+      # has already run `compose down -v`. Everything worth reading is in the
+      # bind-mounted work directory, which the suite made host-readable before
+      # exiting.
+      - name: Make suite logs readable
         if: failure()
         working-directory: dstack/gateway/test-run/proxy-e2e
         run: |
-          mkdir -p run/logs
-          for svc in $(docker compose config --services); do
-            docker compose logs --no-color "$svc" > "run/logs/container-$svc.log" 2>&1 || true
-          done
+          mkdir -p run
+          docker run --rm -v "$PWD/run:/r" alpine:latest chmod -R a+rX /r || true
+          ls -R run || true
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: gateway-proxy-test-logs
-          path: dstack/gateway/test-run/proxy-e2e/run/logs/
+          # Only the logs. The work directory also holds each arm's throwaway
+          # TLS key, and an artifact is the wrong place for key material even
+          # when it is disposable.
+          path: dstack/gateway/test-run/proxy-e2e/run/*/logs/
           if-no-files-found: ignore
           retention-days: 7
 

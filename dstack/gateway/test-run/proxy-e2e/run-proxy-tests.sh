@@ -13,7 +13,13 @@ TEST_RUN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKIP_BUILD=""
 case "${1:-}" in
     --skip-build) SKIP_BUILD="--skip-build" ;;
-    down) docker compose -f "$SCRIPT_DIR/docker-compose.yml" down -v --remove-orphans; exit 0 ;;
+    down)
+        docker compose -f "$SCRIPT_DIR/docker-compose.yml" down -v --remove-orphans
+        # The fixture too: it is a project of its own, so a suite-only teardown
+        # leaves it and its global network and volumes on the runner forever.
+        docker compose -p dstack-fixture -f "$TEST_RUN_DIR/attestation/fixture.yml" \
+            down -v --remove-orphans >/dev/null 2>&1 || true
+        exit 0 ;;
     -h|--help) echo "Usage: $0 [--skip-build] | down"; exit 0 ;;
     "") ;;
     *) echo "unknown option: $1" >&2; exit 1 ;;
@@ -87,15 +93,25 @@ trap cleanup EXIT
 compose build
 fixture_compose build >/dev/null
 echo "[INFO] starting the attestation fixture" >&2
-FIXTURE_WAS_UP=$(fixture_compose ps -q 2>/dev/null | wc -l)
 fixture_compose up -d --wait >/dev/null
 
+# `set -e` is on, so a bare call aborts the script the moment an arm fails and
+# `$?` is never read -- both variables could only ever be 0 and the comparison
+# below was a tautology. Worse, the no-TLS-ULP arm was skipped on exactly the
+# runs where something was already wrong, and that arm is the only place the
+# kTLS truncation regression is covered. Capture the status instead.
 echo "[INFO] running the proxy suite" >&2
-compose run --rm proxy-tests
-MAIN_RC=$?
+MAIN_RC=0
+compose run --rm proxy-tests || MAIN_RC=$?
 
 echo "[INFO] running the no-TLS-ULP arm" >&2
-compose run --rm proxy-tests-notls
-NOTLS_RC=$?
+NOTLS_RC=0
+compose run --rm proxy-tests-notls || NOTLS_RC=$?
 
+# Readable by the host: the suite runs as root in the container and writes into
+# the bind-mounted work directory, so CI cannot collect what it cannot open.
+docker run --rm -v "$SCRIPT_DIR/run:/r" alpine:latest \
+    chmod -R a+rX /r >/dev/null 2>&1 || true
+
+echo "[INFO] proxy-tests exit=$MAIN_RC  proxy-tests-notls exit=$NOTLS_RC" >&2
 [ "$MAIN_RC" -eq 0 ] && [ "$NOTLS_RC" -eq 0 ]

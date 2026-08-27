@@ -32,7 +32,10 @@ x-suite: &suite
     - ./run:/work
   environment:
     - DSTACK_AGENT_ADDRESS=unix:/var/run/dstack/dstack.sock
-    - WORK=/work
+    # A subdirectory per arm. Both arms run the whole suite, so with one shared
+    # WORK the second overwrote every `gw-<label>.log` the first wrote -- and the
+    # uploaded artifact for a main-arm failure showed the no-ULP arm's logs.
+    - WORK=/work/main
     - KEEP_LOGS=1
   # The gateway reads /proc/net/tls_stat to report kTLS counters. In a container
   # that MIB is per network namespace, so these numbers describe this run alone
@@ -40,9 +43,11 @@ x-suite: &suite
   network_mode: bridge
 
 services:
+  # No container_name: these are driven with `compose run --rm`, which ignores
+  # it, names the container `<project>-<service>-run-<hash>` and deletes it on
+  # exit. Logs are collected from the bind-mounted work directory instead.
   proxy-tests:
     <<: *suite
-    container_name: gateway-proxy-tests
 
   # Same image, same suite, one arm. `setsockopt(IPPROTO_TCP, TCP_ULP)` is made
   # to fail here so the gateway sees a kernel with no TLS ULP; a seccomp profile
@@ -50,7 +55,6 @@ services:
   # the container above.
   proxy-tests-notls:
     <<: *suite
-    container_name: gateway-proxy-tests-notls
     security_opt:
       - seccomp=./notls-seccomp.json
     # Repeats what the anchor sets: a service-level `environment` replaces the
@@ -58,6 +62,6 @@ services:
     # this arm writing its logs somewhere the host never sees.
     environment:
       - DSTACK_AGENT_ADDRESS=unix:/var/run/dstack/dstack.sock
-      - WORK=/work
+      - WORK=/work/notls
       - KEEP_LOGS=1
       - GWTEST_ULP_UNAVAILABLE=1
