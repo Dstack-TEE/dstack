@@ -76,6 +76,12 @@ services:
       # No PEBBLE_VA_ALWAYS_VALID: the mock answers DNS over TCP, which is the
       # only transport Pebble uses once it is given -dnsserver, so challenges
       # are validated against the records rather than waved through.
+      #
+      # CAA is not, and cannot be here: Pebble only advertises `caaIdentities`
+      # in its directory metadata and never queries CAA, so no CAA record in
+      # this harness can permit or forbid an order. Every CAA assertion below
+      # is against the mock's record store -- what certbot wrote -- and none of
+      # them is evidence that a CA would accept or refuse it.
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:14000/dir"]
       interval: 5s
