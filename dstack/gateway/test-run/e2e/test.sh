@@ -383,6 +383,22 @@ test_self_check_resolves_a_published_record() {
     [ "$(answered_queries_for "_validation-persist.${PERSIST_DOMAIN}")" -gt 0 ]
 }
 
+# The self-check does not ask its system resolver for the challenge record: a
+# resolver that cached NXDOMAIN moments before the record was written answers
+# from that cache for the whole wait, so the check reads the authoritative
+# servers instead. Getting there is two questions -- NS for the zone, then A for
+# the name that answers -- and if either goes unanswered certbot logs a warning
+# and silently falls back to the very resolver the path exists to avoid. The
+# fallback is deliberate and issuance still works, which is exactly why nothing
+# else here would notice that the path never ran.
+test_self_check_reads_the_authoritative_nameservers() {
+    # `_validation-persist.<zone>` is not a zone cut, so certbot strips the
+    # leading label and asks at the apex. That strip is what makes one code path
+    # serve both challenges, and this is where it is exercised for real.
+    [ "$(answered_queries_for "${PERSIST_DOMAIN}")" -gt 0 ] || return 1
+    [ "$(answered_queries_for "ns.${PERSIST_DOMAIN}")" -gt 0 ]
+}
+
 # The unhappy path, and the reason the check is advisory at all. A name with no
 # record has to be polled and given up on -- the record may still be
 # propagating -- rather than asked once and abandoned.
@@ -792,6 +808,8 @@ main() {
         "$(test_self_check_resolves_a_published_record; echo $?)"
     run_test "Self-check polls and gives up when the record is absent" \
         "$(test_self_check_gives_up_on_a_missing_record; echo $?)"
+    run_test "Self-check reads the authoritative nameservers" \
+        "$(test_self_check_reads_the_authoritative_nameservers; echo $?)"
 
     # Summary
     log_section "Test Summary"

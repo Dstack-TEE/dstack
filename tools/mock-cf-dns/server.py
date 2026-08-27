@@ -45,6 +45,7 @@ RECORDS: list[dict[str, Any]] = []
 # under test resolved a name rather than inferring it from what happened next.
 QUERIES: list[dict[str, Any]] = []
 MAX_QUERIES = 2000
+QTYPE_ANY = 255
 NEXT_ID = 1
 # Names whose issuer CAA set went from non-empty to empty at some point.
 #
@@ -294,6 +295,46 @@ def txt_rdata(text: str) -> bytes:
     return b"".join(bytes([len(c)]) + c for c in chunks)
 
 
+def wire_name(name: str) -> bytes:
+    """Encode a domain name uncompressed, for use in RDATA."""
+    out = b""
+    for label in name.strip(".").split("."):
+        raw = label.encode("ascii", "ignore")[:63]
+        out += bytes([len(raw)]) + raw
+    return out + b"\x00"
+
+
+def ns_address() -> str | None:
+    """Address to advertise as this mock's nameserver, if it is to advertise one.
+
+    A client that reads a challenge record straight from the authoritative
+    servers -- which is the only way to dodge a recursive resolver's negative
+    cache -- gets there by asking NS for the zone and then A for each answer.
+    Unset, this mock answers neither and that client falls back to its system
+    resolver, so the authoritative path never runs. Set to the address this
+    container is reachable at, and the path is exercised end to end.
+    """
+    return os.environ.get("MOCK_CF_NS_ADDR") or None
+
+
+def _synthesized(name: str, qtype: int) -> list[tuple[int, bytes]]:
+    """NS at a zone apex and A for the nameserver it names.
+
+    Only at the apex: a name below it must answer NODATA, or a client walking
+    up from `_acme-challenge.<name>` looking for the zone cut would stop at the
+    wrong place -- and walking up is what it does against a real zone.
+    """
+    addr = ns_address()
+    if not addr:
+        return []
+    apexes = {zone["name"] for zone in _zones()}
+    if qtype in (2, QTYPE_ANY) and name in apexes:
+        return [(2, wire_name(f"ns.{name}"))]
+    if qtype in (1, QTYPE_ANY) and name.startswith("ns.") and name[3:] in apexes:
+        return [(1, socket.inet_aton(addr))]
+    return []
+
+
 def _upstream() -> str:
     """Where to send questions this mock is not authoritative for.
 
@@ -371,21 +412,23 @@ def dns_response(packet: bytes) -> bytes:
             return txid + struct.pack("!HHHHH", 0x8182, 1, 0, 0, 0) + packet[12:qend + 4]
 
     with STATE_LOCK:
-        answers = [
+        stored = [
             r
             for r in RECORDS
             if r["type"] == "TXT" and r["name"].strip(".").lower() == name
         ]
-    if qtype not in (16, 255):
-        answers = []
+    if qtype not in (16, QTYPE_ANY):
+        stored = []
+    answers = [(16, txt_rdata(r["content"])) for r in stored]
+    answers += _synthesized(name, qtype)
+
     _record_query(name, qtype, len(answers), False)
     header = txid + struct.pack("!HHHHH", 0x8180, 1, len(answers), 0, 0)
     body = question
-    for record in answers:
-        rdata = txt_rdata(record["content"])
+    for rtype, rdata in answers:
         body += (
             b"\xc0\x0c"
-            + struct.pack("!HHIH", 16, 1, int(record.get("ttl", 60)), len(rdata))
+            + struct.pack("!HHIH", rtype, 1, 60, len(rdata))
             + rdata
         )
     return header + body
