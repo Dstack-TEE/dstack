@@ -1,0 +1,136 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Gateway cluster tests
+
+# WaveKV replication between gateway nodes: push and periodic sync, anti-entropy
+# repair, bootstrap after losing a store, partition recovery, node identity, and
+# the admin RPCs that gate registration. Unit tests cover the store; this runs
+# three real gateways and stops, wipes and restarts them.
+#
+# The nodes authenticate each other for real, so the cluster mTLS path is
+# exercised rather than switched off -- which is what the process-based suite
+# this replaces could not do.
+on:
+  push:
+    branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/cert-client/**'
+      - 'dstack/ra-tls/**'
+      - 'dstack/guest-agent-simulator/**'
+      - 'sdk/simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - '.github/workflows/gateway-cluster-tests.yml'
+  pull_request:
+    branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/cert-client/**'
+      - 'dstack/ra-tls/**'
+      - 'dstack/guest-agent-simulator/**'
+      - 'sdk/simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - '.github/workflows/gateway-cluster-tests.yml'
+
+# Per workflow, not shared with the other two gateway suites.
+#
+# A group shared across all three does not serialise them, it drops one: a
+# concurrency group holds a single *pending* run, so when the third workflow
+# queued behind the first two, the one already waiting was cancelled --
+# silently, and reported as a cancelled run rather than a failure. The suites
+# no longer need serialising anyway; each brings up its own attestation fixture
+# under its own `FIXTURE_NS`, so there is nothing left to collide over.
+#
+# `cancel-in-progress` is the ordinary meaning here: a new push supersedes the
+# run for the commit it replaced.
+concurrency:
+  group: gateway-cluster-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gateway-cluster:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # 28 tests, most of which restart nodes and then wait out a 5s sync interval.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      # The gateways create real WireGuard interfaces inside their containers.
+      - name: Record kernel capabilities
+        run: |
+          echo "kernel: $(uname -r)"
+          sudo modprobe wireguard 2>&1 || echo "no wireguard module available"
+          echo "wireguard loaded: $(lsmod | grep -c '^wireguard ' || true)"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dstack/target
+          key: gateway-cluster-${{ runner.os }}-${{ hashFiles('dstack/Cargo.lock') }}
+          restore-keys: gateway-cluster-${{ runner.os }}-
+
+      - name: Cluster suite
+        working-directory: dstack/gateway/test-run/cluster
+        run: ./run-cluster-tests.sh
+
+      # The suite only materialises node logs for the two tests that assert on
+      # them, so the mounted directory is close to empty for any other failure.
+      # Pull them from the daemon instead, by compose service so the shared
+      # fixture's project-scoped names do not have to be guessed.
+      - name: Collect node logs on failure
+        if: failure()
+        working-directory: dstack/gateway/test-run/cluster
+        run: |
+          mkdir -p run/logs
+          # By project, discovered from the daemon. A bare `docker compose` here
+          # addresses the project named after this directory (`cluster`), which
+          # no test ever uses -- every test runs under `cluster-<testname>`, so
+          # the loop that used `compose config --services` collected nothing.
+          docker ps -a --filter 'label=com.docker.compose.project' \
+            --format '{{.Label "com.docker.compose.project"}}' \
+            | grep -E '^cluster-' | sort -u | while read -r project; do
+              docker compose -p "$project" -f docker-compose.yml logs --no-color \
+                > "run/logs/project-$project.log" 2>&1 || true
+            done
+          # The suite's own per-test dumps are root-owned inside the bind mount.
+          docker run --rm -v "$PWD/run:/r" alpine:latest chmod -R a+rX /r || true
+          # The attestation fixture is a project of its own now, so it is not in
+          # this suite's service list and its logs have to be asked for
+          # separately -- they are where a quote-verification failure explains
+          # itself.
+          FIXTURE_NS=dstack-fixture-cluster docker compose -p dstack-fixture-cluster -f ../attestation/fixture.yml logs \
+            --no-color > "run/logs/fixture.log" 2>&1 || true
+          docker compose ps -a > run/logs/compose-ps.txt 2>&1 || true
+
+      - name: Upload node logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-cluster-logs
+          path: dstack/gateway/test-run/cluster/run/logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Tear down
+        if: always()
+        working-directory: dstack/gateway/test-run/cluster
+        run: ./run-cluster-tests.sh down

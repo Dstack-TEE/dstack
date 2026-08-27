@@ -1,0 +1,141 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Gateway e2e tests
+
+# The gateway's certbot/ACME half only exists as a whole: certificate issuance,
+# cluster sync of the result, and the dns-persist-01 flow each depend on the
+# ones before. Unit tests cover the pieces; this stands up three gateways, a
+# Pebble CA, a mock Cloudflare DNS API and a mock attestation collateral
+# service, and asserts on what the cluster actually converges to.
+#
+# The suite verifies peer quotes for real: the gateways check each other against
+# development trust anchors derived from the simulator's seed, so it covers the
+# cluster mTLS path that a harness with the checks switched off cannot reach.
+on:
+  push:
+    branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/cert-client/**'
+      - 'dstack/certbot/**'
+      - 'dstack/ra-tls/**'
+      - 'dstack/guest-agent-simulator/**'
+      - 'sdk/simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - 'tools/mock-cf-dns/**'
+      - '.github/workflows/gateway-e2e-tests.yml'
+  pull_request:
+    branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/gateway/**'
+      - 'dstack/cert-client/**'
+      - 'dstack/certbot/**'
+      - 'dstack/ra-tls/**'
+      - 'dstack/guest-agent-simulator/**'
+      - 'sdk/simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - 'tools/mock-cf-dns/**'
+      - '.github/workflows/gateway-e2e-tests.yml'
+
+# Per workflow, not shared with the other two gateway suites.
+#
+# A group shared across all three does not serialise them, it drops one: a
+# concurrency group holds a single *pending* run, so when the third workflow
+# queued behind the first two, the one already waiting was cancelled --
+# silently, and reported as a cancelled run rather than a failure. The suites
+# no longer need serialising anyway; each brings up its own attestation fixture
+# under its own `FIXTURE_NS`, so there is nothing left to collide over.
+#
+# `cancel-in-progress` is the ordinary meaning here: a new push supersedes the
+# run for the commit it replaced.
+concurrency:
+  group: gateway-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gateway-e2e:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # A cold musl build dominates; the suite itself waits out real ACME orders
+    # and a 20s cluster-sync settle, so it is minutes rather than seconds.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          # run-e2e.sh builds a static gateway so the image can be alpine.
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      # The gateways create real WireGuard interfaces inside their containers,
+      # so the host kernel has to offer the module. Record it: a run that failed
+      # because the runner image changed under us should say so plainly instead
+      # of looking like a gateway bug.
+      - name: Record kernel capabilities
+        run: |
+          echo "kernel: $(uname -r)"
+          sudo modprobe wireguard 2>&1 || echo "no wireguard module available"
+          echo "wireguard loaded: $(lsmod | grep -c '^wireguard ' || true)"
+          docker version --format 'docker: {{.Server.Version}}'
+          docker compose version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            dstack/target
+          key: gateway-e2e-${{ runner.os }}-${{ hashFiles('dstack/Cargo.lock') }}
+          restore-keys: gateway-e2e-${{ runner.os }}-
+
+      # --keep-running so the containers survive for the log step below; the
+      # script's own EXIT trap would otherwise tear them down and leave nothing
+      # to collect from exactly the runs worth diagnosing.
+      - name: Gateway e2e suite
+        working-directory: dstack/gateway/test-run/e2e
+        run: ./run-e2e.sh --keep-running
+
+      - name: Collect container logs on failure
+        if: failure()
+        working-directory: dstack/gateway/test-run/e2e
+        run: |
+          # By compose service, not by container name: the shared attestation
+          # fixture deliberately does not pin one, so that more than one suite
+          # can be up at a time.
+          mkdir -p /tmp/gateway-e2e-logs
+          for svc in $(docker compose config --services); do
+            docker compose logs --no-color "$svc" > "/tmp/gateway-e2e-logs/$svc.log" 2>&1 || true
+          done
+          # The attestation fixture is a project of its own now, so it is not in
+          # this suite's service list and its logs have to be asked for
+          # separately -- they are where a quote-verification failure explains
+          # itself.
+          FIXTURE_NS=dstack-fixture-e2e docker compose -p dstack-fixture-e2e -f ../attestation/fixture.yml logs \
+            --no-color > "/tmp/gateway-e2e-logs/fixture.log" 2>&1 || true
+          docker compose ps -a > /tmp/gateway-e2e-logs/compose-ps.txt 2>&1 || true
+
+      - name: Tear down
+        if: always()
+        working-directory: dstack/gateway/test-run/e2e
+        run: ./run-e2e.sh down
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-e2e-logs
+          path: /tmp/gateway-e2e-logs/
+          if-no-files-found: ignore
+          retention-days: 7

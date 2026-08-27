@@ -261,6 +261,24 @@ pub fn advisory_dns_wait(configured: Duration, renew_timeout: Duration) -> Durat
     configured.min(capped)
 }
 
+/// How long the DNS poll may sleep before its next lookup.
+///
+/// The backoff, cut to whatever is left of the budget. Split out from the loop
+/// because the loop cannot be driven from a test -- it needs a resolver and a
+/// live challenge -- while the arithmetic is the whole of the rule and is what
+/// went wrong: sleeping the full backoff and checking the budget afterwards
+/// overshoots by up to a whole step (32s at the top of the ramp), which for a
+/// short `renew_timeout` hands the deadline to the timeout wrapping the order.
+/// The graceful "proceed anyway" exit is then missed and the renewal ends as a
+/// bare timeout, naming nothing.
+///
+/// A zero budget yields a zero sleep, and the caller's expiry check fires on the
+/// same pass, so `max_dns_wait = 0` means the check is skipped outright rather
+/// than run once.
+fn dns_poll_sleep(budget: Duration, elapsed: Duration, backoff: Duration) -> Duration {
+    budget.saturating_sub(elapsed).min(backoff)
+}
+
 /// A AcmeClient instance.
 pub struct AcmeClient {
     account: Account,
@@ -929,10 +947,9 @@ impl AcmeClient {
             // `renew_timeout` is enough to hand the deadline to the timeout
             // wrapping the order, so the graceful exit below is missed and the
             // renewal ends as a timeout with nothing named.
-            let elapsed = start_time.elapsed();
-            let remaining = self.max_dns_wait.saturating_sub(elapsed);
-            if !remaining.is_zero() {
-                sleep(delay.min(remaining)).await;
+            let nap = dns_poll_sleep(self.max_dns_wait, start_time.elapsed(), delay);
+            if !nap.is_zero() {
+                sleep(nap).await;
             }
 
             let elapsed = start_time.elapsed();
@@ -1768,26 +1785,172 @@ mod caa_guard_tests {
     }
 }
 
+/// The DNS wait budget: what `max_dns_wait` is clamped to, and what the poll
+/// loop does with the result.
+///
+/// Both halves are pure and both were uncovered. `advisory_dns_wait` exists
+/// only for the clamp, and nothing asserted it; `dns_poll_sleep` is the rule the
+/// loop's own comment describes and could not be reached without a resolver and
+/// a live challenge.
 #[cfg(test)]
 mod dns_wait_tests {
-    use super::advisory_dns_wait;
+    use super::{advisory_dns_wait, dns_poll_sleep, DNS_WAIT_SHARE_OF_RENEW_TIMEOUT};
     use std::time::Duration;
+
+    const fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    /// A wait already inside the budget is left where the operator put it: the
+    /// clamp is a ceiling, not an override.
+    #[test]
+    fn a_wait_that_already_fits_is_unchanged() {
+        assert_eq!(advisory_dns_wait(secs(30), secs(600)), secs(30));
+        assert_eq!(advisory_dns_wait(secs(5), secs(300)), secs(5));
+    }
 
     /// The CLI's own defaults are the failing case: a 300s wait inside a 120s
     /// renewal budget never reaches its "proceed anyway" exit, so an unanswered
     /// check ends as a timeout rather than as the warning naming the record.
     #[test]
     fn the_wait_ends_before_the_renewal_budget_does() {
-        let wait = advisory_dns_wait(Duration::from_secs(300), Duration::from_secs(120));
-        assert!(wait < Duration::from_secs(120), "{wait:?}");
+        let renew = secs(120);
+        let wait = advisory_dns_wait(secs(300), renew);
+        assert_eq!(wait, secs(60));
+        assert!(wait < renew, "{wait:?}");
     }
 
-    /// A wait already inside the budget is left where the operator put it.
+    /// The boundary belongs to the configured value: exactly half the renewal
+    /// budget still fits.
     #[test]
-    fn a_wait_that_already_fits_is_unchanged() {
-        assert_eq!(
-            advisory_dns_wait(Duration::from_secs(30), Duration::from_secs(600)),
-            Duration::from_secs(30)
+    fn a_wait_of_exactly_half_the_renewal_budget_fits() {
+        assert_eq!(advisory_dns_wait(secs(150), secs(300)), secs(150));
+    }
+
+    /// Over the ceiling, the ceiling wins.
+    #[test]
+    fn a_wait_that_does_not_fit_is_cut_to_the_ceiling() {
+        assert_eq!(advisory_dns_wait(secs(300), secs(60)), secs(30));
+        assert_eq!(advisory_dns_wait(secs(3600), secs(300)), secs(150));
+    }
+
+    /// The case the clamp was written for: the stock defaults on both sides are
+    /// 300s, so without it the wait and the timeout wrapping the order expire
+    /// together and the outer one always wins -- the renewal dies as a bare
+    /// timeout and the warning naming the missing record is never logged.
+    ///
+    /// What matters is not the number but that the wait ends strictly first.
+    #[test]
+    fn the_stock_defaults_leave_room_for_the_graceful_exit() {
+        let renew = secs(300);
+        let wait = advisory_dns_wait(secs(300), renew);
+        assert_eq!(wait, secs(150));
+        assert!(
+            wait < renew,
+            "the DNS wait must end before the timeout wrapping the order"
         );
+    }
+
+    /// Zero configured means the check is off, and the clamp must not quietly
+    /// turn it back on.
+    ///
+    /// Reachable from the certbot CLI, whose `max_dns_wait` is a plain
+    /// `#[serde(default)]` field with no lower bound -- unlike the gateway's
+    /// `CreateDnsCredential`, which refuses zero with "max_dns_wait must be
+    /// greater than zero". So the clamp is the only thing standing between a
+    /// zero in a config file and whatever the poll loop would do with it, and
+    /// what it must do is pass the zero through: the loop's own reading of a
+    /// spent budget is what turns the check off, and a clamp that rounded zero
+    /// up would re-enable a check the operator switched off.
+    #[test]
+    fn zero_stays_zero() {
+        assert_eq!(advisory_dns_wait(secs(0), secs(300)), secs(0));
+    }
+
+    /// A renewal budget of zero leaves nothing for the wait, and must not
+    /// underflow or panic on the division.
+    #[test]
+    fn a_zero_renewal_budget_leaves_no_wait() {
+        assert_eq!(advisory_dns_wait(secs(300), secs(0)), secs(0));
+        assert_eq!(advisory_dns_wait(secs(0), secs(0)), secs(0));
+    }
+
+    /// The two invariants, over the whole grid rather than at the points above:
+    /// never more than what was configured, and never more than the share of the
+    /// renewal budget the wait is allowed.
+    #[test]
+    fn the_result_never_exceeds_either_bound() {
+        for configured in [0, 1, 5, 59, 60, 61, 150, 299, 300, 3600] {
+            for renew in [0, 1, 2, 60, 119, 120, 300, 301] {
+                let (configured, renew) = (secs(configured), secs(renew));
+                let got = advisory_dns_wait(configured, renew);
+                assert!(got <= configured, "{got:?} > configured {configured:?}");
+                assert!(
+                    got <= renew / DNS_WAIT_SHARE_OF_RENEW_TIMEOUT,
+                    "{got:?} exceeds its share of {renew:?}"
+                );
+            }
+        }
+    }
+
+    /// With budget to spare, the poll sleeps the full backoff step.
+    #[test]
+    fn a_poll_with_budget_to_spare_sleeps_the_whole_backoff() {
+        assert_eq!(
+            dns_poll_sleep(secs(150), secs(10), Duration::from_millis(250)),
+            Duration::from_millis(250)
+        );
+        assert_eq!(dns_poll_sleep(secs(150), secs(10), secs(32)), secs(32));
+    }
+
+    /// Near the end of the budget the sleep is cut to what is left.
+    ///
+    /// The regression this guards: sleeping the full step and checking after
+    /// overshoots by up to 32s, which is enough to hand the deadline to the
+    /// timeout wrapping the order.
+    #[test]
+    fn a_poll_near_the_deadline_sleeps_only_what_is_left() {
+        assert_eq!(dns_poll_sleep(secs(60), secs(58), secs(32)), secs(2));
+        assert_eq!(
+            dns_poll_sleep(secs(5), secs(4), secs(32)),
+            secs(1),
+            "the e2e suite's 5s budget must not be overrun by a 32s backoff step"
+        );
+    }
+
+    /// A spent budget sleeps not at all, so the caller reaches its expiry check
+    /// on the same pass.
+    #[test]
+    fn a_spent_budget_sleeps_not_at_all() {
+        assert_eq!(dns_poll_sleep(secs(60), secs(60), secs(32)), secs(0));
+        assert_eq!(dns_poll_sleep(secs(60), secs(90), secs(32)), secs(0));
+    }
+
+    /// `max_dns_wait = 0` skips the check rather than running it once: the first
+    /// pass sleeps nothing and the caller's `elapsed >= budget` is already true,
+    /// so no lookup is ever made.
+    #[test]
+    fn a_zero_budget_skips_the_check_entirely() {
+        let budget = secs(0);
+        assert_eq!(dns_poll_sleep(budget, secs(0), secs(32)), secs(0));
+        assert!(
+            secs(0) >= budget,
+            "the caller's expiry check fires on the first pass"
+        );
+    }
+
+    /// The sleep never runs past the budget, for any point inside it.
+    #[test]
+    fn a_poll_never_sleeps_past_the_budget() {
+        for budget in [0u64, 1, 5, 60, 150] {
+            for elapsed in 0..=budget + 2 {
+                for backoff in [1u64, 2, 4, 8, 16, 32] {
+                    let (b, e) = (secs(budget), secs(elapsed));
+                    let nap = dns_poll_sleep(b, e, secs(backoff));
+                    assert!(e + nap <= b.max(e), "{e:?} + {nap:?} overruns {b:?}");
+                    assert!(nap <= secs(backoff));
+                }
+            }
+        }
     }
 }

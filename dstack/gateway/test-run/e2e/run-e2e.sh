@@ -10,6 +10,28 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+TEST_RUN_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# The attestation fixture is its own long-lived project: one simulator, one
+# collateral service, one seed. Both suites reference its network and volumes
+# rather than each building a copy, so the seed that signs quotes and the seed
+# that derives the verifying roots cannot drift apart.
+#
+# Defined here, above the EXIT trap that calls it -- a cleanup handler naming a
+# function defined later fails on exactly the error paths it exists for.
+# The attestation fixture, namespaced to this suite.
+#
+# Each suite runs its own copy rather than sharing one project. The seed that
+# signs quotes and the seed that derives the verifying roots come from files in
+# `attestation/`, so separate instances agree by construction -- while a shared
+# instance meant whichever suite finished first tore it down under the others,
+# and meant the three CI workflows could not run at the same time.
+FIXTURE_NS="dstack-fixture-e2e"
+export FIXTURE_NS
+
+fixture_compose() {
+    docker compose -p "$FIXTURE_NS" -f "$TEST_RUN_DIR/attestation/fixture.yml" "$@"
+}
 
 # Colors for output
 RED='\033[0;31m'
@@ -20,6 +42,7 @@ NC='\033[0m' # No Color
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
+# shellcheck disable=SC2317  # called from the EXIT trap, which shellcheck cannot see
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
@@ -46,6 +69,10 @@ while [[ $# -gt 0 ]]; do
             cd "$SCRIPT_DIR"
             log_info "Stopping containers..."
             docker compose down -v --remove-orphans 2>/dev/null || true
+            # The fixture too: it is a project of its own, so a suite-only
+            # teardown leaves it and its global network and volumes behind on
+            # any runner that outlives the job.
+            fixture_compose down -v --remove-orphans 2>/dev/null || true
             log_success "Containers stopped"
             exit 0
             ;;
@@ -72,10 +99,39 @@ done
 cd "$SCRIPT_DIR"
 
 # Cleanup function
+# Two runs share one compose project, one set of container names and one work
+# directory, so a second run tears down what the first is using. The damage does
+# not look like a collision -- it looks like flaky tests, because state vanishes
+# mid-run. Refuse to start instead.
+# Locked on the directory, not on a file inside it. Deleting a lock FILE does
+# not release the lock, it detaches it: the holder keeps its inode while the
+# next run creates a fresh one and flocks that successfully. Three runs of the
+# cluster suite overlapped exactly that way -- each wiping the others' state,
+# with the failures reading as flaky sync rather than as a collision -- because
+# a "clean up before rerunning" step had removed the lock file by name.
+exec 9<"$SCRIPT_DIR"
+if ! flock -n 9; then
+    log_error "another run of this suite is already in progress ($SCRIPT_DIR)"
+    exit 1
+fi
+
+# Probed BEFORE the trap is installed, not next to the `up` that follows it: any
+# failure in between would otherwise run cleanup with the variable unset, take
+# the `:-0` default, and tear down a fixture another suite was using.
+FIXTURE_WAS_UP=$(fixture_compose ps -q 2>/dev/null | wc -l)
+
+# shellcheck disable=SC2317  # the body runs from the EXIT trap installed below
 cleanup() {
     if ! $KEEP_RUNNING; then
         log_info "Stopping containers..."
         docker compose down -v --remove-orphans 2>/dev/null || true
+        # Only if this run started it. The fixture is meant to outlive a single
+        # suite; tearing down one this run found already up is what made the
+        # next run fail with "network dstack-attestation declared as external,
+        # but could not be found".
+        if [ "${FIXTURE_WAS_UP:-0}" -eq 0 ]; then
+            fixture_compose down -v --remove-orphans 2>/dev/null || true
+        fi
     fi
 }
 
@@ -107,28 +163,16 @@ if ! $SKIP_BUILD; then
 fi
 
 # Step 2: Create gateway docker image (alpine for musl)
+#
+# Through the shared builder, not a private copy of the Dockerfile. This used to
+# heredoc its own byte-identical `Dockerfile.gateway`, build from it and `rm` it
+# afterwards -- which defeated the point of `build-gateway-image.sh` ("shared so
+# the two suites cannot end up testing different builds"), and, because the `rm`
+# was neither conditional nor trapped, left an untracked `e2e/Dockerfile.gateway`
+# in the tree whenever the build failed under `set -e`.
 log_info "Creating gateway docker image..."
 cd "$SCRIPT_DIR"
-
-cat > Dockerfile.gateway << 'EOF'
-FROM alpine:latest
-
-RUN apk add --no-cache \
-    wireguard-tools \
-    iproute2 \
-    curl \
-    ca-certificates
-
-COPY dstack-gateway /usr/local/bin/dstack-gateway
-
-RUN chmod +x /usr/local/bin/dstack-gateway && \
-    mkdir -p /etc/gateway/certs /var/lib/gateway
-
-ENTRYPOINT ["/usr/local/bin/dstack-gateway", "-c", "/etc/gateway/gateway.toml"]
-EOF
-
-docker build -t dstack-gateway:test -f Dockerfile.gateway .
-rm Dockerfile.gateway
+"$TEST_RUN_DIR/build-gateway-image.sh" "$SCRIPT_DIR" --skip-build
 log_success "Gateway image created: dstack-gateway:test"
 
 # Step 3: Run docker compose
@@ -141,8 +185,18 @@ export GATEWAY_IMAGE=dstack-gateway:test
 # shared with the full-stack suite, so a stale copy from an older checkout
 # would be picked up silently -- and a mock that does not answer TCP fails
 # every challenge now that Pebble actually validates them.
-log_info "Building the mock DNS/Cloudflare API..."
-docker compose build mock-cf-dns-api
+# Build every image rather than trusting whatever carries its tag. `image:` plus
+# `build:` means compose reuses a local tag if one exists, and these tags are
+# shared with other suites and other checkouts, so a stale copy would be picked
+# up silently -- a mock that does not answer TCP fails every challenge now that
+# Pebble validates them, and a stale simulator issues certificates from an older
+# cert-client, which is the code path the cluster's app_id pinning depends on.
+log_info "Building the mock services and the guest agent simulator..."
+docker compose build
+fixture_compose build
+
+log_info "Starting the attestation fixture..."
+fixture_compose up -d --wait
 
 docker compose up -d mock-cf-dns-api pebble
 log_info "Waiting for mock services to be healthy..."
@@ -154,8 +208,11 @@ sleep 10
 
 # Step 4: Run tests
 log_info "Running tests..."
-docker compose run --rm test-runner
-TEST_EXIT_CODE=$?
+# `set -e` is on, so a plain call would abort the script the moment the suite
+# fails and the report below would be unreachable -- the failure still exits
+# non-zero, but silently. Capture the status instead of inheriting it.
+TEST_EXIT_CODE=0
+docker compose run --rm test-runner || TEST_EXIT_CODE=$?
 
 # Step 5: Report result (cleanup handled by trap)
 if [ $TEST_EXIT_CODE -eq 0 ]; then

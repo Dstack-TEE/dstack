@@ -1,0 +1,67 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Two containers from one image. The suite restarts the gateway ~25 times with a
+# different config each round; that loop stays inside a container rather than
+# being handed to compose, which would turn every arm into a container create.
+
+# The gateway asks the guest agent for its own app id at startup. That is a unix
+# socket, not a network hop, so sharing it through a volume leaves this suite's
+# "everything in one network namespace" requirement untouched -- these services
+# stay on network_mode: bridge and never join the fixture's network.
+#
+# Referenced rather than included, like the other two suites: one fixture
+# project, one seed, one set of roots derived from it.
+volumes:
+  dstack-socket:
+    external: true
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-socket
+
+x-suite: &suite
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: dstack-gateway-proxy-tests:local
+  cap_add:
+    - NET_ADMIN
+  volumes:
+    - dstack-socket:/var/run/dstack
+    # The suite's work directory, so the per-arm gateway logs outlive the
+    # container and CI has something to attach when an arm fails.
+    - ./run:/work
+  environment:
+    - DSTACK_AGENT_ADDRESS=unix:/var/run/dstack/dstack.sock
+    # A subdirectory per arm. Both arms run the whole suite, so with one shared
+    # WORK the second overwrote every `gw-<label>.log` the first wrote -- and the
+    # uploaded artifact for a main-arm failure showed the no-ULP arm's logs.
+    - WORK=/work/main
+    - KEEP_LOGS=1
+  # The gateway reads /proc/net/tls_stat to report kTLS counters. In a container
+  # that MIB is per network namespace, so these numbers describe this run alone
+  # rather than whatever else on the machine happens to be using TLS.
+  network_mode: bridge
+
+services:
+  # No container_name: these are driven with `compose run --rm`, which ignores
+  # it, names the container `<project>-<service>-run-<hash>` and deletes it on
+  # exit. Logs are collected from the bind-mounted work directory instead.
+  proxy-tests:
+    <<: *suite
+
+  # Same image, same suite, one arm. `setsockopt(IPPROTO_TCP, TCP_ULP)` is made
+  # to fail here so the gateway sees a kernel with no TLS ULP; a seccomp profile
+  # is fixed at creation, which is why this cannot just be another round inside
+  # the container above.
+  proxy-tests-notls:
+    <<: *suite
+    security_opt:
+      - seccomp=./notls-seccomp.json
+    # Repeats what the anchor sets: a service-level `environment` replaces the
+    # anchor's rather than merging with it, so omitting these here would leave
+    # this arm writing its logs somewhere the host never sees.
+    environment:
+      - DSTACK_AGENT_ADDRESS=unix:/var/run/dstack/dstack.sock
+      - WORK=/work/notls
+      - KEEP_LOGS=1
+      - GWTEST_ULP_UNAVAILABLE=1

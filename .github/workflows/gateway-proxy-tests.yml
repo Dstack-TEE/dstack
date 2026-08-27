@@ -8,19 +8,52 @@ name: Gateway proxy tests
 # `ktls`) whose behaviour depends on kernel capabilities and on a per-connection
 # gate. Unit tests cover the relay functions; this runs a real gateway process
 # and asserts on what actually reaches the wire.
+#
+# The suite runs in containers. One of them has a seccomp profile that makes
+# `setsockopt(IPPROTO_TCP, TCP_ULP)` fail, which is how the no-TLS-ULP fallback
+# is exercised now -- the suite used to `rmmod tls`, which needed passwordless
+# sudo, took the module from the whole host, and skipped itself whenever
+# anything else was using TLS.
 on:
   push:
     branches: [ next, 'release/**' ]
     paths:
       - 'dstack/gateway/**'
       - 'dstack/vendor/ktls/**'
+      # The suite runs the gateway with attestation on, so it depends on the
+      # shared fixture: the simulator, the mock collateral service, and the
+      # fixture payloads baked into the simulator image.
+      - 'dstack/guest-agent-simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - 'sdk/simulator/**'
       - '.github/workflows/gateway-proxy-tests.yml'
   pull_request:
     branches: [ next, 'release/**' ]
     paths:
       - 'dstack/gateway/**'
       - 'dstack/vendor/ktls/**'
+      # The suite runs the gateway with attestation on, so it depends on the
+      # shared fixture: the simulator, the mock collateral service, and the
+      # fixture payloads baked into the simulator image.
+      - 'dstack/guest-agent-simulator/**'
+      - 'dstack/crates/mock-attestation/**'
+      - 'sdk/simulator/**'
       - '.github/workflows/gateway-proxy-tests.yml'
+
+# Per workflow, not shared with the other two gateway suites.
+#
+# A group shared across all three does not serialise them, it drops one: a
+# concurrency group holds a single *pending* run, so when the third workflow
+# queued behind the first two, the one already waiting was cancelled --
+# silently, and reported as a cancelled run rather than a failure. The suites
+# no longer need serialising anyway; each brings up its own attestation fixture
+# under its own `FIXTURE_NS`, so there is nothing left to collide over.
+#
+# `cancel-in-progress` is the ordinary meaning here: a new push supersedes the
+# run for the commit it replaced.
+concurrency:
+  group: gateway-proxy-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -32,13 +65,21 @@ jobs:
   proxy-integration:
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     # Each of the ~25 arms restarts the gateway, and the idle-timeout arms wait
-    # out a real timeout, so this is minutes rather than seconds.
-    timeout-minutes: 30
+    # out a real timeout. On top of that the suite now builds the shared
+    # attestation fixture, whose two images compile Rust from a cold docker cache
+    # on every run -- the cargo cache above does not reach inside a docker build.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          # The container image is built around a static binary.
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -50,32 +91,51 @@ jobs:
           key: gateway-proxy-${{ runner.os }}-${{ hashFiles('dstack/Cargo.lock') }}
           restore-keys: gateway-proxy-${{ runner.os }}-
 
-      - name: Build the gateway
-        working-directory: dstack
-        run: cargo build --release -p dstack-gateway
-
       - name: Record kernel capabilities
         # The suite adapts to what the kernel offers, so the log needs to say
         # what it had: a run that skipped kTLS looks the same as one that
         # covered it otherwise.
         run: |
           echo "kernel: $(uname -r)"
+          # Without this the suite falls back to a dummy link and skips
+          # test_accel_status entirely -- including the only positive proof that
+          # splice engaged. The other two workflows already modprobe it.
+          sudo modprobe wireguard 2>&1 || echo "no wireguard module available"
           sudo modprobe tls 2>&1 || echo "no TLS ULP available"
           echo "tls module loaded: $(lsmod | grep -c '^tls ' || true)"
           grep -B2 -A3 'gcm(aes)' /proc/crypto | grep -E '^(driver|priority)' \
             | paste - - | sort -u || true
 
       - name: Proxy integration tests
-        working-directory: dstack/gateway/test-run
-        env:
-          GATEWAY_BIN: ${{ github.workspace }}/dstack/target/release/dstack-gateway
-        run: ./test_proxy.sh
+        working-directory: dstack/gateway/test-run/proxy-e2e
+        run: ./run-proxy-tests.sh
+
+      # No `docker compose logs` here: the suite is driven with `compose run
+      # --rm`, so its containers are deleted on exit and the script's own trap
+      # has already run `compose down -v`. Everything worth reading is in the
+      # bind-mounted work directory, which the suite made host-readable before
+      # exiting.
+      - name: Make suite logs readable
+        if: failure()
+        working-directory: dstack/gateway/test-run/proxy-e2e
+        run: |
+          mkdir -p run
+          docker run --rm -v "$PWD/run:/r" alpine:latest chmod -R a+rX /r || true
+          ls -R run || true
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: gateway-proxy-test-logs
-          path: /tmp/dstack-gw-proxy-test.*/logs/
+          # Only the logs. The work directory also holds each arm's throwaway
+          # TLS key, and an artifact is the wrong place for key material even
+          # when it is disposable.
+          path: dstack/gateway/test-run/proxy-e2e/run/*/logs/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Tear down
+        if: always()
+        working-directory: dstack/gateway/test-run/proxy-e2e
+        run: ./run-proxy-tests.sh down

@@ -629,12 +629,24 @@ setup_certbot_config() {
             -d '{"domain": "'"${domain}"'", "port": 443}' > /dev/null \
             || log_warn "AddZtDomain failed for $domain (may already exist)"
 
+        # The first domain on a fresh deployment has to create the global ACME
+        # account, and it holds the shared ACME lock while it does. A domain
+        # added inside that window is refused with "retry after it finishes"
+        # and nothing retries it promptly, so adding three in a tight loop
+        # leaves two without certificates. Retry here, as the error asks.
         log_info "Triggering renewal for: $domain"
-        curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.RenewZtDomainCert" \
-            -H "${ADMIN_AUTH_HEADER}" \
-            -H "Content-Type: application/json" \
-            -d '{"domain": "'"${domain}"'", "force": true}' > /dev/null || \
-            log_warn "Renewal request failed for $domain (may retry)"
+        local attempt=1
+        while [ $attempt -le 10 ]; do
+            if curl -sf -X POST "${GATEWAY_ADMIN}/prpc/Admin.RenewZtDomainCert" \
+                -H "${ADMIN_AUTH_HEADER}" \
+                -H "Content-Type: application/json" \
+                -d '{"domain": "'"${domain}"'", "force": true}' > /dev/null; then
+                break
+            fi
+            attempt=$((attempt + 1))
+            sleep 3
+        done
+        [ $attempt -le 10 ] || log_warn "Renewal never succeeded for $domain after 10 tries"
     done
 
     return 0
@@ -701,26 +713,26 @@ main() {
 
     # Phase 5: Certificate issuance
     log_phase 5 "Certificate issuance"
-    local first_domain first_sni first_proxy
-    first_domain=$(echo "$CERT_DOMAINS" | cut -d' ' -f1)
-    first_sni=$(get_test_sni "$first_domain")
+    local first_proxy
     first_proxy=$(echo "$GATEWAY_PROXIES" | cut -d' ' -f1)
 
-    log_info "Waiting for certificates (up to 120s)..."
-    local waited=0
-    while [ $waited -lt 120 ]; do
-        if test_certificate_issued "$first_proxy" "$first_sni"; then
-            log_info "Certificate detected for $first_sni"
-            break
-        fi
-        sleep 5
-        waited=$((waited + 5))
-        log_info "Waiting... (${waited}s)"
-    done
-
-    local sni wildcard
+    # Wait for each domain, not just the first. The orders run concurrently and
+    # finish in any order, so the first one landing says nothing about the rest
+    # -- asserting on all three the moment it does made the last domain a
+    # coin flip.
+    local sni waited
     for domain in $CERT_DOMAINS; do
         sni=$(get_test_sni "$domain")
+        log_info "Waiting for certificate: $domain (up to 120s)"
+        waited=0
+        while [ $waited -lt 120 ]; do
+            if test_certificate_issued "$first_proxy" "$sni"; then
+                log_info "Certificate detected for $sni"
+                break
+            fi
+            sleep 5
+            waited=$((waited + 5))
+        done
         run_test "Certificate issued for $domain" \
             "$(test_certificate_issued "$first_proxy" "$sni"; echo $?)"
     done
