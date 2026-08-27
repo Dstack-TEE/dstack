@@ -264,49 +264,22 @@ mod tests {
     /// A self-signed CA plus a leaf it signs. `HttpSyncNetwork::new` loads all three
     /// from disk to build its rustls client config, and the root store only accepts a
     /// trust anchor with `CA:TRUE` — so a lone self-signed leaf is not enough.
+    ///
+    /// The leaf carries an app_id because no test here turns the peer check off, so a
+    /// certificate without one is refused before any of them reach what they are about.
+    /// It is also what a real peer's certificate carries.
     fn write_tls_material(dir: &std::path::Path) -> TlsConfig {
-        use ra_tls::rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair};
-
-        let ca_key = KeyPair::generate().expect("ca key");
-        let mut ca_params = CertificateParams::new(vec![]).expect("ca params");
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        let ca_cert = ca_params.self_signed(&ca_key).expect("ca cert");
-
-        let leaf_key = KeyPair::generate().expect("leaf key");
-        let mut leaf_params =
-            CertificateParams::new(vec!["127.0.0.1".to_string()]).expect("leaf params");
-        // No test here turns the peer check off, so a certificate without an app_id
-        // is refused before any of them reach what they are about. Stamping one
-        // here is also what a real peer's certificate carries.
-        // A DER OCTET STRING, which is what `ra_tls` writes into this extension.
-        // Hand-encoded rather than pulling in an ASN.1 crate for three bytes of
-        // header; the short-form length is valid because the payload is under 128
-        // bytes, which a debug_assert pins.
-        debug_assert!(TEST_APP_ID.len() < 128);
-        let mut app_id_der = vec![0x04, TEST_APP_ID.len() as u8];
-        app_id_der.extend_from_slice(TEST_APP_ID);
-        leaf_params
-            .custom_extensions
-            .push(ra_tls::rcgen::CustomExtension::from_oid_content(
-                ra_tls::oids::PHALA_RATLS_APP_ID,
-                app_id_der,
-            ));
-        let leaf_cert = leaf_params
-            .signed_by(&leaf_key, &ca_cert, &ca_key)
-            .expect("leaf cert");
-
-        let cert_path = dir.join("node.crt");
-        let key_path = dir.join("node.key");
-        let ca_path = dir.join("ca.crt");
-        std::fs::write(&cert_path, leaf_cert.pem()).expect("write cert");
-        std::fs::write(&key_path, leaf_key.serialize_pem()).expect("write key");
-        std::fs::write(&ca_path, ca_cert.pem()).expect("write ca");
+        let pki = ra_tls::test_pki::write_mtls_pki(
+            dir,
+            ra_tls::test_pki::TestCert::localhost().app_id(TEST_APP_ID),
+        )
+        .expect("write test PKI");
 
         TlsConfig {
-            certs: cert_path.to_string_lossy().into_owned(),
-            key: key_path.to_string_lossy().into_owned(),
+            certs: pki.cert_path.to_string_lossy().into_owned(),
+            key: pki.key_path.to_string_lossy().into_owned(),
             mutual: MutualConfig {
-                ca_certs: ca_path.to_string_lossy().into_owned(),
+                ca_certs: pki.ca_cert_path.to_string_lossy().into_owned(),
             },
         }
     }
@@ -408,33 +381,17 @@ mod tests {
     /// `CertRequest` adds unconditionally, and the check under test never looks at a
     /// quote — it reads two extensions and compares bytes.
     fn cert_with_app_id(app_id: &[u8]) -> Vec<u8> {
-        use ra_tls::cert::CertRequest;
-        use ra_tls::rcgen::KeyPair;
-
-        let key = KeyPair::generate().expect("key");
-        let cert = CertRequest::builder()
-            .key(&key)
-            .subject("peer.test")
+        ra_tls::test_pki::TestCert::new("peer.test")
             .app_id(app_id)
-            .build()
-            .self_signed()
-            .expect("self-signed cert");
-        cert.der().to_vec()
+            .self_signed_der()
+            .expect("self-signed cert")
     }
 
     /// A certificate with no app identity at all.
     fn cert_without_app_id() -> Vec<u8> {
-        use ra_tls::cert::CertRequest;
-        use ra_tls::rcgen::KeyPair;
-
-        let key = KeyPair::generate().expect("key");
-        let cert = CertRequest::builder()
-            .key(&key)
-            .subject("peer.test")
-            .build()
-            .self_signed()
-            .expect("self-signed cert");
-        cert.der().to_vec()
+        ra_tls::test_pki::TestCert::new("peer.test")
+            .self_signed_der()
+            .expect("self-signed cert")
     }
 
     fn authorize(der: &[u8], my_app_id: Option<&[u8]>) -> Result<(), Status> {

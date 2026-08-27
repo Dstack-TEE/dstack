@@ -13,4 +13,6 @@ pub mod api_v1;
 pub mod cert;
 pub mod kdf;
 pub mod oids;
+#[cfg(feature = "test-pki")]
+pub mod test_pki;
 pub mod traits;

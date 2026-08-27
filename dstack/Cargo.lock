@@ -5818,6 +5818,7 @@ dependencies = [
  "sha2 0.10.9",
  "sha3",
  "tdx-attest",
+ "tempfile",
  "tokio",
  "tpm-qvl",
  "tpm-types",

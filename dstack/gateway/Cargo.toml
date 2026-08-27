@@ -74,6 +74,9 @@ socket2.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+# The test-only CA/leaf helpers. A dev-dependency on the same crate the normal
+# dependency points at, so the feature is enabled for tests and not for the binary.
+ra-tls = { workspace = true, features = ["test-pki"] }
 rmpv.workspace = true
 tempfile.workspace = true
 wavekv-v1 = { package = "wavekv", version = "=1.0.0" }
