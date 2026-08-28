@@ -101,9 +101,55 @@ Deploy VMM instances that do not share this trust boundary with dedicated netd
 sockets and distinct filesystem permissions.
 
 `netd` invokes fixed absolute `ip` and `virsh` executables with separate
-arguments. It never accepts a command, executable path, TAP name, or raw XML
-from a client. Filter XML is generated internally with XML escaping and is
-validated by libvirt.
+arguments. It never accepts a command, executable path, or raw XML from a
+client. Filter XML is generated internally with XML escaping and is validated by
+libvirt.
+
+### Asking what a netd implements
+
+`netd` ships as its own package on its own release cadence, and a host may run
+an implementation that is not this one, so a VMM newer than its `netd` is the
+normal case rather than the exception. `hello` answers with a protocol version
+and a list of feature names, which the VMM asks for once at startup instead of
+inferring support one failed operation at a time. A `netd` that predates the
+operation rejects it, and that rejection *is* the answer: it claims nothing.
+
+### Finding interfaces whose VM is gone
+
+A `netd`-created TAP outlives the QEMU that used it. A VMM that died between
+creating one and recording it leaves an interface nothing can name again —
+`check` and `remove` both answer about an identity, and the identity is exactly
+what was lost. Two operations close that:
+
+- `list` enumerates the interfaces `netd` holds for one instance namespace.
+- `remove_tap` deletes one by name. The name must be one `tap_name` could have
+  produced, so it reaches nothing `netd` did not create, and any binding is
+  cleared best-effort because the caller cannot say whether there was one.
+
+The VMM runs this at startup, alongside the cleanup it already does for
+supervisor processes: anything `netd` holds that maps to no VM it knows is
+removed. It over-approximates which TAPs are still wanted, since keeping a leak
+is the cheaper mistake.
+
+Listing is scoped to an instance namespace because one host runs several VMMs
+against one `netd`, and a caller reconciling its own VMs must not mistake
+another's interfaces for orphans. `netd` records the namespace in the TAP's
+`ifalias` rather than in a state file, so a crash leaves nothing to repair. The
+identity itself is not recorded: `IFALIAS_MAX` is 255 bytes and two 128-byte
+identifiers do not fit, and a caller can already derive every TAP name it owns.
+The namespace is the only part it cannot.
+
+An interface created by an older `netd` carries no stamp and is therefore listed
+by nobody. It is left in place rather than attributed to whoever asks, which
+keeps reconciliation from deleting an interface it cannot prove is an orphan.
+
+### Fields that only travel
+
+`workdir` on both prepare operations names the VM's directory on the host. It is
+untrusted and never read for a decision — any process that can reach the socket
+can assert anything — and exists so that an operator reading `netd`'s log can get
+from an opaque TAP name back to the VM that asked for it without going through
+the VMM.
 
 ## Deployment modes
 

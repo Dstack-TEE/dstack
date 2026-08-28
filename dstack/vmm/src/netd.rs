@@ -43,6 +43,21 @@ const LOCK_PATH: &str = "/run/lock/dstack-netd.lock";
 /// Upper bound on TAP queue pairs netd will create. Mirrors the VMM's own cap
 /// so a malformed request cannot ask the kernel for an unbounded device.
 const MAX_QUEUES: u32 = 64;
+/// Bumped when the protocol gains an operation or a field a caller must know
+/// about. `Hello` reports it so a VMM newer than its netd learns that once, at
+/// startup, instead of one failed operation at a time.
+const PROTOCOL_VERSION: u32 = 1;
+/// Named capabilities, so a caller can ask about one feature without mapping
+/// version numbers onto it. A netd that predates `Hello` answers with an error
+/// rather than a list, which reads as "none of these".
+const FEATURES: &[&str] = &["multiqueue", "list"];
+/// Stamped into the TAP's `ifalias` so `List` can tell one VMM instance's
+/// interfaces from another's. The identity itself is not recorded: the caller
+/// derives every TAP name it owns from `tap_name`, so the namespace is the only
+/// part it cannot work out for itself.
+const ALIAS_PREFIX: &str = "dstack-netd:1:";
+/// The kernel's `IFALIAS_MAX`, including the terminator.
+const MAX_IFALIAS: usize = 255;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceIdentity {
@@ -69,6 +84,14 @@ pub struct PrepareBridgeRequest {
     /// rejects a device whose `IFF_MULTI_QUEUE` state differs from its own
     /// `queues=` argument, so this must match the launch exactly.
     pub queues: u32,
+    /// The VM's working directory on the host, for logs and diagnostics.
+    ///
+    /// Untrusted and never read for a decision: the caller asserts it, and any
+    /// process that can reach the socket can assert anything. It is here so an
+    /// operator reading netd's log can get from an opaque TAP name back to the
+    /// VM that asked for it without going through the VMM.
+    #[serde(default)]
+    pub workdir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +107,21 @@ pub struct PrepareMacvtapRequest {
     /// queues; QEMU then opens the character device once per queue.
     #[serde(default)]
     pub queues: u32,
+    /// The VM's working directory on the host. Informational only; see
+    /// [`PrepareBridgeRequest::workdir`].
+    #[serde(default)]
+    pub workdir: String,
+}
+
+/// A netd-managed interface as `List` found it on the host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagedInterface {
+    pub tap: String,
+    /// The bridge this TAP is enslaved to, if any. A macvtap has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master: Option<String>,
+    /// `"tap"` or `"macvtap"`.
+    pub kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +144,34 @@ pub enum Request {
         identity: InterfaceIdentity,
         filtered: bool,
     },
+    /// Report the protocol version and feature names this netd implements.
+    ///
+    /// Every field added so far has been detected by its own absence from a
+    /// response -- `queues` is documented that way. That works once per field
+    /// and only for fields that are echoed back, and netd ships as a separate
+    /// package on its own release cadence, so version skew is the normal case
+    /// rather than the exception. Asking once beats inferring repeatedly.
+    Hello {},
+    /// Enumerate the interfaces netd holds for one VMM instance.
+    ///
+    /// netd creates persistent TAPs, so a VMM that died between creating one
+    /// and recording it leaks an interface that nothing can find again: `Check`
+    /// answers about an identity the caller must already know. Listing is
+    /// scoped to an instance namespace because a host can run several VMMs, and
+    /// a caller reconciling its own VMs must not mistake another's interfaces
+    /// for orphans.
+    List {
+        instance_id: String,
+    },
+    /// Remove an interface by name rather than by identity.
+    ///
+    /// The name must be one netd itself could have generated, so this reaches
+    /// nothing it did not create. It exists for the orphan `List` reports: its
+    /// identity is exactly what the caller no longer has, and the identity is
+    /// only ever used to derive this name.
+    RemoveTap {
+        tap: String,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,8 +186,35 @@ struct Response {
     /// between "one queue was requested" and "this netd ignored the request".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     queues: Option<u32>,
+    /// Protocol version, answering `Hello`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<u32>,
+    /// Feature names, answering `Hello`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    features: Option<Vec<String>>,
+    /// Managed interfaces, answering `List`. Present and empty means netd holds
+    /// none; absent means it did not understand the question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interfaces: Option<Vec<ManagedInterface>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+impl Response {
+    /// A response that claims nothing, so each arm below states only the fields
+    /// its own operation answers with.
+    fn empty() -> Self {
+        Self {
+            ok: false,
+            tap: None,
+            device: None,
+            queues: None,
+            version: None,
+            features: None,
+            interfaces: None,
+            error: None,
+        }
+    }
 }
 
 /// What netd built, echoed back so the caller can verify it matches the
@@ -142,6 +235,37 @@ impl Prepared {
     }
 }
 
+/// What a request produced. Every operation used to name an interface, so the
+/// response shape could be flat; `Hello` and `List` answer about netd itself.
+enum Outcome {
+    Interface(Prepared),
+    Capabilities,
+    Interfaces(Vec<ManagedInterface>),
+}
+
+/// What a netd reported about itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capabilities {
+    pub version: u32,
+    pub features: Vec<String>,
+}
+
+impl Capabilities {
+    /// What a netd that predates `Hello` amounts to: reachable, but claiming
+    /// nothing. Version zero is not a version netd ever reported, so it cannot
+    /// be confused with one that answered.
+    pub fn legacy() -> Self {
+        Self {
+            version: 0,
+            features: Vec::new(),
+        }
+    }
+
+    pub fn has(&self, feature: &str) -> bool {
+        self.features.iter().any(|name| name == feature)
+    }
+}
+
 pub fn tap_name(identity: &InterfaceIdentity) -> String {
     let input = format!(
         "{}\0{}\0{}",
@@ -149,6 +273,21 @@ pub fn tap_name(identity: &InterfaceIdentity) -> String {
     );
     let digest = Sha256::digest(input.as_bytes());
     format!("dt{}", hex::encode(&digest[..6]))
+}
+
+/// Whether a name has the shape [`tap_name`] produces.
+///
+/// This is what keeps removal by name from reaching an interface netd did not
+/// create: the caller names one, and a name outside this shape is refused
+/// before anything runs.
+pub fn is_managed_tap_name(name: &str) -> bool {
+    let Some(digest) = name.strip_prefix("dt") else {
+        return false;
+    };
+    digest.len() == 12
+        && digest
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_uppercase())
 }
 
 pub fn instance_id(configured: &str, run_path: &Path) -> String {
@@ -186,11 +325,61 @@ pub fn is_unreachable(error: &anyhow::Error) -> bool {
 }
 
 pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
+    let response = exchange(socket, request).await?;
+    response.tap.context("netd response omitted TAP name")?;
+    Ok(PreparedInterface {
+        device: response.device,
+        queues: response.queues,
+    })
+}
+
+/// Asks netd what it implements.
+///
+/// A netd that predates `Hello` rejects the operation, which is not a failure
+/// to report: it is the answer. Only an unreachable netd is an error, because
+/// the caller asked about a daemon and got no daemon.
+pub async fn capabilities(socket: &Path) -> Result<Capabilities> {
+    match exchange(socket, &Request::Hello {}).await {
+        Ok(response) => Ok(Capabilities {
+            version: response.version.unwrap_or_default(),
+            features: response.features.unwrap_or_default(),
+        }),
+        Err(error) if is_unreachable(&error) => Err(error),
+        Err(error) => {
+            debug!(%error, "netd does not report capabilities");
+            Ok(Capabilities::legacy())
+        }
+    }
+}
+
+/// Lists the interfaces netd holds for one VMM instance.
+pub async fn list(socket: &Path, instance_id: &str) -> Result<Vec<ManagedInterface>> {
+    let request = Request::List {
+        instance_id: instance_id.to_string(),
+    };
+    exchange(socket, &request)
+        .await?
+        .interfaces
+        .context("netd response omitted the interface list")
+}
+
+/// Removes an interface by name. See [`Request::RemoveTap`].
+pub async fn remove_tap(socket: &Path, tap: &str) -> Result<()> {
+    let request = Request::RemoveTap {
+        tap: tap.to_string(),
+    };
+    exchange(socket, &request).await.map(drop)
+}
+
+async fn exchange(socket: &Path, request: &Request) -> Result<Response> {
     let operation = match request {
         Request::PrepareBridge(_) => "prepare_bridge",
         Request::PrepareMacvtap(_) => "prepare_macvtap",
         Request::Remove { .. } => "remove",
         Request::Check { .. } => "check",
+        Request::Hello {} => "hello",
+        Request::List { .. } => "list",
+        Request::RemoveTap { .. } => "remove_tap",
     };
     let exchange = async {
         let mut stream = UnixStream::connect(socket)
@@ -220,11 +409,7 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
                 response.error.as_deref().unwrap_or("unknown error")
             );
         }
-        response.tap.context("netd response omitted TAP name")?;
-        Ok(PreparedInterface {
-            device: response.device,
-            queues: response.queues,
-        })
+        Ok(response)
     };
     timeout(Duration::from_secs(30), exchange)
         .await
@@ -307,21 +492,29 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
         Err(error) => Err(error),
     };
     let response = match outcome {
-        Ok(prepared) => Response {
+        Ok(Outcome::Interface(prepared)) => Response {
             ok: true,
             tap: Some(prepared.tap),
             device: prepared.device,
             queues: prepared.queues,
-            error: None,
+            ..Response::empty()
+        },
+        Ok(Outcome::Capabilities) => Response {
+            ok: true,
+            version: Some(PROTOCOL_VERSION),
+            features: Some(FEATURES.iter().map(|name| name.to_string()).collect()),
+            ..Response::empty()
+        },
+        Ok(Outcome::Interfaces(interfaces)) => Response {
+            ok: true,
+            interfaces: Some(interfaces),
+            ..Response::empty()
         },
         Err(error) => {
             warn!(%error, "netd request failed");
             Response {
-                ok: false,
-                tap: None,
-                device: None,
-                queues: None,
                 error: Some(format!("{error:#}")),
+                ..Response::empty()
             }
         }
     };
@@ -349,21 +542,35 @@ async fn read_request(stream: &mut UnixStream) -> Result<Option<Request>> {
         .context("invalid netd request")
 }
 
-fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
+fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
     let libvirt_uri = config.libvirt_uri.as_str();
     let _lock = OperationLock::acquire()?;
     match request {
         Request::PrepareBridge(request) => {
-            prepare_bridge(libvirt_uri, &request, config.filter_policy())
+            prepare_bridge(libvirt_uri, &request, config.filter_policy()).map(Outcome::Interface)
         }
         Request::PrepareMacvtap(request) => {
-            prepare_macvtap(libvirt_uri, &request, config.filter_policy())
+            prepare_macvtap(libvirt_uri, &request, config.filter_policy()).map(Outcome::Interface)
+        }
+        Request::Hello {} => Ok(Outcome::Capabilities),
+        Request::List { instance_id } => list_interfaces(&instance_id).map(Outcome::Interfaces),
+        Request::RemoveTap { tap } => {
+            if !is_managed_tap_name(&tap) {
+                bail!("{tap} is not a name netd creates");
+            }
+            // The caller reached this operation because it lost the identity,
+            // so it cannot say whether a binding was ever bound. Clearing one
+            // best-effort is right in both directions: a leftover binding would
+            // be inherited by the next interface to take this name, and a node
+            // running unfiltered TAPs need not have libvirtd at all.
+            remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort)?;
+            Ok(Outcome::Interface(Prepared::tap(tap)))
         }
         Request::Remove { identity, filtered } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
             remove_interface(libvirt_uri, &tap, binding_cleanup(filtered))?;
-            Ok(Prepared::tap(tap))
+            Ok(Outcome::Interface(Prepared::tap(tap)))
         }
         Request::Check { identity, filtered } => {
             validate_identity(&identity)?;
@@ -376,9 +583,73 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
             if filtered && !is_macvtap(&tap) {
                 virsh(libvirt_uri, &["nwfilter-binding-dumpxml", &tap], None)?;
             }
-            Ok(Prepared::tap(tap))
+            Ok(Outcome::Interface(Prepared::tap(tap)))
         }
     }
+}
+
+/// Records which VMM instance owns a TAP, in the kernel rather than in a file.
+///
+/// netd derives every other fact it needs from the request or from sysfs, and a
+/// state file would be one more thing to keep true across a crash. The identity
+/// is deliberately not stored: `ifalias` holds 255 bytes and two 128-byte
+/// identifiers do not fit, and the caller can already derive every TAP name it
+/// owns. The namespace is the only part it cannot.
+fn stamp_namespace(tap: &str, instance_id: &str) -> Result<()> {
+    let Some(alias) = namespace_alias(instance_id) else {
+        // Leaving it unstamped is not a failure worth refusing the interface
+        // over: the VM works, and only reconciliation is degraded, which leaves
+        // the TAP unattributed rather than deleting it.
+        warn!(%tap, "instance ID is too long to record on the interface");
+        return Ok(());
+    };
+    ip(&["link", "set", "dev", tap, "alias", &alias])
+}
+
+/// The alias for a namespace, or `None` when the kernel could not hold it.
+fn namespace_alias(instance_id: &str) -> Option<String> {
+    let alias = format!("{ALIAS_PREFIX}{instance_id}");
+    (alias.len() < MAX_IFALIAS).then_some(alias)
+}
+
+/// Reads back what [`stamp_namespace`] wrote, if anything.
+fn namespace_of(tap: &str) -> Option<String> {
+    let alias =
+        std::fs::read_to_string(Path::new("/sys/class/net").join(tap).join("ifalias")).ok()?;
+    alias
+        .trim_end_matches('\n')
+        .strip_prefix(ALIAS_PREFIX)
+        .map(ToOwned::to_owned)
+}
+
+fn list_interfaces(instance_id: &str) -> Result<Vec<ManagedInterface>> {
+    if instance_id.is_empty() || instance_id.len() > 128 || instance_id.contains('\0') {
+        bail!("invalid instance ID");
+    }
+    let mut interfaces = Vec::new();
+    let entries = std::fs::read_dir("/sys/class/net").context("failed to list host interfaces")?;
+    for entry in entries {
+        let entry = entry.context("failed to read a host interface entry")?;
+        let Ok(tap) = entry.file_name().into_string() else {
+            continue;
+        };
+        // An interface whose name netd could not have produced is not netd's,
+        // whatever its alias says.
+        if !is_managed_tap_name(&tap) || namespace_of(&tap).as_deref() != Some(instance_id) {
+            continue;
+        }
+        let master = std::fs::read_link(entry.path().join("master"))
+            .ok()
+            .and_then(|path| path.file_name()?.to_str().map(ToOwned::to_owned));
+        let kind = if is_macvtap(&tap) { "macvtap" } else { "tap" };
+        interfaces.push(ManagedInterface {
+            tap,
+            master,
+            kind: kind.to_string(),
+        });
+    }
+    interfaces.sort_by(|left, right| left.tap.cmp(&right.tap));
+    Ok(interfaces)
 }
 
 fn prepare_macvtap(
@@ -449,6 +720,7 @@ fn prepare_macvtap(
         }
         std::os::unix::fs::chown(&device, Some(qemu_uid), None)
             .with_context(|| format!("failed to set owner of macvtap device {device}"))?;
+        stamp_namespace(&tap, &identity.instance_id)?;
         ip(&["link", "set", "dev", &tap, "up"])?;
         Ok(device)
     })();
@@ -520,6 +792,7 @@ fn prepare_bridge(
     ip(&add)?;
     let result = (|| {
         ip(&["link", "set", "dev", &tap, "master", &request.bridge])?;
+        stamp_namespace(&tap, &request.identity.instance_id)?;
         if filtered {
             let xml = binding_xml(request, &tap, filter);
             virsh(
@@ -868,6 +1141,7 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 0,
+            workdir: String::new(),
         };
         let filter = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -914,6 +1188,7 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 0,
+            workdir: String::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
@@ -983,6 +1258,7 @@ mod tests {
             qemu_uid: 1000,
             filtered: false,
             queues: 4,
+            workdir: String::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["queues"], 4);
@@ -1015,6 +1291,7 @@ mod tests {
             qemu_uid: 1000,
             mode: "private".into(),
             queues: 0,
+            workdir: String::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_macvtap");
@@ -1032,6 +1309,7 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 0,
+            workdir: String::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
@@ -1108,6 +1386,7 @@ mod tests {
             qemu_uid: 1000,
             filtered: false,
             queues: 4,
+            workdir: String::new(),
         };
         let filtering = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -1158,6 +1437,7 @@ mod tests {
             qemu_uid: 1000,
             mode: "bridge".into(),
             queues: 4,
+            workdir: String::new(),
         };
         let error = match prepare_macvtap("test:///default", &request, &filtering) {
             Err(error) => error,
@@ -1179,6 +1459,7 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 1,
+            workdir: String::new(),
         };
         // Nothing on the wire can name a filter: the field does not exist.
         let wire = serde_json::to_value(Request::PrepareBridge(request.clone())).unwrap();
@@ -1207,5 +1488,110 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn hello_reports_a_version_and_names_its_features() {
+        let value = serde_json::to_value(Request::Hello {}).unwrap();
+        assert_eq!(value["operation"], "hello");
+
+        // A netd that predates this operation rejects it, and that rejection is
+        // the answer rather than a failure: it claims no features.
+        let legacy = Capabilities::legacy();
+        assert_eq!(legacy.version, 0);
+        assert!(!legacy.has("list"));
+
+        // Every feature this netd implements has to be nameable, or a caller
+        // has to map version numbers onto behaviour by hand.
+        let reported = Capabilities {
+            version: PROTOCOL_VERSION,
+            features: FEATURES.iter().map(|name| name.to_string()).collect(),
+        };
+        assert!(reported.has("list"));
+        assert!(reported.has("multiqueue"));
+        assert!(!reported.has("ingress"));
+    }
+
+    #[test]
+    fn listing_is_scoped_to_one_vmm_instance() {
+        let value = serde_json::to_value(Request::List {
+            instance_id: "instance".into(),
+        })
+        .unwrap();
+        assert_eq!(value["operation"], "list");
+        assert_eq!(value["instance_id"], "instance");
+
+        // A host runs several VMMs against one netd. An unscoped list would
+        // invite a caller to delete another VMM's interfaces as orphans.
+        assert!(list_interfaces("").is_err());
+        assert!(list_interfaces(&"x".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn removal_by_name_reaches_only_names_netd_could_have_made() {
+        assert!(is_managed_tap_name(&tap_name(&identity(
+            "instance", "vm", 0
+        ))));
+        for name in [
+            "eth0",
+            "dstack-br0",
+            "dt",
+            "dtnothex00000",
+            "dtABCDEF012345",
+        ] {
+            assert!(!is_managed_tap_name(name), "{name}");
+        }
+
+        let value = serde_json::to_value(Request::RemoveTap { tap: "eth0".into() }).unwrap();
+        assert_eq!(value["operation"], "remove_tap");
+        assert_eq!(value["tap"], "eth0");
+    }
+
+    #[test]
+    fn the_namespace_is_recorded_but_the_identity_is_not() {
+        let instance = "path-0123456789abcdef";
+        let alias = namespace_alias(instance).expect("a normal instance ID fits");
+        assert!(alias.starts_with(ALIAS_PREFIX));
+        assert_eq!(alias.strip_prefix(ALIAS_PREFIX), Some(instance));
+
+        // `validate_identity` allows 128 bytes for each of two identifiers, and
+        // two of those plus a prefix do not fit in IFALIAS_MAX. Recording only
+        // the namespace does, and the caller derives its own TAP names anyway.
+        assert!(namespace_alias(&"x".repeat(128)).is_some());
+        assert!(namespace_alias(&"x".repeat(MAX_IFALIAS)).is_none());
+    }
+
+    #[test]
+    fn the_workdir_is_carried_along_but_older_callers_may_omit_it() {
+        let request = Request::PrepareBridge(PrepareBridgeRequest {
+            identity: identity("instance", "vm", 0),
+            bridge: "br0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filtered: true,
+            queues: 1,
+            workdir: "/opt/dstack/run/vm/vm".into(),
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["workdir"], "/opt/dstack/run/vm/vm");
+
+        // It is a log line, not an input. A caller that never sets it is not
+        // asking for anything different.
+        let decoded = serde_json::from_value::<Request>(serde_json::json!({
+            "operation": "prepare_bridge",
+            "instance_id": "instance",
+            "vm_id": "vm",
+            "nic_index": 0,
+            "bridge": "br0",
+            "mac": "02:00:00:00:00:01",
+            "qemu_uid": 1000,
+            "filtered": true,
+            "queues": 1,
+        }))
+        .unwrap();
+        let Request::PrepareBridge(decoded) = decoded else {
+            panic!("expected a bridge prepare");
+        };
+        assert_eq!(decoded.workdir, "");
     }
 }

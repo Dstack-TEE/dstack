@@ -314,6 +314,12 @@ pub struct App {
 
 const GUEST_AGENT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How many NIC indices per VM startup reconciliation treats as possibly still
+/// in use. Deliberately larger than any VM the VMM builds: naming a TAP that no
+/// longer belongs to anything keeps a leak, while failing to name a live one
+/// would delete it.
+const RECONCILE_MAX_NICS: usize = 16;
+
 impl App {
     pub(crate) fn lock(&self) -> MutexGuard<'_, AppState> {
         self.state.lock().or_panic("mutex poisoned")
@@ -564,6 +570,13 @@ impl App {
             return Ok(());
         }
         let qemu_uid = Uid::effective().as_raw();
+        // Only ever read back out of a log line. netd is told where the VM
+        // lives so an operator holding an opaque TAP name can get to the VM
+        // without going through the VMM first.
+        let workdir = self
+            .work_dir(&vm.manifest.id)
+            .map(|dir| dir.path().display().to_string())
+            .unwrap_or_default();
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter_mut().enumerate() {
             if !needs_netd_interface(network, &self.config.cvm) {
@@ -593,6 +606,7 @@ impl App {
                     // libvirt at all.
                     filtered,
                     queues,
+                    workdir: workdir.clone(),
                 }),
                 NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
                     identity: identity.clone(),
@@ -601,6 +615,7 @@ impl App {
                     qemu_uid,
                     mode: network.macvtap_mode.clone(),
                     queues,
+                    workdir: workdir.clone(),
                 }),
                 NetworkingMode::User | NetworkingMode::Custom => continue,
             };
@@ -1067,7 +1082,73 @@ impl App {
             }
         }
 
+        self.reconcile_netd_interfaces(&loaded_vm_ids).await;
+
         Ok(())
+    }
+
+    /// Deletes host interfaces netd still holds for VMs this VMM no longer has.
+    ///
+    /// The same cleanup the loop above does for supervisor processes, for the
+    /// other resource a crash can strand. A netd-created TAP outlives the QEMU
+    /// that used it, so a VMM that died between creating one and recording it
+    /// leaves an interface nothing can find again: `Check` answers about an
+    /// identity, and the identity is exactly what was lost.
+    ///
+    /// Failure is never fatal. Most nodes run no netd at all, and a leaked TAP
+    /// costs a name and an ifindex -- not a reason to refuse to start.
+    async fn reconcile_netd_interfaces(&self, loaded_vm_ids: &HashSet<String>) {
+        let socket = &self.config.netd.socket;
+        let instance_id = &self.config.cvm.instance_id;
+        // Unreachable is the ordinary case: most nodes run no netd at all.
+        let Ok(capabilities) = netd::capabilities(socket).await else {
+            debug!("no netd on this node, so nothing to reconcile");
+            return;
+        };
+        info!(
+            version = capabilities.version,
+            features = ?capabilities.features,
+            "netd is available"
+        );
+        if !capabilities.has("list") {
+            // Asking anyway would log a failure on every start of a node whose
+            // netd is simply older than this VMM.
+            info!("netd cannot list its interfaces, so orphans are left in place");
+            return;
+        }
+        let held = match netd::list(socket, instance_id).await {
+            Ok(held) => held,
+            Err(error) => {
+                warn!(%error, "failed to list netd interfaces");
+                return;
+            }
+        };
+        if held.is_empty() {
+            return;
+        }
+        // Over-approximate on purpose. A manifest edited while the VMM was down
+        // can leave a TAP at a NIC index the VM no longer has, and treating
+        // that as expected only means a leak survives -- the opposite mistake
+        // would delete a live interface out from under a running QEMU.
+        let mut expected = HashSet::new();
+        for vm_id in loaded_vm_ids {
+            for nic_index in 0..RECONCILE_MAX_NICS {
+                expected.insert(netd::tap_name(&InterfaceIdentity {
+                    instance_id: instance_id.clone(),
+                    vm_id: vm_id.clone(),
+                    nic_index,
+                }));
+            }
+        }
+        for interface in held {
+            if expected.contains(&interface.tap) {
+                continue;
+            }
+            info!(tap = %interface.tap, kind = %interface.kind, "removing orphaned netd interface");
+            if let Err(error) = netd::remove_tap(socket, &interface.tap).await {
+                warn!(tap = %interface.tap, %error, "failed to remove orphaned netd interface");
+            }
+        }
     }
 
     /// Reload VMs directory and sync with memory state while preserving statistics
