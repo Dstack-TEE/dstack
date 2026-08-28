@@ -149,13 +149,17 @@ impl DistributedCertBot {
 
     /// Status of the most recent issuance/renewal attempt for a domain.
     pub fn attempt_status(&self, domain: &str) -> Option<CertAttemptStatus> {
-        self.statuses.lock().unwrap().get(domain).cloned()
+        self.statuses
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(domain)
+            .cloned()
     }
 
     /// Record the outcome of an issuance/renewal attempt.
     fn record_attempt<T>(&self, domain: &str, result: &Result<T>) {
         let now = now_secs();
-        let mut statuses = self.statuses.lock().unwrap();
+        let mut statuses = self.statuses.lock().unwrap_or_else(|err| err.into_inner());
         let status = statuses.entry(domain.to_string()).or_default();
         status.last_attempt_at = now;
         status.attempted_by = self.kv_store.my_node_id();
