@@ -564,6 +564,28 @@ impl App {
             return Ok(());
         }
         let qemu_uid = Uid::effective().as_raw();
+        // Only ever read back out of a log line: netd is told where the VM
+        // lives so an operator holding an opaque TAP name can reach the VM
+        // without going through the VMM first.
+        let workdir = self
+            .work_dir(&vm.manifest.id)
+            .map(|dir| dir.path().display().to_string())
+            .unwrap_or_default();
+        // `port_map` is implemented as QEMU `hostfwd=` entries on a user-mode
+        // netdev, so a bridge NIC drops every one of them. The VMM cannot
+        // forward them itself -- it runs without CAP_NET_ADMIN by design -- so
+        // it states the requirement and lets the node's netd answer it.
+        let ingress: Vec<netd::IngressRequest> = vm
+            .manifest
+            .port_map
+            .iter()
+            .map(|mapping| netd::IngressRequest {
+                protocol: mapping.protocol.as_str().to_string(),
+                host_address: mapping.address.to_string(),
+                host_port: mapping.from,
+                guest_port: mapping.to,
+            })
+            .collect();
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter_mut().enumerate() {
             if !needs_netd_interface(network, &self.config.cvm) {
@@ -593,6 +615,15 @@ impl App {
                     // libvirt at all.
                     filtered,
                     queues,
+                    workdir: workdir.clone(),
+                    // Only the first NIC carries them, matching where user-mode
+                    // networking puts its `hostfwd=` entries. Repeating the list
+                    // would ask two interfaces to answer on one host port.
+                    ingress: if nic_index == 0 {
+                        ingress.clone()
+                    } else {
+                        Vec::new()
+                    },
                 }),
                 NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
                     identity: identity.clone(),
@@ -601,6 +632,7 @@ impl App {
                     qemu_uid,
                     mode: network.macvtap_mode.clone(),
                     queues,
+                    workdir: workdir.clone(),
                 }),
                 NetworkingMode::User | NetworkingMode::Custom => continue,
             };
@@ -678,6 +710,17 @@ impl App {
                 }
                 Ok(())
             })();
+            // Ports asked for and not answered for used to vanish in silence:
+            // no warning, and `GetInfo` still listing them. A netd that forwards
+            // says what it built, so nothing said means nothing forwarded.
+            if nic_index == 0 && !ingress.is_empty() && response.ingress.is_none() {
+                warn!(
+                    vm_id = %vm.manifest.id,
+                    ports = ingress.len(),
+                    "netd on this node does not forward host ports, so this VM's \
+                     port mappings do not apply to its bridge interface"
+                );
+            }
             if let Err(error) = accepted {
                 self.roll_back_prepared_networks(prepared).await;
                 return Err(error);

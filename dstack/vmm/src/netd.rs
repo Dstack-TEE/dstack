@@ -69,6 +69,56 @@ pub struct PrepareBridgeRequest {
     /// rejects a device whose `IFF_MULTI_QUEUE` state differs from its own
     /// `queues=` argument, so this must match the launch exactly.
     pub queues: u32,
+    /// The VM's working directory on the host, for logs and diagnostics.
+    ///
+    /// Untrusted and never read for a decision: any process that can reach the
+    /// socket can assert anything here. It is carried so an operator reading
+    /// netd's log can get from an opaque TAP name back to the VM that asked for
+    /// it without going through the VMM.
+    #[serde(default)]
+    pub workdir: String,
+    /// Host ports this VM wants reachable at its guest.
+    ///
+    /// Empty asks for nothing, which is also what a caller predating the field
+    /// sends. Whether a netd forwards them is its own business; this states the
+    /// requirement rather than assuming it is met, and the response says what
+    /// was actually done.
+    #[serde(default)]
+    pub ingress: Vec<IngressRequest>,
+}
+
+/// One host port a VM wants reachable at its guest.
+///
+/// Every field is named by the caller, which is what `bridge`, `mac` and
+/// `queues` already get and the opposite of `filtered`. The difference is
+/// whether netd can check what it is handed: an nwfilter name cannot be checked
+/// for whether it filters anything, while a host port is a closed space a node
+/// policy can be stated over. Naming is not deciding -- which ports may be
+/// handed out stays netd's own configuration, exactly as `allowed_bridges`
+/// governs the bridge a caller names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngressRequest {
+    /// `"tcp"` or `"udp"`.
+    pub protocol: String,
+    /// Host address to accept on. Empty leaves the choice to netd.
+    ///
+    /// Not decoration: an admin port bound to loopback and a published one
+    /// differ only here.
+    #[serde(default)]
+    pub host_address: String,
+    /// Host port. Zero asks netd to choose one.
+    pub host_port: u16,
+    pub guest_port: u16,
+}
+
+/// One forwarding rule a netd established, echoed so the caller can report what
+/// the VM actually got rather than what it asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngressBinding {
+    pub protocol: String,
+    pub host_address: String,
+    pub host_port: u16,
+    pub guest_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +134,10 @@ pub struct PrepareMacvtapRequest {
     /// queues; QEMU then opens the character device once per queue.
     #[serde(default)]
     pub queues: u32,
+    /// The VM's working directory on the host. Informational only; see
+    /// [`PrepareBridgeRequest::workdir`].
+    #[serde(default)]
+    pub workdir: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +174,12 @@ struct Response {
     /// between "one queue was requested" and "this netd ignored the request".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     queues: Option<u32>,
+    /// Forwarding rules netd established. Absent from a netd that does not
+    /// forward host ports, which is how the caller tells "nothing was asked
+    /// for" apart from "this request was ignored" -- the same reading `queues`
+    /// gets above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ingress: Option<Vec<IngressBinding>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -130,6 +190,7 @@ struct Prepared {
     tap: String,
     device: Option<String>,
     queues: Option<u32>,
+    ingress: Option<Vec<IngressBinding>>,
 }
 
 impl Prepared {
@@ -138,6 +199,7 @@ impl Prepared {
             tap,
             device: None,
             queues: None,
+            ingress: None,
         }
     }
 }
@@ -162,6 +224,8 @@ pub fn instance_id(configured: &str, run_path: &Path) -> String {
 pub struct PreparedInterface {
     pub device: Option<String>,
     pub queues: Option<u32>,
+    /// The forwarding rules netd established, if it forwards host ports at all.
+    pub ingress: Option<Vec<IngressBinding>>,
 }
 
 /// Marker carried in the error chain when the VMM could not reach netd at all.
@@ -224,6 +288,7 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
         Ok(PreparedInterface {
             device: response.device,
             queues: response.queues,
+            ingress: response.ingress,
         })
     };
     timeout(Duration::from_secs(30), exchange)
@@ -312,6 +377,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
             tap: Some(prepared.tap),
             device: prepared.device,
             queues: prepared.queues,
+            ingress: prepared.ingress,
             error: None,
         },
         Err(error) => {
@@ -321,6 +387,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
                 tap: None,
                 device: None,
                 queues: None,
+                ingress: None,
                 error: Some(format!("{error:#}")),
             }
         }
@@ -459,6 +526,7 @@ fn prepare_macvtap(
                 tap,
                 device: Some(device),
                 queues: Some(queues),
+                ingress: None,
             })
         }
         Err(error) => {
@@ -540,6 +608,10 @@ fn prepare_bridge(
         tap,
         device: None,
         queues: Some(queues),
+        // This netd builds interfaces; it is not the host's forwarder. Saying
+        // nothing here is what tells the caller that, so ports it asked for are
+        // reported as unmet rather than assumed done.
+        ingress: None,
     })
 }
 
@@ -868,6 +940,8 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 0,
+            workdir: String::new(),
+            ingress: Vec::new(),
         };
         let filter = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -914,6 +988,8 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 0,
+            workdir: String::new(),
+            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
@@ -983,6 +1059,8 @@ mod tests {
             qemu_uid: 1000,
             filtered: false,
             queues: 4,
+            workdir: String::new(),
+            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["queues"], 4);
@@ -1015,6 +1093,7 @@ mod tests {
             qemu_uid: 1000,
             mode: "private".into(),
             queues: 0,
+            workdir: String::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_macvtap");
@@ -1032,6 +1111,8 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 0,
+            workdir: String::new(),
+            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
@@ -1108,6 +1189,8 @@ mod tests {
             qemu_uid: 1000,
             filtered: false,
             queues: 4,
+            workdir: String::new(),
+            ingress: Vec::new(),
         };
         let filtering = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -1158,6 +1241,7 @@ mod tests {
             qemu_uid: 1000,
             mode: "bridge".into(),
             queues: 4,
+            workdir: String::new(),
         };
         let error = match prepare_macvtap("test:///default", &request, &filtering) {
             Err(error) => error,
@@ -1179,6 +1263,8 @@ mod tests {
             qemu_uid: 1000,
             filtered: true,
             queues: 1,
+            workdir: String::new(),
+            ingress: Vec::new(),
         };
         // Nothing on the wire can name a filter: the field does not exist.
         let wire = serde_json::to_value(Request::PrepareBridge(request.clone())).unwrap();
@@ -1207,5 +1293,100 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_workdir_travels_but_older_callers_may_omit_it() {
+        let request = Request::PrepareBridge(PrepareBridgeRequest {
+            identity: identity("instance", "vm", 0),
+            bridge: "br0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filtered: true,
+            queues: 1,
+            workdir: "/opt/dstack/run/vm/vm".into(),
+            ingress: Vec::new(),
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["workdir"], "/opt/dstack/run/vm/vm");
+        // It is a log line, not an input, so a caller that never sets it is not
+        // asking for anything different.
+        let Request::PrepareBridge(decoded) = decode_minimal_bridge() else {
+            panic!("expected a bridge prepare");
+        };
+        assert_eq!(decoded.workdir, "");
+    }
+
+    #[test]
+    fn host_ports_travel_with_the_bridge_prepare_and_default_to_none() {
+        let request = Request::PrepareBridge(PrepareBridgeRequest {
+            identity: identity("instance", "vm", 0),
+            bridge: "br0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filtered: true,
+            queues: 1,
+            workdir: String::new(),
+            ingress: vec![IngressRequest {
+                protocol: "udp".into(),
+                host_address: "0.0.0.0".into(),
+                host_port: 7483,
+                guest_port: 51820,
+            }],
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["ingress"][0]["protocol"], "udp");
+        assert_eq!(value["ingress"][0]["host_port"], 7483);
+        assert_eq!(value["ingress"][0]["guest_port"], 51820);
+        // The bind address separates an admin port from a published one, so a
+        // forwarder that lost it would publish the admin port.
+        assert_eq!(value["ingress"][0]["host_address"], "0.0.0.0");
+
+        let Request::PrepareBridge(decoded) = decode_minimal_bridge() else {
+            panic!("expected a bridge prepare");
+        };
+        assert!(decoded.ingress.is_empty());
+    }
+
+    #[test]
+    fn saying_nothing_about_ports_is_how_a_netd_reports_it_forwards_none() {
+        // The same reading `queues` gets: absent distinguishes "this netd does
+        // not do that" from "nothing was asked for", so ports are never assumed
+        // forwarded just because the TAP came back.
+        let response: Response = serde_json::from_value(serde_json::json!({
+            "ok": true,
+            "tap": "dt000000000000",
+        }))
+        .unwrap();
+        assert!(response.ingress.is_none());
+
+        let response: Response = serde_json::from_value(serde_json::json!({
+            "ok": true,
+            "tap": "dt000000000000",
+            "ingress": [{
+                "protocol": "udp",
+                "host_address": "0.0.0.0",
+                "host_port": 7483,
+                "guest_port": 51820,
+            }],
+        }))
+        .unwrap();
+        assert_eq!(response.ingress.unwrap().len(), 1);
+    }
+
+    /// A prepare carrying only the fields that predate this change.
+    fn decode_minimal_bridge() -> Request {
+        serde_json::from_value(serde_json::json!({
+            "operation": "prepare_bridge",
+            "instance_id": "instance",
+            "vm_id": "vm",
+            "nic_index": 0,
+            "bridge": "br0",
+            "mac": "02:00:00:00:00:01",
+            "qemu_uid": 1000,
+            "filtered": true,
+            "queues": 1,
+        }))
+        .unwrap()
     }
 }

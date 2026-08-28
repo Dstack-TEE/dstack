@@ -105,6 +105,18 @@ arguments. It never accepts a command, executable path, TAP name, or raw XML
 from a client. Filter XML is generated internally with XML escaping and is
 validated by libvirt.
 
+A bridge prepare also carries two things `netd` does not need to build the TAP.
+`workdir` names the VM's directory on the host: untrusted, never read for a
+decision, and present only so an operator reading `netd`'s log can get from an
+opaque TAP name back to the VM. `ingress` states the host ports the VM wants
+reachable at its guest, which the VMM cannot arrange itself — it runs without
+`CAP_NET_ADMIN` by design, and QEMU's `hostfwd=` entries need a user-mode netdev
+that a bridge NIC does not have. The `netd` in this repository builds interfaces
+and does not forward ports; it says so by leaving `ingress` out of its response,
+the same reading `queues` gets, so a caller can tell "this netd does not do that"
+from "nothing was asked for" instead of assuming ports were forwarded because a
+TAP came back.
+
 ## Deployment modes
 
 Production should run one shared service. `netd` reads the `[netd]` section,
