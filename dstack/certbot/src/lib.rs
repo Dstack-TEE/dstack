@@ -22,7 +22,9 @@ pub use acme_client::{
     RequiredRecord, ValidationMethod,
 };
 pub use bot::{read_pubkey, CertBot, CertBotConfig};
-pub use dns01_client::Dns01Client;
+pub use dns01_client::{
+    resolve_cloudflare_zone, verify_cloudflare_token, CloudflareTokenInfo, Dns01Client,
+};
 pub use dns_persist::{resolve_issuer_domain_name, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
 pub use workdir::WorkDir;
 
