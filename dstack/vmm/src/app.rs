@@ -558,6 +558,75 @@ impl App {
         Ok(())
     }
 
+    /// The host ports this VM asks for, if the node can forward any.
+    ///
+    /// `port_map` has always been implemented as QEMU `hostfwd=` entries on a
+    /// user-mode netdev, so a VM that moves to a bridge silently loses every
+    /// one of them: nothing warns, and `GetInfo` keeps reporting the ports as
+    /// though they worked. Handing them to netd is what can make them real,
+    /// and saying so when it cannot is what makes the loss visible.
+    ///
+    /// Returns an empty list rather than failing when the node has no forwarder.
+    /// A VM deployed before this existed has been running with its ports
+    /// dropped, and refusing to start it now would turn a silent
+    /// misconfiguration into an outage on upgrade.
+    async fn ingress_for(
+        &self,
+        vm: &VmConfig,
+        networks: &[Networking],
+    ) -> Vec<netd::IngressRequest> {
+        if vm.manifest.port_map.is_empty() {
+            return Vec::new();
+        }
+        // QEMU's own `hostfwd=` entries ride on a user-mode netdev, so a VM
+        // that still has one needs nothing from netd. This mirrors how the
+        // launch picks the interface to put them on.
+        if networks
+            .iter()
+            .any(|network| network.nic.mode == NetworkingMode::User)
+        {
+            return Vec::new();
+        }
+        let ports = vm.manifest.port_map.len();
+        if !networks
+            .iter()
+            .any(|network| network.nic.mode == NetworkingMode::Bridge)
+        {
+            // macvtap bypasses the host bridge and custom mode owns its own
+            // netdev string, so neither has anywhere for the host to forward to.
+            warn!(
+                vm_id = %vm.manifest.id,
+                ports,
+                "this VM's networking mode cannot carry host port mappings, so \
+                 its {ports} port mapping(s) do not apply"
+            );
+            return Vec::new();
+        }
+        let forwards = netd::capabilities(&self.config.netd.socket)
+            .await
+            .map(|capabilities| capabilities.has("ingress"))
+            .unwrap_or(false);
+        if !forwards {
+            warn!(
+                vm_id = %vm.manifest.id,
+                ports,
+                "no netd on this node forwards host ports, so this VM's {ports} \
+                 port mapping(s) do not apply to its bridge interface"
+            );
+            return Vec::new();
+        }
+        vm.manifest
+            .port_map
+            .iter()
+            .map(|mapping| netd::IngressRequest {
+                protocol: mapping.protocol.as_str().to_string(),
+                host_address: mapping.address.to_string(),
+                host_port: mapping.from,
+                guest_port: mapping.to,
+            })
+            .collect()
+    }
+
     async fn prepare_filtered_networks(
         &self,
         vm: &VmConfig,
@@ -577,6 +646,7 @@ impl App {
             .work_dir(&vm.manifest.id)
             .map(|dir| dir.path().display().to_string())
             .unwrap_or_default();
+        let ingress = self.ingress_for(vm, networks).await;
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter_mut().enumerate() {
             if !needs_netd_interface(network, &self.config.cvm) {
@@ -607,6 +677,15 @@ impl App {
                     filtered,
                     queues,
                     workdir: workdir.clone(),
+                    // Only the first NIC carries them, matching where user-mode
+                    // networking puts its `hostfwd=` entries. A second NIC that
+                    // repeated the list would ask two interfaces to answer on
+                    // one host port.
+                    ingress: if nic_index == 0 {
+                        ingress.clone()
+                    } else {
+                        Vec::new()
+                    },
                 }),
                 NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
                     identity: identity.clone(),
@@ -691,6 +770,18 @@ impl App {
                         )
                     );
                 }
+                // Ports that were asked for and not answered for are the
+                // failure this whole path exists to end. A netd that forwards
+                // says what it built; silence is not consent.
+                let requested = if nic_index == 0 { ingress.len() } else { 0 };
+                if requested > 0 {
+                    let established = response
+                        .ingress
+                        .clone()
+                        .context("netd accepted host ports without saying what it forwarded")?;
+                    network.ingress = established;
+                }
+                network.guest_ip = response.guest_ip.clone().unwrap_or_default();
                 Ok(())
             })();
             if let Err(error) = accepted {

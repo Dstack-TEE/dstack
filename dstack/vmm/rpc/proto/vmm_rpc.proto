@@ -67,6 +67,26 @@ message NetworkInterfaceStatus {
   // configuration decides it, so it is reported here with the rest of the
   // resolved state rather than on the VM's own NetworkingConfig.
   optional string macvtap_mode = 8;
+  // Address this interface reaches its segment at, when the node's netd is the
+  // one that decides addresses. A bridge NIC gets its address from a DHCP
+  // server the VMM does not run, so absent means "not reported to us", never
+  // "has none".
+  optional string guest_ip = 9;
+  // Host ports actually forwarded to this interface. This is what the node
+  // did; VmConfiguration.ports is what was asked for. They differ whenever the
+  // node's netd allocates a port itself or declines one, and an empty list
+  // against a non-empty request means nothing was forwarded at all.
+  repeated IngressBinding ingress = 10;
+}
+
+// One host port forwarded to a VM, as the node established it.
+message IngressBinding {
+  // "tcp" or "udp".
+  string protocol = 1;
+  // Host address the port is accepted on.
+  string host_address = 2;
+  uint32 host_port = 3;
+  uint32 guest_port = 4;
 }
 
 // Structured log or lifecycle event emitted by the guest or runtime.

@@ -87,6 +87,21 @@ fn interfaces_to_proto(
                 // state. The VM's own record cannot carry one.
                 macvtap_mode: (networking.nic.mode == NetworkingMode::Macvtap)
                     .then(|| networking.macvtap_mode.clone()),
+                // Both are what the node reported at launch, not what the VM
+                // asked for. `port_map` is the request and stays on the
+                // configuration; an empty list here against a non-empty request
+                // is the node saying it forwarded nothing.
+                guest_ip: (!networking.guest_ip.is_empty()).then(|| networking.guest_ip.clone()),
+                ingress: networking
+                    .ingress
+                    .iter()
+                    .map(|binding| pb::IngressBinding {
+                        protocol: binding.protocol.clone(),
+                        host_address: binding.host_address.clone(),
+                        host_port: binding.host_port as u32,
+                        guest_port: binding.guest_port as u32,
+                    })
+                    .collect(),
             }
         })
         .collect()

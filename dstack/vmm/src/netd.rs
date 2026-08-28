@@ -92,6 +92,15 @@ pub struct PrepareBridgeRequest {
     /// VM that asked for it without going through the VMM.
     #[serde(default)]
     pub workdir: String,
+    /// Host ports this VM wants reachable at its guest.
+    ///
+    /// Empty asks for nothing, which is what a caller that predates the field
+    /// sends. A netd that does not implement forwarding refuses a non-empty
+    /// list rather than building the interface without it: the alternative is
+    /// the failure this field exists to end, where ports are accepted, reported
+    /// back, and silently never forwarded.
+    #[serde(default)]
+    pub ingress: Vec<IngressRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +120,47 @@ pub struct PrepareMacvtapRequest {
     /// [`PrepareBridgeRequest::workdir`].
     #[serde(default)]
     pub workdir: String,
+}
+
+/// One host port a VM wants reachable at its guest.
+///
+/// The caller names every field. That is the same treatment `bridge`, `mac` and
+/// `queues` get, and the opposite of `filtered`: an nwfilter name cannot be
+/// checked for whether it filters anything, so naming one is excluded, while a
+/// host port is a closed space netd can check a request against. Naming is not
+/// deciding -- which ports may be handed out, and to whom, stays netd's own
+/// configuration, exactly as `allowed_bridges` governs the bridge a caller
+/// names.
+///
+/// The VMM does not implement forwarding for these. It carries the requirement
+/// to whoever configures the host, because the VMM runs without
+/// `CAP_NET_ADMIN` by design, and because netd is the only component that sees
+/// every VMM instance on the host and can therefore arbitrate a host port
+/// between them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngressRequest {
+    /// `"tcp"` or `"udp"`.
+    pub protocol: String,
+    /// Host address to accept on. Empty leaves the choice to netd.
+    ///
+    /// Not merely cosmetic: an admin or metrics port bound to loopback and one
+    /// published to the world differ only here, and a forwarder that dropped
+    /// the distinction would publish the first.
+    #[serde(default)]
+    pub host_address: String,
+    /// Host port. Zero asks netd to choose from whatever range it allocates.
+    pub host_port: u16,
+    pub guest_port: u16,
+}
+
+/// One forwarding rule netd established, echoed so the caller can report what
+/// the VM actually got rather than what it asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IngressBinding {
+    pub protocol: String,
+    pub host_address: String,
+    pub host_port: u16,
+    pub guest_port: u16,
 }
 
 /// A netd-managed interface as `List` found it on the host.
@@ -196,6 +246,20 @@ struct Response {
     /// none; absent means it did not understand the question.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     interfaces: Option<Vec<ManagedInterface>>,
+    /// The address this NIC will reach the segment at, when netd is the one
+    /// that decides it.
+    ///
+    /// A DNAT rule needs an address at install time and a DHCP lease does not
+    /// exist until the guest has booted, so a netd that forwards ports is
+    /// necessarily also the authority on the address. Reporting it back is what
+    /// lets the VMM show a bridge VM's address without a lease callback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    guest_ip: Option<String>,
+    /// Forwarding rules netd established. Absent from a netd that does not
+    /// implement forwarding, which is how the caller tells "nothing was asked
+    /// for" apart from "this was ignored".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ingress: Option<Vec<IngressBinding>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -212,6 +276,8 @@ impl Response {
             version: None,
             features: None,
             interfaces: None,
+            guest_ip: None,
+            ingress: None,
             error: None,
         }
     }
@@ -223,6 +289,8 @@ struct Prepared {
     tap: String,
     device: Option<String>,
     queues: Option<u32>,
+    guest_ip: Option<String>,
+    ingress: Option<Vec<IngressBinding>>,
 }
 
 impl Prepared {
@@ -231,6 +299,8 @@ impl Prepared {
             tap,
             device: None,
             queues: None,
+            guest_ip: None,
+            ingress: None,
         }
     }
 }
@@ -301,6 +371,10 @@ pub fn instance_id(configured: &str, run_path: &Path) -> String {
 pub struct PreparedInterface {
     pub device: Option<String>,
     pub queues: Option<u32>,
+    /// The address netd says this NIC will use, when netd decides addresses.
+    pub guest_ip: Option<String>,
+    /// The forwarding rules netd established, if it establishes any.
+    pub ingress: Option<Vec<IngressBinding>>,
 }
 
 /// Marker carried in the error chain when the VMM could not reach netd at all.
@@ -330,6 +404,8 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
     Ok(PreparedInterface {
         device: response.device,
         queues: response.queues,
+        guest_ip: response.guest_ip,
+        ingress: response.ingress,
     })
 }
 
@@ -497,6 +573,8 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
             tap: Some(prepared.tap),
             device: prepared.device,
             queues: prepared.queues,
+            guest_ip: prepared.guest_ip,
+            ingress: prepared.ingress,
             ..Response::empty()
         },
         Ok(Outcome::Capabilities) => Response {
@@ -731,6 +809,8 @@ fn prepare_macvtap(
                 tap,
                 device: Some(device),
                 queues: Some(queues),
+                guest_ip: None,
+                ingress: None,
             })
         }
         Err(error) => {
@@ -813,6 +893,10 @@ fn prepare_bridge(
         tap,
         device: None,
         queues: Some(queues),
+        // This netd assigns no addresses and forwards no ports, so it has
+        // nothing to report beyond the interface itself.
+        guest_ip: None,
+        ingress: None,
     })
 }
 
@@ -946,6 +1030,16 @@ fn validate_prepare_bridge(
     // about what happens to exist on this machine.
     if filter.requires_binding() && !request.filtered {
         bail!("this netd requires an nwfilter binding on every bridge TAP");
+    }
+    // This netd creates interfaces; it is not the host's forwarder. Building
+    // the TAP anyway and leaving the ports unforwarded is the silent failure
+    // the field exists to end, so the request is refused whole. `hello` does
+    // not name `ingress`, so a caller learns this before it ever asks.
+    if !request.ingress.is_empty() {
+        bail!(
+            "this netd does not forward host ports, but {} was/were requested",
+            request.ingress.len()
+        );
     }
     if !Path::new("/sys/class/net")
         .join(&request.bridge)
@@ -1142,6 +1236,7 @@ mod tests {
             filtered: true,
             queues: 0,
             workdir: String::new(),
+            ingress: Vec::new(),
         };
         let filter = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -1189,6 +1284,7 @@ mod tests {
             filtered: true,
             queues: 0,
             workdir: String::new(),
+            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
@@ -1259,6 +1355,7 @@ mod tests {
             filtered: false,
             queues: 4,
             workdir: String::new(),
+            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["queues"], 4);
@@ -1310,6 +1407,7 @@ mod tests {
             filtered: true,
             queues: 0,
             workdir: String::new(),
+            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
@@ -1387,6 +1485,7 @@ mod tests {
             filtered: false,
             queues: 4,
             workdir: String::new(),
+            ingress: Vec::new(),
         };
         let filtering = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -1460,6 +1559,7 @@ mod tests {
             filtered: true,
             queues: 1,
             workdir: String::new(),
+            ingress: Vec::new(),
         };
         // Nothing on the wire can name a filter: the field does not exist.
         let wire = serde_json::to_value(Request::PrepareBridge(request.clone())).unwrap();
@@ -1571,6 +1671,7 @@ mod tests {
             filtered: true,
             queues: 1,
             workdir: "/opt/dstack/run/vm/vm".into(),
+            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["workdir"], "/opt/dstack/run/vm/vm");
@@ -1593,5 +1694,95 @@ mod tests {
             panic!("expected a bridge prepare");
         };
         assert_eq!(decoded.workdir, "");
+    }
+
+    #[test]
+    fn ports_travel_with_the_bridge_prepare_and_default_to_none() {
+        let request = Request::PrepareBridge(PrepareBridgeRequest {
+            identity: identity("instance", "vm", 0),
+            bridge: "br0".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filtered: true,
+            queues: 1,
+            workdir: String::new(),
+            ingress: vec![IngressRequest {
+                protocol: "udp".into(),
+                host_address: "0.0.0.0".into(),
+                host_port: 7483,
+                guest_port: 51820,
+            }],
+        });
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["ingress"][0]["protocol"], "udp");
+        assert_eq!(value["ingress"][0]["host_port"], 7483);
+        assert_eq!(value["ingress"][0]["guest_port"], 51820);
+        // The bind address separates an admin port from a published one, so a
+        // forwarder that lost it would publish the admin port.
+        assert_eq!(value["ingress"][0]["host_address"], "0.0.0.0");
+
+        // A caller that predates the field asks for nothing.
+        let decoded = serde_json::from_value::<Request>(serde_json::json!({
+            "operation": "prepare_bridge",
+            "instance_id": "instance",
+            "vm_id": "vm",
+            "nic_index": 0,
+            "bridge": "br0",
+            "mac": "02:00:00:00:00:01",
+            "qemu_uid": 1000,
+            "filtered": true,
+            "queues": 1,
+        }))
+        .unwrap();
+        let Request::PrepareBridge(decoded) = decoded else {
+            panic!("expected a bridge prepare");
+        };
+        assert!(decoded.ingress.is_empty());
+    }
+
+    #[test]
+    fn a_netd_that_does_not_forward_refuses_the_ports_instead_of_dropping_them() {
+        let mut request = PrepareBridgeRequest {
+            identity: identity("instance", "vm", 0),
+            bridge: "dt-absent-br".into(),
+            mac: "02:00:00:00:00:01".into(),
+            qemu_uid: 1000,
+            filtered: true,
+            queues: 1,
+            workdir: String::new(),
+            ingress: vec![IngressRequest {
+                protocol: "tcp".into(),
+                host_address: "0.0.0.0".into(),
+                host_port: 8443,
+                guest_port: 443,
+            }],
+        };
+        let filter = NetworkFilterConfig {
+            mode: crate::config::NetworkFilterMode::Libvirt,
+            filter: "clean-traffic".into(),
+            parameters: Default::default(),
+        };
+        // Building the TAP and dropping the ports is the failure being ended,
+        // so the whole request is refused -- and refused for the request's own
+        // sake, before the host is inspected for a bridge that may not exist.
+        let error = validate_prepare_bridge(&request, &filter).unwrap_err();
+        assert!(
+            error.to_string().contains("does not forward host ports"),
+            "{error}"
+        );
+
+        // Asking for nothing gets past this check and on to the host, which is
+        // where a bridge that does not exist is noticed.
+        request.ingress.clear();
+        request.bridge = "dt-absent-br".into();
+        let error = validate_prepare_bridge(&request, &filter).unwrap_err();
+        assert!(error.to_string().contains("not a host bridge"), "{error}");
+    }
+
+    #[test]
+    fn a_forwarding_netd_is_not_this_one() {
+        // `hello` is what tells a caller this before it asks, so the refusal
+        // above is never the first thing it learns.
+        assert!(!FEATURES.contains(&"ingress"));
     }
 }

@@ -10,6 +10,7 @@ use path_absolutize::Absolutize;
 use rocket::figment::Figment;
 use serde::{Deserialize, Serialize};
 
+use crate::netd::IngressBinding;
 use dstack_types::TdxAttestationVariant;
 use lspci::{lspci_filtered, Device};
 use tracing::{info, warn};
@@ -1072,6 +1073,27 @@ pub struct Networking {
     /// the VM runs, and what has to be removed is what was created.
     #[serde(default, skip_serializing_if = "NetdInterface::is_none")]
     pub netd_interface: NetdInterface,
+    /// The address netd says this NIC reaches its segment at.
+    ///
+    /// Runtime state, cleared when the VM stops. A bridge NIC's address comes
+    /// from a DHCP server the VMM does not run, so without netd reporting it the
+    /// VMM can only say which bridge a VM is on, not where it is. Empty
+    /// whenever netd does not assign addresses.
+    ///
+    /// Unlike `device` this is persisted, so a VMM restart does not lose the
+    /// address of a VM that is still running. A stale `/dev/tapN` can name a
+    /// different device after a restart, which is why that one is not; a stale
+    /// address is only ever reported, never acted on.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guest_ip: String,
+    /// The host ports netd forwards to this NIC, as netd established them.
+    ///
+    /// Runtime state, persisted for the same reason as `guest_ip`. What was
+    /// asked for lives in the manifest's `port_map`; this is what the node
+    /// actually did, which is not the same thing when netd allocates a port
+    /// from a range or declines one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ingress: Vec<IngressBinding>,
 }
 
 /// The host interface netd created for a NIC, if any.

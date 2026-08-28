@@ -199,6 +199,41 @@ The remaining bytes are derived from the VM ID hash. The prefix applies to all n
 - Docker's nftables chains (`DOCKER-FORWARD`) run before libvirt's but do not block virbr0 traffic
 - Use `setup-bridge.sh check --bridge <name>` to diagnose missing rules
 
+### Host port mappings
+
+A VM's `port_map` has always been implemented as QEMU `hostfwd=` entries on a
+user-mode netdev. A bridge NIC has no such netdev, so **the VMM does not forward
+host ports for bridge VMs** — it is deliberately run without `CAP_NET_ADMIN`,
+and a userspace proxy on the host would give back the per-packet cost that
+moving off user mode was meant to escape.
+
+What the VMM does instead is carry the requirement to `netd`, which is
+privileged and is the only component that sees every VMM instance on the host —
+and therefore the only one that can arbitrate a host port between them. Whether
+a given `netd` implements forwarding is its own business; the one in this
+repository does not, and says so through `hello` rather than accepting ports it
+will not forward.
+
+So on a node whose `netd` does not forward:
+
+- the VM starts normally and its bridge networking works
+- its port mappings do not apply, and the VMM says so in its log at every launch
+- `GetInfo` reports an empty `ingress` on the interface, against the non-empty
+  `ports` on the configuration — that difference is the signal
+
+Expose such a VM by reaching its address on the bridge directly, by putting an
+L7 proxy in front of it, or by running a `netd` that forwards. `GetInfo` reports
+the interface's `guest_ip` when `netd` is the authority for addresses on that
+segment; a bridge NIC otherwise takes its address from a DHCP server the VMM
+does not run and cannot ask.
+
+`macvtap` and `custom` NICs can never carry host port mappings — the first
+bypasses the host bridge, and the second hands the whole netdev string to the
+operator. The VMM warns rather than refusing to start, because a VM deployed
+before any of this existed has been running with its ports dropped, and turning
+that into a failed launch on upgrade would make an outage out of a
+misconfiguration that was already there.
+
 ### Mixing networking modes
 
 Bridge and user-mode VMs can coexist. Set the global default in `vmm.toml` and override per-VM as needed:
