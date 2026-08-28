@@ -21,17 +21,63 @@ jobs:
         working-directory: dstack
     steps:
     - uses: actions/checkout@v5
+      with:
+        # The change detection below diffs against the base commit.
+        fetch-depth: 0
+
+    # Which files changed, decided here rather than with a workflow-level
+    # `paths:` filter.
+    #
+    # `rust-checks` is a required status check. A workflow skipped by `paths:`
+    # reports nothing at all, so the check never arrives and the pull request
+    # waits on it forever -- the filter has to live inside a job that always
+    # runs and always reports. Everything expensive below is gated on this
+    # output; when nothing relevant moved the job costs a checkout and a diff.
+    - name: Detect relevant changes
+      id: changes
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: |
+        if [ -z "$BASE_SHA" ]; then
+          echo "relevant=true" >> "$GITHUB_OUTPUT"
+          echo "push build: running everything"
+          exit 0
+        fi
+        changed=$(git diff --name-only "$BASE_SHA...HEAD")
+        echo "$changed"
+        if echo "$changed" | grep -qE '^(dstack/|sdk/simulator/|rust-toolchain\.toml|\.github/workflows/rust\.yml)'; then
+          echo "relevant=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "relevant=false" >> "$GITHUB_OUTPUT"
+          echo "nothing this job covers changed"
+        fi
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@1.92.0
       with:
         components: clippy, rustfmt
 
+    # The largest job in the repository was compiling the workspace from nothing
+    # on every run. `simulator-release.yml` already caches this way; this brings
+    # the check that gates every merge in line with it.
+    #
+    # `workspaces` because the manifest lives in `dstack/`, not at the root, and
+    # the action keys the cache on the lockfile it finds there. `sdk/` is a
+    # separate workspace, cached by its own job.
+    - name: Cache cargo
+      if: steps.changes.outputs.relevant == 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: dstack
+
     - name: Run Clippy
+      if: steps.changes.outputs.relevant == 'true'
       run: cargo clippy -- -D warnings -D clippy::expect_used -D clippy::unwrap_used --allow unused_variables
 
     - name: Cargo fmt check
+      if: steps.changes.outputs.relevant == 'true'
       run: cargo fmt --check --all
 
     - name: Run tests
+      if: steps.changes.outputs.relevant == 'true'
       run: ./run-tests.sh
