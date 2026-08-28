@@ -105,10 +105,18 @@ arguments. It never accepts a command, executable path, TAP name, or raw XML
 from a client. Filter XML is generated internally with XML escaping and is
 validated by libvirt.
 
+Teardown by identity only reaches the NIC indices its caller still has a record
+of, and that record is written *after* the interface exists — a VMM killed in
+between leaves a TAP nothing on disk points at, and a manifest that lost a NIC
+leaves the same thing behind. `remove_all` names a VM instead of an interface
+and derives every name that VM could occupy, so neither has to be recorded for
+teardown to work. The VMM sweeps before preparing a launch as well as on stop,
+which makes a launch self-healing regardless of what the record says.
+
 A bridge prepare also carries two things `netd` does not need to build the TAP.
 `workdir` names the VM's directory on the host: untrusted, never read for a
 decision, and present only so an operator reading `netd`'s log can get from an
-opaque TAP name back to the VM. `ingress` states the host ports the VM wants
+opaque TAP name back to the VM. `ingress` states the host ports that NIC should make
 reachable at its guest, which the VMM cannot arrange itself — it runs without
 `CAP_NET_ADMIN` by design, and QEMU's `hostfwd=` entries need a user-mode netdev
 that a bridge NIC does not have. The `netd` in this repository builds interfaces

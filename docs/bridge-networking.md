@@ -199,6 +199,30 @@ The remaining bytes are derived from the VM ID hash. The prefix applies to all n
 - Docker's nftables chains (`DOCKER-FORWARD`) run before libvirt's but do not block virbr0 traffic
 - Use `setup-bridge.sh check --bridge <name>` to diagnose missing rules
 
+### Which NIC a port mapping uses
+
+A port mapping says which NIC its traffic enters through:
+
+```bash
+vmm-cli.py deploy ... --port udp:0.0.0.0:7483:51820@0 --port tcp:127.0.0.1:7484:8001@0
+```
+
+Leave `@<nic>` off and the VMM picks the first user-mode NIC — where QEMU's
+`hostfwd=` entries have always gone — and failing that the first bridge NIC. A
+single-NIC VM never needs it.
+
+With several NICs the choice used to be made silently, and not always the way an
+operator would have. A bridge NIC for external traffic beside a user-mode NIC for
+management — the topology multi-NIC was added for — put every published port on
+the *management* NIC: the traffic reached the guest, but over slirp, bypassing
+whatever the bridge NIC's nwfilter was there to enforce and hiding the client's
+address behind the slirp gateway. A second user-mode NIC could never publish
+anything at all, because only the first was ever selected.
+
+A mapping resolves to exactly one NIC, and that NIC's backend decides the
+mechanism: `hostfwd=` for user mode, `netd` for a bridge. Nothing can be claimed
+by both.
+
 ### Mixing networking modes
 
 Bridge and user-mode VMs can coexist. Set the global default in `vmm.toml` and override per-VM as needed:

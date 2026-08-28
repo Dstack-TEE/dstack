@@ -10,8 +10,8 @@ use super::{
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
     network::{
-        bridge_helper, mac_address_for_vm_index, needs_netd_interface, validate_resolved_networks,
-        warn_if_vhost_net_missing,
+        bridge_helper, ingress_nic, mac_address_for_vm_index, needs_netd_interface,
+        validate_resolved_networks, warn_if_vhost_net_missing,
     },
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
@@ -631,11 +631,6 @@ impl QemuCommandBuilder<'_> {
 
     fn configure_networking(&self, command: &mut Command) -> Result<()> {
         let macvtap_fds = macvtap_fd_layout(&self.prepared.networks);
-        let hostfwd_index = self
-            .prepared
-            .networks
-            .iter()
-            .position(|networking| networking.nic.mode == NetworkingMode::User);
         for (index, networking) in self.prepared.networks.iter().enumerate() {
             let net_id = format!("net{index}");
             let mac = mac_address_for_vm_index(
@@ -663,16 +658,21 @@ impl QemuCommandBuilder<'_> {
                         networking.dhcp_start,
                         if networking.restrict { "yes" } else { "no" }
                     );
-                    if hostfwd_index == Some(index) {
-                        for mapping in &self.vm.manifest.port_map {
-                            netdev.push_str(&format!(
-                                ",hostfwd={}:{}:{}-:{}",
-                                mapping.protocol.as_str(),
-                                mapping.address,
-                                mapping.from,
-                                mapping.to
-                            ));
+                    // Only the mappings that resolve to this NIC. A mapping
+                    // lands on exactly one, and that NIC's backend decides the
+                    // mechanism, so a bridge NIC's ports go to netd instead of
+                    // being claimed here as well.
+                    for mapping in &self.vm.manifest.port_map {
+                        if ingress_nic(mapping, &self.prepared.networks) != Some(index) {
+                            continue;
                         }
+                        netdev.push_str(&format!(
+                            ",hostfwd={}:{}:{}-:{}",
+                            mapping.protocol.as_str(),
+                            mapping.address,
+                            mapping.from,
+                            mapping.to
+                        ));
                     }
                     netdev
                 }
@@ -1192,6 +1192,7 @@ mod tests {
                     protocol: Protocol::Tcp,
                     from: 18080,
                     to: 8080,
+                    nic_index: None,
                 }],
                 created_at_ms: 0,
                 hugepages: false,

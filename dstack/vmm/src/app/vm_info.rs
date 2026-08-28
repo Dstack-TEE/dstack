@@ -207,6 +207,7 @@ impl VmInfo {
                         .port_map
                         .iter()
                         .map(|mapping| pb::PortMapping {
+                            nic_index: mapping.nic_index.map(|index| index as u32),
                             protocol: mapping.protocol.as_str().into(),
                             host_address: mapping.address.to_string(),
                             host_port: mapping.from as u32,

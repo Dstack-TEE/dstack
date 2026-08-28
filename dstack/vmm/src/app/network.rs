@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{bail, Result};
 use sha2::{Digest, Sha256};
 
-use super::Manifest;
+use super::{Manifest, PortMapping};
 use crate::config::{
     CvmConfig, NetdInterface, NetworkFilterMode, Networking, NetworkingMode, NicNetworking,
     MAX_NET_QUEUES,
@@ -329,6 +329,54 @@ pub(crate) fn warn_if_vhost_net_missing(networks: &[Networking]) {
     }
 }
 
+/// Which NIC an unpinned port mapping's traffic enters through.
+///
+/// The first user-mode NIC, because that is where QEMU's `hostfwd=` entries
+/// have always gone and existing VMs must keep behaving the same way; failing
+/// that the first bridge NIC, which is the only other backend with a path into
+/// the guest. `macvtap` bypasses the host bridge and `custom` owns its own
+/// netdev string, so neither can carry one.
+pub(crate) fn default_ingress_nic(networks: &[Networking]) -> Option<usize> {
+    networks
+        .iter()
+        .position(|network| network.nic.mode == NetworkingMode::User)
+        .or_else(|| {
+            networks
+                .iter()
+                .position(|network| network.nic.mode == NetworkingMode::Bridge)
+        })
+}
+
+/// Which NIC a port mapping's traffic enters through.
+///
+/// One mapping resolves to at most one NIC, and that NIC's backend decides the
+/// mechanism: `hostfwd=` for user mode, netd for a bridge. That is what keeps
+/// QEMU and netd from both claiming one host port.
+pub(crate) fn ingress_nic(mapping: &PortMapping, networks: &[Networking]) -> Option<usize> {
+    mapping
+        .nic_index
+        .or_else(|| default_ingress_nic(networks))
+        .filter(|index| *index < networks.len())
+}
+
+/// The host ports one NIC carries, as netd requests.
+pub(crate) fn ingress_for(
+    port_map: &[PortMapping],
+    networks: &[Networking],
+    nic_index: usize,
+) -> Vec<crate::netd::IngressRequest> {
+    port_map
+        .iter()
+        .filter(|mapping| ingress_nic(mapping, networks) == Some(nic_index))
+        .map(|mapping| crate::netd::IngressRequest {
+            protocol: mapping.protocol.as_str().to_string(),
+            host_address: mapping.address.to_string(),
+            host_port: mapping.from,
+            guest_port: mapping.to,
+        })
+        .collect()
+}
+
 /// Derives a deterministic, locally administered unicast MAC address.
 ///
 /// Index zero preserves the legacy single-NIC derivation. Later interfaces
@@ -356,10 +404,12 @@ pub(crate) fn mac_address_for_vm_index(vm_id: &str, prefix: &[u8], index: usize)
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_queues_without_netd, effective_vhost, mac_address_for_vm_index, needs_netd_interface,
-        netd_teardown, resolve_networking, resolved_networks, settle_vhost,
-        validate_resolved_networks,
+        clamp_queues_without_netd, default_ingress_nic, effective_vhost, ingress_for, ingress_nic,
+        mac_address_for_vm_index, needs_netd_interface, netd_teardown, resolve_networking,
+        resolved_networks, settle_vhost, validate_resolved_networks,
     };
+    use crate::app::PortMapping;
+    use crate::config::Protocol;
     use crate::config::{Networking, NetworkingMode, NicNetworking};
 
     fn macvtap_network() -> NicNetworking {
@@ -721,5 +771,75 @@ mod tests {
             mac_address_for_vm_index("vm-123", &[], 1),
             "c6:74:2c:65:14:b9"
         );
+    }
+
+    fn nic(mode: NetworkingMode) -> Networking {
+        Networking {
+            nic: NicNetworking {
+                mode,
+                ..NicNetworking::default()
+            },
+            ..Networking::default()
+        }
+    }
+
+    fn mapping(host_port: u16, nic_index: Option<usize>) -> PortMapping {
+        PortMapping {
+            address: "0.0.0.0".parse().unwrap(),
+            protocol: Protocol::Tcp,
+            from: host_port,
+            to: host_port,
+            nic_index,
+        }
+    }
+
+    #[test]
+    fn an_unpinned_mapping_still_lands_where_hostfwd_always_put_it() {
+        // Existing VMs must not move. QEMU's `hostfwd=` has always gone to the
+        // first user-mode NIC, so that stays the answer wherever there is one.
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::User)];
+        assert_eq!(default_ingress_nic(&networks), Some(1));
+        assert_eq!(ingress_nic(&mapping(443, None), &networks), Some(1));
+
+        // With no user-mode NIC there was nowhere at all, which is the hole
+        // this closes: a bridge NIC is the only other backend with a path.
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::Bridge)];
+        assert_eq!(default_ingress_nic(&networks), Some(0));
+
+        // macvtap bypasses the host bridge and custom owns its netdev string.
+        let networks = [nic(NetworkingMode::Macvtap), nic(NetworkingMode::Custom)];
+        assert_eq!(default_ingress_nic(&networks), None);
+        assert_eq!(ingress_nic(&mapping(443, None), &networks), None);
+    }
+
+    #[test]
+    fn a_pinned_mapping_goes_where_it_says() {
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::User)];
+        assert_eq!(ingress_nic(&mapping(443, Some(0)), &networks), Some(0));
+        // Out of range resolves to nothing rather than to something arbitrary.
+        // Deployment refuses it outright; a manifest that lost a NIC lands here.
+        assert_eq!(ingress_nic(&mapping(443, Some(7)), &networks), None);
+    }
+
+    #[test]
+    fn one_mapping_reaches_exactly_one_nic() {
+        // The property that keeps QEMU and netd from both claiming a host port:
+        // every mapping appears under one NIC and no other.
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::User)];
+        let port_map = [
+            mapping(443, Some(0)),
+            mapping(8080, None),
+            mapping(9090, Some(1)),
+        ];
+        let per_nic: Vec<_> = (0..networks.len())
+            .map(|index| ingress_for(&port_map, &networks, index))
+            .collect();
+        // Only NIC 0 is a bridge, so only its list becomes netd requests; the
+        // other two ride QEMU's hostfwd on NIC 1.
+        assert_eq!(per_nic[0].len(), 1);
+        assert_eq!(per_nic[0][0].host_port, 443);
+        assert_eq!(per_nic[1].len(), 2);
+        let total: usize = per_nic.iter().map(Vec::len).sum();
+        assert_eq!(total, port_map.len());
     }
 }

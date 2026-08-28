@@ -321,17 +321,31 @@ def encrypt_env(envs, hex_public_key: str) -> str:
 
 
 def parse_port_mapping(port_str: str) -> Dict:
-    """Parse a port mapping string into a dictionary."""
+    """Parse a port mapping string into a dictionary.
+
+    Accepts an optional "@<nic>" suffix naming which NIC the traffic enters
+    through. Without it the VMM picks: the first user-mode NIC, else the first
+    bridge NIC. A single-NIC VM never needs it.
+    """
+    nic_index = None
+    if "@" in port_str:
+        port_str, _, nic = port_str.rpartition("@")
+        try:
+            nic_index = int(nic)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"Invalid NIC index: {nic}")
+        if nic_index < 0:
+            raise argparse.ArgumentTypeError(f"Invalid NIC index: {nic}")
     parts = port_str.split(":")
     if len(parts) == 3:
-        return {
+        mapping = {
             "protocol": parts[0],
             "host_address": "127.0.0.1",
             "host_port": int(parts[1]),
             "vm_port": int(parts[2]),
         }
     elif len(parts) == 4:
-        return {
+        mapping = {
             "protocol": parts[0],
             "host_address": parts[1],
             "host_port": int(parts[2]),
@@ -339,6 +353,9 @@ def parse_port_mapping(port_str: str) -> Dict:
         }
     else:
         raise argparse.ArgumentTypeError(f"Invalid port mapping format: {port_str}")
+    if nic_index is not None:
+        mapping["nic_index"] = nic_index
+    return mapping
 
 
 def read_utf8(filepath: str) -> str:
@@ -1907,7 +1924,7 @@ def main():
         "--port",
         action="append",
         type=str,
-        help="Port mapping in format: protocol[:address]:from:to",
+        help="Port mapping in format: protocol[:address]:from:to[@nic]",
     )
     deploy_parser.add_argument(
         "--gpu",
@@ -2063,7 +2080,7 @@ def main():
         action="append",
         type=str,
         required=True,
-        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+        help="Port mapping in format: protocol[:address]:from:to[@nic] (can be used multiple times)",
     )
 
     # Update (all-in-one) command
@@ -2133,7 +2150,7 @@ def main():
         "--port",
         action="append",
         type=str,
-        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+        help="Port mapping in format: protocol[:address]:from:to[@nic] (can be used multiple times)",
     )
     port_group.add_argument(
         "--no-ports",

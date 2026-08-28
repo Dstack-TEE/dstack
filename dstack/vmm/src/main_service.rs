@@ -168,6 +168,28 @@ fn port_mappings_conflict(left: &PortMapping, right: &PortMapping) -> bool {
             || right.address.is_unspecified())
 }
 
+/// Rejects a mapping pinned to a NIC the VM does not have.
+///
+/// Range only. Whether the named NIC's backend can carry a host port is
+/// resolved at launch, where the node configuration that decides it is the one
+/// in force -- and where an existing VM gets a warning rather than a refusal.
+fn validate_port_mapping_nics(mappings: &[PortMapping], nic_count: usize) -> Result<()> {
+    for mapping in mappings {
+        let Some(index) = mapping.nic_index else {
+            continue;
+        };
+        if index >= nic_count {
+            bail!(
+                "port mapping {} {}:{} names NIC {index}, but this VM has {nic_count}",
+                mapping.protocol.as_str(),
+                mapping.address,
+                mapping.from
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_unique_port_mappings(mappings: &[PortMapping]) -> Result<()> {
     for (index, mapping) in mappings.iter().enumerate() {
         if mappings[..index]
@@ -216,10 +238,14 @@ pub fn create_manifest_from_vm_config(
                 protocol,
                 from,
                 to,
+                nic_index: p.nic_index.map(|index| index as usize),
             })
         })
         .collect::<Result<Vec<_>>>()?;
     validate_unique_port_mappings(&port_map)?;
+    let networks = networks_from_vm_config(&request, cvm_config)?;
+    // An empty list inherits the node default, which is one NIC.
+    validate_port_mapping_nics(&port_map, networks.len().max(1))?;
 
     let app_id = match &request.app_id {
         Some(id) => id.strip_prefix("0x").unwrap_or(id).to_lowercase(),
@@ -268,7 +294,7 @@ pub fn create_manifest_from_vm_config(
         no_tee: request.no_tee || simulated_tee.is_some(),
         simulated_tee,
         swtpm,
-        networks: networks_from_vm_config(&request, cvm_config)?,
+        networks,
         volumes,
     })
 }
@@ -918,6 +944,7 @@ impl VmmRpc for RpcHandler {
                         protocol: p.protocol.parse().context("Invalid protocol")?,
                         from: p.host_port.try_into().context("Invalid host port")?,
                         to: p.vm_port.try_into().context("Invalid vm port")?,
+                        nic_index: p.nic_index.map(|index| index as usize),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -960,6 +987,9 @@ impl VmmRpc for RpcHandler {
             }
             manifest.networks = networks;
         }
+        // After both, since either half can move and the other still has to
+        // agree with it.
+        validate_port_mapping_nics(&manifest.port_map, manifest.networks.len().max(1))?;
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
             .context("failed to read app compose for swtpm decision")?;
         manifest.swtpm = needs_swtpm(

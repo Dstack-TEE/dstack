@@ -182,6 +182,15 @@ message PortMapping {
   uint32 vm_port = 3;
   // Host address
   string host_address = 4;
+  // Which NIC this mapping's traffic enters through, as an index into
+  // `networks`. Unset picks the first user-mode NIC, which is where QEMU's
+  // hostfwd entries have always gone, and failing that the first bridge NIC.
+  //
+  // A VM with one NIC never needs it. With several there is a choice, and it
+  // used to be made silently: a bridge NIC for external traffic beside a
+  // user-mode NIC for management -- the topology multi-NIC was added for --
+  // put every published port on the management NIC.
+  optional uint32 nic_index = 5;
 }
 
 // Partial configuration used when mutating an existing VM.

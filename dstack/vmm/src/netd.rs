@@ -43,6 +43,10 @@ const LOCK_PATH: &str = "/run/lock/dstack-netd.lock";
 /// Upper bound on TAP queue pairs netd will create. Mirrors the VMM's own cap
 /// so a malformed request cannot ask the kernel for an unbounded device.
 const MAX_QUEUES: u32 = 64;
+/// Highest NIC index an identity may name. Also the width of the space a
+/// whole-VM sweep has to enumerate, since it derives names instead of reading a
+/// record.
+const MAX_NIC_INDEX: usize = 255;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceIdentity {
@@ -153,6 +157,18 @@ pub enum Request {
         /// trusting this field.
         filtered: bool,
     },
+    /// Delete every interface netd holds for one VM.
+    ///
+    /// Teardown by identity can only reach the NIC indices its caller still has
+    /// a record of, and that record is written after the interface exists: a
+    /// VMM killed in between leaves a TAP nothing on disk points at. A manifest
+    /// that lost a NIC leaves the same thing behind. Both are found here
+    /// without a record, because every name netd can produce for a VM is
+    /// derivable from its identity.
+    RemoveAll {
+        instance_id: String,
+        vm_id: String,
+    },
     /// Verify a deterministic TAP and binding for operations and integration
     /// diagnostics. The VMM startup path uses Prepare rather than Check.
     Check {
@@ -180,6 +196,9 @@ struct Response {
     /// gets above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ingress: Option<Vec<IngressBinding>>,
+    /// How many interfaces a whole-VM sweep deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    removed: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -191,6 +210,7 @@ struct Prepared {
     device: Option<String>,
     queues: Option<u32>,
     ingress: Option<Vec<IngressBinding>>,
+    removed: Option<usize>,
 }
 
 impl Prepared {
@@ -200,6 +220,18 @@ impl Prepared {
             device: None,
             queues: None,
             ingress: None,
+            removed: None,
+        }
+    }
+
+    /// A sweep names no single interface, so it reports how many it deleted.
+    fn removed(removed: usize) -> Self {
+        Self {
+            tap: String::new(),
+            device: None,
+            queues: None,
+            ingress: None,
+            removed: Some(removed),
         }
     }
 }
@@ -250,10 +282,36 @@ pub fn is_unreachable(error: &anyhow::Error) -> bool {
 }
 
 pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
+    let response = exchange(socket, request).await?;
+    if response.tap.as_deref().unwrap_or_default().is_empty() {
+        bail!("netd response omitted TAP name");
+    }
+    Ok(PreparedInterface {
+        device: response.device,
+        queues: response.queues,
+        ingress: response.ingress,
+    })
+}
+
+/// Deletes every interface netd holds for one VM, returning how many there
+/// were. See [`Request::RemoveAll`].
+pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result<usize> {
+    let request = Request::RemoveAll {
+        instance_id: instance_id.to_string(),
+        vm_id: vm_id.to_string(),
+    };
+    Ok(exchange(socket, &request)
+        .await?
+        .removed
+        .unwrap_or_default())
+}
+
+async fn exchange(socket: &Path, request: &Request) -> Result<Response> {
     let operation = match request {
         Request::PrepareBridge(_) => "prepare_bridge",
         Request::PrepareMacvtap(_) => "prepare_macvtap",
         Request::Remove { .. } => "remove",
+        Request::RemoveAll { .. } => "remove_all",
         Request::Check { .. } => "check",
     };
     let exchange = async {
@@ -284,12 +342,7 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
                 response.error.as_deref().unwrap_or("unknown error")
             );
         }
-        response.tap.context("netd response omitted TAP name")?;
-        Ok(PreparedInterface {
-            device: response.device,
-            queues: response.queues,
-            ingress: response.ingress,
-        })
+        Ok(response)
     };
     timeout(Duration::from_secs(30), exchange)
         .await
@@ -378,6 +431,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
             device: prepared.device,
             queues: prepared.queues,
             ingress: prepared.ingress,
+            removed: prepared.removed,
             error: None,
         },
         Err(error) => {
@@ -388,6 +442,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
                 device: None,
                 queues: None,
                 ingress: None,
+                removed: None,
                 error: Some(format!("{error:#}")),
             }
         }
@@ -425,6 +480,10 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
         }
         Request::PrepareMacvtap(request) => {
             prepare_macvtap(libvirt_uri, &request, config.filter_policy())
+        }
+        Request::RemoveAll { instance_id, vm_id } => {
+            let removed = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
+            Ok(Prepared::removed(removed))
         }
         Request::Remove { identity, filtered } => {
             validate_identity(&identity)?;
@@ -527,6 +586,7 @@ fn prepare_macvtap(
                 device: Some(device),
                 queues: Some(queues),
                 ingress: None,
+                removed: None,
             })
         }
         Err(error) => {
@@ -612,6 +672,7 @@ fn prepare_bridge(
         // nothing here is what tells the caller that, so ports it asked for are
         // reported as unmet rather than assumed done.
         ingress: None,
+        removed: None,
     })
 }
 
@@ -627,6 +688,49 @@ enum BindingCleanup {
     /// be running at all, and a stale binding left by an earlier, filtered
     /// interface at this name is still worth clearing when it is.
     BestEffort,
+}
+
+/// Deletes every interface a VM could hold, by deriving each name rather than
+/// consulting a record.
+///
+/// `validate_identity` caps the NIC index, so the whole space a VM can occupy
+/// is enumerable: 256 names, each a `stat` that usually misses. Cleanup is
+/// best-effort about bindings -- nothing is about to take these names, and a
+/// node running unfiltered TAPs need not have libvirtd at all.
+fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Result<usize> {
+    let identity = InterfaceIdentity {
+        instance_id: instance_id.to_string(),
+        vm_id: vm_id.to_string(),
+        nic_index: 0,
+    };
+    validate_identity(&identity)?;
+    let mut removed = 0;
+    let mut first_error = None;
+    for nic_index in 0..=MAX_NIC_INDEX {
+        let tap = tap_name(&InterfaceIdentity {
+            nic_index,
+            ..identity.clone()
+        });
+        if !Path::new("/sys/class/net").join(&tap).exists() {
+            continue;
+        }
+        match remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort) {
+            // Keep going after a failure. Stopping at the first one would leave
+            // the rest of a VM's interfaces behind over one that is stuck.
+            Err(error) => {
+                warn!(%tap, %error, "failed to remove interface");
+                first_error.get_or_insert(error);
+            }
+            Ok(()) => {
+                info!(%tap, %vm_id, "removed interface");
+                removed += 1;
+            }
+        }
+    }
+    match first_error {
+        Some(error) => Err(error).context("failed to remove every interface for this VM"),
+        None => Ok(removed),
+    }
 }
 
 fn remove_interface(libvirt_uri: &str, tap: &str, cleanup: BindingCleanup) -> Result<()> {
@@ -766,7 +870,7 @@ fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
             bail!("invalid {label}");
         }
     }
-    if identity.nic_index > 255 {
+    if identity.nic_index > MAX_NIC_INDEX {
         bail!("NIC index is out of range");
     }
     Ok(())
@@ -1388,5 +1492,27 @@ mod tests {
             "queues": 1,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_whole_vm_sweep_needs_no_record_of_what_it_is_deleting() {
+        let value = serde_json::to_value(Request::RemoveAll {
+            instance_id: "instance".into(),
+            vm_id: "vm".into(),
+        })
+        .unwrap();
+        assert_eq!(value["operation"], "remove_all");
+        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["vm_id"], "vm");
+        // No NIC index: the point is reaching the ones the caller can no longer
+        // name, so it names none and netd derives the whole space instead.
+        assert!(value.get("nic_index").is_none());
+
+        // That space is bounded by what an identity may say, which is what
+        // makes deriving it cheap enough to do on every launch.
+        let mut identity = identity("instance", "vm", MAX_NIC_INDEX);
+        assert!(validate_identity(&identity).is_ok());
+        identity.nic_index = MAX_NIC_INDEX + 1;
+        assert!(validate_identity(&identity).is_err());
     }
 }

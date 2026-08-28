@@ -46,9 +46,9 @@ use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub(crate) use network::{
-    clamp_queues_without_netd, filters_bridge_traffic, needs_netd_interface, netd_available,
-    netd_teardown, resolve_networking, resolved_networks, settle_vhost, validate_resolved_network,
-    validate_resolved_networks,
+    clamp_queues_without_netd, filters_bridge_traffic, ingress_for, needs_netd_interface,
+    netd_available, netd_teardown, resolve_networking, resolved_networks, settle_vhost,
+    validate_resolved_network, validate_resolved_networks,
 };
 pub use qemu::VmConfig;
 // Exported so the RPC layer can assert that everything it reports is
@@ -97,6 +97,10 @@ pub struct PortMapping {
     pub protocol: Protocol,
     pub from: u16,
     pub to: u16,
+    /// Which NIC carries this mapping. `None` resolves by the node's rule; see
+    /// [`crate::app::network::ingress_nic`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nic_index: Option<usize>,
 }
 
 /// An extra disk attached to the VM (e.g. a pre-baked verity volume). `source`
@@ -563,6 +567,27 @@ impl App {
         {
             return Ok(());
         }
+        // Whatever an earlier boot left behind, from a crash between creating
+        // an interface and recording it or from a NIC this VM no longer has.
+        // Prepare replaces the names it is about to use, but only those; an
+        // index nothing will claim again is only reachable from here.
+        if let Err(error) = netd::remove_all(
+            &self.config.netd.socket,
+            &self.config.cvm.instance_id,
+            &vm.manifest.id,
+        )
+        .await
+        {
+            if !netd::is_unreachable(&error) {
+                warn!(vm_id = %vm.manifest.id, %error, "failed to sweep stale netd interfaces");
+            }
+        }
+        // Resolved before the loop borrows `networks` mutably, and once rather
+        // than per NIC, so both the request and the warning below read the same
+        // answer.
+        let ingress: Vec<Vec<netd::IngressRequest>> = (0..networks.len())
+            .map(|nic_index| ingress_for(&vm.manifest.port_map, networks, nic_index))
+            .collect();
         let qemu_uid = Uid::effective().as_raw();
         // Only ever read back out of a log line: netd is told where the VM
         // lives so an operator holding an opaque TAP name can reach the VM
@@ -575,17 +600,6 @@ impl App {
         // netdev, so a bridge NIC drops every one of them. The VMM cannot
         // forward them itself -- it runs without CAP_NET_ADMIN by design -- so
         // it states the requirement and lets the node's netd answer it.
-        let ingress: Vec<netd::IngressRequest> = vm
-            .manifest
-            .port_map
-            .iter()
-            .map(|mapping| netd::IngressRequest {
-                protocol: mapping.protocol.as_str().to_string(),
-                host_address: mapping.address.to_string(),
-                host_port: mapping.from,
-                guest_port: mapping.to,
-            })
-            .collect();
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter_mut().enumerate() {
             if !needs_netd_interface(network, &self.config.cvm) {
@@ -616,14 +630,11 @@ impl App {
                     filtered,
                     queues,
                     workdir: workdir.clone(),
-                    // Only the first NIC carries them, matching where user-mode
-                    // networking puts its `hostfwd=` entries. Repeating the list
-                    // would ask two interfaces to answer on one host port.
-                    ingress: if nic_index == 0 {
-                        ingress.clone()
-                    } else {
-                        Vec::new()
-                    },
+                    // Only the mappings that resolve to this NIC. One mapping
+                    // lands on exactly one, and a user-mode NIC's are emitted
+                    // as QEMU `hostfwd=` instead, so no host port is claimed
+                    // twice.
+                    ingress: ingress[nic_index].clone(),
                 }),
                 NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
                     identity: identity.clone(),
@@ -713,10 +724,11 @@ impl App {
             // Ports asked for and not answered for used to vanish in silence:
             // no warning, and `GetInfo` still listing them. A netd that forwards
             // says what it built, so nothing said means nothing forwarded.
-            if nic_index == 0 && !ingress.is_empty() && response.ingress.is_none() {
+            let asked = ingress[nic_index].len();
+            if asked > 0 && response.ingress.is_none() {
                 warn!(
                     vm_id = %vm.manifest.id,
-                    ports = ingress.len(),
+                    ports = asked,
                     "netd on this node does not forward host ports, so this VM's \
                      port mappings do not apply to its bridge interface"
                 );
@@ -843,40 +855,51 @@ impl App {
         }
     }
 
+    /// Deletes every host interface netd holds for this VM.
+    ///
+    /// A sweep rather than one removal per recorded NIC. The record is written
+    /// after the interface exists, so a VMM killed in between leaves a TAP
+    /// nothing on disk points at; a lost or unreadable record reads as an empty
+    /// list, which used to mean "nothing to remove"; and a manifest that lost a
+    /// NIC leaves an index the list no longer reaches. netd derives the names
+    /// instead, so none of that has to be true for teardown to work.
+    ///
+    /// `networks` now only decides whether to ask at all. An unreachable netd
+    /// is not a failure: most nodes run none, and stopping a VM must not depend
+    /// on one being up.
     pub(crate) async fn remove_filtered_networks(
         &self,
         vm_id: &str,
         networks: &[Networking],
     ) -> Result<()> {
-        if networks
-            .iter()
-            .all(|network| netd_teardown(network, &self.config.cvm).is_none())
-        {
+        // An empty list is not "no interfaces", it is "no record" -- exactly
+        // the case a sweep exists for. A record that names only backends netd
+        // never touches is the one case worth skipping.
+        let recorded_none = !networks.is_empty()
+            && networks
+                .iter()
+                .all(|network| netd_teardown(network, &self.config.cvm).is_none());
+        if recorded_none {
             return Ok(());
         }
-        let mut first_error = None;
-        for (nic_index, network) in networks.iter().enumerate().rev() {
-            let Some(filtered) = netd_teardown(network, &self.config.cvm) else {
-                continue;
-            };
-            let identity = InterfaceIdentity {
-                instance_id: self.config.cvm.instance_id.clone(),
-                vm_id: vm_id.to_string(),
-                nic_index,
-            };
-            if let Err(error) = netd::request(
-                &self.config.netd.socket,
-                &NetdRequest::Remove { identity, filtered },
-            )
-            .await
-            {
-                first_error.get_or_insert(error);
+        match netd::remove_all(
+            &self.config.netd.socket,
+            &self.config.cvm.instance_id,
+            vm_id,
+        )
+        .await
+        {
+            Ok(0) => Ok(()),
+            Ok(removed) => {
+                info!(vm_id, removed, "removed netd-managed interfaces");
+                Ok(())
             }
+            Err(error) if netd::is_unreachable(&error) => {
+                debug!(vm_id, %error, "no netd to remove interfaces from");
+                Ok(())
+            }
+            Err(error) => Err(error).context("failed to remove netd-managed networking"),
         }
-        if let Some(error) = first_error {
-            return Err(error).context("failed to remove netd-managed networking");
-        }
-        Ok(())
     }
 
     pub(crate) async fn stop_vm_process(&self, id: &str) -> Result<()> {
