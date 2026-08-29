@@ -32,5 +32,5 @@ export function toKeypairSecure(keyResponse: GetTlsKeyResponse | GetKeyResponse)
     const buf = sha256(keyResponse.asUint8Array())
     return Keypair.fromSeed(buf)
   }
-  return Keypair.fromSeed(keyResponse.key)
+  return Keypair.fromSeed(sha256(keyResponse.key))
 }

@@ -63,4 +63,5 @@ def to_keypair_secure(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> K
                 "to_keypair_secure: missing SHA256 support, please upgrade your system"
             ) from e
     else:  # GetKeyResponse
-        return Keypair.from_seed(get_key_response.decode_key())
+        hashed_key = hashlib.sha256(get_key_response.decode_key()).digest()
+        return Keypair.from_seed(hashed_key)

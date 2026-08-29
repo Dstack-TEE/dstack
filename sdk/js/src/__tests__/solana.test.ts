@@ -80,5 +80,18 @@ describe('solana support', () => {
 
       consoleSpy.mockRestore()
     })
+
+    it('should hash the full key material for GetKeyResponse (regression: previously fell through unhashed)', async () => {
+      const client = new DstackClient()
+      const result = await client.getKey('/', 'test')
+
+      const legacyKeypair = toKeypair(result)
+      const secureKeypair = toKeypairSecure(result)
+
+      // toKeypairSecure must apply SHA256 to the full key material, as its
+      // docstring promises. If it silently falls through to the raw key (the
+      // bug this test guards against), both public keys are identical.
+      expect(secureKeypair.publicKey.toBase58()).not.toBe(legacyKeypair.publicKey.toBase58())
+    })
   })
 })
