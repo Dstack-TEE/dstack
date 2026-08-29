@@ -21,3 +21,6 @@ x509-parser = { workspace = true, features = ["verify"] }
 rustls-pki-types.workspace = true
 rustls-webpki = { workspace = true, features = ["ring"] }
 pem.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "time", "macros", "net", "io-util"] }

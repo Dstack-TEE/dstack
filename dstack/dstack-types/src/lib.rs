@@ -1238,20 +1238,114 @@ pub struct GatewayClusterConfig {
     pub urls: Vec<String>,
 }
 
+/// One or more interchangeable endpoints for the same collateral service.
+///
+/// Deserializes from either a bare string or a list, so every config file and
+/// every already-serialized `SysConfig` written by an older host keeps parsing
+/// unchanged. Serializes back as a bare string when there is exactly one entry,
+/// for the same reason.
+///
+/// Order is meaningful: callers try entries front to back and keep the first
+/// answer. Blank entries are dropped on the way in, because a config that says
+/// `pccs = ["", "https://..."]` means the second one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UrlList(Vec<String>);
+
+impl UrlList {
+    pub fn new(urls: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self(
+            urls.into_iter()
+                .map(Into::into)
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty())
+                .collect(),
+        )
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// The endpoints in the order they should be tried.
+    pub fn as_slice(&self) -> &[String] {
+        &self.0
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, String> {
+        self.0.iter()
+    }
+
+    /// The endpoint a single-URL caller should use. `None` when the list is
+    /// empty, which callers read as "use the platform default".
+    pub fn first(&self) -> Option<&str> {
+        self.0.first().map(String::as_str)
+    }
+}
+
+impl From<String> for UrlList {
+    fn from(url: String) -> Self {
+        Self::new([url])
+    }
+}
+
+impl From<&str> for UrlList {
+    fn from(url: &str) -> Self {
+        Self::new([url])
+    }
+}
+
+impl From<Vec<String>> for UrlList {
+    fn from(urls: Vec<String>) -> Self {
+        Self::new(urls)
+    }
+}
+
+impl Serialize for UrlList {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.0.as_slice() {
+            [single] => serializer.serialize_str(single),
+            many => many.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for UrlList {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(String),
+            Many(Vec<String>),
+        }
+        Ok(match OneOrMany::deserialize(deserializer)? {
+            OneOrMany::One(url) => Self::new([url]),
+            OneOrMany::Many(urls) => Self::new(urls),
+        })
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CollateralUrls {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pccs: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub amd_kds: Option<String>,
+    /// Intel PCCS endpoints. Empty means the built-in default.
+    #[serde(default, skip_serializing_if = "UrlList::is_empty")]
+    pub pccs: UrlList,
+    /// AMD KDS endpoints, or mirrors of it. Empty means the built-in default.
+    #[serde(default, skip_serializing_if = "UrlList::is_empty")]
+    pub amd_kds: UrlList,
 }
 
 impl SysConfig {
     pub fn collateral_urls(&self) -> CollateralUrls {
         let mut urls = self.collateral_urls.clone().unwrap_or_default();
-        if urls.pccs.is_none() {
-            urls.pccs.clone_from(&self.legacy_pccs_url);
+        if urls.pccs.is_empty() {
+            if let Some(legacy) = &self.legacy_pccs_url {
+                urls.pccs = UrlList::from(legacy.clone());
+            }
         }
         urls
     }
@@ -2679,6 +2773,91 @@ mod appcompose_sdk_parity {
              type as a closed struct, so a field they do not know is silently \
              dropped from the compose hash they compute -- and that hash is what \
              gets whitelisted on chain. Update sdk/go and sdk/js, then this list."
+        );
+    }
+}
+
+#[cfg(test)]
+mod collateral_url_tests {
+    use super::*;
+
+    #[test]
+    fn a_bare_string_and_a_list_both_parse() {
+        let single: CollateralUrls =
+            serde_json::from_str(r#"{"pccs":"https://pccs.example"}"#).unwrap();
+        assert_eq!(single.pccs.as_slice(), ["https://pccs.example"]);
+
+        let many: CollateralUrls =
+            serde_json::from_str(r#"{"amd_kds":["https://a/vcek/v1","https://b/vcek/v1"]}"#)
+                .unwrap();
+        assert_eq!(
+            many.amd_kds.as_slice(),
+            ["https://a/vcek/v1", "https://b/vcek/v1"]
+        );
+    }
+
+    /// A `SysConfig` written by a host that predates lists must still round
+    /// trip through a new binary unchanged, because the guest hashes what it
+    /// is given rather than what it would have written itself.
+    #[test]
+    fn a_single_url_serializes_back_as_a_bare_string() {
+        let urls = CollateralUrls {
+            pccs: UrlList::from("https://pccs.example"),
+            amd_kds: UrlList::default(),
+        };
+        assert_eq!(
+            serde_json::to_string(&urls).unwrap(),
+            r#"{"pccs":"https://pccs.example"}"#
+        );
+    }
+
+    #[test]
+    fn several_urls_serialize_as_a_list() {
+        let urls = CollateralUrls {
+            pccs: UrlList::default(),
+            amd_kds: UrlList::new(["https://a", "https://b"]),
+        };
+        assert_eq!(
+            serde_json::to_string(&urls).unwrap(),
+            r#"{"amd_kds":["https://a","https://b"]}"#
+        );
+    }
+
+    #[test]
+    fn blank_entries_are_dropped_on_the_way_in() {
+        let urls: CollateralUrls =
+            serde_json::from_str(r#"{"pccs":["", "  ", "https://real"]}"#).unwrap();
+        assert_eq!(urls.pccs.as_slice(), ["https://real"]);
+
+        let blank: CollateralUrls = serde_json::from_str(r#"{"pccs":"   "}"#).unwrap();
+        assert!(
+            blank.pccs.is_empty(),
+            "a blank string means 'unset', not 'an endpoint named blank'"
+        );
+    }
+
+    #[test]
+    fn the_legacy_pccs_url_field_still_wins_when_no_list_is_configured() {
+        let sys_config: SysConfig = serde_json::from_str(
+            r#"{"kms_urls":[],"gateway_urls":[],"pccs_url":"https://legacy.example","vm_config":"{}"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            sys_config.collateral_urls().pccs.as_slice(),
+            ["https://legacy.example"]
+        );
+    }
+
+    #[test]
+    fn an_explicit_list_takes_precedence_over_the_legacy_field() {
+        let sys_config: SysConfig = serde_json::from_str(
+            r#"{"kms_urls":[],"gateway_urls":[],"pccs_url":"https://legacy.example",
+                "collateral_urls":{"pccs":["https://new.example"]},"vm_config":"{}"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            sys_config.collateral_urls().pccs.as_slice(),
+            ["https://new.example"]
         );
     }
 }

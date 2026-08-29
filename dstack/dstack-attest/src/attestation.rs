@@ -11,10 +11,10 @@ pub const TDX_QUOTE_REPORT_DATA_RANGE: std::ops::Range<usize> = 568..632;
 
 use std::{borrow::Cow, time::SystemTime};
 
+use crate::collateral::{amd_kds_client, PccsClient};
 use anyhow::{anyhow, bail, Context, Result};
 use cc_eventlog::{EventLogVersion, RuntimeEvent, TdxEvent};
 use dcap_qvl::{
-    collateral::CollateralClient,
     quote::{EnclaveReport, Quote, Report, TDReport10, TDReport15},
     verify::VerifiedReport as TdxVerifiedReport,
 };
@@ -57,7 +57,7 @@ pub struct AttestationVerifierConfig {
 
 pub struct AttestationVerifier {
     tdx: dcap_qvl::verify::QuoteVerifier,
-    tdx_collateral: CollateralClient,
+    tdx_collateral: PccsClient,
     gcp_tpm: tpm_qvl::QuoteVerifier,
     aws_nitro_enclave: nsm_qvl::QuoteVerifier,
     aws_nitro_tpm: nsm_qvl::QuoteVerifier,
@@ -130,26 +130,14 @@ impl AttestationVerifier {
                 sev_snp = sev_snp.with_root(product, root);
             }
         }
-        let pccs = config
-            .urls
-            .pccs
-            .as_deref()
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or(dcap_qvl::collateral::PHALA_PCCS_URL);
-        let amd_kds = config
-            .urls
-            .amd_kds
-            .as_deref()
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or(sev_snp_qvl::AMD_KDS_DEFAULT_BASE_URL);
         Ok(Self {
             tdx,
-            tdx_collateral: CollateralClient::with_default_http(pccs)?,
+            tdx_collateral: PccsClient::new(&config.urls.pccs)?,
             gcp_tpm,
             aws_nitro_enclave: nsm(aws_nitro_enclave.as_deref(), "AWS Nitro Enclave")?,
             aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
             sev_snp,
-            amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
+            amd_kds: amd_kds_client(&config.urls.amd_kds)?,
         })
     }
 
@@ -157,24 +145,12 @@ impl AttestationVerifier {
         let collateral_urls = collateral_urls.cloned().unwrap_or_default();
         Ok(Self {
             tdx: dcap_qvl::verify::QuoteVerifier::new_prod(),
-            tdx_collateral: CollateralClient::with_default_http(
-                collateral_urls
-                    .pccs
-                    .as_deref()
-                    .filter(|url| !url.trim().is_empty())
-                    .unwrap_or(dcap_qvl::collateral::PHALA_PCCS_URL),
-            )?,
+            tdx_collateral: PccsClient::new(&collateral_urls.pccs)?,
             gcp_tpm: tpm_qvl::QuoteVerifier::new_prod(Platform::Gcp)?,
             aws_nitro_enclave: nsm_qvl::QuoteVerifier::new_prod(),
             aws_nitro_tpm: nsm_qvl::QuoteVerifier::new_prod(),
             sev_snp: sev_snp_qvl::QuoteVerifier::new_prod(),
-            amd_kds: AmdKdsClient::with_base_url(
-                collateral_urls
-                    .amd_kds
-                    .as_deref()
-                    .filter(|url| !url.trim().is_empty())
-                    .unwrap_or(sev_snp_qvl::AMD_KDS_DEFAULT_BASE_URL),
-            )?,
+            amd_kds: amd_kds_client(&collateral_urls.amd_kds)?,
         })
     }
 
