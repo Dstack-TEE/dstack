@@ -143,35 +143,37 @@ mode = "bridge"
 bridge = "dstack-br0"
 ```
 
-### QEMU bridge helper setup (needed unless every bridge NIC goes through netd)
+### netd is required
 
-The bridge helper allows QEMU to create and attach TAP devices without VMM needing root privileges.
-It is used only on the single-queue bridge paths; a NIC that `netd` builds never touches it, so a
-node that runs `netd` for all of its bridge VMs does not need it at all.
-
-The VMM probes `/usr/lib/qemu/qemu-bridge-helper`, `/usr/libexec/qemu-bridge-helper` and
-`/usr/local/libexec/qemu-bridge-helper`. Set `cvm.qemu_bridge_helper` in `vmm.toml` for a path
-outside that list.
+Bridge networking needs `netd`, the privileged helper that owns every host
+interface a bridge or macvtap NIC uses. It is the same binary:
 
 ```bash
-# Allow QEMU to use the bridge
-sudo mkdir -p /etc/qemu
-echo "allow virbr0" | sudo tee /etc/qemu/bridge.conf
-# Or for manual bridge: echo "allow dstack-br0" | sudo tee /etc/qemu/bridge.conf
-
-# Set setuid on bridge helper
-sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
+sudo dstack-vmm netd -c vmm.toml
 ```
+
+Nothing else on the node needs `CAP_NET_ADMIN`: the VMM itself still runs
+unprivileged, and `netd` holds the privilege behind a Unix socket whose
+filesystem permissions authorize callers.
+
+This used to be conditional — `netd` built the TAP when libvirt filtering was on
+or when the NIC wanted more than one queue pair, and otherwise QEMU's setuid
+`qemu-bridge-helper` did. Two owners meant two answers to the same questions:
+which netdev QEMU gets, whether vhost is really on, and where a bridge NIC's
+published ports go. Only `netd` can answer the last one, because only `netd`
+sees every VMM instance on the host and can arbitrate a port between them. So a
+bridge NIC's host interface has one owner now, on every node.
+
+`qemu-bridge-helper` is no longer used, and `/etc/qemu/bridge.conf` no longer
+needs an `allow` line for the bridge.
 
 ## How it works
 
-- With more than one queue pair, or with libvirt filtering on, `netd` creates the TAP and the VMM passes `-netdev tap,id=net0,ifname=<tap>,...` — this is the usual case on a node running `netd` with multi-vCPU VMs, since queue pairs default to the VM's vCPU count. Without `netd`, a bridge NIC that took that default drops back to one queue pair and takes a helper path below
-- Otherwise the VMM passes `-netdev tap,id=net0,br=<bridge>,helper=<qemu-bridge-helper>,vhost=on`, or `-netdev bridge,id=net0,br=<bridge>` when vhost is off or no helper is found
-- QEMU's bridge helper (setuid) creates a TAP device and attaches it to the bridge on the two helper paths
+- `netd` creates a persistent TAP, attaches it to the bridge, binds the nwfilter if the node filters, and the VMM passes `-netdev tap,id=net0,ifname=<tap>,...`
 - Guest MAC address is derived from SHA256 of the VM ID, with an optional configurable prefix (stable across restarts for DHCP IP consistency)
 - The host DHCP server (dnsmasq) assigns an IP to the VM
-- On the two bridge-helper paths the TAP disappears when QEMU exits; a `netd`-created TAP is persistent and is deleted when the VMM tears the VM's networking down
-- The VMM process itself needs neither root nor `CAP_NET_ADMIN` on any path; the `netd` path moves that privilege into a separate root service instead
+- The TAP outlives QEMU and is deleted when the VMM tears the VM's networking down, so a VM that crashes does not leave its filter rules attached to a name the next VM could take
+- The VMM process needs neither root nor `CAP_NET_ADMIN`; `netd` holds that privilege in a separate service
 
 ### MAC address prefix
 

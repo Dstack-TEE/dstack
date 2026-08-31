@@ -14,11 +14,10 @@ host mechanism.
 
 The measurable acceptance criteria are:
 
-- `network_filter = "none"` installs no nwfilter binding. It still uses `netd`
-  for any NIC with more than one queue pair, and a `tap` netdev behind
-  `qemu-bridge-helper` whenever vhost is on; only a single-queue, non-vhost
-  bridge NIC keeps the historical `-netdev bridge` path with no `netd` or
-  libvirt dependency.
+- `network_filter = "none"` installs no nwfilter binding. It does not remove
+  the `netd` dependency: `netd` creates the TAP for every bridge NIC either
+  way, and the VMM uses `-netdev tap` either way. What changes is only whether
+  that TAP carries a binding.
 - `network_filter = "libvirt"` creates the TAP and filter binding before QEMU
   is submitted to Supervisor, and uses QEMU `-netdev tap`.
 - A failed TAP or filter setup prevents QEMU from starting and rolls back all
@@ -214,11 +213,9 @@ sudo dstack-vmm --config ./vmm.toml \
   --netd-socket /run/dstack-dev/netd.sock
 ```
 
-User networking never asks `netd` to build an interface; the VMM still opens a
-short liveness-probe connection to the netd socket on every launch and when
-describing a stopped VM. Libvirt mode fails closed if `netd`
-is unavailable. Bridge networking with `mode = "none"` connects only when it
-needs more than one queue pair, as described below.
+User networking and a caller-supplied netdev never ask `netd` to build an
+interface, and a VM using only those never contacts it. Bridge and macvtap
+always do, and fail closed if `netd` is unavailable.
 
 Filtered TAP netdevs follow the node's `vhost` and `queues` settings like any
 other TAP-backed NIC (see [network-data-plane.md](network-data-plane.md)). The
@@ -227,10 +224,11 @@ whether they were written by QEMU or by a vhost worker; filtering is unaffected
 by the data plane choice. Enabling vhost does require the QEMU user to be able
 to open `/dev/vhost-net`.
 
-`netd` also creates the TAP for unfiltered bridge NICs that ask for more than
-one queue pair, because `qemu-bridge-helper` returns a single descriptor and
-cannot create a `multi_queue` device. Those TAPs carry no nwfilter binding, so
-a multiqueue bridge node needs `netd` even when `network_filter.mode = "none"`.
+`netd` creates the TAP for unfiltered bridge NICs too. Those TAPs carry no
+nwfilter binding, so a bridge node needs `netd` even when
+`network_filter.mode = "none"` — see
+[bridge-networking.md](bridge-networking.md) for why the host interface has a
+single owner.
 
 An empty filter name is what selects that unfiltered TAP, so `mode = "libvirt"`
 with an empty `filter` is rejected at config load rather than quietly producing

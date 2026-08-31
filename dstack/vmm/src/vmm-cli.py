@@ -330,12 +330,11 @@ def parse_port_mapping(port_str: str) -> Dict:
     nic_index = None
     if "@" in port_str:
         port_str, _, nic = port_str.rpartition("@")
-        try:
-            nic_index = int(nic)
-        except ValueError:
+        # `int()` alone would take "1_0" as 10, " 1" as 1, and "+1" as 1. A NIC
+        # index is a position in a list the user wrote, so only digits are it.
+        if not (nic.isascii() and nic.isdigit()):
             raise argparse.ArgumentTypeError(f"Invalid NIC index: {nic}")
-        if nic_index < 0:
-            raise argparse.ArgumentTypeError(f"Invalid NIC index: {nic}")
+        nic_index = int(nic)
     parts = port_str.split(":")
     if len(parts) == 3:
         mapping = {

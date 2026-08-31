@@ -8,6 +8,10 @@ type PortEntry = {
   host_port: number | null;
   vm_port: number | null;
   custom_ip?: string;            // User-entered IP for custom mode
+  // Which NIC the traffic enters through. Blank lets the VMM pick: the first
+  // user-mode NIC, else the first bridge NIC. A single-NIC VM never needs it,
+  // which is why the field only appears once a VM has more than one.
+  nic_index?: number | null;
 };
 
 // ... keep your types as-is ...
@@ -21,6 +25,9 @@ const PortMappingEditorComponent = {
   name: 'PortMappingEditor',
   props: {
     ports: { type: Array, required: true },
+    // How many NICs the VM has. One NIC has nothing to choose between, so the
+    // column stays hidden rather than offering a pin that can only be 0.
+    nicCount: { type: Number, default: 1 },
   },
 
   // normalize on initial load
@@ -63,6 +70,15 @@ const PortMappingEditorComponent = {
 
         <input type="number" v-model.number="port.host_port" placeholder="Host Port" required>
         <input type="number" v-model.number="port.vm_port" placeholder="VM Port" required>
+        <input
+          v-if="nicCount > 1"
+          type="number"
+          min="0"
+          :max="nicCount - 1"
+          v-model.number="port.nic_index"
+          placeholder="NIC"
+          title="Which NIC this mapping enters through. Leave blank to let the VMM pick."
+        />
         <button type="button" class="action-btn danger" @click="removePort(index)">Remove</button>
       </div>
       <button type="button" class="action-btn" @click="addPort">Add Port</button>
@@ -95,6 +111,7 @@ const PortMappingEditorComponent = {
         custom_ip: '',
         host_port: null,
         vm_port: null,
+        nic_index: null,
       });
     },
 

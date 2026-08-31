@@ -85,17 +85,22 @@ pub(crate) fn resolved_networks(manifest: &Manifest, cfg: &CvmConfig) -> Vec<Net
 
 /// Whether netd must pre-create the host interface for this NIC.
 ///
-/// Macvtap always needs one. A bridge NIC needs one when libvirt filtering
-/// binds an nwfilter to the TAP, and when multiqueue requires a persistent
-/// `IFF_MULTI_QUEUE` device that `qemu-bridge-helper` cannot create.
-pub(crate) fn needs_netd_interface(networking: &Networking, cfg: &CvmConfig) -> bool {
-    match networking.nic.mode {
-        NetworkingMode::Macvtap => true,
-        NetworkingMode::Bridge => {
-            cfg.network_filter.mode == NetworkFilterMode::Libvirt || networking.queue_pairs() > 1
-        }
-        NetworkingMode::User | NetworkingMode::Custom => false,
-    }
+/// Every macvtap and every bridge NIC. The alternative was a set of conditions
+/// -- libvirt filtering, multiqueue -- under which netd was consulted and
+/// outside of which the VMM built the interface some other way. Each of those
+/// paths had to answer the same questions again and answer them differently:
+/// which netdev QEMU gets, whether vhost is really on, and, once port mappings
+/// grew a NIC, where a bridge NIC's host ports go. A host interface has one
+/// owner now, and `port_map` on a bridge reaches netd on every node rather than
+/// only on the ones that happened to filter or to have scaled their queues.
+///
+/// The cost is stated plainly: bridge and macvtap need a netd on the host. User
+/// mode and a caller-supplied netdev still need nothing.
+pub(crate) fn needs_netd_interface(networking: &Networking) -> bool {
+    matches!(
+        networking.nic.mode,
+        NetworkingMode::Macvtap | NetworkingMode::Bridge
+    )
 }
 
 /// Whether this NIC's host interface carries a libvirt nwfilter binding.
@@ -120,131 +125,23 @@ pub(crate) fn netd_teardown(networking: &Networking, cfg: &CvmConfig) -> Option<
         // preparation recorded the fact. Fall back to the derivation such an
         // entry was created by; a Remove for an interface that does not exist
         // is a no-op.
-        NetdInterface::None if needs_netd_interface(networking, cfg) => {
+        NetdInterface::None if needs_netd_interface(networking) => {
             Some(filters_bridge_traffic(networking, cfg))
         }
         NetdInterface::None => None,
     }
 }
 
-/// Drops a NIC back to one queue pair when multiqueue would need a netd
-/// interface this node cannot provide.
-///
-/// Queue pairs are a default now, not something the operator asked for, so a
-/// node that has never deployed netd must keep launching bridge VMs. An
-/// explicit per-VM request is left alone: the caller asked for it, and failing
-/// at prepare tells them why far better than silently halving their throughput.
-/// Returns how many NICs it dropped, so a launch can say so and a status
-/// query, which runs the same calculation to describe a stopped VM, stays
-/// silent.
-pub(crate) fn clamp_queues_without_netd(
-    requested: &[NicNetworking],
-    resolved: &mut [Networking],
-    cfg: &CvmConfig,
-    netd_available: bool,
-) -> usize {
-    if netd_available {
-        return 0;
-    }
-    let mut clamped = 0;
-    for (networking, asked) in resolved.iter_mut().zip(requested) {
-        // Macvtap has nothing to fall back to: netd is the only thing that can
-        // create the device, so clamping one would describe a VM that cannot
-        // start either way.
-        if networking.nic.mode != NetworkingMode::Bridge
-            || asked.queues.is_some()
-            || !needs_netd_interface(networking, cfg)
-            // Filtering needs netd whatever the queue count, so dropping this
-            // NIC to one queue pair would not make it launchable. It would only
-            // describe it as something no launch can produce, and warn about a
-            // fallback that is not happening.
-            || filters_bridge_traffic(networking, cfg)
-        {
-            continue;
-        }
-        networking.nic.queues = Some(1);
-        clamped += 1;
-    }
-    clamped
-}
-
-/// Locations distributions install `qemu-bridge-helper` in. The helper is
-/// setuid root and attaches an unprivileged TAP to a whitelisted bridge, which
-/// is how bridge mode avoids giving the VMM `CAP_NET_ADMIN`.
-const BRIDGE_HELPER_CANDIDATES: [&str; 3] = [
-    "/usr/lib/qemu/qemu-bridge-helper",
-    "/usr/libexec/qemu-bridge-helper",
-    "/usr/local/libexec/qemu-bridge-helper",
-];
-
-/// Absolute path of `qemu-bridge-helper`, which QEMU's `tap` netdev, unlike its
-/// `bridge` netdev, has no compiled-in default for.
-///
-/// A configured path is passed through unchecked: the operator is naming a
-/// binary for QEMU to exec, and QEMU need not see this filesystem.
-pub(crate) fn find_bridge_helper<'a>(
-    configured: &'a str,
-    candidates: &[&'a str],
-) -> Option<&'a str> {
-    let configured = configured.trim();
-    if !configured.is_empty() {
-        return Some(configured);
-    }
-    candidates
-        .iter()
-        .copied()
-        .find(|candidate| Path::new(candidate).exists())
-}
-
-pub(crate) fn bridge_helper(cfg: &CvmConfig) -> Option<&str> {
-    find_bridge_helper(&cfg.qemu_bridge_helper, &BRIDGE_HELPER_CANDIDATES)
-}
-
-/// Whether this NIC will actually run on the vhost-net data plane.
-///
-/// A bridge NIC that neither needs a netd interface nor can find
-/// `qemu-bridge-helper` falls back to QEMU's `bridge` netdev, which has no
-/// vhost support. Both the QEMU arguments and the reported status read this,
-/// so a VM is never described as using a data plane it did not get.
-pub(crate) fn effective_vhost(networking: &Networking, cfg: &CvmConfig) -> bool {
-    if !networking.vhost_enabled() {
-        return false;
-    }
-    networking.nic.mode != NetworkingMode::Bridge
-        || needs_netd_interface(networking, cfg)
-        || bridge_helper(cfg).is_some()
-}
-
-/// Makes the effective data plane concrete on a launch-time NIC list, and
-/// returns how many interfaces asked for vhost and did not get it.
+/// Makes the data plane concrete on a launch-time NIC list.
 ///
 /// `vhost` on a freshly resolved entry is still a *request*: `None` means
-/// inherit, and a bridge NIC that cannot reach `qemu-bridge-helper` runs on the
-/// non-vhost netdev whatever it asked for. Settling it once, here, is what lets
-/// the QEMU arguments and the reported status read the same value -- and keeps
-/// them reading it after the operator moves the helper out from under a VM that
-/// is already running.
-pub(crate) fn settle_vhost(networks: &mut [Networking], cfg: &CvmConfig) -> usize {
-    let mut denied = 0;
+/// inherit from the node, which can change under a VM that is already running.
+/// Settling it once, here, is what lets the QEMU arguments and the reported
+/// status read the same value for the life of a boot.
+pub(crate) fn settle_vhost(networks: &mut [Networking]) {
     for networking in networks.iter_mut() {
-        let effective = effective_vhost(networking, cfg);
-        if networking.vhost_enabled() && !effective {
-            denied += 1;
-        }
-        networking.nic.vhost = Some(effective);
+        networking.nic.vhost = Some(networking.vhost_enabled());
     }
-    denied
-}
-
-/// Whether netd is reachable. A netd that died leaves its socket behind, so
-/// existence alone would report a node as capable and fail every launch.
-///
-/// A connect and nothing more, deliberately: netd serves connections serially,
-/// so anything that waits for an answer reads a *busy* netd as a missing one
-/// and silently drops the VM to a single queue pair. Accepting the connection
-/// is the one signal that does not depend on what netd is doing right now.
-pub(crate) fn netd_available(socket: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(socket).is_ok()
 }
 
 pub(crate) fn validate_resolved_network(networking: &Networking) -> Result<()> {
@@ -347,16 +244,45 @@ pub(crate) fn default_ingress_nic(networks: &[Networking]) -> Option<usize> {
         })
 }
 
+/// Whether a NIC of this mode has a mechanism to publish a host port at all.
+///
+/// `hostfwd=` for user mode and netd for a bridge. Macvtap bypasses the host
+/// bridge and a custom netdev is a string the VMM does not interpret, so
+/// neither has anywhere to put one. Naming one of those is refused at
+/// deployment rather than resolved to nothing here.
+pub(crate) fn mode_carries_ingress(mode: NetworkingMode) -> bool {
+    matches!(mode, NetworkingMode::User | NetworkingMode::Bridge)
+}
+
 /// Which NIC a port mapping's traffic enters through.
 ///
 /// One mapping resolves to at most one NIC, and that NIC's backend decides the
 /// mechanism: `hostfwd=` for user mode, netd for a bridge. That is what keeps
 /// QEMU and netd from both claiming one host port.
+///
+/// `None` is a mapping with nowhere to go. Deployment refuses every way of
+/// asking for one, so reaching it means a manifest wrote a NIC out from under a
+/// mapping that named it; the launch says so rather than dropping it in
+/// silence.
 pub(crate) fn ingress_nic(mapping: &PortMapping, networks: &[Networking]) -> Option<usize> {
     mapping
         .nic_index
         .or_else(|| default_ingress_nic(networks))
-        .filter(|index| *index < networks.len())
+        .filter(|index| {
+            networks
+                .get(*index)
+                .is_some_and(|network| mode_carries_ingress(network.nic.mode))
+        })
+}
+
+/// Names the mappings that resolve to no NIC, for a launch to warn about.
+pub(crate) fn stranded_ingress<'a>(
+    port_map: &'a [PortMapping],
+    networks: &'a [Networking],
+) -> impl Iterator<Item = &'a PortMapping> {
+    port_map
+        .iter()
+        .filter(|mapping| ingress_nic(mapping, networks).is_none())
 }
 
 /// The host ports one NIC carries, as netd requests.
@@ -404,9 +330,9 @@ pub(crate) fn mac_address_for_vm_index(vm_id: &str, prefix: &[u8], index: usize)
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_queues_without_netd, default_ingress_nic, effective_vhost, ingress_for, ingress_nic,
-        mac_address_for_vm_index, needs_netd_interface, netd_teardown, resolve_networking,
-        resolved_networks, settle_vhost, validate_resolved_networks,
+        default_ingress_nic, ingress_for, ingress_nic, mac_address_for_vm_index,
+        needs_netd_interface, netd_teardown, resolve_networking, resolved_networks, settle_vhost,
+        stranded_ingress, validate_resolved_networks,
     };
     use crate::app::PortMapping;
     use crate::config::Protocol;
@@ -500,7 +426,6 @@ mod tests {
             let resolved = resolved_networks(&manifest_with(16, vec![]), &cvm);
             assert!(!resolved[0].vhost_enabled());
             assert_eq!(resolved[0].queue_pairs(), 1);
-            assert!(!needs_netd_interface(&resolved[0], &cvm));
         }
     }
 
@@ -511,7 +436,6 @@ mod tests {
         let resolved = resolved_networks(&manifest_with(8, vec![]), &cvm);
         assert!(!resolved[0].vhost_enabled());
         assert_eq!(resolved[0].queue_pairs(), 1);
-        assert!(!needs_netd_interface(&resolved[0], &cvm));
 
         // Per-VM opt-out does the same thing.
         let cvm = node_config(NetworkingMode::Bridge);
@@ -542,31 +466,37 @@ mod tests {
         assert_eq!(resolved[0].queue_pairs(), 16);
     }
 
+    /// One owner for a host interface, with no condition attached. What used
+    /// to decide this -- libvirt filtering, a scaled queue count -- decided it
+    /// per node, so the same VM definition got a netd-built TAP on one host and
+    /// a `qemu-bridge-helper` TAP on the next.
     #[test]
-    fn status_never_claims_a_data_plane_the_nic_did_not_get() {
+    fn every_bridge_and_macvtap_nic_is_netds_to_build() {
         let mut cvm = node_config(NetworkingMode::Bridge);
-        // No helper on this filesystem and no netd interface needed, so the
-        // NIC falls back to QEMU's `bridge` netdev, which has no vhost.
-        cvm.qemu_bridge_helper = String::new();
         let mut single = cvm.networking.nic.clone();
         single.queues = Some(1);
+        let resolved = resolved_networks(&manifest_with(8, vec![single.clone()]), &cvm);
+        assert!(needs_netd_interface(&resolved[0]));
+
+        // Unfiltered, single queue, no vhost -- the shape that used to need no
+        // netd at all -- is netd's too.
+        cvm.networking.nic.vhost = Some(false);
+        single.vhost = Some(false);
         let resolved = resolved_networks(&manifest_with(8, vec![single]), &cvm);
-        assert!(resolved[0].vhost_enabled());
-        let fell_back = !effective_vhost(&resolved[0], &cvm);
-        assert_eq!(fell_back, super::bridge_helper(&cvm).is_none());
+        assert!(!resolved[0].vhost_enabled());
+        assert_eq!(resolved[0].queue_pairs(), 1);
+        assert!(needs_netd_interface(&resolved[0]));
 
-        // A configured helper is taken at its word, so vhost is real.
-        cvm.qemu_bridge_helper = "/opt/qemu-bridge-helper".into();
+        let cvm = node_config(NetworkingMode::Macvtap);
         let resolved = resolved_networks(&manifest_with(8, vec![]), &cvm);
-        assert!(effective_vhost(&resolved[0], &cvm));
+        assert!(needs_netd_interface(&resolved[0]));
 
-        // Multiqueue goes through netd, which needs no helper at all.
-        let mut mq = cvm.networking.nic.clone();
-        mq.queues = Some(4);
-        cvm.qemu_bridge_helper = String::new();
-        let resolved = resolved_networks(&manifest_with(8, vec![mq]), &cvm);
-        assert!(needs_netd_interface(&resolved[0], &cvm));
-        assert!(effective_vhost(&resolved[0], &cvm));
+        // The two backends the VMM builds itself still need nothing.
+        for mode in [NetworkingMode::User, NetworkingMode::Custom] {
+            let cvm = node_config(mode);
+            let resolved = resolved_networks(&manifest_with(8, vec![]), &cvm);
+            assert!(!needs_netd_interface(&resolved[0]));
+        }
     }
 
     #[test]
@@ -584,35 +514,6 @@ mod tests {
         let cvm = node_config(NetworkingMode::User);
         let resolved = resolved_networks(&manifest_with(32, vec![]), &cvm);
         assert_eq!(resolved[0].queue_pairs(), 1);
-    }
-
-    #[test]
-    fn without_netd_a_defaulted_bridge_drops_to_one_queue_but_a_request_does_not() {
-        let cvm = node_config(NetworkingMode::Bridge);
-
-        // The default is ours to lower: a node that never deployed netd must
-        // keep launching bridge VMs.
-        let requested = vec![cvm.networking.nic.clone()];
-        let mut resolved = resolved_networks(&manifest_with(8, vec![]), &cvm);
-        assert_eq!(resolved[0].queue_pairs(), 8);
-        clamp_queues_without_netd(&requested, &mut resolved, &cvm, false);
-        assert_eq!(resolved[0].queue_pairs(), 1);
-        assert!(!needs_netd_interface(&resolved[0], &cvm));
-
-        // An explicit request is left alone, so prepare fails where the caller
-        // can see why instead of silently halving their throughput.
-        let mut asked = cvm.networking.nic.clone();
-        asked.queues = Some(4);
-        let requested = vec![asked.clone()];
-        let mut resolved = resolved_networks(&manifest_with(8, vec![asked]), &cvm);
-        clamp_queues_without_netd(&requested, &mut resolved, &cvm, false);
-        assert_eq!(resolved[0].queue_pairs(), 4);
-
-        // With netd present nothing is touched.
-        let requested = vec![cvm.networking.nic.clone()];
-        let mut resolved = resolved_networks(&manifest_with(8, vec![]), &cvm);
-        clamp_queues_without_netd(&requested, &mut resolved, &cvm, true);
-        assert_eq!(resolved[0].queue_pairs(), 8);
     }
 
     #[test]
@@ -643,62 +544,26 @@ mod tests {
     #[test]
     fn settling_vhost_records_what_the_launch_decided() {
         let mut cvm = node_config(NetworkingMode::Bridge);
-        cvm.qemu_bridge_helper = String::new();
-        let mut single = cvm.networking.nic.clone();
-        single.queues = Some(1);
-        let manifest = manifest_with(8, vec![single]);
-
-        // Whether this host has a helper is not the test's business; that it
-        // gets written down, once, is.
-        let helper_missing = super::bridge_helper(&cvm).is_none();
+        let manifest = manifest_with(8, vec![]);
         let mut networks = resolved_networks(&manifest, &cvm);
-        assert!(networks[0].vhost_enabled(), "the request starts out on");
-        assert_eq!(
-            settle_vhost(&mut networks, &cvm),
-            usize::from(helper_missing)
-        );
-        assert_eq!(networks[0].nic.vhost, Some(!helper_missing));
-        // Settling an already-settled list reports nothing new, so a relaunch
-        // does not warn about a fallback that already happened.
-        assert_eq!(settle_vhost(&mut networks, &cvm), 0);
+        assert_eq!(networks[0].nic.vhost, Some(true));
+        settle_vhost(&mut networks);
+        assert_eq!(networks[0].nic.vhost, Some(true));
 
-        // A configured helper is taken at its word, so the same NIC settles on.
-        cvm.qemu_bridge_helper = "/opt/qemu-bridge-helper".into();
-        let mut with_helper = resolved_networks(&manifest, &cvm);
-        assert_eq!(settle_vhost(&mut with_helper, &cvm), 0);
-        assert_eq!(with_helper[0].nic.vhost, Some(true));
+        // The node turns vhost off under a VM that is already running. The
+        // entry the launch settled keeps its answer; the next boot gets the
+        // new one.
+        cvm.networking.nic.vhost = Some(false);
+        assert_eq!(networks[0].nic.vhost, Some(true));
+        let mut next_boot = resolved_networks(&manifest, &cvm);
+        settle_vhost(&mut next_boot);
+        assert_eq!(next_boot[0].nic.vhost, Some(false));
 
-        // The entry the first launch settled keeps its answer: nothing about a
-        // running VM is recomputed from the configuration as it stands now.
-        assert_eq!(networks[0].nic.vhost, Some(!helper_missing));
-    }
-
-    /// Dropping to a single queue pair is only worth doing when it makes the
-    /// NIC launchable. A filtered bridge needs netd whatever its queue count,
-    /// so clamping it would report a shape no launch can produce.
-    #[test]
-    fn a_filtered_bridge_is_not_clamped_because_it_cannot_help() {
-        use crate::config::NetworkFilterMode;
-
-        let mut cvm = node_config(NetworkingMode::Bridge);
-        cvm.network_filter.mode = NetworkFilterMode::Libvirt;
-        let requested = vec![cvm.networking.nic.clone()];
-        let mut resolved = resolved_networks(&manifest_with(8, vec![]), &cvm);
-        assert_eq!(resolved[0].queue_pairs(), 8);
-        assert_eq!(
-            clamp_queues_without_netd(&requested, &mut resolved, &cvm, false),
-            0
-        );
-        assert_eq!(resolved[0].queue_pairs(), 8);
-
-        // Unfiltered, the same NIC does drop, because then it can launch.
-        let cvm = node_config(NetworkingMode::Bridge);
-        let mut resolved = resolved_networks(&manifest_with(8, vec![]), &cvm);
-        assert_eq!(
-            clamp_queues_without_netd(&requested, &mut resolved, &cvm, false),
-            1
-        );
-        assert_eq!(resolved[0].queue_pairs(), 1);
+        // An inherited `None` becomes a decision rather than staying a request.
+        let mut unset = resolved_networks(&manifest, &cvm);
+        unset[0].nic.vhost = None;
+        settle_vhost(&mut unset);
+        assert_eq!(unset[0].nic.vhost, Some(false));
     }
 
     /// Teardown has to undo what was built. Node configuration is mutable and
@@ -730,10 +595,20 @@ mod tests {
         // asking libvirt for one would fail the removal.
         assert_eq!(netd_teardown(&built_unfiltered, &filtering), Some(false));
 
-        // A NIC netd never touched stays untouched, whatever the node now says.
+        // A backend netd never builds stays untouched, whatever the node says.
         let mut untouched = unfiltered.networking.clone();
+        untouched.nic.mode = NetworkingMode::User;
         untouched.nic.queues = Some(1);
         assert_eq!(netd_teardown(&untouched, &unfiltered), None);
+
+        // A bridge NIC with no record is netd's by derivation, because netd is
+        // now the only thing that could have built it. Teardown deletes by
+        // deriving names, so being wrong about a VM from an older build costs
+        // a sweep that finds nothing.
+        let mut unrecorded = unfiltered.networking.clone();
+        unrecorded.nic.queues = Some(1);
+        assert_eq!(unrecorded.netd_interface, NetdInterface::None);
+        assert_eq!(netd_teardown(&unrecorded, &unfiltered), Some(false));
 
         // An entry persisted before preparation recorded the fact still gets
         // torn down by the rule that created it.
@@ -749,8 +624,8 @@ mod tests {
         use crate::config::NetdInterface;
 
         let cvm = node_config(NetworkingMode::Bridge);
-        // Single queue and no filtering, so nothing but a stale record could
-        // make teardown believe netd built something.
+        // The node does not filter, so only a stale record could make teardown
+        // ask libvirt to delete a binding.
         let mut previous = cvm.networking.clone();
         previous.nic.queues = Some(1);
         previous.netd_interface = NetdInterface::Filtered;
@@ -758,7 +633,8 @@ mod tests {
 
         let resolved = resolve_networking(&previous.nic, &cvm, 4);
         assert_eq!(resolved.netd_interface, NetdInterface::None);
-        assert_eq!(netd_teardown(&resolved, &cvm), None);
+        // Back to the derivation the node's own configuration gives.
+        assert_eq!(netd_teardown(&resolved, &cvm), Some(false));
     }
 
     #[test]
@@ -819,6 +695,31 @@ mod tests {
         // Out of range resolves to nothing rather than to something arbitrary.
         // Deployment refuses it outright; a manifest that lost a NIC lands here.
         assert_eq!(ingress_nic(&mapping(443, Some(7)), &networks), None);
+    }
+
+    /// A pin has to be checked against the backend, not just the count.
+    /// Naming a macvtap or custom NIC used to resolve to that index and then
+    /// fall out of every branch that could act on it: no `hostfwd=`, no netd
+    /// request, and no warning either.
+    #[test]
+    fn a_pin_to_a_backend_with_no_ingress_resolves_to_nothing() {
+        let networks = [
+            nic(NetworkingMode::Macvtap),
+            nic(NetworkingMode::Custom),
+            nic(NetworkingMode::Bridge),
+        ];
+        assert_eq!(ingress_nic(&mapping(443, Some(0)), &networks), None);
+        assert_eq!(ingress_nic(&mapping(443, Some(1)), &networks), None);
+        assert_eq!(ingress_nic(&mapping(443, Some(2)), &networks), Some(2));
+
+        // And an unpinned mapping on a VM with nowhere to put it is named,
+        // rather than counted as delivered.
+        let networks = [nic(NetworkingMode::Macvtap)];
+        let port_map = [mapping(443, None), mapping(8080, Some(0))];
+        let stranded: Vec<_> = stranded_ingress(&port_map, &networks)
+            .map(|mapping| mapping.from)
+            .collect();
+        assert_eq!(stranded, vec![443, 8080]);
     }
 
     #[test]

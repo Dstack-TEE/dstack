@@ -5,6 +5,7 @@
 //! Small privileged broker for TAP creation and libvirt nwfilter bindings.
 
 use std::{
+    collections::HashSet,
     fs::{File, OpenOptions, Permissions},
     io::Write as _,
     os::{
@@ -110,7 +111,10 @@ pub struct IngressRequest {
     /// differ only here.
     #[serde(default)]
     pub host_address: String,
-    /// Host port. Zero asks netd to choose one.
+    /// Host port, as the deployment named it. There is no "pick one for me":
+    /// the caller reports this number back through `GetInfo` and a client
+    /// connects to it, so a netd-chosen port would have to travel back through
+    /// both before it meant anything.
     pub host_port: u16,
     pub guest_port: u16,
 }
@@ -206,7 +210,8 @@ struct Response {
 /// What netd built, echoed back so the caller can verify it matches the
 /// request before handing the interface to QEMU.
 struct Prepared {
-    tap: String,
+    /// The interface this names, absent for an operation that names none.
+    tap: Option<String>,
     device: Option<String>,
     queues: Option<u32>,
     ingress: Option<Vec<IngressBinding>>,
@@ -216,7 +221,7 @@ struct Prepared {
 impl Prepared {
     fn tap(tap: String) -> Self {
         Self {
-            tap,
+            tap: Some(tap),
             device: None,
             queues: None,
             ingress: None,
@@ -227,7 +232,7 @@ impl Prepared {
     /// A sweep names no single interface, so it reports how many it deleted.
     fn removed(removed: usize) -> Self {
         Self {
-            tap: String::new(),
+            tap: None,
             device: None,
             queues: None,
             ingress: None,
@@ -427,7 +432,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
     let response = match outcome {
         Ok(prepared) => Response {
             ok: true,
-            tap: Some(prepared.tap),
+            tap: prepared.tap,
             device: prepared.device,
             queues: prepared.queues,
             ingress: prepared.ingress,
@@ -582,7 +587,7 @@ fn prepare_macvtap(
         Ok(device) => {
             info!(%tap, %parent, %mode, %device, %queues, "prepared macvtap");
             Ok(Prepared {
-                tap,
+                tap: Some(tap),
                 device: Some(device),
                 queues: Some(queues),
                 ingress: None,
@@ -665,7 +670,7 @@ fn prepare_bridge(
     }
     info!(%tap, bridge = %request.bridge, %filtered, %queues, "prepared TAP");
     Ok(Prepared {
-        tap,
+        tap: Some(tap),
         device: None,
         queues: Some(queues),
         // This netd builds interfaces; it is not the host's forwarder. Saying
@@ -697,6 +702,14 @@ enum BindingCleanup {
 /// is enumerable: 256 names, each a `stat` that usually misses. Cleanup is
 /// best-effort about bindings -- nothing is about to take these names, and a
 /// node running unfiltered TAPs need not have libvirtd at all.
+///
+/// A name with no interface is not skipped. An nwfilter binding outlives the
+/// TAP it was bound to, so the one state teardown must not leave behind is
+/// exactly the one a `/sys/class/net` check cannot see: the per-name Remove
+/// this replaced deleted the binding unconditionally, and a sweep that reaches
+/// less than the thing it replaced is not a sweep. Those names are decided
+/// against a single listing, because the whole point of enumerating a bounded
+/// space is that deciding one name stays cheap.
 fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Result<usize> {
     let identity = InterfaceIdentity {
         instance_id: instance_id.to_string(),
@@ -704,6 +717,7 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
         nic_index: 0,
     };
     validate_identity(&identity)?;
+    let bindings = existing_bindings(libvirt_uri);
     let mut removed = 0;
     let mut first_error = None;
     for nic_index in 0..=MAX_NIC_INDEX {
@@ -711,7 +725,19 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
             nic_index,
             ..identity.clone()
         });
-        if !Path::new("/sys/class/net").join(&tap).exists() {
+        let present = Path::new("/sys/class/net").join(&tap).exists();
+        if !present {
+            if bindings
+                .as_ref()
+                .is_some_and(|bindings| bindings.contains(&tap))
+            {
+                if let Err(error) = delete_binding(libvirt_uri, &tap) {
+                    warn!(%tap, %error, "failed to remove orphaned nwfilter binding");
+                    first_error.get_or_insert(error);
+                } else {
+                    info!(%tap, %vm_id, "removed orphaned nwfilter binding");
+                }
+            }
             continue;
         }
         match remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort) {
@@ -736,6 +762,14 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
 fn remove_interface(libvirt_uri: &str, tap: &str, cleanup: BindingCleanup) -> Result<()> {
     let macvtap = is_macvtap(tap);
     if Path::new("/sys/class/net").join(tap).exists() {
+        // The name is 48 bits of SHA-256, so a collision is not the worry. A
+        // caller asserting an identity that happens to derive to some
+        // pre-existing device is: netd runs as root and `ip link delete` does
+        // not ask what it is deleting. netd creates exactly two kinds of
+        // device, and the kernel publishes an attribute unique to each.
+        if !macvtap && !is_tuntap(tap) {
+            bail!("refusing to delete {tap}: it is neither a tun/tap nor a macvtap device");
+        }
         let _ = ip(&["link", "set", "dev", tap, "down"]);
     }
     // A macvtap interface never carries a binding. Anything else might: this
@@ -759,6 +793,16 @@ fn remove_interface(libvirt_uri: &str, tap: &str, cleanup: BindingCleanup) -> Re
         info!(%tap, "removed managed network interface");
     }
     Ok(())
+}
+
+/// Whether this is a tun/tap device. `tun_flags` is published by the tun
+/// driver and by nothing else, so its presence is the kernel's own answer --
+/// as `macvtap/` is for the other kind of device netd creates.
+fn is_tuntap(interface: &str) -> bool {
+    Path::new("/sys/class/net")
+        .join(interface)
+        .join("tun_flags")
+        .exists()
 }
 
 fn is_macvtap(interface: &str) -> bool {
@@ -943,13 +987,33 @@ fn ip(args: &[&str]) -> Result<()> {
 }
 
 fn virsh(uri: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()> {
+    virsh_output(uri, args, stdin).map(|_| ())
+}
+
+fn virsh_output(uri: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<String> {
     let mut full_args = vec!["--connect", uri];
     full_args.extend_from_slice(args);
-    run_command(VIRSH_PATH, &full_args, stdin)
+    run_command_with_timeout(VIRSH_PATH, &full_args, stdin, COMMAND_TIMEOUT)
+}
+
+/// Every nwfilter binding libvirt currently holds, by interface name.
+///
+/// One call, so that a sweep can decide 256 names against a set instead of
+/// asking libvirt 256 times. `None` means libvirt could not be asked at all,
+/// which on a node running unfiltered TAPs is the normal state -- `virsh` must
+/// be installed for netd to start, but `libvirtd` need not be running.
+fn existing_bindings(uri: &str) -> Option<HashSet<String>> {
+    match virsh_output(uri, &["nwfilter-binding-list", "--name"], None) {
+        Ok(output) => Some(output.split_whitespace().map(str::to_string).collect()),
+        Err(error) => {
+            debug!("could not list nwfilter bindings: {error:#}");
+            None
+        }
+    }
 }
 
 fn run_command(program: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()> {
-    run_command_with_timeout(program, args, stdin, COMMAND_TIMEOUT)
+    run_command_with_timeout(program, args, stdin, COMMAND_TIMEOUT).map(|_| ())
 }
 
 fn run_command_with_timeout(
@@ -957,7 +1021,7 @@ fn run_command_with_timeout(
     args: &[&str],
     stdin: Option<&[u8]>,
     command_timeout: Duration,
-) -> Result<()> {
+) -> Result<String> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(if stdin.is_some() {
@@ -989,7 +1053,7 @@ fn run_command_with_timeout(
         let error = String::from_utf8_lossy(&output.stderr);
         bail!("{} failed: {}", Path::new(program).display(), error.trim());
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn require_executable(path: &str) -> Result<()> {
@@ -1514,5 +1578,38 @@ mod tests {
         assert!(validate_identity(&identity).is_ok());
         identity.nic_index = MAX_NIC_INDEX + 1;
         assert!(validate_identity(&identity).is_err());
+    }
+
+    /// A sweep names no single interface, so its answer must not carry an
+    /// empty one. `request()` reads a blank `tap` as a malformed response, and
+    /// a third-party netd copying this shape would have to send a field that
+    /// means nothing.
+    #[test]
+    fn a_sweep_reports_a_count_and_no_interface() {
+        let response = Response {
+            ok: true,
+            tap: Prepared::removed(3).tap,
+            device: None,
+            queues: None,
+            ingress: None,
+            removed: Some(3),
+            error: None,
+        };
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["removed"], 3);
+        assert!(value.get("tap").is_none());
+
+        // A prepare still names one, because the caller hands that name to QEMU.
+        let value = serde_json::to_value(Response {
+            ok: true,
+            tap: Prepared::tap("dtabc".into()).tap,
+            device: None,
+            queues: None,
+            ingress: None,
+            removed: None,
+            error: None,
+        })
+        .unwrap();
+        assert_eq!(value["tap"], "dtabc");
     }
 }

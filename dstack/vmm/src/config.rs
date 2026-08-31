@@ -357,11 +357,6 @@ pub struct CvmConfig {
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,
-    /// Path to `qemu-bridge-helper`, used to attach an unprivileged TAP to a
-    /// host bridge. Empty probes the known distribution locations.
-    #[serde(default)]
-    pub qemu_bridge_helper: String,
-
     /// TDX attestation/hash scheme policy. `legacy` keeps the existing
     /// digest.txt measurement path; `lite` opts into split measurement CBOR;
     /// `auto` selects `legacy` for
@@ -772,16 +767,6 @@ impl Config {
             (1..=MAX_NET_QUEUES).contains(&self.cvm.max_net_queues),
             "cvm.max_net_queues must be between 1 and {MAX_NET_QUEUES}"
         );
-        // The helper path is interpolated into QEMU's `-netdev` option list,
-        // which QEMU splits on ',' and '='. A path carrying either would not be
-        // passed through, it would end the option and start a bogus one, and the
-        // launch failure names neither this setting nor the file. Volume sources
-        // are rejected for the same reason.
-        anyhow::ensure!(
-            !self.cvm.qemu_bridge_helper.contains([',', '=']),
-            "cvm.qemu_bridge_helper must not contain ',' or '=': {}",
-            self.cvm.qemu_bridge_helper
-        );
         anyhow::ensure!(
             !self
                 .cvm
@@ -976,6 +961,19 @@ pub enum NetworkingMode {
     Bridge,
     Custom,
     Macvtap,
+}
+
+impl NetworkingMode {
+    /// The name this mode is written as in `vmm.toml`, in the RPC, and in
+    /// anything an operator reads.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NetworkingMode::User => "user",
+            NetworkingMode::Bridge => "bridge",
+            NetworkingMode::Custom => "custom",
+            NetworkingMode::Macvtap => "macvtap",
+        }
+    }
 }
 
 /// What a single NIC pins: the fields a deployment may name, a VM's manifest
@@ -1692,26 +1690,6 @@ mod networking_shape_tests {
         assert_eq!(stored.as_object().unwrap().len(), 6);
         assert!(stored.get("macvtap_mode").is_none());
         assert!(stored.get("net").is_none());
-    }
-
-    /// The path is interpolated into QEMU's `-netdev` option list, which QEMU
-    /// splits on ',' and '='. A path carrying either would end the option and
-    /// start a bogus one, and the launch failure names neither the setting nor
-    /// the file.
-    #[test]
-    fn a_bridge_helper_path_cannot_end_the_qemu_option_it_sits_in() {
-        use rocket::figment::providers::Format as _;
-        let mut config: Config = rocket::figment::Figment::from(
-            rocket::figment::providers::Toml::string(DEFAULT_CONFIG),
-        )
-        .extract()
-        .unwrap();
-        config.cvm.qemu_bridge_helper = "/opt/qemu,helper".into();
-        let error = config.validate().unwrap_err();
-        assert!(error.to_string().contains("qemu_bridge_helper"), "{error}");
-
-        config.cvm.qemu_bridge_helper = "/usr/libexec/qemu-bridge-helper".into();
-        config.validate().unwrap();
     }
 
     /// The TOML section still deserializes through the flatten.

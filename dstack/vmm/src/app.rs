@@ -35,7 +35,6 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -46,8 +45,8 @@ use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub(crate) use network::{
-    clamp_queues_without_netd, filters_bridge_traffic, ingress_for, needs_netd_interface,
-    netd_available, netd_teardown, resolve_networking, resolved_networks, settle_vhost,
+    filters_bridge_traffic, ingress_for, mode_carries_ingress, needs_netd_interface, netd_teardown,
+    resolve_networking, resolved_networks, settle_vhost, stranded_ingress,
     validate_resolved_network, validate_resolved_networks,
 };
 pub use qemu::VmConfig;
@@ -314,6 +313,9 @@ pub struct App {
     state: Arc<Mutex<AppState>>,
     /// Pull status for registry images: tag → status.
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
+    /// One lock per VM, held across a launch or a teardown. See
+    /// [`App::launch_lock`].
+    launch_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 const GUEST_AGENT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -344,7 +346,35 @@ impl App {
             })),
             config: Arc::new(config),
             pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            launch_locks: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Serializes everything that creates or deletes one VM's host interfaces.
+    ///
+    /// A launch reads whether QEMU is already up and then spends many awaits --
+    /// a GPU reset, a whole netd conversation, building the QEMU arguments --
+    /// before it launches anything. Nothing used to cover that window. Two
+    /// `StartVm` calls, or one racing the auto-restart timer, could both read
+    /// "not running", and the loser's sweep would delete the TAPs the winner's
+    /// QEMU was already holding open: a live VM silently loses its networking,
+    /// and the loser's error path then clears the winner's record of it. The
+    /// authoritative rejection lives in the supervisor, which is reached long
+    /// after the damage is done.
+    ///
+    /// A tokio mutex, because it is held across awaits. Per VM, because a slow
+    /// start must not stall unrelated ones. Taken by stop and by removal as
+    /// well as by start: those delete the same interfaces from the other side.
+    pub(crate) async fn launch_lock(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.launch_locks.lock().or_panic("mutex poisoned");
+            // A VM that is neither starting nor stopping leaves the map holding
+            // the only reference, so the map stays the size of what is in
+            // flight rather than of every VM this process has ever touched.
+            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+            locks.entry(id.to_string()).or_default().clone()
+        };
+        lock.lock_owned().await
     }
 
     pub async fn load_vm(
@@ -424,6 +454,9 @@ impl App {
                 vm.state.auto_restart.reset();
             }
         }
+        // Everything below reads whether this VM is running and acts on the
+        // answer for as long as the launch takes. See [`App::launch_lock`].
+        let _launch = self.launch_lock(id).await;
         {
             let state = self.lock();
             if let Some(vm) = state.get(id) {
@@ -549,6 +582,9 @@ impl App {
         if let Some(vm) = self.lock().get_mut(id) {
             vm.state.auto_restart.reset();
         }
+        // Teardown deletes the same interfaces a launch creates, and derives
+        // their names rather than reading a record, so it must not overlap one.
+        let _launch = self.launch_lock(id).await;
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
         let networks = self.work_dir(id)?.runtime_networks();
@@ -561,10 +597,22 @@ impl App {
         vm: &VmConfig,
         networks: &mut [Networking],
     ) -> Result<()> {
-        if !networks
-            .iter()
-            .any(|network| needs_netd_interface(network, &self.config.cvm))
-        {
+        // Before the early return, because a mapping with nowhere to go is a
+        // property of the resolved topology and not of whether netd is in it.
+        // Deployment refuses every way of asking for one, so reaching this
+        // means an edit removed the NIC out from under a mapping that named it.
+        for mapping in stranded_ingress(&vm.manifest.port_map, networks) {
+            warn!(
+                vm_id = %vm.manifest.id,
+                "port mapping {} {}:{} names NIC {:?}, which this VM no longer has a backend \
+                 for; it will not be published",
+                mapping.protocol.as_str(),
+                mapping.address,
+                mapping.from,
+                mapping.nic_index,
+            );
+        }
+        if !networks.iter().any(needs_netd_interface) {
             return Ok(());
         }
         // Whatever an earlier boot left behind, from a crash between creating
@@ -602,7 +650,7 @@ impl App {
         // it states the requirement and lets the node's netd answer it.
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter_mut().enumerate() {
-            if !needs_netd_interface(network, &self.config.cvm) {
+            if !needs_netd_interface(network) {
                 continue;
             }
             let identity = InterfaceIdentity {
@@ -665,16 +713,17 @@ impl App {
                         warn!(%cleanup_error, "failed to roll back in-flight filtered network");
                     }
                     self.roll_back_prepared_networks(prepared).await;
-                    // netd's own message is about a TAP, not about queues, so
-                    // a caller who asked for multiqueue would not see their
-                    // request named anywhere in the failure.
+                    // netd's own message is about a socket or a TAP, so
+                    // neither the NIC that asked nor what a node has to install
+                    // to satisfy it appears anywhere in the failure.
                     let unreachable = netd::is_unreachable(&error);
+                    let mode = network.nic.mode.as_str();
                     let error = Err(error).context("failed to prepare netd-managed networking");
-                    return if queues > 1 && unreachable {
+                    return if unreachable {
                         error.with_context(|| {
                             format!(
-                                "interface {nic_index} asked for {queues} queue pairs, which needs \
-                                 a netd running on this host"
+                                "interface {nic_index} is {mode}, whose host interface only netd \
+                                 can build; run dstack-vmm netd on this host"
                             )
                         })
                     } else if queues > 1 {
@@ -682,7 +731,7 @@ impl App {
                             format!("interface {nic_index} asked for {queues} queue pairs")
                         })
                     } else {
-                        error
+                        error.with_context(|| format!("interface {nic_index} is {mode}"))
                     };
                 }
             };
@@ -722,16 +771,43 @@ impl App {
                 Ok(())
             })();
             // Ports asked for and not answered for used to vanish in silence:
-            // no warning, and `GetInfo` still listing them. A netd that forwards
-            // says what it built, so nothing said means nothing forwarded.
-            let asked = ingress[nic_index].len();
-            if asked > 0 && response.ingress.is_none() {
-                warn!(
+            // no warning, and `GetInfo` still listing them as though they
+            // worked.
+            let asked = &ingress[nic_index];
+            match &response.ingress {
+                // A netd that forwards says what it built, so saying nothing is
+                // how one that does not reports it. A warning rather than a
+                // refusal: a VM deployed before this has been running with its
+                // ports dropped, and failing its launch now would turn a silent
+                // misconfiguration into an outage on upgrade.
+                None if !asked.is_empty() => warn!(
                     vm_id = %vm.manifest.id,
-                    ports = asked,
-                    "netd on this node does not forward host ports, so this VM's \
-                     port mappings do not apply to its bridge interface"
-                );
+                    ports = asked.len(),
+                    "netd on this node does not forward host ports, so this VM's port mappings \
+                     on interface {nic_index} are not published"
+                ),
+                // It answered, so hold it to the answer. A netd may refuse one
+                // port out of a set -- a node policy over which ports may be
+                // handed out is its own to state -- and the mapping that lost
+                // is the one worth naming.
+                Some(bound) => {
+                    for request in asked {
+                        if !bound.iter().any(|binding| {
+                            binding.protocol == request.protocol
+                                && binding.host_port == request.host_port
+                                && binding.guest_port == request.guest_port
+                        }) {
+                            warn!(
+                                vm_id = %vm.manifest.id,
+                                "netd did not publish {} {}:{} on interface {nic_index}",
+                                request.protocol,
+                                request.host_address,
+                                request.host_port,
+                            );
+                        }
+                    }
+                }
+                None => {}
             }
             if let Err(error) = accepted {
                 self.roll_back_prepared_networks(prepared).await;
@@ -747,45 +823,18 @@ impl App {
     /// down the snapshot describes a boot that is over: the node configuration
     /// and the VM's own manifest can both have changed since, so reporting it
     /// would answer a question about the past with the grammar of the present.
-    /// Predict instead, the same way the next launch will -- including the
-    /// drop to a single queue pair on a node with no netd.
-    ///
-    /// `netd_reachable` is shared across a request rather than probed here:
-    /// the probe is a blocking connect that netd's serialized accept loop has
-    /// to service, and one status query covers many VMs.
-    fn effective_networks(
-        &self,
-        info: &vm_info::VmInfo,
-        netd_reachable: &OnceCell<bool>,
-    ) -> Vec<Networking> {
+    /// Predict instead, the same way the next launch will.
+    fn effective_networks(&self, info: &vm_info::VmInfo) -> Vec<Networking> {
         if info.running && !info.runtime_networks.is_empty() {
             return info.runtime_networks.clone();
         }
-        let available = *netd_reachable.get_or_init(|| netd_available(&self.config.netd.socket));
-        self.merge_networks(&info.manifest, available).0
+        self.merge_networks(&info.manifest)
     }
 
-    /// Launch-time view of a VM's NICs: node defaults merged in, the
-    /// vCPU-scaled queue count made concrete, and multiqueue dropped when this
-    /// node has no netd to build the interface.
+    /// Launch-time view of a VM's NICs: node defaults merged in and the
+    /// vCPU-scaled queue count made concrete.
     pub(crate) fn runtime_networks(&self, manifest: &Manifest) -> Vec<Networking> {
-        let available = netd_available(&self.config.netd.socket);
-        let (networks, clamped, vhost_denied) = self.merge_networks(manifest, available);
-        if clamped > 0 {
-            warn!(
-                id = %manifest.id,
-                "netd is not available, so {clamped} bridge interface(s) fall back to a single \
-                 queue pair; run dstack-vmm netd to let queue pairs scale with vCPUs"
-            );
-        }
-        if vhost_denied > 0 {
-            warn!(
-                id = %manifest.id,
-                "no qemu-bridge-helper found, so {vhost_denied} bridge interface(s) fall back to \
-                 the non-vhost bridge netdev; set cvm.qemu_bridge_helper to enable vhost"
-            );
-        }
-        networks
+        self.merge_networks(manifest)
     }
 
     /// A running VM whose snapshot is missing, because a VMM that predates the
@@ -802,12 +851,8 @@ impl App {
     /// queue pair and no vhost. Asking `runtime_networks` would apply today's
     /// defaults to a launch that predates them, and the guess is persisted, so
     /// it would keep describing that VM wrongly for the life of its boot.
-    ///
-    /// `merge_networks` rather than `runtime_networks` for the same reason: the
-    /// latter probes netd and warns about a multiqueue fallback, which says
-    /// nothing about a VM that is already up.
     fn inferred_runtime_networks(&self, manifest: &Manifest) -> Vec<Networking> {
-        let mut networks = self.merge_networks(manifest, false).0;
+        let mut networks = self.merge_networks(manifest);
         for network in &mut networks {
             network.nic.vhost = Some(false);
             network.nic.queues = Some(1);
@@ -822,23 +867,12 @@ impl App {
         networks
     }
 
-    /// The merge itself, without the launch-time logging, plus how many NICs
-    /// lost multiqueue for want of netd.
-    fn merge_networks(
-        &self,
-        manifest: &Manifest,
-        netd_reachable: bool,
-    ) -> (Vec<Networking>, usize, usize) {
-        let requested = if manifest.networks.is_empty() {
-            vec![self.config.cvm.networking.nic.clone()]
-        } else {
-            manifest.networks.clone()
-        };
+    /// The merge itself: node defaults applied, then the data plane settled so
+    /// that every later stage reads one answer instead of recomputing it.
+    fn merge_networks(&self, manifest: &Manifest) -> Vec<Networking> {
         let mut resolved = resolved_networks(manifest, &self.config.cvm);
-        let clamped =
-            clamp_queues_without_netd(&requested, &mut resolved, &self.config.cvm, netd_reachable);
-        let vhost_denied = settle_vhost(&mut resolved, &self.config.cvm);
-        (resolved, clamped, vhost_denied)
+        settle_vhost(&mut resolved);
+        resolved
     }
 
     /// Removes interfaces netd already built for a launch that then failed.
@@ -1009,8 +1043,11 @@ impl App {
         }
 
         let runtime_networks = self.work_dir(id)?.runtime_networks();
-        if let Err(error) = self.remove_filtered_networks(id, &runtime_networks).await {
-            warn!(id, %error, "failed to remove filtered networking during VM removal");
+        {
+            let _launch = self.launch_lock(id).await;
+            if let Err(error) = self.remove_filtered_networks(id, &runtime_networks).await {
+                warn!(id, %error, "failed to remove filtered networking during VM removal");
+            }
         }
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
@@ -1391,14 +1428,11 @@ impl App {
         });
 
         let total = infos.len() as u32;
-        // One probe for the whole page, and none at all when every VM is
-        // running and has its own snapshot to report.
-        let netd_reachable = OnceCell::new();
         let vms = paginate(infos, request.page, request.page_size)
             .map(|vm| {
                 let work_dir = self.work_dir(&vm.config.manifest.id)?;
                 let info = vm.merged_info(vms.get(&vm.config.manifest.id), &work_dir);
-                let networks = self.effective_networks(&info, &netd_reachable);
+                let networks = self.effective_networks(&info);
                 Ok(info.to_pb(&self.config.gateway, request.brief, &networks))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1433,8 +1467,7 @@ impl App {
             };
             vm_state.merged_info(proc_state.as_ref(), &self.work_dir(id)?)
         };
-        let netd_reachable = OnceCell::new();
-        let networks = self.effective_networks(&info, &netd_reachable);
+        let networks = self.effective_networks(&info);
         Ok(Some(info.to_pb(&self.config.gateway, false, &networks)))
     }
 
@@ -2129,6 +2162,46 @@ pub(crate) fn needs_swtpm(
 mod tests {
     use super::mr_config::{mr_config_version, MrConfigVersion};
     use super::*;
+
+    fn test_app() -> App {
+        use rocket::figment::providers::Format as _;
+        let config: Config = rocket::figment::Figment::from(
+            rocket::figment::providers::Toml::string(crate::config::DEFAULT_CONFIG),
+        )
+        .extract()
+        .unwrap();
+        App::new(config, SupervisorClient::new("http://127.0.0.1:0"))
+    }
+
+    /// The window a launch spends between reading "not running" and actually
+    /// starting QEMU is long -- a GPU reset, a netd conversation -- and the
+    /// sweep inside it deletes interfaces by deriving their names. Two entrants
+    /// in that window meant the loser deleting the winner's live TAPs.
+    #[tokio::test]
+    async fn one_vm_launches_at_a_time_and_the_lock_map_stays_small() {
+        let app = test_app();
+        let held = app.launch_lock("vm-1").await;
+
+        // A different VM is never blocked by it: a slow start must not stall
+        // every other launch on the node.
+        let other = tokio::time::timeout(Duration::from_millis(50), app.launch_lock("vm-2")).await;
+        assert!(other.is_ok(), "an unrelated VM must not wait");
+
+        // The same VM is.
+        let same = tokio::time::timeout(Duration::from_millis(50), app.launch_lock("vm-1")).await;
+        assert!(same.is_err(), "a second entrant must wait for the first");
+
+        drop(held);
+        drop(other);
+        tokio::time::timeout(Duration::from_millis(50), app.launch_lock("vm-1"))
+            .await
+            .expect("the lock is released");
+
+        // Nothing is in flight now, so the map holds nothing either.
+        assert!(app.launch_locks.lock().unwrap().len() <= 1);
+        let _ = app.launch_lock("vm-3").await;
+        assert!(app.launch_locks.lock().unwrap().len() <= 2);
+    }
 
     #[test]
     fn accepts_server_generated_ids() {

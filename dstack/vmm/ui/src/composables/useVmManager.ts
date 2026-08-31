@@ -107,6 +107,13 @@ type PortFormEntry = {
   host_address?: string;
   host_port?: number | null;
   vm_port?: number | null;
+  /**
+   * Which NIC this mapping's traffic enters through. Unset lets the VMM pick.
+   * Carried through edits unchanged: `GetInfo` reports it and this form sends
+   * the whole list back, so dropping it here would silently unpin a mapping
+   * whenever anyone touched an unrelated field.
+   */
+  nic_index?: number | null;
 };
 
 type NetworkFormEntry = {
@@ -435,6 +442,7 @@ fi
       host_address: port.host_address || '127.0.0.1',
       host_port: typeof port.host_port === 'number' ? port.host_port : null,
       vm_port: typeof port.vm_port === 'number' ? port.vm_port : null,
+      nic_index: typeof port.nic_index === 'number' ? port.nic_index : null,
     }));
 
   const normalizePorts = (ports: PortFormEntry[] = []): VmmTypes.IPortMapping[] =>
@@ -445,11 +453,20 @@ fi
           port.host_port === null || port.host_port === undefined ? Number.NaN : Number(port.host_port);
         const vmPort =
           port.vm_port === null || port.vm_port === undefined ? Number.NaN : Number(port.vm_port);
+        // An unpinned mapping must stay unpinned rather than become NIC 0:
+        // the VMM's own default is the first user-mode NIC, not the first NIC.
+        const nicIndex =
+          port.nic_index === null || port.nic_index === undefined
+            ? undefined
+            : Number(port.nic_index);
         return {
           protocol,
           host_address: (port.host_address || '127.0.0.1').trim() || '127.0.0.1',
           host_port: hostPort,
           vm_port: vmPort,
+          ...(Number.isInteger(nicIndex) && (nicIndex as number) >= 0
+            ? { nic_index: nicIndex }
+            : {}),
         };
       })
       .filter(

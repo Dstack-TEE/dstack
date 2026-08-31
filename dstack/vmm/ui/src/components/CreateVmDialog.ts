@@ -293,7 +293,10 @@ const CreateVmDialogComponent = {
             </div>
 
             <div class="form-group full-width" v-if="portMappingEnabled">
-              <port-mapping-editor :ports="form.ports" />
+              <port-mapping-editor
+                :ports="form.ports"
+                :nic-count="Math.max(form.networks.length, 1)"
+              />
             </div>
           </div>
 
