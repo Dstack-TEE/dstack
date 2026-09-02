@@ -305,9 +305,15 @@ To enable GPU passthrough for AI/ML workloads:
 ```toml
 [cvm.gpu]
 enabled = true
-listing = ["10de:2335"]          # NVIDIA GPU product IDs
+# Example: narrow this list to what the host actually holds if you want discovery to reject anything else.
+listing = ["10de:2335", "10de:3182"]   # H200 SXM, B300 SXM6
 allow_attach_all = true
 ```
+
+A card whose product ID is not in `listing` is never offered for passthrough,
+so the shipped default names every Hopper and Blackwell SKU dstack runs on —
+see `[cvm.gpu]` in `dstack/vmm/vmm.toml` for the annotated list. NVSwitches are
+not listed: the `all` attach mode finds GPUs and switches by PCI class instead.
 
 **Requirements:**
 - IOMMU enabled in BIOS
