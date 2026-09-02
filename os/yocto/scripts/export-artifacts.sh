@@ -112,16 +112,17 @@ fi
 # it here before anything is published -- shipping a guest image whose kernel
 # quietly lacks an asserted capability is the failure this guards against.
 #
-# Only dstack-docker.cfg is gated for now. dstack.cfg still has six lines the
-# build does not satisfy (CONFIG_HOTPLUG_CPU/SCSI/INPUT are forced back on by
-# machine-level features, and CONFIG_TLS/CRYPTO_GCM/CRYPTO_CHACHA20POLY1305 do
-# not come out as asserted); each needs its own decision rather than a blanket
-# edit, so gating it belongs in a follow-up.
+# Both fragments are gated. dstack.cfg used to be exempt because three of its
+# lines were not satisfied by the build -- CONFIG_SCSI, CONFIG_INPUT and
+# CONFIG_HOTPLUG_CPU lose to machine-level KERNEL_FEATURES -- and those three
+# kept the other seventy assertions unchecked along with them. They have been
+# dropped from the fragment, which now says only what the build actually does.
 KERNEL_CONFIG_FILE="$COMMON_IMG_DIR/kernel-config"
 if [ -f "$KERNEL_CONFIG_FILE" ]; then
     "$REPO_ROOT/os/common/scripts/check-kernel-config.sh" \
         "$KERNEL_CONFIG_FILE" \
-        "$YOCTO_DIR/layers/meta-dstack/recipes-kernel/linux/files/dstack-docker.cfg"
+        "$YOCTO_DIR/layers/meta-dstack/recipes-kernel/linux/files/dstack-docker.cfg" \
+        "$YOCTO_DIR/layers/meta-dstack/recipes-kernel/linux/files/dstack.cfg"
 else
     echo "Error: kernel config not found: $KERNEL_CONFIG_FILE" >&2
     exit 1
