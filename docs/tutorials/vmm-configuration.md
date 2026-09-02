@@ -305,8 +305,7 @@ To enable GPU passthrough for AI/ML workloads:
 ```toml
 [cvm.gpu]
 enabled = true
-# Defaults to the Hopper and Blackwell data center SKUs; narrow it to what the
-# host actually holds if you want discovery to reject anything else.
+# Example: narrow this list to what the host actually holds if you want discovery to reject anything else.
 listing = ["10de:2335", "10de:3182"]   # H200 SXM, B300 SXM6
 allow_attach_all = true
 ```
