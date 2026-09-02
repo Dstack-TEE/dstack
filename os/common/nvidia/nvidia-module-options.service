@@ -1,0 +1,31 @@
+[Unit]
+Description=Derive NVIDIA kernel module options from the attached GPU topology
+# Options written after the driver has initialised are ignored, so nothing may
+# load it before this unit has run. Two independent things ensure that.
+#
+# nvidia-blacklist.conf is the primary one: it stops udev autoloading the
+# driver. nvidia.ko and nvidia-drm.ko both carry PCI aliases matching every
+# passed-through GPU, and systemd's 80-drivers.rules loads modules by MODALIAS,
+# so without it coldplug brings the driver up during
+# systemd-udev-trigger.service. `blacklist` suppresses alias loads only, so the
+# explicit `modprobe nvidia` calls in the two services below still work.
+#
+# The ordering here is the second belt, for the case where the blacklist is
+# overridden or ineffective: the generator runs in early boot, ahead of
+# coldplug. /run is a tmpfs mounted by PID1 and the kernel finishes PCI
+# enumeration before userspace starts, so both the output directory and the
+# sysfs topology are already available that early.
+DefaultDependencies=no
+Before=systemd-udev-trigger.service nvidia-persistenced.service nvidia-fabricmanager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nvidia-module-options
+
+[Install]
+# sysinit.target is what makes the early ordering reachable. The two NVIDIA
+# services are listed as well so that starting either of them out of band --
+# after a failed boot run, say -- pulls the generator in instead of merely
+# ordering against it, since Before= is ordering and not a dependency.
+WantedBy=sysinit.target nvidia-persistenced.service nvidia-fabricmanager.service

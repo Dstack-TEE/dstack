@@ -94,8 +94,18 @@ ln -sfn "libnvidia-nscq.so.$NVIDIA_VERSION" "$libdir/libnvidia-nscq.so.2.0"
 ln -sfn libnvidia-nscq.so.2.0 "$libdir/libnvidia-nscq.so.2"
 ln -sfn libnvidia-nscq.so.2 "$libdir/libnvidia-nscq.so"
 
-install -Dm0755 "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-gpu-detect" "$ROOT_STAGE/usr/bin/nvidia-gpu-detect"
-install -Dm0644 "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-persistenced.service" "$ROOT_STAGE/usr/lib/systemd/system/nvidia-persistenced.service"
-install -Dm0644 "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia.conf" "$ROOT_STAGE/etc/modules-load.d/nvidia.conf"
-install -Dm0644 "$ROOT/os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-fabricmanager-nvswitch-condition.conf" "$ROOT_STAGE/etc/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
+# Payload shared with the yocto backend. Both backends must stage the same
+# files to the same destinations; os/yocto/tests/test-nvidia-module-options.sh
+# asserts that this list and the yocto recipes stay in step.
+common="$ROOT/os/common/nvidia"
+install -Dm0755 "$common/nvidia-gpu-detect" "$ROOT_STAGE/usr/bin/nvidia-gpu-detect"
+install -Dm0755 "$common/nvidia-module-options" "$ROOT_STAGE/usr/bin/nvidia-module-options"
+install -Dm0644 "$common/nvidia-persistenced.service" "$ROOT_STAGE/usr/lib/systemd/system/nvidia-persistenced.service"
+install -Dm0644 "$common/nvidia-module-options.service" "$ROOT_STAGE/usr/lib/systemd/system/nvidia-module-options.service"
+# Keeps udev from autoloading the driver before nvidia-module-options has
+# written the options for this topology. This previously installed a
+# modprobe.d `options` line into /etc/modules-load.d, where it did nothing at
+# all except make systemd-modules-load look for a module named "options".
+install -Dm0644 "$common/nvidia-blacklist.conf" "$ROOT_STAGE/usr/lib/modprobe.d/nvidia-blacklist.conf"
+install -Dm0644 "$common/nvidia-fabricmanager-nvswitch-condition.conf" "$ROOT_STAGE/etc/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
 find "$ROOT_STAGE" "$KERNEL_STAGE" -print0 | xargs -0r touch -h -d "@${SOURCE_DATE_EPOCH:?}"

@@ -19,7 +19,8 @@
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-files=$here/../layers/meta-nvidia/recipes-graphics/nvidia/files
+root=$(cd -- "$here/../../.." && pwd)
+files=$root/os/common/nvidia
 detect=$files/nvidia-gpu-detect
 generate=$files/nvidia-module-options
 unit=$files/nvidia-module-options.service
@@ -202,7 +203,8 @@ echo 'module load sites'
 ordered=$(sed -n 's/^Before=//p' "$unit" | tr ' ' '\n' | sed '/^$/d' | sort)
 loaders=$({
     echo systemd-udev-trigger.service
-    grep -rl 'modprobe nvidia' "$files" | xargs -r -n1 basename |
+    # Match the directive, not prose: several files discuss modprobe in comments.
+    grep -rlE '^ExecStartPre=.*modprobe nvidia' "$files" | xargs -r -n1 basename |
         sed 's/^nvidia-fabricmanager-nvswitch-condition\.conf$/nvidia-fabricmanager.service/'
 } | sort -u)
 if [ "$ordered" = "$loaders" ]; then
@@ -213,17 +215,83 @@ else
     failures=$((failures + 1))
 fi
 
-# Ordering ahead of udev coldplug is only reachable from early boot. Dropping
-# either of these would leave Before=systemd-udev-trigger.service unsatisfiable
-# and put the generator back after the driver has already loaded.
-for required in 'DefaultDependencies=no' 'WantedBy=sysinit.target'; do
-    if grep -qxF "$required" "$unit"; then
-        echo "ok   unit keeps $required"
+# Ordering ahead of udev coldplug is only reachable from early boot, so dropping
+# DefaultDependencies=no would leave Before=systemd-udev-trigger.service
+# unsatisfiable. Before= is ordering and not a dependency, so the two services
+# also have to appear in WantedBy= for an out-of-band start to pull the
+# generator in rather than merely order against it.
+if grep -qxF 'DefaultDependencies=no' "$unit"; then
+    echo 'ok   unit keeps DefaultDependencies=no'
+else
+    echo 'FAIL unit is missing DefaultDependencies=no, so it cannot precede udev coldplug' >&2
+    failures=$((failures + 1))
+fi
+
+wanted=$(sed -n 's/^WantedBy=//p' "$unit" | tr ' ' '\n' | sed '/^$/d' | sort)
+want_expected=$(printf '%s\n' sysinit.target nvidia-persistenced.service nvidia-fabricmanager.service | sort)
+if [ "$wanted" = "$want_expected" ]; then
+    echo 'ok   unit is pulled in by early boot and by both NVIDIA services'
+else
+    printf 'FAIL unexpected WantedBy=\n       got:      %s\n       expected: %s\n' \
+        "$(echo "$wanted" | tr '\n' ' ')" "$(echo "$want_expected" | tr '\n' ' ')" >&2
+    failures=$((failures + 1))
+fi
+
+# Blacklisting nvidia alone is bypassed: nvidia-drm carries the same PCI aliases
+# and depends on nvidia-modeset, which depends on nvidia, so udev can match the
+# alias to nvidia-drm and pull nvidia in as a dependency. Confirmed with
+# `modprobe -n -v <modalias>` against the built module tree.
+echo
+echo 'udev autoload blacklist'
+blacklist=$files/nvidia-blacklist.conf
+for mod in nvidia nvidia-drm; do
+    if grep -qxF "blacklist $mod" "$blacklist"; then
+        echo "ok   $mod is kept from alias autoload"
     else
-        echo "FAIL unit is missing $required, so it cannot precede udev coldplug" >&2
+        echo "FAIL $blacklist does not blacklist $mod" >&2
         failures=$((failures + 1))
     fi
 done
+# An `install`/`alias` override would defeat the explicit modprobe the services
+# rely on, so the file must stay purely a blacklist.
+if grep -qE '^[[:space:]]*(install|alias|options)[[:space:]]' "$blacklist"; then
+    echo 'FAIL blacklist file must only contain blacklist directives' >&2
+    failures=$((failures + 1))
+else
+    echo 'ok   blacklist file carries no install/alias/options directives'
+fi
+
+# os/common/nvidia is shared payload: both image backends have to stage every
+# file in it. Drifting here is how the two images silently diverge -- the mkosi
+# backend used to install the modprobe options into /etc/modules-load.d, where
+# they did nothing, and nothing caught it.
+echo
+echo 'backend parity'
+shared=$(cd "$files" && ls | sort)
+mkosi_installs=$(grep -oE '\$common/[A-Za-z0-9._-]+' "$root/os/mkosi/components/nvidia/nvidia-build.sh" |
+    sed 's|.*/||' | sort -u)
+yocto_installs=$(grep -rhoE 'file://[A-Za-z0-9._-]+' "$root/os/yocto/layers/meta-nvidia/recipes-graphics/nvidia" |
+    sed 's|file://||' | sort -u)
+for backend in mkosi yocto; do
+    eval "got=\$${backend}_installs"
+    missing=$(comm -23 <(echo "$shared") <(echo "$got"))
+    if [ -z "$missing" ]; then
+        echo "ok   $backend stages every file in os/common/nvidia"
+    else
+        printf 'FAIL %s does not stage: %s\n' "$backend" "$(echo "$missing" | tr '\n' ' ')" >&2
+        failures=$((failures + 1))
+    fi
+done
+
+# The mkosi backend has no [Install] handling, so its preset is what enables the
+# generator there; the yocto side uses SYSTEMD_AUTO_ENABLE.
+if grep -qxF 'enable nvidia-module-options.service' \
+    "$root/os/mkosi/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"; then
+    echo 'ok   mkosi preset enables the generator'
+else
+    echo 'FAIL mkosi preset does not enable nvidia-module-options.service' >&2
+    failures=$((failures + 1))
+fi
 
 echo
 if [ "$failures" -eq 0 ]; then

@@ -4,6 +4,10 @@ GPU-only services (nvidia-persistenced, nvidia-fabricmanager) skip cleanly on \
 instances without a GPU or without NVSwitch, allowing a single merged image."
 LICENSE = "CLOSED"
 
+# The payload shared with the mkosi backend lives in os/common/nvidia so neither
+# image backend reaches into the other's tree. See os/common/README.md.
+FILESEXTRAPATHS:prepend := "${THISDIR}/../../../../../common/nvidia:"
+
 SRC_URI = "file://nvidia-gpu-detect"
 
 S = "${UNPACKDIR}"
