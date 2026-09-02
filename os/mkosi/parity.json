@@ -85,7 +85,7 @@
   "dev_only_paths": [
     "usr/bin/dstack-tee-simulator",
     "usr/bin/swtpm",
-    "etc/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
+    "usr/lib/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
     "usr/bin/strace",
     "usr/bin/gdb",
     "usr/sbin/sshd",
@@ -142,7 +142,7 @@
   "prod_forbidden_paths": [
     "usr/bin/dstack-tee-simulator",
     "usr/bin/swtpm",
-    "etc/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
+    "usr/lib/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
     "usr/bin/strace",
     "usr/bin/gdb",
     "usr/sbin/sshd",
