@@ -19,7 +19,7 @@
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-root=$(cd -- "$here/../../.." && pwd)
+root=$(cd -- "$here/../.." && pwd)
 files=$root/os/common/nvidia
 detect=$files/nvidia-gpu-detect
 generate=$files/nvidia-module-options
@@ -267,13 +267,11 @@ fi
 # they did nothing, and nothing caught it.
 echo
 echo 'backend parity'
-shared=$(cd "$files" && ls | sort)
-mkosi_installs=$(grep -oE '\$common/[A-Za-z0-9._-]+' "$root/os/mkosi/components/nvidia/nvidia-build.sh" |
-    sed 's|.*/||' | sort -u)
-yocto_installs=$(grep -rhoE 'file://[A-Za-z0-9._-]+' "$root/os/yocto/layers/meta-nvidia/recipes-graphics/nvidia" |
-    sed 's|file://||' | sort -u)
-for backend in mkosi yocto; do
-    eval "got=\$${backend}_installs"
+shared=$(cd "$files" && printf '%s\n' * | sort)
+
+# stages <backend> <newline-separated basenames the backend installs>
+stages() {
+    local backend=$1 got=$2 missing
     missing=$(comm -23 <(echo "$shared") <(echo "$got"))
     if [ -z "$missing" ]; then
         echo "ok   $backend stages every file in os/common/nvidia"
@@ -281,7 +279,13 @@ for backend in mkosi yocto; do
         printf 'FAIL %s does not stage: %s\n' "$backend" "$(echo "$missing" | tr '\n' ' ')" >&2
         failures=$((failures + 1))
     fi
-done
+}
+
+# shellcheck disable=SC2016  # matches the literal "$common/" the script writes
+stages mkosi "$(grep -oE '\$common/[A-Za-z0-9._-]+' \
+    "$root/os/mkosi/components/nvidia/nvidia-build.sh" | sed 's|.*/||' | sort -u)"
+stages yocto "$(grep -rhoE 'file://[A-Za-z0-9._-]+' \
+    "$root/os/yocto/layers/meta-nvidia/recipes-graphics/nvidia" | sed 's|file://||' | sort -u)"
 
 # Image-shipped drop-ins belong under /usr/lib/systemd/system, not
 # /etc/systemd/system. /etc is the administrator's layer, and `systemctl revert`

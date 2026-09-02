@@ -95,7 +95,7 @@ ln -sfn libnvidia-nscq.so.2.0 "$libdir/libnvidia-nscq.so.2"
 ln -sfn libnvidia-nscq.so.2 "$libdir/libnvidia-nscq.so"
 
 # Payload shared with the yocto backend. Both backends must stage the same
-# files to the same destinations; os/yocto/tests/test-nvidia-module-options.sh
+# files to the same destinations; os/tests/test-nvidia-module-options.sh
 # asserts that this list and the yocto recipes stay in step.
 common="$ROOT/os/common/nvidia"
 install -Dm0755 "$common/nvidia-gpu-detect" "$ROOT_STAGE/usr/bin/nvidia-gpu-detect"
