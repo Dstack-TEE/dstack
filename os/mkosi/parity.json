@@ -44,7 +44,7 @@
       "usr/lib/systemd/system/nvidia-module-options.service",
       "usr/lib/modprobe.d/nvidia-blacklist.conf",
       "usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.2",
-      "etc/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
+      "usr/lib/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
     ],
     "nvidia-container": [
       "usr/bin/nvidia-container-cli",

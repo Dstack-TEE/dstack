@@ -283,6 +283,19 @@ for backend in mkosi yocto; do
     fi
 done
 
+# Image-shipped drop-ins belong under /usr/lib/systemd/system, not
+# /etc/systemd/system. /etc is the administrator's layer, and `systemctl revert`
+# deletes <unit>.d/ below it wholesale -- which would silently take the
+# ExecCondition with it and leave the fabric manager failing, instead of
+# skipping, on instances without an NVSwitch.
+if grep -q 'ROOT_STAGE/etc/systemd/system/.*\.service\.d/' \
+    "$root/os/mkosi/components/nvidia/nvidia-build.sh"; then
+    echo 'FAIL mkosi stages a drop-in under /etc/systemd/system' >&2
+    failures=$((failures + 1))
+else
+    echo 'ok   mkosi stages drop-ins under /usr/lib/systemd/system'
+fi
+
 # The mkosi backend has no [Install] handling, so its preset is what enables the
 # generator there; the yocto side uses SYSTEMD_AUTO_ENABLE.
 if grep -qxF 'enable nvidia-module-options.service' \

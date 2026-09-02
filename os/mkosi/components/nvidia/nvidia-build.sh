@@ -107,5 +107,5 @@ install -Dm0644 "$common/nvidia-module-options.service" "$ROOT_STAGE/usr/lib/sys
 # modprobe.d `options` line into /etc/modules-load.d, where it did nothing at
 # all except make systemd-modules-load look for a module named "options".
 install -Dm0644 "$common/nvidia-blacklist.conf" "$ROOT_STAGE/usr/lib/modprobe.d/nvidia-blacklist.conf"
-install -Dm0644 "$common/nvidia-fabricmanager-nvswitch-condition.conf" "$ROOT_STAGE/etc/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
+install -Dm0644 "$common/nvidia-fabricmanager-nvswitch-condition.conf" "$ROOT_STAGE/usr/lib/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
 find "$ROOT_STAGE" "$KERNEL_STAGE" -print0 | xargs -0r touch -h -d "@${SOURCE_DATE_EPOCH:?}"
