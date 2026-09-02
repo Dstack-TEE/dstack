@@ -64,11 +64,19 @@ use_mrconfigid = true
 # suffix: "512G", "2T", "1P" -- all binary multipliers, as are the "1PB" and
 # "1PiB" spellings.
 #
-# 0 leaves the hole at QEMU's default, which is far below what GPU passthrough
-# needs: a data center card's VRAM aperture alone is 256 GiB on an H200 SXM and
-# 512 GiB on a B300, so eight of them want 2 to 4 TiB. Hosts running GPUs set
-# this to "1P", which is what Phala's H200 fleet runs today.
-qemu_pci_hole64_size = 0
+# QEMU's own default is far below what GPU passthrough needs: a data center
+# card's VRAM aperture alone is 256 GiB on an H200 SXM and 512 GiB on a B300,
+# so eight of them want 2 to 4 TiB. The hole costs guest address space rather
+# than memory -- it is where firmware and the guest place 64-bit BARs -- so
+# sizing it generously is cheaper than sizing it exactly.
+#
+# 8T covers eight B300s twice over while keeping the top of the guest address
+# space at 44 bits. That matters because the hole is global: a larger one is
+# not free for the GPU-less guests that share this setting. 1P, which the H200
+# fleet runs today, puts the top at 51 bits, past the 48-bit ceiling of 4-level
+# paging -- so every guest, GPU or not, needs 5-level EPT and, on TDX, GPAW=52.
+# Raise it explicitly if a deployment ever needs more than 8 TiB of BARs.
+qemu_pci_hole64_size = "8T"
 qemu_hotplug_off = false
 # TDX attestation/hash scheme policy:
 # - "legacy": digest.txt + legacy verifier
