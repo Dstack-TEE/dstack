@@ -36,8 +36,10 @@ PCI_DEVICES=${NVIDIA_PCI_DEVICES:-/sys/bus/pci/devices}
 # vendor id and a class matching the given glob (e.g. "0x0302*").
 match_vendor_class() {
     for dev in "$PCI_DEVICES"/*; do
-        [ -r "$dev/vendor" ] && [ -r "$dev/class" ] || continue
+        [ -r "$dev/vendor" ] || continue
+        [ -r "$dev/class" ] || continue
         [ "$(cat "$dev/vendor")" = "$NVIDIA_VENDOR" ] || continue
+        # shellcheck disable=SC2254  # the caller passes a glob on purpose
         case "$(cat "$dev/class")" in
             $1) return 0 ;;
         esac
@@ -51,10 +53,12 @@ match_vendor_class() {
 count_vendor_class() {
     count=0
     for dev in "$PCI_DEVICES"/*; do
-        [ -r "$dev/vendor" ] && [ -r "$dev/class" ] || continue
+        [ -r "$dev/vendor" ] || continue
+        [ -r "$dev/class" ] || continue
         [ "$(cat "$dev/vendor")" = "$NVIDIA_VENDOR" ] || continue
         class=$(cat "$dev/class")
         for glob in "$@"; do
+            # shellcheck disable=SC2254  # the patterns are globs on purpose
             case "$class" in
                 $glob)
                     count=$((count + 1))
