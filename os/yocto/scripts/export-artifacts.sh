@@ -113,10 +113,11 @@ fi
 # quietly lacks an asserted capability is the failure this guards against.
 #
 # Both fragments are gated. dstack.cfg used to be exempt because three of its
-# lines were not satisfied by the build -- CONFIG_SCSI, CONFIG_INPUT and
-# CONFIG_HOTPLUG_CPU lose to machine-level KERNEL_FEATURES -- and those three
-# kept the other seventy assertions unchecked along with them. They have been
-# dropped from the fragment, which now says only what the build actually does.
+# lines were not satisfied by the build: CONFIG_HOTPLUG_CPU has no prompt to
+# set, CONFIG_INPUT has none either without EXPERT, and CONFIG_SCSI is pulled
+# in by the SCSI disk driver that KERNEL_FEATURES enables. Those three kept the
+# other seventy assertions unchecked along with them; the fragment documents
+# each case and now says only what the build actually does.
 KERNEL_CONFIG_FILE="$COMMON_IMG_DIR/kernel-config"
 if [ -f "$KERNEL_CONFIG_FILE" ]; then
     "$REPO_ROOT/os/common/scripts/check-kernel-config.sh" \
