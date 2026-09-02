@@ -97,7 +97,7 @@ impl MemorySize {
     /// - Hexadecimal: "0x1000", "0X2000"
     /// - With suffixes: "2K", "4M", "1G", "2T", "1P" (case-insensitive)
     /// - Two- and three-letter spellings of the same units: "4MB", "1GiB",
-    ///   "2TB", "1PiB", and a bare "B" for bytes
+    ///   "2TB", "1PiB", and "B" as a bytes suffix (e.g. "512B")
     ///
     /// Every suffix is a binary (1024-based) multiplier, including the "B" and
     /// "iB" spellings. "1KB" is 1024 bytes, not 1000: the crate names sizes the
