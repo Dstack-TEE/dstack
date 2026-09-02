@@ -60,6 +60,14 @@ use_mrconfigid = true
 #qemu_single_pass_add_pages = false
 #qemu_pic = true
 #qemu_version = ""
+# Size of the 64-bit PCI hole. Accepts a plain byte count, hex, or a unit
+# suffix: "512G", "2T", "1P" -- all binary multipliers, as are the "1PB" and
+# "1PiB" spellings.
+#
+# 0 leaves the hole at QEMU's default, which is far below what GPU passthrough
+# needs: a data center card's VRAM aperture alone is 256 GiB on an H200 SXM and
+# 512 GiB on a B300, so eight of them want 2 to 4 TiB. Hosts running GPUs set
+# this to "1P", which is what Phala's H200 fleet runs today.
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
 # TDX attestation/hash scheme policy:
