@@ -88,18 +88,21 @@ do_install() {
         install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-gateway-checker.service ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-guest-agent.socket ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/llmnr.conf ${D}${sysconfdir}/systemd/resolved.conf.d
-        install -d ${D}${sysconfdir}/systemd/system/docker.service.d
-        install -m 0644 ${DSTACK_ROOTFS_FILES}/docker.service.d/* ${D}${sysconfdir}/systemd/system/docker.service.d/
+        # Drop-ins the image ships are vendor configuration, so they belong
+        # beside the units in ${systemd_system_unitdir}. /etc is the operator's
+        # layer and `systemctl revert` deletes <unit>.d/ below it wholesale.
+        install -d ${D}${systemd_system_unitdir}/docker.service.d
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/docker.service.d/* ${D}${systemd_system_unitdir}/docker.service.d/
 
-        install -d ${D}${sysconfdir}/systemd/system/containerd.service.d
-        install -m 0644 ${DSTACK_ROOTFS_FILES}/containerd.service.d/* ${D}${sysconfdir}/systemd/system/containerd.service.d/
+        install -d ${D}${systemd_system_unitdir}/containerd.service.d
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/containerd.service.d/* ${D}${systemd_system_unitdir}/containerd.service.d/
     fi
 }
 
 FILES:${PN} += " \
-    ${sysconfdir}/systemd/system/docker.service.d/dstack-guest-agent.conf \
-    ${sysconfdir}/systemd/system/docker.service.d/dstack-prepare.conf \
-    ${sysconfdir}/systemd/system/containerd.service.d/dstack-prepare.conf \
+    ${systemd_system_unitdir}/docker.service.d/dstack-guest-agent.conf \
+    ${systemd_system_unitdir}/docker.service.d/dstack-prepare.conf \
+    ${systemd_system_unitdir}/containerd.service.d/dstack-prepare.conf \
 "
 
 # Cargo embeds build paths into binaries; allow TMPDIR references.
