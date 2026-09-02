@@ -90,10 +90,15 @@ pub struct VerificationDetails {
     pub os_image_hash_verified: bool,
     /// Indicates that TDX ACPI table contents were verified.
     ///
-    /// This is true for the full-image TDX path, where the verifier recomputes
-    /// ACPI tables and checks the resulting RTMRs against the quote. It remains
-    /// false for TDX lite, which replays ACPI DATA digests from the event log
-    /// without validating the table contents.
+    /// Both dstack TDX paths set this. The full-image path recomputes the
+    /// tables and checks the resulting RTMRs against the quote. The lite path
+    /// recomputes the three RTMR0 ACPI DATA digests from the declared VM shape
+    /// and rejects the attestation when they disagree with the ones the guest
+    /// reported, then rebuilds RTMR0 from the recomputed digests, so neither
+    /// path lets host-reported table content reach the expected value.
+    ///
+    /// It stays false where the check does not apply: GCP TDX, which measures
+    /// through the vTPM instead, and the SEV-SNP and Nitro Enclave paths.
     pub acpi_tables_verified: bool,
     /// dev vs prod OS image, from metadata.json (bound to os_image_hash). None if not exposed.
     pub os_image_is_dev: Option<bool>,
