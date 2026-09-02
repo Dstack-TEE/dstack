@@ -103,6 +103,8 @@ fn machine_from_vm_config(vm_config: &VmConfig, ovmf_variant: OvmfVariant) -> cr
 /// otherwise replays the digests the guest reported in its event log, which
 /// makes those three RTMR0 entries self-consistent but unconstrained; comparing
 /// against these expected digests is what turns them into a verified value.
+/// The verifier does exactly that on both TDX paths, and treats a mismatch --
+/// and a VM shape this cannot model -- as fatal rather than unverified.
 pub fn expected_rtmr0_acpi_hashes(
     vm_config: &VmConfig,
     ovmf_variant: OvmfVariant,
