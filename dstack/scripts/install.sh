@@ -238,7 +238,7 @@ fi
 need_cmd cargo
 need_cmd install
 
-checkout=$(resolve_source)
+checkout=$(resolve_source | tail -1)
 core_checkout=$(core_dir "$checkout")
 bin_dir="$prefix/bin"
 
