@@ -8,6 +8,10 @@
 #   exit 0 -> hardware present     (systemd runs the unit)
 #   exit 1 -> hardware absent      (systemd skips the unit, no failure)
 #
+# The `count-gpus` mode is a query instead: it prints the GPU count on stdout
+# and always exits 0. nvidia-module-options uses it to pick module options that
+# match the topology the guest was actually given.
+#
 # Detection mirrors
 # tools/vm-runner/enable-vfio-passthrough.sh, but reads PCI class codes
 # from sysfs so it works before the nvidia driver is loaded and without relying
@@ -24,11 +28,14 @@
 # GPUs (class 0x03xx) and NVSwitches (class 0x06xx).
 
 NVIDIA_VENDOR="0x10de"
+# Overridable only so the detection can be exercised against a synthetic PCI
+# tree; nothing in the image sets it.
+PCI_DEVICES=${NVIDIA_PCI_DEVICES:-/sys/bus/pci/devices}
 
 # match_vendor_class <class-glob>: succeed if any PCI device has NVIDIA's
 # vendor id and a class matching the given glob (e.g. "0x0302*").
 match_vendor_class() {
-    for dev in /sys/bus/pci/devices/*; do
+    for dev in "$PCI_DEVICES"/*; do
         [ -r "$dev/vendor" ] && [ -r "$dev/class" ] || continue
         [ "$(cat "$dev/vendor")" = "$NVIDIA_VENDOR" ] || continue
         case "$(cat "$dev/class")" in
@@ -38,6 +45,27 @@ match_vendor_class() {
     return 1
 }
 
+# count_vendor_class <class-glob>...: print how many PCI devices have NVIDIA's
+# vendor id and a class matching any of the given globs. Used to size the NVLink
+# module options, which differ between a single-GPU and a multi-GPU tenant.
+count_vendor_class() {
+    count=0
+    for dev in "$PCI_DEVICES"/*; do
+        [ -r "$dev/vendor" ] && [ -r "$dev/class" ] || continue
+        [ "$(cat "$dev/vendor")" = "$NVIDIA_VENDOR" ] || continue
+        class=$(cat "$dev/class")
+        for glob in "$@"; do
+            case "$class" in
+                $glob)
+                    count=$((count + 1))
+                    break
+                    ;;
+            esac
+        done
+    done
+    echo "$count"
+}
+
 case "${1:-gpu}" in
     gpu)
         match_vendor_class '0x0300*' || match_vendor_class '0x0302*'
@@ -45,8 +73,14 @@ case "${1:-gpu}" in
     nvswitch)
         match_vendor_class '0x06*'
         ;;
+    count-gpus)
+        # Prints the count and always exits 0, so it is a query rather than an
+        # ExecCondition. A device is only ever one class, so the two globs
+        # cannot double count the same GPU.
+        count_vendor_class '0x0300*' '0x0302*'
+        ;;
     *)
-        echo "usage: ${0##*/} {gpu|nvswitch}" >&2
+        echo "usage: ${0##*/} {gpu|nvswitch|count-gpus}" >&2
         exit 64
         ;;
 esac

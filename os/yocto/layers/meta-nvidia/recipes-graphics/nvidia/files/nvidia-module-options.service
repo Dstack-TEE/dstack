@@ -1,0 +1,18 @@
+[Unit]
+Description=Derive NVIDIA kernel module options from the attached GPU topology
+# nvidia-persistenced.service and nvidia-fabricmanager.service each modprobe the
+# NVIDIA modules from ExecStartPre, and they are the only places this image
+# loads them -- the NVIDIA modules are deliberately kept out of modules-load.d
+# so the shared image stays quiet on GPU-less hosts. Ordering ahead of those two
+# is therefore enough for the generated options to be in place before the driver
+# initialises. Anything added later that loads nvidia earlier must also order
+# itself after this unit.
+Before=nvidia-persistenced.service nvidia-fabricmanager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/nvidia-module-options
+
+[Install]
+WantedBy=multi-user.target
