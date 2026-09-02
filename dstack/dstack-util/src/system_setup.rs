@@ -1352,6 +1352,8 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
 /// unverified GPU either.
 mod gpu {
     use super::*;
+    use nvml_wrapper_sys::bindings as ffi;
+    use std::time::Instant;
 
     const EVENT_VERSION: u32 = 2;
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
@@ -1544,6 +1546,267 @@ mod gpu {
 
     /// Set the system-wide GPU ready state without appraisal for the explicit
     /// `gpu_policy.attest_gpu: false` compatibility path.
+    /// Fabric registration is asynchronous: the GPU probes the fabric manager
+    /// over NVLink inband once the driver initialises it, so a single read
+    /// taken right after boot legitimately catches
+    /// NVML_GPU_FABRIC_STATE_IN_PROGRESS. Poll instead, and log how long it
+    /// actually took so this bound can be tuned from deployments rather than
+    /// guessed at a second time.
+    const FABRIC_READY_TIMEOUT: Duration = Duration::from_secs(30);
+    const FABRIC_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+    /// nvmlGpuFabricState_t values, from nvml.h.
+    const FABRIC_STATE_NOT_SUPPORTED: u8 = 0;
+    const FABRIC_STATE_COMPLETED: u8 = 3;
+
+    #[derive(Clone, Copy)]
+    pub(super) struct FabricInfo {
+        state: u8,
+        status: u32,
+        clique_id: u32,
+    }
+
+    impl FabricInfo {
+        /// A GPU counts as registered only when the probe finished *and*
+        /// reported success. The two are separate fields and the second is the
+        /// one everything else drops: NCCL logs `state` and never `status`, so
+        /// a GPU sitting at Completed with a failed status looks healthy in
+        /// every NCCL log while its P2P capability is gone.
+        pub(super) fn registered(&self) -> bool {
+            self.state == FABRIC_STATE_COMPLETED && self.status == ffi::nvmlReturn_enum_NVML_SUCCESS
+        }
+    }
+
+    /// Read one GPU's NVLink fabric registration.
+    ///
+    /// `Ok(None)` means this platform has no fabric to register with -- a
+    /// single-GPU tenant, or any host without NVSwitch -- which is not a
+    /// fault. nvml-wrapper 0.12 exposes no safe binding for
+    /// `nvmlDeviceGetGpuFabricInfo`, so this reaches through the sys layer
+    /// using the handle and the loaded library the safe wrapper already owns.
+    fn fabric_info(nvml: &nvml_wrapper::Nvml, index: u32) -> Result<Option<FabricInfo>> {
+        let device = nvml
+            .device_by_index(index)
+            .with_context(|| format!("failed to get NVML device {index}"))?;
+        let get = nvml
+            .lib()
+            .nvmlDeviceGetGpuFabricInfo
+            .as_ref()
+            .map_err(|err| anyhow!("NVML exports no nvmlDeviceGetGpuFabricInfo: {err}"))?;
+        let mut raw = ffi::nvmlGpuFabricInfo_t {
+            clusterUuid: [0; 16],
+            status: 0,
+            cliqueId: 0,
+            state: 0,
+        };
+        // SAFETY: `device` is a live handle owned by `nvml`, which outlives
+        // this call, and `raw` is a correctly sized nvmlGpuFabricInfo_t that
+        // NVML only writes into.
+        let ret = unsafe { get(device.handle(), &mut raw) };
+        if ret == ffi::nvmlReturn_enum_NVML_ERROR_NOT_SUPPORTED {
+            return Ok(None);
+        }
+        if ret != ffi::nvmlReturn_enum_NVML_SUCCESS {
+            bail!("nvmlDeviceGetGpuFabricInfo failed for GPU {index}: {ret}");
+        }
+        if raw.state == FABRIC_STATE_NOT_SUPPORTED {
+            return Ok(None);
+        }
+        Ok(Some(FabricInfo {
+            state: raw.state,
+            status: raw.status,
+            clique_id: raw.cliqueId,
+        }))
+    }
+
+    /// Pairs whose NVLink peer-to-peer access NVML reports as anything but OK,
+    /// as `(from, to, direction, status)`.
+    ///
+    /// This is the check NCCL itself makes -- its "P2P is disabled between
+    /// NVLINK connected GPUs" warning comes from `nvmlDeviceGetP2PStatus` --
+    /// and it is the one that catches a fabric which registered cleanly but
+    /// still cannot move traffic. Both directions are read because NCCL reads
+    /// both.
+    fn blocked_p2p_pairs(
+        nvml: &nvml_wrapper::Nvml,
+        devices: u32,
+    ) -> Result<Vec<(u32, u32, &'static str, u32)>> {
+        let get = nvml
+            .lib()
+            .nvmlDeviceGetP2PStatus
+            .as_ref()
+            .map_err(|err| anyhow!("NVML exports no nvmlDeviceGetP2PStatus: {err}"))?;
+        let mut blocked = Vec::new();
+        for a in 0..devices {
+            for b in 0..devices {
+                if a == b {
+                    continue;
+                }
+                let from = nvml.device_by_index(a)?;
+                let to = nvml.device_by_index(b)?;
+                for (name, index) in [
+                    (
+                        "read",
+                        ffi::nvmlGpuP2PCapsIndex_enum_NVML_P2P_CAPS_INDEX_READ,
+                    ),
+                    (
+                        "write",
+                        ffi::nvmlGpuP2PCapsIndex_enum_NVML_P2P_CAPS_INDEX_WRITE,
+                    ),
+                ] {
+                    let mut status: ffi::nvmlGpuP2PStatus_t = 0;
+                    // SAFETY: both handles are live and owned by `nvml`, and
+                    // `status` is a plain u32 NVML only writes into.
+                    let ret = unsafe { get(from.handle(), to.handle(), index, &mut status) };
+                    if ret != ffi::nvmlReturn_enum_NVML_SUCCESS {
+                        bail!("nvmlDeviceGetP2PStatus failed for {a}->{b} ({name}): {ret}");
+                    }
+                    if status != ffi::nvmlGpuP2PStatus_enum_NVML_P2P_STATUS_OK {
+                        blocked.push((a, b, name, status));
+                    }
+                }
+            }
+        }
+        Ok(blocked)
+    }
+
+    /// Warn when the GPUs never finish joining one working NVLink fabric.
+    ///
+    /// Deliberately advisory. The failure this reports is a host-side one --
+    /// a partition that was never activated, a stale Fabric Manager, a
+    /// tenant's GPUs landing in different cliques -- and none of it is
+    /// something the guest can fix or should refuse to boot over. What it
+    /// cannot be allowed to do is stay silent: links train in hardware through
+    /// ALI whatever the fabric is doing, so `nvidia-smi nvlink -s` reports
+    /// every link Active either way and a collective quietly falls back to
+    /// PCIe at a fraction of the bandwidth the tenant is paying for.
+    pub(super) fn warn_unless_fabric_ready(expected_devices: u32) {
+        if expected_devices < 2 {
+            return;
+        }
+        if let Err(err) = fabric_ready_inner(expected_devices) {
+            warn!("could not determine NVLink fabric readiness: {err:?}");
+        }
+    }
+
+    fn fabric_ready_inner(expected_devices: u32) -> Result<()> {
+        let nvml = init_nvml(expected_devices)?;
+        let started = Instant::now();
+        // Assigned on every path that reaches the break below, so the timeout
+        // arm always reports the readings it actually gave up on.
+        let mut last;
+        loop {
+            let mut infos = Vec::with_capacity(expected_devices as usize);
+            for index in 0..expected_devices {
+                match fabric_info(&nvml, index)? {
+                    // The driver says this platform has no fabric at all, so
+                    // there is nothing to wait for and nothing to warn about.
+                    None => {
+                        info!("no NVLink fabric on this platform; skipping fabric readiness check");
+                        return Ok(());
+                    }
+                    Some(info) => infos.push(info),
+                }
+            }
+            if infos.iter().all(FabricInfo::registered) {
+                report_ready(&nvml, &infos, started.elapsed(), expected_devices);
+                return Ok(());
+            }
+            last = infos;
+            if started.elapsed() >= FABRIC_READY_TIMEOUT {
+                break;
+            }
+            std::thread::sleep(FABRIC_POLL_INTERVAL);
+        }
+        for (index, info) in last.iter().enumerate() {
+            warn!(
+                "GPU {index} has not joined the NVLink fabric: state={} status={} cliqueId={}",
+                info.state, info.status, info.clique_id
+            );
+        }
+        warn!(
+            "NVLink fabric not ready after {:?}; NCCL will fall back to PCIe. \
+             This is a host-side condition: check that the partition is active \
+             (`fmpm -l`) and that /var/log/fabricmanager.log reports every GPU notified",
+            FABRIC_READY_TIMEOUT
+        );
+        Ok(())
+    }
+
+    /// The clique every GPU shares, or `None` when they disagree. Two GPUs
+    /// registered into different cliques cannot reach each other over NVLink
+    /// however healthy each one looks on its own.
+    pub(super) fn shared_clique(infos: &[FabricInfo]) -> Option<u32> {
+        let first = infos.first()?.clique_id;
+        infos
+            .iter()
+            .all(|info| info.clique_id == first)
+            .then_some(first)
+    }
+
+    /// Everything registered. Two things can still be wrong, and both are
+    /// invisible without asking: the GPUs may have registered into *different*
+    /// cliques, which means they cannot reach each other however healthy each
+    /// one looks, and P2P may be blocked for a reason the fabric state does
+    /// not express.
+    fn report_ready(
+        nvml: &nvml_wrapper::Nvml,
+        infos: &[FabricInfo],
+        elapsed: Duration,
+        expected_devices: u32,
+    ) {
+        match shared_clique(infos) {
+            Some(clique) => {
+                info!("NVLink fabric ready in {elapsed:?}, all GPUs in clique {clique}")
+            }
+            None => {
+                let ids: Vec<_> = infos.iter().map(|info| info.clique_id).collect();
+                warn!(
+                    "GPUs registered with the NVLink fabric but landed in different cliques: \
+                     {ids:?}. They cannot reach each other over NVLink; the host partition is \
+                     probably wrong"
+                );
+            }
+        }
+        match blocked_p2p_pairs(nvml, expected_devices) {
+            Ok(blocked) if blocked.is_empty() => {
+                info!("NVLink peer-to-peer access is available between all GPU pairs");
+            }
+            Ok(blocked) => {
+                for (from, to, direction, status) in &blocked {
+                    warn!(
+                        "NVLink peer-to-peer {direction} is blocked from GPU {from} to GPU {to} \
+                         (nvmlGpuP2PStatus={status})"
+                    );
+                }
+                warn!(
+                    "{} GPU pair directions cannot use NVLink despite a registered fabric; \
+                     collectives will fall back to PCIe",
+                    blocked.len()
+                );
+            }
+            Err(err) => warn!("could not read NVLink peer-to-peer status: {err:?}"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) mod test_support {
+        use super::{FabricInfo, FABRIC_STATE_COMPLETED};
+
+        pub const COMPLETED: u8 = FABRIC_STATE_COMPLETED;
+        pub const NOT_STARTED: u8 = 1;
+        pub const IN_PROGRESS: u8 = 2;
+        pub const SUCCESS: u32 = super::ffi::nvmlReturn_enum_NVML_SUCCESS;
+
+        pub fn info(state: u8, status: u32, clique_id: u32) -> FabricInfo {
+            FabricInfo {
+                state,
+                status,
+                clique_id,
+            }
+        }
+    }
+
     pub(super) fn set_gpu_ready_state(expected_devices: u32) -> Result<()> {
         let nvml = init_nvml(expected_devices)?;
         set_gpu_ready_state_with_nvml(&nvml)
@@ -2162,6 +2425,12 @@ impl Stage0<'_> {
         gpu::evaluate_rego_policy(&gpu_policy, attestation.claims())?;
 
         info!("application GPU policy accepted the attestation claims and state");
+        // Advisory, and deliberately after attestation so a fabric problem can
+        // never be mistaken for a security one. Runs on a blocking thread
+        // because it polls for up to FABRIC_READY_TIMEOUT.
+        let fabric_devices = expected_devices;
+        let _ = tokio::task::spawn_blocking(move || gpu::warn_unless_fabric_ready(fabric_devices))
+            .await;
         gpu_state.set_ready()?;
         let devtools = gpu_state.any_devtools();
         let event = attestation.event(devtools)?;
@@ -4250,5 +4519,36 @@ Endpoint = [2001:db8::1]:51822
             ["gateway.example.com", "192.0.2.1", "2001:db8::1"]
         );
         assert!(wireguard_endpoint_hosts("Endpoint = missing-port").is_err());
+    }
+}
+
+#[cfg(test)]
+mod fabric_tests {
+    use super::gpu::{shared_clique, test_support::*};
+
+    #[test]
+    fn a_gpu_counts_as_registered_only_when_state_and_status_both_agree() {
+        // The pairing that matters: Completed with a failed status is a real,
+        // observed condition, and it is the one NCCL cannot see because it
+        // logs state and never status.
+        assert!(info(COMPLETED, SUCCESS, 7).registered());
+        assert!(!info(COMPLETED, 999, 7).registered());
+        assert!(!info(IN_PROGRESS, SUCCESS, 7).registered());
+        assert!(!info(NOT_STARTED, SUCCESS, 7).registered());
+    }
+
+    #[test]
+    fn a_shared_clique_is_only_reported_when_every_gpu_agrees() {
+        assert_eq!(shared_clique(&[]), None);
+        assert_eq!(shared_clique(&[info(COMPLETED, SUCCESS, 7)]), Some(7));
+        assert_eq!(
+            shared_clique(&[info(COMPLETED, SUCCESS, 7), info(COMPLETED, SUCCESS, 7)]),
+            Some(7)
+        );
+        // Both GPUs registered successfully and still cannot reach each other.
+        assert_eq!(
+            shared_clique(&[info(COMPLETED, SUCCESS, 7), info(COMPLETED, SUCCESS, 9)]),
+            None
+        );
     }
 }

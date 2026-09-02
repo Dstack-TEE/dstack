@@ -60,6 +60,7 @@ sodiumbox.workspace = true
 libc.workspace = true
 luks2.workspace = true
 nvml-wrapper.workspace = true
+nvml-wrapper-sys.workspace = true
 scopeguard.workspace = true
 tempfile.workspace = true
 ez-hash.workspace = true
