@@ -46,8 +46,8 @@ pub enum MemorySizeError {
     InvalidHex(String),
     #[error("Invalid numeric value: {0}")]
     InvalidNumber(String),
-    #[error("Unknown memory size suffix: {0}")]
-    UnknownSuffix(char),
+    #[error("Unknown memory size unit: {0}")]
+    UnknownUnit(String),
     #[error("Overflow in memory size calculation")]
     Overflow,
 }
@@ -95,13 +95,19 @@ impl MemorySize {
     /// Supports the following formats:
     /// - Plain numbers: "1024", "2048"
     /// - Hexadecimal: "0x1000", "0X2000"
-    /// - With suffixes: "2K", "4M", "1G", "2T" (case-insensitive)
+    /// - With suffixes: "2K", "4M", "1G", "2T", "1P" (case-insensitive)
+    /// - Two- and three-letter spellings of the same units: "4MB", "1GiB",
+    ///   "2TB", "1PiB", and a bare "B" for bytes
     ///
-    /// Suffixes use binary (1024-based) multipliers:
-    /// - K/k: 1024 bytes
-    /// - M/m: 1024^2 bytes
-    /// - G/g: 1024^3 bytes
-    /// - T/t: 1024^4 bytes
+    /// Every suffix is a binary (1024-based) multiplier, including the "B" and
+    /// "iB" spellings. "1KB" is 1024 bytes, not 1000: the crate names sizes the
+    /// way QEMU and the kernel do, and silently switching to powers of ten for
+    /// one spelling would be worse than being consistently binary.
+    /// - K/KB/KiB: 1024 bytes
+    /// - M/MB/MiB: 1024^2 bytes
+    /// - G/GB/GiB: 1024^3 bytes
+    /// - T/TB/TiB: 1024^4 bytes
+    /// - P/PB/PiB: 1024^5 bytes
     pub fn parse(s: &str) -> Result<Self, MemorySizeError> {
         let s = s.trim();
 
@@ -125,22 +131,30 @@ impl MemorySize {
             return Ok(Self::from_bytes(bytes));
         }
 
-        // Handle numbers with suffixes
-        let Some(last_char) = s.chars().last() else {
-            return Err(MemorySizeError::Empty);
-        };
+        // Handle numbers with suffixes. Split at the first non-digit rather
+        // than trimming the trailing character: trim_end_matches removes every
+        // repetition, so "1GG" used to lose both and parse as 1 GiB.
+        let split = s
+            .find(|c: char| !c.is_ascii_digit())
+            .ok_or_else(|| MemorySizeError::InvalidNumber(s.to_string()))?;
+        let (num_part, unit) = s.split_at(split);
+        // No digits at all is a malformed number, not a malformed unit. The
+        // previous implementation classified "abc" by its last character and
+        // called it an unknown suffix, which pointed at the wrong half.
+        if num_part.is_empty() {
+            return Err(MemorySizeError::InvalidNumber(s.to_string()));
+        }
 
-        let multiplier = match last_char.to_ascii_lowercase() {
-            'k' => 1024u64,
-            'm' => 1024u64.saturating_mul(1024),
-            'g' => 1024u64.saturating_mul(1024).saturating_mul(1024),
-            't' => 1024u64
-                .saturating_mul(1024)
-                .saturating_mul(1024)
-                .saturating_mul(1024),
-            _ => return Err(MemorySizeError::UnknownSuffix(last_char)),
+        const KIB: u64 = 1024;
+        let multiplier = match unit.to_ascii_lowercase().as_str() {
+            "b" => 1,
+            "k" | "kb" | "kib" => KIB,
+            "m" | "mb" | "mib" => KIB.pow(2),
+            "g" | "gb" | "gib" => KIB.pow(3),
+            "t" | "tb" | "tib" => KIB.pow(4),
+            "p" | "pb" | "pib" => KIB.pow(5),
+            _ => return Err(MemorySizeError::UnknownUnit(unit.to_string())),
         };
-        let num_part = s.trim_end_matches(last_char);
         let num = num_part
             .parse::<u64>()
             .map_err(|_| MemorySizeError::InvalidNumber(num_part.to_string()))?;
@@ -155,6 +169,7 @@ impl MemorySize {
     /// Format the memory size in a human-readable way
     pub fn format_human(&self) -> String {
         const UNITS: &[(&str, u64)] = &[
+            ("P", 1024u64.pow(5)),
             ("T", 1024u64.pow(4)),
             ("G", 1024u64.pow(3)),
             ("M", 1024u64.pow(2)),
@@ -438,6 +453,43 @@ mod tests {
         assert_eq!(MemorySize::parse("1M").unwrap().bytes(), 1024 * 1024);
         assert_eq!(MemorySize::parse("2m").unwrap().bytes(), 2 * 1024 * 1024);
         assert_eq!(MemorySize::parse("1G").unwrap().bytes(), 1024 * 1024 * 1024);
+        // Petabytes, and the two- and three-letter spellings of every unit.
+        assert_eq!(MemorySize::parse("1P").unwrap().bytes(), 1024u64.pow(5));
+        assert_eq!(MemorySize::parse("1p").unwrap().bytes(), 1024u64.pow(5));
+        assert_eq!(MemorySize::parse("1PB").unwrap().bytes(), 1024u64.pow(5));
+        assert_eq!(MemorySize::parse("1PiB").unwrap().bytes(), 1024u64.pow(5));
+        assert_eq!(MemorySize::parse("1pib").unwrap().bytes(), 1024u64.pow(5));
+        assert_eq!(
+            MemorySize::parse("2TB").unwrap().bytes(),
+            2 * 1024u64.pow(4)
+        );
+        assert_eq!(
+            MemorySize::parse("2TiB").unwrap().bytes(),
+            2 * 1024u64.pow(4)
+        );
+        assert_eq!(
+            MemorySize::parse("4GB").unwrap().bytes(),
+            4 * 1024u64.pow(3)
+        );
+        assert_eq!(
+            MemorySize::parse("4MiB").unwrap().bytes(),
+            4 * 1024u64.pow(2)
+        );
+        assert_eq!(MemorySize::parse("8KB").unwrap().bytes(), 8 * 1024);
+        assert_eq!(MemorySize::parse("512B").unwrap().bytes(), 512);
+        // "KB" is binary here, matching every other spelling in this crate.
+        assert_eq!(MemorySize::parse("1KB").unwrap().bytes(), 1024);
+        // The production pci_hole64_size value, in every accepted spelling.
+        let one_pib = 1125899906842624u64;
+        for spelling in ["1P", "1PiB", "1024T", "0x4000000000000", "1125899906842624"] {
+            assert_eq!(
+                MemorySize::parse(spelling).unwrap().bytes(),
+                one_pib,
+                "{spelling}"
+            );
+        }
+        // A repeated suffix is rejected instead of silently losing a letter.
+        assert!(MemorySize::parse("1GG").is_err());
         assert_eq!(
             MemorySize::parse("2g").unwrap().bytes(),
             2 * 1024 * 1024 * 1024
@@ -455,7 +507,7 @@ mod tests {
         ));
         assert!(matches!(
             MemorySize::parse("abc"),
-            Err(MemorySizeError::UnknownSuffix('c'))
+            Err(MemorySizeError::InvalidNumber(_))
         ));
         assert!(matches!(
             MemorySize::parse("0xgg"),
