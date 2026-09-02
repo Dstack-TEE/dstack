@@ -166,9 +166,27 @@ check_interval_secs = 5
 
 [cvm.gpu]
 enabled = false
-# The product IDs of the GPUs to discover
-# H200: 10de:2335
-listing = ["10de:2335"]
+# The product IDs of the GPUs to discover. A card whose ID is missing here is
+# not offered for passthrough at all, so the list has to name every SKU a
+# deployment might hold. IDs are from pci.ids; the names are its labels.
+#
+# NVSwitches do not belong here. The "all" attach mode finds GPUs and switches
+# by PCI class rather than through this list, which only gates GPU discovery.
+listing = [
+    # Hopper
+    "10de:2330", # GH100 [H100 SXM5 80GB]
+    "10de:2331", # GH100 [H100 PCIe]
+    "10de:2337", # GH100 [H100 SXM5 64GB]
+    "10de:2338", # GH100 [H100 SXM5 96GB]
+    "10de:2339", # GH100 [H100 SXM5 94GB]
+    "10de:2321", # GH100 [H100L 94GB], sold as H100 NVL
+    "10de:2335", # GH100 [H200 SXM 141GB]
+    "10de:233b", # GH100 [H200 NVL]
+    # Blackwell
+    "10de:2901", # GB100 [B200]
+    "10de:2909", # GB100 [HGX B200 168GB]
+    "10de:3182", # GB110 [B300 SXM6]
+]
 # The PCI addresses of the cards to exclude
 exclude = []
 # The PCI addresses of the cards to include
