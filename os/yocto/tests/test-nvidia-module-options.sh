@@ -190,19 +190,40 @@ else
     echo 'skip modprobe or user namespaces unavailable'
 fi
 
-# The unit only orders itself ahead of the services that modprobe the driver, so
-# a new load site added elsewhere would silently race it.
+# Options written after the driver has loaded are ignored, so the generator has
+# to precede every load site. There are two kinds. udev coldplug is the early
+# one and the easiest to forget: nvidia.ko carries PCI aliases and systemd's
+# 80-drivers.rules loads modules by MODALIAS, so the driver comes up during
+# systemd-udev-trigger.service. The explicit modprobe calls in the NVIDIA units
+# are the late one. A load site missing from Before= races the generator and the
+# tenant silently gets the wrong options.
 echo
 echo 'module load sites'
 ordered=$(sed -n 's/^Before=//p' "$unit" | tr ' ' '\n' | sed '/^$/d' | sort)
-loaders=$(grep -rl 'modprobe nvidia' "$files" | xargs -r -n1 basename | sed 's/^nvidia-fabricmanager-nvswitch-condition\.conf$/nvidia-fabricmanager.service/' | sort -u)
+loaders=$({
+    echo systemd-udev-trigger.service
+    grep -rl 'modprobe nvidia' "$files" | xargs -r -n1 basename |
+        sed 's/^nvidia-fabricmanager-nvswitch-condition\.conf$/nvidia-fabricmanager.service/'
+} | sort -u)
 if [ "$ordered" = "$loaders" ]; then
-    echo 'ok   every unit that modprobes nvidia is ordered after the generator'
+    echo 'ok   every load site is ordered after the generator'
 else
-    printf 'FAIL Before= does not cover all modprobe sites\n       Before=: %s\n       loaders: %s\n' \
+    printf 'FAIL Before= does not cover all module load sites\n       Before=: %s\n       expected: %s\n' \
         "$(echo "$ordered" | tr '\n' ' ')" "$(echo "$loaders" | tr '\n' ' ')" >&2
     failures=$((failures + 1))
 fi
+
+# Ordering ahead of udev coldplug is only reachable from early boot. Dropping
+# either of these would leave Before=systemd-udev-trigger.service unsatisfiable
+# and put the generator back after the driver has already loaded.
+for required in 'DefaultDependencies=no' 'WantedBy=sysinit.target'; do
+    if grep -qxF "$required" "$unit"; then
+        echo "ok   unit keeps $required"
+    else
+        echo "FAIL unit is missing $required, so it cannot precede udev coldplug" >&2
+        failures=$((failures + 1))
+    fi
+done
 
 echo
 if [ "$failures" -eq 0 ]; then
