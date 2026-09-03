@@ -50,6 +50,11 @@ use crate::config::NvswitchConfig;
 /// Other sizes are still emitted, but their quota is undefined by NVIDIA.
 const DOCUMENTED_PARTITION_SIZES: [usize; 4] = [1, 2, 4, 8];
 
+/// Written into the table's `name` field to mark the file as ours. A file
+/// carrying any other name is replaced on the first reconcile, so taking
+/// ownership always runs the apply command once.
+const TABLE_NAME: &str = "dstack-vmm";
+
 /// One VM's claim on the fabric.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FabricClaim {
@@ -114,7 +119,9 @@ impl Nvswitch {
                 bail!("cvm.gpu.nvswitch.apply_command is required when nvswitch is enabled");
             }
             if config.module_ids.is_empty() {
-                bail!("cvm.gpu.nvswitch.module_ids is required when nvswitch is enabled");
+                bail!(
+                    "cvm.gpu.nvswitch.module_ids is required when nvswitch is enabled"
+                );
             }
             let mut seen = BTreeMap::new();
             for (slot, module_id) in &config.module_ids {
@@ -170,7 +177,7 @@ impl Nvswitch {
         }
         let table = PartitionTable {
             version: 0,
-            name: "dstack-vmm".to_string(),
+            name: TABLE_NAME.to_string(),
             time: humantime::format_rfc3339_seconds(SystemTime::now()).to_string(),
             partition_info,
         };
@@ -321,14 +328,26 @@ fn render_partitions(partitions: &[PlannedPartition]) -> Vec<PartitionInfo> {
         .collect()
 }
 
-/// The partitions currently on disk, or none when the file is missing or was
-/// not written by us.
+/// The partitions currently on disk, or none when the file is missing, does not
+/// parse, or was not written by us.
+///
+/// Returning none forces a rewrite, which is what taking over a file another
+/// tool wrote should do: matching partitions are not evidence that the fabric
+/// manager ever loaded them.
 fn current_partitions(path: &Path) -> Vec<PartitionInfo> {
     let Ok(body) = fs::read(path) else {
         return Vec::new();
     };
     match serde_json::from_slice::<PartitionTable>(&body) {
-        Ok(table) => table.partition_info,
+        Ok(table) if table.name == TABLE_NAME => table.partition_info,
+        Ok(table) => {
+            info!(
+                file = %path.display(),
+                name = table.name,
+                "taking over a foreign nvswitch partition table"
+            );
+            Vec::new()
+        }
         Err(err) => {
             warn!(
                 file = %path.display(),
@@ -499,6 +518,43 @@ mod tests {
             table["partitionInfo"][0]["gpuModuleIds"],
             serde_json::json!([1, 2])
         );
+    }
+
+    #[test]
+    fn takes_over_a_foreign_table_even_when_the_partitions_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("applied");
+        let partition_file = dir.path().join("customPartition.json");
+        let config = NvswitchConfig {
+            enabled: true,
+            partition_file: partition_file.clone(),
+            apply_command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                format!("echo x >> {}", marker.display()),
+            ],
+            apply_timeout_ms: 10_000,
+            module_ids: BTreeMap::from([("0000:1b:00.0".to_string(), 1)]),
+        };
+        let nvswitch = Nvswitch::new(&config).unwrap();
+        let partitions = plan(vec![claim("vm-a", &[1, 2], None)]).unwrap();
+        fs::write(
+            &partition_file,
+            serde_json::to_vec(&PartitionTable {
+                version: 0,
+                name: "some other tool".to_string(),
+                time: "now".to_string(),
+                partition_info: render_partitions(&partitions),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        nvswitch.apply(&partitions).unwrap();
+        assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 1);
+        // Now the file is ours, so an unchanged plan is a no-op.
+        nvswitch.apply(&partitions).unwrap();
+        assert_eq!(fs::read_to_string(&marker).unwrap().lines().count(), 1);
     }
 
     #[test]
