@@ -12,7 +12,7 @@ The key difference from self-hosting: users don't have to trust you. They can cr
 
 ## What Makes It Confidential
 
-Four things need to be true for the system to be actually confidential:
+Four protections keep data confidential. dstack also makes the application using those protections verifiable:
 
 **TLS terminates inside the VM.** Your HTTPS connection ends inside the Confidential VM, not at some load balancer outside. The operator never sees plaintext traffic.
 
@@ -22,7 +22,32 @@ Four things need to be true for the system to be actually confidential:
 
 **Disk is encrypted.** Anything written to storage uses keys derived from the TEE. The storage backend only sees ciphertext.
 
-When all four are in place, data stays encrypted from network ingress to egress.
+**The application is verifiable through [attestation](#how-attestation-works).** CPU TEE attestation covers the measured software and application configuration. Users can compare the reported configuration hash with the hash of the configuration they reviewed.
+
+Together, the four protections keep data encrypted from network ingress to egress. The attestation evidence lets users verify the application and environment providing those protections.
+
+## How Attestation Works
+
+Encryption keeps data private. Attestation lets users verify the application and the hardware environment that protects it.
+
+A confidential AI deployment combines two forms of evidence that answer different questions:
+
+- **CPU TEE and application:** CPU attestation verifies the Confidential VM and the measured software and configuration that determine what code runs.
+- **GPU environment:** GPU attestation verifies that each GPU is genuine and operating in confidential-computing mode. It does not identify the application. The GPU executes work submitted by the CPU environment.
+
+```mermaid
+graph LR
+    CPU[CPU attestation<br/>CVM and application] --> System[Verified CPU and GPU system]
+    GPU[GPU attestation<br/>protected GPU environment] --> System
+    System --> Keys[Provision application keys]
+    Keys --> App[Start workload]
+```
+
+Together, CPU attestation ties the application to the Confidential VM, while GPU attestation verifies the environment where accelerated computation runs. dstack provisions application keys and starts the workload only after both parts pass. If either part fails, the workload does not start.
+
+In a multi-GPU deployment, dstack verifies every GPU attached to the Confidential VM. All attached GPUs must pass before dstack trusts the CPU and GPUs as one system.
+
+After the workload starts, users can retrieve its attestation evidence and independently verify the hardware identity and application configuration. The [Verification](#verification) section shows the basic user flow. For implementation details, verifier requirements, and the threat model, see [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads).
 
 ## Private Inference
 
@@ -212,7 +237,7 @@ Full example: [dstack-examples/ai/agents](https://github.com/Dstack-TEE/dstack-e
 
 ## Verification
 
-Attestation proves the hardware is genuine and shows what code is running. But it doesn't automatically prove the code is safe—you need to audit it yourself.
+Boot-time attestation decides whether the workload can start. Remote verification lets a user independently check the running deployment. The user verifies the hardware evidence and compares the reported compose hash with the application configuration they reviewed.
 
 ```mermaid
 graph LR
@@ -240,7 +265,7 @@ assert attestation["compose_hash"] == expected_hash
 
 For visual verification, paste the quote into [proof.t16z.com](https://proof.t16z.com), Phala's TEE attestation explorer that parses TDX quotes and displays the verification status, measurements, and TCB info in a readable format.
 
-The compose hash only tells you *what* is running. You still need to verify that code does what you expect—no secret logging, no data exfiltration, proper access controls.
+Attestation proves the environment's identity. It does not prove that the application is well designed. You still need to audit the application for behavior such as logging, data exfiltration, and access control.
 
 ## Performance
 
