@@ -351,11 +351,40 @@ and the file is rewritten — and `apply_command` run — only when the partitio
 actually changed.
 
 `module_ids` maps each attachable GPU's PCI address to its fabric module id,
-which `nvidia-smi -q` reports as `Module ID` on the host. `apply_command` is
-what makes the fabric manager take the new table; it receives
-`DSTACK_NVSWITCH_PARTITION_FILE` and `DSTACK_NVSWITCH_PARTITION_IDS` in its
-environment, so a site script can restart the fabric manager and activate
-partitions the way that deployment needs.
+which `nvidia-smi -q` reports as `Module ID` on the host.
+
+#### The apply command
+
+`apply_command` owns the whole way from a rewritten file to a partition the
+guest can use, **activation included**. When it exits 0, dstack-vmm attaches the
+GPUs and boots the VM; it has no way to check whether the partition is really
+live, so an incomplete command fails silently at the point where the guest finds
+no NVLink.
+
+The command gets two variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `DSTACK_NVSWITCH_PARTITION_FILE` | Path of the file just written. |
+| `DSTACK_NVSWITCH_ACTIVE_PARTITION_IDS` | The ids that must be live when the command returns, and the only ones that may be. |
+
+The second is a goal, not a report. The table only ever holds VMs that are
+running or starting, so its ids are exactly the ids that belong active — the
+command's job is to converge the fabric to that set:
+
+```sh
+#!/bin/sh
+set -e
+systemctl restart nvidia-fabricmanager   # reload the table; does not activate
+for id in $DSTACK_NVSWITCH_ACTIVE_PARTITION_IDS; do
+    fmpm -a "$id"
+done
+```
+
+Restarting the fabric manager on its own only makes it re-read the file. It
+leaves every partition *defined but inactive*, which is why there is no default
+`apply_command`: a host that sets `managed = true` has to state how its table
+becomes effective, and dstack-vmm refuses to start otherwise.
 
 **Requirements:**
 - `SHARED_PARTITION_DEFINITION_FILE` in `fabricmanager.cfg` points at

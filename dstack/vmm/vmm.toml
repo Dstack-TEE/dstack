@@ -236,11 +236,19 @@ sbr_timeout_ms = 10000
 # not dstack-vmm's to enable, so this names the ownership, not the hardware.
 managed = false
 partition_file = "/usr/share/nvidia/nvswitch/customPartition.json"
-# Run after the file changed. The command decides how the fabric manager takes
-# the new table (restart, and any partition activation the deployment needs). It
-# gets DSTACK_NVSWITCH_PARTITION_FILE and DSTACK_NVSWITCH_PARTITION_IDS in its
-# environment.
-apply_command = ["systemctl", "restart", "nvidia-fabricmanager"]
+# Run after the file changed, to make the new table effective. Its contract is
+# the whole way from file to usable partition, activation included: when it
+# returns 0, dstack-vmm attaches the GPUs and boots the guest.
+#
+# It gets DSTACK_NVSWITCH_PARTITION_FILE and DSTACK_NVSWITCH_ACTIVE_PARTITION_IDS
+# in its environment. The second one is a goal, not a report: those ids, and only
+# those, must be live when the command returns. Restarting the fabric manager
+# only reloads the table -- on its own it leaves every partition defined but
+# inactive -- so a command that stops there is not enough.
+#
+# There is no default on purpose: a host that sets managed = true has to say how
+# its table becomes effective, and dstack-vmm refuses to start otherwise.
+apply_command = []
 apply_timeout_ms = 60000
 # PCI address of each attachable GPU mapped to the fabric module id reported by
 # `nvidia-smi -q` ("Module ID"). Required when managed.

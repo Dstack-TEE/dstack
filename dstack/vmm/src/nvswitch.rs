@@ -23,11 +23,13 @@
 //!   partitions actually changed. Restarting a VM that is already in the table
 //!   touches nothing.
 //!
-//! Activating a partition (`fmpm -a`) is deliberately left to the apply
-//! command: the fabric manager's activation semantics differ between driver
-//! releases and multitenancy modes, so the mapping from table to activation is
-//! the operator's to define. The command receives the plan through the
-//! environment (see [`Nvswitch::apply`]).
+//! The apply command owns everything between the file and a partition a guest
+//! can use, activation included: the fabric manager's activation semantics
+//! differ between driver releases and multitenancy modes, and none of that is
+//! verifiable from here. dstack-vmm states the goal declaratively — these
+//! partition ids, and only these, must be live — and the command converges to
+//! it (see [`Nvswitch::apply`]). There is deliberately no default: a host that
+//! sets `managed` must say how its table becomes effective.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -166,10 +168,16 @@ impl Nvswitch {
     /// The apply command is spawned with:
     ///
     /// * `DSTACK_NVSWITCH_PARTITION_FILE` — path of the file just written.
-    /// * `DSTACK_NVSWITCH_PARTITION_IDS` — space-separated ids in the table.
+    /// * `DSTACK_NVSWITCH_ACTIVE_PARTITION_IDS` — space-separated ids that must
+    ///   be live once the command returns, and the only ones that may be.
     ///
-    /// so a site script can restart the fabric manager and activate the
-    /// partitions without dstack-vmm encoding either step.
+    /// The second is a goal, not a log line: the table only ever holds the VMs
+    /// that are running or starting, so its ids are exactly the ids that belong
+    /// active. Reloading the fabric manager is one step towards that goal, not
+    /// the goal itself — a command that only restarts the fabric manager leaves
+    /// the partitions defined but inactive, and dstack-vmm cannot tell the
+    /// difference: a zero exit status is taken as the goal being met, and the
+    /// VM proceeds to attach its GPUs.
     pub(crate) fn apply(&self, partitions: &[PlannedPartition]) -> Result<()> {
         let partition_info = render_partitions(partitions);
         if partition_info == current_partitions(&self.config.partition_file) {
@@ -214,7 +222,7 @@ impl Nvswitch {
                 "DSTACK_NVSWITCH_PARTITION_FILE",
                 &self.config.partition_file,
             )
-            .env("DSTACK_NVSWITCH_PARTITION_IDS", &ids)
+            .env("DSTACK_NVSWITCH_ACTIVE_PARTITION_IDS", &ids)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
