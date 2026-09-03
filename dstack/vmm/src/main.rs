@@ -65,6 +65,8 @@ enum Command {
     CheckConfig,
     /// One-shot VM execution mode for debugging
     Run(RunArgs),
+    /// Sanitize GPUs with a VFIO PCI hot reset (debugging/ops)
+    SanitizeGpu(SanitizeGpuArgs),
     /// Run the privileged TAP and libvirt nwfilter broker.
     Netd(NetdArgs),
     /// Internal per-VM QEMU/swtpm launcher.
@@ -89,6 +91,16 @@ struct RunArgs {
     /// Dry run: only output QEMU command without executing
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(ClapArgs)]
+struct SanitizeGpuArgs {
+    /// PCI slots of the GPUs to reset, e.g. 0000:0f:00.0
+    #[arg(required = true)]
+    slots: Vec<String>,
+    /// Maximum time in milliseconds for the GPUs to become VFIO-ready again
+    #[arg(long, default_value_t = 10_000)]
+    timeout_ms: u64,
 }
 
 #[derive(ClapArgs)]
@@ -208,6 +220,14 @@ async fn main() -> Result<()> {
         return vm_launcher::run(Path::new(&launcher_args.spec)).await;
     }
 
+    // Needs no server configuration; only /dev/vfio access.
+    if let Some(Command::SanitizeGpu(sanitize_args)) = &args.command {
+        return gpu_reset::sanitize_slots(
+            &sanitize_args.slots,
+            Duration::from_millis(sanitize_args.timeout_ms),
+        );
+    }
+
     let figment = config::load_config_figment(args.config.as_deref());
     if let Some(Command::Netd(netd_args)) = &args.command {
         let mut netd_config: NetdConfig = figment
@@ -255,6 +275,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         Command::Netd(_) => unreachable!("netd mode handled before server startup"),
+        Command::SanitizeGpu(_) => unreachable!("sanitize-gpu handled before config loading"),
         Command::Run(run_args) => {
             // One-shot VM execution mode
             return one_shot::run_one_shot(
