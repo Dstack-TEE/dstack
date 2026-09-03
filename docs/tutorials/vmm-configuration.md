@@ -141,6 +141,9 @@ exclude = []
 include = []
 allow_attach_all = false
 
+[cvm.gpu.nvswitch]
+enabled = false
+
 [gateway]
 base_domain = "dstack.yourdomain.com"              # Your gateway domain
 port = 8082
@@ -319,6 +322,47 @@ not listed: the `all` attach mode finds GPUs and switches by PCI class instead.
 - IOMMU enabled in BIOS
 - VFIO driver configured
 - GPU not in use by host
+
+### NVSwitch Partitions
+
+On an HGX/DGX host, the NVIDIA fabric manager can only activate NVLink
+partitions that already exist in its partition definition file, and it reads
+that file once, at startup. Its built-in table hard-codes a fixed set of GPU
+groupings, so handing an arbitrary subset of the free GPUs to a new CVM is not
+expressible. Let dstack-vmm own the file instead:
+
+```toml
+[cvm.gpu.nvswitch]
+enabled = true
+partition_file = "/usr/share/nvidia/nvswitch/customPartition.json"
+apply_command = ["/usr/local/bin/dstack-apply-fabric-partitions"]
+apply_timeout_ms = 60000
+
+[cvm.gpu.nvswitch.module_ids]
+"0000:1b:00.0" = 1
+"0000:43:00.0" = 2
+# ... one entry per attachable GPU
+```
+
+Every VM start then rewrites the file with one partition per GPU-attached VM
+that is running or starting. A VM keeps the partition id it was assigned on its
+first start, so a rewrite never redefines the partition a running VM sits on,
+and the file is rewritten — and `apply_command` run — only when the partitions
+actually changed.
+
+`module_ids` maps each attachable GPU's PCI address to its fabric module id,
+which `nvidia-smi -q` reports as `Module ID` on the host. `apply_command` is
+what makes the fabric manager take the new table; it receives
+`DSTACK_NVSWITCH_PARTITION_FILE` and `DSTACK_NVSWITCH_PARTITION_IDS` in its
+environment, so a site script can restart the fabric manager and activate
+partitions the way that deployment needs.
+
+**Requirements:**
+- `SHARED_PARTITION_DEFINITION_FILE` in `fabricmanager.cfg` points at
+  `partition_file`
+- The NVSwitches stay on the host — a VM that also passes NVSwitch bridges
+  through is rejected while this is enabled
+- dstack-vmm may write `partition_file` and run `apply_command`
 
 ---
 
