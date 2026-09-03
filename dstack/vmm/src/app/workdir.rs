@@ -15,6 +15,7 @@ use dstack_types::{
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
 use serde_human_bytes as hex_bytes;
+use tracing::warn;
 
 use crate::{app::Manifest, config::Networking};
 
@@ -28,9 +29,14 @@ pub struct InstanceInfo {
     pub app_id: Vec<u8>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Default, Deserialize, Serialize)]
 struct State {
     started: bool,
+    /// Partition id the VM owns in the fabric manager NVLink partition table.
+    /// Absent unless `[cvm.gpu.nvswitch]` is enabled; kept across rewrites so a
+    /// running VM's partition is never redefined under it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    nvswitch_partition_id: Option<u32>,
 }
 
 pub struct VmWorkDir {
@@ -83,21 +89,43 @@ impl VmWorkDir {
         fs::write(manifest_path, serde_json::to_string(&value)?).context("failed to write manifest")
     }
 
-    pub fn started(&self) -> Result<bool> {
+    fn state(&self) -> Result<State> {
         let state_path = self.state_path();
         if !state_path.exists() {
-            return Ok(false);
+            return Ok(State::default());
         }
-        let state: State =
-            serde_json::from_str(&fs::read_to_string(state_path).context("failed to read state")?)
-                .context("failed to parse state")?;
-        Ok(state.started)
+        serde_json::from_str(&fs::read_to_string(state_path).context("failed to read state")?)
+            .context("failed to parse state")
+    }
+
+    fn put_state(&self, state: &State) -> Result<()> {
+        fs::write(self.state_path(), serde_json::to_string(state)?).context("failed to write state")
+    }
+
+    pub fn started(&self) -> Result<bool> {
+        Ok(self.state()?.started)
     }
 
     pub fn set_started(&self, started: bool) -> Result<()> {
-        let state_path = self.state_path();
-        fs::write(state_path, serde_json::to_string(&State { started })?)
-            .context("failed to write state")
+        let mut state = self.state().unwrap_or_else(|err| {
+            warn!("failed to read vm state, resetting it: {err:#}");
+            State::default()
+        });
+        state.started = started;
+        self.put_state(&state)
+    }
+
+    pub fn nvswitch_partition_id(&self) -> Result<Option<u32>> {
+        Ok(self.state()?.nvswitch_partition_id)
+    }
+
+    pub fn set_nvswitch_partition_id(&self, partition_id: u32) -> Result<()> {
+        let mut state = self.state()?;
+        if state.nvswitch_partition_id == Some(partition_id) {
+            return Ok(());
+        }
+        state.nvswitch_partition_id = Some(partition_id);
+        self.put_state(&state)
     }
 
     pub fn shared_dir(&self) -> PathBuf {

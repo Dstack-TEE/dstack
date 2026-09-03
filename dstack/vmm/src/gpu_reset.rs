@@ -257,6 +257,7 @@ mod tests {
             allow_attach_all: true,
             sanitize_on_attach: true,
             sbr_timeout_ms: 10_000,
+            nvswitch: Default::default(),
         };
         let devices = GpuConfig {
             attach_mode: AttachMode::Listed,

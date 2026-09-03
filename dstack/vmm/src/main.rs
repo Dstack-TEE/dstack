@@ -31,6 +31,7 @@ mod logrotate;
 mod main_routes;
 mod main_service;
 mod netd;
+mod nvswitch;
 mod one_shot;
 mod openapi;
 mod vm_launcher;
@@ -335,7 +336,7 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to connect to supervisor")?
     };
-    let state = app::App::new(config, supervisor);
+    let state = app::App::new(config, supervisor)?;
     state.reload_vms().await.context("Failed to reload VMs")?;
     tokio::spawn(auto_restart_task(state.clone()));
     tokio::spawn(log_rotation_task(state.clone()));

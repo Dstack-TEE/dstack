@@ -219,6 +219,32 @@ sanitize_on_attach = true
 # Maximum time for all reset GPUs to become continuously VFIO-ready.
 sbr_timeout_ms = 10000
 
+# Ownership of the NVIDIA fabric manager's shared NVSwitch partition definition
+# file. The fabric manager can only activate NVLink partitions that are already
+# in that file and it reads the file once, at startup, so the built-in table
+# limits a host to a fixed set of GPU groupings. When enabled, dstack-vmm
+# rewrites the file on every VM start with one partition per GPU-attached VM
+# that is running or starting, keeping the partition id of VMs that already run,
+# and only reapplies it when the partitions actually changed.
+#
+# Host requirements: point SHARED_PARTITION_DEFINITION_FILE in fabricmanager.cfg
+# at `partition_file`, keep the NVSwitches on the host (a VM that also passes
+# NVSwitch bridges through is rejected in this mode), and make sure dstack-vmm
+# may write the file and run `apply_command`.
+[cvm.gpu.nvswitch]
+enabled = false
+partition_file = "/usr/share/nvidia/nvswitch/customPartition.json"
+# Run after the file changed. The command decides how the fabric manager takes
+# the new table (restart, and any partition activation the deployment needs). It
+# gets DSTACK_NVSWITCH_PARTITION_FILE and DSTACK_NVSWITCH_PARTITION_IDS in its
+# environment.
+apply_command = ["systemctl", "restart", "nvidia-fabricmanager"]
+apply_timeout_ms = 60000
+# PCI address of each attachable GPU mapped to the fabric module id reported by
+# `nvidia-smi -q` ("Module ID"). Required when enabled.
+# [cvm.gpu.nvswitch.module_ids]
+# "0000:1b:00.0" = 1
+
 [gateway]
 base_domain = "localhost"
 port = 8082

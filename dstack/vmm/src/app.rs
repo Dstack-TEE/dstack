@@ -9,6 +9,7 @@ use crate::{
         self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest,
         Request as NetdRequest,
     },
+    nvswitch::{self, FabricClaim, Nvswitch},
 };
 
 use anyhow::{bail, Context, Result};
@@ -297,6 +298,7 @@ pub(crate) enum PullStatus {
 pub struct App {
     pub config: Arc<Config>,
     pub supervisor: SupervisorClient,
+    nvswitch: Arc<Nvswitch>,
     state: Arc<Mutex<AppState>>,
     /// Pull status for registry images: tag → status.
     pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
@@ -318,19 +320,22 @@ impl App {
         Ok(VmWorkDir::new(self.config.run_path.join(id)))
     }
 
-    pub fn new(config: Config, supervisor: SupervisorClient) -> Self {
+    pub fn new(config: Config, supervisor: SupervisorClient) -> Result<Self> {
         let cid_start = config.cvm.cid_start;
         let cid_end = cid_start.saturating_add(config.cvm.cid_pool_size);
         let cid_pool = IdPool::new(cid_start, cid_end);
-        Self {
+        let nvswitch = Nvswitch::new(&config.cvm.gpu.nvswitch)
+            .context("invalid nvswitch partition configuration")?;
+        Ok(Self {
             supervisor: supervisor.clone(),
+            nvswitch: Arc::new(nvswitch),
             state: Arc::new(Mutex::new(AppState {
                 cid_pool,
                 vms: HashMap::new(),
             })),
             config: Arc::new(config),
             pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        }
+        })
     }
 
     pub async fn load_vm(
@@ -456,6 +461,7 @@ impl App {
 
             let mut runtime_networks = resolved_networks(&vm_config.manifest, &self.config.cvm);
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
+            self.reconcile_nvswitch_partitions().await?;
             let gpu_host_config = self.config.cvm.gpu.clone();
             let devices_to_sanitize = devices.clone();
             tokio::task::spawn_blocking(move || {
@@ -1341,6 +1347,92 @@ impl App {
             return Ok(GpuConfig::default());
         }
         Ok(manifest.gpus.clone().unwrap_or_default())
+    }
+
+    /// Rebuild the fabric manager NVLink partition table for the VMs that are
+    /// running or starting, and hand it to the fabric manager.
+    ///
+    /// The whole cycle runs under the fabric lock: a concurrent VM start that
+    /// snapshotted the VM list before this one persisted its partition id would
+    /// otherwise rewrite the table without that VM's partition.
+    async fn reconcile_nvswitch_partitions(&self) -> Result<()> {
+        if !self.config.cvm.gpu.enabled || !self.nvswitch.enabled() {
+            return Ok(());
+        }
+        let _guard = self.nvswitch.lock().await;
+        let claims = self.fabric_claims()?;
+        let partitions = nvswitch::plan(claims)?;
+        for partition in &partitions {
+            self.work_dir(&partition.vm_id)?
+                .set_nvswitch_partition_id(partition.partition_id)
+                .context("failed to persist the nvswitch partition id")?;
+        }
+        let nvswitch = self.nvswitch.clone();
+        tokio::task::spawn_blocking(move || nvswitch.apply(&partitions))
+            .await
+            .context("nvswitch partition task failed")?
+            .context("failed to apply the nvswitch partition table")
+    }
+
+    /// One fabric claim per VM that is running or starting.
+    ///
+    /// `started` is written before the launch begins and cleared on stop, so it
+    /// covers a VM whose QEMU process is not up yet as well as one that the
+    /// auto-restart loop is about to bring back.
+    fn fabric_claims(&self) -> Result<Vec<FabricClaim>> {
+        let vms = self
+            .lock()
+            .iter_vms()
+            .map(|vm| {
+                (
+                    vm.config.manifest.id.clone(),
+                    vm.config.manifest.gpus.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut claims = Vec::new();
+        for (vm_id, gpus) in vms {
+            let Some(gpus) = gpus else { continue };
+            let work_dir = self.work_dir(&vm_id)?;
+            match work_dir.started() {
+                Ok(false) => continue,
+                Ok(true) => {}
+                Err(err) => {
+                    // A VM whose state is unreadable is left out rather than
+                    // failing every later start, but it must not pass silently:
+                    // if it is running, its partition is about to disappear.
+                    warn!(
+                        vm_id,
+                        "skipping nvswitch partition, unreadable state: {err:?}"
+                    );
+                    continue;
+                }
+            }
+            if !gpus.bridges.is_empty() {
+                bail!(
+                    "vm {vm_id} passes NVSwitch bridges through, which the host fabric manager \
+                     owns while cvm.gpu.nvswitch is enabled"
+                );
+            }
+            let module_ids = if gpus.attach_mode.is_all() {
+                self.nvswitch.all_module_ids()
+            } else {
+                gpus.gpus
+                    .iter()
+                    .map(|gpu| self.nvswitch.module_id(&gpu.slot))
+                    .collect::<Result<_>>()
+                    .with_context(|| format!("failed to map the gpus of vm {vm_id}"))?
+            };
+            let partition_id = work_dir
+                .nvswitch_partition_id()
+                .context("failed to read the nvswitch partition id")?;
+            claims.push(FabricClaim {
+                vm_id,
+                module_ids,
+                partition_id,
+            });
+        }
+        Ok(claims)
     }
 
     pub(crate) async fn list_gpus(&self) -> Result<Vec<GpuInfo>> {

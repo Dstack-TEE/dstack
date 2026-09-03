@@ -466,6 +466,32 @@ pub struct GpuConfig {
     pub sanitize_on_attach: bool,
     /// Shared deadline for all GPUs to become VFIO-ready after SBR.
     pub sbr_timeout_ms: u64,
+    /// Ownership of the fabric manager NVLink partition definition file.
+    #[serde(default)]
+    pub nvswitch: NvswitchConfig,
+}
+
+/// Lets dstack-vmm own the fabric manager's shared NVSwitch partition
+/// definition file so that any free subset of GPUs can form a partition.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NvswitchConfig {
+    /// Whether dstack-vmm rewrites the partition definition file on VM start.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path of the file named by `SHARED_PARTITION_DEFINITION_FILE` in
+    /// `fabricmanager.cfg`.
+    #[serde(default)]
+    pub partition_file: PathBuf,
+    /// Command that makes the fabric manager pick up a rewritten file.
+    #[serde(default)]
+    pub apply_command: Vec<String>,
+    /// Deadline for the apply command.
+    #[serde(default)]
+    pub apply_timeout_ms: u64,
+    /// PCI address of every attachable GPU mapped to its fabric module id, as
+    /// reported by `nvidia-smi -q` ("Module ID") on the host.
+    #[serde(default)]
+    pub module_ids: BTreeMap<String, u32>,
 }
 
 impl GpuConfig {
