@@ -32,20 +32,19 @@ Encryption keeps data private. Attestation lets users verify the application and
 
 A confidential AI deployment combines two forms of evidence that answer different questions:
 
-- **CPU TEE and application:** CPU attestation verifies the Confidential VM and the measured software and configuration that determine what code runs.
-- **GPU environment:** GPU attestation verifies that each GPU is genuine and operating in confidential-computing mode. It does not identify the application. The GPU executes work submitted by the CPU environment.
+- **CPU TEE and application:** CPU attestation verifies the Confidential VM and the measured software and configuration that determine what code runs. This includes the NVIDIA driver that controls GPU execution.
+- **GPU environment:** GPU attestation verifies that the attached GPUs are genuine and operating in confidential-computing mode. It describes the GPU environment, not the application or individual computations.
 
 ```mermaid
 graph LR
-    CPU[CPU attestation<br/>CVM and application] --> System[Verified CPU and GPU system]
-    GPU[GPU attestation<br/>protected GPU environment] --> System
-    System --> Keys[Provision application keys]
-    Keys --> App[Start workload]
+    CPUProof[CPU TEE attestation] --> CPU["CVM, application, and NVIDIA driver"]
+    GPUProof["GPU attestation<br/>once at boot"] --> GPU[Protected GPU environment]
+    CPU -->|submits computation| GPU
 ```
 
-Together, CPU attestation ties the application to the Confidential VM, while GPU attestation verifies the environment where accelerated computation runs. dstack provisions application keys and starts the workload only after both parts pass. If either part fails, the workload does not start.
+The verified CPU environment determines what runs and submits computation to the attested GPU environment. Together, the two forms of evidence let users verify the CPU and GPUs as one system.
 
-In a multi-GPU deployment, dstack verifies every GPU attached to the Confidential VM. All attached GPUs must pass before dstack trusts the CPU and GPUs as one system.
+dstack performs GPU attestation once during boot. In a multi-GPU deployment, that check covers every GPU attached to the Confidential VM, and all attached GPUs must pass. dstack then provisions application keys and starts the workload. If either the CPU or GPU verification fails, the workload does not start.
 
 After the workload starts, users can retrieve its attestation evidence and independently verify the hardware identity and application configuration. The [Verification](#verification) section shows the basic user flow. For implementation details, verifier requirements, and the threat model, see [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads).
 
