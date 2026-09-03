@@ -10,7 +10,7 @@
 //! host that hands out arbitrary subsets of its free GPUs cannot express the
 //! group a new CVM needs.
 //!
-//! When `[cvm.gpu.nvswitch] enabled` is set, dstack-vmm owns the file instead:
+//! When `[cvm.gpu.nvswitch] managed` is set, dstack-vmm owns the file instead:
 //! every VM start recomputes one partition per GPU-attached VM that is running
 //! or starting, and then runs the operator's apply command so the fabric
 //! manager picks the file up. Two properties keep that from disturbing tenants
@@ -111,16 +111,16 @@ impl Nvswitch {
     /// Rejects an incomplete `[cvm.gpu.nvswitch]` section at startup rather
     /// than at the first GPU deployment.
     pub(crate) fn new(config: &NvswitchConfig) -> Result<Self> {
-        if config.enabled {
+        if config.managed {
             if config.partition_file.as_os_str().is_empty() {
-                bail!("cvm.gpu.nvswitch.partition_file is required when nvswitch is enabled");
+                bail!("cvm.gpu.nvswitch.partition_file is required when cvm.gpu.nvswitch.managed is set");
             }
             if config.apply_command.is_empty() {
-                bail!("cvm.gpu.nvswitch.apply_command is required when nvswitch is enabled");
+                bail!("cvm.gpu.nvswitch.apply_command is required when cvm.gpu.nvswitch.managed is set");
             }
             if config.module_ids.is_empty() {
                 bail!(
-                    "cvm.gpu.nvswitch.module_ids is required when nvswitch is enabled"
+                    "cvm.gpu.nvswitch.module_ids is required when cvm.gpu.nvswitch.managed is set"
                 );
             }
             let mut seen = BTreeMap::new();
@@ -136,8 +136,8 @@ impl Nvswitch {
         })
     }
 
-    pub(crate) fn enabled(&self) -> bool {
-        self.config.enabled
+    pub(crate) fn managed(&self) -> bool {
+        self.config.managed
     }
 
     /// Hold the fabric lock for a whole reconcile cycle.
@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn rejects_an_incomplete_config() {
         let config = NvswitchConfig {
-            enabled: true,
+            managed: true,
             ..Default::default()
         };
         assert!(Nvswitch::new(&config).is_err());
@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn rejects_a_module_id_shared_by_two_gpus() {
         let config = NvswitchConfig {
-            enabled: true,
+            managed: true,
             partition_file: "/tmp/customPartition.json".into(),
             apply_command: vec!["true".to_string()],
             apply_timeout_ms: 1000,
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn looks_up_module_ids_by_short_or_full_pci_address() {
         let config = NvswitchConfig {
-            enabled: true,
+            managed: true,
             partition_file: "/tmp/customPartition.json".into(),
             apply_command: vec!["true".to_string()],
             apply_timeout_ms: 1000,
@@ -486,7 +486,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("applied");
         let config = NvswitchConfig {
-            enabled: true,
+            managed: true,
             partition_file: dir.path().join("customPartition.json"),
             apply_command: vec![
                 "sh".to_string(),
@@ -526,7 +526,7 @@ mod tests {
         let marker = dir.path().join("applied");
         let partition_file = dir.path().join("customPartition.json");
         let config = NvswitchConfig {
-            enabled: true,
+            managed: true,
             partition_file: partition_file.clone(),
             apply_command: vec![
                 "sh".to_string(),
@@ -561,7 +561,7 @@ mod tests {
     fn fails_the_start_when_the_apply_command_fails() {
         let dir = tempfile::tempdir().unwrap();
         let config = NvswitchConfig {
-            enabled: true,
+            managed: true,
             partition_file: dir.path().join("customPartition.json"),
             apply_command: vec!["false".to_string()],
             apply_timeout_ms: 10_000,

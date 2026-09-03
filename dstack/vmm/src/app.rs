@@ -1356,7 +1356,7 @@ impl App {
     /// snapshotted the VM list before this one persisted its partition id would
     /// otherwise rewrite the table without that VM's partition.
     async fn reconcile_nvswitch_partitions(&self) -> Result<()> {
-        if !self.config.cvm.gpu.enabled || !self.nvswitch.enabled() {
+        if !self.config.cvm.gpu.enabled || !self.nvswitch.managed() {
             return Ok(());
         }
         let _guard = self.nvswitch.lock().await;
@@ -1411,7 +1411,7 @@ impl App {
             if !gpus.bridges.is_empty() {
                 bail!(
                     "vm {vm_id} passes NVSwitch bridges through, which the host fabric manager \
-                     owns while cvm.gpu.nvswitch is enabled"
+                     owns while cvm.gpu.nvswitch.managed is set"
                 );
             }
             let module_ids = if gpus.attach_mode.is_all() {

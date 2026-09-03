@@ -142,7 +142,7 @@ include = []
 allow_attach_all = false
 
 [cvm.gpu.nvswitch]
-enabled = false
+managed = false
 
 [gateway]
 base_domain = "dstack.yourdomain.com"              # Your gateway domain
@@ -333,7 +333,7 @@ expressible. Let dstack-vmm own the file instead:
 
 ```toml
 [cvm.gpu.nvswitch]
-enabled = true
+managed = true
 partition_file = "/usr/share/nvidia/nvswitch/customPartition.json"
 apply_command = ["/usr/local/bin/dstack-apply-fabric-partitions"]
 apply_timeout_ms = 60000
@@ -361,7 +361,7 @@ partitions the way that deployment needs.
 - `SHARED_PARTITION_DEFINITION_FILE` in `fabricmanager.cfg` points at
   `partition_file`
 - The NVSwitches stay on the host — a VM that also passes NVSwitch bridges
-  through is rejected while this is enabled
+  through is rejected while this is managed
 - dstack-vmm may write `partition_file` and run `apply_command`
 
 ---

@@ -475,9 +475,11 @@ pub struct GpuConfig {
 /// definition file so that any free subset of GPUs can form a partition.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct NvswitchConfig {
-    /// Whether dstack-vmm rewrites the partition definition file on VM start.
+    /// Whether dstack-vmm owns the partition definition file and rewrites it
+    /// on VM start. The NVSwitches themselves are not dstack-vmm's to enable,
+    /// so this names the ownership rather than the hardware.
     #[serde(default)]
-    pub enabled: bool,
+    pub managed: bool,
     /// Path of the file named by `SHARED_PARTITION_DEFINITION_FILE` in
     /// `fabricmanager.cfg`.
     #[serde(default)]
