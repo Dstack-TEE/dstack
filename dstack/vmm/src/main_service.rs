@@ -199,22 +199,8 @@ fn resolved_nic_modes(
 /// warning either.
 fn validate_port_mapping_nics(mappings: &[PortMapping], modes: &[NetworkingMode]) -> Result<()> {
     let nic_count = modes.len();
-    let has_ingress = modes.iter().any(|mode| mode_carries_ingress(*mode));
     for mapping in mappings {
         let Some(index) = mapping.nic_index else {
-            // Unpinned, so it goes wherever the default resolves -- unless
-            // there is nowhere for it to resolve to. That is a property of the
-            // VM's own topology, which is why it is decided here and not by
-            // asking the host anything.
-            if !has_ingress {
-                bail!(
-                    "port mapping {} {}:{} has no NIC to enter through: this VM has no user-mode \
-                     or bridge interface",
-                    mapping.protocol.as_str(),
-                    mapping.address,
-                    mapping.from
-                );
-            }
             continue;
         };
         let Some(mode) = modes.get(index) else {
@@ -1490,7 +1476,10 @@ mod tests {
         ];
         let modes = resolved_nic_modes(&bridge_then_macvtap, &cvm, 2);
         assert_eq!(modes, vec![NetworkingMode::Bridge, NetworkingMode::Macvtap]);
-        validate_port_mapping_nics(&[pinned(Some(0))], &modes).unwrap();
+
+        // A bridge TAP is netd's, and netd does not forward host ports.
+        let error = validate_port_mapping_nics(&[pinned(Some(0))], &modes).unwrap_err();
+        assert!(error.to_string().contains("bridge"), "{error}");
 
         let error = validate_port_mapping_nics(&[pinned(Some(1))], &modes).unwrap_err();
         assert!(error.to_string().contains("macvtap"), "{error}");

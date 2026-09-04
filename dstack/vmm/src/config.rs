@@ -907,10 +907,6 @@ fn validate_networking(networking: &Networking) -> Result<()> {
         "cvm.networking.inherit_mode is per-deployment state and cannot be set on the node default"
     );
     anyhow::ensure!(
-        networking.netd_interface.is_none(),
-        "cvm.networking.netd_interface is runtime state and cannot be set in configuration"
-    );
-    anyhow::ensure!(
         networking.device.is_empty(),
         "cvm.networking.device is runtime state and cannot be set in configuration"
     );
@@ -1075,41 +1071,7 @@ pub struct Networking {
     // ── Custom fields ──────────────────────────────────────────────
     #[serde(default)]
     pub netdev: String,
-
     // ── Runtime markers ────────────────────────────────────────────
-    /// What netd built for this NIC, recorded when it was built.
-    ///
-    /// Runtime state, like `device`: resolution always clears it. Teardown
-    /// reads this rather than re-deriving it from node configuration, because
-    /// an operator may change `network_filter.mode` or `max_net_queues` while
-    /// the VM runs, and what has to be removed is what was created.
-    #[serde(default, skip_serializing_if = "NetdInterface::is_none")]
-    pub netd_interface: NetdInterface,
-}
-
-/// The host interface netd created for a NIC, if any.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NetdInterface {
-    /// netd was not involved: user mode, custom mode, or a bridge NIC that
-    /// QEMU's own bridge helper attaches.
-    #[default]
-    None,
-    /// netd created the interface and bound no libvirt nwfilter to it.
-    Unfiltered,
-    /// netd created the interface and bound a libvirt nwfilter to it, which
-    /// removal has to delete before the interface goes away.
-    Filtered,
-}
-
-impl NetdInterface {
-    pub fn is_none(&self) -> bool {
-        matches!(self, NetdInterface::None)
-    }
-
-    pub fn is_filtered(&self) -> bool {
-        matches!(self, NetdInterface::Filtered)
-    }
 }
 
 impl Networking {
@@ -1462,25 +1424,21 @@ mod tests {
             .expect("default VMM config should parse")
     }
 
-    /// The two ownership markers are additive on disk: manifests and runtime
-    /// network snapshots written before they existed still load, and an entry
-    /// that carries neither serializes exactly as it used to.
+    /// The ownership marker is additive on disk: manifests and runtime network
+    /// snapshots written before it existed still load, and an entry that does
+    /// not carry it serializes exactly as it used to.
     #[test]
     fn ownership_markers_are_omitted_when_unset_and_default_when_absent() {
         let mut networking: Networking =
             serde_json::from_str(r#"{"mode":"bridge","bridge":"br0"}"#).unwrap();
         assert!(!networking.nic.inherit_mode);
-        assert_eq!(networking.netd_interface, NetdInterface::None);
 
         let json = serde_json::to_string(&networking).unwrap();
         assert!(!json.contains("inherit_mode"), "{json}");
-        assert!(!json.contains("netd_interface"), "{json}");
 
         networking.nic.inherit_mode = true;
-        networking.netd_interface = NetdInterface::Filtered;
         let json = serde_json::to_string(&networking).unwrap();
         assert!(json.contains(r#""inherit_mode":true"#), "{json}");
-        assert!(json.contains(r#""netd_interface":"filtered""#), "{json}");
         assert_eq!(
             serde_json::from_str::<Networking>(&json).unwrap(),
             networking
@@ -1678,7 +1636,6 @@ mod networking_shape_tests {
             "vhost": false,
             "queues": 4,
             "inherit_mode": true,
-            "netd_interface": "filtered",
         });
 
         // A resolved value keeps every field, at the same names as before.

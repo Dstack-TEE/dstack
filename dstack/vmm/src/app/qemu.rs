@@ -683,10 +683,10 @@ impl QemuCommandBuilder<'_> {
                     );
                     // netd owns the TAP. It is the one component here with
                     // CAP_NET_ADMIN, so it is the only one that can bind an
-                    // nwfilter, create a persistent IFF_MULTI_QUEUE device, or
-                    // arbitrate a host port between VMM instances -- and having
-                    // it own every bridge TAP is what keeps a VM's networking
-                    // from depending on which of those a node happens to use.
+                    // nwfilter or create a persistent IFF_MULTI_QUEUE device --
+                    // and having it own every bridge TAP is what keeps a VM's
+                    // networking from depending on which of those a node
+                    // happens to use.
                     let tap = tap_name(&InterfaceIdentity {
                         instance_id: self.cfg.instance_id.clone(),
                         vm_id: self.vm.manifest.id.clone(),

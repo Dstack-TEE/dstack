@@ -3,10 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    config::{
-        Config, NetdInterface, Networking, NetworkingMode, NicNetworking, ProcessAnnotation,
-        Protocol,
-    },
+    config::{Config, Networking, NetworkingMode, NicNetworking, ProcessAnnotation, Protocol},
     logrotate,
     netd::{
         self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest,
@@ -45,9 +42,9 @@ use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub(crate) use network::{
-    filters_bridge_traffic, ingress_for, mode_carries_ingress, needs_netd_interface, netd_teardown,
-    resolve_networking, resolved_networks, settle_vhost, stranded_ingress,
-    validate_resolved_network, validate_resolved_networks,
+    filters_bridge_traffic, mode_carries_ingress, needs_netd_interface, resolve_networking,
+    resolved_networks, settle_vhost, stranded_ingress, validate_resolved_network,
+    validate_resolved_networks,
 };
 pub use qemu::VmConfig;
 // Exported so the RPC layer can assert that everything it reports is
@@ -661,12 +658,6 @@ impl App {
         if !networks.iter().any(needs_netd_interface) {
             return Ok(());
         }
-        // Resolved before the loop borrows `networks` mutably, and once rather
-        // than per NIC, so both the request and the warning below read the same
-        // answer.
-        let ingress: Vec<Vec<netd::IngressRequest>> = (0..networks.len())
-            .map(|nic_index| ingress_for(&vm.manifest.port_map, networks, nic_index))
-            .collect();
         let qemu_uid = Uid::effective().as_raw();
         // Only ever read back out of a log line: netd is told where the VM
         // lives so an operator holding an opaque TAP name can reach the VM
@@ -709,11 +700,6 @@ impl App {
                     filtered,
                     queues,
                     workdir: workdir.clone(),
-                    // Only the mappings that resolve to this NIC. One mapping
-                    // lands on exactly one, and a user-mode NIC's are emitted
-                    // as QEMU `hostfwd=` instead, so no host port is claimed
-                    // twice.
-                    ingress: ingress[nic_index].clone(),
                 }),
                 NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
                     identity: identity.clone(),
@@ -738,7 +724,6 @@ impl App {
                         &self.config.netd.socket,
                         &NetdRequest::Remove {
                             identity: identity.clone(),
-                            filtered,
                         },
                     )
                     .await
@@ -768,15 +753,7 @@ impl App {
                     };
                 }
             };
-            prepared.push((identity.clone(), filtered));
-            // netd built this one. Record it now, before anything else can
-            // fail, so teardown never has to re-derive it from a node
-            // configuration the operator may since have changed.
-            network.netd_interface = if filtered {
-                NetdInterface::Filtered
-            } else {
-                NetdInterface::Unfiltered
-            };
+            prepared.push(identity.clone());
             // Everything below runs after netd already built a host interface,
             // so a failure has to unwind the same way a failed Prepare does.
             let accepted = (|| {
@@ -851,13 +828,6 @@ impl App {
             network.nic.vhost = Some(false);
             network.nic.queues = Some(1);
         }
-        for network in &mut networks {
-            network.netd_interface = match netd_teardown(network, &self.config.cvm) {
-                Some(true) => NetdInterface::Filtered,
-                Some(false) => NetdInterface::Unfiltered,
-                None => NetdInterface::None,
-            };
-        }
         networks
     }
 
@@ -870,13 +840,10 @@ impl App {
     }
 
     /// Removes interfaces netd already built for a launch that then failed.
-    async fn roll_back_prepared_networks(&self, prepared: Vec<(InterfaceIdentity, bool)>) {
-        for (identity, filtered) in prepared.into_iter().rev() {
-            if let Err(cleanup_error) = netd::request(
-                &self.config.netd.socket,
-                &NetdRequest::Remove { identity, filtered },
-            )
-            .await
+    async fn roll_back_prepared_networks(&self, prepared: Vec<InterfaceIdentity>) {
+        for identity in prepared.into_iter().rev() {
+            if let Err(cleanup_error) =
+                netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity }).await
             {
                 warn!(%cleanup_error, "failed to roll back prepared network interface");
             }

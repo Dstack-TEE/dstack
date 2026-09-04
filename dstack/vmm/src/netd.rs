@@ -105,50 +105,6 @@ pub struct PrepareBridgeRequest {
     /// it without going through the VMM.
     #[serde(default)]
     pub workdir: String,
-    /// Host ports this VM wants reachable at its guest.
-    ///
-    /// Empty asks for nothing, which is also what a caller predating the field
-    /// sends. Whether a netd forwards them is its own business; this states the
-    /// requirement rather than assuming it is met, and the response says what
-    /// was actually done.
-    ///
-    /// Owned by the interface. Whatever a netd establishes to satisfy this is
-    /// released when the interface is -- by `remove`, by `remove_all`, or by a
-    /// collection -- and there is deliberately no operation that releases it
-    /// separately. A host port outliving the interface it was forwarding to is
-    /// a leak nothing would ever collect: the interface is the only thing that
-    /// carries an ownership record, so a reservation that survived it could
-    /// never be attributed to a VM again. A prepare for an identity that
-    /// already has an interface replaces both together.
-    #[serde(default)]
-    pub ingress: Vec<IngressRequest>,
-}
-
-/// One host port a VM wants reachable at its guest.
-///
-/// Every field is named by the caller, which is what `bridge`, `mac` and
-/// `queues` already get and the opposite of `filtered`. The difference is
-/// whether netd can check what it is handed: an nwfilter name cannot be checked
-/// for whether it filters anything, while a host port is a closed space a node
-/// policy can be stated over. Naming is not deciding -- which ports may be
-/// handed out stays netd's own configuration, exactly as `allowed_bridges`
-/// governs the bridge a caller names.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct IngressRequest {
-    /// `"tcp"` or `"udp"`.
-    pub protocol: String,
-    /// Host address to accept on. Empty leaves the choice to netd.
-    ///
-    /// Not decoration: an admin port bound to loopback and a published one
-    /// differ only here.
-    #[serde(default)]
-    pub host_address: String,
-    /// Host port, as the deployment named it. There is no "pick one for me":
-    /// the caller reports this number back through `GetInfo` and a client
-    /// connects to it, so a netd-chosen port would have to travel back through
-    /// both before it meant anything.
-    pub host_port: u16,
-    pub guest_port: u16,
 }
 
 /// One host resource netd holds.
@@ -204,15 +160,6 @@ pub enum Request {
     Remove {
         #[serde(flatten)]
         identity: InterfaceIdentity,
-        /// Whether this interface was created with an nwfilter binding.
-        ///
-        /// Advisory, and no longer read: removal detects macvtap itself, and
-        /// clears a binding best-effort whatever this says. The strict rule it
-        /// used to select exists for prepare, where a binding left at the name
-        /// blocks the one about to be created; at removal it only left the
-        /// interface up on the bridge. Still sent, and still required on
-        /// decode, so a netd that predates that reasoning keeps working.
-        filtered: bool,
     },
     /// Delete every interface netd holds for one VM.
     ///
@@ -222,9 +169,6 @@ pub enum Request {
     /// that lost a NIC leaves the same thing behind. Both are found here
     /// without a record, because every name netd can produce for a VM is
     /// derivable from its identity.
-    ///
-    /// Releases everything those interfaces own, host ports included. See
-    /// [`PrepareBridgeRequest::ingress`].
     RemoveAll {
         instance_id: String,
         vm_id: String,
@@ -794,10 +738,7 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
             remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort)?;
             Ok(Outcome::tap(tap))
         }
-        Request::Remove {
-            identity,
-            filtered: _,
-        } => {
+        Request::Remove { identity } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
             // Best effort, whatever the caller says was built. The strict rule
@@ -1735,7 +1676,6 @@ mod tests {
             filtered: true,
             queues: 0,
             workdir: String::new(),
-            ingress: Vec::new(),
         };
         let filter = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -1763,7 +1703,6 @@ mod tests {
     fn remove_protocol_keeps_identity_fields_flat() {
         let request = Request::Remove {
             identity: identity("instance", "vm", 2),
-            filtered: true,
         };
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "remove");
@@ -1783,47 +1722,12 @@ mod tests {
             filtered: true,
             queues: 0,
             workdir: String::new(),
-            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
         assert_eq!(value["instance_id"], "instance");
         assert_eq!(value["bridge"], "br0");
         assert!(value.get("identity").is_none());
-    }
-
-    /// `filtered` says which of two shapes was built, and both are reachable
-    /// on any node this build can produce. There is no released peer that omits
-    /// it -- netd does not exist before v0.6 -- so it is required rather than
-    /// defaulted, and a request that leaves it out is a bug, not an old client.
-    #[test]
-    fn removal_states_which_shape_it_is_undoing() {
-        let error = serde_json::from_value::<Request>(serde_json::json!({
-            "operation": "remove",
-            "instance_id": "instance",
-            "vm_id": "vm",
-            "nic_index": 0,
-        }))
-        .unwrap_err();
-        assert!(error.to_string().contains("filtered"), "{error}");
-
-        for filtered in [true, false] {
-            let decoded: Request = serde_json::from_value(serde_json::json!({
-                "operation": "remove",
-                "instance_id": "instance",
-                "vm_id": "vm",
-                "nic_index": 0,
-                "filtered": filtered,
-            }))
-            .unwrap();
-            let Request::Remove {
-                filtered: decoded, ..
-            } = decoded
-            else {
-                panic!("wrong variant");
-            };
-            assert_eq!(decoded, filtered);
-        }
     }
 
     /// A binding outlives the interface it was bound to, and TAP names are a
@@ -1854,7 +1758,6 @@ mod tests {
             filtered: false,
             queues: 4,
             workdir: String::new(),
-            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["queues"], 4);
@@ -1906,7 +1809,6 @@ mod tests {
             filtered: true,
             queues: 0,
             workdir: String::new(),
-            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
@@ -1984,7 +1886,6 @@ mod tests {
             filtered: false,
             queues: 4,
             workdir: String::new(),
-            ingress: Vec::new(),
         };
         let filtering = NetworkFilterConfig {
             mode: crate::config::NetworkFilterMode::Libvirt,
@@ -2058,7 +1959,6 @@ mod tests {
             filtered: true,
             queues: 1,
             workdir: String::new(),
-            ingress: Vec::new(),
         };
         // Nothing on the wire can name a filter: the field does not exist.
         let wire = serde_json::to_value(Request::PrepareBridge(request.clone())).unwrap();
@@ -2099,7 +1999,6 @@ mod tests {
             filtered: true,
             queues: 1,
             workdir: "/opt/dstack/run/vm/vm".into(),
-            ingress: Vec::new(),
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["workdir"], "/opt/dstack/run/vm/vm");
@@ -2109,37 +2008,6 @@ mod tests {
             panic!("expected a bridge prepare");
         };
         assert_eq!(decoded.workdir, "");
-    }
-
-    #[test]
-    fn host_ports_travel_with_the_bridge_prepare_and_default_to_none() {
-        let request = Request::PrepareBridge(PrepareBridgeRequest {
-            identity: identity("instance", "vm", 0),
-            bridge: "br0".into(),
-            mac: "02:00:00:00:00:01".into(),
-            qemu_uid: 1000,
-            filtered: true,
-            queues: 1,
-            workdir: String::new(),
-            ingress: vec![IngressRequest {
-                protocol: "udp".into(),
-                host_address: "0.0.0.0".into(),
-                host_port: 7483,
-                guest_port: 51820,
-            }],
-        });
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["ingress"][0]["protocol"], "udp");
-        assert_eq!(value["ingress"][0]["host_port"], 7483);
-        assert_eq!(value["ingress"][0]["guest_port"], 51820);
-        // The bind address separates an admin port from a published one, so a
-        // forwarder that lost it would publish the admin port.
-        assert_eq!(value["ingress"][0]["host_address"], "0.0.0.0");
-
-        let Request::PrepareBridge(decoded) = decode_minimal_bridge() else {
-            panic!("expected a bridge prepare");
-        };
-        assert!(decoded.ingress.is_empty());
     }
 
     /// A prepare carrying only the fields that predate this change.

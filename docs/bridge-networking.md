@@ -159,10 +159,9 @@ filesystem permissions authorize callers.
 This used to be conditional — `netd` built the TAP when libvirt filtering was on
 or when the NIC wanted more than one queue pair, and otherwise QEMU's setuid
 `qemu-bridge-helper` did. Two owners meant two answers to the same questions:
-which netdev QEMU gets, whether vhost is really on, and where a bridge NIC's
-published ports go. Only `netd` can answer the last one, because only `netd`
-sees every VMM instance on the host and can arbitrate a port between them. So a
-bridge NIC's host interface has one owner now, on every node.
+which netdev QEMU gets, whether vhost is really on, and what a bridge NIC's TAP
+is built with. So a bridge NIC's host interface has one owner now, on every
+node.
 
 `qemu-bridge-helper` is no longer used, and `/etc/qemu/bridge.conf` no longer
 needs an `allow` line for the bridge.
@@ -228,16 +227,15 @@ by both.
 
 ### Which ports a bridge NIC can publish
 
-QEMU publishes a user-mode NIC's mappings itself, with `hostfwd=`. A bridge
-NIC's would have to be published by `netd`, and **the `netd` in this repository
-builds interfaces; it does not forward host ports.** A mapping that resolves to
-a bridge NIC is carried to `netd` in the prepare and goes no further.
+QEMU publishes a port with `hostfwd=` on a user-mode NIC, and that is the only
+mechanism this host has. **The `netd` in this repository builds interfaces; it
+does not forward host ports**, so a bridge NIC cannot carry a port mapping.
 
-The VMM does not track whether the host is forwarding. It reports what a VM
-asked for, and a mapping is refused only when the VM's own topology gives it
-nowhere to go — a pinned NIC that is macvtap or does not exist, or a VM with no
-user-mode and no bridge NIC at all. Those are facts about the VM, decided
-without asking the host anything.
+`--port …@<nic>` therefore only ever names a user-mode NIC. Pinning to a bridge,
+macvtap or custom NIC is refused at deployment, where the caller is there to be
+told. An unpinned mapping goes to the first user-mode NIC; a VM that has none is
+not refused — it may have been deployed before this — but every mapping it
+strands is named in the launch log.
 
 ## Who owns an interface
 
