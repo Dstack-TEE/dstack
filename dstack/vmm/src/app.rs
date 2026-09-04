@@ -316,7 +316,26 @@ pub struct App {
     /// One lock per VM, held across a launch or a teardown. See
     /// [`App::launch_lock`].
     launch_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    /// What this node's netd last said it can do, and when. See
+    /// [`App::netd_capabilities`].
+    netd_probe: Arc<Mutex<Option<(std::time::Instant, netd::Reachability)>>>,
 }
+
+/// How long a netd capability answer is reused. Short, because netd is
+/// upgraded and restarted under a running VMM, and a VMM that cached "this one
+/// cannot sweep" across the upgrade that gave it the ability would keep
+/// falling back for as long as it stayed up.
+const NETD_PROBE_TTL: Duration = Duration::from_secs(30);
+
+/// How far past a VM's recorded NIC count a teardown reaches when netd is too
+/// old to sweep by identity.
+///
+/// The record is what a legacy netd leaves us: it cannot derive the space
+/// itself, and asking it for all 256 possible indices would be 256 round trips
+/// on every stop. Eight covers a lost NIC or two on any topology anyone
+/// deploys, each miss is one cheap no-op, and what it does not reach is
+/// collected the next time the node runs a netd that can sweep.
+const LEGACY_TEARDOWN_SPAN: usize = 8;
 
 const GUEST_AGENT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -347,6 +366,7 @@ impl App {
             config: Arc::new(config),
             pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
             launch_locks: Arc::new(Mutex::new(HashMap::new())),
+            netd_probe: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -525,15 +545,13 @@ impl App {
             ) {
                 Ok(processes) => processes,
                 Err(error) => {
-                    let _ = self
-                        .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
+                    self.release_vm_interfaces(&vm_config.manifest.id, &runtime_networks)
                         .await;
                     return Err(error);
                 }
             };
             if let Err(error) = work_dir.set_runtime_networks(&runtime_networks) {
-                let _ = self
-                    .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
+                self.release_vm_interfaces(&vm_config.manifest.id, &runtime_networks)
                     .await;
                 return Err(error);
             }
@@ -544,12 +562,8 @@ impl App {
             }
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
-                    if let Err(cleanup_error) = self
-                        .remove_filtered_networks(&vm_config.manifest.id, &runtime_networks)
-                        .await
-                    {
-                        warn!(id, %cleanup_error, "failed to roll back filtered networking");
-                    }
+                    self.release_vm_interfaces(&vm_config.manifest.id, &runtime_networks)
+                        .await;
                     if let Err(clear_err) = work_dir.clear_runtime_networks() {
                         warn!(
                             id,
@@ -588,7 +602,11 @@ impl App {
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
         let networks = self.work_dir(id)?.runtime_networks();
-        self.remove_filtered_networks(id, &networks).await?;
+        // Not fallible: a VM that has been asked to stop is stopped whether or
+        // not netd could be reached, and what is left behind is collected by
+        // the next launch or by reconciliation. See
+        // [`App::release_vm_interfaces`].
+        self.release_vm_interfaces(id, &networks).await;
         Ok(())
     }
 
@@ -612,23 +630,20 @@ impl App {
                 mapping.nic_index,
             );
         }
+        // Whatever an earlier boot left behind: a crash between creating an
+        // interface and recording it, a NIC this VM no longer has, or a whole
+        // backend it no longer uses. Prepare replaces the names it is about to
+        // use, but only those, so an index nothing will claim again is only
+        // reachable from here.
+        //
+        // Before the early return, and not inside it. A VM that has moved from
+        // a bridge to user-mode networking needs this release precisely because
+        // it no longer wants an interface, and gating it on wanting one is how
+        // the interfaces it left behind would become unreachable to every
+        // later launch.
+        self.release_vm_interfaces(&vm.manifest.id, networks).await;
         if !networks.iter().any(needs_netd_interface) {
             return Ok(());
-        }
-        // Whatever an earlier boot left behind, from a crash between creating
-        // an interface and recording it or from a NIC this VM no longer has.
-        // Prepare replaces the names it is about to use, but only those; an
-        // index nothing will claim again is only reachable from here.
-        if let Err(error) = netd::remove_all(
-            &self.config.netd.socket,
-            &self.config.cvm.instance_id,
-            &vm.manifest.id,
-        )
-        .await
-        {
-            if !netd::is_unreachable(&error) {
-                warn!(vm_id = %vm.manifest.id, %error, "failed to sweep stale netd interfaces");
-            }
         }
         // Resolved before the loop borrows `networks` mutably, and once rather
         // than per NIC, so both the request and the warning below read the same
@@ -889,50 +904,109 @@ impl App {
         }
     }
 
-    /// Deletes every host interface netd holds for this VM.
+    /// What this node's netd can do, cached for [`NETD_PROBE_TTL`].
     ///
-    /// A sweep rather than one removal per recorded NIC. The record is written
-    /// after the interface exists, so a VMM killed in between leaves a TAP
-    /// nothing on disk points at; a lost or unreadable record reads as an empty
-    /// list, which used to mean "nothing to remove"; and a manifest that lost a
-    /// NIC leaves an index the list no longer reaches. netd derives the names
-    /// instead, so none of that has to be true for teardown to work.
-    ///
-    /// `networks` now only decides whether to ask at all. An unreachable netd
-    /// is not a failure: most nodes run none, and stopping a VM must not depend
-    /// on one being up.
-    pub(crate) async fn remove_filtered_networks(
-        &self,
-        vm_id: &str,
-        networks: &[Networking],
-    ) -> Result<()> {
-        // An empty list is not "no interfaces", it is "no record" -- exactly
-        // the case a sweep exists for. A record that names only backends netd
-        // never touches is the one case worth skipping.
-        let recorded_none = !networks.is_empty()
-            && networks
-                .iter()
-                .all(|network| netd_teardown(network, &self.config.cvm).is_none());
-        if recorded_none {
-            return Ok(());
-        }
-        match netd::remove_all(
-            &self.config.netd.socket,
-            &self.config.cvm.instance_id,
-            vm_id,
-        )
-        .await
+    /// Asked rather than inferred, and asked once per window rather than per
+    /// VM: every launch, teardown and reconciliation needs the answer, and the
+    /// probe is a connection netd's serialized accept loop has to service.
+    /// An unreachable answer is not cached -- a failed connect costs nothing,
+    /// and holding on to it would keep a VMM blind to the netd an operator
+    /// just started.
+    pub(crate) async fn netd_capabilities(&self) -> netd::Reachability {
+        if let Some((_, reachability)) = self
+            .netd_probe
+            .lock()
+            .or_panic("mutex poisoned")
+            .as_ref()
+            .filter(|(asked, _)| asked.elapsed() < NETD_PROBE_TTL)
         {
-            Ok(0) => Ok(()),
-            Ok(removed) => {
-                info!(vm_id, removed, "removed netd-managed interfaces");
-                Ok(())
+            return reachability.clone();
+        }
+        let reachability = netd::probe(&self.config.netd.socket).await;
+        if reachability.is_reachable() {
+            *self.netd_probe.lock().or_panic("mutex poisoned") =
+                Some((std::time::Instant::now(), reachability.clone()));
+        }
+        reachability
+    }
+
+    /// Releases every host interface netd holds for this VM.
+    ///
+    /// Unconditional and non-fatal, which is one decision made twice. The
+    /// release path must not be gated on a predicate that can change under it:
+    /// `needs_netd_interface` reads the VM's *current* backend, and a VM whose
+    /// NIC was a bridge when its TAP was built and is a user-mode NIC now would
+    /// skip the release for interfaces that exist. And a VM must be able to
+    /// stop when the daemon holding its interfaces cannot be reached, or a
+    /// netd outage becomes a fleet that cannot be stopped.
+    ///
+    /// Nothing is lost by not failing: the next launch releases before it
+    /// prepares, and startup reconciliation collects what no launch will ever
+    /// reach. `recorded` is not the source of truth -- it is what a netd too
+    /// old to sweep by identity has to be told instead.
+    pub(crate) async fn release_vm_interfaces(&self, vm_id: &str, recorded: &[Networking]) {
+        let reachability = self.netd_capabilities().await;
+        if !reachability.is_reachable() {
+            debug!(vm_id, "no netd to release interfaces from");
+            return;
+        }
+        if reachability.supports("remove_all") {
+            match netd::remove_all(
+                &self.config.netd.socket,
+                &self.config.cvm.instance_id,
+                vm_id,
+            )
+            .await
+            {
+                Ok(0) => {}
+                Ok(removed) => info!(vm_id, removed, "released netd-managed interfaces"),
+                Err(error) if netd::is_unreachable(&error) => {
+                    debug!(vm_id, %error, "no netd to release interfaces from")
+                }
+                Err(error) => {
+                    warn!(vm_id, "failed to release netd-managed interfaces: {error:#}")
+                }
             }
-            Err(error) if netd::is_unreachable(&error) => {
-                debug!(vm_id, %error, "no netd to remove interfaces from");
-                Ok(())
+            return;
+        }
+        self.release_recorded_interfaces(vm_id, recorded).await;
+    }
+
+    /// The teardown a netd that cannot sweep by identity gets.
+    ///
+    /// One `Remove` per index, over the record plus a margin for what the
+    /// record has lost. See [`LEGACY_TEARDOWN_SPAN`].
+    async fn release_recorded_interfaces(&self, vm_id: &str, recorded: &[Networking]) {
+        warn!(
+            vm_id,
+            "netd on this node cannot release a VM's interfaces by identity; falling back to \
+             the recorded ones. Interfaces it has no record of are left behind until this node \
+             runs a netd that can sweep"
+        );
+        for nic_index in (0..recorded.len().max(LEGACY_TEARDOWN_SPAN)).rev() {
+            // Beyond the record there is nothing to say whether the interface
+            // carried a binding, and an unfiltered removal still clears one it
+            // finds. Inside it, say what was built.
+            let filtered = recorded
+                .get(nic_index)
+                .and_then(|network| netd_teardown(network, &self.config.cvm))
+                .unwrap_or(false);
+            let identity = InterfaceIdentity {
+                instance_id: self.config.cvm.instance_id.clone(),
+                vm_id: vm_id.to_string(),
+                nic_index,
+            };
+            if let Err(error) = netd::request(
+                &self.config.netd.socket,
+                &NetdRequest::Remove { identity, filtered },
+            )
+            .await
+            {
+                if netd::is_unreachable(&error) {
+                    return;
+                }
+                warn!(vm_id, nic_index, "failed to release interface: {error:#}");
             }
-            Err(error) => Err(error).context("failed to remove netd-managed networking"),
         }
     }
 
@@ -1045,9 +1119,7 @@ impl App {
         let runtime_networks = self.work_dir(id)?.runtime_networks();
         {
             let _launch = self.launch_lock(id).await;
-            if let Err(error) = self.remove_filtered_networks(id, &runtime_networks).await {
-                warn!(id, %error, "failed to remove filtered networking during VM removal");
-            }
+            self.release_vm_interfaces(id, &runtime_networks).await;
         }
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
@@ -2171,6 +2243,88 @@ mod tests {
         .extract()
         .unwrap();
         App::new(config, SupervisorClient::new("http://127.0.0.1:0"))
+    }
+
+    fn app_talking_to(netd_socket: &Path) -> App {
+        use rocket::figment::providers::Format as _;
+        let mut config: Config = rocket::figment::Figment::from(
+            rocket::figment::providers::Toml::string(crate::config::DEFAULT_CONFIG),
+        )
+        .extract()
+        .unwrap();
+        config.netd.socket = netd_socket.to_path_buf();
+        config.cvm.instance_id = "test-instance".to_string();
+        App::new(config, SupervisorClient::new("http://127.0.0.1:0"))
+    }
+
+    /// A netd outage must not become a fleet that cannot be stopped.
+    #[tokio::test]
+    async fn a_stop_survives_a_netd_that_is_not_there() {
+        let app = app_talking_to(Path::new("/nonexistent/dstack-netd.sock"));
+        // Returns rather than propagating: there is no error type here on
+        // purpose, because there is no caller that should act on one.
+        app.release_vm_interfaces("vm-1", &[]).await;
+    }
+
+    /// The regression this pair exists to prevent: `remove_all` is an
+    /// operation, and an operation a netd does not have answers with an error
+    /// that looks exactly like the sweep having failed. Reading that as failure
+    /// used to fail the stop *and* leave every interface behind -- strictly
+    /// worse than the per-NIC removal it replaced.
+    #[tokio::test]
+    async fn a_netd_too_old_to_sweep_gets_the_teardown_it_understands() {
+        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::Legacy);
+        let app = app_talking_to(netd.socket());
+        app.release_vm_interfaces("vm-1", &[]).await;
+
+        let operations = netd.operations();
+        assert_eq!(operations[0], "hello", "capability is asked, not inferred");
+        assert!(
+            !operations.contains(&"remove_all".to_string()),
+            "an operation it does not have is not sent"
+        );
+        assert_eq!(
+            operations.iter().filter(|op| *op == "remove").count(),
+            LEGACY_TEARDOWN_SPAN,
+            "the record is not the only thing reached, even on a netd that cannot sweep"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_netd_that_sweeps_is_asked_once_and_by_identity() {
+        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
+            "hello",
+            "remove",
+            "remove_all",
+        ]));
+        let app = app_talking_to(netd.socket());
+        app.release_vm_interfaces("vm-1", &[]).await;
+
+        assert_eq!(netd.operations(), vec!["hello", "remove_all"]);
+        let sweep = &netd.seen()[1];
+        assert_eq!(sweep["vm_id"], "vm-1");
+        assert_eq!(sweep["instance_id"], "test-instance");
+        // A sweep names no NIC: reaching the indices the caller can no longer
+        // name is the entire point.
+        assert!(sweep.get("nic_index").is_none());
+    }
+
+    /// One probe covers a window rather than one call, or netd's serialized
+    /// accept loop services a connection per VM per operation.
+    #[tokio::test]
+    async fn the_capability_answer_is_reused() {
+        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
+            "hello",
+            "remove_all",
+        ]));
+        let app = app_talking_to(netd.socket());
+        app.release_vm_interfaces("vm-1", &[]).await;
+        app.release_vm_interfaces("vm-2", &[]).await;
+        assert_eq!(
+            netd.operations(),
+            vec!["hello", "remove_all", "remove_all"],
+            "asked once, acted on twice"
+        );
     }
 
     /// The window a launch spends between reading "not running" and actually

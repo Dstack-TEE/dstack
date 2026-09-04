@@ -1020,9 +1020,8 @@ impl VmmRpc for RpcHandler {
                 // must not overlap a launch of the same VM.
                 let _launch = self.app.launch_lock(&request.id).await;
                 self.app
-                    .remove_filtered_networks(&request.id, &runtime_networks)
-                    .await
-                    .context("failed to remove previous filtered networking")?;
+                    .release_vm_interfaces(&request.id, &runtime_networks)
+                    .await;
                 vm_work_dir.clear_runtime_networks()?;
             }
             manifest.networks = networks;

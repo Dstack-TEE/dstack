@@ -37,6 +37,8 @@ use crate::config::{NetdConfig, NetworkFilterConfig};
 
 const MAX_MESSAGE_SIZE: u64 = 64 * 1024;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(35);
+/// How long a capability probe waits. See [`probe`].
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const IP_PATH: &str = "/usr/sbin/ip";
 const VIRSH_PATH: &str = "/usr/bin/virsh";
@@ -48,6 +50,15 @@ const MAX_QUEUES: u32 = 64;
 /// whole-VM sweep has to enumerate, since it derives names instead of reading a
 /// record.
 const MAX_NIC_INDEX: usize = 255;
+/// Every operation this netd accepts, answered to `hello`.
+const OPERATIONS: &[&str] = &[
+    "hello",
+    "prepare_bridge",
+    "prepare_macvtap",
+    "remove",
+    "remove_all",
+    "check",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceIdentity {
@@ -129,6 +140,44 @@ pub struct IngressBinding {
     pub guest_port: u16,
 }
 
+/// What a netd can do, asked rather than inferred from a failure.
+///
+/// `queues` and `ingress` report a *missing feature* by leaving a response
+/// field out, which works because both ride on an operation every netd has. An
+/// operation a netd does not have cannot answer that way: it fails, and a
+/// failure is indistinguishable from the operation failing for a real reason.
+/// A caller left to guess from the message either turns a missing feature into
+/// an outage or turns a real failure into silence -- and teardown, where the
+/// consequence of guessing wrong is a leaked host interface, is exactly where
+/// neither is acceptable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capabilities {
+    /// Implementation and version, for the operator's log. Never parsed:
+    /// `operations` is what decisions are made from.
+    #[serde(default)]
+    pub version: String,
+    /// Every operation this netd accepts.
+    #[serde(default)]
+    pub operations: Vec<String>,
+    /// Whether it forwards host ports at all. A prepare's `ingress` field still
+    /// says what one interface actually got; this says whether asking is
+    /// meaningful, which is what deployment has to know before any prepare
+    /// exists to read.
+    #[serde(default)]
+    pub ingress: bool,
+    /// Whether it records ownership on the interface itself. A whole-host
+    /// collection cannot tell one VMM instance's interfaces from another's
+    /// without it, so a netd that says no is never asked to collect.
+    #[serde(default)]
+    pub attribution: bool,
+}
+
+impl Capabilities {
+    pub fn supports(&self, operation: &str) -> bool {
+        self.operations.iter().any(|name| name == operation)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrepareMacvtapRequest {
     #[serde(flatten)]
@@ -151,6 +200,13 @@ pub struct PrepareMacvtapRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum Request {
+    /// Ask what this netd can do, before asking it to do anything.
+    ///
+    /// Cheap by construction: answered without taking the operation lock, so a
+    /// caller learns what netd can do without first waiting for what it is
+    /// doing. It doubles as the liveness probe -- a netd that answers is up,
+    /// and one that predates this answers an error, which is still an answer.
+    Hello,
     PrepareBridge(PrepareBridgeRequest),
     PrepareMacvtap(PrepareMacvtapRequest),
     Remove {
@@ -203,41 +259,70 @@ struct Response {
     /// How many interfaces a whole-VM sweep deleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     removed: Option<usize>,
+    /// What this netd can do. Absent from one that predates `hello`, which is
+    /// the same reading `queues` and `ingress` get.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    capabilities: Option<Capabilities>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-/// What netd built, echoed back so the caller can verify it matches the
-/// request before handing the interface to QEMU.
-struct Prepared {
-    /// The interface this names, absent for an operation that names none.
-    tap: Option<String>,
-    device: Option<String>,
-    queues: Option<u32>,
-    ingress: Option<Vec<IngressBinding>>,
-    removed: Option<usize>,
+/// What one request produced.
+///
+/// An enum rather than a struct of options, because the shapes do not overlap:
+/// a prepare names an interface, a sweep counts them, a probe names neither.
+/// One flat [`Response`] still carries all of them on the wire, so a netd that
+/// grows an operation stays readable to a caller that does not know it.
+enum Outcome {
+    /// One interface, named because the caller hands that name to QEMU.
+    Interface {
+        tap: String,
+        device: Option<String>,
+        queues: Option<u32>,
+        ingress: Option<Vec<IngressBinding>>,
+    },
+    /// A sweep names no single interface, so it reports how many it deleted.
+    Swept { removed: usize },
+    Hello(Capabilities),
 }
 
-impl Prepared {
+impl Outcome {
     fn tap(tap: String) -> Self {
-        Self {
-            tap: Some(tap),
+        Self::Interface {
+            tap,
             device: None,
             queues: None,
             ingress: None,
-            removed: None,
         }
     }
 
-    /// A sweep names no single interface, so it reports how many it deleted.
-    fn removed(removed: usize) -> Self {
-        Self {
+    fn into_response(self) -> Response {
+        let mut response = Response {
+            ok: true,
             tap: None,
             device: None,
             queues: None,
             ingress: None,
-            removed: Some(removed),
+            removed: None,
+            capabilities: None,
+            error: None,
+        };
+        match self {
+            Self::Interface {
+                tap,
+                device,
+                queues,
+                ingress,
+            } => {
+                response.tap = Some(tap);
+                response.device = device;
+                response.queues = queues;
+                response.ingress = ingress;
+            }
+            Self::Swept { removed } => response.removed = Some(removed),
+            Self::Hello(capabilities) => response.capabilities = Some(capabilities),
         }
+        response
     }
 }
 
@@ -282,8 +367,14 @@ impl std::fmt::Display for Unreachable {
 impl std::error::Error for Unreachable {}
 
 /// Whether this error means netd was never reached.
+///
+/// `downcast_ref` rather than a walk over `chain()`: a marker attached with
+/// `context` is not a link in the source chain, it is the context *of* a link,
+/// and `chain()` yields the wrapper rather than the marker inside it. Asking
+/// the chain therefore always answered no -- which made every "an unreachable
+/// netd is not a failure" branch in this crate unreachable itself.
 pub fn is_unreachable(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| cause.is::<Unreachable>())
+    error.downcast_ref::<Unreachable>().is_some()
 }
 
 pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
@@ -300,19 +391,103 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
 
 /// Deletes every interface netd holds for one VM, returning how many there
 /// were. See [`Request::RemoveAll`].
+///
+/// A netd that answers without a count did not sweep. Reading that as zero
+/// would report a netd that cannot do this as a VM that had nothing to remove,
+/// which is the conflation [`Capabilities`] exists to end -- so it is an error
+/// here, and the caller falls back to removing what it has a record of.
 pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result<usize> {
     let request = Request::RemoveAll {
         instance_id: instance_id.to_string(),
         vm_id: vm_id.to_string(),
     };
-    Ok(exchange(socket, &request)
+    exchange(socket, &request)
         .await?
         .removed
-        .unwrap_or_default())
+        .context("netd answered a sweep without saying what it removed")
+}
+
+/// This node's netd, as far as it can be asked.
+#[derive(Debug, Clone)]
+pub enum Reachability {
+    /// Nothing is listening. Not a failure: most nodes run no netd, and a VM
+    /// that needs none never notices.
+    Unreachable,
+    /// Reached, but it predates `hello`. Everything in [`OPERATIONS`] before
+    /// `hello` was added is assumed; nothing after it is.
+    Legacy,
+    Capable(Capabilities),
+}
+
+impl Reachability {
+    /// Whether netd answered at all.
+    pub fn is_reachable(&self) -> bool {
+        !matches!(self, Self::Unreachable)
+    }
+
+    pub fn supports(&self, operation: &str) -> bool {
+        match self {
+            Self::Unreachable | Self::Legacy => false,
+            Self::Capable(capabilities) => capabilities.supports(operation),
+        }
+    }
+
+    /// Whether asking this netd to forward host ports is meaningful. Unknown
+    /// counts as no: a caller that assumed yes would report ports as published
+    /// on the strength of never having asked.
+    pub fn forwards_ingress(&self) -> bool {
+        matches!(self, Self::Capable(capabilities) if capabilities.ingress)
+    }
+
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Unreachable => "unreachable".to_string(),
+            Self::Legacy => "reachable, predates capability reporting".to_string(),
+            Self::Capable(capabilities) => {
+                format!("{} [{}]", capabilities.version, capabilities.operations.join(" "))
+            }
+        }
+    }
+}
+
+/// Asks what this node's netd can do.
+///
+/// Never fails: not being there, and being there but too old to say, are both
+/// answers a caller has to act on rather than propagate. Both are also
+/// distinguishable here and nowhere else -- an error from any other operation
+/// cannot tell "netd refused this" from "netd does not have this".
+pub async fn probe(socket: &Path) -> Reachability {
+    // Bounded well below the request timeout. Every teardown asks, and a netd
+    // that accepts a connection and then stops answering must not turn each of
+    // them into a thirty-second stall; not answering promptly is, for the
+    // caller's purposes, the same as not being there.
+    let answer = match timeout(PROBE_TIMEOUT, exchange(socket, &Request::Hello)).await {
+        Ok(answer) => answer,
+        Err(_) => {
+            warn!("netd accepted a connection but did not answer hello in time");
+            return Reachability::Unreachable;
+        }
+    };
+    match answer {
+        Ok(response) => match response.capabilities {
+            Some(capabilities) => Reachability::Capable(capabilities),
+            // It answered `hello` with nothing to say, which is not a shape
+            // this netd produces. Treat it as the older protocol rather than
+            // trusting an empty capability set.
+            None => Reachability::Legacy,
+        },
+        // It answered, so it is up; it just does not know the question.
+        Err(error) if !is_unreachable(&error) => {
+            debug!("netd does not answer hello: {error:#}");
+            Reachability::Legacy
+        }
+        Err(_) => Reachability::Unreachable,
+    }
 }
 
 async fn exchange(socket: &Path, request: &Request) -> Result<Response> {
     let operation = match request {
+        Request::Hello => "hello",
         Request::PrepareBridge(_) => "prepare_bridge",
         Request::PrepareMacvtap(_) => "prepare_macvtap",
         Request::Remove { .. } => "remove",
@@ -430,15 +605,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
         Err(error) => Err(error),
     };
     let response = match outcome {
-        Ok(prepared) => Response {
-            ok: true,
-            tap: prepared.tap,
-            device: prepared.device,
-            queues: prepared.queues,
-            ingress: prepared.ingress,
-            removed: prepared.removed,
-            error: None,
-        },
+        Ok(outcome) => outcome.into_response(),
         Err(error) => {
             warn!(%error, "netd request failed");
             Response {
@@ -448,6 +615,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
                 queues: None,
                 ingress: None,
                 removed: None,
+                capabilities: None,
                 error: Some(format!("{error:#}")),
             }
         }
@@ -476,10 +644,31 @@ async fn read_request(stream: &mut UnixStream) -> Result<Option<Request>> {
         .context("invalid netd request")
 }
 
-fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
+/// What this build of netd can do. See [`Capabilities`].
+fn capabilities() -> Capabilities {
+    Capabilities {
+        version: format!("dstack-netd {}", env!("CARGO_PKG_VERSION")),
+        operations: OPERATIONS.iter().map(|name| name.to_string()).collect(),
+        // This netd builds interfaces; it is not the host's forwarder. The
+        // response field says so per prepare; this says so before one.
+        ingress: false,
+        attribution: true,
+    }
+}
+
+fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
+    // Answered before the lock. A caller asks this to find out whether netd
+    // can do the thing it is about to ask for, and making that wait behind a
+    // running collection would put a whole-host sweep in front of every
+    // launch's first question.
+    if matches!(request, Request::Hello) {
+        return Ok(Outcome::Hello(capabilities()));
+    }
     let libvirt_uri = config.libvirt_uri.as_str();
     let _lock = OperationLock::acquire()?;
     match request {
+        // Handled above, before the lock.
+        Request::Hello => Ok(Outcome::Hello(capabilities())),
         Request::PrepareBridge(request) => {
             prepare_bridge(libvirt_uri, &request, config.filter_policy())
         }
@@ -488,13 +677,13 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
         }
         Request::RemoveAll { instance_id, vm_id } => {
             let removed = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
-            Ok(Prepared::removed(removed))
+            Ok(Outcome::Swept { removed })
         }
         Request::Remove { identity, filtered } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
             remove_interface(libvirt_uri, &tap, binding_cleanup(filtered))?;
-            Ok(Prepared::tap(tap))
+            Ok(Outcome::tap(tap))
         }
         Request::Check { identity, filtered } => {
             validate_identity(&identity)?;
@@ -507,7 +696,7 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
             if filtered && !is_macvtap(&tap) {
                 virsh(libvirt_uri, &["nwfilter-binding-dumpxml", &tap], None)?;
             }
-            Ok(Prepared::tap(tap))
+            Ok(Outcome::tap(tap))
         }
     }
 }
@@ -516,7 +705,7 @@ fn prepare_macvtap(
     libvirt_uri: &str,
     request: &PrepareMacvtapRequest,
     filter: &NetworkFilterConfig,
-) -> Result<Prepared> {
+) -> Result<Outcome> {
     let identity = &request.identity;
     let parent = request.parent.as_str();
     let qemu_uid = request.qemu_uid;
@@ -586,12 +775,11 @@ fn prepare_macvtap(
     match result {
         Ok(device) => {
             info!(%tap, %parent, %mode, %device, %queues, "prepared macvtap");
-            Ok(Prepared {
-                tap: Some(tap),
+            Ok(Outcome::Interface {
+                tap,
                 device: Some(device),
                 queues: Some(queues),
                 ingress: None,
-                removed: None,
             })
         }
         Err(error) => {
@@ -633,7 +821,7 @@ fn prepare_bridge(
     libvirt_uri: &str,
     request: &PrepareBridgeRequest,
     filter: &NetworkFilterConfig,
-) -> Result<Prepared> {
+) -> Result<Outcome> {
     validate_prepare_bridge(request, filter)?;
     let filtered = request.filtered;
     let tap = tap_name(&request.identity);
@@ -669,15 +857,14 @@ fn prepare_bridge(
         return Err(error);
     }
     info!(%tap, bridge = %request.bridge, %filtered, %queues, "prepared TAP");
-    Ok(Prepared {
-        tap: Some(tap),
+    Ok(Outcome::Interface {
+        tap,
         device: None,
         queues: Some(queues),
         // This netd builds interfaces; it is not the host's forwarder. Saying
         // nothing here is what tells the caller that, so ports it asked for are
         // reported as unmet rather than assumed done.
         ingress: None,
-        removed: None,
     })
 }
 
@@ -1075,6 +1262,174 @@ fn prepare_socket_path(socket: &Path) -> Result<()> {
             .with_context(|| format!("failed to remove stale socket {}", socket.display()))?;
     }
     Ok(())
+}
+
+/// A netd that exists only to be talked to.
+///
+/// The VMM's side of this protocol -- what it falls back to, what it refuses,
+/// what it does when the answer is missing -- had no test at all, because
+/// every path needed a privileged daemon. It does not: it needs something that
+/// answers on a socket. This is that, scripted per behaviour, recording what
+/// it was asked so a test can assert on the conversation rather than on its
+/// effects.
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::{
+        path::{Path, PathBuf},
+        sync::{Arc, Mutex},
+    };
+
+    use serde_json::{json, Value};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::UnixListener,
+    };
+
+    /// How the fake answers.
+    #[derive(Debug, Clone)]
+    pub(crate) enum Behavior {
+        /// Answers `hello` with the given operations, and every listed
+        /// operation with a plausible success.
+        Capable {
+            operations: Vec<String>,
+            ingress: bool,
+        },
+        /// Reached, but predates `hello`: every unknown operation is an error,
+        /// exactly as `serde` produces one.
+        Legacy,
+    }
+
+    impl Behavior {
+        pub(crate) fn capable(operations: &[&str]) -> Self {
+            Self::Capable {
+                operations: operations.iter().map(|name| name.to_string()).collect(),
+                ingress: false,
+            }
+        }
+
+        pub(crate) fn forwarding(operations: &[&str]) -> Self {
+            match Self::capable(operations) {
+                Self::Capable { operations, .. } => Self::Capable {
+                    operations,
+                    ingress: true,
+                },
+                other => other,
+            }
+        }
+    }
+
+    pub(crate) struct FakeNetd {
+        _dir: tempfile::TempDir,
+        socket: PathBuf,
+        seen: Arc<Mutex<Vec<Value>>>,
+    }
+
+    impl FakeNetd {
+        pub(crate) fn spawn(behavior: Behavior) -> Self {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let socket = dir.path().join("netd.sock");
+            let listener = UnixListener::bind(&socket).expect("bind");
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let recorder = seen.clone();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        return;
+                    };
+                    let behavior = behavior.clone();
+                    let recorder = recorder.clone();
+                    tokio::spawn(async move {
+                        let mut message = Vec::new();
+                        if stream.read_to_end(&mut message).await.is_err() {
+                            return;
+                        }
+                        let Ok(request) = serde_json::from_slice::<Value>(&message) else {
+                            return;
+                        };
+                        recorder.lock().expect("poisoned").push(request.clone());
+                        let response = answer(&behavior, &request);
+                        let _ = stream.write_all(&serde_json::to_vec(&response).unwrap()).await;
+                        let _ = stream.shutdown().await;
+                    });
+                }
+            });
+            Self {
+                _dir: dir,
+                socket,
+                seen,
+            }
+        }
+
+        pub(crate) fn socket(&self) -> &Path {
+            &self.socket
+        }
+
+        /// Every request it was sent, in order.
+        pub(crate) fn seen(&self) -> Vec<Value> {
+            self.seen.lock().expect("poisoned").clone()
+        }
+
+        pub(crate) fn operations(&self) -> Vec<String> {
+            self.seen()
+                .iter()
+                .map(|request| request["operation"].as_str().unwrap_or("?").to_string())
+                .collect()
+        }
+    }
+
+    fn answer(behavior: &Behavior, request: &Value) -> Value {
+        let operation = request["operation"].as_str().unwrap_or_default();
+        let (operations, ingress) = match behavior {
+            Behavior::Legacy => {
+                return match operation {
+                    // What the real thing answers for an operation it knows.
+                    "prepare_bridge" | "prepare_macvtap" | "remove" | "check" => {
+                        json!({"ok": true, "tap": "dtdeadbeef00"})
+                    }
+                    other => json!({
+                        "ok": false,
+                        "error": format!("invalid netd request: unknown variant `{other}`"),
+                    }),
+                };
+            }
+            Behavior::Capable {
+                operations,
+                ingress,
+            } => (operations, *ingress),
+        };
+        if !operations.iter().any(|name| name == operation) {
+            return json!({
+                "ok": false,
+                "error": format!("invalid netd request: unknown variant `{operation}`"),
+            });
+        }
+        match operation {
+            "hello" => json!({
+                "ok": true,
+                "capabilities": {
+                    "version": "fake-netd",
+                    "operations": operations,
+                    "ingress": ingress,
+                    "attribution": true,
+                },
+            }),
+            "prepare_bridge" | "prepare_macvtap" => {
+                let mut response = json!({
+                    "ok": true,
+                    "tap": "dtdeadbeef00",
+                    "queues": request["queues"].as_u64().unwrap_or(1).max(1),
+                });
+                if ingress {
+                    let asked = request["ingress"].as_array().cloned().unwrap_or_default();
+                    response["ingress"] = Value::Array(asked);
+                }
+                response
+            }
+            "remove" | "check" => json!({"ok": true, "tap": "dtdeadbeef00"}),
+            "remove_all" => json!({"ok": true, "removed": 0}),
+            _ => json!({"ok": true}),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1586,30 +1941,94 @@ mod tests {
     /// means nothing.
     #[test]
     fn a_sweep_reports_a_count_and_no_interface() {
-        let response = Response {
-            ok: true,
-            tap: Prepared::removed(3).tap,
-            device: None,
-            queues: None,
-            ingress: None,
-            removed: Some(3),
-            error: None,
-        };
-        let value = serde_json::to_value(&response).unwrap();
+        let value = serde_json::to_value(Outcome::Swept { removed: 3 }.into_response()).unwrap();
         assert_eq!(value["removed"], 3);
         assert!(value.get("tap").is_none());
 
         // A prepare still names one, because the caller hands that name to QEMU.
-        let value = serde_json::to_value(Response {
-            ok: true,
-            tap: Prepared::tap("dtabc".into()).tap,
-            device: None,
-            queues: None,
-            ingress: None,
-            removed: None,
-            error: None,
-        })
-        .unwrap();
+        let value =
+            serde_json::to_value(Outcome::tap("dtabc".into()).into_response()).unwrap();
         assert_eq!(value["tap"], "dtabc");
+        assert!(value.get("removed").is_none());
+    }
+
+    /// A netd that answers a sweep with no count did not sweep. Reading the
+    /// absent field as zero is the same conflation `queues` and `ingress` are
+    /// shaped to avoid, and here it would report a netd that cannot collect a
+    /// VM's interfaces as a VM that had none.
+    #[tokio::test]
+    async fn a_sweep_without_a_count_is_not_read_as_an_empty_one() {
+        // Claims the operation, answers without the field.
+        let netd = testing::FakeNetd::spawn(testing::Behavior::capable(&["hello"]));
+        let error = remove_all(netd.socket(), "instance", "vm")
+            .await
+            .expect_err("an answer with no count is not a successful sweep");
+        assert!(!is_unreachable(&error));
+
+        let netd = testing::FakeNetd::spawn(testing::Behavior::capable(&["hello", "remove_all"]));
+        assert_eq!(remove_all(netd.socket(), "instance", "vm").await.unwrap(), 0);
+    }
+
+    /// Every "an unreachable netd is not a failure" branch in the VMM hangs
+    /// off this one predicate, and a marker attached as context is not a link
+    /// in the source chain.
+    #[test]
+    fn an_unreachable_netd_is_recognized_through_the_contexts_stacked_on_it() {
+        let error = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound))
+            .context(Unreachable)
+            .context("failed to connect to netd at /run/netd.sock")
+            .context("failed to prepare netd-managed networking");
+        assert!(is_unreachable(&error));
+
+        let other = anyhow::anyhow!("netd remove_all failed: no such bridge")
+            .context("failed to prepare netd-managed networking");
+        assert!(!is_unreachable(&other));
+    }
+
+    #[tokio::test]
+    async fn a_probe_tells_absent_from_old_from_answering() {
+        assert!(matches!(
+            probe(Path::new("/nonexistent/netd.sock")).await,
+            Reachability::Unreachable
+        ));
+
+        let legacy = testing::FakeNetd::spawn(testing::Behavior::Legacy);
+        let reachability = probe(legacy.socket()).await;
+        assert!(matches!(reachability, Reachability::Legacy));
+        // Reached, so a caller must not treat it as absent -- but it can do
+        // nothing this netd was not already able to do.
+        assert!(reachability.is_reachable());
+        assert!(!reachability.supports("remove_all"));
+        assert!(!reachability.forwards_ingress());
+
+        let netd = testing::FakeNetd::spawn(testing::Behavior::forwarding(&["hello", "remove_all"]));
+        let reachability = probe(netd.socket()).await;
+        assert!(reachability.supports("remove_all"));
+        assert!(!reachability.supports("gc"));
+        assert!(reachability.forwards_ingress());
+    }
+
+    /// The whole point of asking: a caller must be able to tell an operation
+    /// this netd does not have from one that failed, and the two look the same
+    /// in an error message.
+    #[test]
+    fn a_probe_reports_what_this_netd_can_do() {
+        let value = serde_json::to_value(&Request::Hello).unwrap();
+        assert_eq!(value["operation"], "hello");
+
+        let response = Outcome::Hello(capabilities()).into_response();
+        let capabilities = response.capabilities.expect("hello answers capabilities");
+        assert!(capabilities.supports("remove_all"));
+        assert!(capabilities.supports("hello"));
+        assert!(!capabilities.supports("forward_the_whole_internet"));
+        // This netd builds interfaces and does not forward host ports. Saying
+        // so before a prepare is what lets deployment refuse a mapping it
+        // cannot honour, instead of a launch warning about it afterwards.
+        assert!(!capabilities.ingress);
+        assert!(capabilities.attribution);
+
+        // Absent capabilities is an older netd, not one that can do nothing.
+        let legacy: Response = serde_json::from_str(r#"{"ok":true}"#).unwrap();
+        assert!(legacy.capabilities.is_none());
     }
 }
