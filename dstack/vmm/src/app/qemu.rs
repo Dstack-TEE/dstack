@@ -184,6 +184,7 @@ struct PreparedQemuLaunch {
     platform: CvmPlatform,
     networks: Vec<Networking>,
     volumes: Vec<PreparedVolume>,
+    storage_discard: bool,
     hugepage_numa_nodes: Option<HashMap<String, u32>>,
     gpu_numa_nodes: HashMap<String, String>,
     numa_cpus: Option<String>,
@@ -281,6 +282,7 @@ impl PreparedQemuLaunch {
             platform,
             networks,
             volumes,
+            storage_discard: app_compose.storage_discard,
             hugepage_numa_nodes,
             gpu_numa_nodes,
             numa_cpus,
@@ -558,8 +560,13 @@ impl QemuCommandBuilder<'_> {
         command
             .arg("-drive")
             .arg(format!(
-                "file={},if=none,id=hd1",
-                self.prepared.workdir.hda_path().display()
+                "file={},if=none,id=hd1,discard={}",
+                self.prepared.workdir.hda_path().display(),
+                if self.prepared.storage_discard {
+                    "unmap"
+                } else {
+                    "ignore"
+                }
             ))
             .arg("-device")
             .arg(virtio_pci_device(
@@ -1158,6 +1165,7 @@ mod tests {
             volumes: vec![PreparedVolume {
                 source: "/does-not-exist/volume.img".into(),
             }],
+            storage_discard: true,
             hugepage_numa_nodes: None,
             gpu_numa_nodes: HashMap::new(),
             numa_cpus: None,
@@ -1190,6 +1198,9 @@ mod tests {
             .args
             .windows(2)
             .any(|args| args == ["-append", "console=hvc0"]));
+        assert!(process.args.iter().any(|arg| {
+            arg == "file=/does-not-exist/vm-1/hda.img,if=none,id=hd1,discard=unmap"
+        }));
         assert!(process.args.windows(2).any(|args| {
             args == [
                 "-drive",
@@ -1230,6 +1241,19 @@ mod tests {
             .args
             .iter()
             .any(|arg| arg.contains("virtio-net-pci,netdev=net1")));
+
+        prepared.storage_discard = false;
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        assert!(process.args.iter().any(|arg| {
+            arg == "file=/does-not-exist/vm-1/hda.img,if=none,id=hd1,discard=ignore"
+        }));
 
         for network in &mut prepared.networks {
             network.mode = NetworkingMode::Bridge;

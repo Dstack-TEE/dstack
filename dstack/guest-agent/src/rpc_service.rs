@@ -1151,6 +1151,7 @@ pub(crate) mod tests {
             no_instance_id: false,
             secure_time: false,
             storage_fs: None,
+            storage_discard: true,
             swap_size: 0,
             event_log_version: EventLogVersion::V1,
             port_policy: Default::default(),

@@ -116,6 +116,8 @@ export interface AppCompose extends SortableObject {
   requirements?: Requirements;
   init_script?: string[];
   storage_fs?: string;
+  /** Reclaim unused data-disk blocks; disable to hide allocation changes. */
+  storage_discard?: boolean;
   /** Human size string, e.g. "2G", matching what the guest reads. */
   swap_size?: string;
   event_log_version?: number;

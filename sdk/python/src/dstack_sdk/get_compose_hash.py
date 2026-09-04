@@ -118,6 +118,7 @@ class AppCompose:
         allowed_envs: Optional[List[str]] = None,
         no_instance_id: Optional[bool] = None,
         secure_time: Optional[bool] = None,
+        storage_discard: Optional[bool] = None,
         requirements: Optional[Union[Requirements, Dict[str, Any]]] = None,
         bash_script: Optional[str] = None,  # Legacy
         pre_launch_script: Optional[str] = None,  # Legacy
@@ -144,6 +145,7 @@ class AppCompose:
         self.allowed_envs = allowed_envs
         self.no_instance_id = no_instance_id
         self.secure_time = secure_time
+        self.storage_discard = storage_discard
         self.requirements = requirements
         self.bash_script = bash_script
         self.pre_launch_script = pre_launch_script

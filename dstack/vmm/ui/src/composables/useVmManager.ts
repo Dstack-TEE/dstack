@@ -28,6 +28,7 @@ type AppCompose = {
   secure_time: boolean;
   requirements?: Requirements;
   storage_fs?: string;
+  storage_discard?: boolean;
   swap_size: number;
   launch_token_hash?: string;
   pre_launch_script?: string;
@@ -132,6 +133,7 @@ type VmFormState = {
   ports: PortFormEntry[];
   encryptedEnvs: EncryptedEnvEntry[];
   storage_fs: string;
+  storage_discard: boolean;
   app_id: string | null;
   key_provider?: KeyProviderKind;
   key_provider_id: string;
@@ -221,6 +223,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     ports: [],
     encryptedEnvs: [],
     storage_fs: '',
+    storage_discard: true,
     app_id: null,
     key_provider: 'kms',
     key_provider_id: '',
@@ -876,6 +879,7 @@ type CreateVmPayloadSource = {
       allowed_envs: vmForm.value.encryptedEnvs.map((env) => env.key),
       no_instance_id: !vmForm.value.gateway_enabled,
       secure_time: false,
+      storage_discard: vmForm.value.storage_discard,
     };
 
     if (vmForm.value.key_provider !== undefined) {
@@ -1291,6 +1295,7 @@ type CreateVmPayloadSource = {
       encryptedEnvs: [], // Clear environment variables
       ports: [], // Clear port mappings
       storage_fs: theVm.appCompose?.storage_fs || 'zfs',
+      storage_discard: theVm.appCompose?.storage_discard ?? true,
       app_id: config.app_id || '',
       kms_urls: config.kms_urls || [],
       key_provider: getKeyProvider(theVm),

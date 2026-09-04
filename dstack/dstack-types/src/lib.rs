@@ -253,6 +253,10 @@ pub struct AppCompose {
     pub secure_time: bool,
     #[serde(default)]
     pub storage_fs: Option<String>,
+    /// Return unused data-disk blocks to the host. Disable this when leaking
+    /// filesystem allocation and deletion patterns is unacceptable.
+    #[serde(default = "default_true")]
+    pub storage_discard: bool,
     #[serde(default, with = "human_size")]
     pub swap_size: u64,
     #[serde(default, skip_serializing_if = "EventLogVersion::is_v1")]
@@ -823,6 +827,20 @@ mod app_compose_tests {
             "name": "test",
             "runner": "docker-compose"
         }))
+    }
+
+    #[test]
+    fn storage_discard_defaults_on_and_can_be_disabled() {
+        assert!(parse_compose(serde_json::json!(2)).unwrap().storage_discard);
+
+        let compose: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": 2,
+            "name": "test",
+            "runner": "docker-compose",
+            "storage_discard": false
+        }))
+        .unwrap();
+        assert!(!compose.storage_discard);
     }
 
     #[test]
@@ -2637,6 +2655,7 @@ mod appcompose_sdk_parity {
             "requirements",
             "runner",
             "secure_time",
+            "storage_discard",
             "storage_fs",
             "swap_size",
             "verity_volumes",
@@ -2651,6 +2670,7 @@ mod appcompose_sdk_parity {
             "docker_compose_file": "services: {}\n",
             "init_script": ["a.sh"],
             "storage_fs": "ext4",
+            "storage_discard": false,
             "swap_size": "2G",
             "event_log_version": 2,
             "port_policy": {"ports": [{"port": 8080, "pp": true}], "restrict_mode": true},
