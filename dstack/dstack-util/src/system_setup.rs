@@ -1559,7 +1559,7 @@ mod gpu {
     const FABRIC_STATE_NOT_SUPPORTED: u8 = 0;
     const FABRIC_STATE_COMPLETED: u8 = 3;
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub(super) struct FabricInfo {
         state: u8,
         status: u32,
@@ -1636,14 +1636,22 @@ mod gpu {
             .nvmlDeviceGetP2PStatus
             .as_ref()
             .map_err(|err| anyhow!("NVML exports no nvmlDeviceGetP2PStatus: {err}"))?;
+        // Looking a device up is itself an NVML call. Keep one handle per GPU
+        // rather than repeating that call for every ordered pair.
+        let device_handles = (0..devices)
+            .map(|index| {
+                nvml.device_by_index(index)
+                    .with_context(|| format!("failed to get NVML device {index}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut blocked = Vec::new();
         for a in 0..devices {
             for b in 0..devices {
                 if a == b {
                     continue;
                 }
-                let from = nvml.device_by_index(a)?;
-                let to = nvml.device_by_index(b)?;
+                let from = &device_handles[a as usize];
+                let to = &device_handles[b as usize];
                 for (name, index) in [
                     (
                         "read",
@@ -1668,6 +1676,30 @@ mod gpu {
             }
         }
         Ok(blocked)
+    }
+
+    /// Turn one polling round into a complete set of fabric readings.
+    ///
+    /// `Ok(None)` is reserved for platforms where every GPU reports that
+    /// fabric is unsupported. A mixture is itself an abnormal condition and
+    /// must not make the whole check disappear.
+    pub(super) fn complete_fabric_infos(
+        readings: Vec<Option<FabricInfo>>,
+    ) -> Result<Option<Vec<FabricInfo>>> {
+        let unsupported: Vec<_> = readings
+            .iter()
+            .enumerate()
+            .filter_map(|(index, info)| info.is_none().then_some(index))
+            .collect();
+        if unsupported.len() == readings.len() {
+            return Ok(None);
+        }
+        if !unsupported.is_empty() {
+            bail!(
+                "inconsistent NVLink fabric visibility: GPUs {unsupported:?} report NOT_SUPPORTED"
+            );
+        }
+        Ok(Some(readings.into_iter().flatten().collect()))
     }
 
     /// Warn when the GPUs never finish joining one working NVLink fabric.
@@ -1696,18 +1728,14 @@ mod gpu {
         // arm always reports the readings it actually gave up on.
         let mut last;
         loop {
-            let mut infos = Vec::with_capacity(expected_devices as usize);
+            let mut readings = Vec::with_capacity(expected_devices as usize);
             for index in 0..expected_devices {
-                match fabric_info(&nvml, index)? {
-                    // The driver says this platform has no fabric at all, so
-                    // there is nothing to wait for and nothing to warn about.
-                    None => {
-                        info!("no NVLink fabric on this platform; skipping fabric readiness check");
-                        return Ok(());
-                    }
-                    Some(info) => infos.push(info),
-                }
+                readings.push(fabric_info(&nvml, index)?);
             }
+            let Some(infos) = complete_fabric_infos(readings)? else {
+                info!("no NVLink fabric on this platform; skipping fabric readiness check");
+                return Ok(());
+            };
             if infos.iter().all(FabricInfo::registered) {
                 report_ready(&nvml, &infos, started.elapsed(), expected_devices);
                 return Ok(());
@@ -1718,7 +1746,11 @@ mod gpu {
             }
             std::thread::sleep(FABRIC_POLL_INTERVAL);
         }
-        for (index, info) in last.iter().enumerate() {
+        for (index, info) in last
+            .iter()
+            .enumerate()
+            .filter(|(_, info)| !info.registered())
+        {
             warn!(
                 "GPU {index} has not joined the NVLink fabric: state={} status={} cliqueId={}",
                 info.state, info.status, info.clique_id
@@ -1776,7 +1808,7 @@ mod gpu {
                 for (from, to, direction, status) in &blocked {
                     warn!(
                         "NVLink peer-to-peer {direction} is blocked from GPU {from} to GPU {to} \
-                         (nvmlGpuP2PStatus={status})"
+                        (nvmlGpuP2PStatus={status})"
                     );
                 }
                 warn!(
@@ -2429,8 +2461,11 @@ impl Stage0<'_> {
         // never be mistaken for a security one. Runs on a blocking thread
         // because it polls for up to FABRIC_READY_TIMEOUT.
         let fabric_devices = expected_devices;
-        let _ = tokio::task::spawn_blocking(move || gpu::warn_unless_fabric_ready(fabric_devices))
-            .await;
+        if let Err(err) =
+            tokio::task::spawn_blocking(move || gpu::warn_unless_fabric_ready(fabric_devices)).await
+        {
+            warn!("NVLink fabric readiness task failed: {err}");
+        }
         gpu_state.set_ready()?;
         let devtools = gpu_state.any_devtools();
         let event = attestation.event(devtools)?;
@@ -4524,7 +4559,7 @@ Endpoint = [2001:db8::1]:51822
 
 #[cfg(test)]
 mod fabric_tests {
-    use super::gpu::{shared_clique, test_support::*};
+    use super::gpu::{complete_fabric_infos, shared_clique, test_support::*};
 
     #[test]
     fn a_gpu_counts_as_registered_only_when_state_and_status_both_agree() {
@@ -4550,5 +4585,21 @@ mod fabric_tests {
             shared_clique(&[info(COMPLETED, SUCCESS, 7), info(COMPLETED, SUCCESS, 9)]),
             None
         );
+    }
+
+    #[test]
+    fn fabric_is_skipped_only_when_every_gpu_reports_unsupported() {
+        assert!(complete_fabric_infos(vec![None, None]).unwrap().is_none());
+
+        let complete = complete_fabric_infos(vec![
+            Some(info(COMPLETED, SUCCESS, 7)),
+            Some(info(COMPLETED, SUCCESS, 7)),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(complete.len(), 2);
+
+        let err = complete_fabric_infos(vec![Some(info(COMPLETED, SUCCESS, 7)), None]).unwrap_err();
+        assert!(err.to_string().contains("GPUs [1] report NOT_SUPPORTED"));
     }
 }
