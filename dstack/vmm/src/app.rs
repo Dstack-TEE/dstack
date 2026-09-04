@@ -933,6 +933,40 @@ impl App {
         reachability
     }
 
+    /// Every VM whose interfaces this instance may still be using.
+    ///
+    /// Wider than the VMs it managed to load. A VM whose manifest is corrupt
+    /// or whose image is missing fails to load and is only logged -- but its
+    /// QEMU may well still be running, and collecting by what loaded would
+    /// delete a running VM's networking over a file the VMM could not parse.
+    /// A directory is enough of a claim: what has been removed for real leaves
+    /// none behind.
+    /// `None` when the answer cannot be established, which is not the same as
+    /// nobody claiming anything: an unreadable VM directory read as empty
+    /// would offer every interface on the host up for collection.
+    fn claimable_vm_ids(&self) -> Option<Vec<String>> {
+        let mut ids: HashSet<String> = self.lock().vms.keys().cloned().collect();
+        match fs::read_dir(self.vm_dir()) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() {
+                        if let Some(id) = entry.file_name().to_str() {
+                            ids.insert(id.to_string());
+                        }
+                    }
+                }
+            }
+            // A VMM that has never run has no directory and no VMs, which is a
+            // knowable answer rather than an unknowable one.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                warn!("failed to read the VM directory: {error}; not collecting interfaces");
+                return None;
+            }
+        }
+        Some(ids.into_iter().collect())
+    }
+
     /// Deletes every host interface netd holds for a VM this instance no
     /// longer has.
     ///
@@ -965,7 +999,9 @@ impl App {
             );
             return;
         }
-        let live: Vec<String> = self.lock().vms.keys().cloned().collect();
+        let Some(live) = self.claimable_vm_ids() else {
+            return;
+        };
         let policy = if self.config.netd.collect_unattributed {
             netd::UnattributedPolicy::Remove
         } else {
@@ -2323,7 +2359,7 @@ mod tests {
         App::new(config, SupervisorClient::new("http://127.0.0.1:0"))
     }
 
-    fn app_talking_to(netd_socket: &Path) -> App {
+    fn test_config(netd_socket: &Path, run_path: &Path) -> Config {
         use rocket::figment::providers::Format as _;
         let mut config: Config = rocket::figment::Figment::from(
             rocket::figment::providers::Toml::string(crate::config::DEFAULT_CONFIG),
@@ -2332,7 +2368,50 @@ mod tests {
         .unwrap();
         config.netd.socket = netd_socket.to_path_buf();
         config.cvm.instance_id = "test-instance".to_string();
-        App::new(config, SupervisorClient::new("http://127.0.0.1:0"))
+        config.run_path = run_path.to_path_buf();
+        config
+    }
+
+    fn app_talking_to(netd_socket: &Path) -> App {
+        let run_path = netd_socket.parent().unwrap_or(Path::new("/nonexistent"));
+        App::new(
+            test_config(netd_socket, run_path),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        )
+    }
+
+    /// A VM whose manifest is corrupt or whose image is missing fails to load
+    /// and is only logged -- but its QEMU may well still be running. Collecting
+    /// by what loaded would delete a running VM's networking over a file the
+    /// VMM could not parse.
+    #[test]
+    fn a_vm_that_failed_to_load_still_claims_its_interfaces() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("vm-that-did-not-load")).unwrap();
+        std::fs::write(dir.path().join("not-a-vm"), "").unwrap();
+        let app = App::new(
+            test_config(Path::new("/nonexistent/netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        assert_eq!(
+            app.claimable_vm_ids(),
+            Some(vec!["vm-that-did-not-load".to_string()])
+        );
+
+        // Unreadable is not "nobody claims anything", which would offer every
+        // interface on the host up for collection.
+        let app = App::new(
+            test_config(
+                Path::new("/nonexistent/netd.sock"),
+                Path::new("/proc/self/environ"),
+            ),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        assert_eq!(app.claimable_vm_ids(), None);
+
+        // A VMM that has never run is a knowable answer, not an unknowable one.
+        let app = app_talking_to(Path::new("/nonexistent/netd.sock"));
+        assert_eq!(app.claimable_vm_ids(), Some(Vec::new()));
     }
 
     /// A netd outage must not become a fleet that cannot be stopped.
