@@ -874,11 +874,19 @@ impl RpcHandler {
         if reachability.forwards_ingress() {
             return Ok(());
         }
+        let named = needs_netd.join(", ");
+        // "It does not forward" and "it could not be asked" call for different
+        // fixes, and only one of them is about the deployment.
+        if !reachability.is_reachable() {
+            bail!(
+                "port mapping {named} enters through a bridge NIC, which only netd can publish, \
+                 and netd could not be reached to ask whether it does"
+            );
+        }
         bail!(
-            "port mapping {} enters through a bridge NIC, which only netd can publish, and the \
-             netd on this node does not forward host ports ({}). Put the mapping on a user-mode \
-             NIC with @<nic>, or deploy a netd that forwards",
-            needs_netd.join(", "),
+            "port mapping {named} enters through a bridge NIC, which only netd can publish, and \
+             the netd on this node does not forward host ports ({}). Put the mapping on a \
+             user-mode NIC with @<nic>, or run a netd that forwards",
             reachability.describe()
         )
     }

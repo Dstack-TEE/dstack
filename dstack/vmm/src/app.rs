@@ -811,9 +811,12 @@ impl App {
                     network.ingress = bound.clone();
                     for request in asked {
                         if !bound.iter().any(|binding| {
-                            binding.protocol == request.protocol
-                                && binding.host_port == request.host_port
-                                && binding.guest_port == request.guest_port
+                            binding.answers(
+                                &request.protocol,
+                                &request.host_address,
+                                request.host_port,
+                                request.guest_port,
+                            )
                         }) {
                             warn!(
                                 vm_id = %vm.manifest.id,
@@ -948,10 +951,40 @@ impl App {
         let mut ids: HashSet<String> = self.lock().vms.keys().cloned().collect();
         match fs::read_dir(self.vm_dir()) {
             Ok(entries) => {
-                for entry in entries.flatten() {
-                    if entry.path().is_dir() {
-                        if let Some(id) = entry.file_name().to_str() {
-                            ids.insert(id.to_string());
+                for entry in entries {
+                    // Every error here is answered the same way the `read_dir`
+                    // error below is, and for the same reason: an entry that
+                    // cannot be read is a VM that might exist, and dropping it
+                    // silently is how a collection deletes a running VM's
+                    // networking over an unreadable directory entry.
+                    let entry = match entry {
+                        Ok(entry) => entry,
+                        Err(error) => {
+                            warn!("failed to read a VM directory entry: {error}; not collecting");
+                            return None;
+                        }
+                    };
+                    match entry.file_type() {
+                        Ok(file_type) if !file_type.is_dir() => continue,
+                        Ok(_) => {}
+                        Err(error) => {
+                            warn!(
+                                name = ?entry.file_name(),
+                                "failed to stat a VM directory entry: {error}; not collecting"
+                            );
+                            return None;
+                        }
+                    }
+                    match entry.file_name().into_string() {
+                        Ok(id) => {
+                            ids.insert(id);
+                        }
+                        // A VM ID is ASCII, so a name that is not UTF-8 is not
+                        // a VM directory -- but it is also not something to
+                        // decide a deletion around.
+                        Err(name) => {
+                            warn!(?name, "unreadable VM directory name; not collecting");
+                            return None;
                         }
                     }
                 }
@@ -986,24 +1019,27 @@ impl App {
     /// from overlapping a prepare; the ordering here is what keeps it from
     /// racing the decision.
     pub(crate) async fn reconcile_netd_interfaces(&self) {
-        let reachability = self.netd_capabilities().await;
-        if !reachability.is_reachable() {
-            debug!("no netd to reconcile interfaces with");
-            return;
-        }
-        if !reachability.supports("gc") {
-            warn!(
-                netd = %reachability.describe(),
-                "netd on this node cannot collect interfaces no VM claims; a VM removed while \
-                 this VMM was down leaves its host interfaces behind until it runs a newer netd"
-            );
-            return;
-        }
         let Some(live) = self.claimable_vm_ids() else {
             return;
         };
         let policy = if self.config.netd.collect_unattributed {
-            netd::UnattributedPolicy::Remove
+            // The one decision worth a round trip before making it. Acting on
+            // the *absence* of an ownership record only means anything if the
+            // netd that built these interfaces writes one; asked of a netd that
+            // does not, "no record" describes every interface on the host --
+            // including another instance's running VMs.
+            let reachability = self.netd_capabilities().await;
+            if reachability.records_ownership() {
+                netd::UnattributedPolicy::Remove
+            } else {
+                warn!(
+                    netd = %reachability.describe(),
+                    "netd.collect_unattributed is set, but this netd does not record which VM an \
+                     interface belongs to, so an interface with no record says nothing about what \
+                     is using it; collecting only what is attributed"
+                );
+                netd::UnattributedPolicy::Keep
+            }
         } else {
             netd::UnattributedPolicy::Keep
         };
@@ -1037,7 +1073,19 @@ impl App {
             Err(error) if netd::is_unreachable(&error) => {
                 debug!("no netd to reconcile interfaces with")
             }
-            Err(error) => warn!("failed to reconcile netd-managed interfaces: {error:#}"),
+            Err(error) => {
+                // Same reading a release gets: it answered, so now the question
+                // is whether the answer means it cannot do this at all.
+                if self.netd_capabilities().await.supports("gc") {
+                    warn!("failed to reconcile netd-managed interfaces: {error:#}");
+                } else {
+                    warn!(
+                        "netd on this node cannot collect interfaces no VM claims; a VM removed \
+                         while this VMM was down leaves its host interfaces behind until the node \
+                         runs a newer netd"
+                    );
+                }
+            }
         }
     }
 
@@ -1056,34 +1104,40 @@ impl App {
     /// reach. `recorded` is not the source of truth -- it is what a netd too
     /// old to sweep by identity has to be told instead.
     pub(crate) async fn release_vm_interfaces(&self, vm_id: &str, recorded: &[Networking]) {
-        let reachability = self.netd_capabilities().await;
-        if !reachability.is_reachable() {
-            debug!(vm_id, "no netd to release interfaces from");
-            return;
-        }
-        if reachability.supports("remove_all") {
-            match netd::remove_all(
-                &self.config.netd.socket,
-                &self.config.cvm.instance_id,
-                vm_id,
-            )
-            .await
-            {
-                Ok(0) => {}
-                Ok(removed) => info!(vm_id, removed, "released netd-managed interfaces"),
-                Err(error) if netd::is_unreachable(&error) => {
-                    debug!(vm_id, %error, "no netd to release interfaces from")
-                }
-                Err(error) => {
+        // Ask for the release, rather than asking whether it can be asked for.
+        // A probe first would put a second round trip in front of every stop
+        // and -- worse -- would make a *busy* netd look like an absent one and
+        // skip the release entirely. The operation itself cannot be misread
+        // that way: it succeeds, or it says netd is not there, or netd answers
+        // with a refusal, and only the last of those has a fallback.
+        match netd::remove_all(
+            &self.config.netd.socket,
+            &self.config.cvm.instance_id,
+            vm_id,
+        )
+        .await
+        {
+            Ok(0) => {}
+            Ok(removed) => info!(vm_id, removed, "released netd-managed interfaces"),
+            Err(error) if netd::is_unreachable(&error) => {
+                debug!(vm_id, %error, "no netd to release interfaces from")
+            }
+            Err(error) => {
+                // It answered, so it is up. Now the question is worth a round
+                // trip: an operation a netd does not have looks exactly like
+                // one that failed, and only one of those has a fallback. A netd
+                // that has this operation and failed at it is a failure to
+                // report, not a reason to send it eight more requests.
+                if self.netd_capabilities().await.supports("remove_all") {
                     warn!(
                         vm_id,
                         "failed to release netd-managed interfaces: {error:#}"
-                    )
+                    );
+                } else {
+                    self.release_recorded_interfaces(vm_id, recorded).await;
                 }
             }
-            return;
         }
-        self.release_recorded_interfaces(vm_id, recorded).await;
     }
 
     /// The teardown a netd that cannot sweep by identity gets.
@@ -2435,10 +2489,13 @@ mod tests {
         app.release_vm_interfaces("vm-1", &[]).await;
 
         let operations = netd.operations();
-        assert_eq!(operations[0], "hello", "capability is asked, not inferred");
-        assert!(
-            !operations.contains(&"remove_all".to_string()),
-            "an operation it does not have is not sent"
+        assert_eq!(
+            operations[0], "remove_all",
+            "the release is asked for, not asked about"
+        );
+        assert_eq!(
+            operations[1], "hello",
+            "only a refusal is worth a question, and then it is asked rather than inferred"
         );
         assert_eq!(
             operations.iter().filter(|op| *op == "remove").count(),
@@ -2447,8 +2504,12 @@ mod tests {
         );
     }
 
+    /// A probe in front of every stop is a second round trip on the hot path,
+    /// and -- because netd answers one caller at a time -- a *busy* netd would
+    /// answer it too slowly and be taken for an absent one, skipping the
+    /// release entirely. The operation cannot be misread that way.
     #[tokio::test]
-    async fn a_netd_that_sweeps_is_asked_once_and_by_identity() {
+    async fn a_netd_that_sweeps_is_asked_to_without_a_question_first() {
         let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
             "hello",
             "remove",
@@ -2457,8 +2518,8 @@ mod tests {
         let app = app_talking_to(netd.socket());
         app.release_vm_interfaces("vm-1", &[]).await;
 
-        assert_eq!(netd.operations(), vec!["hello", "remove_all"]);
-        let sweep = &netd.seen()[1];
+        assert_eq!(netd.operations(), vec!["remove_all"]);
+        let sweep = &netd.seen()[0];
         assert_eq!(sweep["vm_id"], "vm-1");
         assert_eq!(sweep["instance_id"], "test-instance");
         // A sweep names no NIC: reaching the indices the caller can no longer
@@ -2466,20 +2527,17 @@ mod tests {
         assert!(sweep.get("nic_index").is_none());
     }
 
-    /// One probe covers a window rather than one call, or netd's serialized
-    /// accept loop services a connection per VM per operation.
+    /// Where a probe is unavoidable it covers a window rather than one call,
+    /// or netd's accept loop services a connection per VM per operation.
     #[tokio::test]
     async fn the_capability_answer_is_reused() {
-        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
-            "hello",
-            "remove_all",
-        ]));
+        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::Legacy);
         let app = app_talking_to(netd.socket());
         app.release_vm_interfaces("vm-1", &[]).await;
         app.release_vm_interfaces("vm-2", &[]).await;
         assert_eq!(
-            netd.operations(),
-            vec!["hello", "remove_all", "remove_all"],
+            netd.operations().iter().filter(|op| *op == "hello").count(),
+            1,
             "asked once, acted on twice"
         );
     }
@@ -2495,18 +2553,16 @@ mod tests {
         ]));
         let app = app_talking_to(old.socket());
         app.reconcile_netd_interfaces().await;
-        assert_eq!(
-            old.operations(),
-            vec!["hello"],
-            "an operation it does not have is not sent"
-        );
+        // Asked for, refused, and only then asked about -- so that "cannot do
+        // this" is reported as itself rather than as a collection that failed.
+        assert_eq!(old.operations(), vec!["gc", "hello"]);
 
         let netd =
             netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello", "gc"]));
         let app = app_talking_to(netd.socket());
         app.reconcile_netd_interfaces().await;
-        let request = &netd.seen()[1];
-        assert_eq!(request["operation"], "gc");
+        assert_eq!(netd.operations(), vec!["gc"]);
+        let request = &netd.seen()[0];
         assert_eq!(request["instance_id"], "test-instance");
         assert_eq!(request["live_vm_ids"].as_array().unwrap().len(), 0);
         assert_eq!(request["dry_run"], false);
@@ -2519,12 +2575,23 @@ mod tests {
     async fn collecting_unattributed_interfaces_is_the_operators_to_ask_for() {
         let netd =
             netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello", "gc"]));
-        let mut app = app_talking_to(netd.socket());
-        let mut config = (*app.config).clone();
+        let mut config = test_config(netd.socket(), netd.socket().parent().unwrap());
         config.netd.collect_unattributed = true;
-        app = App::new(config, SupervisorClient::new("http://127.0.0.1:0"));
+        let app = App::new(config.clone(), SupervisorClient::new("http://127.0.0.1:0"));
         app.reconcile_netd_interfaces().await;
+        assert_eq!(netd.operations(), vec!["hello", "gc"]);
         assert_eq!(netd.seen()[1]["unattributed"], "remove");
+
+        // Acting on the absence of a record only means anything if the netd
+        // that built these interfaces writes one. Asked of a netd that does
+        // not, "no record" describes every interface on the host -- including
+        // another instance's running VMs.
+        let anonymous =
+            netd::testing::FakeNetd::spawn(netd::testing::Behavior::anonymous(&["hello", "gc"]));
+        config.netd.socket = anonymous.socket().to_path_buf();
+        let app = App::new(config, SupervisorClient::new("http://127.0.0.1:0"));
+        app.reconcile_netd_interfaces().await;
+        assert_eq!(anonymous.seen()[1]["unattributed"], "keep");
     }
 
     /// The window a launch spends between reading "not running" and actually

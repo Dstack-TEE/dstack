@@ -144,10 +144,14 @@ fn published_at(mapping: &crate::app::PortMapping, networks: &[Networking]) -> b
         // QEMU carries these itself, for as long as it is up.
         return true;
     }
+    let host_address = mapping.address.to_string();
     network.ingress.iter().any(|binding| {
-        binding.protocol == mapping.protocol.as_str()
-            && binding.host_port == mapping.from
-            && binding.guest_port == mapping.to
+        binding.answers(
+            mapping.protocol.as_str(),
+            &host_address,
+            mapping.from,
+            mapping.to,
+        )
     })
 }
 
@@ -411,6 +415,30 @@ mod tests {
 
         // A mapping naming a NIC the VM no longer has is answered by nobody.
         assert!(!published_at(&mapping(443, Some(7)), &networks));
+
+        // An admin port on loopback and a published one differ only in the
+        // address, so a netd that narrowed 0.0.0.0 to 127.0.0.1 has not met
+        // the request -- and reporting it as met would report a port as
+        // reachable from the network when it is not.
+        let mut narrowed = nic(NetworkingMode::Bridge);
+        narrowed.ingress = vec![IngressBinding {
+            protocol: "tcp".into(),
+            host_address: "127.0.0.1".into(),
+            host_port: 443,
+            guest_port: 8080,
+        }];
+        assert!(!published_at(&mapping(443, None), &[narrowed]));
+
+        // An address netd did not state at all is a netd that echoes less than
+        // it was told, not one that narrowed anything.
+        let mut silent = nic(NetworkingMode::Bridge);
+        silent.ingress = vec![IngressBinding {
+            protocol: "tcp".into(),
+            host_address: String::new(),
+            host_port: 443,
+            guest_port: 8080,
+        }];
+        assert!(published_at(&mapping(443, None), &[silent]));
     }
 
     /// Custom mode hands the operator the whole netdev string and the VMM never

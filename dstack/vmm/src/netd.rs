@@ -71,14 +71,18 @@ const TAP_DIGEST_CHARS: usize = 12;
 const ALIAS_PREFIX: &str = "dstack1";
 /// What the kernel stores in an interface alias, minus the terminator.
 const MAX_IFALIAS: usize = 255;
-/// How long one sweep or collection may run before it reports what it has done
-/// and stops.
+/// How long a sweep or collection keeps starting work on new interfaces.
 ///
-/// Under the operation lock and inside a serialized accept loop, so an
-/// unbounded pass is not slow, it is an outage: one hung `virsh` per interface
-/// would hold every other VM's prepare and remove behind it, and the caller
-/// that asked has long since timed out. Partial progress reported honestly
-/// beats total progress nobody is still waiting for.
+/// A bound on when the pass stops, not on how long one interface takes: an
+/// interface it has already begun is still bounded only by `COMMAND_TIMEOUT`
+/// per helper invocation, so a pass that passes this check at 19.9s can run on
+/// for as long as the `ip` and `virsh` calls it has started take to time out.
+///
+/// What it protects is the caller's patience against the operation lock. Every
+/// other prepare and remove on the host waits behind a pass, and the caller
+/// that asked for this one gave up at thirty seconds; work done after that is
+/// work nobody is waiting for, done while everybody waits. Partial progress
+/// reported honestly beats total progress reported to nobody.
 const COLLECTION_DEADLINE: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,7 +251,9 @@ pub struct Capabilities {
     pub ingress: bool,
     /// Whether it records ownership on the interface itself. A whole-host
     /// collection cannot tell one VMM instance's interfaces from another's
-    /// without it, so a netd that says no is never asked to collect.
+    /// without it, so a netd that says no is never asked to act on the
+    /// *absence* of a record: "no record" would describe every interface on
+    /// the host, including another instance's running VMs.
     #[serde(default)]
     pub attribution: bool,
 }
@@ -255,6 +261,29 @@ pub struct Capabilities {
 impl Capabilities {
     pub fn supports(&self, operation: &str) -> bool {
         self.operations.iter().any(|name| name == operation)
+    }
+}
+
+impl IngressBinding {
+    /// Whether this binding answers a request for one host port.
+    ///
+    /// The address is part of the answer, not decoration: an admin port bound
+    /// to loopback and a published one differ only there, so a netd that
+    /// narrowed `0.0.0.0` to `127.0.0.1` has not met the request, and
+    /// reporting it as met would report a port as reachable from the network
+    /// when it is not. An address netd did not state at all is not a narrowing;
+    /// it is a netd that echoes less than it was told.
+    pub fn answers(
+        &self,
+        protocol: &str,
+        host_address: &str,
+        host_port: u16,
+        guest_port: u16,
+    ) -> bool {
+        self.protocol == protocol
+            && self.host_port == host_port
+            && self.guest_port == guest_port
+            && (self.host_address.is_empty() || self.host_address == host_address)
     }
 }
 
@@ -709,6 +738,12 @@ impl Reachability {
     /// Whether asking this netd to forward host ports is meaningful. Unknown
     /// counts as no: a caller that assumed yes would report ports as published
     /// on the strength of never having asked.
+    /// Whether it records which VM an interface belongs to. Unknown counts as
+    /// no, for the same reason `forwards_ingress` does.
+    pub fn records_ownership(&self) -> bool {
+        matches!(self, Self::Capable(capabilities) if capabilities.attribution)
+    }
+
     pub fn forwards_ingress(&self) -> bool {
         matches!(self, Self::Capable(capabilities) if capabilities.ingress)
     }
@@ -821,16 +856,33 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
         None => bind_listener(&config)?,
     };
     info!(address = ?listener.local_addr()?, "netd listening");
+    let config = std::sync::Arc::new(config);
     loop {
         let (mut stream, _) = listener.accept().await?;
-        // This timeout bounds async socket reads and writes. handle_request is
-        // synchronous, so helper execution is bounded separately by
-        // COMMAND_TIMEOUT rather than preempted by this future timeout.
-        match timeout(CONNECTION_TIMEOUT, serve_connection(&config, &mut stream)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!(%error, "netd connection failed"),
-            Err(_) => warn!("netd connection timed out"),
-        }
+        // One task per connection, so a request that takes minutes does not
+        // stop the next one from being *accepted*.
+        //
+        // Serialization still holds where it matters, and holds where it is
+        // actually stated: `handle_request` takes the operation lock, which is
+        // an flock and blocks between two open descriptions in one process
+        // just as it does between processes. What a single-connection accept
+        // loop added on top of that was head-of-line blocking -- a caller
+        // asking netd a question it answers in microseconds waited for whatever
+        // netd happened to be doing, and gave up believing netd was not there.
+        // A collection can run for twenty seconds and a `virsh` for thirty, so
+        // this was not a corner: it made a busy netd indistinguishable from an
+        // absent one, and teardown skips an absent netd.
+        let config = config.clone();
+        tokio::spawn(async move {
+            // Bounds the socket reads and writes. It cannot preempt
+            // `handle_request`, which is synchronous and bounded separately by
+            // COMMAND_TIMEOUT per helper invocation.
+            match timeout(CONNECTION_TIMEOUT, serve_connection(&config, &mut stream)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!(%error, "netd connection failed"),
+                Err(_) => warn!("netd connection timed out"),
+            }
+        });
     }
 }
 
@@ -865,7 +917,10 @@ fn bind_listener(config: &NetdConfig) -> Result<UnixListener> {
     Ok(listener)
 }
 
-async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Result<()> {
+async fn serve_connection(
+    config: &std::sync::Arc<NetdConfig>,
+    stream: &mut UnixStream,
+) -> Result<()> {
     // Access is authorized by the Unix socket's owner, group, and mode. Any
     // process that can connect is trusted with the complete netd protocol.
     let outcome = match read_request(stream).await {
@@ -877,7 +932,18 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
             debug!("netd liveness probe");
             return Ok(());
         }
-        Ok(Some(request)) => handle_request(config, request),
+        Ok(Some(request)) => {
+            // `handle_request` shells out to `ip` and `virsh` and waits on the
+            // operation lock, so it can block for as long as those take. On a
+            // runtime worker that would stall every other connection's reads
+            // and writes, which is the head-of-line blocking this daemon just
+            // stopped having.
+            let config = config.clone();
+            match tokio::task::spawn_blocking(move || handle_request(&config, request)).await {
+                Ok(outcome) => outcome,
+                Err(error) => Err(anyhow::anyhow!("netd worker failed: {error}")),
+            }
+        }
         // A request that arrived but could not be understood still gets an
         // answer. A VMM newer than this netd sends operations it does not
         // know, and "unknown variant `prepare_foo`" is what tells the operator
@@ -940,7 +1006,7 @@ fn capabilities() -> Capabilities {
 
 fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
     // Answered before the lock. A caller asks this to find out whether netd
-    // can do the thing it is about to ask for, and making that wait behind a
+    // can do the thing it is about to ask for, and making it wait behind a
     // running collection would put a whole-host sweep in front of every
     // launch's first question.
     if matches!(request, Request::Hello) {
@@ -1308,7 +1374,16 @@ fn gc_plan(
             // ownership was recorded survives the upgrade that introduced it.
             _ => {
                 let names = derived.get_or_insert_with(live_names);
-                names.contains(&record.tap) || policy == UnattributedPolicy::Keep
+                names.contains(&record.tap)
+                    // An nwfilter binding whose interface is gone is the one
+                    // unattributable thing that is also unambiguously dead: a
+                    // record can only ever live on an interface, so this can
+                    // never gain one, and nothing is using a binding with
+                    // nothing to bind to. Left to the conservative default it
+                    // would be the one leak in this design that nothing could
+                    // ever collect -- the VM it belonged to is gone, so not
+                    // even an operator could name it.
+                    || (record.kind != "binding" && policy == UnattributedPolicy::Keep)
             }
         };
         if !keep {
@@ -1406,12 +1481,18 @@ fn collect_garbage(
             Err(error) => warn!(tap = %record.tap, "failed to collect: {error:#}"),
         }
     }
-    if unattributed > 0 && policy == UnattributedPolicy::Keep {
+    let left_alone = unattributed.saturating_sub(
+        taken
+            .iter()
+            .filter(|record| record.instance_id.is_none())
+            .count(),
+    );
+    if left_alone > 0 && policy == UnattributedPolicy::Keep {
         info!(
             %instance_id,
-            unattributed,
-            "interfaces carry no ownership record and were left alone; they gain one when their \
-             VM next launches"
+            unattributed = left_alone,
+            "interfaces carry no ownership record and were left alone; each gains one when its VM \
+             next launches"
         );
     }
     Ok(Outcome::Collected {
@@ -1861,6 +1942,8 @@ pub(crate) mod testing {
         Capable {
             operations: Vec<String>,
             ingress: bool,
+            /// Whether it claims to record who an interface belongs to.
+            attribution: bool,
         },
         /// Reached, but predates `hello`: every unknown operation is an error,
         /// exactly as `serde` produces one.
@@ -1872,6 +1955,7 @@ pub(crate) mod testing {
             Self::Capable {
                 operations: operations.iter().map(|name| name.to_string()).collect(),
                 ingress: false,
+                attribution: true,
             }
         }
 
@@ -1880,6 +1964,24 @@ pub(crate) mod testing {
                 Self::Capable { operations, .. } => Self::Capable {
                     operations,
                     ingress: true,
+                    attribution: true,
+                },
+                other => other,
+            }
+        }
+
+        /// A netd that builds interfaces without recording whose they are --
+        /// a third-party one, or this one before it did.
+        pub(crate) fn anonymous(operations: &[&str]) -> Self {
+            match Self::capable(operations) {
+                Self::Capable {
+                    operations,
+                    ingress,
+                    ..
+                } => Self::Capable {
+                    operations,
+                    ingress,
+                    attribution: false,
                 },
                 other => other,
             }
@@ -1949,7 +2051,7 @@ pub(crate) mod testing {
 
     fn answer(behavior: &Behavior, request: &Value) -> Value {
         let operation = request["operation"].as_str().unwrap_or_default();
-        let (operations, ingress) = match behavior {
+        let (operations, ingress, attribution) = match behavior {
             Behavior::Legacy => {
                 return match operation {
                     // What the real thing answers for an operation it knows.
@@ -1965,7 +2067,8 @@ pub(crate) mod testing {
             Behavior::Capable {
                 operations,
                 ingress,
-            } => (operations, *ingress),
+                attribution,
+            } => (operations, *ingress, *attribution),
         };
         if !operations.iter().any(|name| name == operation) {
             return json!({
@@ -1980,7 +2083,7 @@ pub(crate) mod testing {
                     "version": "fake-netd",
                     "operations": operations,
                     "ingress": ingress,
-                    "attribution": true,
+                    "attribution": attribution,
                 },
             }),
             "prepare_bridge" | "prepare_macvtap" => {
@@ -2228,7 +2331,7 @@ mod tests {
         drop(client);
         let result = timeout(
             Duration::from_secs(1),
-            serve_connection(&NetdConfig::default(), &mut server),
+            serve_connection(&std::sync::Arc::new(NetdConfig::default()), &mut server),
         )
         .await;
         assert!(result.is_ok(), "disconnected peer blocked the handler");
@@ -2251,7 +2354,7 @@ mod tests {
             .await
             .unwrap();
         client.shutdown().await.unwrap();
-        serve_connection(&NetdConfig::default(), &mut server)
+        serve_connection(&std::sync::Arc::new(NetdConfig::default()), &mut server)
             .await
             .unwrap();
 
@@ -2677,19 +2780,29 @@ mod tests {
     }
 
     /// A binding outlives the interface it was bound to, so it is the one piece
-    /// of state that can never carry a record, and the one a collection over
-    /// interfaces alone would always miss.
+    /// of state that can never carry a record -- and therefore the one thing a
+    /// conservative default would strand forever. It is also the one
+    /// unattributable thing that is unambiguously dead: nothing is using a
+    /// binding with nothing to bind to, and the VM it belonged to is gone, so
+    /// not even an operator could name it to remove it by hand.
     #[test]
-    fn an_orphaned_binding_is_collectable_but_not_by_default() {
+    fn an_orphaned_binding_is_collected_even_by_default() {
         let mut binding = record("dt00000000beef", None, None);
         binding.kind = "binding".to_string();
         binding.bound = true;
         let records = [binding];
-        assert!(plan(&records, &[], UnattributedPolicy::Keep).is_empty());
         assert_eq!(
-            plan(&records, &[], UnattributedPolicy::Remove),
+            plan(&records, &[], UnattributedPolicy::Keep),
             vec!["dt00000000beef".to_string()]
         );
+
+        // Except where the name is one a live VM would occupy: a filtered
+        // interface is rebuilt binding-first, so the binding can legitimately
+        // exist for a moment without one.
+        let live_tap = tap_name(&identity("ours", "live-vm", 0));
+        let mut binding = record(&live_tap, None, None);
+        binding.kind = "binding".to_string();
+        assert!(plan(&[binding], &["live-vm"], UnattributedPolicy::Keep).is_empty());
     }
 
     /// Everything else here reasons about strings. This puts the reasoning

@@ -353,6 +353,27 @@ async fn main() -> Result<()> {
     // Preserve the existing startup validation. The broader static checks are
     // opt-in through `check-config` until they have seen wider deployment use.
     netd::validate_instance_id(&config.cvm.instance_id)?;
+    // Two live VMMs sharing one instance ID share the name space their host
+    // interfaces are derived in: each would build TAPs at names the other can
+    // also produce, and each collection would delete the other's running VMs
+    // because the ownership record -- the only thing that can tell two
+    // instances apart -- would name the collector. Derived from `run_path`
+    // this cannot happen; it takes a copied `vmm.toml` that states one.
+    for peer in discovery::live_instances() {
+        if peer.instance_id == config.cvm.instance_id
+            && peer.run_path != config.run_path.to_string_lossy()
+        {
+            anyhow::bail!(
+                "cvm.instance_id '{}' is already in use by the VMM running at {} (pid {}). It is \
+                 the name space this VMM's host interfaces are derived in, so sharing one would \
+                 have each instance delete the other's running VMs' networking. Leave it empty to \
+                 derive it from run_path",
+                config.cvm.instance_id,
+                peer.run_path,
+                peer.pid
+            );
+        }
+    }
     config
         .host_api
         .validate()
@@ -420,6 +441,7 @@ async fn main() -> Result<()> {
         &config.run_path,
         &config.node_name,
         &app_version(),
+        &config.cvm.instance_id,
     ) {
         Ok(registration) => Some(registration),
         Err(err) => {
