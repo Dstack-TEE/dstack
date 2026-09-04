@@ -874,13 +874,8 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
         // absent one, and teardown skips an absent netd.
         let config = config.clone();
         tokio::spawn(async move {
-            // Bounds the socket reads and writes. It cannot preempt
-            // `handle_request`, which is synchronous and bounded separately by
-            // COMMAND_TIMEOUT per helper invocation.
-            match timeout(CONNECTION_TIMEOUT, serve_connection(&config, &mut stream)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => warn!(%error, "netd connection failed"),
-                Err(_) => warn!("netd connection timed out"),
+            if let Err(error) = serve_connection(&config, &mut stream).await {
+                warn!(%error, "netd connection failed");
             }
         });
     }
@@ -917,13 +912,26 @@ fn bind_listener(config: &NetdConfig) -> Result<UnixListener> {
     Ok(listener)
 }
 
+/// Serves one connection.
+///
+/// The timeouts bound the socket reads and writes and nothing else. They used
+/// to wrap the whole exchange, which read as a bound on the request but was
+/// not one: `handle_request` is synchronous and shells out, so the timeout
+/// could not cancel it -- it only threw away the answer to work that went on
+/// running. A caller has its own deadline and will have gone by then; what it
+/// cost was netd's own log, which reported "timed out" for a request it in
+/// fact completed. Helper execution is bounded where it can be, by
+/// COMMAND_TIMEOUT per invocation.
 async fn serve_connection(
     config: &std::sync::Arc<NetdConfig>,
     stream: &mut UnixStream,
 ) -> Result<()> {
     // Access is authorized by the Unix socket's owner, group, and mode. Any
     // process that can connect is trusted with the complete netd protocol.
-    let outcome = match read_request(stream).await {
+    let request = timeout(CONNECTION_TIMEOUT, read_request(stream))
+        .await
+        .context("timed out reading a netd request")?;
+    let outcome = match request {
         // A peer that connects and closes without sending is the VMM's
         // reachability check: netd that died leaves its socket behind, so the
         // VMM connects to tell the two apart. Answering that with a parse error
@@ -969,8 +977,12 @@ async fn serve_connection(
         }
     };
     let encoded = serde_json::to_vec(&response)?;
-    stream.write_all(&encoded).await?;
-    stream.shutdown().await?;
+    timeout(CONNECTION_TIMEOUT, async {
+        stream.write_all(&encoded).await?;
+        stream.shutdown().await
+    })
+    .await
+    .context("timed out answering a netd request")??;
     Ok(())
 }
 
