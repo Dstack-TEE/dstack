@@ -183,12 +183,6 @@ fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
             }
         } else if let Some(value) = param.strip_prefix("dstack.storage_fs=") {
             options.storage_fs = value.parse().context("Failed to parse dstack.storage_fs")?;
-        } else if let Some(value) = param.strip_prefix("dstack.storage_discard=") {
-            options.storage_discard = match value {
-                "0" | "false" | "no" | "off" => false,
-                "1" | "true" | "yes" | "on" => true,
-                _ => bail!("Invalid value for dstack.storage_discard: {value}"),
-            };
         }
     }
 
@@ -2707,7 +2701,13 @@ impl<'a> Stage0<'a> {
                 FsType::Ext4 => {
                     info!("Creating ext4 filesystem");
                     cmd!(mkfs.ext4 -F $fs_dev).context("Failed to create ext4 filesystem")?;
-                    Self::mount_ext4(Path::new(&fs_dev), mount_point, opts.storage_discard)?;
+                    if opts.storage_discard {
+                        cmd!(mount -o discard $fs_dev $mount_point)
+                            .context("failed to mount ext4 filesystem with discard")?;
+                    } else {
+                        cmd!(mount $fs_dev $mount_point)
+                            .context("failed to mount ext4 filesystem")?;
+                    }
                 }
             }
         } else {
@@ -2743,7 +2743,7 @@ impl<'a> Stage0<'a> {
                         // trim on first upgrade so historical free space is returned
                         // without delaying boot.
                         if let Err(err) = cmd!(zpool trim dstack) {
-                            warn!("Failed to start initial zpool trim: {err}");
+                            warn!("failed to start initial zpool trim: {err}");
                         }
                     }
                     if cmd!(mountpoint -q $mount_point).is_err() {
@@ -2791,19 +2791,18 @@ impl<'a> Stage0<'a> {
             }
         }
 
-        cmd!(resize2fs $dev).context("Failed to resize ext4 filesystem")?;
-        Self::mount_ext4(dev, mount_point, discard)?;
-        Ok(())
-    }
-
-    fn mount_ext4(dev: &Path, mount_point: &Path, discard: bool) -> Result<()> {
-        let mut mount = Command::new("mount");
         if discard {
-            mount.args(["-o", "discard"]);
-        }
-        let status = mount.arg(dev).arg(mount_point).status()?;
-        if !status.success() {
-            bail!("Failed to mount ext4 filesystem: {status}");
+            cmd! {
+                resize2fs $dev;
+                mount -o discard $dev $mount_point;
+            }
+            .context("failed to resize and mount ext4 filesystem with discard")?;
+        } else {
+            cmd! {
+                resize2fs $dev;
+                mount $dev $mount_point;
+            }
+            .context("failed to resize and mount ext4 filesystem")?;
         }
         Ok(())
     }
