@@ -60,7 +60,7 @@ mod host_share;
 mod id_pool;
 mod image;
 mod mr_config;
-mod network;
+pub(crate) mod network;
 mod qemu;
 pub(crate) mod registry;
 mod vm_info;
@@ -806,6 +806,9 @@ impl App {
                 // handed out is its own to state -- and the mapping that lost
                 // is the one worth naming.
                 Some(bound) => {
+                    // What was answered, not what was asked. `GetInfo` reports
+                    // the difference rather than the request.
+                    network.ingress = bound.clone();
                     for request in asked {
                         if !bound.iter().any(|binding| {
                             binding.protocol == request.protocol
@@ -1036,7 +1039,10 @@ impl App {
                     debug!(vm_id, %error, "no netd to release interfaces from")
                 }
                 Err(error) => {
-                    warn!(vm_id, "failed to release netd-managed interfaces: {error:#}")
+                    warn!(
+                        vm_id,
+                        "failed to release netd-managed interfaces: {error:#}"
+                    )
                 }
             }
             return;
@@ -2416,9 +2422,8 @@ mod tests {
             "an operation it does not have is not sent"
         );
 
-        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
-            "hello", "gc",
-        ]));
+        let netd =
+            netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello", "gc"]));
         let app = app_talking_to(netd.socket());
         app.reconcile_netd_interfaces().await;
         let request = &netd.seen()[1];

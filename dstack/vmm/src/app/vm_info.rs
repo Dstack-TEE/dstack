@@ -126,6 +126,31 @@ fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
     value.filter(|value| !value.as_ref().trim().is_empty())
 }
 
+/// Whether one mapping's host port is actually reachable at the guest.
+///
+/// A mapping is a request, and which NIC carries it decides who answers it:
+/// QEMU's `hostfwd` on a user-mode NIC, always; the node's netd on a bridge
+/// NIC, which may not forward host ports at all. A mapping naming a NIC the VM
+/// no longer has is answered by nobody. Reporting the request as the answer is
+/// how a VM could list published ports that nothing on the host forwarded.
+fn published_at(mapping: &crate::app::PortMapping, networks: &[Networking]) -> bool {
+    let Some(nic_index) = crate::app::network::ingress_nic(mapping, networks) else {
+        return false;
+    };
+    let Some(network) = networks.get(nic_index) else {
+        return false;
+    };
+    if network.nic.mode == crate::config::NetworkingMode::User {
+        // QEMU carries these itself, for as long as it is up.
+        return true;
+    }
+    network.ingress.iter().any(|binding| {
+        binding.protocol == mapping.protocol.as_str()
+            && binding.host_port == mapping.from
+            && binding.guest_port == mapping.to
+    })
+}
+
 impl VmInfo {
     /// Takes no `CvmConfig` on purpose. Everything it reports about a VM's
     /// data plane was decided when that VM launched and written into
@@ -198,6 +223,9 @@ impl VmInfo {
                         .port_map
                         .iter()
                         .map(|mapping| pb::PortMapping {
+                            published: self
+                                .running
+                                .then(|| published_at(mapping, effective_networks)),
                             nic_index: mapping.nic_index.map(|index| index as u32),
                             protocol: mapping.protocol.as_str().into(),
                             host_address: mapping.address.to_string(),
@@ -328,8 +356,62 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::{interfaces_to_proto, networking_to_proto, sanitize_optional};
-    use crate::config::{NetworkingMode, NicNetworking};
+    use super::{interfaces_to_proto, networking_to_proto, published_at, sanitize_optional};
+    use crate::app::PortMapping;
+    use crate::config::{Networking, NetworkingMode, NicNetworking, Protocol};
+    use crate::netd::IngressBinding;
+
+    fn nic(mode: NetworkingMode) -> Networking {
+        Networking {
+            nic: NicNetworking {
+                mode,
+                ..NicNetworking::default()
+            },
+            ..Networking::default()
+        }
+    }
+
+    fn mapping(host_port: u16, nic_index: Option<usize>) -> PortMapping {
+        PortMapping {
+            address: "0.0.0.0".parse().unwrap(),
+            protocol: Protocol::Tcp,
+            from: host_port,
+            to: 8080,
+            nic_index,
+        }
+    }
+
+    /// A mapping is a request. Which NIC carries it decides who answers it,
+    /// and on a bridge the answer comes from a netd that may not forward host
+    /// ports at all -- so reporting the request as the answer is how a VM
+    /// could list published ports nothing on the host forwarded.
+    #[test]
+    fn a_port_is_reported_published_only_where_something_publishes_it() {
+        // QEMU carries a user-mode NIC's mappings itself.
+        let networks = [nic(NetworkingMode::User)];
+        assert!(published_at(&mapping(443, None), &networks));
+
+        // A bridge NIC's are netd's to publish, and this node's netd said
+        // nothing about them.
+        let networks = [nic(NetworkingMode::Bridge)];
+        assert!(!published_at(&mapping(443, None), &networks));
+
+        // Until it does.
+        let mut published = nic(NetworkingMode::Bridge);
+        published.ingress = vec![IngressBinding {
+            protocol: "tcp".into(),
+            host_address: "0.0.0.0".into(),
+            host_port: 443,
+            guest_port: 8080,
+        }];
+        let networks = [published];
+        assert!(published_at(&mapping(443, None), &networks));
+        // Answered for one port is not answered for another.
+        assert!(!published_at(&mapping(444, None), &networks));
+
+        // A mapping naming a NIC the VM no longer has is answered by nobody.
+        assert!(!published_at(&mapping(443, Some(7)), &networks));
+    }
 
     /// Custom mode hands the operator the whole netdev string and the VMM never
     /// parses it, so it has no data-plane state to report. Reporting the

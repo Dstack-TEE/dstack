@@ -1095,6 +1095,15 @@ pub struct Networking {
     /// the VM runs, and what has to be removed is what was created.
     #[serde(default, skip_serializing_if = "NetdInterface::is_none")]
     pub netd_interface: NetdInterface,
+    /// The host ports netd actually published for this NIC.
+    ///
+    /// Runtime state, like `device`: resolution always clears it. What was
+    /// asked for lives in the manifest; this is what was answered, and the
+    /// difference between the two is the whole reason to keep it. Reporting
+    /// the request as though it were the answer is how a VM's ports could be
+    /// listed as published while nothing on the host forwarded them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ingress: Vec<crate::netd::IngressBinding>,
 }
 
 /// The host interface netd created for a NIC, if any.

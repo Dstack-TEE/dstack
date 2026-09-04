@@ -120,6 +120,15 @@ pub struct PrepareBridgeRequest {
     /// sends. Whether a netd forwards them is its own business; this states the
     /// requirement rather than assuming it is met, and the response says what
     /// was actually done.
+    ///
+    /// Owned by the interface. Whatever a netd establishes to satisfy this is
+    /// released when the interface is -- by `remove`, by `remove_all`, or by a
+    /// collection -- and there is deliberately no operation that releases it
+    /// separately. A host port outliving the interface it was forwarding to is
+    /// a leak nothing would ever collect: the interface is the only thing that
+    /// carries an ownership record, so a reservation that survived it could
+    /// never be attributed to a VM again. A prepare for an identity that
+    /// already has an interface replaces both together.
     #[serde(default)]
     pub ingress: Vec<IngressRequest>,
 }
@@ -280,6 +289,9 @@ pub enum Request {
     Hello,
     PrepareBridge(PrepareBridgeRequest),
     PrepareMacvtap(PrepareMacvtapRequest),
+    ///
+    /// Releases everything the interface owns, including any host ports a
+    /// forwarding netd published for it. See [`PrepareBridgeRequest::ingress`].
     Remove {
         #[serde(flatten)]
         identity: InterfaceIdentity,
@@ -296,6 +308,9 @@ pub enum Request {
     /// that lost a NIC leaves the same thing behind. Both are found here
     /// without a record, because every name netd can produce for a VM is
     /// derivable from its identity.
+    ///
+    /// Releases everything those interfaces own, host ports included. See
+    /// [`PrepareBridgeRequest::ingress`].
     RemoveAll {
         instance_id: String,
         vm_id: String,
@@ -320,6 +335,9 @@ pub enum Request {
     /// The one operation that does not need to be told what to look for. Per-VM
     /// teardown reaches only what its caller can still name; this reaches
     /// what nothing names any more, which is the only place a leak can end up.
+    ///
+    /// Releases everything those interfaces own, host ports included. See
+    /// [`PrepareBridgeRequest::ingress`].
     Gc {
         instance_id: String,
         /// Every VM this instance still has, running or not. Not the running
@@ -395,7 +413,10 @@ enum Outcome {
         ingress: Option<Vec<IngressBinding>>,
     },
     /// A sweep names no single interface, so it reports how many it deleted.
-    Swept { removed: usize, incomplete: bool },
+    Swept {
+        removed: usize,
+        incomplete: bool,
+    },
     /// A collection reports what it took as well as how much, because what it
     /// took is the part an operator has to be able to disagree with.
     Collected {
@@ -471,7 +492,10 @@ pub fn tap_name(identity: &InterfaceIdentity) -> String {
         identity.instance_id, identity.vm_id, identity.nic_index
     );
     let digest = Sha256::digest(input.as_bytes());
-    format!("{TAP_PREFIX}{}", hex::encode(&digest[..TAP_DIGEST_CHARS / 2]))
+    format!(
+        "{TAP_PREFIX}{}",
+        hex::encode(&digest[..TAP_DIGEST_CHARS / 2])
+    )
 }
 
 /// The ownership record netd writes onto every interface it creates.
@@ -679,7 +703,11 @@ impl Reachability {
             Self::Unreachable => "unreachable".to_string(),
             Self::Legacy => "reachable, predates capability reporting".to_string(),
             Self::Capable(capabilities) => {
-                format!("{} [{}]", capabilities.version, capabilities.operations.join(" "))
+                format!(
+                    "{} [{}]",
+                    capabilities.version,
+                    capabilities.operations.join(" ")
+                )
             }
         }
     }
@@ -914,10 +942,9 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
         Request::PrepareMacvtap(request) => {
             prepare_macvtap(libvirt_uri, &request, config.filter_policy())
         }
-        Request::List { instance_id } => Ok(Outcome::Listed(list_interfaces(
-            libvirt_uri,
-            &instance_id,
-        ))),
+        Request::List { instance_id } => {
+            Ok(Outcome::Listed(list_interfaces(libvirt_uri, &instance_id)))
+        }
         Request::RemoveAll { instance_id, vm_id } => {
             let (removed, incomplete) = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
             Ok(Outcome::Swept {
@@ -1180,11 +1207,7 @@ fn remove_interface_in_pass(uri: &str, tap: &str, libvirt: &mut bool) -> Result<
 /// less than the thing it replaced is not a sweep. Those names are decided
 /// against a single listing, because the whole point of enumerating a bounded
 /// space is that deciding one name stays cheap.
-fn sweep_vm_interfaces(
-    libvirt_uri: &str,
-    instance_id: &str,
-    vm_id: &str,
-) -> Result<(usize, bool)> {
+fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Result<(usize, bool)> {
     let identity = InterfaceIdentity {
         instance_id: instance_id.to_string(),
         vm_id: vm_id.to_string(),
@@ -1412,8 +1435,9 @@ fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord>
                 // creates. Listing it would invite a collection to delete it.
                 continue;
             };
-            let alias = std::fs::read_to_string(Path::new("/sys/class/net").join(&tap).join("ifalias"))
-                .unwrap_or_default();
+            let alias =
+                std::fs::read_to_string(Path::new("/sys/class/net").join(&tap).join("ifalias"))
+                    .unwrap_or_default();
             let owner = owner_of(&tap, &alias);
             seen.insert(tap.clone());
             records.push(InterfaceRecord {
@@ -1877,7 +1901,9 @@ pub(crate) mod testing {
                         };
                         recorder.lock().expect("poisoned").push(request.clone());
                         let response = answer(&behavior, &request);
-                        let _ = stream.write_all(&serde_json::to_vec(&response).unwrap()).await;
+                        let _ = stream
+                            .write_all(&serde_json::to_vec(&response).unwrap())
+                            .await;
                         let _ = stream.shutdown().await;
                     });
                 }
@@ -2472,13 +2498,19 @@ mod tests {
     /// means nothing.
     #[test]
     fn a_sweep_reports_a_count_and_no_interface() {
-        let value = serde_json::to_value(Outcome::Swept { removed: 3, incomplete: false }.into_response()).unwrap();
+        let value = serde_json::to_value(
+            Outcome::Swept {
+                removed: 3,
+                incomplete: false,
+            }
+            .into_response(),
+        )
+        .unwrap();
         assert_eq!(value["removed"], 3);
         assert!(value.get("tap").is_none());
 
         // A prepare still names one, because the caller hands that name to QEMU.
-        let value =
-            serde_json::to_value(Outcome::tap("dtabc".into()).into_response()).unwrap();
+        let value = serde_json::to_value(Outcome::tap("dtabc".into()).into_response()).unwrap();
         assert_eq!(value["tap"], "dtabc");
         assert!(value.get("removed").is_none());
     }
@@ -2531,7 +2563,9 @@ mod tests {
         assert!(validate_identity(&identity("instance", &long, 0)).is_ok());
         let identity_too_long = identity(&"i".repeat(128), &long, 255);
         assert!(interface_alias(&identity_too_long).len() > MAX_IFALIAS);
-        let error = validate_identity(&identity_too_long).unwrap_err().to_string();
+        let error = validate_identity(&identity_too_long)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("too long to record"), "{error}");
     }
 
@@ -2563,11 +2597,7 @@ mod tests {
         }
     }
 
-    fn plan(
-        records: &[InterfaceRecord],
-        live: &[&str],
-        policy: UnattributedPolicy,
-    ) -> Vec<String> {
+    fn plan(records: &[InterfaceRecord], live: &[&str], policy: UnattributedPolicy) -> Vec<String> {
         let live: HashSet<String> = live.iter().map(|vm| vm.to_string()).collect();
         gc_plan(
             records,
@@ -2661,7 +2691,10 @@ mod tests {
         assert!(!is_unreachable(&error));
 
         let netd = testing::FakeNetd::spawn(testing::Behavior::capable(&["hello", "remove_all"]));
-        assert_eq!(remove_all(netd.socket(), "instance", "vm").await.unwrap(), 0);
+        assert_eq!(
+            remove_all(netd.socket(), "instance", "vm").await.unwrap(),
+            0
+        );
     }
 
     /// Every "an unreachable netd is not a failure" branch in the VMM hangs
@@ -2696,7 +2729,8 @@ mod tests {
         assert!(!reachability.supports("remove_all"));
         assert!(!reachability.forwards_ingress());
 
-        let netd = testing::FakeNetd::spawn(testing::Behavior::forwarding(&["hello", "remove_all"]));
+        let netd =
+            testing::FakeNetd::spawn(testing::Behavior::forwarding(&["hello", "remove_all"]));
         let reachability = probe(netd.socket()).await;
         assert!(reachability.supports("remove_all"));
         assert!(!reachability.supports("gc"));

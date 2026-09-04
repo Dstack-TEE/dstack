@@ -24,8 +24,10 @@ use path_absolutize::Absolutize;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
+use crate::app::network::ingress_nic;
 use crate::app::{
-    mode_carries_ingress, needs_swtpm, resolve_networking, validate_resolved_network,
+    mode_carries_ingress, needs_swtpm, resolve_networking, resolved_networks,
+    validate_resolved_network,
     validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
     VmWorkDir,
 };
@@ -831,12 +833,63 @@ impl RpcHandler {
 
         Ok(true)
     }
+
+    /// Refuses a port mapping this node has no way to publish.
+    ///
+    /// At deployment, where refusing costs nothing: nothing is running on the
+    /// answer yet, and the alternative is a VM that reports published ports
+    /// nothing on the host forwards. A launch only warns about the same thing,
+    /// because a VM deployed before this has been running with its ports
+    /// dropped, and failing it on upgrade would turn a silent misconfiguration
+    /// into an outage.
+    ///
+    /// Two ways to have nowhere to go. A mapping can resolve to no NIC at all
+    /// -- a VM whose every NIC is macvtap or custom -- or to a bridge NIC on a
+    /// node whose netd builds interfaces and does not forward host ports, which
+    /// is what the netd in this repository does.
+    async fn refuse_unpublishable_ports(&self, manifest: &Manifest) -> Result<()> {
+        let networks = resolved_networks(manifest, &self.app.config.cvm);
+        let mut needs_netd = Vec::new();
+        for mapping in &manifest.port_map {
+            let backend = ingress_nic(mapping, &networks).and_then(|index| networks.get(index));
+            let named = format!(
+                "{} {}:{}",
+                mapping.protocol.as_str(),
+                mapping.address,
+                mapping.from
+            );
+            match backend {
+                None => bail!(
+                    "port mapping {named} has no NIC to enter through: this VM has no user-mode \
+                     or bridge interface"
+                ),
+                // QEMU carries these itself.
+                Some(network) if network.nic.mode == NetworkingMode::User => {}
+                Some(_) => needs_netd.push(named),
+            }
+        }
+        if needs_netd.is_empty() {
+            return Ok(());
+        }
+        let reachability = self.app.netd_capabilities().await;
+        if reachability.forwards_ingress() {
+            return Ok(());
+        }
+        bail!(
+            "port mapping {} enters through a bridge NIC, which only netd can publish, and the \
+             netd on this node does not forward host ports ({}). Put the mapping on a user-mode \
+             NIC with @<nic>, or deploy a netd that forwards",
+            needs_netd.join(", "),
+            reachability.describe()
+        )
+    }
 }
 
 impl VmmRpc for RpcHandler {
     async fn create_vm(self, request: VmConfiguration) -> Result<Id> {
         let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
         self.validate_port_mapping_conflicts(None, &manifest.port_map)?;
+        self.refuse_unpublishable_ports(&manifest).await?;
         let id = manifest.id.clone();
         info!(vm_id = %id, "create_vm RPC called");
         let app_id = manifest.app_id.clone();
@@ -1032,6 +1085,14 @@ impl VmmRpc for RpcHandler {
             &manifest.port_map,
             &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
         )?;
+        // Only when this request moved one of them. A VM deployed before the
+        // node could answer for its ports must stay editable in every other
+        // respect: read-modify-write sends the whole configuration back, and
+        // refusing a memory change over a port mapping nobody touched would
+        // make the VM unmanageable rather than fixed.
+        if request.update_ports || request.update_networking {
+            self.refuse_unpublishable_ports(&manifest).await?;
+        }
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
             .context("failed to read app compose for swtpm decision")?;
         manifest.swtpm = needs_swtpm(
