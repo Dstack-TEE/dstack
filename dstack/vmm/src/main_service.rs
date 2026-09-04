@@ -1068,6 +1068,9 @@ impl VmmRpc for RpcHandler {
                 let networks = networks_from_proto(&request.networks, &cvm)?;
                 resolve_requested_networks(&networks, &cvm, manifest.vcpu)?
             };
+            // A VM being removed is not one to reconfigure, and removal holds
+            // this lock until it has exited.
+            self.app.refuse_if_removing(&request.id)?;
             // The lock first, then the question. Reading "not running" outside
             // it and acting on the answer inside is the exact race the lock
             // exists to close: a launch can start, prepare its interfaces and

@@ -472,7 +472,13 @@ impl App {
         Ok(())
     }
 
-    fn refuse_if_removing(&self, id: &str) -> Result<()> {
+    /// Refuses an operation on a VM that is being removed.
+    ///
+    /// Cheap, and taken before the launch lock as well as under it. Removal
+    /// holds that lock until the VM has exited -- hours, by its own estimate --
+    /// so anything that only asked afterwards would wait the removal out in
+    /// order to be told no.
+    pub(crate) fn refuse_if_removing(&self, id: &str) -> Result<()> {
         let state = self.lock();
         if state.get(id).is_some_and(|vm| vm.state.removing) {
             bail!("VM is being removed");
@@ -621,6 +627,10 @@ impl App {
     }
 
     pub async fn stop_vm(&self, id: &str) -> Result<()> {
+        // Removal stops the VM itself and holds the launch lock while it does,
+        // so this would otherwise wait hours to do again what is already being
+        // done.
+        self.refuse_if_removing(id)?;
         if let Some(vm) = self.lock().get_mut(id) {
             vm.state.auto_restart.reset();
         }
