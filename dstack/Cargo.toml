@@ -143,6 +143,8 @@ log = "0.4.26"
 moka = { version = "0.12.15", default-features = false, features = ["sync"] }
 notify = "8.0.0"
 nvml-wrapper = "0.12.1"
+# Raw NVML entry points the safe wrapper does not bind (fabric + P2P status).
+nvml-wrapper-sys = "0.9.1"
 rand = "0.8.5"
 regorus = { version = "0.10.1", default-features = false, features = ["full-opa", "arc"] }
 tracing = "0.1.40"
