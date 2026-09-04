@@ -58,11 +58,11 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 info() {
-    echo "$*" >&2
+    printf '%s\n' "$*" >&2
 }
 
 error() {
-    echo "error: $*" >&2
+    printf 'error: %s\n' "$*" >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -189,26 +189,26 @@ resolve_source() {
             if git rev-parse --verify "origin/$ref" >/dev/null 2>&1; then
                 git pull --ff-only origin "$ref"
             fi
-        )
+        ) >&2
     elif [ -n "$src" ]; then
         info "cloning dstack source into $src"
-        git clone "$repo" "$src"
+        git clone "$repo" "$src" >&2
         (
             cd "$src"
             git fetch --tags origin
             git checkout "$ref"
-        )
+        ) >&2
     else
         need_cmd mktemp
         tmp_src=$(mktemp -d "${TMPDIR:-/tmp}/dstack-install.XXXXXX")
         src="$tmp_src/source"
         info "cloning dstack source into a temporary checkout"
-        git clone "$repo" "$src"
+        git clone "$repo" "$src" >&2
         (
             cd "$src"
             git fetch --tags origin
             git checkout "$ref"
-        )
+        ) >&2
     fi
 
     abs_dir "$src"
@@ -263,7 +263,7 @@ else
     install -d -m 0755 "$bin_dir"
 fi
 
-echo "building dstackup from $checkout"
+info "building dstackup from $checkout"
 (
     cd "$core_checkout"
     cargo build --release \
