@@ -988,6 +988,21 @@ impl VmmRpc for RpcHandler {
 
     async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
         info!(vm_id = %request.id, "update_vm RPC called");
+        // A VM being removed is not one to reconfigure. Before the lock,
+        // because removal holds it across the whole teardown and anything that
+        // only asked afterwards would wait that out in order to be told no.
+        self.app.refuse_if_removing(&request.id)?;
+        // Held from here rather than around the parts that touch the host,
+        // because everything below writes into the workdir -- the compose
+        // file first, the manifest last -- and `put_manifest` creates the
+        // directory it writes into. An update that resumed after a removal
+        // deleted that directory would recreate it holding nothing but a
+        // manifest: invisible to `list_vms`, unloadable at every start, and
+        // claiming the VM's netd interfaces against collection forever.
+        let _launch = self.app.launch_lock(&request.id).await;
+        // Again under the lock: removal can have claimed the VM while this
+        // waited for it.
+        self.app.refuse_if_removing(&request.id)?;
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
@@ -1068,16 +1083,12 @@ impl VmmRpc for RpcHandler {
                 let networks = networks_from_proto(&request.networks, &cvm)?;
                 resolve_requested_networks(&networks, &cvm, manifest.vcpu)?
             };
-            // A VM being removed is not one to reconfigure, and removal holds
-            // this lock until it has exited.
-            self.app.refuse_if_removing(&request.id)?;
-            // The lock first, then the question. Reading "not running" outside
-            // it and acting on the answer inside is the exact race the lock
-            // exists to close: a launch can start, prepare its interfaces and
-            // deploy QEMU in between, and the release would then delete the
-            // interfaces of a VM that is running -- silently, since QEMU stays
-            // up and the supervisor still reports it healthy.
-            let _launch = self.app.launch_lock(&request.id).await;
+            // Under the launch lock this whole call holds. Reading "not
+            // running" outside it and acting on the answer inside is the exact
+            // race the lock exists to close: a launch can start, prepare its
+            // interfaces and deploy QEMU in between, and the release would
+            // then delete the interfaces of a VM that is running -- silently,
+            // since QEMU stays up and the supervisor still reports it healthy.
             let is_running = self
                 .app
                 .supervisor
@@ -1093,18 +1104,18 @@ impl VmmRpc for RpcHandler {
             }
             manifest.networks = networks;
         }
-        // After both, since either half can move and the other still has to
-        // agree with it.
-        validate_port_mapping_nics(
-            &manifest.port_map,
-            &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
-        )?;
-        // Only when this request moved one of them. A VM deployed before the
-        // node could answer for its ports must stay editable in every other
-        // respect: read-modify-write sends the whole configuration back, and
-        // refusing a memory change over a port mapping nobody touched would
-        // make the VM unmanageable rather than fixed.
+        // Both only when this request moved one of the two halves, and after
+        // both, since either half can move and the other still has to agree
+        // with it. A VM deployed before the node could answer for its ports
+        // must stay editable in every other respect: read-modify-write sends
+        // the whole configuration back, and refusing a memory change over a
+        // port mapping nobody touched -- or over a node default that changed
+        // under it -- would make the VM unmanageable rather than fixed.
         if request.update_ports || request.update_networking {
+            validate_port_mapping_nics(
+                &manifest.port_map,
+                &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
+            )?;
             self.refuse_unpublishable_ports(&manifest).await?;
         }
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
