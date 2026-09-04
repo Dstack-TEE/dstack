@@ -653,15 +653,6 @@ pub struct NetdConfig {
     /// not reach. Zero turns it off.
     #[serde(default = "default_reconcile_interval")]
     pub reconcile_interval_secs: u64,
-    /// Whether a collection may delete interfaces it cannot attribute.
-    ///
-    /// Off. An interface carrying no ownership record is not nobody's: on a
-    /// host where two VMM instances share one netd, it may be the other one's
-    /// running VM, and before netd recorded ownership every interface looked
-    /// like this. Turn it on only where nothing else creates interfaces in
-    /// netd's name space -- a single VMM instance on the host.
-    #[serde(default)]
-    pub collect_unattributed: bool,
 }
 
 /// See [`NetdConfig::reconcile_interval_secs`].
@@ -677,7 +668,6 @@ impl Default for NetdConfig {
             libvirt_uri: default_libvirt_uri(),
             network_filter: None,
             reconcile_interval_secs: default_reconcile_interval(),
-            collect_unattributed: false,
         }
     }
 }

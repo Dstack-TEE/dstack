@@ -99,6 +99,17 @@ enum NetdCommand {
     /// For a VM whose VMM will never ask again -- one whose directory was
     /// deleted by hand, or whose instance is gone. A running VMM collects
     /// these itself; this is for when there is no longer one to do it.
+    /// Delete one interface by name.
+    ///
+    /// For what nothing else can reach: an interface built before netd
+    /// recorded ownership, or by another netd, whose VM is gone. `netd list`
+    /// shows these with no instance and no VM -- nothing can attribute them,
+    /// so no VMM will ever collect them, and an operator who can tell what
+    /// they are says so here.
+    RemoveInterface {
+        /// The interface name, as `netd list` prints it.
+        name: String,
+    },
     RemoveVm {
         /// The `cvm.instance_id` of the VMM that created them. `netd list`
         /// shows it.
@@ -262,6 +273,13 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
                     "{unattributed} carry no ownership record, so a collection will not touch them"
                 );
             }
+            Ok(())
+        }
+        NetdCommand::RemoveInterface { name } => {
+            netd::remove_interface_named(&config.socket, name)
+                .await
+                .with_context(|| format!("failed to remove {name}"))?;
+            println!("removed {name}");
             Ok(())
         }
         NetdCommand::RemoveVm { instance, vm } => {

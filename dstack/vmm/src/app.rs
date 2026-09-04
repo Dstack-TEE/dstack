@@ -713,9 +713,11 @@ impl App {
             let response = match netd::request(&self.config.netd.socket, &request).await {
                 Ok(response) => response,
                 Err(error) => {
-                    // The client may have timed out while netd was still finishing
-                    // this Prepare. Remove the in-flight identity first; netd's
-                    // serialized accept loop processes it after Prepare completes.
+                    // The client may have timed out while netd was still
+                    // finishing this Prepare. Remove the in-flight identity
+                    // first: the operation lock makes netd run that removal
+                    // after the Prepare it is undoing, whatever order the two
+                    // connections arrived in.
                     if let Err(cleanup_error) = netd::request(
                         &self.config.netd.socket,
                         &NetdRequest::Remove {
@@ -913,8 +915,8 @@ impl App {
     /// What this node's netd can do, cached for [`NETD_PROBE_TTL`].
     ///
     /// Asked rather than inferred, and asked once per window rather than per
-    /// VM: every launch, teardown and reconciliation needs the answer, and the
-    /// probe is a connection netd's serialized accept loop has to service.
+    /// VM: it is a round trip, and the paths that want it are the ones already
+    /// making one.
     /// An unreachable answer is not cached -- a failed connect costs nothing,
     /// and holding on to it would keep a VMM blind to the netd an operator
     /// just started.
@@ -989,9 +991,15 @@ impl App {
                     }
                 }
             }
-            // A VMM that has never run has no directory and no VMs, which is a
-            // knowable answer rather than an unknowable one.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // "Never ran" and "the volume is not mounted yet" produce the same
+            // error, and only one of them means there are no VMs. A VMM that
+            // has never run has nothing to collect either way, so declining
+            // costs nothing and the other reading costs every interface this
+            // instance owns.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                debug!("no VM directory yet; not collecting interfaces");
+                return None;
+            }
             Err(error) => {
                 warn!("failed to read the VM directory: {error}; not collecting interfaces");
                 return None;
@@ -1005,88 +1013,104 @@ impl App {
     ///
     /// Per-VM release reaches only what its caller can still name. This reaches
     /// what nothing names any more, which is where a leak actually ends up: a
-    /// VM removed while the VMM was down, a workdir deleted by hand, a
-    /// teardown that raced a netd outage and was never retried because the VM
-    /// it belonged to no longer exists to retry it.
+    /// VM removed while the VMM was down, a workdir deleted by hand, a teardown
+    /// that raced a netd outage and was never retried because the VM it
+    /// belonged to no longer exists to retry it.
     ///
-    /// The live set is every VM this instance has, running or not. Not the
+    /// The decision is made here and not in netd, and that is the whole design.
+    /// A collection decided in netd is decided against a set of live VMs that
+    /// was true when the caller sent it: netd runs the request when it wins the
+    /// operation lock, which may be long after, and a VM created in between is
+    /// absent from the set and present on the host. netd cannot close that --
+    /// the lock that would close it is the VMM's per-VM launch lock, and netd
+    /// has no way to take it. Here, each VM is decided under exactly that lock
+    /// and re-checked while holding it, so a launch and a collection of the
+    /// same VM cannot both believe they are alone.
+    ///
+    /// What is claimed is every VM this instance has, running or not. Not the
     /// running set: a VMM restarts under VMs that keep running, and collecting
     /// by what is running would delete their interfaces out from under them.
-    ///
-    /// At startup this must run before the API is served -- the set is a
-    /// snapshot, and a VM created after it was taken would be in netd's
-    /// listing and not in the snapshot. netd's own lock keeps the collection
-    /// from overlapping a prepare; the ordering here is what keeps it from
-    /// racing the decision.
     pub(crate) async fn reconcile_netd_interfaces(&self) {
-        let Some(live) = self.claimable_vm_ids() else {
+        let Some(claimed) = self.claimable_vm_ids() else {
             return;
         };
-        let policy = if self.config.netd.collect_unattributed {
-            // The one decision worth a round trip before making it. Acting on
-            // the *absence* of an ownership record only means anything if the
-            // netd that built these interfaces writes one; asked of a netd that
-            // does not, "no record" describes every interface on the host --
-            // including another instance's running VMs.
-            let reachability = self.netd_capabilities().await;
-            if reachability.records_ownership() {
-                netd::UnattributedPolicy::Remove
-            } else {
-                warn!(
-                    netd = %reachability.describe(),
-                    "netd.collect_unattributed is set, but this netd does not record which VM an \
-                     interface belongs to, so an interface with no record says nothing about what \
-                     is using it; collecting only what is attributed"
-                );
-                netd::UnattributedPolicy::Keep
-            }
-        } else {
-            netd::UnattributedPolicy::Keep
-        };
-        match netd::collect(
-            &self.config.netd.socket,
-            &self.config.cvm.instance_id,
-            live,
-            policy,
-            false,
-        )
-        .await
-        {
-            Ok(collection) => {
-                if collection.removed > 0 {
-                    for record in &collection.collected {
-                        info!(
-                            tap = %record.tap,
-                            vm_id = record.vm_id.as_deref().unwrap_or("-"),
-                            "collected a host interface no VM of this instance claims"
-                        );
-                    }
-                    info!(
-                        removed = collection.removed,
-                        "reconciled netd-managed interfaces"
-                    );
-                }
-                if collection.incomplete {
-                    warn!("netd stopped collecting on its deadline; the next pass continues");
-                }
-            }
+        let interfaces = match netd::list(&self.config.netd.socket, "").await {
+            Ok(interfaces) => interfaces,
             Err(error) if netd::is_unreachable(&error) => {
-                debug!("no netd to reconcile interfaces with")
+                debug!("no netd to reconcile interfaces with");
+                return;
             }
             Err(error) => {
-                // Same reading a release gets: it answered, so now the question
-                // is whether the answer means it cannot do this at all.
-                if self.netd_capabilities().await.supports("gc") {
-                    warn!("failed to reconcile netd-managed interfaces: {error:#}");
+                // It answered, so ask whether the answer means it cannot do
+                // this at all -- the same reading a release gets.
+                if self.netd_capabilities().await.supports("list") {
+                    warn!("failed to list netd-managed interfaces: {error:#}");
                 } else {
                     warn!(
-                        "netd on this node cannot collect interfaces no VM claims; a VM removed \
-                         while this VMM was down leaves its host interfaces behind until the node \
-                         runs a newer netd"
+                        "netd on this node cannot say what it holds, so interfaces belonging to a \
+                         VM removed while this VMM was down stay until the node runs a newer netd"
                     );
                 }
+                return;
+            }
+        };
+        let mut unattributed = 0;
+        let mut dead = BTreeSet::new();
+        for record in &interfaces {
+            match (&record.instance_id, &record.vm_id) {
+                // Another instance's. Never ours to collect: on a host where
+                // two VMMs share one netd, this is the other one's running VM,
+                // and the ownership record is the only thing that says so.
+                (Some(instance_id), _) if instance_id != &self.config.cvm.instance_id => {}
+                (Some(_), Some(vm_id)) if !claimed.contains(vm_id) => {
+                    dead.insert(vm_id.clone());
+                }
+                (Some(_), _) => {}
+                // Built before netd recorded ownership, or by another netd.
+                // Nothing here can attribute it, so nothing here can decide
+                // about it: `dstack-vmm netd remove-interface` is where an
+                // operator who can decide says so.
+                _ => unattributed += 1,
             }
         }
+        if unattributed > 0 {
+            // Why there are any is the difference between "these are from
+            // before the upgrade and will sort themselves out" and "this netd
+            // never records ownership, so they never will".
+            let records_ownership = self.netd_capabilities().await.records_ownership();
+            info!(
+                unattributed,
+                records_ownership,
+                "host interfaces carry no ownership record, so no VMM can tell whose they are \
+                 and none will collect them; `dstack-vmm netd list` shows them and \
+                 `netd remove-interface` removes one"
+            );
+        }
+        for vm_id in dead {
+            // The lock a launch of this VM holds from before it asks netd for
+            // an interface until after it has recorded one.
+            let _launch = self.launch_lock(&vm_id).await;
+            // Re-read under it. Between the listing and this line the VM may
+            // have been created and started: its directory exists now, and its
+            // interfaces are the ones a launch just built.
+            if self.claims_vm(&vm_id) {
+                continue;
+            }
+            info!(vm_id = %vm_id, "collecting host interfaces no VM of this instance claims");
+            self.release_vm_interfaces(&vm_id, &[]).await;
+        }
+    }
+
+    /// Whether this instance has a VM by this ID at all, loaded or merely
+    /// present on disk. See [`App::claimable_vm_ids`].
+    fn claims_vm(&self, vm_id: &str) -> bool {
+        if self.lock().vms.contains_key(vm_id) {
+            return true;
+        }
+        // `validate_vm_id` keeps an ID from naming anything outside the VM
+        // directory, so this cannot be pointed at another path.
+        self.work_dir(vm_id)
+            .is_ok_and(|work_dir| work_dir.path().is_dir())
     }
 
     /// Releases every host interface netd holds for this VM.
@@ -2463,9 +2487,12 @@ mod tests {
         );
         assert_eq!(app.claimable_vm_ids(), None);
 
-        // A VMM that has never run is a knowable answer, not an unknowable one.
+        // "Never ran" and "the volume is not mounted yet" produce the same
+        // error and only one of them means there are no VMs. A VMM that has
+        // never run has nothing to collect either way, so declining costs
+        // nothing and the other reading costs every interface it owns.
         let app = app_talking_to(Path::new("/nonexistent/netd.sock"));
-        assert_eq!(app.claimable_vm_ids(), Some(Vec::new()));
+        assert_eq!(app.claimable_vm_ids(), None);
     }
 
     /// A netd outage must not become a fleet that cannot be stopped.
@@ -2505,9 +2532,9 @@ mod tests {
     }
 
     /// A probe in front of every stop is a second round trip on the hot path,
-    /// and -- because netd answers one caller at a time -- a *busy* netd would
-    /// answer it too slowly and be taken for an absent one, skipping the
-    /// release entirely. The operation cannot be misread that way.
+    /// and one whose failure mode is silence: a netd too slow to answer it
+    /// reads as an absent one, and an absent netd's release is skipped. The
+    /// operation itself cannot be misread that way.
     #[tokio::test]
     async fn a_netd_that_sweeps_is_asked_to_without_a_question_first() {
         let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
@@ -2542,59 +2569,107 @@ mod tests {
         );
     }
 
-    /// A collection is decided against the set of VMs this instance has, and
-    /// asking for one from a netd that cannot do it must not look like asking
-    /// for one that found nothing.
+    fn held(tap: &str, instance: Option<&str>, vm: Option<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "tap": tap,
+            "kind": "tap",
+            "instance_id": instance,
+            "vm_id": vm,
+            "nic_index": 0,
+            "bound": false,
+        })
+    }
+
+    /// The decision a collection is made of. It lives here, and not in netd,
+    /// because it is only safe under a lock netd cannot take -- see
+    /// [`App::reconcile_netd_interfaces`].
     #[tokio::test]
-    async fn reconciliation_is_asked_for_only_where_it_exists() {
-        let old = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
+    async fn a_collection_takes_only_what_this_instance_no_longer_claims() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("live-vm")).unwrap();
+        let netd = netd::testing::FakeNetd::spawn_holding(
+            netd::testing::Behavior::capable(&["hello", "list", "remove_all"]),
+            vec![
+                held("dt000000000001", Some("test-instance"), Some("live-vm")),
+                held("dt000000000002", Some("test-instance"), Some("dead-vm")),
+                // Another VMM instance on the same host. The ownership record
+                // is the only thing that can tell this from ours, which is why
+                // there is one: without it a collection would delete another
+                // instance's running VM's networking.
+                held("dt000000000003", Some("someone-else"), Some("dead-vm")),
+                // Built before ownership was recorded, or by another netd.
+                // Nothing here can attribute it, so nothing here decides.
+                held("dt000000000004", None, None),
+            ],
+        );
+        let app = App::new(
+            test_config(netd.socket(), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        app.reconcile_netd_interfaces().await;
+
+        let swept: Vec<serde_json::Value> = netd
+            .seen()
+            .into_iter()
+            .filter(|request| request["operation"] == "remove_all")
+            .collect();
+        assert_eq!(swept.len(), 1, "one VM collected, and only one");
+        assert_eq!(swept[0]["vm_id"], "dead-vm");
+        assert_eq!(swept[0]["instance_id"], "test-instance");
+    }
+
+    /// A netd that cannot say what it holds must not read as one holding
+    /// nothing.
+    #[tokio::test]
+    async fn a_netd_that_cannot_enumerate_collects_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
             "hello",
             "remove_all",
         ]));
-        let app = app_talking_to(old.socket());
+        let app = App::new(
+            test_config(netd.socket(), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
         app.reconcile_netd_interfaces().await;
-        // Asked for, refused, and only then asked about -- so that "cannot do
-        // this" is reported as itself rather than as a collection that failed.
-        assert_eq!(old.operations(), vec!["gc", "hello"]);
-
-        let netd =
-            netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello", "gc"]));
-        let app = app_talking_to(netd.socket());
-        app.reconcile_netd_interfaces().await;
-        assert_eq!(netd.operations(), vec!["gc"]);
-        let request = &netd.seen()[0];
-        assert_eq!(request["instance_id"], "test-instance");
-        assert_eq!(request["live_vm_ids"].as_array().unwrap().len(), 0);
-        assert_eq!(request["dry_run"], false);
-        // The conservative default: an interface with no ownership record may
-        // be another VMM instance's running VM.
-        assert_eq!(request["unattributed"], "keep");
+        assert!(
+            !netd
+                .operations()
+                .iter()
+                .any(|operation| operation == "remove_all"),
+            "nothing is collected on the strength of an answer netd could not give"
+        );
     }
 
+    /// A VM directory that cannot be read is not an absent VM. Reading it as
+    /// one offers every interface this instance owns up for collection.
     #[tokio::test]
-    async fn collecting_unattributed_interfaces_is_the_operators_to_ask_for() {
-        let netd =
-            netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello", "gc"]));
-        let mut config = test_config(netd.socket(), netd.socket().parent().unwrap());
-        config.netd.collect_unattributed = true;
-        let app = App::new(config.clone(), SupervisorClient::new("http://127.0.0.1:0"));
-        app.reconcile_netd_interfaces().await;
-        assert_eq!(netd.operations(), vec!["hello", "gc"]);
-        assert_eq!(netd.seen()[1]["unattributed"], "remove");
-
-        // Acting on the absence of a record only means anything if the netd
-        // that built these interfaces writes one. Asked of a netd that does
-        // not, "no record" describes every interface on the host -- including
-        // another instance's running VMs.
-        let anonymous =
-            netd::testing::FakeNetd::spawn(netd::testing::Behavior::anonymous(&["hello", "gc"]));
-        config.netd.socket = anonymous.socket().to_path_buf();
-        let app = App::new(config, SupervisorClient::new("http://127.0.0.1:0"));
-        app.reconcile_netd_interfaces().await;
-        assert_eq!(anonymous.seen()[1]["unattributed"], "keep");
+    async fn an_unreadable_vm_directory_collects_nothing() {
+        let netd = netd::testing::FakeNetd::spawn_holding(
+            netd::testing::Behavior::capable(&["hello", "list", "remove_all"]),
+            vec![held(
+                "dt000000000001",
+                Some("test-instance"),
+                Some("running-vm"),
+            )],
+        );
+        for run_path in [
+            Path::new("/proc/self/environ"),
+            Path::new("/nonexistent/vms"),
+        ] {
+            let app = App::new(
+                test_config(netd.socket(), run_path),
+                SupervisorClient::new("http://127.0.0.1:0"),
+            );
+            app.reconcile_netd_interfaces().await;
+        }
+        assert!(
+            netd.operations().is_empty(),
+            "an answer that could not be established is not an answer"
+        );
     }
 
-    /// The window a launch spends between reading "not running" and actually
+    /// The window a launch spends between reading "not running" and actually    /// The window a launch spends between reading "not running" and actually
     /// starting QEMU is long -- a GPU reset, a netd conversation -- and the
     /// sweep inside it deletes interfaces by deriving their names. Two entrants
     /// in that window meant the loser deleting the winner's live TAPs.

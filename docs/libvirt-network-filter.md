@@ -20,9 +20,11 @@ The measurable acceptance criteria are:
   that TAP carries a binding.
 - `network_filter = "libvirt"` creates the TAP and filter binding before QEMU
   is submitted to Supervisor, and uses QEMU `-netdev tap`.
-- An nwfilter binding outlives the TAP it was bound to, so teardown and
-  collection both clear a binding whose interface is already gone. `dstack-vmm
-  netd list` shows one as a `binding` row with no interface.
+- An nwfilter binding outlives the TAP it was bound to, so a teardown clears
+  the binding at every name that VM could have used, whether or not the
+  interface is still there. `dstack-vmm netd list` shows a binding whose
+  interface is already gone as a `binding` row; remove one with
+  `dstack-vmm netd remove-interface <name>`.
 - A failed TAP or filter setup prevents QEMU from starting and rolls back all
   interfaces prepared for that VM.
 - Normal stop and removal delete the filter binding and TAP.

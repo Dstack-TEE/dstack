@@ -271,30 +271,38 @@ sudo dstack-vmm netd remove-vm --instance path-3f9a1c8e7d2b4a60 --vm 0a1b2c3d4e5
 
 ### Collection
 
-The VMM asks `netd` to collect interfaces no VM of its claims: once at startup,
-after it has loaded its VMs and before it serves its API, and then every
-`netd.reconcile_interval_secs`. That is what reaches an interface no per-VM
-teardown can — one whose VM was removed while the VMM was down, or whose
-workdir was deleted by hand.
+The VMM reconciles what `netd` holds against the VMs it has: once at startup,
+after loading them, and then every `netd.reconcile_interval_secs`. That is what
+reaches an interface no per-VM teardown can — one whose VM was removed while
+the VMM was down, or whose workdir was deleted by hand.
 
-Three rules:
+It asks `netd list` and decides for itself, rather than asking `netd` to decide.
+The decision is only safe under the VMM's per-VM launch lock, which `netd` has
+no way to take: a collection decided inside `netd` would be decided against a
+set of live VMs that was true when the request was *sent*, and `netd` runs it
+when it wins the operation lock — possibly much later, by which time a VM
+created in between is absent from the set and present on the host. Here each
+VM is re-checked while holding the lock its own launch holds, so a launch and a
+collection of the same VM cannot both believe they are alone.
 
 | What the interface is recorded as | What happens |
 | --- | --- |
 | Another VMM instance's | Never touched. Several VMM instances share one `netd`, and the record is the only thing that can tell that instance's *running* VM from garbage |
-| This instance's, for a VM it no longer has | Collected |
-| Nothing that checks out | Kept and reported. Set `netd.collect_unattributed = true` to collect it |
-| An nwfilter binding whose interface is gone | Always collected. A record can only live on an interface, so this can never gain one — and nothing is using a binding with nothing to bind to |
+| This instance's, for a VM it no longer has | Collected, by the same whole-VM sweep a stop uses |
+| Nothing that checks out | Left alone. No VMM can tell whose it is, so no VMM decides about it |
 
 An interface with no record is not nobody's: before `netd` recorded ownership
 every interface looked like this, and on a host with two VMM instances one of
-them may be the other's running VM. Turn `collect_unattributed` on only where a
-single VMM instance owns the host.
+them may be the other's running VM. They are reported at each pass and listed
+by `netd list` with `-` for instance and VM; an operator who can tell what one
+is removes it by name:
 
-Upgrading is safe without touching anything: a collection also derives the
-names its own live VMs would occupy and keeps those, so a fleet running from
-before this existed survives the first pass, and each interface gains a record
-the next time its VM launches.
+```bash
+sudo dstack-vmm netd remove-interface dtc41d9e0b7a52
+```
+
+Nothing accumulates: each interface gains a record the next time its VM
+launches, so the set only shrinks.
 
 ### Mixing networking modes
 

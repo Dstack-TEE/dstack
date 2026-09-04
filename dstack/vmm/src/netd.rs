@@ -58,7 +58,7 @@ const OPERATIONS: &[&str] = &[
     "remove",
     "remove_all",
     "list",
-    "gc",
+    "remove_interface",
     "check",
 ];
 /// The interface names netd may create. Reserved: anything matching it is
@@ -172,30 +172,6 @@ pub struct IngressBinding {
     pub host_address: String,
     pub host_port: u16,
     pub guest_port: u16,
-}
-
-/// What a collection does about an interface it cannot attribute.
-///
-/// Unattributed is not "nobody's". It is an interface built by a netd too old
-/// to record ownership, by a third-party netd, or by this one in the instant
-/// between creating an interface and recording it -- and on a host where two
-/// VMM instances share a netd, one of those is another instance's running VM.
-/// So the default is to leave it, and to say so.
-///
-/// Nothing is stuck there: a collection still derives the names its own live
-/// VMs would occupy and keeps those, so the interfaces of a running fleet
-/// survive the upgrade that introduced the record, and each one gains a record
-/// the next time its VM launches.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UnattributedPolicy {
-    /// Leave it and report it.
-    #[default]
-    Keep,
-    /// Delete it. Only safe where nothing else creates interfaces in netd's
-    /// name space -- a node with a single VMM instance -- and the operator
-    /// says so.
-    Remove,
 }
 
 /// One host resource netd holds.
@@ -358,27 +334,16 @@ pub enum Request {
         #[serde(default)]
         instance_id: String,
     },
-    /// Delete every interface this VMM instance holds for a VM it no longer
-    /// has, and say what was left alone.
+    /// Delete one interface by name.
     ///
-    /// The one operation that does not need to be told what to look for. Per-VM
-    /// teardown reaches only what its caller can still name; this reaches
-    /// what nothing names any more, which is the only place a leak can end up.
-    ///
-    /// Releases everything those interfaces own, host ports included. See
-    /// [`PrepareBridgeRequest::ingress`].
-    Gc {
-        instance_id: String,
-        /// Every VM this instance still has, running or not. Not the running
-        /// set: a VMM restarts under VMs that keep running, and collecting by
-        /// what is running would delete their interfaces out from under them.
-        live_vm_ids: Vec<String>,
-        /// What to do with an interface carrying no ownership record.
-        #[serde(default)]
-        unattributed: UnattributedPolicy,
-        /// Report what would be collected without collecting it.
-        #[serde(default)]
-        dry_run: bool,
+    /// For what nothing else can reach: an interface built before netd recorded
+    /// ownership, or by another netd, whose VM is gone. Nothing can attribute
+    /// it, so nothing can decide about it -- but an operator looking at
+    /// `list` can, and this is how they say so. Guarded the same way every
+    /// other removal is: the name must be one netd could have created, and the
+    /// device must be one netd creates.
+    RemoveInterface {
+        tap: String,
     },
     /// Verify a deterministic TAP and binding for operations and integration
     /// diagnostics. The VMM startup path uses Prepare rather than Check.
@@ -447,13 +412,6 @@ enum Outcome {
         removed: usize,
         incomplete: bool,
     },
-    /// A collection reports what it took as well as how much, because what it
-    /// took is the part an operator has to be able to disagree with.
-    Collected {
-        collected: Vec<InterfaceRecord>,
-        removed: usize,
-        incomplete: bool,
-    },
     Hello(Capabilities),
     Listed(Vec<InterfaceRecord>),
 }
@@ -499,15 +457,6 @@ impl Outcome {
             } => {
                 response.removed = Some(removed);
                 response.incomplete = Some(incomplete);
-            }
-            Self::Collected {
-                collected,
-                removed,
-                incomplete,
-            } => {
-                response.removed = Some(removed);
-                response.incomplete = Some(incomplete);
-                response.interfaces = Some(collected);
             }
             Self::Hello(capabilities) => response.capabilities = Some(capabilities),
             Self::Listed(interfaces) => response.interfaces = Some(interfaces),
@@ -665,6 +614,14 @@ pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result
         .context("netd answered a sweep without saying what it removed")
 }
 
+/// Deletes one interface by name. See [`Request::RemoveInterface`].
+pub async fn remove_interface_named(socket: &Path, tap: &str) -> Result<()> {
+    let request = Request::RemoveInterface {
+        tap: tap.to_string(),
+    };
+    exchange(socket, &request).await.map(|_| ())
+}
+
 /// Everything netd holds, optionally narrowed to one VMM instance. See
 /// [`Request::List`].
 pub async fn list(socket: &Path, instance_id: &str) -> Result<Vec<InterfaceRecord>> {
@@ -675,39 +632,6 @@ pub async fn list(socket: &Path, instance_id: &str) -> Result<Vec<InterfaceRecor
         .await?
         .interfaces
         .context("netd answered a listing without one")
-}
-
-/// What one collection did, or would do.
-#[derive(Debug, Clone, Default)]
-pub struct Collection {
-    pub removed: usize,
-    pub collected: Vec<InterfaceRecord>,
-    pub incomplete: bool,
-}
-
-/// Deletes every interface this VMM instance holds for a VM it no longer has.
-/// See [`Request::Gc`].
-pub async fn collect(
-    socket: &Path,
-    instance_id: &str,
-    live_vm_ids: Vec<String>,
-    unattributed: UnattributedPolicy,
-    dry_run: bool,
-) -> Result<Collection> {
-    let request = Request::Gc {
-        instance_id: instance_id.to_string(),
-        live_vm_ids,
-        unattributed,
-        dry_run,
-    };
-    let response = exchange(socket, &request).await?;
-    Ok(Collection {
-        removed: response
-            .removed
-            .context("netd answered a collection without saying what it removed")?,
-        collected: response.interfaces.unwrap_or_default(),
-        incomplete: response.incomplete.unwrap_or_default(),
-    })
 }
 
 /// This node's netd, as far as it can be asked.
@@ -735,15 +659,15 @@ impl Reachability {
         }
     }
 
-    /// Whether asking this netd to forward host ports is meaningful. Unknown
-    /// counts as no: a caller that assumed yes would report ports as published
-    /// on the strength of never having asked.
     /// Whether it records which VM an interface belongs to. Unknown counts as
     /// no, for the same reason `forwards_ingress` does.
     pub fn records_ownership(&self) -> bool {
         matches!(self, Self::Capable(capabilities) if capabilities.attribution)
     }
 
+    /// Whether asking this netd to forward host ports is meaningful. Unknown
+    /// counts as no: a caller that assumed yes would report ports as published
+    /// on the strength of never having asked.
     pub fn forwards_ingress(&self) -> bool {
         matches!(self, Self::Capable(capabilities) if capabilities.ingress)
     }
@@ -806,7 +730,7 @@ async fn exchange(socket: &Path, request: &Request) -> Result<Response> {
         Request::Remove { .. } => "remove",
         Request::RemoveAll { .. } => "remove_all",
         Request::List { .. } => "list",
-        Request::Gc { .. } => "gc",
+        Request::RemoveInterface { .. } => "remove_interface",
         Request::Check { .. } => "check",
     };
     let exchange = async {
@@ -1045,18 +969,13 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
                 incomplete,
             })
         }
-        Request::Gc {
-            instance_id,
-            live_vm_ids,
-            unattributed,
-            dry_run,
-        } => collect_garbage(
-            libvirt_uri,
-            &instance_id,
-            live_vm_ids,
-            unattributed,
-            dry_run,
-        ),
+        Request::RemoveInterface { tap } => {
+            if !is_managed_name(&tap) {
+                bail!("{tap} is not a name netd could have created");
+            }
+            remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort)?;
+            Ok(Outcome::tap(tap))
+        }
         Request::Remove { identity, filtered } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
@@ -1308,7 +1227,13 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
     };
     validate_identity(&identity)?;
     let bindings = existing_bindings(libvirt_uri);
-    let mut libvirt = bindings.is_some();
+    // Not `bindings.is_some()`. A listing that could not be produced says
+    // nothing about whether a *deletion* will work, and reading it as "libvirt
+    // is down, skip the bindings" would mean a node whose listing breaks for
+    // any reason silently stops cleaning up bindings at all -- which is worse
+    // than the per-name asking this listing exists to avoid. The pass finds
+    // out by trying, once.
+    let mut libvirt = true;
     let mut removed = 0;
     let mut incomplete = false;
     let mut first_error = None;
@@ -1359,161 +1284,6 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
     }
 }
 
-/// What a collection would take, decided against a listing rather than against
-/// the host.
-///
-/// Split out so it can be reasoned about and tested without a privileged
-/// daemon: the decision is the dangerous part, not the `ip link delete` that
-/// follows it.
-fn gc_plan(
-    records: &[InterfaceRecord],
-    instance_id: &str,
-    live_vm_ids: &HashSet<String>,
-    live_names: &dyn Fn() -> HashSet<String>,
-    policy: UnattributedPolicy,
-) -> Vec<InterfaceRecord> {
-    let mut derived = None;
-    let mut collected = Vec::new();
-    for record in records {
-        let keep = match (&record.instance_id, &record.vm_id) {
-            // Someone else's, and on a host where two VMM instances share one
-            // netd, "someone else's" includes a running VM. The record is the
-            // only thing that can tell them apart, which is why there is one.
-            (Some(owner), _) if owner != instance_id => true,
-            (Some(_), Some(vm_id)) => live_vm_ids.contains(vm_id),
-            // Cannot be attributed. Derive the names this instance's live VMs
-            // would occupy and keep those, so a fleet that was running before
-            // ownership was recorded survives the upgrade that introduced it.
-            _ => {
-                let names = derived.get_or_insert_with(live_names);
-                names.contains(&record.tap)
-                    // An nwfilter binding whose interface is gone is the one
-                    // unattributable thing that is also unambiguously dead: a
-                    // record can only ever live on an interface, so this can
-                    // never gain one, and nothing is using a binding with
-                    // nothing to bind to. Left to the conservative default it
-                    // would be the one leak in this design that nothing could
-                    // ever collect -- the VM it belonged to is gone, so not
-                    // even an operator could name it.
-                    || (record.kind != "binding" && policy == UnattributedPolicy::Keep)
-            }
-        };
-        if !keep {
-            collected.push(record.clone());
-        }
-    }
-    collected
-}
-
-/// Every interface name this instance's live VMs could occupy.
-///
-/// Only ever needed when something on the host carries no ownership record, so
-/// it is derived lazily: |live| x 256 digests is cheap next to a `virsh` call
-/// but not next to nothing.
-fn live_interface_names(instance_id: &str, live_vm_ids: &HashSet<String>) -> HashSet<String> {
-    let mut names = HashSet::with_capacity(live_vm_ids.len() * (MAX_NIC_INDEX + 1));
-    for vm_id in live_vm_ids {
-        for nic_index in 0..=MAX_NIC_INDEX {
-            names.insert(tap_name(&InterfaceIdentity {
-                instance_id: instance_id.to_string(),
-                vm_id: vm_id.clone(),
-                nic_index,
-            }));
-        }
-    }
-    names
-}
-
-/// Deletes what [`gc_plan`] decided against. See [`Request::Gc`].
-fn collect_garbage(
-    libvirt_uri: &str,
-    instance_id: &str,
-    live_vm_ids: Vec<String>,
-    policy: UnattributedPolicy,
-    dry_run: bool,
-) -> Result<Outcome> {
-    if instance_id.is_empty() || instance_id.len() > 128 || instance_id.contains(':') {
-        bail!("invalid instance ID");
-    }
-    let live: HashSet<String> = live_vm_ids.into_iter().collect();
-    let records = list_interfaces(libvirt_uri, "");
-    let unattributed = records
-        .iter()
-        .filter(|record| record.instance_id.is_none())
-        .count();
-    let collected = gc_plan(
-        &records,
-        instance_id,
-        &live,
-        &|| live_interface_names(instance_id, &live),
-        policy,
-    );
-    if dry_run {
-        info!(
-            %instance_id,
-            held = records.len(),
-            unattributed,
-            would_remove = collected.len(),
-            "collection dry run"
-        );
-        return Ok(Outcome::Collected {
-            removed: 0,
-            incomplete: false,
-            collected,
-        });
-    }
-    let mut libvirt = true;
-    let mut removed = 0;
-    let mut incomplete = false;
-    let mut taken = Vec::new();
-    let deadline = std::time::Instant::now() + COLLECTION_DEADLINE;
-    for record in collected {
-        if std::time::Instant::now() >= deadline {
-            warn!("collection stopped on its deadline");
-            incomplete = true;
-            break;
-        }
-        let outcome = if record.kind == "binding" {
-            // No interface left to delete, only the binding that outlived it.
-            delete_binding(libvirt_uri, &record.tap)
-        } else {
-            remove_interface_in_pass(libvirt_uri, &record.tap, &mut libvirt)
-        };
-        match outcome {
-            Ok(()) => {
-                info!(
-                    tap = %record.tap,
-                    vm_id = record.vm_id.as_deref().unwrap_or("-"),
-                    "collected interface no live VM claims"
-                );
-                removed += 1;
-                taken.push(record);
-            }
-            // Keep going: one stuck interface must not shelter the rest.
-            Err(error) => warn!(tap = %record.tap, "failed to collect: {error:#}"),
-        }
-    }
-    let left_alone = unattributed.saturating_sub(
-        taken
-            .iter()
-            .filter(|record| record.instance_id.is_none())
-            .count(),
-    );
-    if left_alone > 0 && policy == UnattributedPolicy::Keep {
-        info!(
-            %instance_id,
-            unattributed = left_alone,
-            "interfaces carry no ownership record and were left alone; each gains one when its VM \
-             next launches"
-        );
-    }
-    Ok(Outcome::Collected {
-        removed,
-        incomplete,
-        collected: taken,
-    })
-}
-
 /// Every resource netd owns, read off the host rather than out of a record.
 ///
 /// Ownership is the reserved name plus the kernel's own answer about what kind
@@ -1540,7 +1310,7 @@ fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord>
                 "tap"
             } else {
                 // The name is netd's to use, but this is not a device netd
-                // creates. Listing it would invite a collection to delete it.
+                // creates. Listing it would invite a caller to delete it.
                 continue;
             };
             let alias =
@@ -1560,11 +1330,11 @@ fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord>
             });
         }
     }
-    // A binding outlives its interface, and an interface is the only thing
-    // that carries a record, so an orphaned binding can never be attributed.
-    // It is still netd's: nothing else creates a binding at one of these names.
+    // A binding outlives its interface, and an interface is the only thing that
+    // carries a record, so an orphaned binding can never be attributed. It is
+    // still netd's: nothing else creates a binding at one of these names.
     for name in bindings.into_iter().flatten() {
-        if is_managed_name(&name) && !seen.contains(&name) {
+        if !seen.contains(&name) {
             records.push(InterfaceRecord {
                 tap: name,
                 kind: "binding".to_string(),
@@ -1619,9 +1389,6 @@ fn remove_interface(libvirt_uri: &str, tap: &str, cleanup: BindingCleanup) -> Re
     Ok(())
 }
 
-/// Whether this is a tun/tap device. `tun_flags` is published by the tun
-/// driver and by nothing else, so its presence is the kernel's own answer --
-/// as `macvtap/` is for the other kind of device netd creates.
 /// Records who an interface belongs to, on the interface. See
 /// [`interface_alias`].
 fn set_alias(tap: &str, identity: &InterfaceIdentity) -> Result<()> {
@@ -1630,6 +1397,9 @@ fn set_alias(tap: &str, identity: &InterfaceIdentity) -> Result<()> {
         .with_context(|| format!("failed to record ownership on {tap}"))
 }
 
+/// Whether this is a tun/tap device. `tun_flags` is published by the tun
+/// driver and by nothing else, so its presence is the kernel's own answer --
+/// as `macvtap/` is for the other kind of device netd creates.
 fn is_tuntap(interface: &str) -> bool {
     Path::new("/sys/class/net")
         .join(interface)
@@ -1647,8 +1417,9 @@ fn is_macvtap(interface: &str) -> bool {
 /// Deletes an interface's nwfilter binding, if it has one.
 ///
 /// Goes through the same `COMMAND_TIMEOUT`-bounded helper as every other virsh
-/// call. netd's accept loop is strictly serialized, so an unbounded call here
-/// would let one unreachable libvirt stall every other VM's prepare and remove.
+/// call. Every mutating operation holds the operation lock, so an unbounded
+/// call here would let one unreachable libvirt stall every other VM's prepare
+/// and remove behind it.
 fn delete_binding(uri: &str, tap: &str) -> Result<()> {
     match virsh(uri, &["nwfilter-binding-delete", tap], None) {
         Ok(()) => Ok(()),
@@ -1844,15 +1615,29 @@ fn virsh_output(uri: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<String
     run_command_with_timeout(VIRSH_PATH, &full_args, stdin, COMMAND_TIMEOUT)
 }
 
-/// Every nwfilter binding libvirt currently holds, by interface name.
+/// Every nwfilter binding libvirt holds at a name netd could have created.
 ///
 /// One call, so that a sweep can decide 256 names against a set instead of
 /// asking libvirt 256 times. `None` means libvirt could not be asked at all,
 /// which on a node running unfiltered TAPs is the normal state -- `virsh` must
 /// be installed for netd to start, but `libvirtd` need not be running.
+///
+/// The command has no machine-readable mode: it prints a two-line header and
+/// then one binding per line, interface name first, and it accepts no options
+/// at all -- `--name` is not one of them, and asking for it fails the whole
+/// call. Narrowing to netd's own name space is what makes parsing a human
+/// table safe: a header, a rule line, or a column that moves cannot produce a
+/// `dt` name, and a binding at any other name is not netd's to reason about.
 fn existing_bindings(uri: &str) -> Option<HashSet<String>> {
-    match virsh_output(uri, &["nwfilter-binding-list", "--name"], None) {
-        Ok(output) => Some(output.split_whitespace().map(str::to_string).collect()),
+    match virsh_output(uri, &["nwfilter-binding-list"], None) {
+        Ok(output) => Some(
+            output
+                .lines()
+                .filter_map(|line| line.split_whitespace().next())
+                .filter(|name| is_managed_name(name))
+                .map(str::to_string)
+                .collect(),
+        ),
         Err(error) => {
             debug!("could not list nwfilter bindings: {error:#}");
             None
@@ -2008,17 +1793,28 @@ pub(crate) mod testing {
 
     impl FakeNetd {
         pub(crate) fn spawn(behavior: Behavior) -> Self {
+            Self::spawn_holding(behavior, Vec::new())
+        }
+
+        /// A netd that holds these interfaces, whatever else it does.
+        pub(crate) fn spawn_holding(behavior: Behavior, interfaces: Vec<Value>) -> Self {
+            Self::start(behavior, interfaces)
+        }
+
+        fn start(behavior: Behavior, interfaces: Vec<Value>) -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
             let socket = dir.path().join("netd.sock");
             let listener = UnixListener::bind(&socket).expect("bind");
             let seen = Arc::new(Mutex::new(Vec::new()));
             let recorder = seen.clone();
+            let interfaces = std::sync::Arc::new(interfaces);
             tokio::spawn(async move {
                 loop {
                     let Ok((mut stream, _)) = listener.accept().await else {
                         return;
                     };
                     let behavior = behavior.clone();
+                    let interfaces = interfaces.clone();
                     let recorder = recorder.clone();
                     tokio::spawn(async move {
                         let mut message = Vec::new();
@@ -2029,7 +1825,7 @@ pub(crate) mod testing {
                             return;
                         };
                         recorder.lock().expect("poisoned").push(request.clone());
-                        let response = answer(&behavior, &request);
+                        let response = answer(&behavior, &interfaces, &request);
                         let _ = stream
                             .write_all(&serde_json::to_vec(&response).unwrap())
                             .await;
@@ -2061,7 +1857,7 @@ pub(crate) mod testing {
         }
     }
 
-    fn answer(behavior: &Behavior, request: &Value) -> Value {
+    fn answer(behavior: &Behavior, interfaces: &[Value], request: &Value) -> Value {
         let operation = request["operation"].as_str().unwrap_or_default();
         let (operations, ingress, attribution) = match behavior {
             Behavior::Legacy => {
@@ -2112,8 +1908,18 @@ pub(crate) mod testing {
             }
             "remove" | "check" => json!({"ok": true, "tap": "dtdeadbeef00"}),
             "remove_all" => json!({"ok": true, "removed": 0, "incomplete": false}),
-            "gc" => json!({"ok": true, "removed": 0, "incomplete": false, "interfaces": []}),
-            "list" => json!({"ok": true, "interfaces": []}),
+            "list" => {
+                let instance = request["instance_id"].as_str().unwrap_or_default();
+                let held: Vec<Value> = interfaces
+                    .iter()
+                    .filter(|record| {
+                        instance.is_empty() || record["instance_id"].as_str() == Some(instance)
+                    })
+                    .cloned()
+                    .collect();
+                json!({"ok": true, "interfaces": held})
+            }
+            "remove_interface" => json!({"ok": true, "tap": request["tap"]}),
             _ => json!({"ok": true}),
         }
     }
@@ -2716,105 +2522,29 @@ mod tests {
         assert!(tap_name(&identity("instance", "vm", 255)).len() < 16);
     }
 
-    fn record(tap: &str, instance: Option<&str>, vm: Option<&str>) -> InterfaceRecord {
-        InterfaceRecord {
-            tap: tap.to_string(),
-            kind: "tap".to_string(),
-            instance_id: instance.map(str::to_string),
-            vm_id: vm.map(str::to_string),
-            nic_index: instance.map(|_| 0),
-            bound: false,
-        }
-    }
-
-    fn plan(records: &[InterfaceRecord], live: &[&str], policy: UnattributedPolicy) -> Vec<String> {
-        let live: HashSet<String> = live.iter().map(|vm| vm.to_string()).collect();
-        gc_plan(
-            records,
-            "ours",
-            &live,
-            &|| live_interface_names("ours", &live),
-            policy,
-        )
-        .into_iter()
-        .map(|record| record.tap)
-        .collect()
-    }
-
-    /// The decision a collection is made of, which is the dangerous half: the
-    /// `ip link delete` that follows it is not the part that can take down a
-    /// running VM.
+    /// The command prints a table for a human and accepts no options to make it
+    /// print anything else, so this parses one. Narrowing to netd's own name
+    /// space is what makes that safe.
     #[test]
-    fn a_collection_takes_only_what_this_instance_no_longer_claims() {
-        let records = [
-            record("dt000000000001", Some("ours"), Some("live-vm")),
-            record("dt000000000002", Some("ours"), Some("dead-vm")),
-            // Another VMM instance on the same host. The record is the only
-            // thing that can tell this from ours, which is why there is one:
-            // without it a collection would delete another instance's running
-            // VM's networking.
-            record("dt000000000003", Some("theirs"), Some("dead-vm")),
-        ];
-        assert_eq!(
-            plan(&records, &["live-vm"], UnattributedPolicy::Keep),
-            vec!["dt000000000002"]
-        );
-        // A VM this instance no longer has at all is exactly the case per-VM
-        // teardown can never reach: nothing is left to name it.
-        assert_eq!(
-            plan(&records, &[], UnattributedPolicy::Keep).len(),
-            2,
-            "both of ours, and never theirs"
-        );
-    }
-
-    /// The upgrade this has to survive: before ownership was recorded, every
-    /// interface on the host was unattributed, and a collection that deleted
-    /// them would take down the networking of every running VM at once.
-    #[test]
-    fn a_fleet_that_predates_the_ownership_record_survives_the_first_collection() {
-        let live_tap = tap_name(&identity("ours", "live-vm", 0));
-        let records = [
-            record(&live_tap, None, None),
-            record("dt0000000000ff", None, None),
-        ];
-
-        // The conservative default leaves both, and says so.
-        assert!(plan(&records, &["live-vm"], UnattributedPolicy::Keep).is_empty());
-
-        // Even told to collect, a name a live VM would occupy is kept: the
-        // record is missing, but the name is still derivable from the identity,
-        // and that is proof enough to keep something.
-        assert_eq!(
-            plan(&records, &["live-vm"], UnattributedPolicy::Remove),
-            vec!["dt0000000000ff".to_string()]
-        );
-    }
-
-    /// A binding outlives the interface it was bound to, so it is the one piece
-    /// of state that can never carry a record -- and therefore the one thing a
-    /// conservative default would strand forever. It is also the one
-    /// unattributable thing that is unambiguously dead: nothing is using a
-    /// binding with nothing to bind to, and the VM it belonged to is gone, so
-    /// not even an operator could name it to remove it by hand.
-    #[test]
-    fn an_orphaned_binding_is_collected_even_by_default() {
-        let mut binding = record("dt00000000beef", None, None);
-        binding.kind = "binding".to_string();
-        binding.bound = true;
-        let records = [binding];
-        assert_eq!(
-            plan(&records, &[], UnattributedPolicy::Keep),
-            vec!["dt00000000beef".to_string()]
-        );
-
-        // Except where the name is one a live VM would occupy: a filtered
-        // interface is rebuilt binding-first, so the binding can legitimately
-        // exist for a moment without one.
-        let live_tap = tap_name(&identity("ours", "live-vm", 0));
-        let mut binding = record(&live_tap, None, None);
-        binding.kind = "binding".to_string();
-        assert!(plan(&[binding], &["live-vm"], UnattributedPolicy::Keep).is_empty());
+    fn the_binding_listing_reads_a_table_meant_for_a_person() {
+        let output = "\
+ Port Dev         Filter
+---------------------------------
+ dt1e053266e9f7   clean-traffic
+ dt28b105b3031a   clean-traffic
+ vnet3            some-other-filter
+";
+        let names: HashSet<String> = output
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .filter(|name| is_managed_name(name))
+            .map(str::to_string)
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains("dt1e053266e9f7"));
+        // The header, the rule, and a binding that is not netd's all fall out.
+        assert!(!names.contains("Port"));
+        assert!(!names.contains("vnet3"));
     }
 
     /// Everything else here reasons about strings. This puts the reasoning
@@ -2914,7 +2644,6 @@ mod tests {
         // and most of them miss.
         remove_interface(uri, &tap, BindingCleanup::Skip).unwrap();
     }
-
     /// A netd that answers a sweep with no count did not sweep. Reading the
     /// absent field as zero is the same conflation `queues` and `ingress` are
     /// shaped to avoid, and here it would report a netd that cannot collect a
