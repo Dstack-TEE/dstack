@@ -11,7 +11,7 @@ type PortEntry = {
   // Which NIC the traffic enters through. Blank lets the VMM pick: the first
   // user-mode NIC, else the first bridge NIC. A single-NIC VM never needs it,
   // which is why the field only appears once a VM has more than one.
-  nic_index?: number | null;
+  nic_index?: number | string | null;
 };
 
 // ... keep your types as-is ...

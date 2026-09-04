@@ -113,7 +113,9 @@ type PortFormEntry = {
    * the whole list back, so dropping it here would silently unpin a mapping
    * whenever anyone touched an unrelated field.
    */
-  nic_index?: number | null;
+  // `v-model.number` leaves the raw string here when it does not parse, so
+  // an emptied box is `''` rather than `null`. See `normalizePorts`.
+  nic_index?: number | string | null;
 };
 
 type NetworkFormEntry = {
@@ -187,6 +189,9 @@ type UpdateDialogState = {
   disk_size: number;
   image: string;
   ports: PortFormEntry[];
+  /// What the dialog opened with, normalized, so the update can tell whether
+  /// this request moved the port mappings at all.
+  originalPorts: VmmTypes.IPortMapping[];
   attachAllGpus: boolean;
   selectedGpus: string[];
   updateGpuConfig: boolean;
@@ -278,6 +283,7 @@ function createUpdateDialogState(): UpdateDialogState {
     disk_size: 0,
     image: '',
     ports: [],
+    originalPorts: [],
     attachAllGpus: false,
     selectedGpus: [],
     updateGpuConfig: false,
@@ -455,8 +461,11 @@ fi
           port.vm_port === null || port.vm_port === undefined ? Number.NaN : Number(port.vm_port);
         // An unpinned mapping must stay unpinned rather than become NIC 0:
         // the VMM's own default is the first user-mode NIC, not the first NIC.
+        // `v-model.number` hands back the raw string when it does not parse,
+        // so a box the operator cleared arrives as `''`. `Number('')` is 0,
+        // which would pin to NIC 0 the mapping they just unpinned.
         const nicIndex =
-          port.nic_index === null || port.nic_index === undefined
+          port.nic_index === null || port.nic_index === undefined || port.nic_index === ''
             ? undefined
             : Number(port.nic_index);
         return {
@@ -474,13 +483,7 @@ fi
           port.protocol.length > 0 &&
           Number.isFinite(port.host_port) &&
           Number.isFinite(port.vm_port),
-      )
-      .map((port) => ({
-        protocol: port.protocol,
-        host_address: port.host_address,
-        host_port: port.host_port,
-        vm_port: port.vm_port,
-      }));
+      );
 
   const cloneNetworks = (configuration?: VmConfiguration | null): NetworkFormEntry[] => {
     const configured = configuration?.networks && configuration.networks.length > 0
@@ -1145,6 +1148,10 @@ type CreateVmPayloadSource = {
       disk_size: config.disk_size || 0,
       image: config.image || '',
       ports: clonePortMappings(config.ports || []),
+      // What the dialog opened with. `update_ports` means "this request moved
+      // the port mappings", and the server refuses some mappings it has to
+      // keep accepting on a request that only touched memory.
+      originalPorts: normalizePorts(clonePortMappings(config.ports || [])),
       attachAllGpus: gpuSelection.attachAll,
       selectedGpus: gpuSelection.selected,
       updateGpuConfig: false,
@@ -1324,8 +1331,13 @@ type CreateVmPayloadSource = {
       body.compose_file = composeNeedsUpdate ? await makeUpdateComposeFile() : undefined;
       body.encrypted_env = encryptedEnvPayload;
       body.user_config = updated.user_config;
-      body.update_ports = true;
-      body.ports = normalizePorts(updated.ports);
+      const ports = normalizePorts(updated.ports);
+      const portsMoved =
+        JSON.stringify(ports) !== JSON.stringify(updateDialog.value.originalPorts ?? []);
+      if (portsMoved) {
+        body.update_ports = true;
+        body.ports = ports;
+      }
       body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated, true) : undefined;
       if (updated.updateNetworking) {
         body.update_networking = true;
