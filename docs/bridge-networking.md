@@ -284,6 +284,7 @@ Three rules:
 | Another VMM instance's | Never touched. Several VMM instances share one `netd`, and the record is the only thing that can tell that instance's *running* VM from garbage |
 | This instance's, for a VM it no longer has | Collected |
 | Nothing that checks out | Kept and reported. Set `netd.collect_unattributed = true` to collect it |
+| An nwfilter binding whose interface is gone | Always collected. A record can only live on an interface, so this can never gain one — and nothing is using a binding with nothing to bind to |
 
 An interface with no record is not nobody's: before `netd` recorded ownership
 every interface looked like this, and on a host with two VMM instances one of
