@@ -226,22 +226,18 @@ A mapping resolves to exactly one NIC, and that NIC's backend decides the
 mechanism: `hostfwd=` for user mode, `netd` for a bridge. Nothing can be claimed
 by both.
 
-### Which ports are actually published
+### Which ports a bridge NIC can publish
 
-A port mapping is a *request*. Whether it is met depends on which NIC carries
-it: QEMU publishes a user-mode NIC's mappings itself, while a bridge NIC's can
-only be published by `netd`, and the `netd` in this repository builds
-interfaces and does not forward host ports.
+QEMU publishes a user-mode NIC's mappings itself, with `hostfwd=`. A bridge
+NIC's would have to be published by `netd`, and **the `netd` in this repository
+builds interfaces; it does not forward host ports.** A mapping that resolves to
+a bridge NIC is carried to `netd` in the prepare and goes no further.
 
-`GetInfo` reports `published` per mapping so the difference is visible rather
-than assumed. A deployment that asks for something this node cannot publish is
-refused outright — nothing is running on the answer yet — while a VM deployed
-before the node could answer only gets a warning at launch, so an upgrade never
-turns a silent misconfiguration into an outage.
-
-To publish a bridge NIC's ports, run a `netd` that forwards. It reports
-`ingress: true` in its `hello` and echoes what it established in each prepare;
-the VMM records that answer and holds it to it per mapping.
+The VMM does not track whether the host is forwarding. It reports what a VM
+asked for, and a mapping is refused only when the VM's own topology gives it
+nowhere to go — a pinned NIC that is macvtap or does not exist, or a VM with no
+user-mode and no bridge NIC at all. Those are facts about the VM, decided
+without asking the host anything.
 
 ## Who owns an interface
 

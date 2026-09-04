@@ -24,11 +24,10 @@ use path_absolutize::Absolutize;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
-use crate::app::network::ingress_nic;
 use crate::app::{
-    mode_carries_ingress, needs_swtpm, resolve_networking, resolved_networks,
-    validate_resolved_network, validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec,
-    Manifest, PortMapping, VmWorkDir,
+    mode_carries_ingress, needs_swtpm, resolve_networking, validate_resolved_network,
+    validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
+    VmWorkDir,
 };
 use crate::config::{CvmConfig, Networking, NetworkingMode, NicNetworking};
 
@@ -200,8 +199,22 @@ fn resolved_nic_modes(
 /// warning either.
 fn validate_port_mapping_nics(mappings: &[PortMapping], modes: &[NetworkingMode]) -> Result<()> {
     let nic_count = modes.len();
+    let has_ingress = modes.iter().any(|mode| mode_carries_ingress(*mode));
     for mapping in mappings {
         let Some(index) = mapping.nic_index else {
+            // Unpinned, so it goes wherever the default resolves -- unless
+            // there is nowhere for it to resolve to. That is a property of the
+            // VM's own topology, which is why it is decided here and not by
+            // asking the host anything.
+            if !has_ingress {
+                bail!(
+                    "port mapping {} {}:{} has no NIC to enter through: this VM has no user-mode \
+                     or bridge interface",
+                    mapping.protocol.as_str(),
+                    mapping.address,
+                    mapping.from
+                );
+            }
             continue;
         };
         let Some(mode) = modes.get(index) else {
@@ -832,71 +845,16 @@ impl RpcHandler {
 
         Ok(true)
     }
-
-    /// Refuses a port mapping this node has no way to publish.
-    ///
-    /// At deployment, where refusing costs nothing: nothing is running on the
-    /// answer yet, and the alternative is a VM that reports published ports
-    /// nothing on the host forwards. A launch only warns about the same thing,
-    /// because a VM deployed before this has been running with its ports
-    /// dropped, and failing it on upgrade would turn a silent misconfiguration
-    /// into an outage.
-    ///
-    /// Two ways to have nowhere to go. A mapping can resolve to no NIC at all
-    /// -- a VM whose every NIC is macvtap or custom -- or to a bridge NIC on a
-    /// node whose netd builds interfaces and does not forward host ports, which
-    /// is what the netd in this repository does.
-    async fn refuse_unpublishable_ports(&self, manifest: &Manifest) -> Result<()> {
-        let networks = resolved_networks(manifest, &self.app.config.cvm);
-        let mut needs_netd = Vec::new();
-        for mapping in &manifest.port_map {
-            let backend = ingress_nic(mapping, &networks).and_then(|index| networks.get(index));
-            let named = format!(
-                "{} {}:{}",
-                mapping.protocol.as_str(),
-                mapping.address,
-                mapping.from
-            );
-            match backend {
-                None => bail!(
-                    "port mapping {named} has no NIC to enter through: this VM has no user-mode \
-                     or bridge interface"
-                ),
-                // QEMU carries these itself.
-                Some(network) if network.nic.mode == NetworkingMode::User => {}
-                Some(_) => needs_netd.push(named),
-            }
-        }
-        if needs_netd.is_empty() {
-            return Ok(());
-        }
-        let reachability = self.app.netd_capabilities().await;
-        if reachability.forwards_ingress() {
-            return Ok(());
-        }
-        let named = needs_netd.join(", ");
-        // "It does not forward" and "it could not be asked" call for different
-        // fixes, and only one of them is about the deployment.
-        if !reachability.is_reachable() {
-            bail!(
-                "port mapping {named} enters through a bridge NIC, which only netd can publish, \
-                 and netd could not be reached to ask whether it does"
-            );
-        }
-        bail!(
-            "port mapping {named} enters through a bridge NIC, which only netd can publish, and \
-             the netd on this node does not forward host ports ({}). Put the mapping on a \
-             user-mode NIC with @<nic>, or run a netd that forwards",
-            reachability.describe()
-        )
-    }
 }
 
 impl VmmRpc for RpcHandler {
     async fn create_vm(self, request: VmConfiguration) -> Result<Id> {
         let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
         self.validate_port_mapping_conflicts(None, &manifest.port_map)?;
-        self.refuse_unpublishable_ports(&manifest).await?;
+        validate_port_mapping_nics(
+            &manifest.port_map,
+            &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
+        )?;
         let id = manifest.id.clone();
         info!(vm_id = %id, "create_vm RPC called");
         let app_id = manifest.app_id.clone();
@@ -1096,10 +1054,7 @@ impl VmmRpc for RpcHandler {
                 .await?
                 .is_some_and(|info| info.state.status.is_running());
             if !is_running {
-                let runtime_networks = vm_work_dir.runtime_networks();
-                self.app
-                    .release_vm_interfaces(&request.id, &runtime_networks)
-                    .await;
+                self.app.release_vm_interfaces(&request.id).await;
                 vm_work_dir.clear_runtime_networks()?;
             }
             manifest.networks = networks;
@@ -1116,7 +1071,6 @@ impl VmmRpc for RpcHandler {
                 &manifest.port_map,
                 &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
             )?;
-            self.refuse_unpublishable_ports(&manifest).await?;
         }
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
             .context("failed to read app compose for swtpm decision")?;

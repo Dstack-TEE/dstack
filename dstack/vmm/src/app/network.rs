@@ -41,7 +41,6 @@ pub(crate) fn resolve_networking(
     // node configuration that names either is rejected at startup.
     resolved.netd_interface = crate::config::NetdInterface::None;
     resolved.device.clear();
-    resolved.ingress.clear();
     if !networking.bridge.is_empty() {
         resolved.nic.bridge = networking.bridge.clone();
     }

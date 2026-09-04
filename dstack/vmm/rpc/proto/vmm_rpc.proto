@@ -191,14 +191,6 @@ message PortMapping {
   // user-mode NIC for management -- the topology multi-NIC was added for --
   // put every published port on the management NIC.
   optional uint32 nic_index = 5;
-  // Whether the host port is actually reachable at the guest right now.
-  //
-  // Absent for a VM that is not running, and from a VMM that predates the
-  // field. A mapping was only ever a request: on a bridge NIC it is met by the
-  // node's netd, which may not forward host ports at all, and reporting the
-  // request as though it were the answer is how published ports could be
-  // listed for a VM nothing on the host forwarded any traffic to.
-  optional bool published = 6;
 }
 
 // Partial configuration used when mutating an existing VM.

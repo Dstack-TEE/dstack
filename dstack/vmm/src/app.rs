@@ -316,26 +316,7 @@ pub struct App {
     /// One lock per VM, held across a launch or a teardown. See
     /// [`App::launch_lock`].
     launch_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-    /// What this node's netd last said it can do, and when. See
-    /// [`App::netd_capabilities`].
-    netd_probe: Arc<Mutex<Option<(std::time::Instant, netd::Reachability)>>>,
 }
-
-/// How long a netd capability answer is reused. Short, because netd is
-/// upgraded and restarted under a running VMM, and a VMM that cached "this one
-/// cannot sweep" across the upgrade that gave it the ability would keep
-/// falling back for as long as it stayed up.
-const NETD_PROBE_TTL: Duration = Duration::from_secs(30);
-
-/// How far past a VM's recorded NIC count a teardown reaches when netd is too
-/// old to sweep by identity.
-///
-/// The record is what a legacy netd leaves us: it cannot derive the space
-/// itself, and asking it for all 256 possible indices would be 256 round trips
-/// on every stop. Eight covers a lost NIC or two on any topology anyone
-/// deploys, each miss is one cheap no-op, and what it does not reach is
-/// collected the next time the node runs a netd that can sweep.
-const LEGACY_TEARDOWN_SPAN: usize = 8;
 
 const GUEST_AGENT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -367,7 +348,6 @@ impl App {
             config: Arc::new(config),
             pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
             launch_locks: Arc::new(Mutex::new(HashMap::new())),
-            netd_probe: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -579,14 +559,12 @@ impl App {
             ) {
                 Ok(processes) => processes,
                 Err(error) => {
-                    self.release_vm_interfaces(&vm_config.manifest.id, &runtime_networks)
-                        .await;
+                    self.release_vm_interfaces(&vm_config.manifest.id).await;
                     return Err(error);
                 }
             };
             if let Err(error) = work_dir.set_runtime_networks(&runtime_networks) {
-                self.release_vm_interfaces(&vm_config.manifest.id, &runtime_networks)
-                    .await;
+                self.release_vm_interfaces(&vm_config.manifest.id).await;
                 return Err(error);
             }
             {
@@ -596,8 +574,7 @@ impl App {
             }
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
-                    self.release_vm_interfaces(&vm_config.manifest.id, &runtime_networks)
-                        .await;
+                    self.release_vm_interfaces(&vm_config.manifest.id).await;
                     if let Err(clear_err) = work_dir.clear_runtime_networks() {
                         warn!(
                             id,
@@ -639,14 +616,13 @@ impl App {
         let _launch = self.launch_lock(id).await;
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
-        let networks = self.work_dir(id)?.runtime_networks();
         // Not fallible: a VM that has been asked to stop is stopped whether or
         // not netd could be reached. What is left behind is reclaimed by this
         // VM's next launch, which releases before it prepares, or by its
         // removal. Not by reconciliation -- a stopped VM is still one this
         // instance claims, so a VM that is never started or removed again keeps
         // its interfaces. See [`App::release_vm_interfaces`].
-        self.release_vm_interfaces(id, &networks).await;
+        self.release_vm_interfaces(id).await;
         Ok(())
     }
 
@@ -681,7 +657,7 @@ impl App {
         // it no longer wants an interface, and gating it on wanting one is how
         // the interfaces it left behind would become unreachable to every
         // later launch.
-        self.release_vm_interfaces(&vm.manifest.id, networks).await;
+        self.release_vm_interfaces(&vm.manifest.id).await;
         if !networks.iter().any(needs_netd_interface) {
             return Ok(());
         }
@@ -827,51 +803,6 @@ impl App {
                 }
                 Ok(())
             })();
-            // Ports asked for and not answered for used to vanish in silence:
-            // no warning, and `GetInfo` still listing them as though they
-            // worked.
-            let asked = &ingress[nic_index];
-            match &response.ingress {
-                // A netd that forwards says what it built, so saying nothing is
-                // how one that does not reports it. A warning rather than a
-                // refusal: a VM deployed before this has been running with its
-                // ports dropped, and failing its launch now would turn a silent
-                // misconfiguration into an outage on upgrade.
-                None if !asked.is_empty() => warn!(
-                    vm_id = %vm.manifest.id,
-                    ports = asked.len(),
-                    "netd on this node does not forward host ports, so this VM's port mappings \
-                     on interface {nic_index} are not published"
-                ),
-                // It answered, so hold it to the answer. A netd may refuse one
-                // port out of a set -- a node policy over which ports may be
-                // handed out is its own to state -- and the mapping that lost
-                // is the one worth naming.
-                Some(bound) => {
-                    // What was answered, not what was asked. `GetInfo` reports
-                    // the difference rather than the request.
-                    network.ingress = bound.clone();
-                    for request in asked {
-                        if !bound.iter().any(|binding| {
-                            binding.answers(
-                                &request.protocol,
-                                &request.host_address,
-                                request.host_port,
-                                request.guest_port,
-                            )
-                        }) {
-                            warn!(
-                                vm_id = %vm.manifest.id,
-                                "netd did not publish {} {}:{} on interface {nic_index}",
-                                request.protocol,
-                                request.host_address,
-                                request.host_port,
-                            );
-                        }
-                    }
-                }
-                None => {}
-            }
             if let Err(error) = accepted {
                 self.roll_back_prepared_networks(prepared).await;
                 return Err(error);
@@ -950,38 +881,6 @@ impl App {
                 warn!(%cleanup_error, "failed to roll back prepared network interface");
             }
         }
-    }
-
-    /// What this node's netd can do, cached for [`NETD_PROBE_TTL`].
-    ///
-    /// Asked rather than inferred, and asked once per window rather than per
-    /// VM: it is a round trip, and the paths that want it are the ones already
-    /// making one.
-    /// An unreachable answer is not cached -- a failed connect costs nothing,
-    /// and holding on to it would keep a VMM blind to the netd an operator
-    /// just started.
-    pub(crate) async fn netd_capabilities(&self) -> netd::Reachability {
-        if let Some((_, reachability)) = self
-            .netd_probe
-            .lock()
-            .or_panic("mutex poisoned")
-            .as_ref()
-            .filter(|(asked, _)| asked.elapsed() < NETD_PROBE_TTL)
-        {
-            return reachability.clone();
-        }
-        let reachability = netd::probe(&self.config.netd.socket).await;
-        // Only a real answer is cached. "Unreachable" and "too old to answer"
-        // are both produced by transient failures too, and holding either for
-        // half a minute turns one blip into a deployment refused for a reason
-        // that is not true -- `refuse_unpublishable_ports` reads this. A netd
-        // that genuinely predates `hello` is re-asked on a path that was
-        // already making a round trip.
-        if matches!(reachability, netd::Reachability::Capable(_)) {
-            *self.netd_probe.lock().or_panic("mutex poisoned") =
-                Some((std::time::Instant::now(), reachability.clone()));
-        }
-        reachability
     }
 
     /// Every VM whose interfaces this instance may still be using.
@@ -1087,16 +986,10 @@ impl App {
                 return;
             }
             Err(error) => {
-                // It answered, so ask whether the answer means it cannot do
-                // this at all -- the same reading a release gets.
-                if self.netd_capabilities().await.supports("list") {
-                    warn!("failed to list netd-managed interfaces: {error:#}");
-                } else {
-                    warn!(
-                        "netd on this node cannot say what it holds, so interfaces belonging to a \
-                         VM removed while this VMM was down stay until the node runs a newer netd"
-                    );
-                }
+                warn!(
+                    "failed to list netd-managed interfaces, so nothing is collected this pass: \
+                     {error:#}"
+                );
                 return;
             }
         };
@@ -1120,13 +1013,8 @@ impl App {
             }
         }
         if unattributed > 0 {
-            // Why there are any is the difference between "these are from
-            // before the upgrade and will sort themselves out" and "this netd
-            // never records ownership, so they never will".
-            let records_ownership = self.netd_capabilities().await.records_ownership();
             info!(
                 unattributed,
-                records_ownership,
                 "host interfaces carry no ownership record, so no VMM can tell whose they are \
                  and none will collect them; `dstack-vmm netd list` shows them and \
                  `netd remove-interface` removes one"
@@ -1150,7 +1038,7 @@ impl App {
                 continue;
             }
             info!(vm_id = %vm_id, "collecting host interfaces no VM of this instance claims");
-            self.release_vm_interfaces(&vm_id, &[]).await;
+            self.release_vm_interfaces(&vm_id).await;
         }
     }
 
@@ -1180,7 +1068,7 @@ impl App {
     /// prepares, and startup reconciliation collects what no launch will ever
     /// reach. `recorded` is not the source of truth -- it is what a netd too
     /// old to sweep by identity has to be told instead.
-    pub(crate) async fn release_vm_interfaces(&self, vm_id: &str, recorded: &[Networking]) {
+    pub(crate) async fn release_vm_interfaces(&self, vm_id: &str) {
         // Ask for the release, rather than asking whether it can be asked for.
         // A probe first would put a second round trip in front of every stop
         // and -- worse -- would make a *busy* netd look like an absent one and
@@ -1219,57 +1107,12 @@ impl App {
                 debug!(vm_id, %error, "no netd to release interfaces from")
             }
             Err(error) => {
-                // It answered, so it is up. Now the question is worth a round
-                // trip: an operation a netd does not have looks exactly like
-                // one that failed, and only one of those has a fallback. A netd
-                // that has this operation and failed at it is a failure to
-                // report, not a reason to send it eight more requests.
-                if self.netd_capabilities().await.supports("remove_all") {
-                    warn!(
-                        vm_id,
-                        "failed to release netd-managed interfaces: {error:#}"
-                    );
-                } else {
-                    self.release_recorded_interfaces(vm_id, recorded).await;
-                }
-            }
-        }
-    }
-
-    /// The teardown a netd that cannot sweep by identity gets.
-    ///
-    /// One `Remove` per index, over the record plus a margin for what the
-    /// record has lost. See [`LEGACY_TEARDOWN_SPAN`].
-    async fn release_recorded_interfaces(&self, vm_id: &str, recorded: &[Networking]) {
-        warn!(
-            vm_id,
-            "netd on this node cannot release a VM's interfaces by identity; falling back to \
-             the recorded ones. Interfaces it has no record of are left behind until this node \
-             runs a netd that can sweep"
-        );
-        for nic_index in (0..recorded.len().max(LEGACY_TEARDOWN_SPAN)).rev() {
-            // Beyond the record there is nothing to say whether the interface
-            // carried a binding, and an unfiltered removal still clears one it
-            // finds. Inside it, say what was built.
-            let filtered = recorded
-                .get(nic_index)
-                .and_then(|network| netd_teardown(network, &self.config.cvm))
-                .unwrap_or(false);
-            let identity = InterfaceIdentity {
-                instance_id: self.config.cvm.instance_id.clone(),
-                vm_id: vm_id.to_string(),
-                nic_index,
-            };
-            if let Err(error) = netd::request(
-                &self.config.netd.socket,
-                &NetdRequest::Remove { identity, filtered },
-            )
-            .await
-            {
-                if netd::is_unreachable(&error) {
-                    return;
-                }
-                warn!(vm_id, nic_index, "failed to release interface: {error:#}");
+                // Whatever this VM holds stays until it launches again, or
+                // until reconciliation collects it once nothing claims it.
+                warn!(
+                    vm_id,
+                    "failed to release netd-managed interfaces: {error:#}"
+                );
             }
         }
     }
@@ -1397,8 +1240,7 @@ impl App {
             }
         }
 
-        let runtime_networks = self.work_dir(id)?.runtime_networks();
-        self.release_vm_interfaces(id, &runtime_networks).await;
+        self.release_vm_interfaces(id).await;
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
         // Orphaned supervisor processes without the marker keep their data intact.
@@ -2584,49 +2426,35 @@ mod tests {
         let app = app_talking_to(Path::new("/nonexistent/dstack-netd.sock"));
         // Returns rather than propagating: there is no error type here on
         // purpose, because there is no caller that should act on one.
-        app.release_vm_interfaces("vm-1", &[]).await;
+        app.release_vm_interfaces("vm-1").await;
     }
 
-    /// The regression this pair exists to prevent: `remove_all` is an
-    /// operation, and an operation a netd does not have answers with an error
-    /// that looks exactly like the sweep having failed. Reading that as failure
-    /// used to fail the stop *and* leave every interface behind -- strictly
-    /// worse than the per-NIC removal it replaced.
+    /// A netd too old for the sweep refuses it, and a refusal is not a reason
+    /// to fail the stop. What it holds stays until this VM launches again or
+    /// until reconciliation collects it, which is what an operator upgrading
+    /// netd gets for free.
     #[tokio::test]
-    async fn a_netd_too_old_to_sweep_gets_the_teardown_it_understands() {
+    async fn a_netd_that_refuses_the_sweep_does_not_fail_the_stop() {
         let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::Legacy);
         let app = app_talking_to(netd.socket());
-        app.release_vm_interfaces("vm-1", &[]).await;
-
-        let operations = netd.operations();
+        app.release_vm_interfaces("vm-1").await;
         assert_eq!(
-            operations[0], "remove_all",
-            "the release is asked for, not asked about"
-        );
-        assert_eq!(
-            operations[1], "hello",
-            "only a refusal is worth a question, and then it is asked rather than inferred"
-        );
-        assert_eq!(
-            operations.iter().filter(|op| *op == "remove").count(),
-            LEGACY_TEARDOWN_SPAN,
-            "the record is not the only thing reached, even on a netd that cannot sweep"
+            netd.operations(),
+            vec!["remove_all"],
+            "asked once, and not asked about afterwards"
         );
     }
 
-    /// A probe in front of every stop is a second round trip on the hot path,
-    /// and one whose failure mode is silence: a netd too slow to answer it
-    /// reads as an absent one, and an absent netd's release is skipped. The
-    /// operation itself cannot be misread that way.
+    /// One request, no question in front of it. A probe on the hot path is a
+    /// second round trip whose failure mode is silence: a netd too slow to
+    /// answer it reads as an absent one, and an absent netd's release is
+    /// skipped.
     #[tokio::test]
-    async fn a_netd_that_sweeps_is_asked_to_without_a_question_first() {
-        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
-            "hello",
-            "remove",
-            "remove_all",
-        ]));
+    async fn a_stop_asks_netd_to_sweep_without_a_question_first() {
+        let netd =
+            netd::testing::FakeNetd::spawn(netd::testing::Behavior::handling(&["remove_all"]));
         let app = app_talking_to(netd.socket());
-        app.release_vm_interfaces("vm-1", &[]).await;
+        app.release_vm_interfaces("vm-1").await;
 
         assert_eq!(netd.operations(), vec!["remove_all"]);
         let sweep = &netd.seen()[0];
@@ -2635,30 +2463,6 @@ mod tests {
         // A sweep names no NIC: reaching the indices the caller can no longer
         // name is the entire point.
         assert!(sweep.get("nic_index").is_none());
-    }
-
-    /// A real answer is reused; anything else is asked again.
-    ///
-    /// "Unreachable" and "too old to answer" are both produced by transient
-    /// failures too, and holding either for half a minute turns one blip into
-    /// a deployment refused for a reason that is not true.
-    #[tokio::test]
-    async fn only_a_real_capability_answer_is_reused() {
-        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello"]));
-        let app = app_talking_to(netd.socket());
-        app.netd_capabilities().await;
-        app.netd_capabilities().await;
-        assert_eq!(netd.operations(), vec!["hello"], "asked once, read twice");
-
-        let legacy = netd::testing::FakeNetd::spawn(netd::testing::Behavior::Legacy);
-        let app = app_talking_to(legacy.socket());
-        app.netd_capabilities().await;
-        app.netd_capabilities().await;
-        assert_eq!(
-            legacy.operations().len(),
-            2,
-            "an answer that may have been a blip is not held onto"
-        );
     }
 
     fn held(tap: &str, instance: Option<&str>, vm: Option<&str>) -> serde_json::Value {
@@ -2680,7 +2484,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("live-vm")).unwrap();
         let netd = netd::testing::FakeNetd::spawn_holding(
-            netd::testing::Behavior::capable(&["hello", "list", "remove_all"]),
+            netd::testing::Behavior::handling(&["list", "remove_all"]),
             vec![
                 held("dt000000000001", Some("test-instance"), Some("live-vm")),
                 held("dt000000000002", Some("test-instance"), Some("dead-vm")),
@@ -2715,10 +2519,8 @@ mod tests {
     #[tokio::test]
     async fn a_netd_that_cannot_enumerate_collects_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
-            "hello",
-            "remove_all",
-        ]));
+        let netd =
+            netd::testing::FakeNetd::spawn(netd::testing::Behavior::handling(&["remove_all"]));
         let app = App::new(
             test_config(netd.socket(), dir.path()),
             SupervisorClient::new("http://127.0.0.1:0"),
@@ -2738,7 +2540,7 @@ mod tests {
     #[tokio::test]
     async fn an_unreadable_vm_directory_collects_nothing() {
         let netd = netd::testing::FakeNetd::spawn_holding(
-            netd::testing::Behavior::capable(&["hello", "list", "remove_all"]),
+            netd::testing::Behavior::handling(&["list", "remove_all"]),
             vec![held(
                 "dt000000000001",
                 Some("test-instance"),

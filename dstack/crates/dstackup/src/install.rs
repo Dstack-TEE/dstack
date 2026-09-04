@@ -298,8 +298,6 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
                     // is one NIC, and the VMM resolves that itself.
                     nic_index: None,
                     // A request, not an answer: the VMM reports what it
-                    // actually published back through `GetInfo`.
-                    published: None,
                 }],
                 ..Default::default()
             };
