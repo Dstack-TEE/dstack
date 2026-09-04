@@ -352,6 +352,7 @@ async fn main() -> Result<()> {
 
     // Preserve the existing startup validation. The broader static checks are
     // opt-in through `check-config` until they have seen wider deployment use.
+    netd::validate_instance_id(&config.cvm.instance_id)?;
     config
         .host_api
         .validate()

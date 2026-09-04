@@ -389,7 +389,8 @@ struct Response {
     /// [`COLLECTION_DEADLINE`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     incomplete: Option<bool>,
-    /// Everything netd holds. Absent, rather than empty, from a netd that
+    /// For a listing, everything netd holds; for a collection, what it took,
+    /// or would take on a dry run. Absent, rather than empty, from a netd that
     /// cannot enumerate: "I hold nothing" and "I cannot say" are answers a
     /// collection must not confuse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -547,6 +548,20 @@ pub fn is_managed_name(interface: &str) -> bool {
         && digest
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// Rejects an instance ID no interface could be recorded as belonging to.
+///
+/// At startup rather than at the first launch. The VMM derives one that is
+/// always valid; an operator who configured their own learns here rather than
+/// from the first VM that fails to get a NIC.
+pub fn validate_instance_id(instance_id: &str) -> Result<()> {
+    validate_identity(&InterfaceIdentity {
+        instance_id: instance_id.to_string(),
+        vm_id: "0".repeat(64),
+        nic_index: MAX_NIC_INDEX,
+    })
+    .context("invalid cvm.instance_id")
 }
 
 pub fn instance_id(configured: &str, run_path: &Path) -> String {
