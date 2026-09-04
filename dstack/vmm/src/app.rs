@@ -386,15 +386,27 @@ impl App {
     /// start must not stall unrelated ones. Taken by stop and by removal as
     /// well as by start: those delete the same interfaces from the other side.
     pub(crate) async fn launch_lock(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
-        let lock = {
-            let mut locks = self.launch_locks.lock().or_panic("mutex poisoned");
-            // A VM that is neither starting nor stopping leaves the map holding
-            // the only reference, so the map stays the size of what is in
-            // flight rather than of every VM this process has ever touched.
-            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
-            locks.entry(id.to_string()).or_default().clone()
-        };
-        lock.lock_owned().await
+        self.launch_lock_handle(id).lock_owned().await
+    }
+
+    /// The launch lock, if nothing else holds it.
+    ///
+    /// For a caller with something better to do than wait. A held lock means a
+    /// launch, a stop or a removal of this VM is in flight, and every one of
+    /// those manages that VM's interfaces itself -- so waiting would be waiting
+    /// for the very thing that makes the work unnecessary. A removal holds it
+    /// for as long as the VM takes to exit, which its own comment puts at hours.
+    pub(crate) fn try_launch_lock(&self, id: &str) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.launch_lock_handle(id).try_lock_owned().ok()
+    }
+
+    fn launch_lock_handle(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.launch_locks.lock().or_panic("mutex poisoned");
+        // A VM that is neither starting nor stopping leaves the map holding
+        // the only reference, so the map stays the size of what is in flight
+        // rather than of every VM this process has ever touched.
+        locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        locks.entry(id.to_string()).or_default().clone()
     }
 
     pub async fn load_vm(
@@ -460,6 +472,14 @@ impl App {
         Ok(())
     }
 
+    fn refuse_if_removing(&self, id: &str) -> Result<()> {
+        let state = self.lock();
+        if state.get(id).is_some_and(|vm| vm.state.removing) {
+            bail!("VM is being removed");
+        }
+        Ok(())
+    }
+
     pub async fn start_vm(&self, id: &str) -> Result<()> {
         self.start_vm_with_restart_policy(id, true).await
     }
@@ -474,17 +494,17 @@ impl App {
                 vm.state.auto_restart.reset();
             }
         }
+        // Before the lock as well as after it. Removal holds the lock until the
+        // VM has exited, so a launch that only asked afterwards would wait that
+        // out -- hours, by removal's own estimate -- to be told no. Asking
+        // first is not sufficient on its own, because the marker can be set
+        // while this waits; asking again under the lock is what makes it
+        // authoritative.
+        self.refuse_if_removing(id)?;
         // Everything below reads whether this VM is running and acts on the
         // answer for as long as the launch takes. See [`App::launch_lock`].
         let _launch = self.launch_lock(id).await;
-        {
-            let state = self.lock();
-            if let Some(vm) = state.get(id) {
-                if vm.state.removing {
-                    bail!("VM is being removed");
-                }
-            }
-        }
+        self.refuse_if_removing(id)?;
         // A restart decided before a stop must not outlive it. The decision
         // read `started` from disk; `stop_vm` writes it false under this lock,
         // so re-reading it here is what makes the stop stick. An explicit start
@@ -1104,8 +1124,15 @@ impl App {
         }
         for vm_id in dead {
             // The lock a launch of this VM holds from before it asks netd for
-            // an interface until after it has recorded one.
-            let _launch = self.launch_lock(&vm_id).await;
+            // an interface until after it has recorded one -- and that a
+            // removal holds until the VM has exited, which can be hours. Taking
+            // it without waiting is both safe and necessary: whoever holds it
+            // is already dealing with this VM's interfaces, and waiting would
+            // stall the collection of every other VM behind one that is busy.
+            let Some(_launch) = self.try_launch_lock(&vm_id) else {
+                debug!(vm_id = %vm_id, "not collecting: this VM is busy");
+                continue;
+            };
             // Re-read under it. Between the listing and this line the VM may
             // have been created and started: its directory exists now, and its
             // interfaces are the ones a launch just built.
@@ -2716,6 +2743,23 @@ mod tests {
             netd.operations().is_empty(),
             "an answer that could not be established is not an answer"
         );
+    }
+
+    /// A removal holds the launch lock until the VM has exited, which its own
+    /// comment puts at hours. Nothing that has something better to do than
+    /// wait may queue behind it.
+    #[tokio::test]
+    async fn work_that_can_wait_does_not_queue_behind_a_removal() {
+        let app = test_app();
+        let removal = app.launch_lock("vm-1").await;
+
+        // The collection skips a busy VM rather than stalling every other VM
+        // behind it: whoever holds the lock is already dealing with this one.
+        assert!(app.try_launch_lock("vm-1").is_none());
+        assert!(app.try_launch_lock("vm-2").is_some());
+
+        drop(removal);
+        assert!(app.try_launch_lock("vm-1").is_some());
     }
 
     /// A restart decided before a stop must not outlive it. The restart task
