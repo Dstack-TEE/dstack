@@ -1049,25 +1049,9 @@ impl App {
         )
         .await
         {
-            Ok(sweep) => {
-                if sweep.removed > 0 {
-                    info!(
-                        vm_id,
-                        removed = sweep.removed,
-                        "released netd-managed interfaces"
-                    );
-                }
-                // A sweep that ran out of time is not a sweep that found
-                // nothing left. Saying so is the difference between a host an
-                // operator can reason about and one where "released 3
-                // interfaces" hid the fourth.
-                if sweep.incomplete {
-                    warn!(
-                        vm_id,
-                        "netd stopped releasing this VM's interfaces on its deadline; the rest \
-                         go when this VM next launches, or -- once it is removed and nothing \
-                         claims it -- when reconciliation next runs"
-                    );
+            Ok(removed) => {
+                if removed > 0 {
+                    info!(vm_id, removed, "released netd-managed interfaces");
                 }
             }
             Err(error) if netd::is_unreachable(&error) => {
@@ -1613,9 +1597,9 @@ impl App {
 
     pub async fn vm_info(&self, id: &str) -> Result<Option<pb::VmInfo>> {
         let proc_state = self.supervisor.info(id).await?;
-        // Snapshot under the lock, then release it: describing the VM can
-        // probe netd, and that is a blocking connect the global state lock has
-        // no business being held across.
+        // Snapshot under the lock, then release it: the global state lock is
+        // held by every other VM's operations, and describing one VM has no
+        // business keeping it across the work that follows.
         let info = {
             let state = self.lock();
             let Some(vm_state) = state.get(id) else {
@@ -2439,7 +2423,6 @@ mod tests {
             "instance_id": instance,
             "vm_id": vm,
             "nic_index": 0,
-            "bound": false,
         })
     }
 

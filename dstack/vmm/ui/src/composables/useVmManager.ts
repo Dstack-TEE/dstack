@@ -189,9 +189,6 @@ type UpdateDialogState = {
   disk_size: number;
   image: string;
   ports: PortFormEntry[];
-  /// What the dialog opened with, normalized, so the update can tell whether
-  /// this request moved the port mappings at all.
-  originalPorts: VmmTypes.IPortMapping[];
   attachAllGpus: boolean;
   selectedGpus: string[];
   updateGpuConfig: boolean;
@@ -283,7 +280,6 @@ function createUpdateDialogState(): UpdateDialogState {
     disk_size: 0,
     image: '',
     ports: [],
-    originalPorts: [],
     attachAllGpus: false,
     selectedGpus: [],
     updateGpuConfig: false,
@@ -1148,10 +1144,6 @@ type CreateVmPayloadSource = {
       disk_size: config.disk_size || 0,
       image: config.image || '',
       ports: clonePortMappings(config.ports || []),
-      // What the dialog opened with. `update_ports` means "this request moved
-      // the port mappings", and the server refuses some mappings it has to
-      // keep accepting on a request that only touched memory.
-      originalPorts: normalizePorts(clonePortMappings(config.ports || [])),
       attachAllGpus: gpuSelection.attachAll,
       selectedGpus: gpuSelection.selected,
       updateGpuConfig: false,
@@ -1331,13 +1323,8 @@ type CreateVmPayloadSource = {
       body.compose_file = composeNeedsUpdate ? await makeUpdateComposeFile() : undefined;
       body.encrypted_env = encryptedEnvPayload;
       body.user_config = updated.user_config;
-      const ports = normalizePorts(updated.ports);
-      const portsMoved =
-        JSON.stringify(ports) !== JSON.stringify(updateDialog.value.originalPorts ?? []);
-      if (portsMoved) {
-        body.update_ports = true;
-        body.ports = ports;
-      }
+      body.update_ports = true;
+      body.ports = normalizePorts(updated.ports);
       body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated, true) : undefined;
       if (updated.updateNetworking) {
         body.update_networking = true;

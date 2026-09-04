@@ -243,7 +243,7 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
                 .await
                 .context("failed to list netd interfaces")?;
             println!(
-                "{:<16} {:<8} {:<24} {:<38} {:>3}  FILTERED",
+                "{:<16} {:<8} {:<24} {:<38} {:>3}",
                 "INTERFACE", "KIND", "INSTANCE", "VM", "NIC"
             );
             let mut unattributed = 0;
@@ -252,7 +252,7 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
                     unattributed += 1;
                 }
                 println!(
-                    "{:<16} {:<8} {:<24} {:<38} {:>3}  {}",
+                    "{:<16} {:<8} {:<24} {:<38} {:>3}",
                     record.tap,
                     record.kind,
                     record.instance_id.as_deref().unwrap_or("-"),
@@ -260,7 +260,6 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
                     record
                         .nic_index
                         .map_or_else(|| "-".to_string(), |index| index.to_string()),
-                    if record.bound { "yes" } else { "no" },
                 );
             }
             println!();
@@ -283,13 +282,10 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
             Ok(())
         }
         NetdCommand::RemoveVm { instance, vm } => {
-            let sweep = netd::remove_all(&config.socket, instance, vm)
+            let removed = netd::remove_all(&config.socket, instance, vm)
                 .await
                 .context("failed to remove the VM's interfaces")?;
-            println!("removed {} interface(s) for {vm}", sweep.removed);
-            if sweep.incomplete {
-                println!("netd stopped on its deadline; run this again to continue");
-            }
+            println!("removed {removed} interface(s) for {vm}");
             Ok(())
         }
     }

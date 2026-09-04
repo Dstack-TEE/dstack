@@ -837,10 +837,6 @@ impl VmmRpc for RpcHandler {
     async fn create_vm(self, request: VmConfiguration) -> Result<Id> {
         let manifest = create_manifest_from_vm_config(request.clone(), &self.app.config.cvm)?;
         self.validate_port_mapping_conflicts(None, &manifest.port_map)?;
-        validate_port_mapping_nics(
-            &manifest.port_map,
-            &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
-        )?;
         let id = manifest.id.clone();
         info!(vm_id = %id, "create_vm RPC called");
         let app_id = manifest.app_id.clone();

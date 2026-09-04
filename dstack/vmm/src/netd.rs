@@ -58,20 +58,6 @@ const TAP_DIGEST_CHARS: usize = 12;
 const ALIAS_PREFIX: &str = "dstack1";
 /// What the kernel stores in an interface alias, minus the terminator.
 const MAX_IFALIAS: usize = 255;
-/// How long a sweep or collection keeps starting work on new interfaces.
-///
-/// A bound on when the pass stops, not on how long one interface takes: an
-/// interface it has already begun is still bounded only by `COMMAND_TIMEOUT`
-/// per helper invocation, so a pass that passes this check at 19.9s can run on
-/// for as long as the `ip` and `virsh` calls it has started take to time out.
-///
-/// What it protects is the caller's patience against the operation lock. Every
-/// other prepare and remove on the host waits behind a pass, and the caller
-/// that asked for this one gave up at thirty seconds; work done after that is
-/// work nobody is waiting for, done while everybody waits. Partial progress
-/// reported honestly beats total progress reported to nobody.
-const COLLECTION_DEADLINE: Duration = Duration::from_secs(20);
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceIdentity {
     pub instance_id: String,
@@ -128,9 +114,6 @@ pub struct InterfaceRecord {
     pub vm_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nic_index: Option<usize>,
-    /// Whether libvirt holds an nwfilter binding at this name.
-    #[serde(default)]
-    pub bound: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,10 +209,6 @@ struct Response {
     /// How many interfaces a whole-VM sweep deleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     removed: Option<usize>,
-    /// Whether the pass stopped on its deadline with work left. See
-    /// [`COLLECTION_DEADLINE`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    incomplete: Option<bool>,
     /// For a listing, everything netd holds; for a collection, what it took,
     /// or would take on a dry run. Absent, rather than empty, from a netd that
     /// cannot enumerate: "I hold nothing" and "I cannot say" are answers a
@@ -243,7 +222,7 @@ struct Response {
 /// What one request produced.
 ///
 /// An enum rather than a struct of options, because the shapes do not overlap:
-/// a prepare names an interface, a sweep counts them, a probe names neither.
+/// a prepare names an interface, a sweep counts them, a listing enumerates.
 /// One flat [`Response`] still carries all of them on the wire, so a netd that
 /// grows an operation stays readable to a caller that does not know it.
 enum Outcome {
@@ -256,7 +235,6 @@ enum Outcome {
     /// A sweep names no single interface, so it reports how many it deleted.
     Swept {
         removed: usize,
-        incomplete: bool,
     },
     Listed(Vec<InterfaceRecord>),
 }
@@ -277,7 +255,6 @@ impl Outcome {
             device: None,
             queues: None,
             removed: None,
-            incomplete: None,
             interfaces: None,
             error: None,
         };
@@ -291,13 +268,7 @@ impl Outcome {
                 response.device = device;
                 response.queues = queues;
             }
-            Self::Swept {
-                removed,
-                incomplete,
-            } => {
-                response.removed = Some(removed);
-                response.incomplete = Some(incomplete);
-            }
+            Self::Swept { removed } => response.removed = Some(removed),
             Self::Listed(interfaces) => response.interfaces = Some(interfaces),
         }
         response
@@ -446,31 +417,15 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
 /// would report a netd that cannot do this as a VM that had nothing to remove,
 /// which is a netd that cannot do this reported as a VM that had nothing to
 /// remove -- so it is an error here.
-pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result<Sweep> {
+pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result<usize> {
     let request = Request::RemoveAll {
         instance_id: instance_id.to_string(),
         vm_id: vm_id.to_string(),
     };
-    let response = exchange(socket, &request).await?;
-    Ok(Sweep {
-        removed: response
-            .removed
-            .context("netd answered a sweep without saying what it removed")?,
-        // Absent from a netd that cannot stop early, which is the same as one
-        // that did not.
-        incomplete: response.incomplete.unwrap_or_default(),
-    })
-}
-
-/// What one whole-VM sweep did.
-#[derive(Debug, Clone, Copy)]
-pub struct Sweep {
-    pub removed: usize,
-    /// Whether it stopped on its deadline with names left to check. Reported
-    /// rather than dropped: a sweep that ran out of time and one that finished
-    /// having removed the same count are different states of the host, and
-    /// only one of them needs looking at.
-    pub incomplete: bool,
+    exchange(socket, &request)
+        .await?
+        .removed
+        .context("netd answered a sweep without saying what it removed")
 }
 
 /// Deletes one interface by name. See [`Request::RemoveInterface`].
@@ -641,10 +596,10 @@ async fn serve_connection(
         .await
         .context("timed out reading a netd request")?;
     let outcome = match request {
-        // A peer that connects and closes without sending is the VMM's
-        // reachability check: netd that died leaves its socket behind, so the
-        // VMM connects to tell the two apart. Answering that with a parse error
-        // and a warning would fill the log with reports of it working.
+        // A peer that connects and closes without sending is asking whether
+        // anything is listening: netd that died leaves its socket behind.
+        // Answering that with a parse error and a warning would fill the log
+        // with reports of it working.
         Ok(None) => {
             debug!("netd liveness probe");
             return Ok(());
@@ -677,7 +632,6 @@ async fn serve_connection(
                 device: None,
                 queues: None,
                 removed: None,
-                incomplete: None,
                 interfaces: None,
                 error: Some(format!("{error:#}")),
             }
@@ -725,11 +679,8 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
             Ok(Outcome::Listed(list_interfaces(libvirt_uri, &instance_id)))
         }
         Request::RemoveAll { instance_id, vm_id } => {
-            let (removed, incomplete) = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
-            Ok(Outcome::Swept {
-                removed,
-                incomplete,
-            })
+            let removed = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
+            Ok(Outcome::Swept { removed })
         }
         Request::RemoveInterface { tap } => {
             if !is_managed_name(&tap) {
@@ -893,7 +844,19 @@ fn prepare_bridge(
     let tap = tap_name(&request.identity);
     // A failed VMM start may leave a deterministic resource behind. Replacing
     // it makes prepare idempotent without accepting a caller-selected TAP.
-    remove_interface(libvirt_uri, &tap, binding_cleanup(filtered))?;
+    // A binding outlives the interface it was bound to and TAP names are
+    // derived, so the same name comes back: clear whatever is there. Insist
+    // only when this prepare is about to create a replacement libvirt would
+    // refuse as a duplicate.
+    remove_interface(
+        libvirt_uri,
+        &tap,
+        if filtered {
+            BindingCleanup::Required
+        } else {
+            BindingCleanup::BestEffort
+        },
+    )?;
 
     let uid = request.qemu_uid.to_string();
     let queues = validate_queues(request.queues)?;
@@ -955,29 +918,6 @@ enum BindingCleanup {
     Skip,
 }
 
-/// Removes one interface during a pass over many.
-///
-/// A pass gets one answer about libvirt, not one per interface. Asking again
-/// after it has failed is how a hung `libvirtd` turns a bounded collection into
-/// an unbounded one: the deadline is reached having deleted nothing, while
-/// every other VM on the host waits behind the operation lock.
-/// `Ok(false)` when the interface is gone but its binding could not be
-/// cleared. The pass reports that as incomplete rather than as success: the
-/// orphan half of the same loop already treats a binding it could not delete
-/// as a failure, and a stale binding is exactly the state a later filtered
-/// prepare at the same name hard-fails on.
-fn remove_interface_in_pass(uri: &str, tap: &str, libvirt: &mut bool) -> Result<bool> {
-    let mut cleared = true;
-    if *libvirt && !is_macvtap(tap) {
-        if let Err(error) = delete_binding(uri, tap) {
-            warn!(%tap, "could not clear a possible nwfilter binding: {error:#}");
-            *libvirt = false;
-            cleared = false;
-        }
-    }
-    remove_interface(uri, tap, BindingCleanup::Skip).map(|()| cleared)
-}
-
 /// Deletes every interface a VM could hold, by deriving each name rather than
 /// consulting a record.
 ///
@@ -993,7 +933,7 @@ fn remove_interface_in_pass(uri: &str, tap: &str, libvirt: &mut bool) -> Result<
 /// less than the thing it replaced is not a sweep. Those names are decided
 /// against a single listing, because the whole point of enumerating a bounded
 /// space is that deciding one name stays cheap.
-fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Result<(usize, bool)> {
+fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Result<usize> {
     let identity = InterfaceIdentity {
         instance_id: instance_id.to_string(),
         vm_id: vm_id.to_string(),
@@ -1009,55 +949,45 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
     // out by trying, once.
     let mut libvirt = true;
     let mut removed = 0;
-    let mut incomplete = false;
     let mut first_error = None;
-    let deadline = std::time::Instant::now() + COLLECTION_DEADLINE;
     for nic_index in 0..=MAX_NIC_INDEX {
-        if std::time::Instant::now() >= deadline {
-            warn!(%vm_id, nic_index, "sweep stopped on its deadline");
-            incomplete = true;
-            break;
-        }
         let tap = tap_name(&InterfaceIdentity {
             nic_index,
             ..identity.clone()
         });
         let present = Path::new("/sys/class/net").join(&tap).exists();
-        if !present {
-            if libvirt
-                && bindings
-                    .as_ref()
-                    .is_some_and(|bindings| bindings.contains(&tap))
-            {
-                if let Err(error) = delete_binding(libvirt_uri, &tap) {
-                    warn!(%tap, %error, "failed to remove orphaned nwfilter binding");
-                    libvirt = false;
-                    first_error.get_or_insert(error);
-                } else {
-                    info!(%tap, %vm_id, "removed orphaned nwfilter binding");
-                }
+        // A pass gets one answer about libvirt, not one per interface. Asking
+        // again after it has failed is how a hung `libvirtd` turns a bounded
+        // collection into an unbounded one.
+        let wanted = present || bindings.as_ref().is_some_and(|held| held.contains(&tap));
+        if libvirt && wanted && !is_macvtap(&tap) {
+            if let Err(error) = delete_binding(libvirt_uri, &tap) {
+                warn!(%tap, %error, "failed to remove an nwfilter binding");
+                libvirt = false;
+                first_error.get_or_insert(error);
+            } else if !present {
+                info!(%tap, %vm_id, "removed orphaned nwfilter binding");
             }
+        }
+        if !present {
             continue;
         }
-        match remove_interface_in_pass(libvirt_uri, &tap, &mut libvirt) {
-            // Keep going after a failure. Stopping at the first one would leave
-            // the rest of a VM's interfaces behind over one that is stuck.
+        // Keep going after a failure. Stopping at the first one would leave the
+        // rest of a VM's interfaces behind over one that is stuck.
+        match remove_interface(libvirt_uri, &tap, BindingCleanup::Skip) {
             Err(error) => {
                 warn!(%tap, %error, "failed to remove interface");
                 first_error.get_or_insert(error);
             }
-            Ok(cleared) => {
+            Ok(()) => {
                 info!(%tap, %vm_id, "removed interface");
                 removed += 1;
-                if !cleared {
-                    incomplete = true;
-                }
             }
         }
     }
     match first_error {
         Some(error) => Err(error).context("failed to remove every interface for this VM"),
-        None => Ok((removed, incomplete)),
+        None => Ok(removed),
     }
 }
 
@@ -1096,9 +1026,6 @@ fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord>
             let owner = owner_of(&tap, &alias);
             seen.insert(tap.clone());
             records.push(InterfaceRecord {
-                bound: bindings
-                    .as_ref()
-                    .is_some_and(|bindings| bindings.contains(&tap)),
                 kind: kind.to_string(),
                 nic_index: owner.as_ref().map(|identity| identity.nic_index),
                 instance_id: owner.as_ref().map(|identity| identity.instance_id.clone()),
@@ -1118,7 +1045,6 @@ fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord>
                 instance_id: None,
                 vm_id: None,
                 nic_index: None,
-                bound: true,
             });
         }
     }
@@ -1314,16 +1240,6 @@ fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
         bail!("instance ID must not contain ':'");
     }
     Ok(())
-}
-
-/// A caller that knows a binding is there needs it gone; one that does not
-/// still clears whatever it finds, without failing when libvirt is absent.
-fn binding_cleanup(filtered: bool) -> BindingCleanup {
-    if filtered {
-        BindingCleanup::Required
-    } else {
-        BindingCleanup::BestEffort
-    }
 }
 
 /// Normalizes a requested queue pair count. Zero means the caller did not ask
@@ -1730,16 +1646,6 @@ mod tests {
         assert!(value.get("identity").is_none());
     }
 
-    /// A binding outlives the interface it was bound to, and TAP names are a
-    /// deterministic hash of the VM identity, so the same name comes back.
-    /// Removing an interface therefore clears whatever binding is there, and
-    /// only insists when the caller is about to create a replacement.
-    #[test]
-    fn binding_cleanup_insists_only_when_a_replacement_follows() {
-        assert_eq!(binding_cleanup(true), BindingCleanup::Required);
-        assert_eq!(binding_cleanup(false), BindingCleanup::BestEffort);
-    }
-
     #[test]
     fn queue_counts_normalize_to_at_least_one_and_stay_bounded() {
         assert_eq!(validate_queues(0).unwrap(), 1);
@@ -2054,14 +1960,7 @@ mod tests {
     /// means nothing.
     #[test]
     fn a_sweep_reports_a_count_and_no_interface() {
-        let value = serde_json::to_value(
-            Outcome::Swept {
-                removed: 3,
-                incomplete: false,
-            }
-            .into_response(),
-        )
-        .unwrap();
+        let value = serde_json::to_value(Outcome::Swept { removed: 3 }.into_response()).unwrap();
         assert_eq!(value["removed"], 3);
         assert!(value.get("tap").is_none());
 
@@ -2278,9 +2177,8 @@ mod tests {
         assert!(!is_unreachable(&error));
 
         let netd = testing::FakeNetd::spawn(testing::Behavior::handling(&["remove_all"]));
-        let sweep = remove_all(netd.socket(), "instance", "vm").await.unwrap();
-        assert_eq!(sweep.removed, 0);
-        assert!(!sweep.incomplete);
+        let removed = remove_all(netd.socket(), "instance", "vm").await.unwrap();
+        assert_eq!(removed, 0);
     }
 
     /// Every "an unreachable netd is not a failure" branch in the VMM hangs
