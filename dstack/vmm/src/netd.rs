@@ -301,8 +301,13 @@ pub enum Request {
         #[serde(flatten)]
         identity: InterfaceIdentity,
         /// Whether this interface was created with an nwfilter binding.
-        /// Macvtap TAPs never carry one, and removal detects them rather than
-        /// trusting this field.
+        ///
+        /// Advisory, and no longer read: removal detects macvtap itself, and
+        /// clears a binding best-effort whatever this says. The strict rule it
+        /// used to select exists for prepare, where a binding left at the name
+        /// blocks the one about to be created; at removal it only left the
+        /// interface up on the bridge. Still sent, and still required on
+        /// decode, so a netd that predates that reasoning keeps working.
         filtered: bool,
     },
     /// Delete every interface netd holds for one VM.

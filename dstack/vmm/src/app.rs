@@ -1210,7 +1210,8 @@ impl App {
                     warn!(
                         vm_id,
                         "netd stopped releasing this VM's interfaces on its deadline; the rest \
-                         are released by its next launch or its removal"
+                         go when this VM next launches, or -- once it is removed and nothing \
+                         claims it -- when reconciliation next runs"
                     );
                 }
             }
@@ -1355,8 +1356,11 @@ impl App {
             debug!("graceful VM stop during removal failed: {err:?}");
         }
 
-        // Poll until the process is no longer running, then remove it.
-        // Some VMs take a long time to stop (e.g. 2+ hours), so we wait indefinitely.
+        // Poll until the process is no longer running, then remove it. The
+        // stop above is a SIGKILL, so this is however long the kernel takes to
+        // tear the VM down -- seconds for a large TD, unbounded for one wedged
+        // in a device reset. Waiting is still right: what follows deletes the
+        // interfaces and the workdir it is using.
         let mut poll_count: u64 = 0;
         loop {
             match self.supervisor.info(id).await {

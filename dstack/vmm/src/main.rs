@@ -94,11 +94,6 @@ enum NetdCommand {
         #[arg(long)]
         instance: Option<String>,
     },
-    /// Delete every interface netd holds for one VM.
-    ///
-    /// For a VM whose VMM will never ask again -- one whose directory was
-    /// deleted by hand, or whose instance is gone. A running VMM collects
-    /// these itself; this is for when there is no longer one to do it.
     /// Delete one interface by name.
     ///
     /// For what nothing else can reach: an interface built before netd
@@ -110,6 +105,11 @@ enum NetdCommand {
         /// The interface name, as `netd list` prints it.
         name: String,
     },
+    /// Delete every interface netd holds for one VM.
+    ///
+    /// For a VM whose VMM will never ask again -- one whose directory was
+    /// deleted by hand, or whose instance is gone. A running VMM collects
+    /// these itself; this is for when there is no longer one to do it.
     RemoveVm {
         /// The `cvm.instance_id` of the VMM that created them. `netd list`
         /// shows it.
