@@ -605,9 +605,9 @@ impl App {
         // Not fallible: a VM that has been asked to stop is stopped whether or
         // not netd could be reached. What is left behind is reclaimed by this
         // VM's next launch, which releases before it prepares, or by its
-        // removal. Not by reconciliation -- a stopped VM is still one this
-        // instance claims, so a VM that is never started or removed again keeps
-        // its interfaces. See [`App::release_vm_interfaces`].
+        // removal, which will not finish until the release lands. A VM that is
+        // never started or removed again keeps its interfaces, and its
+        // directory is still there to say whose they are.
         self.release_vm_interfaces(id).await;
         Ok(())
     }
@@ -2202,8 +2202,8 @@ mod tests {
 
     /// A netd too old for the sweep refuses it, and a refusal is not a reason
     /// to fail the stop. What it holds stays until this VM launches again or
-    /// until reconciliation collects it, which is what an operator upgrading
-    /// netd gets for free.
+    /// until an operator names it. The stop still succeeds: a netd outage must
+    /// not become a fleet that cannot be stopped.
     #[tokio::test]
     async fn a_netd_that_refuses_the_sweep_does_not_fail_the_stop() {
         let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::Legacy);

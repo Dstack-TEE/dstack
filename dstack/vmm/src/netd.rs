@@ -156,8 +156,8 @@ pub enum Request {
         instance_id: String,
         vm_id: String,
     },
-    /// Everything netd holds, so that an operator -- and a reconciliation --
-    /// can see the host's interfaces without being told what to look for.
+    /// Everything netd holds, so that an operator can see the host's
+    /// interfaces without being told what to look for.
     ///
     /// Deriving a name answers "where is this VM's interface". It cannot
     /// answer "whose is this interface", which is the question a leak is made
