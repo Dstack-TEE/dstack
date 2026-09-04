@@ -362,6 +362,7 @@ impl App {
             state: Arc::new(Mutex::new(AppState {
                 cid_pool,
                 vms: HashMap::new(),
+                removing: HashSet::new(),
             })),
             config: Arc::new(config),
             pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -479,8 +480,7 @@ impl App {
     /// so anything that only asked afterwards would wait the removal out in
     /// order to be told no.
     pub(crate) fn refuse_if_removing(&self, id: &str) -> Result<()> {
-        let state = self.lock();
-        if state.get(id).is_some_and(|vm| vm.state.removing) {
+        if self.lock().is_removing(id) {
             bail!("VM is being removed");
         }
         Ok(())
@@ -995,7 +995,7 @@ impl App {
     /// `None` when the answer cannot be established, which is not the same as
     /// nobody claiming anything: an unreadable VM directory read as empty
     /// would offer every interface on the host up for collection.
-    fn claimable_vm_ids(&self) -> Option<Vec<String>> {
+    fn claimable_vm_ids(&self) -> Option<HashSet<String>> {
         let mut ids: HashSet<String> = self.lock().vms.keys().cloned().collect();
         match fs::read_dir(self.vm_dir()) {
             Ok(entries) => {
@@ -1051,7 +1051,7 @@ impl App {
                 return None;
             }
         }
-        Some(ids.into_iter().collect())
+        Some(ids)
     }
 
     /// Deletes every host interface netd holds for a VM this instance no
@@ -1311,12 +1311,11 @@ impl App {
     pub async fn remove_vm(&self, id: &str) -> Result<()> {
         {
             let mut state = self.lock();
-            let vm = state.get_mut(id).context("VM not found")?;
-            if vm.state.removing {
+            state.get(id).context("VM not found")?;
+            if !state.start_removing(id) {
                 // Already being removed — idempotent
                 return Ok(());
             }
-            vm.state.removing = true;
         }
 
         // Persist the removing marker so crash recovery can resume
@@ -1342,6 +1341,12 @@ impl App {
     ///
     /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
     async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
+        // Every exit from here clears the mark, including the `?`s below and a
+        // panic in this task, which `tokio::spawn` would otherwise swallow.
+        let _mark = RemovalMark {
+            app: self.clone(),
+            id: id.to_string(),
+        };
         // Held across the stop, the wait and the release, not just the release.
         // `removing` turns launches away, but a launch that passed that check
         // before the marker was set is already inside the lock: it has not
@@ -1428,16 +1433,13 @@ impl App {
     /// Returns false if a cleanup task is already running for this VM.
     fn spawn_finish_remove(&self, id: &str) -> bool {
         {
-            let mut state = self.lock();
-            if let Some(vm) = state.get_mut(id) {
-                if vm.state.removing {
-                    // Already being cleaned up — skip
-                    return false;
-                }
-                vm.state.removing = true;
+            // Claimed in the set rather than in the entry: an orphaned
+            // supervisor process has no entry, and that is exactly the case
+            // where the launch lock is held with nothing turning waiters away.
+            if !self.lock().start_removing(id) {
+                // Already being cleaned up — skip
+                return false;
             }
-            // If VM is not in memory (e.g. orphaned supervisor process), no entry to guard
-            // but we still need to clean up the supervisor process.
         }
         let app = self.clone();
         let id = id.to_string();
@@ -2554,7 +2556,7 @@ mod tests {
         );
         assert_eq!(
             app.claimable_vm_ids(),
-            Some(vec!["vm-that-did-not-load".to_string()])
+            Some(HashSet::from(["vm-that-did-not-load".to_string()]))
         );
 
         // Unreadable is not "nobody claims anything", which would offer every
@@ -2774,6 +2776,43 @@ mod tests {
 
         drop(removal);
         assert!(app.try_launch_lock("vm-1").is_some());
+    }
+
+    /// The orphan cleanup runs for an ID that never loaded, so a guard living
+    /// in the VM entry is not there when it holds the launch lock across the
+    /// whole teardown. Without the mark, `StartVm` on that ID waits the
+    /// teardown out with no error and no log.
+    #[tokio::test]
+    async fn a_removal_with_no_vm_entry_still_turns_operations_away() {
+        let app = test_app();
+        assert!(app.refuse_if_removing("orphan").is_ok());
+        assert!(app.lock().start_removing("orphan"));
+        assert!(
+            app.refuse_if_removing("orphan").is_err(),
+            "an orphan being removed is still a VM being removed"
+        );
+        // And the same removal cannot be started twice.
+        assert!(!app.lock().start_removing("orphan"));
+    }
+
+    /// `finish_remove_vm` returns early on more than its happy path. A mark it
+    /// left behind is not a stale flag: every later operation on that VM,
+    /// including the removal that would retry, answers "being removed".
+    #[tokio::test]
+    async fn a_removal_that_gives_up_early_does_not_leave_the_vm_marked() {
+        let app = test_app();
+        {
+            let _mark = RemovalMark {
+                app: app.clone(),
+                id: "vm-1".to_string(),
+            };
+            assert!(app.lock().start_removing("vm-1"));
+            assert!(app.refuse_if_removing("vm-1").is_err());
+        }
+        assert!(
+            app.refuse_if_removing("vm-1").is_ok(),
+            "the mark is cleared however the removal ends"
+        );
     }
 
     /// A restart decided before a stop must not outlive it. The restart task
@@ -3933,6 +3972,14 @@ impl VmState {
 pub(crate) struct AppState {
     cid_pool: IdPool<u32>,
     vms: HashMap<String, VmState>,
+    /// The VMs a removal is currently working on.
+    ///
+    /// Separate from `VmState::removing` because the set has to outlive the
+    /// entry. Orphan cleanup runs for IDs that never loaded into `vms`, and
+    /// `finish_remove_vm` holds the launch lock across the whole teardown, so
+    /// a guard that lives in the entry cannot turn away the operation that
+    /// would otherwise wait that teardown out.
+    removing: HashSet<String>,
 }
 
 impl AppState {
@@ -3954,6 +4001,38 @@ impl AppState {
 
     pub fn iter_vms(&self) -> impl Iterator<Item = &VmState> {
         self.vms.values()
+    }
+
+    /// Claims `id` for a removal. False when one already has it.
+    fn start_removing(&mut self, id: &str) -> bool {
+        if let Some(vm) = self.vms.get_mut(id) {
+            vm.state.removing = true;
+        }
+        self.removing.insert(id.to_string())
+    }
+
+    fn is_removing(&self, id: &str) -> bool {
+        self.removing.contains(id)
+    }
+}
+
+/// Clears the in-flight removal mark however the removal ends.
+///
+/// `finish_remove_vm` returns early on more than its happy path, and a mark
+/// left behind is not a stale flag: every operation on that VM answers "being
+/// removed" from then on, including the removal that would retry.
+struct RemovalMark {
+    app: App,
+    id: String,
+}
+
+impl Drop for RemovalMark {
+    fn drop(&mut self) {
+        let mut state = self.app.lock();
+        state.removing.remove(&self.id);
+        if let Some(vm) = state.vms.get_mut(&self.id) {
+            vm.state.removing = false;
+        }
     }
 }
 
