@@ -149,7 +149,7 @@ Bridge networking needs `netd`, the privileged helper that owns every host
 interface a bridge or macvtap NIC uses. It is the same binary:
 
 ```bash
-sudo dstack-vmm netd -c vmm.toml
+sudo dstack-vmm --config vmm.toml netd
 ```
 
 Nothing else on the node needs `CAP_NET_ADMIN`: the VMM itself still runs

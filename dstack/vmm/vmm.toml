@@ -49,7 +49,9 @@ qmp_socket = false
 # empty, a stable value is derived from run_path. It is what netd records on
 # every host interface this VMM asks for, and what a collection uses to tell
 # this instance's interfaces from another's -- so two VMMs sharing one value on
-# one host would each collect the other's running VMs. May not contain ":".
+# one host would each collect the other's running VMs. A VMM that finds another
+# live instance using the value it was given refuses to start rather than let
+# that happen. May not contain ":".
 instance_id = ""
 # Network choices that deployment RPC callers may make. Macvtap is excluded
 # by default because libvirt nwfilter applies only to bridge interfaces.

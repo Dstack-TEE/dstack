@@ -290,6 +290,11 @@ Expose services running in your VM:
 
 # Multiple ports
 --port tcp:8080:80 --port tcp:8443:443
+
+# Pin a mapping to one NIC: protocol[:host_address]:host_port:vm_port@<nic>
+# Without @<nic> the mapping enters through the first user-mode NIC, or the
+# first bridge NIC when the VM has no user-mode one.
+--port tcp:0.0.0.0:8443:443@0
 ```
 
 #### GPU Assignment

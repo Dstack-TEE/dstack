@@ -219,8 +219,10 @@ sudo dstack-vmm --config ./vmm.toml \
 ```
 
 User networking and a caller-supplied netdev never ask `netd` to build an
-interface, and a VM using only those never contacts it. Bridge and macvtap
-always do, and fail closed if `netd` is unavailable.
+interface. The VMM still contacts the socket for such a VM -- every launch and
+every stop releases whatever the VM held, before it decides whether it needs
+anything built -- but nothing about the VM depends on the answer. Bridge and
+macvtap do ask, and fail closed if `netd` is unavailable.
 
 Filtered TAP netdevs follow the node's `vhost` and `queues` settings like any
 other TAP-backed NIC (see [network-data-plane.md](network-data-plane.md)). The
