@@ -1766,23 +1766,6 @@ pub(crate) mod testing {
                 other => other,
             }
         }
-
-        /// A netd that builds interfaces without recording whose they are --
-        /// a third-party one, or this one before it did.
-        pub(crate) fn anonymous(operations: &[&str]) -> Self {
-            match Self::capable(operations) {
-                Self::Capable {
-                    operations,
-                    ingress,
-                    ..
-                } => Self::Capable {
-                    operations,
-                    ingress,
-                    attribution: false,
-                },
-                other => other,
-            }
-        }
     }
 
     pub(crate) struct FakeNetd {
