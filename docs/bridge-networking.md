@@ -304,6 +304,12 @@ sudo dstack-vmm netd remove-interface dtc41d9e0b7a52
 Nothing accumulates: each interface gains a record the next time its VM
 launches, so the set only shrinks.
 
+Changing `cvm.instance_id` — or `run_path`, which it is derived from — is the
+one move that strands interfaces on purpose. They stay recorded under the old
+namespace, so no VMM collects them and running VMs keep working until they
+stop. `netd list` still shows the old instance ID, which is what
+`netd remove-vm --instance <old> --vm <id>` needs.
+
 ### Mixing networking modes
 
 Bridge and user-mode VMs can coexist. Set the global default in `vmm.toml` and override per-VM as needed:

@@ -931,7 +931,13 @@ impl App {
             return reachability.clone();
         }
         let reachability = netd::probe(&self.config.netd.socket).await;
-        if reachability.is_reachable() {
+        // Only a real answer is cached. "Unreachable" and "too old to answer"
+        // are both produced by transient failures too, and holding either for
+        // half a minute turns one blip into a deployment refused for a reason
+        // that is not true -- `refuse_unpublishable_ports` reads this. A netd
+        // that genuinely predates `hello` is re-asked on a path that was
+        // already making a round trip.
+        if matches!(reachability, netd::Reachability::Capable(_)) {
             *self.netd_probe.lock().or_panic("mutex poisoned") =
                 Some((std::time::Instant::now(), reachability.clone()));
         }
@@ -941,11 +947,11 @@ impl App {
     /// Every VM whose interfaces this instance may still be using.
     ///
     /// Wider than the VMs it managed to load. A VM whose manifest is corrupt
-    /// or whose image is missing fails to load and is only logged -- but its
-    /// QEMU may well still be running, and collecting by what loaded would
-    /// delete a running VM's networking over a file the VMM could not parse.
-    /// A directory is enough of a claim: what has been removed for real leaves
-    /// none behind.
+    /// or whose image is missing fails to load and is only logged; `reload_vms`
+    /// then stops any supervisor process it still has, but that runs in the
+    /// background, and a collection deciding on the loaded set alone races it
+    /// -- over a file the VMM could not parse. A directory is enough of a
+    /// claim, and what has been removed for real leaves none behind.
     /// `None` when the answer cannot be established, which is not the same as
     /// nobody claiming anything: an unreadable VM directory read as empty
     /// would offer every interface on the host up for collection.
@@ -2554,18 +2560,27 @@ mod tests {
         assert!(sweep.get("nic_index").is_none());
     }
 
-    /// Where a probe is unavoidable it covers a window rather than one call,
-    /// or netd's accept loop services a connection per VM per operation.
+    /// A real answer is reused; anything else is asked again.
+    ///
+    /// "Unreachable" and "too old to answer" are both produced by transient
+    /// failures too, and holding either for half a minute turns one blip into
+    /// a deployment refused for a reason that is not true.
     #[tokio::test]
-    async fn the_capability_answer_is_reused() {
-        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::Legacy);
+    async fn only_a_real_capability_answer_is_reused() {
+        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello"]));
         let app = app_talking_to(netd.socket());
-        app.release_vm_interfaces("vm-1", &[]).await;
-        app.release_vm_interfaces("vm-2", &[]).await;
+        app.netd_capabilities().await;
+        app.netd_capabilities().await;
+        assert_eq!(netd.operations(), vec!["hello"], "asked once, read twice");
+
+        let legacy = netd::testing::FakeNetd::spawn(netd::testing::Behavior::Legacy);
+        let app = app_talking_to(legacy.socket());
+        app.netd_capabilities().await;
+        app.netd_capabilities().await;
         assert_eq!(
-            netd.operations().iter().filter(|op| *op == "hello").count(),
-            1,
-            "asked once, acted on twice"
+            legacy.operations().len(),
+            2,
+            "an answer that may have been a blip is not held onto"
         );
     }
 
