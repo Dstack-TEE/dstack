@@ -160,6 +160,7 @@ impl FromStr for FsType {
 struct DstackOptions {
     storage_encrypted: bool,
     storage_fs: FsType,
+    storage_discard: bool,
 }
 
 fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
@@ -168,6 +169,7 @@ fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
     let mut options = DstackOptions {
         storage_encrypted: true, // Default to encryption enabled
         storage_fs: FsType::Zfs, // Default to ZFS
+        storage_discard: true,   // Reclaim unused blocks from sparse host images
     };
 
     for param in cmdline.split_whitespace() {
@@ -181,12 +183,19 @@ fn parse_dstack_options(shared: &HostShared) -> Result<DstackOptions> {
             }
         } else if let Some(value) = param.strip_prefix("dstack.storage_fs=") {
             options.storage_fs = value.parse().context("Failed to parse dstack.storage_fs")?;
+        } else if let Some(value) = param.strip_prefix("dstack.storage_discard=") {
+            options.storage_discard = match value {
+                "0" | "false" | "no" | "off" => false,
+                "1" | "true" | "yes" | "on" => true,
+                _ => bail!("Invalid value for dstack.storage_discard: {value}"),
+            };
         }
     }
 
     if let Some(fs) = &shared.app_compose.storage_fs {
         options.storage_fs = fs.parse().context("Failed to parse storage_fs")?;
     }
+    options.storage_discard = shared.app_compose.storage_discard;
     Ok(options)
 }
 
@@ -2680,7 +2689,7 @@ impl<'a> Stage0<'a> {
 
             if opts.storage_encrypted {
                 info!("Setting up disk encryption");
-                self.luks_setup(disk_crypt_key, name)?;
+                self.luks_setup(disk_crypt_key, name, opts.storage_discard)?;
             } else {
                 info!("Skipping disk encryption as requested by kernel cmdline");
             }
@@ -2688,19 +2697,17 @@ impl<'a> Stage0<'a> {
             match opts.storage_fs {
                 FsType::Zfs => {
                     info!("Creating ZFS filesystem");
+                    let autotrim = if opts.storage_discard { "on" } else { "off" };
                     cmd! {
-                        zpool create -o autoexpand=on -m none dstack $fs_dev;
+                        zpool create -o autoexpand=on -o autotrim=$autotrim -m none dstack $fs_dev;
                         zfs create -o mountpoint=$mount_point -o atime=off -o checksum=blake3 dstack/data;
                     }
                     .context("Failed to create zpool")?;
                 }
                 FsType::Ext4 => {
                     info!("Creating ext4 filesystem");
-                    cmd! {
-                        mkfs.ext4 -F $fs_dev;
-                        mount $fs_dev $mount_point;
-                    }
-                    .context("Failed to create ext4 filesystem")?;
+                    cmd!(mkfs.ext4 -F $fs_dev).context("Failed to create ext4 filesystem")?;
+                    Self::mount_ext4(Path::new(&fs_dev), mount_point, opts.storage_discard)?;
                 }
             }
         } else {
@@ -2710,7 +2717,7 @@ impl<'a> Stage0<'a> {
 
             if opts.storage_encrypted {
                 info!("Mounting encrypted data disk");
-                self.open_encrypted_volume(disk_crypt_key, name)?;
+                self.open_encrypted_volume(disk_crypt_key, name, opts.storage_discard)?;
             } else {
                 info!("Mounting unencrypted data disk");
             }
@@ -2719,16 +2726,32 @@ impl<'a> Stage0<'a> {
                 FsType::Zfs => {
                     cmd! {
                         zpool import dstack;
+                    }
+                    .context("Failed to import zpool")?;
+                    let previous_autotrim = cmd!(zpool get -H -o value autotrim dstack)
+                        .map(|value| value.trim().to_owned())
+                        .unwrap_or_default();
+                    let autotrim = if opts.storage_discard { "on" } else { "off" };
+                    cmd! {
+                        zpool set autotrim=$autotrim dstack;
                         zpool status dstack;
                         zpool online -e dstack $fs_dev; // triggers autoexpand
                     }
-                    .context("Failed to import zpool")?;
+                    .context("Failed to configure zpool")?;
+                    if opts.storage_discard && previous_autotrim == "off" {
+                        // autotrim only covers future frees. Start an asynchronous
+                        // trim on first upgrade so historical free space is returned
+                        // without delaying boot.
+                        if let Err(err) = cmd!(zpool trim dstack) {
+                            warn!("Failed to start initial zpool trim: {err}");
+                        }
+                    }
                     if cmd!(mountpoint -q $mount_point).is_err() {
                         cmd!(zfs mount dstack/data).context("Failed to mount zpool")?;
                     }
                 }
                 FsType::Ext4 => {
-                    Self::mount_e2fs(&fs_dev, mount_point)
+                    Self::mount_e2fs(&fs_dev, mount_point, opts.storage_discard)
                         .context("Failed to mount ext4 filesystem")?;
                 }
             }
@@ -2736,7 +2759,11 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    fn mount_e2fs(dev: &impl AsRef<Path>, mount_point: &impl AsRef<Path>) -> Result<()> {
+    fn mount_e2fs(
+        dev: &impl AsRef<Path>,
+        mount_point: &impl AsRef<Path>,
+        discard: bool,
+    ) -> Result<()> {
         let dev = dev.as_ref();
         let mount_point = mount_point.as_ref();
         info!("Checking filesystem");
@@ -2764,17 +2791,24 @@ impl<'a> Stage0<'a> {
             }
         }
 
-        cmd! {
-            info "Trying to resize filesystem if needed";
-            resize2fs $dev;
-            info "Mounting filesystem";
-            mount $dev $mount_point;
-        }
-        .context("Failed to prepare ext4 filesystem")?;
+        cmd!(resize2fs $dev).context("Failed to resize ext4 filesystem")?;
+        Self::mount_ext4(dev, mount_point, discard)?;
         Ok(())
     }
 
-    fn luks_setup(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
+    fn mount_ext4(dev: &Path, mount_point: &Path, discard: bool) -> Result<()> {
+        let mut mount = Command::new("mount");
+        if discard {
+            mount.args(["-o", "discard"]);
+        }
+        let status = mount.arg(dev).arg(mount_point).status()?;
+        if !status.success() {
+            bail!("Failed to mount ext4 filesystem: {status}");
+        }
+        Ok(())
+    }
+
+    fn luks_setup(&self, disk_crypt_key: &str, name: &str, discard: bool) -> Result<()> {
         let root_hd = &self.args.device;
         let sector_offset = PAYLOAD_OFFSET / 512;
         info!("Formatting encrypted disk");
@@ -2810,10 +2844,10 @@ impl<'a> Stage0<'a> {
         {
             bail!("Failed to setup luks volume");
         }
-        self.open_encrypted_volume(disk_crypt_key, name)
+        self.open_encrypted_volume(disk_crypt_key, name, discard)
     }
 
-    fn open_encrypted_volume(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
+    fn open_encrypted_volume(&self, disk_crypt_key: &str, name: &str, discard: bool) -> Result<()> {
         let root_hd = &self.args.device;
         let disk_crypt_key = disk_crypt_key.trim();
         // Create a private tmpfs mount to ensure the header stays in-memory.
@@ -2841,8 +2875,13 @@ impl<'a> Stage0<'a> {
         validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
 
         info!("Opening the device");
-        let mut child = Command::new("cryptsetup")
-            .args(["luksOpen", "--type", "luks2", "--header"])
+        let mut command = Command::new("cryptsetup");
+        command.args(["luksOpen", "--type", "luks2"]);
+        if discard {
+            command.arg("--allow-discards");
+        }
+        let mut child = command
+            .arg("--header")
             .arg(&in_mem_hdr)
             .arg("-d-")
             .arg(root_hd)

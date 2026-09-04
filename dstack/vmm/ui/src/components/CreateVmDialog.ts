@@ -90,6 +90,14 @@ const CreateVmDialogComponent = {
               </select>
             </div>
 
+            <div class="form-group checkbox-group">
+              <label>
+                <input v-model="form.storage_discard" type="checkbox">
+                Reclaim unused storage blocks
+                <span class="help-icon" title="Keeps sparse disk images small, but reveals allocation and deletion patterns to the host.">?</span>
+              </label>
+            </div>
+
             <div class="form-group full-width">
               <label for="appId">App ID (optional)</label>
               <input id="appId" v-model="form.app_id" type="text" placeholder="Leave empty for automatic generation">
