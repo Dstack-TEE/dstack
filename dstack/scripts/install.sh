@@ -57,11 +57,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+info() {
+    printf '%s\n' "$*" >&2
+}
+
+error() {
+    printf 'error: %s\n' "$*" >&2
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --repo)
             if [ "$#" -lt 2 ]; then
-                echo "error: --repo requires a URL" >&2
+                error "--repo requires a URL"
                 exit 1
             fi
             repo=$2
@@ -69,7 +77,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --ref)
             if [ "$#" -lt 2 ]; then
-                echo "error: --ref requires a ref" >&2
+                error "--ref requires a ref"
                 exit 1
             fi
             ref=$2
@@ -77,7 +85,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --src)
             if [ "$#" -lt 2 ]; then
-                echo "error: --src requires a directory" >&2
+                error "--src requires a directory"
                 exit 1
             fi
             src=$2
@@ -85,7 +93,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         --prefix|--root)
             if [ "$#" -lt 2 ]; then
-                echo "error: --prefix requires a directory" >&2
+                error "--prefix requires a directory"
                 exit 1
             fi
             prefix=$2
@@ -101,7 +109,7 @@ while [ "$#" -gt 0 ]; do
             exit 0
             ;;
         *)
-            echo "error: unknown option: $1" >&2
+            error "unknown option: $1"
             usage >&2
             exit 1
             ;;
@@ -110,7 +118,7 @@ done
 
 need_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
-        echo "error: required command not found: $1" >&2
+        error "required command not found: $1"
         exit 1
     fi
 }
@@ -170,10 +178,10 @@ resolve_source() {
 
     if [ -n "$src" ] && [ -e "$src" ]; then
         if ! is_checkout "$src" || ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
-            echo "error: $src exists but is not a dstack git checkout" >&2
+            error "$src exists but is not a dstack git checkout"
             exit 1
         fi
-        echo "updating dstack source in $src"
+        info "updating dstack source in $src"
         (
             cd "$src"
             git fetch --tags origin
@@ -181,26 +189,26 @@ resolve_source() {
             if git rev-parse --verify "origin/$ref" >/dev/null 2>&1; then
                 git pull --ff-only origin "$ref"
             fi
-        )
+        ) >&2
     elif [ -n "$src" ]; then
-        echo "cloning dstack source into $src"
-        git clone "$repo" "$src"
+        info "cloning dstack source into $src"
+        git clone "$repo" "$src" >&2
         (
             cd "$src"
             git fetch --tags origin
             git checkout "$ref"
-        )
+        ) >&2
     else
         need_cmd mktemp
         tmp_src=$(mktemp -d "${TMPDIR:-/tmp}/dstack-install.XXXXXX")
         src="$tmp_src/source"
-        echo "cloning dstack source into a temporary checkout"
-        git clone "$repo" "$src"
+        info "cloning dstack source into a temporary checkout"
+        git clone "$repo" "$src" >&2
         (
             cd "$src"
             git fetch --tags origin
             git checkout "$ref"
-        )
+        ) >&2
     fi
 
     abs_dir "$src"
@@ -210,17 +218,17 @@ validate_prefix() {
     case "$prefix" in
         /*) ;;
         *)
-            echo "error: --prefix must be an absolute path" >&2
+            error "--prefix must be an absolute path"
             exit 1
             ;;
     esac
     if [ "$prefix" = "/" ]; then
-        echo "error: --prefix must not be /" >&2
+        error "--prefix must not be /"
         exit 1
     fi
     case "$prefix" in
         *"/../"*|*"/.."|*"/./"*|*"/.")
-            echo "error: --prefix must not contain . or .. path components" >&2
+            error "--prefix must not contain . or .. path components"
             exit 1
             ;;
     esac
@@ -255,7 +263,7 @@ else
     install -d -m 0755 "$bin_dir"
 fi
 
-echo "building dstackup from $checkout"
+info "building dstackup from $checkout"
 (
     cd "$core_checkout"
     cargo build --release \
@@ -266,7 +274,7 @@ install_bin() {
     src_bin="$core_checkout/target/release/$1"
     dest_bin="$bin_dir/$2"
     if [ ! -f "$src_bin" ]; then
-        echo "error: expected binary not found: $src_bin" >&2
+        error "expected binary not found: $src_bin"
         exit 1
     fi
     if [ -n "$sudo_cmd" ]; then
