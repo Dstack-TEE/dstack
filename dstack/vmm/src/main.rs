@@ -77,6 +77,23 @@ struct NetdArgs {
     /// Override the Unix socket configured in [netd].
     #[arg(long)]
     socket: Option<String>,
+    /// Inspect a running netd instead of starting one.
+    #[command(subcommand)]
+    command: Option<NetdCommand>,
+}
+
+#[derive(Subcommand)]
+enum NetdCommand {
+    /// List every host interface netd holds.
+    ///
+    /// Answers the question a leak is made of -- whose is this interface --
+    /// which deriving a name from an identity cannot.
+    List {
+        /// Only this VMM instance's interfaces. Defaults to every one netd
+        /// owns, including those it cannot attribute.
+        #[arg(long)]
+        instance: Option<String>,
+    },
 }
 
 #[derive(ClapArgs)]
@@ -192,6 +209,49 @@ async fn log_rotation_task(app: App) {
     }
 }
 
+/// Client-side netd subcommands. Talks to the socket like the VMM does, so it
+/// needs whatever the socket's permissions ask for and not root.
+async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<()> {
+    match command {
+        NetdCommand::List { instance } => {
+            let interfaces = netd::list(&config.socket, instance.as_deref().unwrap_or_default())
+                .await
+                .context("failed to list netd interfaces")?;
+            println!(
+                "{:<16} {:<8} {:<24} {:<38} {:>3}  {}",
+                "INTERFACE", "KIND", "INSTANCE", "VM", "NIC", "FILTERED"
+            );
+            let mut unattributed = 0;
+            for record in &interfaces {
+                if record.instance_id.is_none() {
+                    unattributed += 1;
+                }
+                println!(
+                    "{:<16} {:<8} {:<24} {:<38} {:>3}  {}",
+                    record.tap,
+                    record.kind,
+                    record.instance_id.as_deref().unwrap_or("-"),
+                    record.vm_id.as_deref().unwrap_or("-"),
+                    record
+                        .nic_index
+                        .map_or_else(|| "-".to_string(), |index| index.to_string()),
+                    if record.bound { "yes" } else { "no" },
+                );
+            }
+            println!("\n{} interface(s)", interfaces.len());
+            if unattributed > 0 {
+                // Not a fault to fix by hand: an interface built before netd
+                // recorded ownership, or by another netd, carries no record and
+                // gets one the next time its VM launches.
+                println!(
+                    "{unattributed} carry no ownership record, so a collection will not touch them"
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -234,6 +294,9 @@ async fn main() -> Result<()> {
                     .extract_inner("cvm.network_filter")
                     .context("failed to load [cvm.network_filter] for netd")?,
             );
+        }
+        if let Some(command) = &netd_args.command {
+            return run_netd_command(&netd_config, command).await;
         }
         return netd::serve(netd_config).await;
     }

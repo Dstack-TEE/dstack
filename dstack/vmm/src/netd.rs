@@ -57,8 +57,19 @@ const OPERATIONS: &[&str] = &[
     "prepare_macvtap",
     "remove",
     "remove_all",
+    "list",
     "check",
 ];
+/// The interface names netd may create. Reserved: anything matching it is
+/// netd's to delete, and nothing else on the host may take one.
+const TAP_PREFIX: &str = "dt";
+/// Hex characters of digest in a TAP name, after [`TAP_PREFIX`].
+const TAP_DIGEST_CHARS: usize = 12;
+/// Version tag on the ownership record. Present so a later format can be told
+/// from this one rather than mis-parsed as it.
+const ALIAS_PREFIX: &str = "dstack1";
+/// What the kernel stores in an interface alias, minus the terminator.
+const MAX_IFALIAS: usize = 255;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceIdentity {
@@ -138,6 +149,39 @@ pub struct IngressBinding {
     pub host_address: String,
     pub host_port: u16,
     pub guest_port: u16,
+}
+
+/// One host resource netd holds.
+///
+/// `instance_id` and `vm_id` are absent when the interface carries no record
+/// that checks out: built by a netd too old to write one, by a third-party
+/// netd, or by this one in the instant between creating the interface and
+/// recording it. Absent is not "nobody's" -- it is "not known to be anybody's",
+/// which is a materially different thing to a collection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterfaceRecord {
+    pub tap: String,
+    /// `"tap"`, `"macvtap"`, or `"binding"` for an nwfilter binding whose
+    /// interface is already gone. A binding outlives the interface it was
+    /// bound to, so a collection that only looked at interfaces would leave
+    /// the one piece of state that survives them.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vm_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nic_index: Option<usize>,
+    /// Whether libvirt holds an nwfilter binding at this name.
+    #[serde(default)]
+    pub bound: bool,
+}
+
+impl InterfaceRecord {
+    /// Whether this is recorded as belonging to one VM of one VMM instance.
+    pub fn belongs_to(&self, instance_id: &str, vm_id: &str) -> bool {
+        self.instance_id.as_deref() == Some(instance_id) && self.vm_id.as_deref() == Some(vm_id)
+    }
 }
 
 /// What a netd can do, asked rather than inferred from a failure.
@@ -229,6 +273,20 @@ pub enum Request {
         instance_id: String,
         vm_id: String,
     },
+    /// Everything netd holds, so that an operator -- and a reconciliation --
+    /// can see the host's interfaces without being told what to look for.
+    ///
+    /// Deriving a name answers "where is this VM's interface". It cannot
+    /// answer "whose is this interface", which is the question a leak is made
+    /// of: a VM whose directory was deleted, a VMM instance that was
+    /// decommissioned, an interface built by a netd that has since been
+    /// upgraded. Enumeration answers it.
+    List {
+        /// Only interfaces recorded as this instance's. Empty lists every one
+        /// netd owns, whatever it is recorded as and whether or not it is.
+        #[serde(default)]
+        instance_id: String,
+    },
     /// Verify a deterministic TAP and binding for operations and integration
     /// diagnostics. The VMM startup path uses Prepare rather than Check.
     Check {
@@ -263,6 +321,11 @@ struct Response {
     /// the same reading `queues` and `ingress` get.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     capabilities: Option<Capabilities>,
+    /// Everything netd holds. Absent, rather than empty, from a netd that
+    /// cannot enumerate: "I hold nothing" and "I cannot say" are answers a
+    /// collection must not confuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interfaces: Option<Vec<InterfaceRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -284,6 +347,7 @@ enum Outcome {
     /// A sweep names no single interface, so it reports how many it deleted.
     Swept { removed: usize },
     Hello(Capabilities),
+    Listed(Vec<InterfaceRecord>),
 }
 
 impl Outcome {
@@ -305,6 +369,7 @@ impl Outcome {
             ingress: None,
             removed: None,
             capabilities: None,
+            interfaces: None,
             error: None,
         };
         match self {
@@ -321,6 +386,7 @@ impl Outcome {
             }
             Self::Swept { removed } => response.removed = Some(removed),
             Self::Hello(capabilities) => response.capabilities = Some(capabilities),
+            Self::Listed(interfaces) => response.interfaces = Some(interfaces),
         }
         response
     }
@@ -332,7 +398,58 @@ pub fn tap_name(identity: &InterfaceIdentity) -> String {
         identity.instance_id, identity.vm_id, identity.nic_index
     );
     let digest = Sha256::digest(input.as_bytes());
-    format!("dt{}", hex::encode(&digest[..6]))
+    format!("{TAP_PREFIX}{}", hex::encode(&digest[..TAP_DIGEST_CHARS / 2]))
+}
+
+/// The ownership record netd writes onto every interface it creates.
+///
+/// The record lives on the resource, so it has exactly the resource's
+/// lifetime. A file under `/run` would be a second thing to keep in step with
+/// the first, and the failure this whole path exists to fix is precisely a
+/// record that got out of step: written after the interface, lost with the
+/// directory, and unreadable to anything but the process that wrote it.
+///
+/// Never trusted as *authority*. Anything that can reach this socket can also
+/// name an identity, and the interface name is a digest of that identity --
+/// so a record is believed only when re-deriving the name from it reproduces
+/// the name it is written on. Ambiguity (a separator inside an identity),
+/// truncation, and forgery all fail that check and land in the same bucket as
+/// no record at all, which is the bucket handled conservatively.
+pub fn interface_alias(identity: &InterfaceIdentity) -> String {
+    format!(
+        "{ALIAS_PREFIX}:{}:{}:{}",
+        identity.nic_index, identity.instance_id, identity.vm_id
+    )
+}
+
+/// The identity an interface claims, if the claim checks out.
+///
+/// `nic_index` first, so the two free-form fields are the last two and a
+/// `vm_id` containing the separator still parses. An `instance_id` containing
+/// one does not, and is refused at prepare rather than mis-parsed here.
+pub fn owner_of(tap: &str, alias: &str) -> Option<InterfaceIdentity> {
+    let rest = alias.trim().strip_prefix(ALIAS_PREFIX)?.strip_prefix(':')?;
+    let (nic_index, rest) = rest.split_once(':')?;
+    let (instance_id, vm_id) = rest.split_once(':')?;
+    let identity = InterfaceIdentity {
+        instance_id: instance_id.to_string(),
+        vm_id: vm_id.to_string(),
+        nic_index: nic_index.parse().ok()?,
+    };
+    // The name is the proof. A record that does not reproduce it describes
+    // some other interface, or nothing.
+    (tap_name(&identity) == tap).then_some(identity)
+}
+
+/// Whether this name is one netd can have created. See [`TAP_PREFIX`].
+pub fn is_managed_name(interface: &str) -> bool {
+    let Some(digest) = interface.strip_prefix(TAP_PREFIX) else {
+        return false;
+    };
+    digest.len() == TAP_DIGEST_CHARS
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 pub fn instance_id(configured: &str, run_path: &Path) -> String {
@@ -405,6 +522,18 @@ pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result
         .await?
         .removed
         .context("netd answered a sweep without saying what it removed")
+}
+
+/// Everything netd holds, optionally narrowed to one VMM instance. See
+/// [`Request::List`].
+pub async fn list(socket: &Path, instance_id: &str) -> Result<Vec<InterfaceRecord>> {
+    let request = Request::List {
+        instance_id: instance_id.to_string(),
+    };
+    exchange(socket, &request)
+        .await?
+        .interfaces
+        .context("netd answered a listing without one")
 }
 
 /// This node's netd, as far as it can be asked.
@@ -492,6 +621,7 @@ async fn exchange(socket: &Path, request: &Request) -> Result<Response> {
         Request::PrepareMacvtap(_) => "prepare_macvtap",
         Request::Remove { .. } => "remove",
         Request::RemoveAll { .. } => "remove_all",
+        Request::List { .. } => "list",
         Request::Check { .. } => "check",
     };
     let exchange = async {
@@ -616,6 +746,7 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
                 ingress: None,
                 removed: None,
                 capabilities: None,
+                interfaces: None,
                 error: Some(format!("{error:#}")),
             }
         }
@@ -675,6 +806,10 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
         Request::PrepareMacvtap(request) => {
             prepare_macvtap(libvirt_uri, &request, config.filter_policy())
         }
+        Request::List { instance_id } => Ok(Outcome::Listed(list_interfaces(
+            libvirt_uri,
+            &instance_id,
+        ))),
         Request::RemoveAll { instance_id, vm_id } => {
             let removed = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
             Ok(Outcome::Swept { removed })
@@ -751,6 +886,7 @@ fn prepare_macvtap(
     add.extend_from_slice(&["type", "macvtap", "mode", mode]);
     ip(&add)?;
     let result = (|| {
+        set_alias(&tap, identity)?;
         let ifindex =
             std::fs::read_to_string(Path::new("/sys/class/net").join(&tap).join("ifindex"))
                 .context("failed to read macvtap ifindex")?;
@@ -840,6 +976,10 @@ fn prepare_bridge(
     add.extend_from_slice(&["user", &uid]);
     ip(&add)?;
     let result = (|| {
+        // Before anything else it could fail at. An interface that exists
+        // without a record is one nothing can attribute, and the window in
+        // which that is true is the window a crash turns permanent.
+        set_alias(&tap, &request.identity)?;
         ip(&["link", "set", "dev", &tap, "master", &request.bridge])?;
         if filtered {
             let xml = binding_xml(request, &tap, filter);
@@ -946,6 +1086,73 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
     }
 }
 
+/// Every resource netd owns, read off the host rather than out of a record.
+///
+/// Ownership is the reserved name plus the kernel's own answer about what kind
+/// of device it is; attribution is the interface's alias, checked by
+/// re-deriving the name from it. A listing never fails for want of libvirt: on
+/// a node that does not filter, `libvirtd` need not be running, and an
+/// interface inventory that refused to be produced without it would be
+/// unavailable exactly where unfiltered TAPs live.
+fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord> {
+    let bindings = existing_bindings(libvirt_uri);
+    let mut records = Vec::new();
+    let mut seen = HashSet::new();
+    if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let Ok(tap) = entry.file_name().into_string() else {
+                continue;
+            };
+            if !is_managed_name(&tap) {
+                continue;
+            }
+            let kind = if is_macvtap(&tap) {
+                "macvtap"
+            } else if is_tuntap(&tap) {
+                "tap"
+            } else {
+                // The name is netd's to use, but this is not a device netd
+                // creates. Listing it would invite a collection to delete it.
+                continue;
+            };
+            let alias = std::fs::read_to_string(Path::new("/sys/class/net").join(&tap).join("ifalias"))
+                .unwrap_or_default();
+            let owner = owner_of(&tap, &alias);
+            seen.insert(tap.clone());
+            records.push(InterfaceRecord {
+                bound: bindings
+                    .as_ref()
+                    .is_some_and(|bindings| bindings.contains(&tap)),
+                kind: kind.to_string(),
+                nic_index: owner.as_ref().map(|identity| identity.nic_index),
+                instance_id: owner.as_ref().map(|identity| identity.instance_id.clone()),
+                vm_id: owner.map(|identity| identity.vm_id),
+                tap,
+            });
+        }
+    }
+    // A binding outlives its interface, and an interface is the only thing
+    // that carries a record, so an orphaned binding can never be attributed.
+    // It is still netd's: nothing else creates a binding at one of these names.
+    for name in bindings.into_iter().flatten() {
+        if is_managed_name(&name) && !seen.contains(&name) {
+            records.push(InterfaceRecord {
+                tap: name,
+                kind: "binding".to_string(),
+                instance_id: None,
+                vm_id: None,
+                nic_index: None,
+                bound: true,
+            });
+        }
+    }
+    if !instance_id.is_empty() {
+        records.retain(|record| record.instance_id.as_deref() == Some(instance_id));
+    }
+    records.sort_by(|left, right| left.tap.cmp(&right.tap));
+    records
+}
+
 fn remove_interface(libvirt_uri: &str, tap: &str, cleanup: BindingCleanup) -> Result<()> {
     let macvtap = is_macvtap(tap);
     if Path::new("/sys/class/net").join(tap).exists() {
@@ -985,6 +1192,14 @@ fn remove_interface(libvirt_uri: &str, tap: &str, cleanup: BindingCleanup) -> Re
 /// Whether this is a tun/tap device. `tun_flags` is published by the tun
 /// driver and by nothing else, so its presence is the kernel's own answer --
 /// as `macvtap/` is for the other kind of device netd creates.
+/// Records who an interface belongs to, on the interface. See
+/// [`interface_alias`].
+fn set_alias(tap: &str, identity: &InterfaceIdentity) -> Result<()> {
+    let alias = interface_alias(identity);
+    ip(&["link", "set", "dev", tap, "alias", &alias])
+        .with_context(|| format!("failed to record ownership on {tap}"))
+}
+
 fn is_tuntap(interface: &str) -> bool {
     Path::new("/sys/class/net")
         .join(interface)
@@ -1103,6 +1318,22 @@ fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
     }
     if identity.nic_index > MAX_NIC_INDEX {
         bail!("NIC index is out of range");
+    }
+    // An identity that cannot be recorded on the interface is refused rather
+    // than built unattributed. A host resource nothing can name the owner of
+    // is the thing this whole path exists to stop producing, and the kernel's
+    // alias is the only place with the interface's exact lifetime to put it.
+    let alias = interface_alias(identity);
+    if alias.len() > MAX_IFALIAS {
+        bail!(
+            "identity is too long to record on the interface: {} bytes of {MAX_IFALIAS}",
+            alias.len()
+        );
+    }
+    // The record puts the two free-form fields last, so only the first of them
+    // has to be unambiguous.
+    if identity.instance_id.contains(':') {
+        bail!("instance ID must not contain ':'");
     }
     Ok(())
 }
@@ -1950,6 +2181,75 @@ mod tests {
             serde_json::to_value(Outcome::tap("dtabc".into()).into_response()).unwrap();
         assert_eq!(value["tap"], "dtabc");
         assert!(value.get("removed").is_none());
+    }
+
+    /// The record is a hint; the name is the proof. Everything that can go
+    /// wrong with reading a string off an interface -- forged, truncated,
+    /// ambiguous, absent -- has to land in the same bucket, and it has to be
+    /// the bucket a collection treats conservatively.
+    #[test]
+    fn an_interface_says_whose_it_is_and_the_name_is_what_proves_it() {
+        let nic = identity("path-abc", "vm-1", 3);
+        let tap = tap_name(&nic);
+        let alias = interface_alias(&nic);
+        assert_eq!(alias, "dstack1:3:path-abc:vm-1");
+
+        let owner = owner_of(&tap, &alias).expect("its own record checks out");
+        assert_eq!(owner.instance_id, "path-abc");
+        assert_eq!(owner.vm_id, "vm-1");
+        assert_eq!(owner.nic_index, 3);
+
+        // A record naming some other interface proves nothing about this one.
+        // This is what makes the record unforgeable without making it
+        // authoritative: anything that can reach the socket can write a
+        // string, but only the true identity re-derives the name.
+        let forged = interface_alias(&identity("path-abc", "someone-elses-vm", 3));
+        assert!(owner_of(&tap, &forged).is_none());
+        assert!(owner_of(&tap, "").is_none());
+        assert!(owner_of(&tap, "dstack1:3:path-abc").is_none());
+        assert!(owner_of(&tap, &alias[..alias.len() - 2]).is_none());
+        // A format this build does not know is not this format.
+        assert!(owner_of(&tap, &alias.replace("dstack1", "dstack2")).is_none());
+
+        // The two free-form fields are last and only the first of them has to
+        // be unambiguous, so a VM ID carrying the separator still reads back.
+        let odd = identity("path-abc", "vm:with:colons", 0);
+        assert_eq!(
+            owner_of(&tap_name(&odd), &interface_alias(&odd)).map(|owner| owner.vm_id),
+            Some("vm:with:colons".to_string())
+        );
+        // An instance ID carrying it is refused instead of mis-parsed.
+        assert!(validate_identity(&identity("path:abc", "vm-1", 0)).is_err());
+    }
+
+    /// An identity that cannot be recorded would produce an interface nothing
+    /// can attribute, which is the state this whole path exists to stop
+    /// creating. Refusing it is the only answer that keeps the invariant.
+    #[test]
+    fn an_identity_too_long_to_record_is_refused() {
+        let long = "v".repeat(128);
+        assert!(validate_identity(&identity("instance", &long, 0)).is_ok());
+        let identity_too_long = identity(&"i".repeat(128), &long, 255);
+        assert!(interface_alias(&identity_too_long).len() > MAX_IFALIAS);
+        let error = validate_identity(&identity_too_long).unwrap_err().to_string();
+        assert!(error.contains("too long to record"), "{error}");
+    }
+
+    /// The name space netd claims. A collection deletes what matches, so what
+    /// matches has to be exactly what netd can produce.
+    #[test]
+    fn the_managed_name_space_is_exactly_what_netd_produces() {
+        assert!(is_managed_name(&tap_name(&identity("instance", "vm", 0))));
+        assert!(is_managed_name("dt0123456789ab"));
+        assert!(!is_managed_name("dt0123456789AB"), "digests are lower case");
+        assert!(!is_managed_name("dt0123456789a"), "one short");
+        assert!(!is_managed_name("dt0123456789abc"), "one long");
+        assert!(!is_managed_name("dtzzzzzzzzzzzz"));
+        assert!(!is_managed_name("virbr0"));
+        assert!(!is_managed_name("eth0"));
+        // The whole space fits in IFNAMSIZ, or the kernel would refuse the
+        // names this reserves.
+        assert!(tap_name(&identity("instance", "vm", 255)).len() < 16);
     }
 
     /// A netd that answers a sweep with no count did not sweep. Reading the
