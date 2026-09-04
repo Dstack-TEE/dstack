@@ -644,6 +644,29 @@ pub struct NetdConfig {
     /// left inferring policy from a file that does not state it.
     #[serde(default)]
     pub network_filter: Option<NetworkFilterConfig>,
+    /// How often the VMM asks netd to collect interfaces no VM of its claims.
+    ///
+    /// The pass at startup is not optional and does not read this: it is the
+    /// one moment the VMM knows every VM it has, and everything a crash left
+    /// behind is still there. This is the backstop for what accumulates while
+    /// it runs -- a removal that raced a netd outage, an interface a stop could
+    /// not reach. Zero turns it off.
+    #[serde(default = "default_reconcile_interval")]
+    pub reconcile_interval_secs: u64,
+    /// Whether a collection may delete interfaces it cannot attribute.
+    ///
+    /// Off. An interface carrying no ownership record is not nobody's: on a
+    /// host where two VMM instances share one netd, it may be the other one's
+    /// running VM, and before netd recorded ownership every interface looked
+    /// like this. Turn it on only where nothing else creates interfaces in
+    /// netd's name space -- a single VMM instance on the host.
+    #[serde(default)]
+    pub collect_unattributed: bool,
+}
+
+/// See [`NetdConfig::reconcile_interval_secs`].
+fn default_reconcile_interval() -> u64 {
+    3600
 }
 
 impl Default for NetdConfig {
@@ -653,6 +676,8 @@ impl Default for NetdConfig {
             socket_mode: 0o660,
             libvirt_uri: default_libvirt_uri(),
             network_filter: None,
+            reconcile_interval_secs: default_reconcile_interval(),
+            collect_unattributed: false,
         }
     }
 }

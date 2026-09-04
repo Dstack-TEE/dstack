@@ -94,6 +94,20 @@ enum NetdCommand {
         #[arg(long)]
         instance: Option<String>,
     },
+    /// Delete every interface netd holds for one VM.
+    ///
+    /// For a VM whose VMM will never ask again -- one whose directory was
+    /// deleted by hand, or whose instance is gone. A running VMM collects
+    /// these itself; this is for when there is no longer one to do it.
+    RemoveVm {
+        /// The `cvm.instance_id` of the VMM that created them. `netd list`
+        /// shows it.
+        #[arg(long)]
+        instance: String,
+        /// The VM's ID.
+        #[arg(long)]
+        vm: String,
+    },
 }
 
 #[derive(ClapArgs)]
@@ -218,8 +232,8 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
                 .await
                 .context("failed to list netd interfaces")?;
             println!(
-                "{:<16} {:<8} {:<24} {:<38} {:>3}  {}",
-                "INTERFACE", "KIND", "INSTANCE", "VM", "NIC", "FILTERED"
+                "{:<16} {:<8} {:<24} {:<38} {:>3}  FILTERED",
+                "INTERFACE", "KIND", "INSTANCE", "VM", "NIC"
             );
             let mut unattributed = 0;
             for record in &interfaces {
@@ -238,7 +252,8 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
                     if record.bound { "yes" } else { "no" },
                 );
             }
-            println!("\n{} interface(s)", interfaces.len());
+            println!();
+            println!("{} interface(s)", interfaces.len());
             if unattributed > 0 {
                 // Not a fault to fix by hand: an interface built before netd
                 // recorded ownership, or by another netd, carries no record and
@@ -249,6 +264,34 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
             }
             Ok(())
         }
+        NetdCommand::RemoveVm { instance, vm } => {
+            let removed = netd::remove_all(&config.socket, instance, vm)
+                .await
+                .context("failed to remove the VM's interfaces")?;
+            println!("removed {removed} interface(s) for {vm}");
+            Ok(())
+        }
+    }
+}
+
+/// Collects host interfaces no VM claims, on an interval.
+///
+/// The startup pass covers what a crash left behind. This covers what
+/// accumulates while the VMM runs: a removal that raced a netd outage, a
+/// teardown whose VM no longer exists to retry it.
+async fn netd_reconcile_task(app: App) {
+    let interval_secs = app.config.netd.reconcile_interval_secs;
+    if interval_secs == 0 {
+        info!("periodic netd reconciliation is disabled");
+        return;
+    }
+    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+    // The startup pass already ran, and this fires immediately on its first
+    // tick.
+    interval.tick().await;
+    loop {
+        interval.tick().await;
+        app.reconcile_netd_interfaces().await;
     }
 }
 
@@ -416,8 +459,14 @@ async fn main() -> Result<()> {
     };
     let state = app::App::new(config, supervisor);
     state.reload_vms().await.context("Failed to reload VMs")?;
+    // After the VMs are loaded, because the set of VMs this instance has is
+    // what the collection is decided against, and before the API is served,
+    // because a VM created between taking that set and acting on it would be
+    // in netd's listing and not in the set.
+    state.reconcile_netd_interfaces().await;
     tokio::spawn(auto_restart_task(state.clone()));
     tokio::spawn(log_rotation_task(state.clone()));
+    tokio::spawn(netd_reconcile_task(state.clone()));
 
     tokio::select! {
         result = run_external_api(state.clone(), figment.clone(), api_auth) => {

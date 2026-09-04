@@ -930,6 +930,78 @@ impl App {
         reachability
     }
 
+    /// Deletes every host interface netd holds for a VM this instance no
+    /// longer has.
+    ///
+    /// Per-VM release reaches only what its caller can still name. This reaches
+    /// what nothing names any more, which is where a leak actually ends up: a
+    /// VM removed while the VMM was down, a workdir deleted by hand, a
+    /// teardown that raced a netd outage and was never retried because the VM
+    /// it belonged to no longer exists to retry it.
+    ///
+    /// The live set is every VM this instance has, running or not. Not the
+    /// running set: a VMM restarts under VMs that keep running, and collecting
+    /// by what is running would delete their interfaces out from under them.
+    ///
+    /// At startup this must run before the API is served -- the set is a
+    /// snapshot, and a VM created after it was taken would be in netd's
+    /// listing and not in the snapshot. netd's own lock keeps the collection
+    /// from overlapping a prepare; the ordering here is what keeps it from
+    /// racing the decision.
+    pub(crate) async fn reconcile_netd_interfaces(&self) {
+        let reachability = self.netd_capabilities().await;
+        if !reachability.is_reachable() {
+            debug!("no netd to reconcile interfaces with");
+            return;
+        }
+        if !reachability.supports("gc") {
+            warn!(
+                netd = %reachability.describe(),
+                "netd on this node cannot collect interfaces no VM claims; a VM removed while \
+                 this VMM was down leaves its host interfaces behind until it runs a newer netd"
+            );
+            return;
+        }
+        let live: Vec<String> = self.lock().vms.keys().cloned().collect();
+        let policy = if self.config.netd.collect_unattributed {
+            netd::UnattributedPolicy::Remove
+        } else {
+            netd::UnattributedPolicy::Keep
+        };
+        match netd::collect(
+            &self.config.netd.socket,
+            &self.config.cvm.instance_id,
+            live,
+            policy,
+            false,
+        )
+        .await
+        {
+            Ok(collection) => {
+                if collection.removed > 0 {
+                    for record in &collection.collected {
+                        info!(
+                            tap = %record.tap,
+                            vm_id = record.vm_id.as_deref().unwrap_or("-"),
+                            "collected a host interface no VM of this instance claims"
+                        );
+                    }
+                    info!(
+                        removed = collection.removed,
+                        "reconciled netd-managed interfaces"
+                    );
+                }
+                if collection.incomplete {
+                    warn!("netd stopped collecting on its deadline; the next pass continues");
+                }
+            }
+            Err(error) if netd::is_unreachable(&error) => {
+                debug!("no netd to reconcile interfaces with")
+            }
+            Err(error) => warn!("failed to reconcile netd-managed interfaces: {error:#}"),
+        }
+    }
+
     /// Releases every host interface netd holds for this VM.
     ///
     /// Unconditional and non-fatal, which is one decision made twice. The
@@ -2325,6 +2397,50 @@ mod tests {
             vec!["hello", "remove_all", "remove_all"],
             "asked once, acted on twice"
         );
+    }
+
+    /// A collection is decided against the set of VMs this instance has, and
+    /// asking for one from a netd that cannot do it must not look like asking
+    /// for one that found nothing.
+    #[tokio::test]
+    async fn reconciliation_is_asked_for_only_where_it_exists() {
+        let old = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
+            "hello",
+            "remove_all",
+        ]));
+        let app = app_talking_to(old.socket());
+        app.reconcile_netd_interfaces().await;
+        assert_eq!(
+            old.operations(),
+            vec!["hello"],
+            "an operation it does not have is not sent"
+        );
+
+        let netd = netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&[
+            "hello", "gc",
+        ]));
+        let app = app_talking_to(netd.socket());
+        app.reconcile_netd_interfaces().await;
+        let request = &netd.seen()[1];
+        assert_eq!(request["operation"], "gc");
+        assert_eq!(request["instance_id"], "test-instance");
+        assert_eq!(request["live_vm_ids"].as_array().unwrap().len(), 0);
+        assert_eq!(request["dry_run"], false);
+        // The conservative default: an interface with no ownership record may
+        // be another VMM instance's running VM.
+        assert_eq!(request["unattributed"], "keep");
+    }
+
+    #[tokio::test]
+    async fn collecting_unattributed_interfaces_is_the_operators_to_ask_for() {
+        let netd =
+            netd::testing::FakeNetd::spawn(netd::testing::Behavior::capable(&["hello", "gc"]));
+        let mut app = app_talking_to(netd.socket());
+        let mut config = (*app.config).clone();
+        config.netd.collect_unattributed = true;
+        app = App::new(config, SupervisorClient::new("http://127.0.0.1:0"));
+        app.reconcile_netd_interfaces().await;
+        assert_eq!(netd.seen()[1]["unattributed"], "remove");
     }
 
     /// The window a launch spends between reading "not running" and actually
