@@ -509,7 +509,14 @@ pub fn interface_alias(identity: &InterfaceIdentity) -> String {
 /// `vm_id` containing the separator still parses. An `instance_id` containing
 /// one does not, and is refused at prepare rather than mis-parsed here.
 pub fn owner_of(tap: &str, alias: &str) -> Option<InterfaceIdentity> {
-    let rest = alias.trim().strip_prefix(ALIAS_PREFIX)?.strip_prefix(':')?;
+    // `trim_end_matches`, not `trim`: sysfs adds a newline, and a `vm_id`
+    // whose own trailing whitespace were trimmed off here would re-derive a
+    // name that is not the one it is on, making the interface permanently
+    // unattributable -- never collected, only removable by hand.
+    let rest = alias
+        .trim_end_matches(['\n', '\r'])
+        .strip_prefix(ALIAS_PREFIX)?
+        .strip_prefix(':')?;
     let (nic_index, rest) = rest.split_once(':')?;
     let (instance_id, vm_id) = rest.split_once(':')?;
     let identity = InterfaceIdentity {
@@ -755,11 +762,26 @@ async fn exchange(socket: &Path, request: &Request) -> Result<Response> {
         Request::Check { .. } => "check",
     };
     let exchange = async {
-        let mut stream = UnixStream::connect(socket)
-            .await
-            .map_err(anyhow::Error::from)
-            .context(Unreachable)
-            .with_context(|| format!("failed to connect to netd at {}", socket.display()))?;
+        let mut stream = UnixStream::connect(socket).await.map_err(|error| {
+            // Only the two errnos that mean "nothing is listening". A socket
+            // the VMM's user cannot open (`EACCES`, the default `0660` on a
+            // root-owned socket) or a VMM out of descriptors would otherwise
+            // read as an absent netd, and every caller that treats absence as
+            // "nothing to do here" would skip its work at `debug!` -- leaking
+            // interfaces on a host whose netd is running fine, while telling
+            // the operator to go start one.
+            let absent = matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            );
+            let error = anyhow::Error::from(error)
+                .context(format!("failed to connect to netd at {}", socket.display()));
+            if absent {
+                error.context(Unreachable)
+            } else {
+                error
+            }
+        })?;
         let message = serde_json::to_vec(request)?;
         if message.len() as u64 > MAX_MESSAGE_SIZE {
             bail!("netd request is too large");
@@ -885,6 +907,12 @@ async fn serve_connection(
             debug!("netd liveness probe");
             return Ok(());
         }
+        // Answered here rather than in `handle_request`, which reaches the
+        // blocking pool first. That pool is finite and its tasks cannot be
+        // cancelled, so a node whose `virsh` calls are all timing out fills it
+        // -- and `hello` queued behind them times out too, putting back the
+        // "a busy netd reads as an absent one" this daemon exists to avoid.
+        Ok(Some(Request::Hello)) => Ok(Outcome::Hello(capabilities())),
         Ok(Some(request)) => {
             // `handle_request` shells out to `ip` and `virsh` and waits on the
             // operation lock, so it can block for as long as those take. On a
@@ -1225,14 +1253,21 @@ enum BindingCleanup {
 /// after it has failed is how a hung `libvirtd` turns a bounded collection into
 /// an unbounded one: the deadline is reached having deleted nothing, while
 /// every other VM on the host waits behind the operation lock.
-fn remove_interface_in_pass(uri: &str, tap: &str, libvirt: &mut bool) -> Result<()> {
+/// `Ok(false)` when the interface is gone but its binding could not be
+/// cleared. The pass reports that as incomplete rather than as success: the
+/// orphan half of the same loop already treats a binding it could not delete
+/// as a failure, and a stale binding is exactly the state a later filtered
+/// prepare at the same name hard-fails on.
+fn remove_interface_in_pass(uri: &str, tap: &str, libvirt: &mut bool) -> Result<bool> {
+    let mut cleared = true;
     if *libvirt && !is_macvtap(tap) {
         if let Err(error) = delete_binding(uri, tap) {
             warn!(%tap, "could not clear a possible nwfilter binding: {error:#}");
             *libvirt = false;
+            cleared = false;
         }
     }
-    remove_interface(uri, tap, BindingCleanup::Skip)
+    remove_interface(uri, tap, BindingCleanup::Skip).map(|()| cleared)
 }
 
 /// Deletes every interface a VM could hold, by deriving each name rather than
@@ -1303,9 +1338,12 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
                 warn!(%tap, %error, "failed to remove interface");
                 first_error.get_or_insert(error);
             }
-            Ok(()) => {
+            Ok(cleared) => {
                 info!(%tap, %vm_id, "removed interface");
                 removed += 1;
+                if !cleared {
+                    incomplete = true;
+                }
             }
         }
     }
