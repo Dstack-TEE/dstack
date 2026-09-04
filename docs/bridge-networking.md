@@ -173,6 +173,7 @@ needs an `allow` line for the bridge.
 - Guest MAC address is derived from SHA256 of the VM ID, with an optional configurable prefix (stable across restarts for DHCP IP consistency)
 - The host DHCP server (dnsmasq) assigns an IP to the VM
 - The TAP outlives QEMU and is deleted when the VMM tears the VM's networking down, so a VM that crashes does not leave its filter rules attached to a name the next VM could take
+- Every interface `netd` creates records which VM of which VMM instance it belongs to, in the kernel's interface alias — see [Who owns an interface](#who-owns-an-interface)
 - The VMM process needs neither root nor `CAP_NET_ADMIN`; `netd` holds that privilege in a separate service
 
 ### MAC address prefix
@@ -224,6 +225,75 @@ anything at all, because only the first was ever selected.
 A mapping resolves to exactly one NIC, and that NIC's backend decides the
 mechanism: `hostfwd=` for user mode, `netd` for a bridge. Nothing can be claimed
 by both.
+
+### Which ports are actually published
+
+A port mapping is a *request*. Whether it is met depends on which NIC carries
+it: QEMU publishes a user-mode NIC's mappings itself, while a bridge NIC's can
+only be published by `netd`, and the `netd` in this repository builds
+interfaces and does not forward host ports.
+
+`GetInfo` reports `published` per mapping so the difference is visible rather
+than assumed. A deployment that asks for something this node cannot publish is
+refused outright — nothing is running on the answer yet — while a VM deployed
+before the node could answer only gets a warning at launch, so an upgrade never
+turns a silent misconfiguration into an outage.
+
+To publish a bridge NIC's ports, run a `netd` that forwards. It reports
+`ingress: true` in its `hello` and echoes what it established in each prepare;
+the VMM records that answer and holds it to it per mapping.
+
+## Who owns an interface
+
+`netd` names an interface `dt<12 hex>`, a digest of (VMM instance, VM, NIC
+index). That answers "where is this VM's interface" but not "whose is this
+interface" — and the second question is the one a leaked interface poses. So
+`netd` also records the identity on the interface itself:
+
+```console
+$ ip -d link show dtc41d9e0b7a52 | grep alias
+    alias dstack1:0:path-3f9a1c8e7d2b4a60:0a1b2c3d4e5f6071
+```
+
+The kernel holds that for exactly the interface's lifetime, so unlike a file on
+disk it cannot be written late, lost, or left behind. It is a hint, never an
+authority: a record is believed only when re-deriving the interface name from
+it reproduces the name it is written on, so a forged, truncated or ambiguous
+record reads the same as no record at all.
+
+```bash
+# What netd holds on this host
+sudo dstack-vmm netd list
+
+# Everything one VM holds, for a VM whose VMM will never ask again
+sudo dstack-vmm netd remove-vm --instance path-3f9a1c8e7d2b4a60 --vm 0a1b2c3d4e5f6071
+```
+
+### Collection
+
+The VMM asks `netd` to collect interfaces no VM of its claims: once at startup,
+after it has loaded its VMs and before it serves its API, and then every
+`netd.reconcile_interval_secs`. That is what reaches an interface no per-VM
+teardown can — one whose VM was removed while the VMM was down, or whose
+workdir was deleted by hand.
+
+Three rules:
+
+| What the interface is recorded as | What happens |
+| --- | --- |
+| Another VMM instance's | Never touched. Several VMM instances share one `netd`, and the record is the only thing that can tell that instance's *running* VM from garbage |
+| This instance's, for a VM it no longer has | Collected |
+| Nothing that checks out | Kept and reported. Set `netd.collect_unattributed = true` to collect it |
+
+An interface with no record is not nobody's: before `netd` recorded ownership
+every interface looked like this, and on a host with two VMM instances one of
+them may be the other's running VM. Turn `collect_unattributed` on only where a
+single VMM instance owns the host.
+
+Upgrading is safe without touching anything: a collection also derives the
+names its own live VMs would occupy and keeps those, so a fleet running from
+before this existed survives the first pass, and each interface gains a record
+the next time its VM launches.
 
 ### Mixing networking modes
 

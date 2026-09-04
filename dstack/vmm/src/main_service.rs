@@ -27,9 +27,8 @@ use tracing::{info, warn};
 use crate::app::network::ingress_nic;
 use crate::app::{
     mode_carries_ingress, needs_swtpm, resolve_networking, resolved_networks,
-    validate_resolved_network,
-    validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
-    VmWorkDir,
+    validate_resolved_network, validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec,
+    Manifest, PortMapping, VmWorkDir,
 };
 use crate::config::{CvmConfig, Networking, NetworkingMode, NicNetworking};
 

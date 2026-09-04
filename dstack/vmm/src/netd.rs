@@ -2677,6 +2677,104 @@ mod tests {
         );
     }
 
+    /// Everything else here reasons about strings. This puts the reasoning
+    /// next to the kernel: that an alias survives on a device netd actually
+    /// creates, that enumeration finds it, that the guards refuse what they
+    /// are meant to, and that removal leaves nothing.
+    ///
+    /// Refuses to run in the host's network namespace, so it cannot touch a
+    /// real node's interfaces even when it fails. Unsharing one from inside
+    /// the test is not enough: `/sys/class/net` keeps showing the old
+    /// namespace until sysfs is remounted, which is most of what `ip netns
+    /// exec` does. So it asks to be put in one:
+    ///
+    /// ```text
+    /// cargo test -p dstack-vmm --bins --no-run
+    /// sudo ip netns add dstack-netd-test
+    /// sudo ip netns exec dstack-netd-test \
+    ///     target/debug/deps/dstack_vmm-<hash> --ignored --test-threads=1
+    /// sudo ip netns del dstack-netd-test
+    /// ```
+    #[test]
+    #[ignore = "needs root and its own network namespace; see the doc comment"]
+    fn a_real_interface_carries_its_record_and_removal_leaves_nothing() {
+        assert!(
+            nix::unistd::Uid::effective().is_root(),
+            "this test needs root"
+        );
+        let (mine, init) = (
+            std::fs::read_link("/proc/self/ns/net").unwrap(),
+            std::fs::read_link("/proc/1/ns/net").unwrap(),
+        );
+        assert_ne!(
+            mine, init,
+            "run this inside its own network namespace; it creates and deletes interfaces"
+        );
+        // Nothing in this namespace to talk to, which is also the state of a
+        // node that does not filter: the listing has to work without libvirt.
+        let uri = "qemu:///nonexistent-for-this-test";
+
+        let nic = identity("test-instance", "vm-1", 2);
+        let tap = tap_name(&nic);
+        ip(&["tuntap", "add", "dev", &tap, "mode", "tap"]).unwrap();
+        set_alias(&tap, &nic).unwrap();
+        assert!(is_tuntap(&tap), "the kernel publishes tun_flags for a TAP");
+
+        let records = list_interfaces(uri, "");
+        let record = records
+            .iter()
+            .find(|record| record.tap == tap)
+            .expect("an interface netd created is one netd can find");
+        assert_eq!(record.instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(record.vm_id.as_deref(), Some("vm-1"));
+        assert_eq!(record.nic_index, Some(2));
+        assert_eq!(record.kind, "tap");
+        // Narrowing by instance is what keeps one VMM's collection off
+        // another's interfaces.
+        assert_eq!(list_interfaces(uri, "test-instance").len(), 1);
+        assert!(list_interfaces(uri, "someone-else").is_empty());
+
+        // A device with one of netd's names that netd did not create. The name
+        // is 48 bits of digest, so this is not about collisions -- it is that
+        // `ip link delete` does not ask what it is deleting, and netd runs as
+        // root.
+        let impostor = tap_name(&identity("test-instance", "not-a-tap", 0));
+        ip(&["link", "add", &impostor, "type", "dummy"]).unwrap();
+        assert!(is_managed_name(&impostor));
+        assert!(
+            !list_interfaces(uri, "")
+                .iter()
+                .any(|record| record.tap == impostor),
+            "a device netd did not create is not offered up for collection"
+        );
+        let refused = remove_interface(uri, &impostor, BindingCleanup::Skip).unwrap_err();
+        assert!(refused.to_string().contains("refusing to delete"));
+
+        // An interface whose record does not re-derive its own name proves
+        // nothing, and lands in the same bucket as no record at all.
+        ip(&[
+            "link",
+            "set",
+            "dev",
+            &tap,
+            "alias",
+            "dstack1:2:test-instance:some-other-vm",
+        ])
+        .unwrap();
+        let records = list_interfaces(uri, "");
+        let record = records.iter().find(|record| record.tap == tap).unwrap();
+        assert!(record.instance_id.is_none(), "a forged record is no record");
+
+        remove_interface(uri, &tap, BindingCleanup::Skip).unwrap();
+        assert!(!Path::new("/sys/class/net").join(&tap).exists());
+        assert!(!list_interfaces(uri, "")
+            .iter()
+            .any(|record| record.tap == tap));
+        // Removing what is not there is not an error: a sweep derives names
+        // and most of them miss.
+        remove_interface(uri, &tap, BindingCleanup::Skip).unwrap();
+    }
+
     /// A netd that answers a sweep with no count did not sweep. Reading the
     /// absent field as zero is the same conflation `queues` and `ingress` are
     /// shaped to avoid, and here it would report a netd that cannot collect a
