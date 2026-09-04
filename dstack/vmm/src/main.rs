@@ -283,10 +283,13 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
             Ok(())
         }
         NetdCommand::RemoveVm { instance, vm } => {
-            let removed = netd::remove_all(&config.socket, instance, vm)
+            let sweep = netd::remove_all(&config.socket, instance, vm)
                 .await
                 .context("failed to remove the VM's interfaces")?;
-            println!("removed {removed} interface(s) for {vm}");
+            println!("removed {} interface(s) for {vm}", sweep.removed);
+            if sweep.incomplete {
+                println!("netd stopped on its deadline; run this again to continue");
+            }
             Ok(())
         }
     }

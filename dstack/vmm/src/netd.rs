@@ -603,15 +603,31 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
 /// would report a netd that cannot do this as a VM that had nothing to remove,
 /// which is the conflation [`Capabilities`] exists to end -- so it is an error
 /// here, and the caller falls back to removing what it has a record of.
-pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result<usize> {
+pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result<Sweep> {
     let request = Request::RemoveAll {
         instance_id: instance_id.to_string(),
         vm_id: vm_id.to_string(),
     };
-    exchange(socket, &request)
-        .await?
-        .removed
-        .context("netd answered a sweep without saying what it removed")
+    let response = exchange(socket, &request).await?;
+    Ok(Sweep {
+        removed: response
+            .removed
+            .context("netd answered a sweep without saying what it removed")?,
+        // Absent from a netd that cannot stop early, which is the same as one
+        // that did not.
+        incomplete: response.incomplete.unwrap_or_default(),
+    })
+}
+
+/// What one whole-VM sweep did.
+#[derive(Debug, Clone, Copy)]
+pub struct Sweep {
+    pub removed: usize,
+    /// Whether it stopped on its deadline with names left to check. Reported
+    /// rather than dropped: a sweep that ran out of time and one that finished
+    /// having removed the same count are different states of the host, and
+    /// only one of them needs looking at.
+    pub incomplete: bool,
 }
 
 /// Deletes one interface by name. See [`Request::RemoveInterface`].
@@ -976,10 +992,20 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
             remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort)?;
             Ok(Outcome::tap(tap))
         }
-        Request::Remove { identity, filtered } => {
+        Request::Remove {
+            identity,
+            filtered: _,
+        } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
-            remove_interface(libvirt_uri, &tap, binding_cleanup(filtered))?;
+            // Best effort, whatever the caller says was built. The strict rule
+            // exists for prepare, where a binding left at the name would block
+            // the one about to be created; at removal nothing is about to take
+            // the name, and failing here leaves the interface itself up on the
+            // bridge rather than just a binding libvirt will hand back on its
+            // next listing. It also makes this agree with the whole-VM sweep,
+            // which has always been best effort.
+            remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort)?;
             Ok(Outcome::tap(tap))
         }
         Request::Check { identity, filtered } => {
@@ -2641,10 +2667,9 @@ mod tests {
         assert!(!is_unreachable(&error));
 
         let netd = testing::FakeNetd::spawn(testing::Behavior::capable(&["hello", "remove_all"]));
-        assert_eq!(
-            remove_all(netd.socket(), "instance", "vm").await.unwrap(),
-            0
-        );
+        let sweep = remove_all(netd.socket(), "instance", "vm").await.unwrap();
+        assert_eq!(sweep.removed, 0);
+        assert!(!sweep.incomplete);
     }
 
     /// Every "an unreachable netd is not a failure" branch in the VMM hangs

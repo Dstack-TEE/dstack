@@ -1068,6 +1068,13 @@ impl VmmRpc for RpcHandler {
                 let networks = networks_from_proto(&request.networks, &cvm)?;
                 resolve_requested_networks(&networks, &cvm, manifest.vcpu)?
             };
+            // The lock first, then the question. Reading "not running" outside
+            // it and acting on the answer inside is the exact race the lock
+            // exists to close: a launch can start, prepare its interfaces and
+            // deploy QEMU in between, and the release would then delete the
+            // interfaces of a VM that is running -- silently, since QEMU stays
+            // up and the supervisor still reports it healthy.
+            let _launch = self.app.launch_lock(&request.id).await;
             let is_running = self
                 .app
                 .supervisor
@@ -1076,9 +1083,6 @@ impl VmmRpc for RpcHandler {
                 .is_some_and(|info| info.state.status.is_running());
             if !is_running {
                 let runtime_networks = vm_work_dir.runtime_networks();
-                // Teardown deletes interfaces by deriving their names, so it
-                // must not overlap a launch of the same VM.
-                let _launch = self.app.launch_lock(&request.id).await;
                 self.app
                     .release_vm_interfaces(&request.id, &runtime_networks)
                     .await;

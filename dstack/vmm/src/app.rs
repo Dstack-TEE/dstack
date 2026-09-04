@@ -485,6 +485,14 @@ impl App {
                 }
             }
         }
+        // A restart decided before a stop must not outlive it. The decision
+        // read `started` from disk; `stop_vm` writes it false under this lock,
+        // so re-reading it here is what makes the stop stick. An explicit start
+        // sets the flag itself and has nothing to re-read.
+        if !reset_restart_policy && !self.work_dir(id)?.started().unwrap_or(false) {
+            debug!(id, "skipping automatic restart: the VM was stopped");
+            return Ok(());
+        }
         self.sync_dynamic_config(id)?;
         let is_running = self
             .supervisor
@@ -603,9 +611,11 @@ impl App {
         self.stop_vm_process(id).await?;
         let networks = self.work_dir(id)?.runtime_networks();
         // Not fallible: a VM that has been asked to stop is stopped whether or
-        // not netd could be reached, and what is left behind is collected by
-        // the next launch or by reconciliation. See
-        // [`App::release_vm_interfaces`].
+        // not netd could be reached. What is left behind is reclaimed by this
+        // VM's next launch, which releases before it prepares, or by its
+        // removal. Not by reconciliation -- a stopped VM is still one this
+        // instance claims, so a VM that is never started or removed again keeps
+        // its interfaces. See [`App::release_vm_interfaces`].
         self.release_vm_interfaces(id, &networks).await;
         Ok(())
     }
@@ -1147,8 +1157,26 @@ impl App {
         )
         .await
         {
-            Ok(0) => {}
-            Ok(removed) => info!(vm_id, removed, "released netd-managed interfaces"),
+            Ok(sweep) => {
+                if sweep.removed > 0 {
+                    info!(
+                        vm_id,
+                        removed = sweep.removed,
+                        "released netd-managed interfaces"
+                    );
+                }
+                // A sweep that ran out of time is not a sweep that found
+                // nothing left. Saying so is the difference between a host an
+                // operator can reason about and one where "released 3
+                // interfaces" hid the fourth.
+                if sweep.incomplete {
+                    warn!(
+                        vm_id,
+                        "netd stopped releasing this VM's interfaces on its deadline; the rest \
+                         are released by its next launch or its removal"
+                    );
+                }
+            }
             Err(error) if netd::is_unreachable(&error) => {
                 debug!(vm_id, %error, "no netd to release interfaces from")
             }
@@ -1276,6 +1304,15 @@ impl App {
     ///
     /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
     async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
+        // Held across the stop, the wait and the release, not just the release.
+        // `removing` turns launches away, but a launch that passed that check
+        // before the marker was set is already inside the lock: it has not
+        // deployed yet, so the wait below sees nothing running and returns at
+        // once, and the release then deletes the interfaces of the QEMU that
+        // launch went on to start. Taking the lock first means the launch
+        // finishes before removal decides anything, and removal then stops what
+        // it actually started.
+        let _launch = self.launch_lock(id).await;
         // Stop the supervisor process (idempotent if already stopped)
         if let Err(err) = self.stop_vm_process(id).await {
             debug!("graceful VM stop during removal failed: {err:?}");
@@ -1315,10 +1352,7 @@ impl App {
         }
 
         let runtime_networks = self.work_dir(id)?.runtime_networks();
-        {
-            let _launch = self.launch_lock(id).await;
-            self.release_vm_interfaces(id, &runtime_networks).await;
-        }
+        self.release_vm_interfaces(id, &runtime_networks).await;
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
         // Orphaned supervisor processes without the marker keep their data intact.
@@ -2684,7 +2718,40 @@ mod tests {
         );
     }
 
-    /// The window a launch spends between reading "not running" and actually    /// The window a launch spends between reading "not running" and actually
+    /// A restart decided before a stop must not outlive it. The restart task
+    /// reads the started flag off disk and only then queues a launch, which
+    /// waits for the lock the stop is holding; without a re-read under that
+    /// lock the launch resurrects a VM the operator was told was stopped.
+    #[tokio::test]
+    async fn an_automatic_restart_does_not_outlive_the_stop_it_raced() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(Path::new("/nonexistent/netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let work_dir = app.work_dir("vm-1").unwrap();
+        std::fs::create_dir_all(work_dir.path()).unwrap();
+
+        work_dir.set_started(false).unwrap();
+        app.start_vm_with_restart_policy("vm-1", false)
+            .await
+            .expect("an automatic restart of a stopped VM does nothing");
+
+        // The flag is the whole difference: with it set, the same call goes on
+        // to do the work, and fails here for want of a VM to launch.
+        work_dir.set_started(true).unwrap();
+        assert!(app
+            .start_vm_with_restart_policy("vm-1", false)
+            .await
+            .is_err());
+
+        // An explicit start sets the flag itself and has nothing to re-read,
+        // so it is never turned away by one.
+        work_dir.set_started(false).unwrap();
+        assert!(app.start_vm("vm-1").await.is_err());
+    }
+
+    /// The window a launch spends between reading "not running" and actually
     /// starting QEMU is long -- a GPU reset, a netd conversation -- and the
     /// sweep inside it deletes interfaces by deriving their names. Two entrants
     /// in that window meant the loser deleting the winner's live TAPs.
