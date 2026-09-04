@@ -42,11 +42,6 @@ pub struct VmmInstanceInfo {
     pub run_path: String,
     /// Node name from configuration.
     pub node_name: String,
-    /// The namespace this VMM's host interfaces are recorded under. Two live
-    /// instances must not share one: it is the name space their TAP names are
-    /// derived in and the only thing a collection can tell them apart by.
-    #[serde(default)]
-    pub instance_id: String,
     /// VMM version string.
     pub version: String,
     /// Unix timestamp (seconds) when the instance started.
@@ -69,7 +64,6 @@ impl DiscoveryRegistration {
         run_path: &Path,
         node_name: &str,
         version: &str,
-        instance_id: &str,
     ) -> Result<Self> {
         let dir = discovery_dir();
         fs_err::create_dir_all(&dir).context("failed to create discovery directory")?;
@@ -88,7 +82,6 @@ impl DiscoveryRegistration {
             image_path: image_path.to_string_lossy().to_string(),
             run_path: run_path.to_string_lossy().to_string(),
             node_name: node_name.to_string(),
-            instance_id: instance_id.to_string(),
             version: version.to_string(),
             started_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -115,20 +108,6 @@ impl Drop for DiscoveryRegistration {
             ),
         }
     }
-}
-
-/// Every VMM instance currently registered as alive on this host.
-pub fn live_instances() -> Vec<VmmInstanceInfo> {
-    let Ok(entries) = fs::read_dir(discovery_dir()) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("json"))
-        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
-        .filter_map(|content| serde_json::from_str::<VmmInstanceInfo>(&content).ok())
-        .filter(|info| Path::new(&format!("/proc/{}", info.pid)).exists())
-        .collect()
 }
 
 /// Clean up stale discovery files from dead processes.

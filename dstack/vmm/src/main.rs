@@ -96,11 +96,10 @@ enum NetdCommand {
     },
     /// Delete one interface by name.
     ///
-    /// For what nothing else can reach: an interface built before netd
-    /// recorded ownership, or by another netd, whose VM is gone. `netd list`
-    /// shows these with no instance and no VM -- nothing can attribute them,
-    /// so no VMM will ever collect them, and an operator who can tell what
-    /// they are says so here.
+    /// For what nothing else can name: an interface built before netd recorded
+    /// ownership, or by another netd, whose VM is gone. `netd list` shows these
+    /// with no instance and no VM, so nothing can derive the sweep that would
+    /// take them; an operator who can tell what they are says so here.
     RemoveInterface {
         /// The interface name, as `netd list` prints it.
         name: String,
@@ -108,8 +107,9 @@ enum NetdCommand {
     /// Delete every interface netd holds for one VM.
     ///
     /// For a VM whose VMM will never ask again -- one whose directory was
-    /// deleted by hand, or whose instance is gone. A running VMM collects
-    /// these itself; this is for when there is no longer one to do it.
+    /// deleted by hand, or whose instance is gone. A VMM sweeps its own VMs on
+    /// every stop and every removal, and keeps a removal pending until the
+    /// sweep lands; this is for when no VMM will ever run that sweep.
     RemoveVm {
         /// The `cvm.instance_id` of the VMM that created them. `netd list`
         /// shows it.
@@ -269,7 +269,8 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
                 // recorded ownership, or by another netd, carries no record and
                 // gets one the next time its VM launches.
                 println!(
-                    "{unattributed} carry no ownership record, so a collection will not touch them"
+                    "{unattributed} carry no ownership record; `netd remove-interface` takes \
+                     one by name"
                 );
             }
             Ok(())
@@ -288,27 +289,6 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
             println!("removed {removed} interface(s) for {vm}");
             Ok(())
         }
-    }
-}
-
-/// Collects host interfaces no VM claims, on an interval.
-///
-/// The startup pass covers what a crash left behind. This covers what
-/// accumulates while the VMM runs: a removal that raced a netd outage, a
-/// teardown whose VM no longer exists to retry it.
-async fn netd_reconcile_task(app: App) {
-    let interval_secs = app.config.netd.reconcile_interval_secs;
-    if interval_secs == 0 {
-        info!("periodic netd reconciliation is disabled");
-        return;
-    }
-    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-    // The startup pass already ran, and this fires immediately on its first
-    // tick.
-    interval.tick().await;
-    loop {
-        interval.tick().await;
-        app.reconcile_netd_interfaces().await;
     }
 }
 
@@ -370,27 +350,6 @@ async fn main() -> Result<()> {
     // Preserve the existing startup validation. The broader static checks are
     // opt-in through `check-config` until they have seen wider deployment use.
     netd::validate_instance_id(&config.cvm.instance_id)?;
-    // Two live VMMs sharing one instance ID share the name space their host
-    // interfaces are derived in: each would build TAPs at names the other can
-    // also produce, and each collection would delete the other's running VMs
-    // because the ownership record -- the only thing that can tell two
-    // instances apart -- would name the collector. Derived from `run_path`
-    // this cannot happen; it takes a copied `vmm.toml` that states one.
-    for peer in discovery::live_instances() {
-        if peer.instance_id == config.cvm.instance_id
-            && peer.run_path != config.run_path.to_string_lossy()
-        {
-            anyhow::bail!(
-                "cvm.instance_id '{}' is already in use by the VMM running at {} (pid {}). It is \
-                 the name space this VMM's host interfaces are derived in, so sharing one would \
-                 have each instance delete the other's running VMs' networking. Leave it empty to \
-                 derive it from run_path",
-                config.cvm.instance_id,
-                peer.run_path,
-                peer.pid
-            );
-        }
-    }
     config
         .host_api
         .validate()
@@ -458,7 +417,6 @@ async fn main() -> Result<()> {
         &config.run_path,
         &config.node_name,
         &app_version(),
-        &config.cvm.instance_id,
     ) {
         Ok(registration) => Some(registration),
         Err(err) => {
@@ -499,14 +457,8 @@ async fn main() -> Result<()> {
     };
     let state = app::App::new(config, supervisor);
     state.reload_vms().await.context("Failed to reload VMs")?;
-    // After the VMs are loaded, because the set of VMs this instance has is
-    // what the collection is decided against, and before the API is served,
-    // because a VM created between taking that set and acting on it would be
-    // in netd's listing and not in the set.
-    state.reconcile_netd_interfaces().await;
     tokio::spawn(auto_restart_task(state.clone()));
     tokio::spawn(log_rotation_task(state.clone()));
-    tokio::spawn(netd_reconcile_task(state.clone()));
 
     tokio::select! {
         result = run_external_api(state.clone(), figment.clone(), api_auth) => {

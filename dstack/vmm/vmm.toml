@@ -47,11 +47,10 @@ qmp_socket = false
 # The user to run the VM as. If empty, the VM will be run as the current user.
 # Unique namespace when multiple dstack-vmm instances share one host. When
 # empty, a stable value is derived from run_path. It is what netd records on
-# every host interface this VMM asks for, and what a collection uses to tell
-# this instance's interfaces from another's -- so two VMMs sharing one value on
-# one host would each collect the other's running VMs. A VMM that finds another
-# live instance using the value it was given refuses to start rather than let
-# that happen. May not contain ":".
+# every host interface this VMM asks for, and the name space those interfaces'
+# names are derived in. Two VMMs on one host must not share one: each would
+# build interfaces at names the other can also produce. Left empty it is
+# derived from run_path, which cannot collide. May not contain ":".
 instance_id = ""
 # Network choices that deployment RPC callers may make. Macvtap is excluded
 # by default because libvirt nwfilter applies only to bridge interfaces.
@@ -155,12 +154,6 @@ parameters = {}
 # permissions authorize clients.
 [netd]
 socket = "/run/dstack/netd.sock"
-# How often the VMM asks netd to collect interfaces no VM of its claims. The
-# pass at startup is not optional and does not read this: it is the one moment
-# the VMM knows every VM it has and everything a crash left behind is still
-# there. This is the backstop for what accumulates while it runs. 0 disables it.
-reconcile_interval_secs = 3600
-
 # Applied when netd creates the socket itself. A systemd socket unit controls
 # its own SocketMode instead.
 socket_mode = 0o660

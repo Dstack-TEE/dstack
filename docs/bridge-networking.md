@@ -255,6 +255,10 @@ authority: a record is believed only when re-deriving the interface name from
 it reproduces the name it is written on, so a forged, truncated or ambiguous
 record reads the same as no record at all.
 
+Teardown does not need it — a sweep derives the names it deletes. What needs it
+is an operator, and a host running several VMM instances, where it is the only
+thing that tells one instance's interfaces from another's.
+
 ```bash
 # What netd holds on this host
 sudo dstack-vmm netd list
@@ -263,46 +267,34 @@ sudo dstack-vmm netd list
 sudo dstack-vmm netd remove-vm --instance path-3f9a1c8e7d2b4a60 --vm 0a1b2c3d4e5f6071
 ```
 
-### Collection
+### When a release does not land
 
-The VMM reconciles what `netd` holds against the VMs it has: once at startup,
-after loading them, and then every `netd.reconcile_interval_secs`. That is what
-reaches an interface no per-VM teardown can — one whose VM was removed while
-the VMM was down, or whose workdir was deleted by hand.
+Every stop and every removal asks `netd` to sweep that VM's interfaces, by
+deriving each of the 256 names its identity could produce. That needs no
+record, and it reaches what a per-NIC teardown cannot: an interface a crash
+left behind before anything on disk pointed at it, or one whose NIC the
+manifest has since dropped.
 
-It asks `netd list` and decides for itself, rather than asking `netd` to decide.
-The decision is only safe under the VMM's per-VM launch lock, which `netd` has
-no way to take: a collection decided inside `netd` would be decided against a
-set of live VMs that was true when the request was *sent*, and `netd` runs it
-when it wins the operation lock — possibly much later, by which time a VM
-created in between is absent from the set and present on the host. Here each
-VM is re-checked while holding the lock its own launch holds, so a launch and a
-collection of the same VM cannot both believe they are alone.
+A removal deletes the VM's directory, and that directory — with its `.removing`
+marker — is the only thing left that says to try again. So it is deleted only
+once the sweep has landed. If `netd` refused, or was not there to ask, the
+directory stays and the next VMM start resumes the removal; `remove_all` is
+idempotent, so the retry costs one round trip. A VM that never asked `netd` for
+an interface is unaffected: there is nothing for `netd` to be holding.
 
-| What the interface is recorded as | What happens |
-| --- | --- |
-| Another VMM instance's | Never touched. Several VMM instances share one `netd`, and the record is the only thing that can tell that instance's *running* VM from garbage |
-| This instance's, for a VM it no longer has | Collected, by the same whole-VM sweep a stop uses |
-| Nothing that checks out | Left alone. No VMM can tell whose it is, so no VMM decides about it |
-
-An interface with no record is not nobody's: before `netd` recorded ownership
-every interface looked like this, and on a host with two VMM instances one of
-them may be the other's running VM. They are reported at each pass and listed
-by `netd list` with `-` for instance and VM; an operator who can tell what one
-is removes it by name:
+What no VMM will retry is an interface whose VM directory an operator deleted
+by hand, or one recorded under an instance ID no VMM uses any more. `netd list`
+shows both, with the instance and VM they are recorded under:
 
 ```bash
+sudo dstack-vmm netd list
+sudo dstack-vmm netd remove-vm --instance <instance> --vm <vm>
 sudo dstack-vmm netd remove-interface dtc41d9e0b7a52
 ```
 
-Nothing accumulates: each interface gains a record the next time its VM
-launches, so the set only shrinks.
-
-Changing `cvm.instance_id` — or `run_path`, which it is derived from — is the
-one move that strands interfaces on purpose. They stay recorded under the old
-namespace, so no VMM collects them and running VMs keep working until they
-stop. `netd list` still shows the old instance ID, which is what
-`netd remove-vm --instance <old> --vm <id>` needs.
+Changing `cvm.instance_id` — or `run_path`, which it is derived from — strands
+interfaces the same way. Running VMs keep working until they stop, and
+`netd list` still shows the old instance ID, which is what `remove-vm` needs.
 
 ### Mixing networking modes
 
