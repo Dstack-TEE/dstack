@@ -77,6 +77,9 @@ pub fn parse_port(spec: &str) -> Result<PortMapping> {
         host_port,
         vm_port,
         nic_index,
+        // A request, not an answer: the server reports what it actually
+        // published back through `GetInfo`.
+        published: None,
     })
 }
 
