@@ -202,10 +202,6 @@ struct Response {
     /// between "one queue was requested" and "this netd ignored the request".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     queues: Option<u32>,
-    /// Forwarding rules netd established. Absent from a netd that does not
-    /// forward host ports, which is how the caller tells "nothing was asked
-    /// for" apart from "this request was ignored" -- the same reading `queues`
-    /// gets above.
     /// How many interfaces a whole-VM sweep deleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     removed: Option<usize>,
@@ -2164,9 +2160,9 @@ mod tests {
         remove_interface(uri, &tap, BindingCleanup::Skip).unwrap();
     }
     /// A netd that answers a sweep with no count did not sweep. Reading the
-    /// absent field as zero is the same conflation `queues` and `ingress` are
-    /// shaped to avoid, and here it would report a netd that cannot collect a
-    /// VM's interfaces as a VM that had none.
+    /// absent field as zero is the same conflation `queues` is shaped to
+    /// avoid, and here it would report a netd that cannot collect a VM's
+    /// interfaces as a VM that had none.
     #[tokio::test]
     async fn a_sweep_without_a_count_is_not_read_as_an_empty_one() {
         // Claims the operation, answers without the field.
