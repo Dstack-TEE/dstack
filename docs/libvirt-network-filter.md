@@ -118,17 +118,15 @@ and derives every name that VM could occupy, so neither has to be recorded for
 teardown to work. The VMM sweeps before preparing a launch as well as on stop,
 which makes a launch self-healing regardless of what the record says.
 
-A bridge prepare also carries two things `netd` does not need to build the TAP.
+A bridge prepare also carries one thing `netd` does not need to build the TAP.
 `workdir` names the VM's directory on the host: untrusted, never read for a
 decision, and present only so an operator reading `netd`'s log can get from an
-opaque TAP name back to the VM. `ingress` states the host ports that NIC should make
-reachable at its guest, which the VMM cannot arrange itself — it runs without
-`CAP_NET_ADMIN` by design, and QEMU's `hostfwd=` entries need a user-mode netdev
-that a bridge NIC does not have. The `netd` in this repository builds interfaces
-and does not forward ports; it says so by leaving `ingress` out of its response,
-the same reading `queues` gets, so a caller can tell "this netd does not do that"
-from "nothing was asked for" instead of assuming ports were forwarded because a
-TAP came back.
+opaque TAP name back to the VM.
+
+`netd` builds interfaces and does not forward host ports. A bridge NIC
+therefore cannot carry a port mapping — QEMU's `hostfwd=` needs a user-mode
+netdev — and the protocol says nothing about ports at all, rather than carrying
+a request no `netd` here can honour.
 
 ## Deployment modes
 

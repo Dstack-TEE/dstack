@@ -8,9 +8,9 @@ type PortEntry = {
   host_port: number | null;
   vm_port: number | null;
   custom_ip?: string;            // User-entered IP for custom mode
-  // Which NIC the traffic enters through. Blank lets the VMM pick: the first
-  // user-mode NIC, else the first bridge NIC. A single-NIC VM never needs it,
-  // which is why the field only appears once a VM has more than one.
+  // Which NIC the traffic enters through. Blank means the first user-mode
+  // NIC, the only kind that can publish a host port. A single-NIC VM never
+  // needs it, which is why the field only appears once a VM has more than one.
   nic_index?: number | string | null;
 };
 

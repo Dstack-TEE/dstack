@@ -35,9 +35,9 @@ pub fn tcp_port_free(addr: &str, port: u16) -> bool {
 /// * `<proto>:<addr>:<host>:<vm>`
 ///
 /// Any of them may carry a trailing `@<nic>` naming which NIC the traffic
-/// enters through, as `vmm-cli.py --port` does. Without it the VMM picks: the
-/// first user-mode NIC, else the first bridge NIC. A single-NIC VM never needs
-/// it.
+/// enters through, as `vmm-cli.py --port` does. Without it the mapping goes to
+/// the first user-mode NIC, the only kind that can publish a host port. A
+/// single-NIC VM never needs it.
 pub fn parse_port(spec: &str) -> Result<PortMapping> {
     let (spec, nic_index) = match spec.rsplit_once('@') {
         // Only digits. `parse()` would take " 1" and "+1" as 1, and a NIC index

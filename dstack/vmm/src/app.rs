@@ -620,17 +620,25 @@ impl App {
     ) -> Result<()> {
         // Before the early return, because a mapping with nowhere to go is a
         // property of the resolved topology and not of whether netd is in it.
-        // Deployment refuses every way of asking for one, so reaching this
-        // means an edit removed the NIC out from under a mapping that named it.
+        // Deployment refuses a *pin* to a NIC that cannot publish, so a pinned
+        // mapping only reaches this when an edit removed the NIC out from
+        // under it. An unpinned one is never refused -- a bridge-only VM with
+        // a port map deploys today and must keep deploying -- and reaches this
+        // whenever the VM has no user-mode NIC at all, which is the common
+        // case here and the one that must not read as a missing pin.
         for mapping in stranded_ingress(&vm.manifest.port_map, networks) {
+            let nowhere = match mapping.nic_index {
+                Some(index) => {
+                    format!("names NIC {index}, which this VM no longer has a backend for")
+                }
+                None => "is unpinned and this VM has no user-mode NIC to publish it".to_string(),
+            };
             warn!(
                 vm_id = %vm.manifest.id,
-                "port mapping {} {}:{} names NIC {:?}, which this VM no longer has a backend \
-                 for; it will not be published",
+                "port mapping {} {}:{} {nowhere}; it will not be published",
                 mapping.protocol.as_str(),
                 mapping.address,
                 mapping.from,
-                mapping.nic_index,
             );
         }
         // Whatever an earlier boot left behind: a crash between creating an
@@ -656,10 +664,6 @@ impl App {
             .work_dir(&vm.manifest.id)
             .map(|dir| dir.path().display().to_string())
             .unwrap_or_default();
-        // `port_map` is implemented as QEMU `hostfwd=` entries on a user-mode
-        // netdev, so a bridge NIC drops every one of them. The VMM cannot
-        // forward them itself -- it runs without CAP_NET_ADMIN by design -- so
-        // it states the requirement and lets the node's netd answer it.
         let mut prepared = Vec::new();
         for (nic_index, network) in networks.iter_mut().enumerate() {
             if !needs_netd_interface(network) {

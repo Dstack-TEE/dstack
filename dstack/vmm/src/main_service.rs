@@ -214,7 +214,7 @@ fn validate_port_mapping_nics(mappings: &[PortMapping], modes: &[NetworkingMode]
         if !mode_carries_ingress(*mode) {
             bail!(
                 "port mapping {} {}:{} names NIC {index}, which is {} and cannot publish a host \
-                 port; use a user-mode or bridge NIC",
+                 port; only a user-mode NIC can",
                 mapping.protocol.as_str(),
                 mapping.address,
                 mapping.from,

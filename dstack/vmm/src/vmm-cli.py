@@ -334,8 +334,8 @@ def parse_port_mapping(port_str: str) -> Dict:
     """Parse a port mapping string into a dictionary.
 
     Accepts an optional "@<nic>" suffix naming which NIC the traffic enters
-    through. Without it the VMM picks: the first user-mode NIC, else the first
-    bridge NIC. A single-NIC VM never needs it.
+    through. Without it the mapping goes to the first user-mode NIC, the only
+    kind that can publish a host port. A single-NIC VM never needs it.
     """
     nic_index = None
     if "@" in port_str:
