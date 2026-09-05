@@ -288,13 +288,13 @@ shows both, with the instance and VM they are recorded under:
 
 ```bash
 sudo dstack-vmm netd list
-sudo dstack-vmm netd remove-vm --instance <instance> --vm <vm>
+sudo dstack-vmm netd remove-vm --vmm <vmm_id> --vm <vm>
 sudo dstack-vmm netd remove-interface dtc41d9e0b7a52
 ```
 
-Changing `cvm.instance_id` — or `run_path`, which it is derived from — strands
+Changing `vmm_id` — or `run_path`, which it is derived from — strands
 interfaces the same way. Running VMs keep working until they stop, and
-`netd list` still shows the old instance ID, which is what `remove-vm` needs.
+`netd list` still shows the old VMM ID, which is what `remove-vm` needs.
 
 ### Mixing networking modes
 

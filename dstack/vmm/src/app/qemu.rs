@@ -367,6 +367,9 @@ fn prepare_shared_disk(workdir: &VmWorkDir, cfg: &CvmConfig) -> Result<()> {
 struct QemuCommandBuilder<'a> {
     vm: &'a VmConfig,
     cfg: &'a CvmConfig,
+    /// Which VMM instance the interfaces this launch names belong to. Lives on
+    /// the root config, not on `cfg`: it identifies the VMM, not the CVMs.
+    vmm_id: &'a str,
     gpus: &'a GpuConfig,
     prepared: &'a PreparedQemuLaunch,
 }
@@ -376,6 +379,7 @@ impl VmConfig {
         &self,
         workdir: impl AsRef<Path>,
         cfg: &CvmConfig,
+        vmm_id: &str,
         gpus: &GpuConfig,
         networks: &[Networking],
     ) -> Result<Vec<ProcessConfig>> {
@@ -383,6 +387,7 @@ impl VmConfig {
         let process = QemuCommandBuilder {
             vm: self,
             cfg,
+            vmm_id,
             gpus,
             prepared: &prepared,
         }
@@ -688,7 +693,7 @@ impl QemuCommandBuilder<'_> {
                     // networking from depending on which of those a node
                     // happens to use.
                     let tap = tap_name(&InterfaceIdentity {
-                        instance_id: self.cfg.instance_id.clone(),
+                        vmm_id: self.vmm_id.to_string(),
                         vm_id: self.vm.manifest.id.clone(),
                         nic_index: index,
                     });
@@ -1249,6 +1254,7 @@ mod tests {
         let process = QemuCommandBuilder {
             vm: &vm,
             cfg: &config.cvm,
+            vmm_id: &config.vmm_id,
             gpus: &GpuConfig::default(),
             prepared: &prepared,
         }
@@ -1278,12 +1284,12 @@ mod tests {
         // interface has one owner, so the netdev QEMU is handed does not
         // change with the node's filter mode or its queue count.
         let (mut config, ..) = test_launch_fixture();
-        config.cvm.instance_id = "vmm-a".into();
+        config.vmm_id = "vmm-a".into();
         let mut networking = bridge_network(&config);
         networking.nic.queues = Some(1);
         let args = net_args(&config, vec![networking]);
         let tap = tap_name(&InterfaceIdentity {
-            instance_id: "vmm-a".into(),
+            vmm_id: "vmm-a".into(),
             vm_id: "vm-1".into(),
             nic_index: 0,
         });
@@ -1299,12 +1305,12 @@ mod tests {
     #[test]
     fn disabling_vhost_keeps_the_netd_tap_and_turns_the_data_plane_off() {
         let (mut config, ..) = test_launch_fixture();
-        config.cvm.instance_id = "vmm-a".into();
+        config.vmm_id = "vmm-a".into();
         let mut networking = bridge_network(&config);
         networking.nic.vhost = Some(false);
         let args = net_args(&config, vec![networking]);
         let tap = tap_name(&InterfaceIdentity {
-            instance_id: "vmm-a".into(),
+            vmm_id: "vmm-a".into(),
             vm_id: "vm-1".into(),
             nic_index: 0,
         });
@@ -1316,12 +1322,12 @@ mod tests {
     #[test]
     fn multiqueue_bridge_uses_the_netd_tap_and_derives_vectors() {
         let (mut config, ..) = test_launch_fixture();
-        config.cvm.instance_id = "vmm-a".into();
+        config.vmm_id = "vmm-a".into();
         let mut networking = bridge_network(&config);
         networking.nic.queues = Some(4);
         let args = net_args(&config, vec![networking]);
         let tap = tap_name(&InterfaceIdentity {
-            instance_id: "vmm-a".into(),
+            vmm_id: "vmm-a".into(),
             vm_id: "vm-1".into(),
             nic_index: 0,
         });
@@ -1409,6 +1415,7 @@ mod tests {
         let process = QemuCommandBuilder {
             vm: &vm,
             cfg: &config.cvm,
+            vmm_id: &config.vmm_id,
             gpus: &GpuConfig::default(),
             prepared: &prepared,
         }
@@ -1474,18 +1481,19 @@ mod tests {
             network.nic.bridge = "br0".into();
             network.nic.vhost = Some(false);
         }
-        config.cvm.instance_id = "vmm-a".into();
+        config.vmm_id = "vmm-a".into();
         config.cvm.network_filter.mode = NetworkFilterMode::Libvirt;
         let process = QemuCommandBuilder {
             vm: &vm,
             cfg: &config.cvm,
+            vmm_id: &config.vmm_id,
             gpus: &GpuConfig::default(),
             prepared: &prepared,
         }
         .build()
         .unwrap();
         let expected_tap = tap_name(&InterfaceIdentity {
-            instance_id: "vmm-a".into(),
+            vmm_id: "vmm-a".into(),
             vm_id: "vm-1".into(),
             nic_index: 0,
         });
@@ -1501,6 +1509,7 @@ mod tests {
         let process = QemuCommandBuilder {
             vm: &vm,
             cfg: &config.cvm,
+            vmm_id: &config.vmm_id,
             gpus: &GpuConfig::default(),
             prepared: &prepared,
         }
@@ -1534,6 +1543,7 @@ mod tests {
         let error = QemuCommandBuilder {
             vm: &vm,
             cfg: &config.cvm,
+            vmm_id: &config.vmm_id,
             gpus: &GpuConfig::default(),
             prepared: &prepared,
         }
@@ -1544,6 +1554,7 @@ mod tests {
         QemuCommandBuilder {
             vm: &vm,
             cfg: &config.cvm,
+            vmm_id: &config.vmm_id,
             gpus: &GpuConfig::default(),
             prepared: &prepared,
         }
@@ -1559,6 +1570,7 @@ mod tests {
         let process = QemuCommandBuilder {
             vm: &vm,
             cfg: &config.cvm,
+            vmm_id: &config.vmm_id,
             gpus: &gpu,
             prepared: &prepared,
         }

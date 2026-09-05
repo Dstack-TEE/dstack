@@ -394,8 +394,8 @@ pub struct CvmConfig {
     #[serde(default)]
     pub network_filter: NetworkFilterConfig,
 
-    /// Stable namespace for TAP names when several VMMs share one host.
-    /// An empty value is derived from the absolute run directory.
+    /// Deprecated: use the top-level `vmm_id` instead. Kept so a config
+    /// written against v0.6.0-rc0 keeps loading.
     #[serde(default)]
     pub instance_id: String,
 
@@ -549,6 +549,18 @@ pub struct Config {
     /// Node name (optional, used as prefix in UI title)
     #[serde(default)]
     pub node_name: String,
+
+    /// This VMM instance's identity on its host: the namespace every host
+    /// interface it asks netd for is named in, and the owner recorded on each
+    /// of them. Two VMMs on one host must not share one, or each can derive
+    /// the other's interface names and sweep them.
+    ///
+    /// Empty is derived from the absolute run directory, which cannot collide.
+    /// Unlike `node_name`, which is cosmetic, this one is constrained: it may
+    /// not contain `:`, and it must stay stable across restarts, because an
+    /// interface's name and its ownership record are both derived from it.
+    #[serde(default)]
+    pub vmm_id: String,
 
     /// Image configuration
     #[serde(default)]
@@ -1218,6 +1230,18 @@ impl Config {
                     warn!("config: both `image_path` and `[image] path` are set, using `[image] path`");
                 }
                 me.image_path = PathBuf::default();
+            }
+            // Migrate deprecated `[cvm] instance_id` to top-level `vmm_id`
+            if !me.cvm.instance_id.is_empty() {
+                if me.vmm_id.is_empty() {
+                    warn!(
+                        "config: `[cvm] instance_id` is deprecated, use top-level `vmm_id` instead"
+                    );
+                    me.vmm_id = me.cvm.instance_id.clone();
+                } else {
+                    warn!("config: both `[cvm] instance_id` and `vmm_id` are set, using `vmm_id`");
+                }
+                me.cvm.instance_id = String::new();
             }
             if me.image.path == PathBuf::default() {
                 me.image.path = app_home.join("image");

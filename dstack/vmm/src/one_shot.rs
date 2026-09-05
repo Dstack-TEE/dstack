@@ -296,7 +296,13 @@ Compose file content (first 200 chars):
     }
 
     let process_configs = vm_builder_config
-        .config_qemu(&workdir_path, &config.cvm, &gpus, &runtime_networks)
+        .config_qemu(
+            &workdir_path,
+            &config.cvm,
+            &config.vmm_id,
+            &gpus,
+            &runtime_networks,
+        )
         .context("Failed to build QEMU configuration")?;
 
     // Get the main QEMU process config (first in the list)

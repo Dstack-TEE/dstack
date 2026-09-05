@@ -89,16 +89,16 @@ enum NetdCommand {
     /// Answers the question a leak is made of -- whose is this interface --
     /// which deriving a name from an identity cannot.
     List {
-        /// Only this VMM instance's interfaces. Defaults to every one netd
-        /// owns, including those it cannot attribute.
+        /// Only this VMM's interfaces. Defaults to every one netd owns,
+        /// including those it cannot attribute.
         #[arg(long)]
-        instance: Option<String>,
+        vmm: Option<String>,
     },
     /// Delete one interface by name.
     ///
     /// For what nothing else can name: an interface built before netd recorded
     /// ownership, or by another netd, whose VM is gone. `netd list` shows these
-    /// with no instance and no VM, so nothing can derive the sweep that would
+    /// with no VMM and no VM, so nothing can derive the sweep that would
     /// take them; an operator who can tell what they are says so here.
     RemoveInterface {
         /// The interface name, as `netd list` prints it.
@@ -107,14 +107,13 @@ enum NetdCommand {
     /// Delete every interface netd holds for one VM.
     ///
     /// For a VM whose VMM will never ask again -- one whose directory was
-    /// deleted by hand, or whose instance is gone. A VMM sweeps its own VMs on
+    /// deleted by hand, or whose VMM is gone. A VMM sweeps its own VMs on
     /// every stop and every removal, and keeps a removal pending until the
     /// sweep lands; this is for when no VMM will ever run that sweep.
     RemoveVm {
-        /// The `cvm.instance_id` of the VMM that created them. `netd list`
-        /// shows it.
+        /// The `vmm_id` of the VMM that created them. `netd list` shows it.
         #[arg(long)]
-        instance: String,
+        vmm: String,
         /// The VM's ID.
         #[arg(long)]
         vm: String,
@@ -238,24 +237,24 @@ async fn log_rotation_task(app: App) {
 /// needs whatever the socket's permissions ask for and not root.
 async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<()> {
     match command {
-        NetdCommand::List { instance } => {
-            let interfaces = netd::list(&config.socket, instance.as_deref().unwrap_or_default())
+        NetdCommand::List { vmm } => {
+            let interfaces = netd::list(&config.socket, vmm.as_deref().unwrap_or_default())
                 .await
                 .context("failed to list netd interfaces")?;
             println!(
                 "{:<16} {:<8} {:<24} {:<38} {:>3}",
-                "INTERFACE", "KIND", "INSTANCE", "VM", "NIC"
+                "INTERFACE", "KIND", "VMM", "VM", "NIC"
             );
             let mut unattributed = 0;
             for record in &interfaces {
-                if record.instance_id.is_none() {
+                if record.vmm_id.is_none() {
                     unattributed += 1;
                 }
                 println!(
                     "{:<16} {:<8} {:<24} {:<38} {:>3}",
                     record.tap,
                     record.kind,
-                    record.instance_id.as_deref().unwrap_or("-"),
+                    record.vmm_id.as_deref().unwrap_or("-"),
                     record.vm_id.as_deref().unwrap_or("-"),
                     record
                         .nic_index
@@ -282,8 +281,8 @@ async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<
             println!("removed {name}");
             Ok(())
         }
-        NetdCommand::RemoveVm { instance, vm } => {
-            let removed = netd::remove_all(&config.socket, instance, vm)
+        NetdCommand::RemoveVm { vmm, vm } => {
+            let removed = netd::remove_all(&config.socket, vmm, vm)
                 .await
                 .context("failed to remove the VM's interfaces")?;
             println!("removed {removed} interface(s) for {vm}");
@@ -342,14 +341,14 @@ async fn main() -> Result<()> {
     }
 
     let mut config = Config::extract_or_default(&figment)?.abs_path()?;
-    config.cvm.instance_id = netd::instance_id(&config.cvm.instance_id, config.run_path.as_path());
+    config.vmm_id = netd::vmm_id(&config.vmm_id, config.run_path.as_path());
     if let Some(socket) = args.netd_socket.as_deref() {
         config.netd.socket = socket.into();
     }
 
     // Preserve the existing startup validation. The broader static checks are
     // opt-in through `check-config` until they have seen wider deployment use.
-    netd::validate_instance_id(&config.cvm.instance_id)?;
+    netd::validate_vmm_id(&config.vmm_id)?;
     config
         .host_api
         .validate()

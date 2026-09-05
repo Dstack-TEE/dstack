@@ -69,9 +69,10 @@ from `[cvm.networking].macvtap_mode` and cannot be selected through deployment
 RPCs. These allowlists authorize attachment targets; an nwfilter is not a
 substitute for that authorization.
 
-Each VMM instance also has an `instance_id`. It must be unique among VMMs that
-share a host. If omitted, the VMM derives a stable namespace from its absolute
-run directory.
+Each VMM instance also has a top-level `vmm_id`. It must be unique among VMMs
+that share a host. If omitted, the VMM derives a stable namespace from its
+absolute run directory. A config written against v0.6.0-rc0 can still say
+`[cvm] instance_id`, which is read as `vmm_id` with a deprecation warning.
 
 ## Architecture
 
@@ -205,7 +206,7 @@ The service accepts exactly one Unix stream listener through the systemd
 socket type, is rejected.
 
 All VMM instance configurations point to the same socket and use distinct
-`cvm.instance_id` values. A dedicated netd uses a different socket. A
+`vmm_id` values. A dedicated netd uses a different socket. A
 host-wide lock serializes mutations made by shared and dedicated netd
 processes.
 

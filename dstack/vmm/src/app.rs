@@ -540,6 +540,7 @@ impl App {
             let processes = match vm_config.config_qemu(
                 &work_dir,
                 &self.config.cvm,
+                &self.config.vmm_id,
                 &devices,
                 &runtime_networks,
             ) {
@@ -665,7 +666,7 @@ impl App {
                 continue;
             }
             let identity = InterfaceIdentity {
-                instance_id: self.config.cvm.instance_id.clone(),
+                vmm_id: self.config.vmm_id.clone(),
                 vm_id: vm.manifest.id.clone(),
                 nic_index,
             };
@@ -860,13 +861,7 @@ impl App {
         // skip the release entirely. The operation itself cannot be misread
         // that way: it succeeds, or it says netd is not there, or netd answers
         // with a refusal, and only the last of those has a fallback.
-        match netd::remove_all(
-            &self.config.netd.socket,
-            &self.config.cvm.instance_id,
-            vm_id,
-        )
-        .await
-        {
+        match netd::remove_all(&self.config.netd.socket, &self.config.vmm_id, vm_id).await {
             Ok(removed) => {
                 if removed > 0 {
                     info!(vm_id, removed, "released netd-managed interfaces");
@@ -2155,7 +2150,7 @@ mod tests {
         .extract()
         .unwrap();
         config.netd.socket = netd_socket.to_path_buf();
-        config.cvm.instance_id = "test-instance".to_string();
+        config.vmm_id = "test-instance".to_string();
         config.run_path = run_path.to_path_buf();
         config
     }
@@ -2230,7 +2225,7 @@ mod tests {
         assert_eq!(netd.operations(), vec!["remove_all"]);
         let sweep = &netd.seen()[0];
         assert_eq!(sweep["vm_id"], "vm-1");
-        assert_eq!(sweep["instance_id"], "test-instance");
+        assert_eq!(sweep["vmm_id"], "test-instance");
         // A sweep names no NIC: reaching the indices the caller can no longer
         // name is the entire point.
         assert!(sweep.get("nic_index").is_none());

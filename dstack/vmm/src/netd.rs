@@ -60,7 +60,16 @@ const ALIAS_PREFIX: &str = "dstack1";
 const MAX_IFALIAS: usize = 255;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterfaceIdentity {
-    pub instance_id: String,
+    /// Which VMM instance this interface belongs to.
+    ///
+    /// `instance_id` is the name this field shipped under in v0.6.0-rc0, and
+    /// is accepted so a VMM that predates the rename still talks to a netd
+    /// that does not. netd and the VMM ship in one binary, so the reverse skew
+    /// -- a new VMM against an old netd -- is fixed by restarting netd, and
+    /// fails closed at decode rather than building an interface under the
+    /// wrong name.
+    #[serde(alias = "instance_id")]
+    pub vmm_id: String,
     pub vm_id: String,
     pub nic_index: usize,
 }
@@ -95,7 +104,7 @@ pub struct PrepareBridgeRequest {
 
 /// One host resource netd holds.
 ///
-/// `instance_id` and `vm_id` are absent when the interface carries no record
+/// `vmm_id` and `vm_id` are absent when the interface carries no record
 /// that checks out: built by a netd too old to write one, by a third-party
 /// netd, or by this one in the instant between creating the interface and
 /// recording it. Absent is not "nobody's" -- it is "not known to be anybody's",
@@ -108,8 +117,12 @@ pub struct InterfaceRecord {
     /// bound to, so a collection that only looked at interfaces would leave
     /// the one piece of state that survives them.
     pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instance_id: Option<String>,
+    #[serde(
+        default,
+        alias = "instance_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub vmm_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vm_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,7 +166,8 @@ pub enum Request {
     /// without a record, because every name netd can produce for a VM is
     /// derivable from its identity.
     RemoveAll {
-        instance_id: String,
+        #[serde(alias = "instance_id")]
+        vmm_id: String,
         vm_id: String,
     },
     /// Everything netd holds, so that an operator can see the host's
@@ -165,10 +179,10 @@ pub enum Request {
     /// decommissioned, an interface built by a netd that has since been
     /// upgraded. Enumeration answers it.
     List {
-        /// Only interfaces recorded as this instance's. Empty lists every one
-        /// netd owns, whatever it is recorded as and whether or not it is.
-        #[serde(default)]
-        instance_id: String,
+        /// Only interfaces recorded as this VMM's. Empty lists every one netd
+        /// owns, whatever it is recorded as and whether or not it is.
+        #[serde(default, alias = "instance_id")]
+        vmm_id: String,
     },
     /// Delete one interface by name.
     ///
@@ -274,7 +288,7 @@ impl Outcome {
 pub fn tap_name(identity: &InterfaceIdentity) -> String {
     let input = format!(
         "{}\0{}\0{}",
-        identity.instance_id, identity.vm_id, identity.nic_index
+        identity.vmm_id, identity.vm_id, identity.nic_index
     );
     let digest = Sha256::digest(input.as_bytes());
     format!(
@@ -300,14 +314,14 @@ pub fn tap_name(identity: &InterfaceIdentity) -> String {
 pub fn interface_alias(identity: &InterfaceIdentity) -> String {
     format!(
         "{ALIAS_PREFIX}:{}:{}:{}",
-        identity.nic_index, identity.instance_id, identity.vm_id
+        identity.nic_index, identity.vmm_id, identity.vm_id
     )
 }
 
 /// The identity an interface claims, if the claim checks out.
 ///
 /// `nic_index` first, so the two free-form fields are the last two and a
-/// `vm_id` containing the separator still parses. An `instance_id` containing
+/// `vm_id` containing the separator still parses. An `vmm_id` containing
 /// one does not, and is refused at prepare rather than mis-parsed here.
 pub fn owner_of(tap: &str, alias: &str) -> Option<InterfaceIdentity> {
     // `trim_end_matches`, not `trim`: sysfs adds a newline, and a `vm_id`
@@ -319,9 +333,9 @@ pub fn owner_of(tap: &str, alias: &str) -> Option<InterfaceIdentity> {
         .strip_prefix(ALIAS_PREFIX)?
         .strip_prefix(':')?;
     let (nic_index, rest) = rest.split_once(':')?;
-    let (instance_id, vm_id) = rest.split_once(':')?;
+    let (vmm_id, vm_id) = rest.split_once(':')?;
     let identity = InterfaceIdentity {
-        instance_id: instance_id.to_string(),
+        vmm_id: vmm_id.to_string(),
         vm_id: vm_id.to_string(),
         nic_index: nic_index.parse().ok()?,
     };
@@ -341,21 +355,21 @@ pub fn is_managed_name(interface: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-/// Rejects an instance ID no interface could be recorded as belonging to.
+/// Rejects a VMM ID no interface could be recorded as belonging to.
 ///
 /// At startup rather than at the first launch. The VMM derives one that is
 /// always valid; an operator who configured their own learns here rather than
 /// from the first VM that fails to get a NIC.
-pub fn validate_instance_id(instance_id: &str) -> Result<()> {
+pub fn validate_vmm_id(vmm_id: &str) -> Result<()> {
     validate_identity(&InterfaceIdentity {
-        instance_id: instance_id.to_string(),
+        vmm_id: vmm_id.to_string(),
         vm_id: "0".repeat(64),
         nic_index: MAX_NIC_INDEX,
     })
-    .context("invalid cvm.instance_id")
+    .context("invalid vmm_id")
 }
 
-pub fn instance_id(configured: &str, run_path: &Path) -> String {
+pub fn vmm_id(configured: &str, run_path: &Path) -> String {
     if !configured.trim().is_empty() {
         return configured.trim().to_string();
     }
@@ -413,9 +427,9 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
 /// would report a netd that cannot do this as a VM that had nothing to remove,
 /// which is a netd that cannot do this reported as a VM that had nothing to
 /// remove -- so it is an error here.
-pub async fn remove_all(socket: &Path, instance_id: &str, vm_id: &str) -> Result<usize> {
+pub async fn remove_all(socket: &Path, vmm_id: &str, vm_id: &str) -> Result<usize> {
     let request = Request::RemoveAll {
-        instance_id: instance_id.to_string(),
+        vmm_id: vmm_id.to_string(),
         vm_id: vm_id.to_string(),
     };
     exchange(socket, &request)
@@ -434,9 +448,9 @@ pub async fn remove_interface_named(socket: &Path, tap: &str) -> Result<()> {
 
 /// Everything netd holds, optionally narrowed to one VMM instance. See
 /// [`Request::List`].
-pub async fn list(socket: &Path, instance_id: &str) -> Result<Vec<InterfaceRecord>> {
+pub async fn list(socket: &Path, vmm_id: &str) -> Result<Vec<InterfaceRecord>> {
     let request = Request::List {
-        instance_id: instance_id.to_string(),
+        vmm_id: vmm_id.to_string(),
     };
     exchange(socket, &request)
         .await?
@@ -671,11 +685,9 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
         Request::PrepareMacvtap(request) => {
             prepare_macvtap(libvirt_uri, &request, config.filter_policy())
         }
-        Request::List { instance_id } => {
-            Ok(Outcome::Listed(list_interfaces(libvirt_uri, &instance_id)))
-        }
-        Request::RemoveAll { instance_id, vm_id } => {
-            let removed = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
+        Request::List { vmm_id } => Ok(Outcome::Listed(list_interfaces(libvirt_uri, &vmm_id))),
+        Request::RemoveAll { vmm_id, vm_id } => {
+            let removed = sweep_vm_interfaces(libvirt_uri, &vmm_id, &vm_id)?;
             Ok(Outcome::Swept { removed })
         }
         Request::RemoveInterface { tap } => {
@@ -929,9 +941,9 @@ enum BindingCleanup {
 /// less than the thing it replaced is not a sweep. Those names are decided
 /// against a single listing, because the whole point of enumerating a bounded
 /// space is that deciding one name stays cheap.
-fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Result<usize> {
+fn sweep_vm_interfaces(libvirt_uri: &str, vmm_id: &str, vm_id: &str) -> Result<usize> {
     let identity = InterfaceIdentity {
-        instance_id: instance_id.to_string(),
+        vmm_id: vmm_id.to_string(),
         vm_id: vm_id.to_string(),
         nic_index: 0,
     };
@@ -995,7 +1007,7 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
 /// a node that does not filter, `libvirtd` need not be running, and an
 /// interface inventory that refused to be produced without it would be
 /// unavailable exactly where unfiltered TAPs live.
-fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord> {
+fn list_interfaces(libvirt_uri: &str, vmm_id: &str) -> Vec<InterfaceRecord> {
     let bindings = existing_bindings(libvirt_uri);
     let mut records = Vec::new();
     let mut seen = HashSet::new();
@@ -1024,7 +1036,7 @@ fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord>
             records.push(InterfaceRecord {
                 kind: kind.to_string(),
                 nic_index: owner.as_ref().map(|identity| identity.nic_index),
-                instance_id: owner.as_ref().map(|identity| identity.instance_id.clone()),
+                vmm_id: owner.as_ref().map(|identity| identity.vmm_id.clone()),
                 vm_id: owner.map(|identity| identity.vm_id),
                 tap,
             });
@@ -1038,14 +1050,14 @@ fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord>
             records.push(InterfaceRecord {
                 tap: name,
                 kind: "binding".to_string(),
-                instance_id: None,
+                vmm_id: None,
                 vm_id: None,
                 nic_index: None,
             });
         }
     }
-    if !instance_id.is_empty() {
-        records.retain(|record| record.instance_id.as_deref() == Some(instance_id));
+    if !vmm_id.is_empty() {
+        records.retain(|record| record.vmm_id.as_deref() == Some(vmm_id));
     }
     records.sort_by(|left, right| left.tap.cmp(&right.tap));
     records
@@ -1140,7 +1152,7 @@ fn binding_xml(request: &PrepareBridgeRequest, tap: &str, filter: &NetworkFilter
     let owner_uuid = stable_uuid(&request.identity);
     let owner_name = format!(
         "dstack:{}:{}:{}",
-        request.identity.instance_id, request.identity.vm_id, request.identity.nic_index
+        request.identity.vmm_id, request.identity.vm_id, request.identity.nic_index
     );
     let mut parameters = String::new();
     for (name, value) in &filter.parameters {
@@ -1167,7 +1179,7 @@ fn stable_uuid(identity: &InterfaceIdentity) -> Uuid {
     let digest = Sha256::digest(
         format!(
             "{}\0{}\0{}",
-            identity.instance_id, identity.vm_id, identity.nic_index
+            identity.vmm_id, identity.vm_id, identity.nic_index
         )
         .as_bytes(),
     );
@@ -1209,7 +1221,7 @@ fn validate_prepare_bridge(
 
 fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
     for (label, value) in [
-        ("instance ID", identity.instance_id.as_str()),
+        ("VMM ID", identity.vmm_id.as_str()),
         ("VM ID", identity.vm_id.as_str()),
     ] {
         if value.is_empty() || value.len() > 128 || value.contains('\0') {
@@ -1232,8 +1244,8 @@ fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
     }
     // The record puts the two free-form fields last, so only the first of them
     // has to be unambiguous.
-    if identity.instance_id.contains(':') {
-        bail!("instance ID must not contain ':'");
+    if identity.vmm_id.contains(':') {
+        bail!("VMM ID must not contain ':'");
     }
     Ok(())
 }
@@ -1540,11 +1552,11 @@ pub(crate) mod testing {
             "remove" | "check" => json!({"ok": true, "tap": "dtdeadbeef00"}),
             "remove_all" => json!({"ok": true, "removed": 0, "incomplete": false}),
             "list" => {
-                let instance = request["instance_id"].as_str().unwrap_or_default();
+                let instance = request["vmm_id"].as_str().unwrap_or_default();
                 let held: Vec<Value> = interfaces
                     .iter()
                     .filter(|record| {
-                        instance.is_empty() || record["instance_id"].as_str() == Some(instance)
+                        instance.is_empty() || record["vmm_id"].as_str() == Some(instance)
                     })
                     .cloned()
                     .collect();
@@ -1563,7 +1575,7 @@ mod tests {
 
     fn identity(instance: &str, vm: &str, nic_index: usize) -> InterfaceIdentity {
         InterfaceIdentity {
-            instance_id: instance.into(),
+            vmm_id: instance.into(),
             vm_id: vm.into(),
             nic_index,
         }
@@ -1611,6 +1623,54 @@ mod tests {
         assert!(validate_mac("ff:ff:ff:ff:ff:ff").is_err());
     }
 
+    /// The field was `instance_id` in v0.6.0-rc0. netd keeps reading that
+    /// spelling so a VMM which predates the rename still gets an interface out
+    /// of a netd which does not -- including through the `flatten` that carries
+    /// an identity into a prepare, where an alias is easy to assume and cheap
+    /// to check.
+    #[test]
+    fn the_pre_rename_spelling_of_the_vmm_id_still_decodes() {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "operation": "prepare_bridge",
+            "instance_id": "vmm-a",
+            "vm_id": "vm",
+            "nic_index": 0,
+            "bridge": "br0",
+            "mac": "02:00:00:00:00:01",
+            "qemu_uid": 1000,
+            "filtered": true,
+            "queues": 1,
+        }))
+        .expect("a request in the old spelling is still a request");
+        let Request::PrepareBridge(request) = request else {
+            panic!("decoded as the wrong operation");
+        };
+        assert_eq!(request.identity.vmm_id, "vmm-a");
+
+        let sweep: Request = serde_json::from_value(serde_json::json!({
+            "operation": "remove_all",
+            "instance_id": "vmm-a",
+            "vm_id": "vm",
+        }))
+        .expect("a sweep in the old spelling is still a sweep");
+        let Request::RemoveAll { vmm_id, .. } = sweep else {
+            panic!("decoded as the wrong operation");
+        };
+        assert_eq!(vmm_id, "vmm-a");
+
+        // The other direction: an old netd answers a listing in the old
+        // spelling, and a new VMM must not read that as unattributed.
+        let record: InterfaceRecord = serde_json::from_value(serde_json::json!({
+            "tap": "dt000000000000",
+            "kind": "tap",
+            "instance_id": "vmm-a",
+            "vm_id": "vm",
+            "nic_index": 0,
+        }))
+        .expect("a record in the old spelling is still a record");
+        assert_eq!(record.vmm_id.as_deref(), Some("vmm-a"));
+    }
+
     #[test]
     fn remove_protocol_keeps_identity_fields_flat() {
         let request = Request::Remove {
@@ -1618,7 +1678,7 @@ mod tests {
         };
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "remove");
-        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["vmm_id"], "instance");
         assert_eq!(value["vm_id"], "vm");
         assert_eq!(value["nic_index"], 2);
         assert!(value.get("identity").is_none());
@@ -1637,7 +1697,7 @@ mod tests {
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
-        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["vmm_id"], "instance");
         assert_eq!(value["bridge"], "br0");
         assert!(value.get("identity").is_none());
     }
@@ -1670,7 +1730,7 @@ mod tests {
         // imagination is one netd must not answer.
         let error = serde_json::from_value::<Request>(serde_json::json!({
             "operation": "prepare_bridge",
-            "instance_id": "instance",
+            "vmm_id": "instance",
             "vm_id": "vm",
             "nic_index": 0,
             "bridge": "br0",
@@ -1696,7 +1756,7 @@ mod tests {
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_macvtap");
-        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["vmm_id"], "instance");
         assert_eq!(value["parent"], "eth0");
         assert!(value.get("identity").is_none());
     }
@@ -1714,7 +1774,7 @@ mod tests {
         });
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "prepare_bridge");
-        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["vmm_id"], "instance");
         assert_eq!(value["bridge"], "br0");
         assert!(value.get("identity").is_none());
     }
@@ -1776,7 +1836,7 @@ mod tests {
     fn a_filtering_node_refuses_an_unfiltered_bridge_tap() {
         let request = PrepareBridgeRequest {
             identity: InterfaceIdentity {
-                instance_id: "i".into(),
+                vmm_id: "i".into(),
                 vm_id: "v".into(),
                 nic_index: 0,
             },
@@ -1916,7 +1976,7 @@ mod tests {
     fn decode_minimal_bridge() -> Request {
         serde_json::from_value(serde_json::json!({
             "operation": "prepare_bridge",
-            "instance_id": "instance",
+            "vmm_id": "instance",
             "vm_id": "vm",
             "nic_index": 0,
             "bridge": "br0",
@@ -1931,12 +1991,12 @@ mod tests {
     #[test]
     fn a_whole_vm_sweep_needs_no_record_of_what_it_is_deleting() {
         let value = serde_json::to_value(Request::RemoveAll {
-            instance_id: "instance".into(),
+            vmm_id: "instance".into(),
             vm_id: "vm".into(),
         })
         .unwrap();
         assert_eq!(value["operation"], "remove_all");
-        assert_eq!(value["instance_id"], "instance");
+        assert_eq!(value["vmm_id"], "instance");
         assert_eq!(value["vm_id"], "vm");
         // No NIC index: the point is reaching the ones the caller can no longer
         // name, so it names none and netd derives the whole space instead.
@@ -1978,7 +2038,7 @@ mod tests {
         assert_eq!(alias, "dstack1:3:path-abc:vm-1");
 
         let owner = owner_of(&tap, &alias).expect("its own record checks out");
-        assert_eq!(owner.instance_id, "path-abc");
+        assert_eq!(owner.vmm_id, "path-abc");
         assert_eq!(owner.vm_id, "vm-1");
         assert_eq!(owner.nic_index, 3);
 
@@ -2110,7 +2170,7 @@ mod tests {
             .iter()
             .find(|record| record.tap == tap)
             .expect("an interface netd created is one netd can find");
-        assert_eq!(record.instance_id.as_deref(), Some("test-instance"));
+        assert_eq!(record.vmm_id.as_deref(), Some("test-instance"));
         assert_eq!(record.vm_id.as_deref(), Some("vm-1"));
         assert_eq!(record.nic_index, Some(2));
         assert_eq!(record.kind, "tap");
@@ -2148,7 +2208,7 @@ mod tests {
         .unwrap();
         let records = list_interfaces(uri, "");
         let record = records.iter().find(|record| record.tap == tap).unwrap();
-        assert!(record.instance_id.is_none(), "a forged record is no record");
+        assert!(record.vmm_id.is_none(), "a forged record is no record");
 
         remove_interface(uri, &tap, BindingCleanup::Skip).unwrap();
         assert!(!Path::new("/sys/class/net").join(&tap).exists());
