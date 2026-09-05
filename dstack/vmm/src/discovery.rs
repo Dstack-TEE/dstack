@@ -26,8 +26,16 @@ fn discovery_dir() -> PathBuf {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmmInstanceInfo {
-    /// Unique identifier for this VMM instance (random UUID).
+    /// Unique identifier for this run of the VMM (random UUID). A restart
+    /// produces a new one, which is what makes it useless for naming anything
+    /// that outlives the process -- see `vmm_id`.
     pub id: String,
+    /// The VMM's configured `vmm_id`: its identity on this host, stable across
+    /// restarts, and the value `netd list` attributes host interfaces to.
+    /// Carried here so an operator holding an interface can get from it to the
+    /// VMM that asked for it.
+    #[serde(default)]
+    pub vmm_id: String,
     /// Process ID.
     pub pid: u32,
     /// Address the external API listens on (e.g. "unix:./vmm.sock" or "0.0.0.0:9080").
@@ -63,6 +71,7 @@ impl DiscoveryRegistration {
         image_path: &Path,
         run_path: &Path,
         node_name: &str,
+        vmm_id: &str,
         version: &str,
     ) -> Result<Self> {
         let dir = discovery_dir();
@@ -75,6 +84,7 @@ impl DiscoveryRegistration {
 
         let info = VmmInstanceInfo {
             id: id.clone(),
+            vmm_id: vmm_id.to_string(),
             pid: std::process::id(),
             address: listen_address.to_string(),
             working_dir: cwd.to_string_lossy().to_string(),

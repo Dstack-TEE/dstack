@@ -194,11 +194,15 @@ def cmd_ls_vmm(args):
 
     # Table output
 
-    fmt = "  {active} {id:<12s} {pid:<8s} {user:<10s} {node:<12s} {address:<24s} {workdir}"
+    fmt = (
+        "  {active} {id:<10s} {vmm:<24s} {pid:<8s} {user:<10s} {node:<12s}"
+        " {address:<24s} {workdir}"
+    )
     print(
         fmt.format(
             active="",
             id="ID",
+            vmm="VMM ID",
             pid="PID",
             user="USER",
             node="NAME",
@@ -206,7 +210,7 @@ def cmd_ls_vmm(args):
             workdir="WORKING DIR",
         )
     )
-    print("  " + "-" * 100)
+    print("  " + "-" * 120)
 
     for inst in instances:
         short_id = inst["id"][:8]
@@ -218,6 +222,7 @@ def cmd_ls_vmm(args):
             fmt.format(
                 active=is_active,
                 id=short_id,
+                vmm=inst.get("vmm_id", "") or "-",
                 pid=str(inst.get("pid", "?")),
                 user=inst.get("user", "?")[:10],
                 node=node_name[:12],
@@ -229,15 +234,20 @@ def cmd_ls_vmm(args):
 
 def cmd_switch_vmm(args):
     """Switch the active VMM instance."""
-    target = args.vmm_id
+    target = args.id
     instances = discover_vmm_instances()
 
     if not instances:
         print("No running VMM instances found.")
         return
 
-    # Find matching instance by prefix
-    matches = [i for i in instances if i["id"].startswith(target)]
+    # By discovery ID prefix, or by the configured vmm_id in full. The second
+    # is what `netd list` shows, so an interface leads back to a VMM here.
+    matches = [
+        i
+        for i in instances
+        if i["id"].startswith(target) or i.get("vmm_id", "") == target
+    ]
     if len(matches) == 0:
         print(f"No VMM instance matching '{target}'.")
         print("Available instances:")
@@ -1753,7 +1763,8 @@ def main():
         "switch", help="Switch active VMM instance"
     )
     vmm_switch_parser.add_argument(
-        "vmm_id", help="VMM instance ID (prefix match supported)"
+        "id",
+        help="Discovery ID of a running VMM (prefix match), or its full vmm_id",
     )
 
     # Register nested subcommands for top-level help display

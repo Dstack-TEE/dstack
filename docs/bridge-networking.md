@@ -283,14 +283,18 @@ idempotent, so the retry costs one round trip. A VM that never asked `netd` for
 an interface is unaffected: there is nothing for `netd` to be holding.
 
 What no VMM will retry is an interface whose VM directory an operator deleted
-by hand, or one recorded under an instance ID no VMM uses any more. `netd list`
-shows both, with the instance and VM they are recorded under:
+by hand, or one recorded under a `vmm_id` no VMM uses any more. `netd list`
+shows both, with the VMM and VM they are recorded under:
 
 ```bash
 sudo dstack-vmm netd list
 sudo dstack-vmm netd remove-vm --vmm <vmm_id> --vm <vm>
 sudo dstack-vmm netd remove-interface dtc41d9e0b7a52
 ```
+
+`vmm-cli.py vmm ls` prints each running VMM's `vmm_id` beside its address and
+working directory, which is how a VMM ID from `netd list` leads back to the VMM
+that asked for the interface.
 
 Changing `vmm_id` — or `run_path`, which it is derived from — strands
 interfaces the same way. Running VMs keep working until they stop, and

@@ -415,6 +415,7 @@ async fn main() -> Result<()> {
         &config.image.path,
         &config.run_path,
         &config.node_name,
+        &config.vmm_id,
         &app_version(),
     ) {
         Ok(registration) => Some(registration),
