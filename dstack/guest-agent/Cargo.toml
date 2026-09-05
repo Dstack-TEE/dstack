@@ -58,6 +58,7 @@ or-panic.workspace = true
 cc-eventlog.workspace = true
 listenfd.workspace = true
 libc.workspace = true
+nvml-wrapper.workspace = true
 
 [dev-dependencies]
 # The test-only mock platform builds attestations from a fixture, which needs
