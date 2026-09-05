@@ -25,8 +25,9 @@ use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
 
 use crate::app::{
-    needs_swtpm, resolve_networking, validate_resolved_network, validate_resolved_networks, App,
-    AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping, VmWorkDir,
+    mode_carries_ingress, needs_swtpm, resolve_networking, validate_resolved_network,
+    validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
+    VmWorkDir,
 };
 use crate::config::{CvmConfig, Networking, NetworkingMode, NicNetworking};
 
@@ -168,6 +169,62 @@ fn port_mappings_conflict(left: &PortMapping, right: &PortMapping) -> bool {
             || right.address.is_unspecified())
 }
 
+/// The backend each of a VM's NICs resolves to, with an empty list standing for
+/// the node default's single NIC.
+fn resolved_nic_modes(
+    networks: &[NicNetworking],
+    cvm_config: &CvmConfig,
+    vcpu: u32,
+) -> Vec<NetworkingMode> {
+    let node_default = [cvm_config.networking.nic.clone()];
+    let requested = if networks.is_empty() {
+        &node_default[..]
+    } else {
+        networks
+    };
+    requested
+        .iter()
+        .map(|networking| resolve_networking(networking, cvm_config, vcpu).nic.mode)
+        .collect()
+}
+
+/// Rejects a mapping pinned to a NIC that cannot carry it.
+///
+/// Both ways of getting that wrong are refused here, at deployment, where the
+/// caller is present to be told: a NIC the VM does not have, and one whose
+/// backend has no mechanism to publish a host port. Macvtap bypasses the host
+/// bridge and a custom netdev is a string the VMM does not interpret, so a
+/// mapping pinned to either used to resolve to that NIC and then fall out of
+/// every branch that could act on it -- no `hostfwd=`, no netd request, and no
+/// warning either.
+fn validate_port_mapping_nics(mappings: &[PortMapping], modes: &[NetworkingMode]) -> Result<()> {
+    let nic_count = modes.len();
+    for mapping in mappings {
+        let Some(index) = mapping.nic_index else {
+            continue;
+        };
+        let Some(mode) = modes.get(index) else {
+            bail!(
+                "port mapping {} {}:{} names NIC {index}, but this VM has {nic_count}",
+                mapping.protocol.as_str(),
+                mapping.address,
+                mapping.from
+            );
+        };
+        if !mode_carries_ingress(*mode) {
+            bail!(
+                "port mapping {} {}:{} names NIC {index}, which is {} and cannot publish a host \
+                 port; use a user-mode or bridge NIC",
+                mapping.protocol.as_str(),
+                mapping.address,
+                mapping.from,
+                mode.as_str(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn validate_unique_port_mappings(mappings: &[PortMapping]) -> Result<()> {
     for (index, mapping) in mappings.iter().enumerate() {
         if mappings[..index]
@@ -216,10 +273,16 @@ pub fn create_manifest_from_vm_config(
                 protocol,
                 from,
                 to,
+                nic_index: p.nic_index.map(|index| index as usize),
             })
         })
         .collect::<Result<Vec<_>>>()?;
     validate_unique_port_mappings(&port_map)?;
+    let networks = networks_from_vm_config(&request, cvm_config)?;
+    validate_port_mapping_nics(
+        &port_map,
+        &resolved_nic_modes(&networks, cvm_config, request.vcpu),
+    )?;
 
     let app_id = match &request.app_id {
         Some(id) => id.strip_prefix("0x").unwrap_or(id).to_lowercase(),
@@ -268,7 +331,7 @@ pub fn create_manifest_from_vm_config(
         no_tee: request.no_tee || simulated_tee.is_some(),
         simulated_tee,
         swtpm,
-        networks: networks_from_vm_config(&request, cvm_config)?,
+        networks,
         volumes,
     })
 }
@@ -865,6 +928,21 @@ impl VmmRpc for RpcHandler {
 
     async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
         info!(vm_id = %request.id, "update_vm RPC called");
+        // A VM being removed is not one to reconfigure. Before the lock,
+        // because removal holds it across the whole teardown and anything that
+        // only asked afterwards would wait that out in order to be told no.
+        self.app.refuse_if_removing(&request.id)?;
+        // Held from here rather than around the parts that touch the host,
+        // because everything below writes into the workdir -- the compose
+        // file first, the manifest last -- and `put_manifest` creates the
+        // directory it writes into. An update that resumed after a removal
+        // deleted that directory would recreate it holding nothing but a
+        // manifest: invisible to `list_vms`, unloadable at every start, and
+        // claiming the VM's netd interfaces against collection forever.
+        let _launch = self.app.launch_lock(&request.id).await;
+        // Again under the lock: removal can have claimed the VM while this
+        // waited for it.
+        self.app.refuse_if_removing(&request.id)?;
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
@@ -918,6 +996,7 @@ impl VmmRpc for RpcHandler {
                         protocol: p.protocol.parse().context("Invalid protocol")?,
                         from: p.host_port.try_into().context("Invalid host port")?,
                         to: p.vm_port.try_into().context("Invalid vm port")?,
+                        nic_index: p.nic_index.map(|index| index as usize),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -944,6 +1023,12 @@ impl VmmRpc for RpcHandler {
                 let networks = networks_from_proto(&request.networks, &cvm)?;
                 resolve_requested_networks(&networks, &cvm, manifest.vcpu)?
             };
+            // Under the launch lock this whole call holds. Reading "not
+            // running" outside it and acting on the answer inside is the exact
+            // race the lock exists to close: a launch can start, prepare its
+            // interfaces and deploy QEMU in between, and the release would
+            // then delete the interfaces of a VM that is running -- silently,
+            // since QEMU stays up and the supervisor still reports it healthy.
             let is_running = self
                 .app
                 .supervisor
@@ -951,14 +1036,23 @@ impl VmmRpc for RpcHandler {
                 .await?
                 .is_some_and(|info| info.state.status.is_running());
             if !is_running {
-                let runtime_networks = vm_work_dir.runtime_networks();
-                self.app
-                    .remove_filtered_networks(&request.id, &runtime_networks)
-                    .await
-                    .context("failed to remove previous filtered networking")?;
+                self.app.release_vm_interfaces(&request.id).await;
                 vm_work_dir.clear_runtime_networks()?;
             }
             manifest.networks = networks;
+        }
+        // Both only when this request moved one of the two halves, and after
+        // both, since either half can move and the other still has to agree
+        // with it. A VM deployed before the node could answer for its ports
+        // must stay editable in every other respect: read-modify-write sends
+        // the whole configuration back, and refusing a memory change over a
+        // port mapping nobody touched -- or over a node default that changed
+        // under it -- would make the VM unmanageable rather than fixed.
+        if request.update_ports || request.update_networking {
+            validate_port_mapping_nics(
+                &manifest.port_map,
+                &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
+            )?;
         }
         let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
             .context("failed to read app compose for swtpm decision")?;
@@ -1344,6 +1438,67 @@ mod tests {
         }
     }
 
+    fn pinned(nic_index: Option<usize>) -> PortMapping {
+        PortMapping {
+            address: "0.0.0.0".parse().unwrap(),
+            protocol: crate::config::Protocol::Tcp,
+            from: 443,
+            to: 443,
+            nic_index,
+        }
+    }
+
+    /// Both ways of naming a NIC that cannot publish a port are refused where
+    /// the caller is present to be told. A pin to macvtap or to a custom
+    /// netdev used to resolve to that NIC and then fall out of every branch
+    /// that could act on it, so the port simply never appeared.
+    #[test]
+    fn a_pin_is_checked_against_the_backend_and_not_only_the_count() {
+        let mut cvm = test_cvm_config();
+        cvm.networking.nic.parent = "eth0".into();
+        cvm.networking.nic.bridge = "br0".into();
+
+        let bridge_then_macvtap = vec![
+            NicNetworking {
+                mode: NetworkingMode::Bridge,
+                bridge: "br0".into(),
+                ..NicNetworking::default()
+            },
+            NicNetworking {
+                mode: NetworkingMode::Macvtap,
+                parent: "eth0".into(),
+                ..NicNetworking::default()
+            },
+        ];
+        let modes = resolved_nic_modes(&bridge_then_macvtap, &cvm, 2);
+        assert_eq!(modes, vec![NetworkingMode::Bridge, NetworkingMode::Macvtap]);
+
+        // A bridge TAP is netd's, and netd does not forward host ports.
+        let error = validate_port_mapping_nics(&[pinned(Some(0))], &modes).unwrap_err();
+        assert!(error.to_string().contains("bridge"), "{error}");
+
+        let error = validate_port_mapping_nics(&[pinned(Some(1))], &modes).unwrap_err();
+        assert!(error.to_string().contains("macvtap"), "{error}");
+        assert!(
+            error.to_string().contains("cannot publish a host port"),
+            "{error}"
+        );
+
+        let error = validate_port_mapping_nics(&[pinned(Some(2))], &modes).unwrap_err();
+        assert!(error.to_string().contains("this VM has 2"), "{error}");
+
+        // An unpinned mapping is never refused here: where it lands is
+        // resolved at launch, from the topology in force then.
+        validate_port_mapping_nics(&[pinned(None)], &modes).unwrap();
+
+        // An empty list is the node default's one NIC, resolved the same way a
+        // launch would resolve it rather than assumed to be user mode.
+        cvm.networking.nic.mode = NetworkingMode::Macvtap;
+        let modes = resolved_nic_modes(&[], &cvm, 2);
+        assert_eq!(modes, vec![NetworkingMode::Macvtap]);
+        assert!(validate_port_mapping_nics(&[pinned(Some(0))], &modes).is_err());
+    }
+
     #[test]
     fn create_without_networking_persists_following_default() {
         let manifest =
@@ -1634,6 +1789,9 @@ mod tests {
         .expect("a named backend is an override");
     }
 
+    /// Deliberately restated rather than calling `NetworkingMode::as_str`: the
+    /// test below checks that what `GetInfo` reports is accepted back, and a
+    /// helper that shares the production mapping could only ever agree with it.
     fn networking_mode_name_for_test(mode: NetworkingMode) -> &'static str {
         match mode {
             NetworkingMode::Bridge => "bridge",

@@ -10,7 +10,7 @@ use super::{
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
     network::{
-        bridge_helper, mac_address_for_vm_index, needs_netd_interface, validate_resolved_networks,
+        ingress_nic, mac_address_for_vm_index, validate_resolved_networks,
         warn_if_vhost_net_missing,
     },
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
@@ -631,11 +631,6 @@ impl QemuCommandBuilder<'_> {
 
     fn configure_networking(&self, command: &mut Command) -> Result<()> {
         let macvtap_fds = macvtap_fd_layout(&self.prepared.networks);
-        let hostfwd_index = self
-            .prepared
-            .networks
-            .iter()
-            .position(|networking| networking.nic.mode == NetworkingMode::User);
         for (index, networking) in self.prepared.networks.iter().enumerate() {
             let net_id = format!("net{index}");
             let mac = mac_address_for_vm_index(
@@ -663,16 +658,21 @@ impl QemuCommandBuilder<'_> {
                         networking.dhcp_start,
                         if networking.restrict { "yes" } else { "no" }
                     );
-                    if hostfwd_index == Some(index) {
-                        for mapping in &self.vm.manifest.port_map {
-                            netdev.push_str(&format!(
-                                ",hostfwd={}:{}:{}-:{}",
-                                mapping.protocol.as_str(),
-                                mapping.address,
-                                mapping.from,
-                                mapping.to
-                            ));
+                    // Only the mappings that resolve to this NIC. A mapping
+                    // lands on exactly one, and that NIC's backend decides the
+                    // mechanism, so a bridge NIC's ports go to netd instead of
+                    // being claimed here as well.
+                    for mapping in &self.vm.manifest.port_map {
+                        if ingress_nic(mapping, &self.prepared.networks) != Some(index) {
+                            continue;
                         }
+                        netdev.push_str(&format!(
+                            ",hostfwd={}:{}:{}-:{}",
+                            mapping.protocol.as_str(),
+                            mapping.address,
+                            mapping.from,
+                            mapping.to
+                        ));
                     }
                     netdev
                 }
@@ -681,43 +681,25 @@ impl QemuCommandBuilder<'_> {
                         "bridge networking: mac={mac} bridge={} vhost={vhost} queues={queues}",
                         networking.nic.bridge
                     );
-                    if needs_netd_interface(networking, self.cfg) {
-                        // netd owns this TAP: libvirt filtering binds an
-                        // nwfilter to it, and multiqueue needs the persistent
-                        // IFF_MULTI_QUEUE device the bridge helper cannot make.
-                        let tap = tap_name(&InterfaceIdentity {
-                            instance_id: self.cfg.instance_id.clone(),
-                            vm_id: self.vm.manifest.id.clone(),
-                            nic_index: index,
-                        });
-                        let mut netdev = format!(
-                            "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost={}",
-                            on_off(vhost)
-                        );
-                        if queues > 1 {
-                            netdev.push_str(&format!(",queues={queues}"));
-                        }
-                        netdev
-                    } else if let Some(helper) = vhost.then(|| bridge_helper(self.cfg)).flatten() {
-                        // QEMU's `bridge` netdev has no vhost support, but the
-                        // same setuid helper works behind a `tap` netdev, so
-                        // the VMM still needs no network privileges.
-                        format!(
-                            "tap,id={net_id},br={},helper={helper},vhost=on",
-                            networking.nic.bridge
-                        )
-                    } else if vhost {
-                        // vhost is a node-wide setting, so a node whose helper
-                        // sits somewhere unusual must keep booting VMs rather
-                        // than lose every bridge NIC to a path lookup.
-                        tracing::warn!(
-                            "{net_id}: no qemu-bridge-helper found, falling back to the \
-                             non-vhost bridge netdev. set cvm.qemu_bridge_helper to enable vhost"
-                        );
-                        format!("bridge,id={net_id},br={}", networking.nic.bridge)
-                    } else {
-                        format!("bridge,id={net_id},br={}", networking.nic.bridge)
+                    // netd owns the TAP. It is the one component here with
+                    // CAP_NET_ADMIN, so it is the only one that can bind an
+                    // nwfilter or create a persistent IFF_MULTI_QUEUE device --
+                    // and having it own every bridge TAP is what keeps a VM's
+                    // networking from depending on which of those a node
+                    // happens to use.
+                    let tap = tap_name(&InterfaceIdentity {
+                        instance_id: self.cfg.instance_id.clone(),
+                        vm_id: self.vm.manifest.id.clone(),
+                        nic_index: index,
+                    });
+                    let mut netdev = format!(
+                        "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost={}",
+                        on_off(vhost)
+                    );
+                    if queues > 1 {
+                        netdev.push_str(&format!(",queues={queues}"));
                     }
+                    netdev
                 }
                 NetworkingMode::Custom => {
                     if !networking.netdev.contains(&format!("id={net_id}")) {
@@ -1192,6 +1174,7 @@ mod tests {
                     protocol: Protocol::Tcp,
                     from: 18080,
                     to: 8080,
+                    nic_index: None,
                 }],
                 created_at_ms: 0,
                 hugepages: false,
@@ -1290,16 +1273,23 @@ mod tests {
     }
 
     #[test]
-    fn bridge_vhost_uses_the_bridge_helper_behind_a_tap_netdev() {
-        // QEMU's `bridge` netdev has no vhost support at all, so enabling the
-        // kernel data plane has to switch netdev types while keeping the same
-        // unprivileged setuid helper.
+    fn every_bridge_nic_gets_the_netd_tap() {
+        // Not only the filtered or multiqueue ones. A bridge NIC's host
+        // interface has one owner, so the netdev QEMU is handed does not
+        // change with the node's filter mode or its queue count.
         let (mut config, ..) = test_launch_fixture();
-        config.cvm.qemu_bridge_helper = "/usr/lib/qemu/qemu-bridge-helper".into();
-        let args = net_args(&config, vec![bridge_network(&config)]);
-        assert!(args.contains(
-            &"tap,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper,vhost=on".to_string()
-        ));
+        config.cvm.instance_id = "vmm-a".into();
+        let mut networking = bridge_network(&config);
+        networking.nic.queues = Some(1);
+        let args = net_args(&config, vec![networking]);
+        let tap = tap_name(&InterfaceIdentity {
+            instance_id: "vmm-a".into(),
+            vm_id: "vm-1".into(),
+            nic_index: 0,
+        });
+        assert!(args.contains(&format!(
+            "tap,id=net0,ifname={tap},script=no,downscript=no,vhost=on"
+        )));
         // A single queue pair must keep the historical device line byte for byte.
         assert!(args.iter().any(
             |arg| arg.starts_with("virtio-net-pci,netdev=net0,mac=") && !arg.contains("mq=on")
@@ -1307,26 +1297,20 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_bridge_helper_is_reported_rather_than_guessed() {
-        // Configured paths are trusted verbatim: QEMU execs them, and it need
-        // not share this filesystem.
-        assert_eq!(
-            crate::app::network::find_bridge_helper("  /opt/qemu-bridge-helper ", &[]),
-            Some("/opt/qemu-bridge-helper")
-        );
-        assert_eq!(
-            crate::app::network::find_bridge_helper("", &["/nonexistent/a", "/nonexistent/b"]),
-            None
-        );
-    }
-
-    #[test]
-    fn disabling_vhost_restores_the_legacy_bridge_netdev() {
-        let (config, ..) = test_launch_fixture();
+    fn disabling_vhost_keeps_the_netd_tap_and_turns_the_data_plane_off() {
+        let (mut config, ..) = test_launch_fixture();
+        config.cvm.instance_id = "vmm-a".into();
         let mut networking = bridge_network(&config);
         networking.nic.vhost = Some(false);
         let args = net_args(&config, vec![networking]);
-        assert!(args.contains(&"bridge,id=net0,br=br0".to_string()));
+        let tap = tap_name(&InterfaceIdentity {
+            instance_id: "vmm-a".into(),
+            vm_id: "vm-1".into(),
+            nic_index: 0,
+        });
+        assert!(args.contains(&format!(
+            "tap,id=net0,ifname={tap},script=no,downscript=no,vhost=off"
+        )));
     }
 
     #[test]
@@ -1490,19 +1474,6 @@ mod tests {
             network.nic.bridge = "br0".into();
             network.nic.vhost = Some(false);
         }
-        let process = QemuCommandBuilder {
-            vm: &vm,
-            cfg: &config.cvm,
-            gpus: &GpuConfig::default(),
-            prepared: &prepared,
-        }
-        .build()
-        .unwrap();
-        assert!(process
-            .args
-            .iter()
-            .any(|arg| arg == "bridge,id=net0,br=br0"));
-
         config.cvm.instance_id = "vmm-a".into();
         config.cvm.network_filter.mode = NetworkFilterMode::Libvirt;
         let process = QemuCommandBuilder {

@@ -33,15 +33,6 @@ pub(crate) struct VmInfo {
     pub runtime_networks: Vec<Networking>,
 }
 
-fn networking_mode_name(mode: NetworkingMode) -> &'static str {
-    match mode {
-        NetworkingMode::Bridge => "bridge",
-        NetworkingMode::User => "user",
-        NetworkingMode::Custom => "custom",
-        NetworkingMode::Macvtap => "macvtap",
-    }
-}
-
 fn networking_backend_name(mode: NetworkingMode) -> &'static str {
     match mode {
         NetworkingMode::Bridge => "tap_bridge",
@@ -62,7 +53,7 @@ fn interfaces_to_proto(
         .map(|(index, networking)| {
             let mac = mac_address_for_vm_index(vm_id, &networking.mac_prefix_bytes(), index);
             pb::NetworkInterfaceStatus {
-                mode: networking_mode_name(networking.nic.mode).into(),
+                mode: networking.nic.mode.as_str().into(),
                 backend: networking_backend_name(networking.nic.mode).into(),
                 mac,
                 bridge_name: (networking.nic.mode == NetworkingMode::Bridge)
@@ -106,7 +97,7 @@ pub(crate) fn networking_to_proto(networking: &NicNetworking) -> pb::NetworkingC
         mode: if networking.inherit_mode {
             String::new()
         } else {
-            networking_mode_name(networking.mode).into()
+            networking.mode.as_str().into()
         },
         bridge_name: if pins_backend && networking.mode == NetworkingMode::Bridge {
             networking.bridge.clone()
@@ -207,6 +198,7 @@ impl VmInfo {
                         .port_map
                         .iter()
                         .map(|mapping| pb::PortMapping {
+                            nic_index: mapping.nic_index.map(|index| index as u32),
                             protocol: mapping.protocol.as_str().into(),
                             host_address: mapping.address.to_string(),
                             host_port: mapping.from as u32,

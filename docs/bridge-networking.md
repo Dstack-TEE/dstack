@@ -143,35 +143,37 @@ mode = "bridge"
 bridge = "dstack-br0"
 ```
 
-### QEMU bridge helper setup (needed unless every bridge NIC goes through netd)
+### netd is required
 
-The bridge helper allows QEMU to create and attach TAP devices without VMM needing root privileges.
-It is used only on the single-queue bridge paths; a NIC that `netd` builds never touches it, so a
-node that runs `netd` for all of its bridge VMs does not need it at all.
-
-The VMM probes `/usr/lib/qemu/qemu-bridge-helper`, `/usr/libexec/qemu-bridge-helper` and
-`/usr/local/libexec/qemu-bridge-helper`. Set `cvm.qemu_bridge_helper` in `vmm.toml` for a path
-outside that list.
+Bridge networking needs `netd`, the privileged helper that owns every host
+interface a bridge or macvtap NIC uses. It is the same binary:
 
 ```bash
-# Allow QEMU to use the bridge
-sudo mkdir -p /etc/qemu
-echo "allow virbr0" | sudo tee /etc/qemu/bridge.conf
-# Or for manual bridge: echo "allow dstack-br0" | sudo tee /etc/qemu/bridge.conf
-
-# Set setuid on bridge helper
-sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
+sudo dstack-vmm --config vmm.toml netd
 ```
+
+Nothing else on the node needs `CAP_NET_ADMIN`: the VMM itself still runs
+unprivileged, and `netd` holds the privilege behind a Unix socket whose
+filesystem permissions authorize callers.
+
+This used to be conditional — `netd` built the TAP when libvirt filtering was on
+or when the NIC wanted more than one queue pair, and otherwise QEMU's setuid
+`qemu-bridge-helper` did. Two owners meant two answers to the same questions:
+which netdev QEMU gets, whether vhost is really on, and what a bridge NIC's TAP
+is built with. So a bridge NIC's host interface has one owner now, on every
+node.
+
+`qemu-bridge-helper` is no longer used, and `/etc/qemu/bridge.conf` no longer
+needs an `allow` line for the bridge.
 
 ## How it works
 
-- With more than one queue pair, or with libvirt filtering on, `netd` creates the TAP and the VMM passes `-netdev tap,id=net0,ifname=<tap>,...` — this is the usual case on a node running `netd` with multi-vCPU VMs, since queue pairs default to the VM's vCPU count. Without `netd`, a bridge NIC that took that default drops back to one queue pair and takes a helper path below
-- Otherwise the VMM passes `-netdev tap,id=net0,br=<bridge>,helper=<qemu-bridge-helper>,vhost=on`, or `-netdev bridge,id=net0,br=<bridge>` when vhost is off or no helper is found
-- QEMU's bridge helper (setuid) creates a TAP device and attaches it to the bridge on the two helper paths
+- `netd` creates a persistent TAP, attaches it to the bridge, binds the nwfilter if the node filters, and the VMM passes `-netdev tap,id=net0,ifname=<tap>,...`
 - Guest MAC address is derived from SHA256 of the VM ID, with an optional configurable prefix (stable across restarts for DHCP IP consistency)
 - The host DHCP server (dnsmasq) assigns an IP to the VM
-- On the two bridge-helper paths the TAP disappears when QEMU exits; a `netd`-created TAP is persistent and is deleted when the VMM tears the VM's networking down
-- The VMM process itself needs neither root nor `CAP_NET_ADMIN` on any path; the `netd` path moves that privilege into a separate root service instead
+- The TAP outlives QEMU and is deleted when the VMM tears the VM's networking down, so a VM that crashes does not leave its filter rules attached to a name the next VM could take
+- Every interface `netd` creates records which VM of which VMM instance it belongs to, in the kernel's interface alias — see [Who owns an interface](#who-owns-an-interface)
+- The VMM process needs neither root nor `CAP_NET_ADMIN`; `netd` holds that privilege in a separate service
 
 ### MAC address prefix
 
@@ -198,6 +200,101 @@ The remaining bytes are derived from the VM ID hash. The prefix applies to all n
 - A standalone bridge requires **all** of these rules to be added manually (see Option B step 4 above). The most common failure mode is a restrictive INPUT policy silently dropping DHCP requests from VMs — if VMs on a custom bridge don't get an IP, check `sudo nft list chain ip filter INPUT` first
 - Docker's nftables chains (`DOCKER-FORWARD`) run before libvirt's but do not block virbr0 traffic
 - Use `setup-bridge.sh check --bridge <name>` to diagnose missing rules
+
+### Which NIC a port mapping uses
+
+A port mapping says which NIC its traffic enters through:
+
+```bash
+vmm-cli.py deploy ... --port udp:0.0.0.0:7483:51820@0 --port tcp:127.0.0.1:7484:8001@0
+```
+
+Leave `@<nic>` off and the VMM picks the first user-mode NIC — where QEMU's
+`hostfwd=` entries have always gone — and failing that the first bridge NIC. A
+single-NIC VM never needs it.
+
+With several NICs the choice used to be made silently, and not always the way an
+operator would have. A bridge NIC for external traffic beside a user-mode NIC for
+management — the topology multi-NIC was added for — put every published port on
+the *management* NIC: the traffic reached the guest, but over slirp, bypassing
+whatever the bridge NIC's nwfilter was there to enforce and hiding the client's
+address behind the slirp gateway. A second user-mode NIC could never publish
+anything at all, because only the first was ever selected.
+
+A mapping resolves to exactly one NIC, and that NIC's backend decides the
+mechanism: `hostfwd=` for user mode, `netd` for a bridge. Nothing can be claimed
+by both.
+
+### Which ports a bridge NIC can publish
+
+QEMU publishes a port with `hostfwd=` on a user-mode NIC, and that is the only
+mechanism this host has. **The `netd` in this repository builds interfaces; it
+does not forward host ports**, so a bridge NIC cannot carry a port mapping.
+
+`--port …@<nic>` therefore only ever names a user-mode NIC. Pinning to a bridge,
+macvtap or custom NIC is refused at deployment, where the caller is there to be
+told. An unpinned mapping goes to the first user-mode NIC; a VM that has none is
+not refused — it may have been deployed before this — but every mapping it
+strands is named in the launch log.
+
+## Who owns an interface
+
+`netd` names an interface `dt<12 hex>`, a digest of (VMM instance, VM, NIC
+index). That answers "where is this VM's interface" but not "whose is this
+interface" — and the second question is the one a leaked interface poses. So
+`netd` also records the identity on the interface itself:
+
+```console
+$ ip -d link show dtc41d9e0b7a52 | grep alias
+    alias dstack1:0:path-3f9a1c8e7d2b4a60:0a1b2c3d4e5f6071
+```
+
+The kernel holds that for exactly the interface's lifetime, so unlike a file on
+disk it cannot be written late, lost, or left behind. It is a hint, never an
+authority: a record is believed only when re-deriving the interface name from
+it reproduces the name it is written on, so a forged, truncated or ambiguous
+record reads the same as no record at all.
+
+Teardown does not need it — a sweep derives the names it deletes. What needs it
+is an operator, and a host running several VMM instances, where it is the only
+thing that tells one instance's interfaces from another's.
+
+```bash
+# What netd holds on this host
+sudo dstack-vmm netd list
+
+# Everything one VM holds, for a VM whose VMM will never ask again
+sudo dstack-vmm netd remove-vm --instance path-3f9a1c8e7d2b4a60 --vm 0a1b2c3d4e5f6071
+```
+
+### When a release does not land
+
+Every stop and every removal asks `netd` to sweep that VM's interfaces, by
+deriving each of the 256 names its identity could produce. That needs no
+record, and it reaches what a per-NIC teardown cannot: an interface a crash
+left behind before anything on disk pointed at it, or one whose NIC the
+manifest has since dropped.
+
+A removal deletes the VM's directory, and that directory — with its `.removing`
+marker — is the only thing left that says to try again. So it is deleted only
+once the sweep has landed. If `netd` refused, or was not there to ask, the
+directory stays and the next VMM start resumes the removal; `remove_all` is
+idempotent, so the retry costs one round trip. A VM that never asked `netd` for
+an interface is unaffected: there is nothing for `netd` to be holding.
+
+What no VMM will retry is an interface whose VM directory an operator deleted
+by hand, or one recorded under an instance ID no VMM uses any more. `netd list`
+shows both, with the instance and VM they are recorded under:
+
+```bash
+sudo dstack-vmm netd list
+sudo dstack-vmm netd remove-vm --instance <instance> --vm <vm>
+sudo dstack-vmm netd remove-interface dtc41d9e0b7a52
+```
+
+Changing `cvm.instance_id` — or `run_path`, which it is derived from — strands
+interfaces the same way. Running VMs keep working until they stop, and
+`netd list` still shows the old instance ID, which is what `remove-vm` needs.
 
 ### Mixing networking modes
 

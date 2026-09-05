@@ -44,83 +44,6 @@ run_cmd() {
     fi
 }
 
-# --- Detect qemu-bridge-helper path ---
-
-find_bridge_helper() {
-    local paths=(
-        /usr/lib/qemu/qemu-bridge-helper
-        /usr/libexec/qemu-bridge-helper
-        /usr/local/lib/qemu/qemu-bridge-helper
-        /usr/local/libexec/qemu-bridge-helper
-    )
-    for p in "${paths[@]}"; do
-        if [[ -f "$p" ]]; then
-            echo "$p"
-            return 0
-        fi
-    done
-    return 1
-}
-
-# --- Detect current bridge provider ---
-
-# Returns "libvirt:<net_name>" if bridge is managed by a libvirt network,
-# "standalone" otherwise.
-detect_bridge_provider() {
-    if command -v virsh &>/dev/null; then
-        local name br
-        while read -r name; do
-            [[ -z "$name" ]] && continue
-            br=$(virsh net-dumpxml "$name" 2>/dev/null | grep -oP "<bridge name='\K[^']*" | head -1 || true)
-            if [[ "$br" == "$BRIDGE" ]]; then
-                echo "libvirt:$name"
-                return 0
-            fi
-        done < <(virsh net-list --all --name 2>/dev/null)
-    fi
-    echo "standalone"
-}
-
-# --- Check functions ---
-
-check_bridge_helper() {
-    echo
-    bold "qemu-bridge-helper"
-    local helper
-    if ! helper=$(find_bridge_helper); then
-        check_fail "qemu-bridge-helper not found"
-        check_info "Install QEMU: sudo apt install qemu-system-x86"
-        return
-    fi
-    check_pass "found at $helper"
-
-    if [[ -u "$helper" ]]; then
-        check_pass "setuid bit is set"
-    else
-        check_fail "setuid bit not set"
-        check_info "Fix: sudo chmod u+s $helper"
-    fi
-}
-
-check_bridge_conf() {
-    echo
-    bold "/etc/qemu/bridge.conf"
-    local conf="/etc/qemu/bridge.conf"
-    if [[ ! -f "$conf" ]]; then
-        check_fail "$conf does not exist"
-        check_info "Fix: sudo mkdir -p /etc/qemu && echo 'allow $BRIDGE' | sudo tee $conf"
-        return
-    fi
-    check_pass "$conf exists"
-
-    if grep -qE "^allow[[:space:]]+($BRIDGE|all)[[:space:]]*$" "$conf" 2>/dev/null; then
-        check_pass "bridge '$BRIDGE' is allowed"
-    else
-        check_fail "bridge '$BRIDGE' not found in $conf"
-        check_info "Fix: echo 'allow $BRIDGE' | sudo tee -a $conf"
-    fi
-}
-
 check_bridge_interface() {
     echo
     bold "bridge interface: $BRIDGE"
@@ -325,33 +248,6 @@ check_forward_rules() {
 }
 
 # --- Setup: common ---
-
-setup_bridge_conf() {
-    echo
-    bold "Setting up /etc/qemu/bridge.conf"
-    run_cmd sudo mkdir -p /etc/qemu
-    if [[ -f /etc/qemu/bridge.conf ]] && grep -qE "^allow[[:space:]]+($BRIDGE|all)" /etc/qemu/bridge.conf 2>/dev/null; then
-        echo "  already configured"
-    else
-        run_cmd bash -c "echo 'allow $BRIDGE' | sudo tee -a /etc/qemu/bridge.conf"
-    fi
-}
-
-setup_bridge_helper() {
-    echo
-    bold "Setting up qemu-bridge-helper"
-    local helper
-    if ! helper=$(find_bridge_helper); then
-        echo "  $(red 'ERROR'): qemu-bridge-helper not found. Install QEMU first."
-        return 1
-    fi
-    if [[ -u "$helper" ]]; then
-        echo "  setuid already set on $helper"
-    else
-        run_cmd sudo chmod u+s "$helper"
-        echo "  setuid set on $helper"
-    fi
-}
 
 setup_ip_forward() {
     echo
@@ -681,8 +577,6 @@ cmd_check() {
         echo "provider: $(bold 'standalone')"
     fi
 
-    check_bridge_helper
-    check_bridge_conf
     check_bridge_interface
     check_dhcp
     check_dhcp_firewall
@@ -728,8 +622,6 @@ cmd_setup() {
     $DRY_RUN && echo "dry-run: $(yellow 'yes')"
 
     # Common setup
-    setup_bridge_conf
-    setup_bridge_helper
     setup_ip_forward
 
     # Mode-specific setup
@@ -812,7 +704,9 @@ cmd_destroy() {
         fi
     fi
 
-    # Remove bridge.conf entry
+    # Remove the bridge.conf entry an older setup added. netd owns every host
+    # interface now, so qemu-bridge-helper is not used and the `allow` line is
+    # a standing grant to attach any local user's TAP to the bridge.
     local conf="/etc/qemu/bridge.conf"
     if [[ -f "$conf" ]] && grep -qE "^allow[[:space:]]+${BRIDGE}[[:space:]]*$" "$conf" 2>/dev/null; then
         echo

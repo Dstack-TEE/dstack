@@ -46,7 +46,11 @@ max_allocable_memory_in_mb = 100_000 # MB
 qmp_socket = false
 # The user to run the VM as. If empty, the VM will be run as the current user.
 # Unique namespace when multiple dstack-vmm instances share one host. When
-# empty, a stable value is derived from run_path.
+# empty, a stable value is derived from run_path. It is what netd records on
+# every host interface this VMM asks for, and the name space those interfaces'
+# names are derived in. Two VMMs on one host must not share one: each would
+# build interfaces at names the other can also produce. Left empty it is
+# derived from run_path, which cannot collide. May not contain ":".
 instance_id = ""
 # Network choices that deployment RPC callers may make. Macvtap is excluded
 # by default because libvirt nwfilter applies only to bridge interfaces.
@@ -58,11 +62,7 @@ allowed_macvtap_parents = []
 # vhost on, queue pairs otherwise default to the VM's vCPU count, capped at
 # 16 (without vhost the default is a single queue pair); raising this
 # above 16 widens what a caller may request without moving that default, and
-# lowering it below 16 lowers the default too. Bridge mode needs netd for
-# anything above 1, because qemu-bridge-helper cannot create a multiqueue TAP.
-# Without netd an unfiltered bridge NIC that took the default drops to one
-# queue; one that asked for a count keeps it and fails to launch instead, so
-# the caller learns their request was not met.
+# lowering it below 16 lowers the default too.
 max_net_queues = 16
 use_mrconfigid = true
 
@@ -72,10 +72,6 @@ use_mrconfigid = true
 #qemu_version = ""
 qemu_pci_hole64_size = 0
 qemu_hotplug_off = false
-# Path to qemu-bridge-helper, needed by vhost bridge networking because QEMU's
-# `tap` netdev, unlike its `bridge` netdev, has no compiled-in default. Empty
-# probes the known distribution locations.
-#qemu_bridge_helper = "/usr/lib/qemu/qemu-bridge-helper"
 # TDX attestation/hash scheme policy:
 # - "legacy": digest.txt + legacy verifier
 # - "lite": digest.txt + measurement.tdx.cbor + no-QEMU verifier
@@ -144,17 +140,18 @@ restrict = false
 # bridge = "virbr0"
 
 # Optional filtering for bridge interfaces only. It does not apply to macvtap.
-# "none" installs no nwfilter binding. It does not by itself remove the netd
-# dependency: netd also builds the multiqueue TAP that qemu-bridge-helper
-# cannot create, so a bridge node without netd is limited to one queue pair.
+# "none" installs no nwfilter binding. It does not remove the netd dependency:
+# netd builds every bridge and macvtap host interface whatever this says.
 [cvm.network_filter]
 mode = "none"
 filter = "clean-traffic"
 parameters = {}
 
-# Shared privileged networking service. Used for macvtap NICs, for libvirt
-# filtering, and for multiqueue bridge NICs. Socket filesystem permissions
-# authorize clients.
+# Shared privileged networking service. Required by bridge and macvtap
+# networking: it builds every host interface those modes use, binds their
+# nwfilters, and releases them again. It does not forward host ports. User mode
+# and a caller-supplied netdev need nothing from it. Socket filesystem
+# permissions authorize clients.
 [netd]
 socket = "/run/dstack/netd.sock"
 # Applied when netd creates the socket itself. A systemd socket unit controls
