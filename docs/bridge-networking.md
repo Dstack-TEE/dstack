@@ -210,8 +210,9 @@ vmm-cli.py deploy ... --port udp:0.0.0.0:7483:51820@0 --port tcp:127.0.0.1:7484:
 ```
 
 Leave `@<nic>` off and the VMM picks the first user-mode NIC — where QEMU's
-`hostfwd=` entries have always gone — and failing that the first bridge NIC. A
-single-NIC VM never needs it.
+`hostfwd=` entries have always gone. If the VM has no user-mode NIC, the mapping
+has no publishing backend and the launch log names it as stranded. A single-NIC
+user-mode VM never needs the suffix.
 
 With several NICs the choice used to be made silently, and not always the way an
 operator would have. A bridge NIC for external traffic beside a user-mode NIC for
@@ -221,9 +222,9 @@ whatever the bridge NIC's nwfilter was there to enforce and hiding the client's
 address behind the slirp gateway. A second user-mode NIC could never publish
 anything at all, because only the first was ever selected.
 
-A mapping resolves to exactly one NIC, and that NIC's backend decides the
-mechanism: `hostfwd=` for user mode, `netd` for a bridge. Nothing can be claimed
-by both.
+A mapping resolves to at most one NIC. The only backend that can carry it is
+QEMU user networking through `hostfwd=`; `netd` builds bridge interfaces but
+does not publish host ports.
 
 ### Which ports a bridge NIC can publish
 

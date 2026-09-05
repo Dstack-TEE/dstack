@@ -531,7 +531,7 @@ impl App {
             .await
             .context("GPU sanitization task failed")??;
             if let Err(error) = self
-                .prepare_filtered_networks(&vm_config, &mut runtime_networks)
+                .prepare_netd_networks(&vm_config, &mut runtime_networks)
                 .await
             {
                 let _ = work_dir.clear_runtime_networks();
@@ -612,7 +612,7 @@ impl App {
         Ok(())
     }
 
-    async fn prepare_filtered_networks(
+    async fn prepare_netd_networks(
         &self,
         vm: &VmConfig,
         networks: &mut [Networking],
@@ -931,15 +931,25 @@ impl App {
             }
         }
 
+        // Clear the in-memory mark if anything below fails before ownership of
+        // the removal is handed to the background task. In particular, a
+        // removal that cannot persist its crash-recovery marker must not start:
+        // without that marker a netd outage could leave interfaces no later
+        // VMM start knows to release.
+        let mut mark = RemovalMark::new(self.clone(), id);
+
         // Persist the removing marker so crash recovery can resume
         let work_dir = self.work_dir(id)?;
-        if let Err(err) = work_dir.set_removing() {
-            warn!("failed to write .removing marker for {id}: {err:?}");
-        }
+        work_dir
+            .set_removing()
+            .with_context(|| format!("failed to write .removing marker for {id}"))?;
 
         // User-initiated removal always deletes the workdir
         let app = self.clone();
         let id = id.to_string();
+        // `finish_remove_vm` owns the mark from here. Do not clear it in the
+        // request task while the background removal is still running.
+        mark.retain();
         tokio::spawn(async move {
             if let Err(err) = app.finish_remove_vm(&id, true).await {
                 error!("Background cleanup failed for {id}: {err:?}");
@@ -954,12 +964,10 @@ impl App {
     ///
     /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
     async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
-        // Every exit from here clears the mark, including the `?`s below and a
-        // panic in this task, which `tokio::spawn` would otherwise swallow.
-        let _mark = RemovalMark {
-            app: self.clone(),
-            id: id.to_string(),
-        };
+        // Ordinary exits clear the mark, including the `?`s below and a panic
+        // in this task, which `tokio::spawn` would otherwise swallow. The one
+        // recoverable incomplete outcome explicitly retains it.
+        let mut mark = RemovalMark::new(self.clone(), id);
         // Held across the stop, the wait and the release, not just the release.
         // `removing` turns launches away, but a launch that passed that check
         // before the marker was set is already inside the lock: it has not
@@ -1036,6 +1044,10 @@ impl App {
                 "VM {id} keeps its directory because netd did not release its interfaces; \
                  the removal resumes at the next VMM start"
             );
+            // The disk marker says this removal must be retried. Keep the
+            // matching in-memory state too, so start/update/stop cannot revive
+            // the VM before that retry happens.
+            mark.retain();
             return Ok(());
         } else if vm_path.path().exists() {
             if let Err(err) = fs::remove_dir_all(&vm_path) {
@@ -2253,23 +2265,35 @@ mod tests {
         assert!(!app.lock().start_removing("orphan"));
     }
 
-    /// `finish_remove_vm` returns early on more than its happy path. A mark it
-    /// left behind is not a stale flag: every later operation on that VM,
-    /// including the removal that would retry, answers "being removed".
+    /// An ordinary early error clears the in-memory mark so the caller can
+    /// retry rather than leaving a VM permanently inaccessible.
     #[tokio::test]
     async fn a_removal_that_gives_up_early_does_not_leave_the_vm_marked() {
         let app = test_app();
         {
-            let _mark = RemovalMark {
-                app: app.clone(),
-                id: "vm-1".to_string(),
-            };
+            let _mark = RemovalMark::new(app.clone(), "vm-1");
             assert!(app.lock().start_removing("vm-1"));
             assert!(app.refuse_if_removing("vm-1").is_err());
         }
         assert!(
             app.refuse_if_removing("vm-1").is_ok(),
             "the mark is cleared however the removal ends"
+        );
+    }
+
+    /// Once a removal deliberately keeps its crash-recovery marker, dropping
+    /// the guard must not make the VM launchable again in the current process.
+    #[tokio::test]
+    async fn a_removal_waiting_for_netd_stays_marked() {
+        let app = test_app();
+        assert!(app.lock().start_removing("vm-1"));
+        {
+            let mut mark = RemovalMark::new(app.clone(), "vm-1");
+            mark.retain();
+        }
+        assert!(
+            app.refuse_if_removing("vm-1").is_err(),
+            "the in-memory state must agree with the retained disk marker"
         );
     }
 
@@ -3482,10 +3506,29 @@ impl AppState {
 struct RemovalMark {
     app: App,
     id: String,
+    clear_on_drop: bool,
+}
+
+impl RemovalMark {
+    fn new(app: App, id: &str) -> Self {
+        Self {
+            app,
+            id: id.to_string(),
+            clear_on_drop: true,
+        }
+    }
+
+    /// Leave the removal mark in place after this guard goes out of scope.
+    fn retain(&mut self) {
+        self.clear_on_drop = false;
+    }
 }
 
 impl Drop for RemovalMark {
     fn drop(&mut self) {
+        if !self.clear_on_drop {
+            return;
+        }
         let mut state = self.app.lock();
         state.removing.remove(&self.id);
         if let Some(vm) = state.vms.get_mut(&self.id) {
