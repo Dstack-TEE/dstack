@@ -225,9 +225,9 @@ pub(crate) fn mode_carries_ingress(mode: NetworkingMode) -> bool {
 
 /// Which NIC a port mapping's traffic enters through.
 ///
-/// One mapping resolves to at most one NIC, and that NIC's backend decides the
-/// mechanism: `hostfwd=` for user mode, netd for a bridge. That is what keeps
-/// QEMU and netd from both claiming one host port.
+/// One mapping resolves to at most one NIC, and only a user-mode NIC has a
+/// mechanism to carry it, so a pin to any other kind resolves to nothing
+/// rather than to a NIC with no path into the guest.
 ///
 /// `None` is a mapping with nowhere to go: a VM with no user-mode NIC, or one
 /// whose NICs changed under a mapping that named one. The launch warns about

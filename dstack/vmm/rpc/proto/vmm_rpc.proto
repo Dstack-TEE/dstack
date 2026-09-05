@@ -184,7 +184,8 @@ message PortMapping {
   string host_address = 4;
   // Which NIC this mapping's traffic enters through, as an index into
   // `networks`. Unset picks the first user-mode NIC, which is where QEMU's
-  // hostfwd entries have always gone, and failing that the first bridge NIC.
+  // hostfwd entries have always gone and the only place a host port is
+  // published from.
   //
   // A VM with one NIC never needs it. With several there is a choice, and it
   // used to be made silently: a bridge NIC for external traffic beside a
