@@ -951,10 +951,7 @@ impl App {
     async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
         // Every exit from here clears the mark, including the `?`s below and a
         // panic in this task, which `tokio::spawn` would otherwise swallow.
-        let _mark = RemovalMark {
-            app: self.clone(),
-            id: id.to_string(),
-        };
+        let mut mark = RemovalMark::new(self, id);
         // Held across the stop, the wait and the release, not just the release.
         // `removing` turns launches away, but a launch that passed that check
         // before the marker was set is already inside the lock: it has not
@@ -1031,6 +1028,10 @@ impl App {
                 "VM {id} keeps its directory because netd did not release its interfaces; \
                  the removal resumes at the next VMM start"
             );
+            // Still being removed, so still refused. The alternative is a VM
+            // that reads as ordinary, can be started, and is deleted by the
+            // resumed removal at the next start.
+            mark.hold();
             return Ok(());
         } else if vm_path.path().exists() {
             if let Err(err) = fs::remove_dir_all(&vm_path) {
@@ -2248,23 +2249,39 @@ mod tests {
         assert!(!app.lock().start_removing("orphan"));
     }
 
-    /// `finish_remove_vm` returns early on more than its happy path. A mark it
-    /// left behind is not a stale flag: every later operation on that VM,
-    /// including the removal that would retry, answers "being removed".
+    /// `finish_remove_vm` returns early on more than its happy path, and a mark
+    /// left behind by a removal that *finished* is a stale flag: it answers
+    /// "being removed" to every later operation on a VM nothing is removing.
     #[tokio::test]
     async fn a_removal_that_gives_up_early_does_not_leave_the_vm_marked() {
         let app = test_app();
         {
-            let _mark = RemovalMark {
-                app: app.clone(),
-                id: "vm-1".to_string(),
-            };
+            let _mark = RemovalMark::new(&app, "vm-1");
             assert!(app.lock().start_removing("vm-1"));
             assert!(app.refuse_if_removing("vm-1").is_err());
         }
         assert!(
             app.refuse_if_removing("vm-1").is_ok(),
             "the mark is cleared however the removal ends"
+        );
+    }
+
+    /// The exception: a removal that could not release its interfaces has not
+    /// ended. It leaves the `.removing` file and resumes at the next start, so
+    /// clearing the mark here would let the VM be started in between -- and
+    /// that start would be deleted by the resumed removal, with nothing having
+    /// gone wrong after it.
+    #[tokio::test]
+    async fn a_removal_that_will_resume_keeps_the_vm_marked() {
+        let app = test_app();
+        {
+            let mut mark = RemovalMark::new(&app, "vm-1");
+            assert!(app.lock().start_removing("vm-1"));
+            mark.hold();
+        }
+        assert!(
+            app.refuse_if_removing("vm-1").is_err(),
+            "a removal that resumes at the next start still refuses a launch"
         );
     }
 
@@ -3477,10 +3494,37 @@ impl AppState {
 struct RemovalMark {
     app: App,
     id: String,
+    /// Whether the mark comes off when this drops.
+    ///
+    /// It does for every way a removal can end, including a `?` and a panic --
+    /// except the one where the removal has not ended. A removal that could not
+    /// release its interfaces leaves the `.removing` file and resumes at the
+    /// next start; clearing the in-memory mark in the meantime would let the
+    /// VM be started again, and that start would be deleted by the resumed
+    /// removal without anything having gone wrong in between.
+    clear: bool,
+}
+
+impl RemovalMark {
+    fn new(app: &App, id: &str) -> Self {
+        Self {
+            app: app.clone(),
+            id: id.to_string(),
+            clear: true,
+        }
+    }
+
+    /// Keeps the VM marked, for a removal that is not over.
+    fn hold(&mut self) {
+        self.clear = false;
+    }
 }
 
 impl Drop for RemovalMark {
     fn drop(&mut self) {
+        if !self.clear {
+            return;
+        }
         let mut state = self.app.lock();
         state.removing.remove(&self.id);
         if let Some(vm) = state.vms.get_mut(&self.id) {
