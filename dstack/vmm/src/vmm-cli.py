@@ -321,17 +321,30 @@ def encrypt_env(envs, hex_public_key: str) -> str:
 
 
 def parse_port_mapping(port_str: str) -> Dict:
-    """Parse a port mapping string into a dictionary."""
+    """Parse a port mapping string into a dictionary.
+
+    Accepts an optional "@<nic>" suffix naming which NIC the traffic enters
+    through. Without it the VMM picks: the first user-mode NIC, else the first
+    bridge NIC. A single-NIC VM never needs it.
+    """
+    nic_index = None
+    if "@" in port_str:
+        port_str, _, nic = port_str.rpartition("@")
+        # `int()` alone would take "1_0" as 10, " 1" as 1, and "+1" as 1. A NIC
+        # index is a position in a list the user wrote, so only digits are it.
+        if not (nic.isascii() and nic.isdigit()):
+            raise argparse.ArgumentTypeError(f"Invalid NIC index: {nic}")
+        nic_index = int(nic)
     parts = port_str.split(":")
     if len(parts) == 3:
-        return {
+        mapping = {
             "protocol": parts[0],
             "host_address": "127.0.0.1",
             "host_port": int(parts[1]),
             "vm_port": int(parts[2]),
         }
     elif len(parts) == 4:
-        return {
+        mapping = {
             "protocol": parts[0],
             "host_address": parts[1],
             "host_port": int(parts[2]),
@@ -339,6 +352,9 @@ def parse_port_mapping(port_str: str) -> Dict:
         }
     else:
         raise argparse.ArgumentTypeError(f"Invalid port mapping format: {port_str}")
+    if nic_index is not None:
+        mapping["nic_index"] = nic_index
+    return mapping
 
 
 def read_utf8(filepath: str) -> str:
@@ -919,8 +935,18 @@ class VmmCLI:
             params["kms_urls"] = args.kms_url
         if args.gateway_url:
             params["gateway_urls"] = args.gateway_url
-        if args.net:
-            params["networking"] = {"mode": args.net}
+        # "auto" is what a fresh deployment already does, so it only means
+        # something to `update`, where it clears a pinned count.
+        net_queues = None if args.net_queues == "auto" else args.net_queues
+        if args.net or args.net_vhost is not None or net_queues:
+            networking = {}
+            if args.net:
+                networking["mode"] = args.net
+            if args.net_vhost is not None:
+                networking["vhost"] = args.net_vhost
+            if net_queues:
+                networking["queues"] = net_queues
+            params["networking"] = networking
 
         app_id = args.app_id or self.calc_app_id(compose_content)
         print(f"App ID: {app_id}")
@@ -1030,6 +1056,10 @@ class VmmCLI:
         no_gpus: bool = False,
         kms_urls: Optional[List[str]] = None,
         no_tee: Optional[bool] = None,
+        net: Optional[str] = None,
+        net_vhost: Optional[bool] = None,
+        net_vhost_inherit: bool = False,
+        net_queues: Optional[Union[int, str]] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command."""
         # Validate: --env-file requires --kms-url
@@ -1153,6 +1183,75 @@ class VmmCLI:
                             app_compose, indent=4, ensure_ascii=False
                         )
 
+        if net or net_vhost is not None or net_vhost_inherit or net_queues:
+            # The RPC replaces the whole NIC list, so merge into what the VM
+            # already has rather than silently dropping its other interfaces or
+            # un-pinning a bridge it was deployed with.
+            if vm_info_response is None:
+                vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
+                if not vm_info_response.get("found", False):
+                    raise Exception(f"VM with ID {vm_id} not found")
+            configuration = vm_info_response["info"].get("configuration") or {}
+            current = configuration.get("networks") or []
+            if not current and configuration.get("networking"):
+                current = [configuration["networking"]]
+            if len(current) > 1:
+                raise Exception(
+                    "this VM has multiple network interfaces; edit them through the "
+                    "web UI or the UpgradeApp API rather than these flags"
+                )
+            # Only the fields the deployment RPC accepts back travel with the
+            # update. macvtap_mode is node-controlled and can never be changed,
+            # so resending it can only fail if the node changed meanwhile. An
+            # empty mode is meaningful: it says the VM never named a backend
+            # and still follows the node's.
+            source = current[0] if current else {}
+            networking = {
+                key: source[key]
+                for key in ("mode", "bridge_name", "parent", "vhost", "queues")
+                if source.get(key) not in (None, "")
+            }
+            if net == "default":
+                # The only way back to "whatever backend the node runs". Without
+                # it a VM that named a mode once is pinned to it for life, since
+                # the merge above carries the reported mode forward on every
+                # later update. The data plane keeps whatever it was told.
+                networking.pop("mode", None)
+                networking.pop("bridge_name", None)
+                networking.pop("parent", None)
+            elif net:
+                networking["mode"] = net
+            # A field belongs to the mode that owns it. Carrying a bridge into
+            # a macvtap request, or a parent into a bridge one, asks the server
+            # about a field the caller never typed and has no flag to clear.
+            mode = networking.get("mode", "")
+            if mode and mode != "bridge":
+                networking.pop("bridge_name", None)
+            if mode and mode != "macvtap":
+                networking.pop("parent", None)
+            # Same rule for the data plane. User networking has neither a vhost
+            # backend nor multiple queues, so carrying an inherited pin into it
+            # is rejected for a flag the operator never typed -- and the two
+            # flags that would clear it are the ones they have not found yet.
+            # An explicitly typed value still earns the error: that one is
+            # theirs to be wrong about.
+            if mode == "user":
+                if net_vhost is None:
+                    networking.pop("vhost", None)
+                if not net_queues:
+                    networking.pop("queues", None)
+            if net_vhost is not None:
+                networking["vhost"] = net_vhost
+            elif net_vhost_inherit:
+                networking.pop("vhost", None)
+            if net_queues == "auto":
+                networking.pop("queues", None)
+            elif net_queues:
+                networking["queues"] = net_queues
+            upgrade_params["update_networking"] = True
+            upgrade_params["networks"] = [networking]
+            updates.append(f"networking ({networking})")
+
         if user_config:
             upgrade_params["user_config"] = user_config
             updates.append("user config")
@@ -1246,6 +1345,38 @@ class VmmCLI:
             print(f"Exited At:     {info['exited_at']}")
         if info.get("shutdown_progress"):
             print(f"Shutdown:      {info['shutdown_progress']}")
+
+        interfaces = info.get("interfaces") or []
+        if interfaces:
+            print("\nNetwork Interfaces:")
+            for iface in interfaces:
+                parts = [
+                    f"{iface.get('netdev_id') or '-':<6}",
+                    f"{iface.get('mode') or '-'}/{iface.get('backend') or '-'}",
+                    iface.get("mac") or "-",
+                ]
+                if iface.get("bridge_name"):
+                    parts.append(f"bridge={iface['bridge_name']}")
+                if iface.get("macvtap_mode"):
+                    parts.append(f"macvtap_mode={iface['macvtap_mode']}")
+                # Absent, not false: custom mode carries an operator-written
+                # netdev string the VMM never parses, so it reports no data
+                # plane rather than asserting the resolved default over one that
+                # may well say vhost=on,queues=8.
+                vhost = iface.get("vhost")
+                parts.append(
+                    "vhost=" + ("-" if vhost is None else ("on" if vhost else "off"))
+                )
+                parts.append(f"queues={iface.get('queues') or '-'}")
+                print("  " + "  ".join(parts))
+            # A stopped VM has no interfaces to describe, so these are what its
+            # next launch would build -- which can differ from its last one.
+            #
+            # The server's own predicate, not the status string: a VM being
+            # removed with QEMU still up reports the interfaces that process
+            # built, and no status value says so.
+            if not info.get("running", False):
+                print("  (not running; shown as its next launch would build them)")
 
         events = info.get("events", [])
         if events:
@@ -1536,6 +1667,26 @@ def save_whitelist(whitelist: List[str]) -> None:
         json.dump({"trusted_signers": whitelist}, f, indent=2)
 
 
+def queue_count(value: str) -> Union[int, str]:
+    """Parse a queue pair count the node could act on, or "auto" to stop pinning one.
+
+    Zero would otherwise reach the wire as "unset" and be answered with the
+    default, and a negative one as a decoding error naming a column offset --
+    neither of which tells the caller what they asked for was impossible.
+    """
+    if value == "auto":
+        return "auto"
+    try:
+        count = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a whole number or 'auto'")
+    if count < 1:
+        raise argparse.ArgumentTypeError(
+            f"queue pairs must be at least 1, or 'auto' to follow the vCPU count; got {count}"
+        )
+    return count
+
+
 def main():
     """Parse arguments and dispatch to the appropriate command handler."""
     parser = argparse.ArgumentParser(description="dstack-vmm CLI - Manage VMs")
@@ -1772,7 +1923,7 @@ def main():
         "--port",
         action="append",
         type=str,
-        help="Port mapping in format: protocol[:address]:from:to",
+        help="Port mapping in format: protocol[:address]:from:to[@nic]",
     )
     deploy_parser.add_argument(
         "--gpu",
@@ -1831,8 +1982,30 @@ def main():
     )
     deploy_parser.add_argument(
         "--net",
-        choices=["bridge", "user"],
+        choices=["bridge", "user", "macvtap"],
         help="Networking mode (default: use global config)",
+    )
+    net_vhost = deploy_parser.add_mutually_exclusive_group()
+    net_vhost.add_argument(
+        "--net-vhost",
+        dest="net_vhost",
+        action="store_true",
+        default=None,
+        help="Use the host kernel vhost-net data plane (default: use global config)",
+    )
+    net_vhost.add_argument(
+        "--net-no-vhost",
+        dest="net_vhost",
+        action="store_false",
+        help="Keep packet processing in the QEMU main loop",
+    )
+    deploy_parser.add_argument(
+        "--net-queues",
+        type=queue_count,
+        metavar="N",
+        help="virtio-net queue pairs, bounded by the node's max_net_queues. "
+        "Without --net, the node's own networking mode is kept "
+        "(default: use global config)",
     )
 
     # Images command
@@ -1906,7 +2079,7 @@ def main():
         action="append",
         type=str,
         required=True,
-        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+        help="Port mapping in format: protocol[:address]:from:to[@nic] (can be used multiple times)",
     )
 
     # Update (all-in-one) command
@@ -1934,13 +2107,49 @@ def main():
         "--env-file", help="File with environment variables to encrypt"
     )
     update_parser.add_argument("--user-config", help="Path to user config file")
+    update_parser.add_argument(
+        "--net",
+        choices=["bridge", "user", "macvtap", "default"],
+        help=(
+            "Networking mode (applies from the next boot). 'default' stops "
+            "pinning a mode and follows the node's, the way --net-queues auto "
+            "and --net-vhost-default stop pinning the data plane"
+        ),
+    )
+    update_net_vhost = update_parser.add_mutually_exclusive_group()
+    update_net_vhost.add_argument(
+        "--net-vhost",
+        dest="net_vhost",
+        action="store_true",
+        default=None,
+        help="Use the host kernel vhost-net data plane",
+    )
+    update_net_vhost.add_argument(
+        "--net-no-vhost",
+        dest="net_vhost",
+        action="store_false",
+        help="Keep packet processing in the QEMU main loop",
+    )
+    update_net_vhost.add_argument(
+        "--net-vhost-default",
+        dest="net_vhost_inherit",
+        action="store_true",
+        help="Stop pinning vhost and follow the node default again",
+    )
+    update_parser.add_argument(
+        "--net-queues",
+        type=queue_count,
+        metavar="N",
+        help="virtio-net queue pairs, bounded by the node's max_net_queues. "
+        "Use 'auto' to stop pinning a count and follow the vCPU count again",
+    )
     # Port mapping options (mutually exclusive with --no-ports)
     port_group = update_parser.add_mutually_exclusive_group()
     port_group.add_argument(
         "--port",
         action="append",
         type=str,
-        help="Port mapping in format: protocol[:address]:from:to (can be used multiple times)",
+        help="Port mapping in format: protocol[:address]:from:to[@nic] (can be used multiple times)",
     )
     port_group.add_argument(
         "--no-ports",
@@ -2077,6 +2286,10 @@ def main():
             no_gpus=args.no_gpus if hasattr(args, "no_gpus") else False,
             kms_urls=args.kms_url,
             no_tee=args.no_tee,
+            net=args.net,
+            net_vhost=args.net_vhost,
+            net_vhost_inherit=getattr(args, "net_vhost_inherit", False),
+            net_queues=args.net_queues,
         )
     elif args.command == "kms":
         if not args.kms_action:

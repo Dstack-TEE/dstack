@@ -46,7 +46,11 @@ max_allocable_memory_in_mb = 100_000 # MB
 qmp_socket = false
 # The user to run the VM as. If empty, the VM will be run as the current user.
 # Unique namespace when multiple dstack-vmm instances share one host. When
-# empty, a stable value is derived from run_path.
+# empty, a stable value is derived from run_path. It is what netd records on
+# every host interface this VMM asks for, and the name space those interfaces'
+# names are derived in. Two VMMs on one host must not share one: each would
+# build interfaces at names the other can also produce. Left empty it is
+# derived from run_path, which cannot collide. May not contain ":".
 instance_id = ""
 # Network choices that deployment RPC callers may make. Macvtap is excluded
 # by default because libvirt nwfilter applies only to bridge interfaces.
@@ -54,6 +58,12 @@ allowed_network_modes = ["user", "bridge"]
 # Empty allowlists mean callers can only use the node networking defaults.
 allowed_bridges = []
 allowed_macvtap_parents = []
+# Largest virtio-net queue pair count a deployment request may ask for. With
+# vhost on, queue pairs otherwise default to the VM's vCPU count, capped at
+# 16 (without vhost the default is a single queue pair); raising this
+# above 16 widens what a caller may request without moving that default, and
+# lowering it below 16 lowers the default too.
+max_net_queues = 16
 use_mrconfigid = true
 
 # QEMU flags
@@ -130,6 +140,16 @@ product_name = "dstack"
 [cvm.networking]
 mode = "user"
 
+# Kernel vhost-net data plane. Off by default: enabling it changes the
+# virtio-net device of every bridge/macvtap VM on its next boot (vhost plus
+# vCPU-scaled queue pairs) and requires /dev/vhost-net to be accessible to
+# the account QEMU runs under — verify that first, or QEMU exits at launch.
+# With it off, QEMU drains every packet on its single main loop thread, so a
+# CVM cannot exceed one core's worth of packet processing no matter how many
+# vCPUs it has. The user-mode backend has no vhost support and ignores this.
+# Individual VMs may override it.
+vhost = false
+
 # for mode = "user"
 net = "10.0.2.0/24"
 dhcp_start = "10.0.2.10"
@@ -139,21 +159,37 @@ restrict = false
 # bridge = "virbr0"
 
 # Optional filtering for bridge interfaces only. It does not apply to macvtap.
-# "none" preserves the existing QEMU bridge-helper behavior and has no
-# netd/libvirt dependency.
+# "none" installs no nwfilter binding. It does not remove the netd dependency:
+# netd builds every bridge and macvtap host interface whatever this says.
 [cvm.network_filter]
 mode = "none"
 filter = "clean-traffic"
 parameters = {}
 
-# Shared privileged networking service. Only used when network_filter.mode is
-# "libvirt". Socket filesystem permissions authorize clients.
+# Shared privileged networking service. Required by bridge and macvtap
+# networking: it builds every host interface those modes use, binds their
+# nwfilters, and releases them again. It does not forward host ports. User mode
+# and a caller-supplied netdev need nothing from it. Socket filesystem
+# permissions authorize clients.
 [netd]
 socket = "/run/dstack/netd.sock"
 # Applied when netd creates the socket itself. A systemd socket unit controls
 # its own SocketMode instead.
 socket_mode = 0o660
 libvirt_uri = "qemu:///system"
+# The bridge filtering policy netd enforces and applies: whether a binding is
+# required, which nwfilter it names, and with what parameters. netd holds this
+# itself rather than taking it from each request, because a caller that chose
+# the filter could name one that drops nothing and still satisfy a policy that
+# only asked for "some filter". Left unset it follows [cvm.network_filter] in
+# this same file, which is the whole answer when netd and the VMM share one
+# vmm.toml. Set it explicitly when netd runs with a config that has no [cvm]
+# section, so the daemon holding the privilege never infers policy from a file
+# that does not state it.
+#[netd.network_filter]
+#mode = "libvirt"
+#filter = "clean-traffic"
+#parameters = {}
 
 [cvm.port_mapping]
 enabled = false

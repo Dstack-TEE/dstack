@@ -77,6 +77,48 @@ struct NetdArgs {
     /// Override the Unix socket configured in [netd].
     #[arg(long)]
     socket: Option<String>,
+    /// Inspect a running netd instead of starting one.
+    #[command(subcommand)]
+    command: Option<NetdCommand>,
+}
+
+#[derive(Subcommand)]
+enum NetdCommand {
+    /// List every host interface netd holds.
+    ///
+    /// Answers the question a leak is made of -- whose is this interface --
+    /// which deriving a name from an identity cannot.
+    List {
+        /// Only this VMM instance's interfaces. Defaults to every one netd
+        /// owns, including those it cannot attribute.
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Delete one interface by name.
+    ///
+    /// For what nothing else can name: an interface built before netd recorded
+    /// ownership, or by another netd, whose VM is gone. `netd list` shows these
+    /// with no instance and no VM, so nothing can derive the sweep that would
+    /// take them; an operator who can tell what they are says so here.
+    RemoveInterface {
+        /// The interface name, as `netd list` prints it.
+        name: String,
+    },
+    /// Delete every interface netd holds for one VM.
+    ///
+    /// For a VM whose VMM will never ask again -- one whose directory was
+    /// deleted by hand, or whose instance is gone. A VMM sweeps its own VMs on
+    /// every stop and every removal, and keeps a removal pending until the
+    /// sweep lands; this is for when no VMM will ever run that sweep.
+    RemoveVm {
+        /// The `cvm.instance_id` of the VMM that created them. `netd list`
+        /// shows it.
+        #[arg(long)]
+        instance: String,
+        /// The VM's ID.
+        #[arg(long)]
+        vm: String,
+    },
 }
 
 #[derive(ClapArgs)]
@@ -192,6 +234,64 @@ async fn log_rotation_task(app: App) {
     }
 }
 
+/// Client-side netd subcommands. Talks to the socket like the VMM does, so it
+/// needs whatever the socket's permissions ask for and not root.
+async fn run_netd_command(config: &NetdConfig, command: &NetdCommand) -> Result<()> {
+    match command {
+        NetdCommand::List { instance } => {
+            let interfaces = netd::list(&config.socket, instance.as_deref().unwrap_or_default())
+                .await
+                .context("failed to list netd interfaces")?;
+            println!(
+                "{:<16} {:<8} {:<24} {:<38} {:>3}",
+                "INTERFACE", "KIND", "INSTANCE", "VM", "NIC"
+            );
+            let mut unattributed = 0;
+            for record in &interfaces {
+                if record.instance_id.is_none() {
+                    unattributed += 1;
+                }
+                println!(
+                    "{:<16} {:<8} {:<24} {:<38} {:>3}",
+                    record.tap,
+                    record.kind,
+                    record.instance_id.as_deref().unwrap_or("-"),
+                    record.vm_id.as_deref().unwrap_or("-"),
+                    record
+                        .nic_index
+                        .map_or_else(|| "-".to_string(), |index| index.to_string()),
+                );
+            }
+            println!();
+            println!("{} interface(s)", interfaces.len());
+            if unattributed > 0 {
+                // Not a fault to fix by hand: an interface built before netd
+                // recorded ownership, or by another netd, carries no record and
+                // gets one the next time its VM launches.
+                println!(
+                    "{unattributed} carry no ownership record; `netd remove-interface` takes \
+                     one by name"
+                );
+            }
+            Ok(())
+        }
+        NetdCommand::RemoveInterface { name } => {
+            netd::remove_interface_named(&config.socket, name)
+                .await
+                .with_context(|| format!("failed to remove {name}"))?;
+            println!("removed {name}");
+            Ok(())
+        }
+        NetdCommand::RemoveVm { instance, vm } => {
+            let removed = netd::remove_all(&config.socket, instance, vm)
+                .await
+                .context("failed to remove the VM's interfaces")?;
+            println!("removed {removed} interface(s) for {vm}");
+            Ok(())
+        }
+    }
+}
+
 #[rocket::main]
 async fn main() -> Result<()> {
     {
@@ -219,6 +319,25 @@ async fn main() -> Result<()> {
         if let Some(socket) = netd_args.socket.as_deref() {
             netd_config.socket = socket.into();
         }
+        if netd_config.network_filter.is_none() {
+            // netd and the VMM normally share one vmm.toml, so the node has
+            // already stated whether its bridge traffic is filtered and with
+            // what. Reading it here keeps the two from drifting apart, which is
+            // what a second setting to keep in sync would invite.
+            //
+            // A malformed section is an error rather than a default: this is
+            // the daemon's security policy, and `[cvm.network_filter] mode =
+            // "Libvirt"` -- which the VMM itself refuses to start on -- must not
+            // quietly resolve to "filter nothing" here.
+            netd_config.network_filter = Some(
+                figment
+                    .extract_inner("cvm.network_filter")
+                    .context("failed to load [cvm.network_filter] for netd")?,
+            );
+        }
+        if let Some(command) = &netd_args.command {
+            return run_netd_command(&netd_config, command).await;
+        }
         return netd::serve(netd_config).await;
     }
 
@@ -230,6 +349,7 @@ async fn main() -> Result<()> {
 
     // Preserve the existing startup validation. The broader static checks are
     // opt-in through `check-config` until they have seen wider deployment use.
+    netd::validate_instance_id(&config.cvm.instance_id)?;
     config
         .host_api
         .validate()

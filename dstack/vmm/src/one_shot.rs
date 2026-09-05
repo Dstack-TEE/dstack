@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::app::{
-    make_sys_config, resolved_networks, simulator_config_for_manifest, sync_tee_simulator_config,
-    Image, VmConfig, VmWorkDir,
+    make_sys_config, needs_netd_interface, resolved_networks, settle_vhost,
+    simulator_config_for_manifest, sync_tee_simulator_config, Image, VmConfig, VmWorkDir,
 };
-use crate::config::{Config, NetworkFilterMode, NetworkingMode};
+use crate::config::Config;
 use crate::main_service;
 use anyhow::{Context, Result};
 use fs_err as fs;
@@ -279,18 +279,22 @@ Compose file content (first 200 chars):
         gateway_enabled: app_compose.gateway_enabled(),
     };
 
-    if !dry_run
-        && config.cvm.network_filter.mode == NetworkFilterMode::Libvirt
-        && resolved_networks(&manifest, &config.cvm)
-            .iter()
-            .any(|network| network.mode == NetworkingMode::Bridge)
-    {
+    let mut runtime_networks = resolved_networks(&manifest, &config.cvm);
+    // Settle the data plane before anything reads it, so `vhost_enabled()` is a
+    // decision rather than a request and the launch does not warn about a
+    // `/dev/vhost-net` the netdev it then builds never opens.
+    settle_vhost(&mut runtime_networks);
+    // Bridge and macvtap host interfaces belong to netd, whose lifecycle
+    // one-shot does not manage. Refusing is the honest answer: the alternative
+    // was to quietly build a different interface here than the server would,
+    // and then report the VM as if it had the one it asked for.
+    if !dry_run && runtime_networks.iter().any(needs_netd_interface) {
         anyhow::bail!(
-            "one-shot execution does not manage libvirt-filtered TAP lifecycle; run the VMM server directly or use --dry-run"
+            "one-shot execution does not manage netd interface lifecycle, which bridge and \
+             macvtap networking need; run the VMM server directly or use --dry-run"
         );
     }
 
-    let runtime_networks = resolved_networks(&manifest, &config.cvm);
     let process_configs = vm_builder_config
         .config_qemu(&workdir_path, &config.cvm, &gpus, &runtime_networks)
         .context("Failed to build QEMU configuration")?;
