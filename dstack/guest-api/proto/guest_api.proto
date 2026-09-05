@@ -115,6 +115,21 @@ message SystemInfo {
   uint32 loadavg_fifteen = 16;
   // Disks
   repeated DiskInfo disks = 17;
+  repeated GpuInfo gpus = 18;
+}
+
+message GpuInfo {
+  uint32 index = 1;          // NVML device index (PCI order)
+  string uuid = 2;           // Device UUID
+  uint32 utilization_gpu = 3;       // SM duty cycle, %
+  uint32 utilization_memory = 4;    // memory-bus duty cycle, %
+  uint64 memory_total_bytes = 5;
+  uint64 memory_reserved_bytes = 6; // 0 for now (v2 call needed)
+  uint64 memory_usable_bytes = 7;   // total minus reserved
+  uint64 memory_used_bytes = 8;
+  uint64 memory_free_bytes = 9;
+  uint32 temperature_c = 10;
+  uint32 power_usage_mw = 11;
 }
 
 // Disk usage metrics scoped per device or mount point.

@@ -12,7 +12,7 @@ use dstack_types::SysConfig;
 use fs_err as fs;
 use guest_api::{
     guest_api_server::{GuestApiRpc, GuestApiServer},
-    Container, DiskInfo, Gateway, GuestInfo, Interface, IpAddress, ListContainersResponse,
+    Container, DiskInfo, Gateway, GpuInfo, GuestInfo, Interface, IpAddress, ListContainersResponse,
     NetworkInformation, SystemInfo,
 };
 use host_api::Notification;
@@ -137,6 +137,7 @@ fn collect_sys_info(data_disks: &HashSet<PathBuf>) -> SystemInfo {
         .collect::<Vec<_>>();
     disks.sort_by(|d1, d2| d1.mount_point.cmp(&d2.mount_point));
     let avg = System::load_average();
+    let gpus = collect_gpu_info();
     SystemInfo {
         os_name: System::name().unwrap_or_default(),
         os_version: System::os_version().unwrap_or_default(),
@@ -157,7 +158,43 @@ fn collect_sys_info(data_disks: &HashSet<PathBuf>) -> SystemInfo {
         loadavg_five: (avg.five * 100.0) as u32,
         loadavg_fifteen: (avg.fifteen * 100.0) as u32,
         disks,
+        gpus,
     }
+}
+
+fn collect_gpu_info() -> Vec<GpuInfo> {
+    use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
+    let nvml = match Nvml::init() {
+        Ok(n) => n,
+        Err(_) => return vec![],
+    };
+    let count = match nvml.device_count() {
+        Ok(n) => n,
+        Err(_) => return vec![],
+    };
+    (0..count)
+        .filter_map(|i| {
+            let device = nvml.device_by_index(i).ok()?;
+            let utilization = device.utilization_rates().ok()?;
+            let memory = device.memory_info().ok()?;
+            let uuid = device.uuid().unwrap_or_default();
+            let temperature_c = device.temperature(TemperatureSensor::Gpu).unwrap_or(0);
+            let power_usage_mw = device.power_usage().unwrap_or(0);
+            Some(GpuInfo {
+                index: i,
+                uuid,
+                utilization_gpu: utilization.gpu,
+                utilization_memory: utilization.memory,
+                memory_total_bytes: memory.total,
+                memory_reserved_bytes: 0,
+                memory_usable_bytes: memory.total,
+                memory_used_bytes: memory.used,
+                memory_free_bytes: memory.free,
+                temperature_c,
+                power_usage_mw,
+            })
+        })
+        .collect()
 }
 
 pub(crate) async fn list_containers() -> Result<ListContainersResponse> {
