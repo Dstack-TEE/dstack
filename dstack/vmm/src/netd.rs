@@ -970,9 +970,17 @@ fn sweep_vm_interfaces(libvirt_uri: &str, vmm_id: &str, vm_id: &str) -> Result<u
         let wanted = present || bindings.as_ref().is_some_and(|held| held.contains(&tap));
         if libvirt && wanted && !is_macvtap(&tap) {
             if let Err(error) = delete_binding(libvirt_uri, &tap) {
+                // Loud, but not a failed sweep. A node that filters nothing
+                // need not run `libvirtd` at all, and on one that does not,
+                // every binding delete fails -- so counting this as a failure
+                // would make `remove_all` always return an error there, and a
+                // VM removed on such a node would keep its directory forever
+                // waiting for a retry that cannot go any better. What the
+                // sweep is here to remove is interfaces; a binding it could
+                // not clear stays visible to `netd list`, and a later prepare
+                // at this name fails loudly rather than binding nothing.
                 warn!(%tap, %error, "failed to remove an nwfilter binding");
                 libvirt = false;
-                first_error.get_or_insert(error);
             } else if !present {
                 info!(%tap, %vm_id, "removed orphaned nwfilter binding");
             }
