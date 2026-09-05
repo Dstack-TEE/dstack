@@ -34,7 +34,7 @@
       "usr/lib/systemd/system/zfs.target",
       "usr/libexec/zfs/zed.d"
     ],
-    "nvidia-595.58.03": [
+    "nvidia-595.91.07": [
       "usr/bin/nvidia-smi",
       "usr/bin/nvidia-persistenced",
       "usr/bin/nv-fabricmanager",
@@ -97,11 +97,11 @@
   ],
   "required_rootfs_globs": {
     "nvidia-firmware": [
-      "usr/lib/firmware/nvidia/595.58.03/*"
+      "usr/lib/firmware/nvidia/595.91.07/*"
     ],
     "nvidia-libraries": [
-      "usr/lib/x86_64-linux-gnu/libcuda.so.595.58.03",
-      "usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.58.03"
+      "usr/lib/x86_64-linux-gnu/libcuda.so.595.91.07",
+      "usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.91.07"
     ],
     "cni-plugins": [
       "usr/lib/cni/loopback",

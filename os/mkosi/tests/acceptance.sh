@@ -194,7 +194,7 @@ grep -q -- '--fuzz=0' "$D/components/nvattest/nvattest-build.sh"
 grep -q '0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest-build.sh"
 grep -q 'COMPONENT_PATH/patches/0001-pin-fetchcontent-inputs.patch' "$D/components/nvattest/nvattest.sh"
 grep -q '^NVATTEST_REVISION=9d12801cea8a198ea0f29640dfaf8a4017c841c5$' "$D/versions.env"
-grep -q '^NVIDIA_VERSION=595.58.03$' "$D/versions.env"
+grep -q '^NVIDIA_VERSION=595.91.07$' "$D/versions.env"
 # GOTOOLCHAIN=local keeps the go command from downloading an unpinned
 # toolchain when a module's go.mod names a newer release.
 grep -q '^export GOTOOLCHAIN=local$' "$D/mkosi.build"
