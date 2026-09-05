@@ -36,27 +36,66 @@ DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.jso
 
 
 # VMM discovery directories
-# Each user's instances are in $XDG_RUNTIME_DIR/dstack-vmm (typically /run/user/<uid>/dstack-vmm).
-# CLI scans all users' directories so operators can see every instance on the host.
+# A VMM registers in $XDG_RUNTIME_DIR/dstack-vmm, falling back to
+# /run/user/<uid>/dstack-vmm when that variable is unset.
+# Scanning /run/user is what lets an operator see every user's instances, and
+# covers the usual case where the variable holds exactly that path. It does not
+# cover a session that points XDG_RUNTIME_DIR somewhere else, so this VMM's own
+# directory is added by name rather than assumed to be under /run/user.
 def _get_discovery_dirs() -> List[Tuple[str, Optional[str]]]:
     """Return list of (discovery_dir, username) tuples."""
     import pwd
 
     dirs = []
+    seen = set()
+
+    def add(path: str, username: Optional[str]):
+        if not os.path.isdir(path):
+            return
+        key = os.path.realpath(path)
+        if key in seen:
+            return
+        seen.add(key)
+        dirs.append((path, username))
+
     run_user = "/run/user"
     if os.path.isdir(run_user):
         try:
             for uid_str in os.listdir(run_user):
                 candidate = os.path.join(run_user, uid_str, "dstack-vmm")
-                if os.path.isdir(candidate):
-                    try:
-                        username = pwd.getpwuid(int(uid_str)).pw_name
-                    except (KeyError, ValueError):
-                        username = f"uid:{uid_str}"
-                    dirs.append((candidate, username))
+                try:
+                    username = pwd.getpwuid(int(uid_str)).pw_name
+                except (KeyError, ValueError):
+                    username = f"uid:{uid_str}"
+                add(candidate, username)
         except PermissionError:
             pass
+
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        try:
+            username = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError:
+            username = f"uid:{os.getuid()}"
+        add(os.path.join(xdg, "dstack-vmm"), username)
+
     return dirs
+
+
+def _discovery_dirs_scanned() -> List[str]:
+    """Where a listing looked, for a listing that found nothing.
+
+    An empty result means no directory exists yet, so naming the ones that
+    would have been read beats naming none of them.
+    """
+    found = [d for d, _ in _get_discovery_dirs()]
+    if found:
+        return found
+    candidates = ["/run/user/*/dstack-vmm"]
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        candidates.append(os.path.join(xdg, "dstack-vmm"))
+    return candidates
 
 
 def load_config() -> Dict[str, Any]:
@@ -183,9 +222,7 @@ def cmd_ls_vmm(args):
 
     if not instances:
         print("No running VMM instances found.")
-        print(
-            f"  (scanned: {', '.join(d for d, _ in _get_discovery_dirs()) or '/run/user/*/dstack-vmm'})"
-        )
+        print(f"  (scanned: {', '.join(_discovery_dirs_scanned())})")
         return
 
     if getattr(args, "json", False):
