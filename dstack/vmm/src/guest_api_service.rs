@@ -6,7 +6,7 @@ use crate::App as AppState;
 use anyhow::Result;
 use guest_api::{
     proxied_guest_api_server::{ProxiedGuestApiRpc, ProxiedGuestApiServer},
-    GuestInfo, Id, ListContainersResponse, NetworkInformation, SystemInfo,
+    GpuInfoResponse, GuestInfo, Id, ListContainersResponse, NetworkInformation, SystemInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use std::ops::Deref;
@@ -40,6 +40,10 @@ impl ProxiedGuestApiRpc for GuestApiHandler {
 
     async fn sys_info(self, request: Id) -> Result<SystemInfo> {
         self.guest_agent_client(&request.id)?.sys_info().await
+    }
+
+    async fn gpu_info(self, request: Id) -> Result<GpuInfoResponse> {
+        self.guest_agent_client(&request.id)?.gpu_info().await
     }
 
     async fn network_info(self, request: Id) -> Result<NetworkInformation> {
