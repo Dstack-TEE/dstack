@@ -89,6 +89,8 @@ while read -r key want; do
 done < <(sed -n 's/^require_config \(CONFIG_[A-Z0-9_]*\) \([ynm]\)$/\1 \2/p' "$audit")
 [[ $required -ge 10 ]]
 grep -q '0002-acpi-sandbox' "$D/components/kernel/kernel-build.sh"
+# LXC's own kernel audit runs after the fragment gate; see check-lxc-kernel-config.sh.
+grep -q 'check-lxc-kernel-config.sh' "$D/components/kernel/kernel-build.sh"
 grep -q -- '--fuzz=0' "$D/components/kernel/kernel-build.sh"
 for service in dstack-guest-agent dstack-prepare app-compose dstack-gateway-checker; do
   grep -q "$service" "$D/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"

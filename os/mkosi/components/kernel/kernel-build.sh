@@ -62,6 +62,7 @@ make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" x86_64_defco
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" olddefconfig
 "$ROOT/os/common/scripts/check-kernel-config.sh" "$BUILD_DIR/kernel-build/.config" \
     "$MKOSI_DIR/components/kernel/kernel.config"
+"$ROOT/os/common/scripts/check-lxc-kernel-config.sh" "$BUILD_DIR/kernel-build/.config"
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" -j"$JOBS" bzImage modules
 make -C "$src" O="$BUILD_DIR/kernel-build" \
     PAHOLE="$pahole_wrapper" INSTALL_MOD_PATH="$STAGING" modules_install
