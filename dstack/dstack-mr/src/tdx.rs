@@ -11,9 +11,11 @@
 //! intentionally excluded and must come from `VmConfig`.
 
 use crate::kernel::{
-    patched_kernel_authenticode_sha384, tdx_kernel_hash_uses_precomputed_high_mem,
-    TDX_KERNEL_HASH_COMPAT_2G_MEMORY, TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+    kernel_authenticode_sha384, patched_kernel_authenticode_sha384,
+    tdx_kernel_hash_uses_precomputed_high_mem, TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
+    TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
 };
+use crate::machine::{VersionedOptions, QEMU_COCO_KERNEL_HEADER_UNPATCHED};
 use crate::tdvf::{rtmr0_log_from_td_hob_hash_with_acpi_hashes, AcpiTableHashes, Tdvf};
 use crate::util::{measure_log, measure_sha384};
 use anyhow::{bail, Context, Result};
@@ -77,6 +79,7 @@ fn machine_from_vm_config(vm_config: &VmConfig, ovmf_variant: OvmfVariant) -> cr
         .root_verity(true)
         .hotplug_off(vm_config.hotplug_off)
         .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+        .maybe_patch_kernel_header(vm_config.qemu_patches_kernel_header)
         .maybe_pic(vm_config.pic)
         .maybe_qemu_version(vm_config.qemu_version.clone())
         .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -119,17 +122,54 @@ pub fn expected_rtmr0_acpi_hashes(
     })
 }
 
-fn select_mrtd(measurement: &TdxOsImageMeasurement, vm_config: &VmConfig) -> Result<Vec<u8>> {
-    let machine = machine_from_vm_config(vm_config, measurement.tdvf.ovmf_variant);
-    let opts = machine
-        .versioned_options()
-        .context("failed to resolve QEMU measurement options")?;
+fn select_mrtd(measurement: &TdxOsImageMeasurement, opts: &VersionedOptions) -> Result<Vec<u8>> {
     let mrtd = if opts.two_pass_add_pages {
         &measurement.tdvf.mrtd.two_pass
     } else {
         &measurement.tdvf.mrtd.single_pass
     };
     validate_bytes_field(mrtd, "tdx.measurement.tdvf.mrtd", 48)
+}
+
+/// Pick the kernel Authenticode digest matching the QEMU that booted the CVM.
+///
+/// Under QEMU >= 10.2 the digest covers the kernel file as built, so it holds
+/// for any guest memory size. Under <= 10.1 it covers QEMU's patched setup
+/// header, which is only stable at the memory sizes
+/// [`tdx_kernel_hash_uses_precomputed_high_mem`] accepts.
+fn select_kernel_authenticode(
+    measurement: &TdxOsImageMeasurement,
+    vm_config: &VmConfig,
+    opts: &VersionedOptions,
+) -> Result<Vec<u8>> {
+    let (digest, field) = if opts.patch_kernel_header {
+        if !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size) {
+            bail!(
+                "TDX lite attestation without image download on QEMU {}.{}.{} requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes. QEMU >= {}.{}.{} removes this restriction because it no longer rewrites the kernel setup header for confidential guests",
+                opts.version.0,
+                opts.version.1,
+                opts.version.2,
+                TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
+                TDX_KERNEL_HASH_COMPAT_2G_MEMORY / 1024 / 1024,
+                TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+                TDX_KERNEL_HASH_STABLE_MIN_MEMORY / 1024 / 1024,
+                vm_config.memory_size,
+                QEMU_COCO_KERNEL_HEADER_UNPATCHED.0,
+                QEMU_COCO_KERNEL_HEADER_UNPATCHED.1,
+                QEMU_COCO_KERNEL_HEADER_UNPATCHED.2,
+            );
+        }
+        (
+            &measurement.image.patched_kernel_authenticode,
+            "tdx.measurement.image.patched_kernel_authenticode",
+        )
+    } else {
+        (
+            &measurement.image.kernel_authenticode,
+            "tdx.measurement.image.kernel_authenticode",
+        )
+    };
+    validate_bytes_field(digest, field, 48)
 }
 
 fn read_varuint(input: &mut &[u8]) -> Result<u64> {
@@ -321,7 +361,9 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
     let kernel_path = image_dir.join(&meta.kernel);
     let kernel =
         fs::read(&kernel_path).with_context(|| format!("cannot read {}", kernel_path.display()))?;
-    let kernel_authenticode = patched_kernel_authenticode_sha384(
+    let kernel_authenticode =
+        kernel_authenticode_sha384(&kernel).context("failed to compute kernel hash")?;
+    let patched_kernel_authenticode = patched_kernel_authenticode_sha384(
         &kernel,
         initrd.len() as u32,
         TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
@@ -335,6 +377,7 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
                 &base_cmdline,
             )),
             kernel_authenticode,
+            patched_kernel_authenticode,
             initrd_sha384: measure_sha384(&initrd),
         },
         tdvf: TdxTdvfMeasurement {
@@ -361,32 +404,26 @@ pub fn tdx_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> 
 /// Compute expected TDX measurements from self-contained TDX measurement
 /// material and the three ACPI table digests captured in RTMR[0].
 ///
-/// This path intentionally does not download or read the OS image. Because
-/// QEMU's patched kernel Authenticode hash depends on exact guest RAM below
-/// `TDX_KERNEL_HASH_STABLE_MIN_MEMORY`, the no-image-download path supports
-/// CVMs at or above that threshold plus the exact 2 GiB placement, which QEMU
-/// patches to the same kernel bytes as the high-memory case.
+/// This path intentionally does not download or read the OS image. On QEMU
+/// <= 10.1 the patched kernel Authenticode hash depends on exact guest RAM
+/// below `TDX_KERNEL_HASH_STABLE_MIN_MEMORY`, so those CVMs are supported only
+/// at or above that threshold plus the exact 2 GiB placement, which QEMU
+/// patches to the same kernel bytes as the high-memory case. QEMU >= 10.2 does
+/// not patch the kernel at all, so any memory size works there; see
+/// [`select_kernel_authenticode`].
 pub fn tdx_measurements_from_measurement_document(
     document: &TdxOsImageMeasurementDocument,
     vm_config: &VmConfig,
     acpi_hashes: &TdxRtmr0AcpiHashes,
 ) -> Result<crate::TdxMeasurements> {
-    if !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size) {
-        bail!(
-            "TDX lite attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes",
-            TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
-            TDX_KERNEL_HASH_COMPAT_2G_MEMORY / 1024 / 1024,
-            TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
-            TDX_KERNEL_HASH_STABLE_MIN_MEMORY / 1024 / 1024,
-            vm_config.memory_size
-        );
-    }
-
     let measurement = document
         .decode_measurement()
         .map_err(anyhow::Error::msg)
         .context("failed to decode TDX measurement CBOR")?;
-    let mrtd = select_mrtd(&measurement, vm_config)?;
+    let opts = machine_from_vm_config(vm_config, measurement.tdvf.ovmf_variant)
+        .versioned_options()
+        .context("failed to resolve QEMU measurement options")?;
+    let mrtd = select_mrtd(&measurement, &opts)?;
 
     let td_hob_hash =
         measure_td_hob_from_witness_data(&measurement.tdvf.td_hob_witness, vm_config.memory_size)
@@ -403,11 +440,7 @@ pub fn tdx_measurements_from_measurement_document(
     .context("failed to compute RTMR0 from measurement document")?;
     let rtmr0 = measure_log(&rtmr0_log);
 
-    let kernel_hash = validate_bytes_field(
-        &measurement.image.kernel_authenticode,
-        "tdx.measurement.image.kernel_authenticode",
-        48,
-    )?;
+    let kernel_hash = select_kernel_authenticode(&measurement, vm_config, &opts)?;
     let rtmr1 = measure_log(&rtmr1_log_from_kernel_hash(kernel_hash));
 
     let initrd_hash = validate_bytes_field(
@@ -482,6 +515,7 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
         .root_verity(true)
         .hotplug_off(vm_config.hotplug_off)
         .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+        .maybe_patch_kernel_header(vm_config.qemu_patches_kernel_header)
         .maybe_pic(vm_config.pic)
         .maybe_qemu_version(vm_config.qemu_version.clone())
         .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -507,6 +541,10 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
         initrd_data.len() as u32,
         vm_config.memory_size,
         0x28000,
+        machine
+            .versioned_options()
+            .context("failed to resolve QEMU measurement options")?
+            .patch_kernel_header,
     )
     .context("failed to compute RTMR1")?;
     let rtmr1 = measure_log(&rtmr1_log);
@@ -573,6 +611,7 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         .root_verity(true)
         .hotplug_off(vm_config.hotplug_off)
         .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+        .maybe_patch_kernel_header(vm_config.qemu_patches_kernel_header)
         .maybe_pic(vm_config.pic)
         .maybe_qemu_version(vm_config.qemu_version.clone())
         .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -611,6 +650,10 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         initrd_data.len() as u32,
         vm_config.memory_size,
         0x28000,
+        machine
+            .versioned_options()
+            .context("failed to resolve QEMU measurement options")?
+            .patch_kernel_header,
     )
     .context("failed to compute RTMR1")?;
     let rtmr1 = measure_log(&rtmr1_log);
@@ -627,4 +670,157 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         rtmr1,
         rtmr2,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dstack_types::TdxAttestationVariant;
+
+    /// Kernel digests and the RTMR[1] they produce, captured from two dstack
+    /// CVMs running on QEMU 10.2.1 (Ubuntu `1:10.2.1+ds-1ubuntu3.2`).
+    ///
+    /// `unpatched` is what the guest actually measured; `patched` is what
+    /// dstack-mr computed before QEMU commit a7542a38f399 was accounted for,
+    /// and `rtmr1` is the value in the TDX quote. Pinning all three keeps the
+    /// selection honest in both directions.
+    struct KernelVector {
+        patched: &'static str,
+        unpatched: &'static str,
+        rtmr1_unpatched: &'static str,
+        rtmr1_patched: &'static str,
+        memory_size: u64,
+    }
+
+    /// 2 GiB CVM on the dstack-0.6.0-rc0 image.
+    const SMALL_VM: KernelVector = KernelVector {
+        patched: "a6dc51e745a0e537afddfc7e06567109692e7840f0334f0392affea35039d10bbb460d86c7310c82de8029a111816ef0",
+        unpatched: "ae9a1504c977b39f6a94558e7701d136ffe6cc30b061db5be7f8a8bd3d0f37bf0d2adcafd23eaf69f2ecd13318b5d83b",
+        rtmr1_unpatched: "74f00f634fe914dc875dc285d8efe1c1ecda4cf10e207f5abd079b559ac5e02ffd64eb75f03ae353cbe72f6ebdd9eca8",
+        rtmr1_patched: "4ffc8bcd33abc1bbf1d772196dc6d9f68cbe64c07b16a74ac085aa22ae976731bbb34a59255f119ec1b2ba53018cfa8e",
+        memory_size: 0x8000_0000,
+    };
+
+    /// 768 GiB, 8-GPU CVM on a dstack-0.6.0-next image.
+    const LARGE_VM: KernelVector = KernelVector {
+        patched: "67c69774a5b01786e051f78bcc85db7cc6cd3bda99ad01a30d1e7827f74c78242c4961d5b99ca5674f15560762a7c230",
+        unpatched: "e5fde8577a8e1f422c78ddc1be9001c14c6f8487d2df78068bfe580d960a78c28db5e17248e6181eb15ff61527c4362d",
+        rtmr1_unpatched: "a839af66b8879b40a48452e170943ce88347d6a294d988eef21df357a0e93d69e7cee07d0cb0fdc3e7e2f19d820be524",
+        rtmr1_patched: "a0e85dfd584783413eef452c7668bf93bbfed983f817a66f47389f096b304171d2b09b9883ad46b8b9d688c1ab027cf1",
+        memory_size: 824_633_720_832,
+    };
+
+    fn measurement_with(vector: &KernelVector) -> TdxOsImageMeasurement {
+        TdxOsImageMeasurement {
+            image: TdxImageMeasurement {
+                kernel_cmdline_sha384: vec![0x11; 48],
+                kernel_authenticode: hex::decode(vector.unpatched).unwrap(),
+                patched_kernel_authenticode: hex::decode(vector.patched).unwrap(),
+                initrd_sha384: vec![0x22; 48],
+            },
+            tdvf: TdxTdvfMeasurement {
+                ovmf_variant: OvmfVariant::default(),
+                mrtd: TdxMrtdCandidates {
+                    single_pass: vec![0x33; 48],
+                    two_pass: vec![0x44; 48],
+                },
+                td_hob_witness: vec![0x00],
+            },
+        }
+    }
+
+    fn vm_config(qemu_version: &str, memory_size: u64) -> VmConfig {
+        VmConfig {
+            os_image_hash: vec![],
+            cpu_count: 1,
+            memory_size,
+            qemu_single_pass_add_pages: None,
+            pic: None,
+            qemu_patches_kernel_header: None,
+            qemu_version: Some(qemu_version.to_string()),
+            pci_hole64_size: 0,
+            hugepages: false,
+            num_gpus: 0,
+            num_nvswitches: 0,
+            num_nics: 1,
+            num_verity_volumes: 0,
+            swtpm: false,
+            hotplug_off: false,
+            image: None,
+            host_share_mode: "9p".to_string(),
+            ovmf_variant: None,
+            tdx_attestation_variant: TdxAttestationVariant::default(),
+            tdx_measurement: None,
+            gcp_measurement: None,
+            aws_measurement: None,
+        }
+    }
+
+    fn select_kernel_authenticode_for(
+        measurement: &TdxOsImageMeasurement,
+        config: &VmConfig,
+    ) -> Result<Vec<u8>> {
+        let opts = machine_from_vm_config(config, measurement.tdvf.ovmf_variant)
+            .versioned_options()
+            .unwrap();
+        select_kernel_authenticode(measurement, config, &opts)
+    }
+
+    fn rtmr1_for(vector: &KernelVector, qemu_version: &str) -> String {
+        let measurement = measurement_with(vector);
+        let config = vm_config(qemu_version, vector.memory_size);
+        hex::encode(measure_log(&rtmr1_log_from_kernel_hash(
+            select_kernel_authenticode_for(&measurement, &config).unwrap(),
+        )))
+    }
+
+    /// The regression this whole change exists for: on QEMU 10.2 the quoted
+    /// RTMR[1] only reproduces from the unpatched kernel digest.
+    #[test]
+    fn qemu_10_2_reproduces_the_rtmr1_the_hardware_quoted() {
+        for vector in [&SMALL_VM, &LARGE_VM] {
+            assert_eq!(rtmr1_for(vector, "10.2.1"), vector.rtmr1_unpatched);
+        }
+    }
+
+    /// QEMU <= 10.1 must keep resolving to the patched digest, which is the
+    /// value dstack-mr produced before this change.
+    #[test]
+    fn qemu_10_1_still_selects_the_patched_kernel_digest() {
+        for vector in [&SMALL_VM, &LARGE_VM] {
+            assert_eq!(rtmr1_for(vector, "10.1.0"), vector.rtmr1_patched);
+        }
+    }
+
+    /// The patched digest is only stable at the memory sizes QEMU patches
+    /// identically, so the guard has to stay on the <= 10.1 branch.
+    #[test]
+    fn odd_memory_sizes_are_rejected_only_while_qemu_patches_the_kernel() {
+        let measurement = measurement_with(&SMALL_VM);
+        // 2.5 GiB: above the 2 GiB special case, below the threshold where
+        // QEMU's patched initrd placement stops moving with memory size.
+        let odd_memory = 0xA000_0000;
+
+        let err = select_kernel_authenticode_for(&measurement, &vm_config("10.1.0", odd_memory))
+            .expect_err("QEMU 10.1 cannot verify an unmodeled memory size");
+        assert!(
+            err.to_string().contains("memory_size"),
+            "unexpected error: {err}"
+        );
+
+        let digest = select_kernel_authenticode_for(&measurement, &vm_config("10.2.1", odd_memory))
+            .expect("QEMU 10.2 does not patch the kernel, so memory size is irrelevant");
+        assert_eq!(hex::encode(digest), SMALL_VM.unpatched);
+    }
+
+    /// A fork override has to reach the candidate selection, not just the
+    /// version mapping.
+    #[test]
+    fn the_vm_config_override_selects_the_candidate() {
+        let measurement = measurement_with(&SMALL_VM);
+        let mut config = vm_config("10.2.1", SMALL_VM.memory_size);
+        config.qemu_patches_kernel_header = Some(true);
+        let digest = select_kernel_authenticode_for(&measurement, &config).unwrap();
+        assert_eq!(hex::encode(digest), SMALL_VM.patched);
+    }
 }

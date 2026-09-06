@@ -23,7 +23,7 @@ usage:
   dstack-mr snp-measurement-hash <image_dir>
 
 features:
-  split-cbor-measurement-v3";
+  split-cbor-measurement-v4";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);

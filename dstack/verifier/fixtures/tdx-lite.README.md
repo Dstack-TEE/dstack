@@ -32,9 +32,16 @@ Important fixture properties:
 
 - `vm_config.tdx_attestation_variant = "lite"`
 - `vm_config.memory_size = 2147483648` (2 GiB)
-- `vm_config.os_image_hash = e6f5cfec20c02e7b97baa213d0f718020b55e040172d90ccbcb946d56c8b09db`
+- `vm_config.os_image_hash = 3a0dfc279e9da8ca6b3659102688379eea28e79a005b83a97e3b05833a2aba02`
 - `vm_config.tdx_measurement.{checksum_file,measurement}` are JSON base64 byte
   strings.
+- The measurement document is v4. The capture predates that format, so its
+  `measurement.tdx.cbor` was rewritten in place: `kernel_authenticode` was
+  filled in from `~/.dstack/images/dstack-0.6.0`, whose
+  `patched_kernel_authenticode` and `initrd_sha384` both equal the captured
+  ones and therefore whose `bzImage` is the byte-identical file this CVM
+  booted. `checksum_file` and `os_image_hash` were recomputed over the new
+  bytes; nothing the quote commits to changed.
 - The raw top-level `event_log` and stripped attestation keep the three named
   RTMR0 `ACPI DATA` digests (`acpi-loader`, `acpi-rsdp`, `acpi-tables`) and
   marker payloads needed by the lite verifier, plus RTMR3 runtime events.

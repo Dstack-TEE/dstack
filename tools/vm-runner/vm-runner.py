@@ -130,7 +130,30 @@ def update_guest_config(config_file: str, data: Dict):
         json.dump(config, f, indent=4)
 
 
-def gen_vm_config(vm_dir, host_port, manifest=None, os_image_hash=None):
+def detect_qemu_version(qemu_path):
+    """Return QEMU's `major.minor.micro`, or None if it cannot be determined.
+
+    The measured RTMR values depend on the QEMU version -- notably RTMR[1],
+    since QEMU >= 10.2 stops rewriting the kernel setup header for confidential
+    guests -- so a vm_config without this field makes the verifier fall back to
+    a default version and compute the wrong digests.
+    """
+    try:
+        output = subprocess.check_output(
+            [qemu_path, '--version'], text=True, stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logging.warning("failed to run %s --version: %s", qemu_path, exc)
+        return None
+    match = re.search(r'QEMU emulator version (\d+\.\d+\.\d+)', output)
+    if not match:
+        logging.warning("could not parse QEMU version from: %s",
+                        output.splitlines()[0] if output else '')
+        return None
+    return match.group(1)
+
+
+def gen_vm_config(vm_dir, host_port, manifest=None, os_image_hash=None,
+                  qemu_version=None):
     shared_dir = os.path.join(vm_dir, 'shared')
     for filename in ['config.json', '.sys-config.json']:
         config_file = os.path.join(shared_dir, filename)
@@ -139,12 +162,15 @@ def gen_vm_config(vm_dir, host_port, manifest=None, os_image_hash=None):
             "host_vsock_port": host_port
         })
         if manifest:
+            vm_config = {
+                "os_image_hash": os_image_hash,
+                "cpu_count": manifest['vcpu'],
+                "memory_size": manifest['memory'] * 1024 * 1024
+            }
+            if qemu_version:
+                vm_config["qemu_version"] = qemu_version
             update_guest_config(config_file, {
-                "vm_config": json.dumps({
-                    "os_image_hash": os_image_hash,
-                    "cpu_count": manifest['vcpu'],
-                    "memory_size": manifest['memory'] * 1024 * 1024
-                })
+                "vm_config": json.dumps(vm_config)
             })
 
 
@@ -408,7 +434,8 @@ class DstackManager:
 
         os_image_hash = open(os.path.join(
             image_path, 'digest.txt'), 'r').read().strip()
-        gen_vm_config(vm_dir, host_port, manifest, os_image_hash)
+        gen_vm_config(vm_dir, host_port, manifest, os_image_hash,
+                      detect_qemu_version(self.config.qemu_path))
 
         mem_gb = manifest['memory'] // 1024
         vcpu_count = manifest['vcpu']

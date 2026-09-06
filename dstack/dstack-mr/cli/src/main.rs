@@ -49,6 +49,13 @@ struct MachineConfig {
     #[arg(long)]
     pic: Option<Bool>,
 
+    /// Whether QEMU rewrites the Linux setup header before serving the kernel
+    /// over fw_cfg. Defaults to the behavior of --qemu-version: QEMU >= 10.2
+    /// leaves it alone for confidential guests. Set this only for a fork whose
+    /// behavior disagrees with its version number.
+    #[arg(long)]
+    patch_kernel_header: Option<Bool>,
+
     /// Enable SMM
     #[arg(long, default_value = "false")]
     smm: Bool,
@@ -126,6 +133,7 @@ fn main() -> Result<()> {
                 .initrd(&initrd_path)
                 .kernel_cmdline(&cmdline)
                 .maybe_two_pass_add_pages(config.two_pass_add_pages)
+                .maybe_patch_kernel_header(config.patch_kernel_header)
                 .maybe_pic(config.pic)
                 .smm(config.smm)
                 .maybe_pci_hole64_size(config.pci_hole64_size)
@@ -341,6 +349,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
         .root_verity(true)
         .hotplug_off(vm.hotplug_off)
         .maybe_two_pass_add_pages(vm.qemu_single_pass_add_pages)
+        .maybe_patch_kernel_header(vm.qemu_patches_kernel_header)
         .maybe_pic(vm.pic)
         .maybe_qemu_version(vm.qemu_version.clone())
         .maybe_pci_hole64_size(if vm.pci_hole64_size > 0 {

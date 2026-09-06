@@ -350,6 +350,11 @@ pub struct CvmConfig {
     pub qemu_single_pass_add_pages: Option<bool>,
     /// QEMU pic
     pub qemu_pic: Option<bool>,
+    /// Whether QEMU rewrites the Linux setup header before serving the kernel
+    /// over fw_cfg. Leave unset: it is derived from `qemu_version`, which is
+    /// right for every upstream release. Set it only for a QEMU fork whose
+    /// behavior disagrees with its version number.
+    pub qemu_patches_kernel_header: Option<bool>,
     /// QEMU qemu_version
     pub qemu_version: Option<String>,
     /// QEMU pci_hole64_size

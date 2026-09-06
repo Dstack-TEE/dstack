@@ -1804,6 +1804,7 @@ fn make_vm_config(
         memory_size: manifest.memory as u64 * 1024 * 1024,
         qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
         pic: cfg.cvm.qemu_pic,
+        qemu_patches_kernel_header: cfg.cvm.qemu_patches_kernel_header,
         qemu_version: cfg.cvm.qemu_version.clone(),
         pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
         hugepages: manifest.hugepages,
@@ -2416,6 +2417,7 @@ mod tests {
             image: TdxImageMeasurement {
                 kernel_cmdline_sha384: vec![0x10; 48],
                 kernel_authenticode: vec![0x20; 48],
+                patched_kernel_authenticode: vec![0x21; 48],
                 initrd_sha384: vec![0x30; 48],
             },
             tdvf: TdxTdvfMeasurement {

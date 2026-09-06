@@ -59,6 +59,7 @@ use_mrconfigid = true
 # QEMU flags
 #qemu_single_pass_add_pages = false
 #qemu_pic = true
+#qemu_patches_kernel_header = true
 #qemu_version = ""
 # Size of the 64-bit PCI hole. Accepts a plain byte count, hex, or a unit
 # suffix: "512G", "2T", "1P" -- all binary multipliers, as are the "1PB" and

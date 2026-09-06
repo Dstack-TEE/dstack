@@ -237,15 +237,30 @@ pub(crate) fn patched_kernel_authenticode_sha384(
     authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")
 }
 
-/// Measures a QEMU-patched TDX kernel image.
+/// Compute the first RTMR[1] event digest for a kernel QEMU serves untouched:
+/// the Authenticode SHA-384 hash of the image file exactly as built.
+///
+/// QEMU >= 10.2 takes this path for every confidential guest, TDX included.
+pub(crate) fn kernel_authenticode_sha384(kernel_data: &[u8]) -> Result<Vec<u8>> {
+    authenticode_sha384_hash(kernel_data).context("failed to compute kernel hash")
+}
+
+/// Measures the TDX kernel image QEMU hands to OVMF.
+///
+/// `patch_kernel_header` selects between the two kernel images QEMU can serve
+/// over fw_cfg; see [`crate::machine::VersionedOptions::patch_kernel_header`].
 pub(crate) fn rtmr1_log(
     kernel_data: &[u8],
     initrd_size: u32,
     mem_size: u64,
     acpi_data_size: u32,
+    patch_kernel_header: bool,
 ) -> Result<Vec<Vec<u8>>> {
-    let kernel_hash =
-        patched_kernel_authenticode_sha384(kernel_data, initrd_size, mem_size, acpi_data_size)?;
+    let kernel_hash = if patch_kernel_header {
+        patched_kernel_authenticode_sha384(kernel_data, initrd_size, mem_size, acpi_data_size)?
+    } else {
+        kernel_authenticode_sha384(kernel_data)?
+    };
     Ok(vec![
         kernel_hash,
         measure_sha384(b"Calling EFI Application from Boot Option"),

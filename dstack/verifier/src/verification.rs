@@ -183,7 +183,9 @@ fn collect_rtmr_mismatch(
 
 // Bump whenever expected RTMR computation changes so stale entries get ignored.
 // v3: all supported OVMF measurements use the Pre202505 RTMR[0] layout.
-const MEASUREMENT_CACHE_VERSION: u32 = 3;
+// v4: RTMR[1] measures the unpatched kernel on QEMU >= 10.2, so entries cached
+//     for such a CVM before that was modeled hold the wrong digest.
+const MEASUREMENT_CACHE_VERSION: u32 = 4;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
@@ -332,6 +334,7 @@ impl CvmVerifier {
             .root_verity(true)
             .hotplug_off(vm_config.hotplug_off)
             .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+            .maybe_patch_kernel_header(vm_config.qemu_patches_kernel_header)
             .maybe_pic(vm_config.pic)
             .maybe_qemu_version(vm_config.qemu_version.clone())
             .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {

@@ -1436,6 +1436,13 @@ pub struct VmConfig {
     pub qemu_single_pass_add_pages: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pic: Option<bool>,
+    /// Override for whether QEMU rewrites the Linux setup header before serving
+    /// the kernel over fw_cfg, which decides the RTMR[1] kernel digest.
+    /// Absent means "derive it from `qemu_version`", which is right for every
+    /// upstream release; set it only for a fork that carries or omits QEMU
+    /// commit a7542a38f399 against its version number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qemu_patches_kernel_header: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub qemu_version: Option<String>,
     #[serde(default)]
@@ -2025,12 +2032,23 @@ pub struct TdxImageMeasurement {
     /// `initrd=initrd` suffix, encoded as UTF-16LE with a trailing NUL.
     #[serde(with = "hex_bytes")]
     pub kernel_cmdline_sha384: Vec<u8>,
-    /// Authenticode SHA-384 digest of the QEMU-patched kernel image when the
-    /// guest memory is at or above QEMU's high-memory TDX initrd placement
-    /// threshold. Below that threshold the patched kernel header depends on the
-    /// exact guest memory size, so the no-image-download verifier rejects it.
+    /// Authenticode SHA-384 of the kernel file as built, byte for byte.
+    ///
+    /// This is what OVMF measures into RTMR[1] under QEMU >= 10.2, which no
+    /// longer rewrites the Linux setup header for confidential guests. It does
+    /// not depend on guest memory size.
     #[serde(with = "hex_bytes")]
     pub kernel_authenticode: Vec<u8>,
+    /// Authenticode SHA-384 of the same kernel after QEMU rewrites the Linux
+    /// setup header (`type_of_loader`, `loadflags`, `heap_end_ptr`,
+    /// `cmdline_addr`, `initrd_addr`, `initrd_size`).
+    ///
+    /// This is what OVMF measures into RTMR[1] under QEMU <= 10.1. The patched
+    /// header encodes the initrd placement, so this digest is only stable at
+    /// the guest memory sizes the verifier accepts on the no-image-download
+    /// path.
+    #[serde(with = "hex_bytes")]
+    pub patched_kernel_authenticode: Vec<u8>,
     /// SHA-384 of the initrd file bytes. This is the second RTMR[2] event.
     #[serde(with = "hex_bytes")]
     pub initrd_sha384: Vec<u8>,
@@ -2061,9 +2079,13 @@ struct CborTdxImageMeasurement {
     /// Measured kernel cmdline SHA-384.
     #[serde(rename = "cmdline_sha384", with = "hex_bytes")]
     kernel_cmdline_sha384: Vec<u8>,
-    /// QEMU-patched kernel Authenticode SHA-384.
+    /// Authenticode SHA-384 of the kernel as built (QEMU >= 10.2).
     #[serde(with = "hex_bytes")]
     kernel_authenticode: Vec<u8>,
+    /// Authenticode SHA-384 of the kernel with QEMU's setup-header rewrite
+    /// applied (QEMU <= 10.1).
+    #[serde(with = "hex_bytes")]
+    patched_kernel_authenticode: Vec<u8>,
     /// Initrd SHA-384.
     #[serde(with = "hex_bytes")]
     initrd_sha384: Vec<u8>,
@@ -2093,43 +2115,60 @@ struct CborTdxOsImageMeasurement {
     tdvf: CborTdxTdvfMeasurement,
 }
 
-impl From<&TdxOsImageMeasurement> for CborTdxOsImageMeasurement {
-    fn from(measurement: &TdxOsImageMeasurement) -> Self {
+/// Reads just the version, so a document from a different format generation is
+/// reported as an unsupported version rather than as a field-shape error.
+#[derive(Debug, Deserialize)]
+struct CborTdxOsImageMeasurementVersion {
+    version: u32,
+}
+
+impl CborTdxTdvfMeasurement {
+    fn from_measurement(tdvf: &TdxTdvfMeasurement) -> Self {
+        Self {
+            ovmf_variant: tdvf.ovmf_variant,
+            mrtd: CborTdxMrtdCandidates {
+                single_pass: tdvf.mrtd.single_pass.clone(),
+                two_pass: tdvf.mrtd.two_pass.clone(),
+            },
+            td_hob_witness: tdvf.td_hob_witness.clone(),
+        }
+    }
+
+    fn into_measurement(self) -> TdxTdvfMeasurement {
+        TdxTdvfMeasurement {
+            ovmf_variant: self.ovmf_variant,
+            mrtd: TdxMrtdCandidates {
+                single_pass: self.mrtd.single_pass,
+                two_pass: self.mrtd.two_pass,
+            },
+            td_hob_witness: self.td_hob_witness,
+        }
+    }
+}
+
+impl CborTdxOsImageMeasurement {
+    fn from_measurement(measurement: &TdxOsImageMeasurement) -> Self {
         Self {
             version: TdxOsImageMeasurement::VERSION,
             image: CborTdxImageMeasurement {
                 kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384.clone(),
                 kernel_authenticode: measurement.image.kernel_authenticode.clone(),
+                patched_kernel_authenticode: measurement.image.patched_kernel_authenticode.clone(),
                 initrd_sha384: measurement.image.initrd_sha384.clone(),
             },
-            tdvf: CborTdxTdvfMeasurement {
-                ovmf_variant: measurement.tdvf.ovmf_variant,
-                mrtd: CborTdxMrtdCandidates {
-                    single_pass: measurement.tdvf.mrtd.single_pass.clone(),
-                    two_pass: measurement.tdvf.mrtd.two_pass.clone(),
-                },
-                td_hob_witness: measurement.tdvf.td_hob_witness.clone(),
-            },
+            tdvf: CborTdxTdvfMeasurement::from_measurement(&measurement.tdvf),
         }
     }
-}
 
-impl From<CborTdxOsImageMeasurement> for TdxOsImageMeasurement {
-    fn from(measurement: CborTdxOsImageMeasurement) -> Self {
-        Self {
+    fn into_measurement(self) -> TdxOsImageMeasurement {
+        TdxOsImageMeasurement {
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384,
-                kernel_authenticode: measurement.image.kernel_authenticode,
-                initrd_sha384: measurement.image.initrd_sha384,
+                kernel_cmdline_sha384: self.image.kernel_cmdline_sha384,
+                kernel_authenticode: self.image.kernel_authenticode,
+                patched_kernel_authenticode: self.image.patched_kernel_authenticode,
+                initrd_sha384: self.image.initrd_sha384,
             },
-            tdvf: TdxTdvfMeasurement {
-                ovmf_variant: measurement.tdvf.ovmf_variant,
-                mrtd: TdxMrtdCandidates {
-                    single_pass: measurement.tdvf.mrtd.single_pass,
-                    two_pass: measurement.tdvf.mrtd.two_pass,
-                },
-                td_hob_witness: measurement.tdvf.td_hob_witness,
-            },
+            tdvf: self.tdvf.into_measurement(),
         }
     }
 }
@@ -2146,32 +2185,59 @@ pub struct TdxOsImageMeasurementDocument {
 }
 
 impl TdxOsImageMeasurement {
-    pub const VERSION: u32 = 3;
+    /// Format version of `measurement.tdx.cbor`. Bumped from 3 to 4 when
+    /// `image.kernel_authenticode` (a single digest, which was always the
+    /// QEMU-patched one) became the pair of digests QEMU 10.2 made necessary.
+    ///
+    /// Only this version is accepted. Version 3 shipped in the `v0.6.0-rc0`
+    /// prereleases and no stable release, so it is rejected by number rather
+    /// than carried along: an image built against it reports an unsupported
+    /// version on every QEMU and has to be re-emitted, which also gives it a
+    /// new `os_image_hash`.
+    pub const VERSION: u32 = 4;
 
-    /// CBOR representation stored as `measurement.tdx.cbor`.
+    /// CBOR representation stored as `measurement.tdx.cbor`. The image digest
+    /// in `sha256sum.txt` is taken over exactly these bytes.
     pub fn to_cbor_vec(&self) -> Vec<u8> {
         cbor_to_vec(
-            &CborTdxOsImageMeasurement::from(self),
+            &CborTdxOsImageMeasurement::from_measurement(self),
             "TdxOsImageMeasurement",
         )
     }
 
     pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
-        let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
-        if cbor.version != Self::VERSION {
-            return Err(format!(
-                "TdxOsImageMeasurement: unsupported version {}, expected {}",
-                cbor.version,
-                Self::VERSION
-            ));
-        }
-        Ok(cbor.into())
+        const CONTEXT: &str = "TdxOsImageMeasurement";
+        // The version is read first so a document from another format
+        // generation is reported as an unsupported version rather than as a
+        // confusing field-shape error.
+        Self::check_version(bytes)?;
+        Ok(cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, CONTEXT)?.into_measurement())
     }
 
     pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
-        let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
+        const CONTEXT: &str = "TdxOsImageMeasurement";
+        Self::check_version(bytes)?;
+        let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, CONTEXT)?;
         serde_json::to_value(cbor)
-            .map_err(|e| format!("TdxOsImageMeasurement: failed to convert CBOR to JSON: {e}"))
+            .map_err(|e| format!("{CONTEXT}: failed to convert CBOR to JSON: {e}"))
+    }
+
+    fn check_version(bytes: &[u8]) -> Result<(), String> {
+        let version = Self::declared_version(bytes)?;
+        if version != Self::VERSION {
+            return Err(format!(
+                "TdxOsImageMeasurement: unsupported version {version}, expected {}",
+                Self::VERSION,
+            ));
+        }
+        Ok(())
+    }
+
+    fn declared_version(bytes: &[u8]) -> Result<u32, String> {
+        Ok(
+            cbor_from_slice::<CborTdxOsImageMeasurementVersion>(bytes, "TdxOsImageMeasurement")?
+                .version,
+        )
     }
 
     /// SHA-256 over the CBOR measurement material.
@@ -2700,5 +2766,98 @@ mod appcompose_sdk_parity {
              dropped from the compose hash they compute -- and that hash is what \
              gets whitelisted on chain. Update sdk/go and sdk/js, then this list."
         );
+    }
+}
+
+#[cfg(test)]
+mod tdx_measurement_cbor_tests {
+    use super::*;
+
+    fn measurement() -> TdxOsImageMeasurement {
+        TdxOsImageMeasurement {
+            image: TdxImageMeasurement {
+                kernel_cmdline_sha384: vec![0x11; 48],
+                kernel_authenticode: vec![0x22; 48],
+                patched_kernel_authenticode: vec![0x33; 48],
+                initrd_sha384: vec![0x44; 48],
+            },
+            tdvf: TdxTdvfMeasurement {
+                ovmf_variant: OvmfVariant::default(),
+                mrtd: TdxMrtdCandidates {
+                    single_pass: vec![0x55; 48],
+                    two_pass: vec![0x66; 48],
+                },
+                td_hob_witness: vec![0x01, 0x02, 0x03],
+            },
+        }
+    }
+
+    /// The two kernel digests are distinct values that must not be transposed
+    /// or collapsed, so the round trip asserts they come back apart.
+    #[test]
+    fn both_kernel_digests_survive_a_cbor_round_trip() {
+        let original = measurement();
+        let decoded = TdxOsImageMeasurement::from_cbor_slice(&original.to_cbor_vec()).unwrap();
+        assert_eq!(decoded, original);
+        assert_eq!(decoded.image.kernel_authenticode, vec![0x22; 48]);
+        assert_eq!(decoded.image.patched_kernel_authenticode, vec![0x33; 48]);
+    }
+
+    #[test]
+    fn the_encoded_document_declares_the_current_version() {
+        let value = TdxOsImageMeasurement::cbor_json_value_from_slice(&measurement().to_cbor_vec())
+            .unwrap();
+        assert_eq!(
+            value["version"],
+            serde_json::json!(TdxOsImageMeasurement::VERSION)
+        );
+    }
+
+    /// CBOR stores the version as the single unsigned byte following the
+    /// "version" key, so rewriting that byte forges another version.
+    fn with_version(measurement: &TdxOsImageMeasurement, version: u8) -> Vec<u8> {
+        let key = [0x67, b'v', b'e', b'r', b's', b'i', b'o', b'n'];
+        let mut cbor = measurement.to_cbor_vec();
+        let at = cbor
+            .windows(key.len())
+            .position(|window| window == key)
+            .expect("encoded document contains a version key");
+        cbor[at + key.len()] = version;
+        cbor
+    }
+
+    #[test]
+    fn unknown_versions_are_rejected() {
+        let cbor = with_version(&measurement(), 2);
+        let err = TdxOsImageMeasurement::from_cbor_slice(&cbor).unwrap_err();
+        assert!(err.contains("unsupported version 2"), "unexpected: {err}");
+    }
+
+    /// A real v3 `measurement.tdx.cbor`, whose `image.kernel_authenticode` is a
+    /// single digest -- always the QEMU-patched one -- instead of the pair.
+    ///
+    /// v3 never shipped in a tagged release, so it is rejected on its version
+    /// rather than carried along. Checking the version before the payload is
+    /// what turns this into "unsupported version 3, expected 4" instead of a
+    /// field-shape error that says nothing about how to fix the image.
+    const V3_GOLDEN_HEX: &str = concat!(
+        "a36776657273696f6e0365696d616765a36e636d646c696e655f73686133383458307862",
+        "80842b7364287a3a70d96f7e309252857beb45fb1f91314a2ea863db0adc04c8431ecbf2",
+        "9a966405604631a5aab8736b65726e656c5f61757468656e7469636f64655830ac7e632d",
+        "cf5cd2a1fe5c1f41f4d9b8219570e64ed3c61038fdbf25404e6f542ffd57f276bc507630",
+        "7efaf882e6d641776d696e697472645f73686133383458304fe4f7710134a61d7def357a",
+        "dd6ac50bdbfeee5032a4c100375e207216ffe42a3bd5822b24e679f91501fff795b81521",
+        "6474647666a3646f766d6669707265323032353035646d727464a26b73696e676c655f70",
+        "6173735830a6f2ac9451810686a4db259fe8fa5438dc4a58bda9fd2f5b1fb09283357055",
+        "00d29a15c92387416a2f52dddce99c83f86874776f5f706173735830fd685522ce791dfe",
+        "f67414614eb07d03fc07a32c5a66f36288b329dab92b724b1564c73d436ffb9ea84488c5",
+        "1ac5a1c56674645f686f624c80100904000609020b021010",
+    );
+
+    #[test]
+    fn a_real_v3_document_is_rejected_on_its_version() {
+        let bytes = hex::decode(V3_GOLDEN_HEX).expect("golden is valid hex");
+        let err = TdxOsImageMeasurement::from_cbor_slice(&bytes).unwrap_err();
+        assert!(err.contains("unsupported version 3"), "unexpected: {err}");
     }
 }

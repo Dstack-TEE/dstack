@@ -20,6 +20,9 @@ pub struct Machine<'a> {
     pub initrd: &'a str,
     pub kernel_cmdline: &'a str,
     pub two_pass_add_pages: Option<bool>,
+    /// Override for whether QEMU rewrites the Linux setup header before serving
+    /// the kernel over fw_cfg. `None` derives it from `qemu_version`.
+    pub patch_kernel_header: Option<bool>,
     pub pic: Option<bool>,
     pub qemu_version: Option<String>,
     #[builder(default = false)]
@@ -91,18 +94,41 @@ impl Machine<'_> {
             default_pic = false;
             default_two_pass = false;
         };
+        let default_patch_kernel_header = version < QEMU_COCO_KERNEL_HEADER_UNPATCHED;
         Ok(VersionedOptions {
             version,
             pic: self.pic.unwrap_or(default_pic),
             two_pass_add_pages: self.two_pass_add_pages.unwrap_or(default_two_pass),
+            patch_kernel_header: self
+                .patch_kernel_header
+                .unwrap_or(default_patch_kernel_header),
         })
     }
 }
+
+/// First QEMU release that stops rewriting the Linux setup header for
+/// confidential guests, from commit a7542a38f399 ("x86/loader: Don't update
+/// kernel header for CoCo VMs"), which widened the pre-existing SEV-only skip
+/// (`!sev_enabled()`) to every confidential guest (`!MACHINE(x86ms)->cgs`).
+///
+/// The commit was not backported to 10.1 or earlier, and every release since
+/// -- 10.2.x, 11.0.x, 11.1.x and master -- keeps the widened check, so the
+/// boundary is a single step at 10.2.0 rather than a per-release quirk.
+pub const QEMU_COCO_KERNEL_HEADER_UNPATCHED: (u32, u32, u32) = (10, 2, 0);
 
 pub struct VersionedOptions {
     pub version: (u32, u32, u32),
     pub pic: bool,
     pub two_pass_add_pages: bool,
+    /// Whether QEMU rewrites the Linux setup header (`type_of_loader`,
+    /// `loadflags`, `heap_end_ptr`, `cmdline_addr`, `initrd_addr`,
+    /// `initrd_size`) before exposing the kernel over fw_cfg.
+    ///
+    /// QEMU <= 10.1 does, so OVMF measures the patched image into RTMR[1].
+    /// QEMU >= 10.2 leaves it alone for every confidential guest, so OVMF
+    /// measures the kernel file as built and the digest no longer depends on
+    /// guest memory size.
+    pub patch_kernel_header: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +163,7 @@ impl Machine<'_> {
             initrd_data.len() as u32,
             self.memory_size,
             0x28000,
+            self.versioned_options()?.patch_kernel_header,
         )?;
         debug_print_log("RTMR1", &rtmr1_log);
         let rtmr1 = measure_log(&rtmr1_log);
@@ -158,5 +185,77 @@ impl Machine<'_> {
             rtmr_logs: [rtmr0_log, rtmr1_log, rtmr2_log],
             acpi_tables,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TDX_TEST_MEMORY: u64 = 0x8000_0000;
+
+    fn patch_kernel_header_for(version: &str) -> bool {
+        Machine::builder()
+            .cpu_count(1)
+            .memory_size(TDX_TEST_MEMORY)
+            .firmware("")
+            .kernel("")
+            .initrd("")
+            .kernel_cmdline("")
+            .hugepages(false)
+            .num_gpus(0)
+            .num_nvswitches(0)
+            .hotplug_off(false)
+            .root_verity(true)
+            .qemu_version(version.to_string())
+            .build()
+            .versioned_options()
+            .unwrap()
+            .patch_kernel_header
+    }
+
+    /// QEMU commit a7542a38f399 landed in 10.2.0 and was not backported, so the
+    /// boundary is exactly between 10.1.x and 10.2.0.
+    #[test]
+    fn kernel_header_patching_stops_at_qemu_10_2() {
+        for version in ["8.2.2", "9.1.0", "9.2.1", "10.0.0", "10.1.0", "10.1.9"] {
+            assert!(
+                patch_kernel_header_for(version),
+                "QEMU {version} still patches the setup header"
+            );
+        }
+        for version in ["10.2.0", "10.2.1", "10.2.4", "11.0.0", "11.1.0", "12.0.0"] {
+            assert!(
+                !patch_kernel_header_for(version),
+                "QEMU {version} leaves the setup header alone for CoCo guests"
+            );
+        }
+    }
+
+    /// A fork can carry or omit the commit against its version number, so the
+    /// explicit override has to win over the version-derived default.
+    #[test]
+    fn explicit_patch_kernel_header_overrides_the_version_default() {
+        for (version, override_value) in [("10.2.1", true), ("9.2.1", false)] {
+            let machine = Machine::builder()
+                .cpu_count(1)
+                .memory_size(TDX_TEST_MEMORY)
+                .firmware("")
+                .kernel("")
+                .initrd("")
+                .kernel_cmdline("")
+                .hugepages(false)
+                .num_gpus(0)
+                .num_nvswitches(0)
+                .hotplug_off(false)
+                .root_verity(true)
+                .qemu_version(version.to_string())
+                .patch_kernel_header(override_value)
+                .build();
+            assert_eq!(
+                machine.versioned_options().unwrap().patch_kernel_header,
+                override_value
+            );
+        }
     }
 }
