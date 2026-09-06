@@ -84,6 +84,39 @@ a table.
 checksum-offloading virtio NICs. On an nft frontend that is programmed through
 `nft_compat`, which still needs the `xt_CHECKSUM` module.
 
+## Beyond netfilter: traffic control and checkpoint/restore
+
+Two more guest-kernel capabilities a nested container manager depends on live
+in the same two fragments. Both are built in (`=y`), so neither backend has a
+module to package or autoload.
+
+| Capability | Kconfig symbol | Yocto | mkosi | Since |
+| --- | --- | --- | --- | --- |
+| HTB qdisc | `NET_SCH_HTB` | built in | built in | 0.6.0 |
+| ingress qdisc | `NET_SCH_INGRESS` | built in | built in | 0.6.0 |
+| u32 classifier | `NET_CLS_U32` | built in | built in | 0.6.0 |
+| police action | `NET_ACT_POLICE` | built in | built in | 0.6.0 |
+| checkpoint/restore | `CHECKPOINT_RESTORE` | built in | built in | 0.6.0 |
+
+**Per-instance bandwidth limits need all four `tc` pieces.** Incus implements
+`limits.max` (and `limits.ingress` / `limits.egress`) on a bridged NIC as an
+HTB root qdisc and class on the host-side veth for egress, and an ingress
+qdisc with a u32 filter and a police action for ingress. `NET_SCHED` and
+`NET_CLS_ACT` alone do not provide any of them: on 0.5.x the manager accepts
+the setting and then fails to start the instance with `Specified qdisc kind is
+unknown` (#1176).
+
+**`CHECKPOINT_RESTORE` is what lets the LXC monitor be found.** LXC retitles
+its monitor process to `[lxc monitor] <path> <name>` with
+`prctl(PR_SET_MM, PR_SET_MM_MAP, ...)`, and Incus's seccomp notification
+handler resolves a monitor PID to its instance by that title. The prctl is
+only implemented under `CHECKPOINT_RESTORE`; without it the monitor keeps its
+`incusd forkstart` command line, the daemon logs `Failed to find container
+for monitor <pid>`, and every intercepted syscall
+(`security.syscalls.intercept.*`) is resumed unhandled instead of getting the
+container-aware answer (#1180). Everything the symbol gates needs
+`CAP_CHECKPOINT_RESTORE` or `CAP_SYS_ADMIN`, and none of it faces the host.
+
 ## Running a nested bridge manager alongside Docker
 
 Having the capabilities is not the whole story. Docker sets the `FORWARD` chain
