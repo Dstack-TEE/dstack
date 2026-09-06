@@ -32,6 +32,7 @@ use utils::AppKeys;
 mod crypto;
 mod docker_compose;
 mod gateway_checker;
+mod gpu_info;
 mod host_api;
 mod host_shared;
 mod parse_env_file;
@@ -101,6 +102,8 @@ enum Commands {
     Decrypt(DecryptArgs),
     /// Encrypt data for an app using its KMS-provided environment encryption key
     Encrypt(EncryptArgs),
+    /// Sample NVIDIA GPU telemetry through NVML and print it as JSON
+    GpuInfo,
 }
 
 #[derive(Parser)]
@@ -1567,13 +1570,19 @@ async fn cmd_tpm_verify(args: TpmVerifyArgs) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
     {
         use tracing_subscriber::{fmt, EnvFilter};
         let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-        fmt().with_env_filter(filter).with_ansi(false).init();
+        let builder = fmt().with_env_filter(filter).with_ansi(false);
+        // `gpu-info` writes a machine-readable JSON document to stdout, so its
+        // logs must go to stderr or an NVML warning would corrupt the output.
+        // Every other subcommand keeps the historical stdout behaviour.
+        match cli.command {
+            Commands::GpuInfo => builder.with_writer(std::io::stderr).init(),
+            _ => builder.init(),
+        }
     }
-
-    let cli = Cli::parse();
 
     match cli.command {
         Commands::Quote => cmd_quote()?,
@@ -1654,6 +1663,9 @@ async fn main() -> Result<()> {
         }
         Commands::Encrypt(args) => {
             cmd_encrypt(args).await?;
+        }
+        Commands::GpuInfo => {
+            gpu_info::cmd_gpu_info()?;
         }
     }
 
