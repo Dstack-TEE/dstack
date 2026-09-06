@@ -132,8 +132,9 @@ message DiskInfo {
 // One NVIDIA GPU sampled through NVML.
 //
 // Optional numeric fields are unset when that query failed, so a consumer can
-// tell a genuine zero from a missing sample. `error` lists the failed queries
-// for this card. `uuid` is the stable identity; `index` and `pci_bus_id` are
+// tell a genuine zero from a missing sample. `errors` lists the failed queries
+// for this card, one entry each, so counting them does not mean re-parsing a
+// joined string. `uuid` is the stable identity; `index` and `pci_bus_id` are
 // ordinal/location helpers. `uuid` may be empty if that query failed.
 message GpuDevice {
   // NVML device index (PCI order)
@@ -150,23 +151,33 @@ message GpuDevice {
   optional uint64 memory_free_bytes = 8;
   optional uint32 temperature_c = 9;
   optional uint32 power_usage_mw = 10;
-  // Failed queries for this card; empty if all fields succeeded
-  string error = 11;
-  // Whether this GPU has CC mode enabled. Unset if the query is unsupported.
-  optional bool cc_enabled = 12;
+  // Failed queries for this card, one per entry; empty if all fields succeeded
+  repeated string errors = 11;
 }
 
 // GPU inventory collected through NVML.
 //
-// `error` is non-empty when NVML itself is unavailable (init or device-count
-// failed). In that case `gpus` is empty. An empty `gpus` with an empty `error`
-// means NVML worked and the guest has no NVIDIA GPUs.
-// `cc_ready` is the system-wide NVML CC ready state (SPDM handshake done and
-// GPUs accepting client work). Unset when the query is unsupported or failed.
+// `error` is non-empty when NVML itself is unavailable, or when the sample
+// could not be taken at all. In that case `gpus` is empty. An empty `gpus`
+// with an empty `error` means the collector ran and the guest has no NVIDIA
+// GPUs.
+//
+// `cc_ready` and `cc_enabled` are both system-wide, not per device: NVML
+// exposes them as `nvmlSystemGetConfComputeGpusReadyState` and
+// `nvmlSystemGetConfComputeSettings`, which nvml-wrapper hangs off `Device`
+// without using the device handle. `cc_enabled` says the CC feature is turned
+// on; `cc_ready` says the SPDM handshake finished and the GPUs are accepting
+// client work. Both unset when the query is unsupported or failed.
+//
+// `sample_age_ms` is how old the returned sample is. The agent serves the last
+// known snapshot rather than nothing, so consumers must decide for themselves
+// how stale is too stale. Unset when the response carries no sample.
 message GpuInfoResponse {
   repeated GpuDevice gpus = 1;
   string error = 2;
   optional bool cc_ready = 3;
+  optional bool cc_enabled = 4;
+  optional uint64 sample_age_ms = 5;
 }
 
 // Direct gRPC surface exposed by the in-guest agent.
