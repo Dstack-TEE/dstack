@@ -2250,6 +2250,40 @@ mod tests {
             "TDX lite verification must not download or cache OS images"
         );
     }
+    /// Captured from a CVM on QEMU 10.2.1, which stops rewriting the kernel
+    /// setup header for confidential guests. Before that was modeled, this
+    /// attestation failed with an RTMR1 mismatch, so the fixture pins the
+    /// regression against a real quote rather than a reconstructed one.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_on_qemu_10_2() {
+        let request: VerificationRequest = serde_json::from_str(include_str!(
+            "../fixtures/tdx-lite-qemu-10-2-attestation.json"
+        ))
+        .expect("QEMU 10.2 TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
+        assert_eq!(
+            response.details.tee_variant,
+            Some(ra_tls::attestation::TeeVariant::DstackTdx)
+        );
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
 
     /// The captured VM ran 2 vCPUs; a VM shape that disagrees with the quote
     /// must not reproduce its ACPI digests, which is what makes the recomputed
