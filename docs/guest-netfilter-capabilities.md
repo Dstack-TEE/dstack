@@ -47,16 +47,16 @@ mkosi.
 | --- | --- | --- | --- | --- |
 | nftables core | `NF_TABLES` | yes | yes | 0.5.x |
 | xtables-over-nftables | `NFT_COMPAT` | yes | yes | 0.5.x |
-| nftables bridge family | `NF_TABLES_BRIDGE` | yes | yes | 0.6.1 (mkosi) |
-| bridge meta / reject | `NFT_BRIDGE_META`, `NFT_BRIDGE_REJECT` | yes | yes | 0.6.1 |
+| nftables bridge family | `NF_TABLES_BRIDGE` | yes | yes | 0.6.0 (mkosi) |
+| bridge meta / reject | `NFT_BRIDGE_META`, `NFT_BRIDGE_REJECT` | yes | yes | 0.6.0 |
 | ebtables framework | `BRIDGE_NF_EBTABLES` | yes | yes | 0.5.x |
-| ebtables matches | `BRIDGE_EBT_ARP`, `_IP`, `_IP6`, `_AMONG`, `_LIMIT`, `_VLAN` | yes | yes | 0.6.1 |
+| ebtables matches | `BRIDGE_EBT_ARP`, `_IP`, `_IP6`, `_AMONG`, `_LIMIT`, `_VLAN` | yes | yes | 0.6.0 |
 | ebtables legacy tables | `BRIDGE_NF_EBTABLES_LEGACY`, `BRIDGE_EBT_T_*` | **no** | **no** | — |
-| CHECKSUM target | `NETFILTER_XT_TARGET_CHECKSUM` | yes | yes | 0.6.1 (mkosi) |
+| CHECKSUM target | `NETFILTER_XT_TARGET_CHECKSUM` | yes | yes | 0.6.0 (mkosi) |
 | IPv4 tables | `IP_NF_IPTABLES` | yes | built in | 0.5.x |
 | IPv4 legacy tables | `IP_NF_IPTABLES_LEGACY` | yes | **no** | — |
-| IPv6 tables | `IP6_NF_IPTABLES` | yes | built in | 0.6.1 (Yocto) |
-| IPv6 NAT / filter / mangle | `IP6_NF_NAT`, `IP6_NF_FILTER`, `IP6_NF_MANGLE` | yes | n/a | 0.6.1 (Yocto) |
+| IPv6 tables | `IP6_NF_IPTABLES` | yes | built in | 0.6.0 (Yocto) |
+| IPv6 NAT / filter / mangle | `IP6_NF_NAT`, `IP6_NF_FILTER`, `IP6_NF_MANGLE` | yes | n/a | 0.6.0 (Yocto) |
 | ipset | `IP_SET` and the hash/bitmap set types | yes | yes | 0.5.x |
 
 Userspace: both images ship `iptables` and `nftables`. `ebtables` is the
@@ -134,7 +134,7 @@ libvirt/LXD/Incus-style bridge managers, and it is what every distribution that
 defaults to the nftables frontend already behaves like.
 
 It is, however, a behaviour change for the Yocto image, which programmed the
-legacy tables before dstack 0.6.1. On that path Incus selected its xtables
+legacy tables before dstack 0.6.0. On that path Incus selected its xtables
 driver and installed its accept rules with
 `iptables -I filter FORWARD -i <bridge> -j ACCEPT` — into Docker's *own* chain,
 ahead of the policy — so forwarding worked without any extra rule. Under the
