@@ -2024,6 +2024,7 @@ dependencies = [
  "listenfd",
  "load_config",
  "nvattest",
+ "nvml-wrapper",
  "or-panic",
  "ra-rpc",
  "ra-tls",

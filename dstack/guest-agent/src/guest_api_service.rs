@@ -12,8 +12,8 @@ use dstack_types::SysConfig;
 use fs_err as fs;
 use guest_api::{
     guest_api_server::{GuestApiRpc, GuestApiServer},
-    Container, DiskInfo, Gateway, GuestInfo, Interface, IpAddress, ListContainersResponse,
-    NetworkInformation, SystemInfo,
+    Container, DiskInfo, Gateway, GpuInfoResponse, GuestInfo, Interface, IpAddress,
+    ListContainersResponse, NetworkInformation, SystemInfo,
 };
 use host_api::Notification;
 use ra_rpc::{CallContext, RpcCall};
@@ -27,6 +27,7 @@ const DOCKER_API_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 const POWEROFF_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const WG_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const GPU_INFO_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct GuestApiHandler {
     state: AppState,
@@ -99,6 +100,16 @@ impl GuestApiRpc for GuestApiHandler {
         .await
         .context("SysInfo request timed out")?
         .context("SysInfo worker failed")
+    }
+
+    async fn gpu_info(self) -> Result<GpuInfoResponse> {
+        timeout(
+            GPU_INFO_TIMEOUT,
+            spawn_blocking(crate::gpu_info::collect_gpu_info),
+        )
+        .await
+        .context("GpuInfo request timed out")?
+        .context("GpuInfo worker failed")
     }
 
     async fn list_containers(self) -> Result<ListContainersResponse> {
