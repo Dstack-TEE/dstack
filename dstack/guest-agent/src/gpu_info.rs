@@ -34,9 +34,18 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
-/// How long a snapshot is served before a refresh is triggered. Older snapshots
-/// are still served, just with a refresh started behind them.
+/// How long a successful snapshot is served before a refresh is triggered.
+/// Older snapshots are still served, just with a refresh started behind them.
 const SAMPLE_TTL: Duration = Duration::from_secs(5);
+/// Backoff after a failed sample.
+///
+/// A collector that hangs burns [`SAMPLE_TIMEOUT`] and is then killed. Retrying
+/// that on the success cadence would keep a guest whose driver has wedged in a
+/// near-continuous spawn-and-kill loop, which is both useless and the state
+/// most likely to leave a process stuck in an uninterruptible driver call.
+/// Long enough to stop hammering, short enough that a recovered driver is
+/// picked up while an operator is still looking at the dashboard.
+const FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 /// Upper bound on one `dstack-util gpu-info` run. Generous because a cold
 /// `nvmlInit_v2` on a multi-GPU CC system is not fast, but finite because the
 /// whole point of the child process is that a wedged driver can be abandoned.
@@ -48,6 +57,8 @@ const DSTACK_UTIL: &str = "/usr/bin/dstack-util";
 #[cfg(test)]
 static COLLECTOR_OVERRIDE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
 
+/// Holds the last outcome, successful or not. The cell's own TTL is unused:
+/// serving is always allowed and [`refresh_interval`] decides when to resample.
 static SNAPSHOT: LazyLock<TtlCell<GpuInfoResponse>> = LazyLock::new(|| TtlCell::new(SAMPLE_TTL));
 /// Serializes refreshes so a burst of scrapes spawns one collector, not N.
 static REFRESH_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -111,10 +122,7 @@ pub(crate) fn gpu_info() -> GpuInfoResponse {
     }
 
     let cached = SNAPSHOT.get_allow_stale().ok();
-    let needs_refresh = cached
-        .as_ref()
-        .is_none_or(|snapshot| snapshot.age() >= SAMPLE_TTL);
-    if needs_refresh {
+    if is_due(cached.as_ref()) {
         tokio::spawn(refresh_if_free());
     }
     serve(cached)
@@ -144,6 +152,20 @@ pub(crate) async fn gpu_info_awaited() -> GpuInfoResponse {
     gpu_info()
 }
 
+/// How long this outcome is kept before resampling.
+fn refresh_interval(response: &GpuInfoResponse) -> Duration {
+    if response.error.is_empty() {
+        SAMPLE_TTL
+    } else {
+        FAILURE_BACKOFF
+    }
+}
+
+/// True when the cached outcome has outlived its refresh interval.
+fn is_due(cached: Option<&cached_cell::Snapshot<GpuInfoResponse>>) -> bool {
+    cached.is_none_or(|snapshot| snapshot.age() >= refresh_interval(snapshot.value()))
+}
+
 fn serve(cached: Option<cached_cell::Snapshot<GpuInfoResponse>>) -> GpuInfoResponse {
     match cached {
         Some(snapshot) => {
@@ -166,7 +188,7 @@ async fn refresh_if_free() {
         return;
     };
     // Another task may have refreshed between the staleness check and here.
-    if SNAPSHOT.get().is_ok() {
+    if !is_due(SNAPSHOT.get_allow_stale().ok().as_ref()) {
         return;
     }
     sample_into_cache().await;
@@ -296,6 +318,26 @@ mod tests {
         assert!(response.gpus.is_empty());
         assert!(response.error.is_empty());
         assert_eq!(response.sample_age_ms, None);
+    }
+
+    /// A failed sample must not be retried on the success cadence. A collector
+    /// that burns the whole timeout and gets killed would otherwise be respawned
+    /// on every scrape, which is the state most likely to strand a process in an
+    /// uninterruptible driver call.
+    #[test]
+    fn a_failed_sample_backs_off_further_than_a_successful_one() {
+        assert_eq!(refresh_interval(&sample_response()), SAMPLE_TTL);
+        assert_eq!(
+            refresh_interval(&unavailable("GPU sampling timed out")),
+            FAILURE_BACKOFF
+        );
+        assert!(FAILURE_BACKOFF > SAMPLE_TTL);
+    }
+
+    /// An empty cache is always due; that is the cold-start path.
+    #[test]
+    fn an_empty_cache_is_due() {
+        assert!(is_due(None));
     }
 
     /// The bug this design exists to prevent: a scrape interval longer than the
