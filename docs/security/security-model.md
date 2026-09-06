@@ -317,6 +317,29 @@ AML access to encrypted/private guest RAM. Verification now rejects tampered
 tables before the CVM is trusted with keys; the sandbox bounds what tampered
 AML could have done in the first place.
 
+### A host-declared QEMU version selects between digests, it does not add one
+
+QEMU 10.2 stopped rewriting the Linux setup header for confidential guests
+(commit a7542a38f399, "x86/loader: Don't update kernel header for CoCo VMs"),
+because doing so changed the kernel bytes away from the file the operator
+passed to `-kernel` and broke TDX attestation. A TDX CVM therefore measures the
+patched kernel into RTMR[1] under QEMU <= 10.1 and the kernel as built under
+>= 10.2, so the OS image records both Authenticode digests and the verifier
+picks one using the host-declared `vm_config.qemu_version`.
+
+That declaration is untrusted, and it does not need to be trusted. Both
+candidates are committed by the same measurement document, which is itself
+bound to `os_image_hash`, so a lying host can only choose between two digests
+that already belong to the image it declared. Whichever it picks still has to
+equal the RTMR[1] the hardware signed, so misdeclaring the version cannot make
+a different kernel verify -- it can only turn a good CVM into a rejected one,
+which is the host degrading its own deployment.
+
+Images built before the measurement document carried both digests are rejected
+on the document's version number, with an error naming the unsupported version,
+rather than half-decoded into a document that is missing the digest the CVM
+actually needs.
+
 ### TCB status is surfaced, not gated, during verification
 
 dstack's `validate_tcb` does not reject a quote based on its TCB status string (`UpToDate`, `OutOfDate`, `ConfigurationNeeded`, `SWHardeningNeeded`, ...). It only enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed. The verified report carries the `status` field through to the caller.
