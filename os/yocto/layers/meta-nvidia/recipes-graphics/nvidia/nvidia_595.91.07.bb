@@ -7,8 +7,8 @@ NVIDIA_SRC = "${WORKDIR}/${NVIDIA_ARCHIVE_NAME}"
 SRC_URI = " \
     https://us.download.nvidia.com/tesla/${PV}/${NVIDIA_ARCHIVE_NAME}.run \
 "
-SRC_URI[md5sum] = "8d98a183bf994af0ff19980e0ef430f2"
-SRC_URI[sha256sum] = "8c0d4f967b7932c4ab5714272aee8103392b0a702c92afa555176d36205829f9"
+SRC_URI[md5sum] = "d4e0f3e042a47fb1683d59b73fefa954"
+SRC_URI[sha256sum] = "ca23c88dd24b07a191644e1e11cfb7bcdd7537305749af40f980018b095e6313"
 
 RDEPENDS:${PN} = "nvidia-modprobe-config"
 
