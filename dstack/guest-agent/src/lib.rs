@@ -10,7 +10,6 @@ pub mod config;
 mod container_health;
 mod gpu_attest;
 mod gpu_info;
-pub use gpu_info::run_gpu_info_helper;
 mod guest_api_service;
 mod health;
 mod http_routes;
