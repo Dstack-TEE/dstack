@@ -50,6 +50,8 @@
       "usr/bin/nvidia-container-cli",
       "usr/bin/nvidia-container-runtime",
       "usr/bin/nvidia-ctk",
+      "usr/lib/x86_64-linux-gnu/libnvidia-container.so.1",
+      "usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1",
       "etc/nvidia-container-runtime/config.toml"
     ],
     "nvattest-2026.06.09": [
