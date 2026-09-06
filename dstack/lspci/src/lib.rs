@@ -6,6 +6,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
+pub mod sysfs;
+
 /// Represents a PCI device with the specified fields.
 #[derive(Debug)]
 pub struct Device {
