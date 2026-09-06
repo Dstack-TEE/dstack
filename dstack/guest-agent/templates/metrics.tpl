@@ -74,6 +74,94 @@ dstack_guest_disk_used_bytes{name="{{disk.name|prometheus_label}}", mount_point=
 dstack_guest_disk_used_ratio{name="{{disk.name|prometheus_label}}", mount_point="{{disk.mount_point|prometheus_label}}"} {% if disk.total_size > 0 %}{{(disk.total_size - disk.free_size) as f64 / disk.total_size as f64}}{% else %}0{% endif %}
 {% endfor %}
 
+# HELP dstack_gpu_nvml_up 1 if NVML collection succeeded, 0 otherwise.
+# TYPE dstack_gpu_nvml_up gauge
+dstack_gpu_nvml_up {% if gpu_info.error.is_empty() %}1{% else %}0{% endif %}
+
+# HELP dstack_gpu_cc_ready 1 if NVIDIA CC GPUs are accepting client requests.
+# TYPE dstack_gpu_cc_ready gauge
+{% match gpu_info.cc_ready %}
+{% when Some with (ready) %}
+dstack_gpu_cc_ready {% if ready %}1{% else %}0{% endif %}
+{% when None %}
+{% endmatch %}
+
+# HELP dstack_gpu_utilization_percent GPU SM duty cycle, percent.
+# TYPE dstack_gpu_utilization_percent gauge
+{% for gpu in gpu_info.gpus %}
+{% match gpu.utilization_gpu %}
+{% when Some with (value) %}
+dstack_gpu_utilization_percent{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {{value}}
+{% when None %}
+{% endmatch %}
+{% endfor %}
+
+# HELP dstack_gpu_memory_utilization_percent GPU memory-bus duty cycle, percent.
+# TYPE dstack_gpu_memory_utilization_percent gauge
+{% for gpu in gpu_info.gpus %}
+{% match gpu.utilization_memory %}
+{% when Some with (value) %}
+dstack_gpu_memory_utilization_percent{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {{value}}
+{% when None %}
+{% endmatch %}
+{% endfor %}
+
+# HELP dstack_gpu_memory_total_bytes GPU framebuffer size in bytes.
+# TYPE dstack_gpu_memory_total_bytes gauge
+{% for gpu in gpu_info.gpus %}
+{% match gpu.memory_total_bytes %}
+{% when Some with (value) %}
+dstack_gpu_memory_total_bytes{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {{value}}
+{% when None %}
+{% endmatch %}
+{% endfor %}
+
+# HELP dstack_gpu_memory_used_bytes GPU framebuffer used in bytes.
+# TYPE dstack_gpu_memory_used_bytes gauge
+{% for gpu in gpu_info.gpus %}
+{% match gpu.memory_used_bytes %}
+{% when Some with (value) %}
+dstack_gpu_memory_used_bytes{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {{value}}
+{% when None %}
+{% endmatch %}
+{% endfor %}
+
+# HELP dstack_gpu_memory_free_bytes GPU framebuffer free in bytes.
+# TYPE dstack_gpu_memory_free_bytes gauge
+{% for gpu in gpu_info.gpus %}
+{% match gpu.memory_free_bytes %}
+{% when Some with (value) %}
+dstack_gpu_memory_free_bytes{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {{value}}
+{% when None %}
+{% endmatch %}
+{% endfor %}
+
+# HELP dstack_gpu_temperature_celsius GPU temperature in Celsius.
+# TYPE dstack_gpu_temperature_celsius gauge
+{% for gpu in gpu_info.gpus %}
+{% match gpu.temperature_c %}
+{% when Some with (value) %}
+dstack_gpu_temperature_celsius{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {{value}}
+{% when None %}
+{% endmatch %}
+{% endfor %}
+
+# HELP dstack_gpu_power_usage_milliwatts GPU power usage in milliwatts.
+# TYPE dstack_gpu_power_usage_milliwatts gauge
+{% for gpu in gpu_info.gpus %}
+{% match gpu.power_usage_mw %}
+{% when Some with (value) %}
+dstack_gpu_power_usage_milliwatts{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {{value}}
+{% when None %}
+{% endmatch %}
+{% endfor %}
+
+# HELP dstack_gpu_query_errors Number of NVML field queries that failed on this GPU.
+# TYPE dstack_gpu_query_errors gauge
+{% for gpu in gpu_info.gpus %}
+dstack_gpu_query_errors{index="{{gpu.index}}", uuid="{{gpu.uuid|prometheus_label}}", pci_bus_id="{{gpu.pci_bus_id|prometheus_label}}"} {% if gpu.error.is_empty() %}0{% else %}{{ gpu.error.split("; ").count() }}{% endif %}
+{% endfor %}
+
 # Everything below is the pre-rename exposition, kept verbatim so existing
 # dashboards keep working through one release cycle. Deprecated: use the
 # dstack_guest_* series above; these will be removed in a future release.

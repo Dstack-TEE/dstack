@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use guest_api::{Container, SystemInfo};
+use guest_api::{Container, GpuInfoResponse, SystemInfo};
 use rinja::Template;
 
 mod filters {
@@ -56,10 +56,12 @@ pub struct Dashboard {
     pub public_tcbinfo: bool,
     pub cloud_vendor: String,
     pub cloud_product: String,
+    pub gpu_info: GpuInfoResponse,
 }
 
 #[derive(Template)]
 #[template(path = "metrics.tpl", escape = "none")]
 pub struct Metrics {
     pub system_info: SystemInfo,
+    pub gpu_info: GpuInfoResponse,
 }

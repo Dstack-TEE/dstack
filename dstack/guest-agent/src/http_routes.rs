@@ -55,9 +55,12 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         .await
         .map_err(|e| format!("Failed to get worker info: {}", e))?;
 
-    let handler = GuestApiHandler::construct(context)
+    let handler = GuestApiHandler::construct(context.clone())
         .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
     let system_info = handler.sys_info().await.unwrap_or_default();
+    let handler = GuestApiHandler::construct(context)
+        .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
+    let gpu_info = handler.gpu_info().await.unwrap_or_default();
 
     let containers = list_containers().await.unwrap_or_default().containers;
     let model = crate::models::Dashboard {
@@ -74,6 +77,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         public_tcbinfo,
         cloud_vendor,
         cloud_product,
+        gpu_info,
     };
     match model.render() {
         Ok(html) => Ok(RawHtml(html)),
@@ -93,7 +97,13 @@ async fn metrics(state: &State<AppState>) -> Result<String, String> {
         .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
 
     let system_info = handler.sys_info().await.unwrap_or_default();
-    let model = crate::models::Metrics { system_info };
+    let handler = GuestApiHandler::construct(context)
+        .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
+    let gpu_info = handler.gpu_info().await.unwrap_or_default();
+    let model = crate::models::Metrics {
+        system_info,
+        gpu_info,
+    };
     match model.render() {
         Ok(body) => Ok(body),
         Err(err) => Err(format!("Failed to render template: {err}")),
