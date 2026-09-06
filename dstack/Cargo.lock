@@ -2002,6 +2002,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bollard",
+ "cached-cell",
  "cc-eventlog",
  "cert-client",
  "chrono",
@@ -2023,8 +2024,8 @@ dependencies = [
  "libc",
  "listenfd",
  "load_config",
+ "lspci",
  "nvattest",
- "nvml-wrapper",
  "or-panic",
  "ra-rpc",
  "ra-tls",
@@ -2292,11 +2293,13 @@ dependencies = [
  "ez-hash",
  "fs-err",
  "getrandom 0.3.4",
+ "guest-api",
  "hex",
  "hex_fmt",
  "host-api",
  "k256",
  "libc",
+ "lspci",
  "luks2",
  "nvattest",
  "nvml-wrapper",
@@ -4292,6 +4295,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "insta",
+ "tempfile",
 ]
 
 [[package]]
