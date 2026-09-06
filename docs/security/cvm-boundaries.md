@@ -35,7 +35,7 @@ This is the main configuration file for the application in JSON format:
 | local_key_provider_enabled | 0.3.1 | boolean | Use a local key provider |
 | key_provider_id | 0.5.1 | string | Optional pin for the key provider identity (hex-encoded bytes). For `kms` this is the KMS CA public key; for `local` the sealing-provider MR. For `tpm` and `none` it must be an empty string — the TPM app-root public key is instance-specific and is not used as a provider id or measured as one. |
 | public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
-| public_sysinfo | 0.3.3 | boolean | Whether system info is public |
+| public_sysinfo | 0.3.3 | boolean | Whether system info is public. Covers the guest dashboard and `/metrics`, including the `dstack_gpu_*` series (since 0.6.0), which expose each GPU's UUID and PCI bus address alongside utilization, memory, temperature and power. |
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
 | allowed_envs | 0.4.2 | array of string | List of allowed environment variable names |
 | no_instance_id | 0.4.2 | boolean | Disable instance ID generation |

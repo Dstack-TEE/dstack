@@ -134,8 +134,13 @@ message DiskInfo {
 // Optional numeric fields are unset when that query failed, so a consumer can
 // tell a genuine zero from a missing sample. `errors` lists the failed queries
 // for this card, one entry each, so counting them does not mean re-parsing a
-// joined string. `uuid` is the stable identity; `index` and `pci_bus_id` are
-// ordinal/location helpers. `uuid` may be empty if that query failed.
+// joined string.
+//
+// `uuid` is the stable identity; `index` and `pci_bus_id` are ordinal/location
+// helpers. `uuid` and `pci_bus_id` are plain strings rather than `optional`
+// because an empty value is already unambiguous: NVML never returns one, and
+// the matching `errors` entry names the query that failed. `index` is always
+// populated, so a device is identifiable even when both lookups fail.
 message GpuDevice {
   // NVML device index (PCI order)
   uint32 index = 1;
