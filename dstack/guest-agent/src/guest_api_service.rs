@@ -103,13 +103,9 @@ impl GuestApiRpc for GuestApiHandler {
     }
 
     async fn gpu_info(self) -> Result<GpuInfoResponse> {
-        timeout(
-            GPU_INFO_TIMEOUT,
-            spawn_blocking(crate::gpu_info::collect_gpu_info),
-        )
-        .await
-        .context("GpuInfo request timed out")?
-        .context("GpuInfo worker failed")
+        timeout(GPU_INFO_TIMEOUT, crate::gpu_info::collect_gpu_info())
+            .await
+            .context("GpuInfo request timed out")
     }
 
     async fn list_containers(self) -> Result<ListContainersResponse> {

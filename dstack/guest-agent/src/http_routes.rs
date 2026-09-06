@@ -97,9 +97,7 @@ async fn metrics(state: &State<AppState>) -> Result<String, String> {
         .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
 
     let system_info = handler.sys_info().await.unwrap_or_default();
-    let handler = GuestApiHandler::construct(context)
-        .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
-    let gpu_info = handler.gpu_info().await.unwrap_or_default();
+    let gpu_info = crate::gpu_info::collect_gpu_info_nonblocking();
     let model = crate::models::Metrics {
         system_info,
         gpu_info,
