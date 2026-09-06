@@ -1361,11 +1361,7 @@ mod gpu {
     /// Bound Rego evaluation so a runaway application policy cannot hang boot.
     const POLICY_TIMEOUT: Duration = Duration::from_secs(10);
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub(super) struct GpuInventory {
-        pub(super) total: u32,
-        pub(super) nvidia: u32,
-    }
+    use lspci::sysfs::GpuInventory;
 
     #[derive(Debug, Serialize)]
     struct GpuAttestationEvent {
@@ -1457,33 +1453,11 @@ mod gpu {
     /// the NVIDIA driver did not bind cannot be hidden from the gate. Reading
     /// the inventory is fail-closed: a mixed NVIDIA/non-NVIDIA set must not be
     /// represented by an attestation result for only the NVIDIA subset.
+    ///
+    /// The scan itself lives in `lspci::sysfs` because the guest agent's GPU
+    /// telemetry gate needs the same answer with a different failure policy.
     pub(super) fn gpu_inventory() -> Result<GpuInventory> {
-        gpu_inventory_at(Path::new("/sys/bus/pci/devices"))
-    }
-
-    fn gpu_inventory_at(devices_path: &Path) -> Result<GpuInventory> {
-        let entries = fs::read_dir(devices_path).context("failed to enumerate PCI devices")?;
-        let mut inventory = GpuInventory {
-            total: 0,
-            nvidia: 0,
-        };
-        for entry in entries {
-            let device = entry.context("failed to read PCI device entry")?;
-            let class_path = device.path().join("class");
-            let class = fs::read_to_string(&class_path)
-                .with_context(|| format!("failed to read {}", class_path.display()))?;
-            if !matches!(class.trim().get(..6), Some("0x0300") | Some("0x0302")) {
-                continue;
-            }
-            inventory.total += 1;
-            let vendor_path = device.path().join("vendor");
-            let vendor = fs::read_to_string(&vendor_path)
-                .with_context(|| format!("failed to read {}", vendor_path.display()))?;
-            if vendor.trim() == "0x10de" {
-                inventory.nvidia += 1;
-            }
-        }
-        Ok(inventory)
+        lspci::sysfs::gpu_inventory()
     }
 
     pub(super) fn nvidia_gpu_count(inventory: GpuInventory) -> Result<u32> {
@@ -1726,13 +1700,6 @@ mod gpu {
     mod tests {
         use super::*;
 
-        fn add_pci_device(root: &Path, name: &str, vendor: &str, class: &str) {
-            let device = root.join(name);
-            fs::create_dir_all(&device).unwrap();
-            fs::write(device.join("vendor"), vendor).unwrap();
-            fs::write(device.join("class"), class).unwrap();
-        }
-
         fn nvattest_output(nonce: &str, claims: usize) -> Vec<u8> {
             let claims = (0..claims)
                 .map(|_| {
@@ -1798,21 +1765,6 @@ mod gpu {
                     .keys()
                     .all(|key| key.starts_with("x-nvidia-cert-")),
                 "cert-chain claim carries certificates, not just verdicts"
-            );
-        }
-
-        #[test]
-        fn inventory_counts_nvidia_and_non_nvidia_gpus() {
-            let root = tempfile::tempdir().unwrap();
-            add_pci_device(root.path(), "0000:01:00.0", "0x10de\n", "0x030200\n");
-            add_pci_device(root.path(), "0000:02:00.0", "0x1234\n", "0x030000\n");
-            add_pci_device(root.path(), "0000:03:00.0", "0x1af4\n", "0x020000\n");
-            assert_eq!(
-                gpu_inventory_at(root.path()).unwrap(),
-                GpuInventory {
-                    total: 2,
-                    nvidia: 1
-                }
             );
         }
 
