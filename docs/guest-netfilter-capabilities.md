@@ -96,7 +96,10 @@ module to package or autoload.
 | ingress qdisc | `NET_SCH_INGRESS` | built in | built in | 0.6.0 |
 | u32 classifier | `NET_CLS_U32` | built in | built in | 0.6.0 |
 | police action | `NET_ACT_POLICE` | built in | built in | 0.6.0 |
-| checkpoint/restore | `CHECKPOINT_RESTORE` | built in | built in | 0.6.0 |
+| checkpoint/restore | `CHECKPOINT_RESTORE` | built in | built in | 0.6.0 (mkosi) |
+| macvlan | `MACVLAN` | built in | built in | 0.6.0 (mkosi) |
+| comment match | `NETFILTER_XT_MATCH_COMMENT` | yes | yes | 0.6.0 (mkosi) |
+| socket diag | `UNIX_DIAG`, `INET_DIAG`, `PACKET_DIAG`, `NETLINK_DIAG` | built in | built in | 0.6.0 (mkosi) |
 
 **Per-instance bandwidth limits need all four `tc` pieces.** Incus implements
 `limits.max` (and `limits.ingress` / `limits.egress`) on a bridged NIC as an
@@ -116,6 +119,21 @@ for monitor <pid>`, and every intercepted syscall
 (`security.syscalls.intercept.*`) is resumed unhandled instead of getting the
 container-aware answer (#1180). Everything the symbol gates needs
 `CAP_CHECKPOINT_RESTORE` or `CAP_SYS_ADMIN`, and none of it faces the host.
+The Yocto 6.18 kernel already had it through meta-virtualization's
+`cfg/lxc.scc` and `cfg/criu.scc`; the mkosi kernel did not, and the 6.9
+kernel of 0.5.9 did not either.
+
+**LXC's own audit runs against both kernels.** `lxc-checkconfig` is the
+script LXC ships to check a kernel for what containers need, and it is the
+closest thing Incus has to Docker's `check-config.sh` — Incus itself has no
+equivalent, and its documentation defers to "any kernel feature required by
+the LXC version in use". It is vendored at `os/common/scripts/lxc-checkconfig`
+and `check-lxc-kernel-config.sh` runs it after the fragment gate in both
+builds, failing on anything it reports missing. The last three rows above are
+what it flagged on the mkosi kernel the first time it ran: `MACVLAN` (Incus
+`nictype=macvlan`), `xt_comment` (`-m comment` on the xtables frontends) and
+the socket-diag interfaces `ss` and CRIU use. It does not know about traffic
+control, so the `tc` rows are asserted by the fragments alone.
 
 ## Running a nested bridge manager alongside Docker
 
@@ -176,6 +194,11 @@ becomes `=m`, and the build still succeeds. Check the produced `.config` rather
 than assuming, with `os/common/scripts/check-kernel-config.sh <.config>
 <fragment...>`; both backends run it, mkosi during the kernel build and Yocto
 in `os/yocto/scripts/export-artifacts.sh` before anything is published.
+`os/common/scripts/check-lxc-kernel-config.sh <.config>` runs at the same two
+points and is the second gate to satisfy: it fails on anything LXC's
+`lxc-checkconfig` reports missing, with the two `IP*_NF_TARGET_MASQUERADE`
+compat aliases (pure `select`s of `NETFILTER_XT_TARGET_MASQUERADE`, which both
+kernels build) as the only exemptions.
 
 On the Yocto backend a module also has to be *packaged* into the rootfs.
 `RDEPENDS:${KERNEL_PACKAGE_NAME}-base` is cleared in
