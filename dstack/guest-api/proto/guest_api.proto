@@ -129,12 +129,54 @@ message DiskInfo {
   uint64 free_size = 5;
 }
 
+// One NVIDIA GPU sampled through NVML.
+//
+// Optional numeric fields are unset when that query failed, so a consumer can
+// tell a genuine zero from a missing sample. `error` lists the failed queries
+// for this card. `uuid` is the stable identity; `index` and `pci_bus_id` are
+// ordinal/location helpers. `uuid` may be empty if that query failed.
+message GpuDevice {
+  // NVML device index (PCI order)
+  uint32 index = 1;
+  string uuid = 2;
+  // PCI BDF from nvmlPciInfo.busId
+  string pci_bus_id = 3;
+  // SM duty cycle, percent
+  optional uint32 utilization_gpu = 4;
+  // Memory-bus duty cycle, percent
+  optional uint32 utilization_memory = 5;
+  optional uint64 memory_total_bytes = 6;
+  optional uint64 memory_used_bytes = 7;
+  optional uint64 memory_free_bytes = 8;
+  optional uint32 temperature_c = 9;
+  optional uint32 power_usage_mw = 10;
+  // Failed queries for this card; empty if all fields succeeded
+  string error = 11;
+  // Whether this GPU has CC mode enabled. Unset if the query is unsupported.
+  optional bool cc_enabled = 12;
+}
+
+// GPU inventory collected through NVML.
+//
+// `error` is non-empty when NVML itself is unavailable (init or device-count
+// failed). In that case `gpus` is empty. An empty `gpus` with an empty `error`
+// means NVML worked and the guest has no NVIDIA GPUs.
+// `cc_ready` is the system-wide NVML CC ready state (SPDM handshake done and
+// GPUs accepting client work). Unset when the query is unsupported or failed.
+message GpuInfoResponse {
+  repeated GpuDevice gpus = 1;
+  string error = 2;
+  optional bool cc_ready = 3;
+}
+
 // Direct gRPC surface exposed by the in-guest agent.
 service GuestApi {
   // Returns attestation material and identifiers for the calling guest.
   rpc Info(google.protobuf.Empty) returns (GuestInfo);
   // Reports the guest's OS/kernel and resource statistics.
   rpc SysInfo(google.protobuf.Empty) returns (SystemInfo);
+  // Reports per-GPU utilization, memory, temperature, power, and CC ready state.
+  rpc GpuInfo(google.protobuf.Empty) returns (GpuInfoResponse);
   // Dumps NIC/Gateway configuration so operators can debug connectivity.
   rpc NetworkInfo(google.protobuf.Empty) returns (NetworkInformation);
   // Enumerates the containers running under the guest supervisor.
@@ -147,6 +189,7 @@ service GuestApi {
 service ProxiedGuestApi {
   rpc Info(Id) returns (GuestInfo);
   rpc SysInfo(Id) returns (SystemInfo);
+  rpc GpuInfo(Id) returns (GpuInfoResponse);
   rpc NetworkInfo(Id) returns (NetworkInformation);
   rpc ListContainers(Id) returns (ListContainersResponse);
   rpc Shutdown(Id) returns (google.protobuf.Empty);
