@@ -27,7 +27,7 @@ const DOCKER_API_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_NOTIFY_TIMEOUT: Duration = Duration::from_secs(5);
 const POWEROFF_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const WG_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-const GPU_INFO_TIMEOUT: Duration = Duration::from_secs(5);
+const GPU_INFO_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct GuestApiHandler {
     state: AppState,
@@ -103,7 +103,7 @@ impl GuestApiRpc for GuestApiHandler {
     }
 
     async fn gpu_info(self) -> Result<GpuInfoResponse> {
-        timeout(GPU_INFO_TIMEOUT, crate::gpu_info::collect_gpu_info())
+        timeout(GPU_INFO_TIMEOUT, crate::gpu_info::gpu_info_awaited())
             .await
             .context("GpuInfo request timed out")
     }

@@ -20,7 +20,7 @@ fs-err.workspace = true
 rcgen.workspace = true
 sha2.workspace = true
 clap.workspace = true
-tokio = { workspace = true, features = ["io-util", "process"] }
+tokio = { workspace = true, features = ["process"] }
 hex.workspace = true
 serde_json.workspace = true
 bollard.workspace = true
@@ -58,7 +58,8 @@ or-panic.workspace = true
 cc-eventlog.workspace = true
 listenfd.workspace = true
 libc.workspace = true
-nvml-wrapper.workspace = true
+cached-cell.workspace = true
+lspci.workspace = true
 
 [dev-dependencies]
 # The test-only mock platform builds attestations from a fixture, which needs
