@@ -2,358 +2,369 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! GPU telemetry collection isolated in a helper process.
+//! GPU telemetry, sampled out of process and cached.
 //!
-//! NVML calls cannot be cancelled safely. Keeping them in a child process lets
-//! the agent terminate and recreate the sampler after a driver call hangs. The
-//! helper keeps one NVML handle for its lifetime. Successful samples are cached
-//! for five seconds; initialization failures are cached for one minute.
+//! Three properties drive the shape of this module:
+//!
+//! 1. **A guest without an NVIDIA card pays nothing.** PCI topology is fixed
+//!    for a CVM's lifetime -- the VMM assigns GPUs through VFIO when QEMU
+//!    starts and never hot-plugs -- so the scan runs once and every later
+//!    request is an atomic load returning a constant.
+//! 2. **NVML never runs in this process.** `dstack-util gpu-info` samples in a
+//!    short-lived child that can be killed when a driver call wedges. Nothing
+//!    stays resident between samples, and each sample re-initializes NVML, so a
+//!    driver that loads late is picked up instead of being cached as "no GPU".
+//! 3. **Stale beats nothing.** Callers get the last known snapshot with its age
+//!    attached and a refresh is kicked off behind them. Returning a placeholder
+//!    on expiry would mean a Prometheus scrape slower than the TTL -- which is
+//!    every realistic scrape interval -- never sees a single GPU series.
 
-use std::collections::HashSet;
-use std::io::{BufRead, Write};
+use std::path::Path;
 use std::process::Stdio;
-use std::sync::{LazyLock, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::{LazyLock, OnceLock};
+use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
-use guest_api::{GpuDevice, GpuInfoResponse};
-use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
-use nvml_wrapper::error::NvmlError;
-use nvml_wrapper::{Device, Nvml};
+use anyhow::{bail, Context, Result};
+use cached_cell::TtlCell;
+use guest_api::GpuInfoResponse;
+#[cfg(test)]
 use or_panic::ResultOrPanic;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
+/// How long a snapshot is served before a refresh is triggered. Older snapshots
+/// are still served, just with a refresh started behind them.
 const SAMPLE_TTL: Duration = Duration::from_secs(5);
-const INIT_FAILURE_TTL: Duration = Duration::from_secs(60);
-const SAMPLE_TIMEOUT: Duration = Duration::from_secs(4);
+/// Upper bound on one `dstack-util gpu-info` run. Generous because a cold
+/// `nvmlInit_v2` on a multi-GPU CC system is not fast, but finite because the
+/// whole point of the child process is that a wedged driver can be abandoned.
+const SAMPLE_TIMEOUT: Duration = Duration::from_secs(10);
 
-struct GpuSampler {
-    warned: HashSet<(u32, &'static str)>,
+/// The collector, installed into the rootfs alongside this agent.
+const DSTACK_UTIL: &str = "/usr/bin/dstack-util";
+/// Set by tests to point at a stub collector.
+#[cfg(test)]
+static COLLECTOR_OVERRIDE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+static SNAPSHOT: LazyLock<TtlCell<GpuInfoResponse>> = LazyLock::new(|| TtlCell::new(SAMPLE_TTL));
+/// Serializes refreshes so a burst of scrapes spawns one collector, not N.
+static REFRESH_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Why this guest cannot produce GPU telemetry, if it cannot.
+enum Gate {
+    /// No NVIDIA device on the PCI bus. Nothing to report, ever.
+    NoGpu,
+    /// A card is present but the kernel module is not loaded yet.
+    NoDriver,
+    /// Sampling is worth attempting.
+    Sample,
 }
 
-struct Worker {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+fn gate() -> Gate {
+    if !nvidia_on_pci() {
+        return Gate::NoGpu;
+    }
+    // Unlike PCI presence this is not fixed: the module can load after the
+    // agent starts, so it is re-checked every time. It is one `stat`.
+    if !Path::new("/sys/module/nvidia").exists() {
+        return Gate::NoDriver;
+    }
+    Gate::Sample
 }
 
-static SNAPSHOT: RwLock<Option<(Instant, GpuInfoResponse)>> = RwLock::new(None);
-static WORKER: LazyLock<Mutex<Option<Worker>>> = LazyLock::new(|| Mutex::new(None));
-
-/// Returns a fresh sample, starting or restarting the isolated NVML worker as needed.
-pub(crate) async fn collect_gpu_info() -> GpuInfoResponse {
-    if let Some(response) = fresh_snapshot() {
-        return response;
-    }
-
-    let mut worker_slot = match WORKER.try_lock() {
-        Ok(guard) => guard,
-        Err(_) => return unavailable("GPU sampling is in progress"),
-    };
-
-    if let Some(response) = fresh_snapshot() {
-        return response;
-    }
-
-    let result = timeout(SAMPLE_TIMEOUT, sample_worker(&mut worker_slot)).await;
-    let response = match result {
-        Ok(Ok(response)) => response,
-        Ok(Err(error)) => {
-            stop_worker(&mut worker_slot);
-            unavailable(format!("GPU sampler failed: {error:#}"))
+/// True when an NVIDIA display device is attached to the PCI bus.
+///
+/// Cached for the process lifetime. A CVM's GPUs are fixed at launch by the
+/// VMM's VFIO assignment; there is no hot-plug path that could change this
+/// answer, and paying a directory scan on every scrape of every GPU-less guest
+/// is exactly the cost this gate exists to avoid.
+///
+/// Fails open to "no GPU" where the boot attestation gate in `dstack-util`
+/// fails closed on the same inventory: refusing to report telemetry is the
+/// safe direction here, and spawning a collector forever on a guest whose
+/// sysfs cannot be read is not.
+fn nvidia_on_pci() -> bool {
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    *PRESENT.get_or_init(|| match lspci::sysfs::gpu_inventory() {
+        Ok(inventory) => inventory.has_nvidia(),
+        Err(error) => {
+            warn!("failed to scan PCI for GPUs, assuming none: {error:#}");
+            false
         }
-        Err(_) => {
-            stop_worker(&mut worker_slot);
-            unavailable("GPU sampling timed out")
-        }
-    };
-    *SNAPSHOT.write().or_panic("gpu snapshot lock poisoned") =
-        Some((Instant::now(), response.clone()));
-    response
-}
-
-/// Returns immediately for Prometheus. An expired cache starts a refresh in the
-/// background so a wedged GPU cannot delay unrelated guest metrics.
-pub(crate) fn collect_gpu_info_nonblocking() -> GpuInfoResponse {
-    if let Some(response) = fresh_snapshot() {
-        return response;
-    }
-    tokio::spawn(async {
-        let _ = collect_gpu_info().await;
-    });
-    unavailable("GPU sample is not available yet")
-}
-
-fn fresh_snapshot() -> Option<GpuInfoResponse> {
-    let snapshot = SNAPSHOT.read().or_panic("gpu snapshot lock poisoned");
-    snapshot.as_ref().and_then(|(fetched_at, response)| {
-        (fetched_at.elapsed() < ttl_for(response)).then(|| response.clone())
     })
 }
 
-fn ttl_for(response: &GpuInfoResponse) -> Duration {
-    if response.error.is_empty() {
-        SAMPLE_TTL
-    } else {
-        INIT_FAILURE_TTL
+/// Returns the best answer available without ever blocking.
+///
+/// Serves the last snapshot whatever its age, annotated with `sample_age_ms`,
+/// and starts a refresh behind the caller when that snapshot has aged past the
+/// TTL. Used by `/metrics` and the dashboard, where a wedged GPU must not
+/// delay unrelated guest data. Only the very first call on a GPU guest returns
+/// "not sampled yet".
+pub(crate) fn gpu_info() -> GpuInfoResponse {
+    match gate() {
+        Gate::NoGpu => return no_gpus(),
+        Gate::NoDriver => return unavailable("NVIDIA driver is not loaded"),
+        Gate::Sample => {}
     }
+
+    let cached = SNAPSHOT.get_allow_stale().ok();
+    let needs_refresh = cached
+        .as_ref()
+        .is_none_or(|snapshot| snapshot.age() >= SAMPLE_TTL);
+    if needs_refresh {
+        tokio::spawn(refresh_if_free());
+    }
+    serve(cached)
+}
+
+/// Like [`gpu_info`], but waits for a first sample when the cache is cold.
+///
+/// The `GpuInfo` RPC is a direct question from an operator or the control
+/// plane, so "ask again in five seconds" is a worse answer than a bounded
+/// wait. The wait is bounded twice: by [`SAMPLE_TIMEOUT`] here and by the RPC
+/// timeout at the call site.
+pub(crate) async fn gpu_info_awaited() -> GpuInfoResponse {
+    match gate() {
+        Gate::NoGpu => return no_gpus(),
+        Gate::NoDriver => return unavailable("NVIDIA driver is not loaded"),
+        Gate::Sample => {}
+    }
+
+    if SNAPSHOT.get_allow_stale().is_err() {
+        // Cold cache. Queue behind any in-flight sample rather than reporting
+        // nothing; whoever wins the lock fills the cache for both.
+        let _guard = REFRESH_LOCK.lock().await;
+        if SNAPSHOT.get_allow_stale().is_err() {
+            sample_into_cache().await;
+        }
+    }
+    gpu_info()
+}
+
+fn serve(cached: Option<cached_cell::Snapshot<GpuInfoResponse>>) -> GpuInfoResponse {
+    match cached {
+        Some(snapshot) => {
+            let mut response = snapshot.value().clone();
+            response.sample_age_ms = Some(snapshot.age().as_millis() as u64);
+            response
+        }
+        None => unavailable("GPU sample is not available yet"),
+    }
+}
+
+/// Runs one collection unless another one is already in flight.
+///
+/// Dropping the refresh when the lock is held is deliberate: a burst of scrapes
+/// must spawn one collector, not one per scrape, and the waiting callers are
+/// already being served the previous snapshot.
+async fn refresh_if_free() {
+    let Ok(_guard) = REFRESH_LOCK.try_lock() else {
+        debug!("GPU sample already in progress, skipping refresh");
+        return;
+    };
+    // Another task may have refreshed between the staleness check and here.
+    if SNAPSHOT.get().is_ok() {
+        return;
+    }
+    sample_into_cache().await;
+}
+
+/// Collects once and stores the outcome, success or failure.
+///
+/// Failures are cached like successes so a guest whose driver is broken reports
+/// the reason instead of an empty device list, and so a hard-failing collector
+/// is not re-spawned on every single scrape.
+///
+/// Caller must hold [`REFRESH_LOCK`].
+async fn sample_into_cache() {
+    match timeout(SAMPLE_TIMEOUT, collect()).await {
+        Ok(Ok(response)) => {
+            SNAPSHOT.set(response);
+        }
+        Ok(Err(error)) => {
+            warn!("failed to sample GPU telemetry: {error:#}");
+            SNAPSHOT.set(unavailable(format!("GPU sampling failed: {error:#}")));
+        }
+        Err(_) => {
+            warn!("GPU sampling timed out after {SAMPLE_TIMEOUT:?}");
+            SNAPSHOT.set(unavailable("GPU sampling timed out"));
+        }
+    }
+}
+
+/// Spawns `dstack-util gpu-info` and parses its stdout.
+///
+/// `kill_on_drop` matters: the timeout above drops this future, and a wedged
+/// NVML call inside the child must not outlive it.
+async fn collect() -> Result<GpuInfoResponse> {
+    let collector = collector_path();
+    if !Path::new(&collector).exists() {
+        bail!("{collector} is not installed");
+    }
+    let output = Command::new(&collector)
+        .arg("gpu-info")
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .with_context(|| format!("failed to run {collector} gpu-info"))?;
+    // The collector logs to stderr and reserves stdout for the document, so
+    // anything here is diagnostics worth keeping rather than protocol noise.
+    if !output.stderr.is_empty() {
+        warn!(
+            "gpu-info collector: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    if !output.status.success() {
+        bail!("gpu-info collector exited with {}", output.status);
+    }
+    serde_json::from_slice(&output.stdout).context("invalid gpu-info output")
+}
+
+fn collector_path() -> String {
+    #[cfg(test)]
+    if let Some(path) = COLLECTOR_OVERRIDE
+        .read()
+        .or_panic("collector override poisoned")
+        .clone()
+    {
+        return path;
+    }
+    DSTACK_UTIL.to_string()
+}
+
+/// The guest has no NVIDIA hardware. Empty devices with no error is the
+/// documented encoding for "the collector ran and found nothing".
+fn no_gpus() -> GpuInfoResponse {
+    GpuInfoResponse::default()
 }
 
 fn unavailable(error: impl Into<String>) -> GpuInfoResponse {
     GpuInfoResponse {
-        gpus: vec![],
         error: error.into(),
-        cc_ready: None,
+        ..Default::default()
     }
 }
 
-async fn sample_worker(slot: &mut Option<Worker>) -> Result<GpuInfoResponse> {
-    if slot.is_none() {
-        *slot = Some(start_worker()?);
+/// Test-only hooks. Production callers go through [`gpu_info`].
+#[cfg(test)]
+mod test_support {
+    use super::*;
+
+    pub(super) fn set_snapshot(response: GpuInfoResponse) {
+        SNAPSHOT.set(response);
     }
-    let worker = slot.as_mut().context("GPU sampler worker is missing")?;
-    worker.stdin.write_all(b"sample\n").await?;
-    worker.stdin.flush().await?;
-    let mut line = String::new();
-    let bytes = worker.stdout.read_line(&mut line).await?;
-    if bytes == 0 {
-        let status = worker.child.wait().await?;
-        return Err(anyhow!("GPU sampler exited with {status}"));
+
+    pub(super) fn hold_refresh_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        REFRESH_LOCK.try_lock().expect("refresh lock is free")
     }
-    serde_json::from_str(&line).context("invalid response from GPU sampler")
-}
 
-fn start_worker() -> Result<Worker> {
-    let mut child = Command::new(std::env::current_exe()?)
-        .arg("--gpu-info-helper")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .context("failed to start GPU sampler")?;
-    let stdin = child.stdin.take().context("GPU sampler stdin is missing")?;
-    let stdout = child
-        .stdout
-        .take()
-        .context("GPU sampler stdout is missing")?;
-    Ok(Worker {
-        child,
-        stdin,
-        stdout: BufReader::new(stdout),
-    })
-}
-
-fn stop_worker(slot: &mut Option<Worker>) {
-    if let Some(mut worker) = slot.take() {
-        let _ = worker.child.start_kill();
-        tokio::spawn(async move {
-            let _ = worker.child.wait().await;
-        });
-    }
-}
-
-/// Entry point for the hidden helper mode. Each request is one line on stdin
-/// and each response is one JSON line on stdout.
-pub fn run_gpu_info_helper() -> Result<()> {
-    let nvml = Nvml::init().map_err(|error| format!("failed to initialize NVML: {error}"));
-    let mut sampler = GpuSampler {
-        warned: HashSet::new(),
-    };
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        if line? != "sample" {
-            continue;
-        }
-        let response = match &nvml {
-            Ok(nvml) => sample(&mut sampler, nvml),
-            Err(error) => unavailable(error),
-        };
-        serde_json::to_writer(&mut stdout, &response)?;
-        stdout.write_all(b"\n")?;
-        stdout.flush()?;
-    }
-    Ok(())
-}
-
-fn sample(sampler: &mut GpuSampler, nvml: &Nvml) -> GpuInfoResponse {
-    let count = match nvml.device_count() {
-        Ok(count) => count,
-        Err(e) => {
-            let error = format!("failed to get NVML GPU count: {e}");
-            warn!("{error}");
-            return unavailable(error);
-        }
-    };
-
-    let cc_ready = query_cc_ready(sampler, nvml, count);
-    GpuInfoResponse {
-        gpus: (0..count)
-            .map(|index| collect_device(sampler, nvml, index))
-            .collect(),
-        error: String::new(),
-        cc_ready,
-    }
-}
-
-fn query_cc_ready(sampler: &mut GpuSampler, nvml: &Nvml, count: u32) -> Option<bool> {
-    if count == 0 {
-        return None;
-    }
-    let device = match nvml.device_by_index(0) {
-        Ok(device) => device,
-        Err(e) => {
-            log_query_error(sampler, 0, "cc_ready", &e);
-            return None;
-        }
-    };
-    match device.get_confidential_compute_state() {
-        Ok(ready) => Some(ready),
-        Err(e) => {
-            log_query_error(sampler, 0, "cc_ready", &e);
-            None
-        }
-    }
-}
-
-fn collect_device(sampler: &mut GpuSampler, nvml: &Nvml, index: u32) -> GpuDevice {
-    match nvml.device_by_index(index) {
-        Ok(device) => collect_device_fields(sampler, index, &device),
-        Err(e) => {
-            log_query_error(sampler, index, "device", &e);
-            GpuDevice {
-                index,
-                error: format!("device: {e}"),
-                ..Default::default()
-            }
-        }
-    }
-}
-
-fn collect_device_fields(sampler: &mut GpuSampler, index: u32, device: &Device<'_>) -> GpuDevice {
-    let mut errors = Vec::new();
-
-    let uuid = match device.uuid() {
-        Ok(uuid) => uuid,
-        Err(e) => {
-            push_error(sampler, index, "uuid", e, &mut errors);
-            String::new()
-        }
-    };
-    let pci_bus_id = match device.pci_info() {
-        Ok(pci) => pci.bus_id,
-        Err(e) => {
-            push_error(sampler, index, "pci_bus_id", e, &mut errors);
-            String::new()
-        }
-    };
-
-    let (utilization_gpu, utilization_memory) = match device.utilization_rates() {
-        Ok(util) => (Some(util.gpu), Some(util.memory)),
-        Err(e) => {
-            push_error(sampler, index, "utilization", e, &mut errors);
-            (None, None)
-        }
-    };
-
-    let (memory_total_bytes, memory_used_bytes, memory_free_bytes) = match device.memory_info() {
-        Ok(mem) => (Some(mem.total), Some(mem.used), Some(mem.free)),
-        Err(e) => {
-            push_error(sampler, index, "memory", e, &mut errors);
-            (None, None, None)
-        }
-    };
-
-    let temperature_c = match device.temperature(TemperatureSensor::Gpu) {
-        Ok(temp) => Some(temp),
-        Err(e) => {
-            push_error(sampler, index, "temperature", e, &mut errors);
-            None
-        }
-    };
-
-    let power_usage_mw = match device.power_usage() {
-        Ok(power) => Some(power),
-        Err(e) => {
-            push_error(sampler, index, "power", e, &mut errors);
-            None
-        }
-    };
-
-    let cc_enabled = match device.is_cc_enabled() {
-        Ok(enabled) => Some(enabled),
-        Err(e) => {
-            push_error(sampler, index, "cc_enabled", e, &mut errors);
-            None
-        }
-    };
-
-    GpuDevice {
-        index,
-        uuid,
-        pci_bus_id,
-        utilization_gpu,
-        utilization_memory,
-        memory_total_bytes,
-        memory_used_bytes,
-        memory_free_bytes,
-        temperature_c,
-        power_usage_mw,
-        error: errors.join("; "),
-        cc_enabled,
-    }
-}
-
-fn push_error(
-    sampler: &mut GpuSampler,
-    index: u32,
-    field: &'static str,
-    err: NvmlError,
-    errors: &mut Vec<String>,
-) {
-    errors.push(format!("{field}: {err}"));
-    log_query_error(sampler, index, field, &err);
-}
-
-fn log_query_error(sampler: &mut GpuSampler, index: u32, field: &'static str, err: &NvmlError) {
-    let first = sampler.warned.insert((index, field));
-    if matches!(err, NvmlError::NotSupported) {
-        debug!("GPU {index} {field} not supported: {err}");
-    } else if first {
-        warn!("failed to query GPU {index} {field}: {err}");
-    } else {
-        debug!("failed to query GPU {index} {field}: {err}");
+    pub(super) fn set_collector(path: &str) {
+        *COLLECTOR_OVERRIDE
+            .write()
+            .or_panic("collector override poisoned") = Some(path.to_string());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{sample, unavailable, GpuSampler};
-    use nvml_wrapper::Nvml;
-    use std::collections::HashSet;
+    use super::*;
+    use guest_api::GpuDevice;
+    use std::os::unix::fs::PermissionsExt;
 
-    /// NVML may or may not be present on the machine running this test.
-    /// Unavailability must be an error with no devices, not a silent empty
-    /// success (which would mean "NVML worked, zero GPUs").
-    #[test]
-    fn collect_reports_nvml_unavailability_without_panicking() {
-        let info = match Nvml::init() {
-            Ok(nvml) => sample(
-                &mut GpuSampler {
-                    warned: HashSet::new(),
-                },
-                &nvml,
-            ),
-            Err(error) => unavailable(format!("failed to initialize NVML: {error}")),
-        };
-        if info.error.is_empty() {
-            return;
+    fn sample_response() -> GpuInfoResponse {
+        GpuInfoResponse {
+            gpus: vec![GpuDevice {
+                index: 0,
+                uuid: "GPU-abc".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
         }
-        assert!(info.gpus.is_empty());
-        assert_eq!(info.cc_ready, None);
+    }
+
+    /// A guest with no NVIDIA device must not scan, spawn, or cache anything.
+    /// The distinction that matters downstream is "no GPUs" (empty, no error)
+    /// versus "could not tell" (error set).
+    #[test]
+    fn a_guest_without_a_card_reports_no_gpus_rather_than_an_error() {
+        let response = no_gpus();
+        assert!(response.gpus.is_empty());
+        assert!(response.error.is_empty());
+        assert_eq!(response.sample_age_ms, None);
+    }
+
+    /// The bug this design exists to prevent: a scrape interval longer than the
+    /// TTL must still see the GPU series. Serving a placeholder on expiry meant
+    /// `/metrics` reported zero GPUs forever at Prometheus' default 15s.
+    #[tokio::test]
+    async fn a_snapshot_older_than_the_ttl_is_still_served() {
+        // Hold the refresh lock so the spawned refresh cannot overwrite the
+        // snapshot mid-assertion on a machine that does have a GPU.
+        let _guard = test_support::hold_refresh_lock();
+        test_support::set_snapshot(sample_response());
+
+        let served = serve(SNAPSHOT.get_allow_stale().ok());
+
+        assert!(
+            served.error.is_empty(),
+            "stale data must not become an error"
+        );
+        assert_eq!(served.gpus.len(), 1);
+        assert!(served.sample_age_ms.is_some(), "age must be reported");
+    }
+
+    /// The reason sampling lives in a child process: when a driver call wedges,
+    /// the timeout must actually reclaim it. Nothing may be left running
+    /// between samples.
+    #[tokio::test]
+    async fn a_collector_that_hangs_is_killed_when_the_sample_times_out() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = dir.path().join("stub-collector");
+        let pid_file = dir.path().join("pid");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho $$ > {}\nsleep 60\n", pid_file.display()),
+        )
+        .expect("write stub");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod stub");
+
+        let _guard = test_support::hold_refresh_lock();
+        test_support::set_collector(&script.to_string_lossy());
+
+        let outcome = timeout(Duration::from_millis(500), collect()).await;
+        assert!(outcome.is_err(), "the stub sleeps far past the timeout");
+
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .expect("stub recorded its pid")
+            .trim()
+            .parse()
+            .expect("pid is a number");
+
+        // SIGKILL is asynchronous; give the kernel a moment to reap.
+        for _ in 0..50 {
+            if !Path::new(&format!("/proc/{pid}")).exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("collector {pid} survived the sample timeout");
+    }
+
+    /// A collector that is not installed must degrade to a recorded error, not
+    /// a panic and not a silent "no GPUs".
+    #[tokio::test]
+    async fn a_missing_collector_is_reported_as_an_error() {
+        test_support::set_collector("/nonexistent/dstack-util");
+        let error = collect().await.expect_err("must fail");
+        assert!(
+            error.to_string().contains("not installed"),
+            "unexpected error: {error:#}"
+        );
     }
 }
