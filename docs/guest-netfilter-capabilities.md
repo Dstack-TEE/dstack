@@ -47,16 +47,16 @@ mkosi.
 | --- | --- | --- | --- | --- |
 | nftables core | `NF_TABLES` | yes | yes | 0.5.x |
 | xtables-over-nftables | `NFT_COMPAT` | yes | yes | 0.5.x |
-| nftables bridge family | `NF_TABLES_BRIDGE` | yes | yes | 0.6.1 (mkosi) |
-| bridge meta / reject | `NFT_BRIDGE_META`, `NFT_BRIDGE_REJECT` | yes | yes | 0.6.1 |
+| nftables bridge family | `NF_TABLES_BRIDGE` | yes | yes | 0.6.0 (mkosi) |
+| bridge meta / reject | `NFT_BRIDGE_META`, `NFT_BRIDGE_REJECT` | yes | yes | 0.6.0 |
 | ebtables framework | `BRIDGE_NF_EBTABLES` | yes | yes | 0.5.x |
-| ebtables matches | `BRIDGE_EBT_ARP`, `_IP`, `_IP6`, `_AMONG`, `_LIMIT`, `_VLAN` | yes | yes | 0.6.1 |
+| ebtables matches | `BRIDGE_EBT_ARP`, `_IP`, `_IP6`, `_AMONG`, `_LIMIT`, `_VLAN` | yes | yes | 0.6.0 |
 | ebtables legacy tables | `BRIDGE_NF_EBTABLES_LEGACY`, `BRIDGE_EBT_T_*` | **no** | **no** | — |
-| CHECKSUM target | `NETFILTER_XT_TARGET_CHECKSUM` | yes | yes | 0.6.1 (mkosi) |
+| CHECKSUM target | `NETFILTER_XT_TARGET_CHECKSUM` | yes | yes | 0.6.0 (mkosi) |
 | IPv4 tables | `IP_NF_IPTABLES` | yes | built in | 0.5.x |
 | IPv4 legacy tables | `IP_NF_IPTABLES_LEGACY` | yes | **no** | — |
-| IPv6 tables | `IP6_NF_IPTABLES` | yes | built in | 0.6.1 (Yocto) |
-| IPv6 NAT / filter / mangle | `IP6_NF_NAT`, `IP6_NF_FILTER`, `IP6_NF_MANGLE` | yes | n/a | 0.6.1 (Yocto) |
+| IPv6 tables | `IP6_NF_IPTABLES` | yes | built in | 0.6.0 (Yocto) |
+| IPv6 NAT / filter / mangle | `IP6_NF_NAT`, `IP6_NF_FILTER`, `IP6_NF_MANGLE` | yes | n/a | 0.6.0 (Yocto) |
 | ipset | `IP_SET` and the hash/bitmap set types | yes | yes | 0.5.x |
 
 Userspace: both images ship `iptables` and `nftables`. `ebtables` is the
@@ -84,6 +84,57 @@ a table.
 checksum-offloading virtio NICs. On an nft frontend that is programmed through
 `nft_compat`, which still needs the `xt_CHECKSUM` module.
 
+## Beyond netfilter: traffic control and checkpoint/restore
+
+Two more guest-kernel capabilities a nested container manager depends on live
+in the same two fragments. Both are built in (`=y`), so neither backend has a
+module to package or autoload.
+
+| Capability | Kconfig symbol | Yocto | mkosi | Since |
+| --- | --- | --- | --- | --- |
+| HTB qdisc | `NET_SCH_HTB` | built in | built in | 0.6.0 |
+| ingress qdisc | `NET_SCH_INGRESS` | built in | built in | 0.6.0 |
+| u32 classifier | `NET_CLS_U32` | built in | built in | 0.6.0 |
+| police action | `NET_ACT_POLICE` | built in | built in | 0.6.0 |
+| checkpoint/restore | `CHECKPOINT_RESTORE` | built in | built in | 0.6.0 (mkosi) |
+| macvlan | `MACVLAN` | built in | built in | 0.6.0 (mkosi) |
+| comment match | `NETFILTER_XT_MATCH_COMMENT` | yes | yes | 0.6.0 (mkosi) |
+| socket diag | `UNIX_DIAG`, `INET_DIAG`, `PACKET_DIAG`, `NETLINK_DIAG` | built in | built in | 0.6.0 (mkosi) |
+
+**Per-instance bandwidth limits need all four `tc` pieces.** Incus implements
+`limits.max` (and `limits.ingress` / `limits.egress`) on a bridged NIC as an
+HTB root qdisc and class on the host-side veth for egress, and an ingress
+qdisc with a u32 filter and a police action for ingress. `NET_SCHED` and
+`NET_CLS_ACT` alone do not provide any of them: on 0.5.x the manager accepts
+the setting and then fails to start the instance with `Specified qdisc kind is
+unknown` (#1176).
+
+**`CHECKPOINT_RESTORE` is what lets the LXC monitor be found.** LXC retitles
+its monitor process to `[lxc monitor] <path> <name>` with
+`prctl(PR_SET_MM, PR_SET_MM_MAP, ...)`, and Incus's seccomp notification
+handler resolves a monitor PID to its instance by that title. The prctl is
+only implemented under `CHECKPOINT_RESTORE`; without it the monitor keeps its
+`incusd forkstart` command line, the daemon logs `Failed to find container
+for monitor <pid>`, and every intercepted syscall
+(`security.syscalls.intercept.*`) is resumed unhandled instead of getting the
+container-aware answer (#1180). Everything the symbol gates needs
+`CAP_CHECKPOINT_RESTORE` or `CAP_SYS_ADMIN`, and none of it faces the host.
+The Yocto 6.18 kernel already had it through meta-virtualization's
+`cfg/lxc.scc` and `cfg/criu.scc`; the mkosi kernel did not, and the 6.9
+kernel of 0.5.9 did not either.
+
+**LXC's own audit runs against both kernels.** `lxc-checkconfig` is the
+script LXC ships to check a kernel for what containers need, and it is the
+closest thing Incus has to Docker's `check-config.sh` — Incus itself has no
+equivalent, and its documentation defers to "any kernel feature required by
+the LXC version in use". It is vendored at `os/common/scripts/lxc-checkconfig`
+and `check-lxc-kernel-config.sh` runs it after the fragment gate in both
+builds, failing on anything it reports missing. The last three rows above are
+what it flagged on the mkosi kernel the first time it ran: `MACVLAN` (Incus
+`nictype=macvlan`), `xt_comment` (`-m comment` on the xtables frontends) and
+the socket-diag interfaces `ss` and CRIU use. It does not know about traffic
+control, so the `tc` rows are asserted by the fragments alone.
+
 ## Running a nested bridge manager alongside Docker
 
 Having the capabilities is not the whole story. Docker sets the `FORWARD` chain
@@ -101,7 +152,7 @@ libvirt/LXD/Incus-style bridge managers, and it is what every distribution that
 defaults to the nftables frontend already behaves like.
 
 It is, however, a behaviour change for the Yocto image, which programmed the
-legacy tables before dstack 0.6.1. On that path Incus selected its xtables
+legacy tables before dstack 0.6.0. On that path Incus selected its xtables
 driver and installed its accept rules with
 `iptables -I filter FORWARD -i <bridge> -j ACCEPT` — into Docker's *own* chain,
 ahead of the policy — so forwarding worked without any extra rule. Under the
@@ -143,6 +194,11 @@ becomes `=m`, and the build still succeeds. Check the produced `.config` rather
 than assuming, with `os/common/scripts/check-kernel-config.sh <.config>
 <fragment...>`; both backends run it, mkosi during the kernel build and Yocto
 in `os/yocto/scripts/export-artifacts.sh` before anything is published.
+`os/common/scripts/check-lxc-kernel-config.sh <.config>` runs at the same two
+points and is the second gate to satisfy: it fails on anything LXC's
+`lxc-checkconfig` reports missing, with the two `IP*_NF_TARGET_MASQUERADE`
+compat aliases (pure `select`s of `NETFILTER_XT_TARGET_MASQUERADE`, which both
+kernels build) as the only exemptions.
 
 On the Yocto backend a module also has to be *packaged* into the rootfs.
 `RDEPENDS:${KERNEL_PACKAGE_NAME}-base` is cleared in

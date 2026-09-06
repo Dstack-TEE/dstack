@@ -124,6 +124,7 @@ if [ -f "$KERNEL_CONFIG_FILE" ]; then
         "$KERNEL_CONFIG_FILE" \
         "$YOCTO_DIR/layers/meta-dstack/recipes-kernel/linux/files/dstack-docker.cfg" \
         "$YOCTO_DIR/layers/meta-dstack/recipes-kernel/linux/files/dstack.cfg"
+    "$REPO_ROOT/os/common/scripts/check-lxc-kernel-config.sh" "$KERNEL_CONFIG_FILE"
 else
     echo "Error: kernel config not found: $KERNEL_CONFIG_FILE" >&2
     exit 1
