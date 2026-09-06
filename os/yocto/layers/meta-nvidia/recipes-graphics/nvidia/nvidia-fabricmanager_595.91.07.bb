@@ -5,8 +5,8 @@ LICENSE = "NVIDIA-Proprietary"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=2cc00be68c1227a7c42ff3620ef75d05"
 
 SRC_URI = "https://developer.download.nvidia.com/compute/nvidia-driver/redist/fabricmanager/linux-x86_64/fabricmanager-linux-x86_64-${PV}-archive.tar.xz"
-SRC_URI[md5sum] = "8761b4b5f371b7e87b2b82141c901311"
-SRC_URI[sha256sum] = "ea86951987ced2c2bbed1a9a9037e917dd2268add0ec484db9216e843d8b7de8"
+SRC_URI[md5sum] = "eb48f8119bdea0f55584bf345f4379d2"
+SRC_URI[sha256sum] = "c91cd6e2fb845a4554d50e061974ebc80f35034f9655e348908783a02e87ddb6"
 
 S = "${UNPACKDIR}/fabricmanager-linux-x86_64-${PV}-archive"
 

@@ -6,7 +6,7 @@ target is functional parity with the Yocto image, not merely release archive
 compatibility. `parity.json` is the machine-checked inventory used by a build.
 
 The backend builds the same dstack services plus the pinned Yocto component
-set: Linux 6.18, NVIDIA 595.58.03 (open modules, userspace, firmware, Fabric
+set: Linux 6.18, NVIDIA 595.91.07 (open modules, userspace, firmware, Fabric
 Manager and NSCQ), nvattest 2026.06.09 with the OCSP-freshness patch, OpenZFS
 2.4.0, Sysbox 0.6.7, NVIDIA Container Toolkit, nerdctl, CNI plugins and
 stargz-snapshotter 0.18.2.
@@ -14,7 +14,7 @@ stargz-snapshotter 0.18.2.
 The kernel tracks the same series as the production Yocto backend
 (`PREFERRED_VERSION_linux-yocto` in `meta-dstack`), which `tests/acceptance.sh`
 enforces. That is what keeps the component set patch-free: ZFS 2.4.0 declares
-`Linux-Maximum: 6.18` and the NVIDIA 595.58.03 open modules build against this
+`Linux-Maximum: 6.18` and the NVIDIA 595.91.07 open modules build against this
 series unmodified, so neither carries an out-of-tree compatibility patch that
 production does not also carry.
 
