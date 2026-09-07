@@ -168,14 +168,20 @@ yocto_srcrev=$(sed -n 's/^SRCREV = "\([0-9a-f]\{40\}\)"/\1/p' "$ovmf_recipe")
 grep -q "^OVMF_REVISION=$yocto_srcrev\$" "$D/versions.env"
 # 0003 and 0005 are what make the prefix map reach the compiler and let
 # stable202502 assemble with NASM 3.x; both were previously dropped.
+# 0007 is half of the setup-header normalization; without it in the firmware
+# the shipped kernel and the measured kernel disagree and every CVM fails on
+# RTMR[1]. os/tests/test-kernel-header-normalization.sh keeps the two halves
+# in sync; this only checks the patch is still applied.
 for patch in 0003-Debug-prefix-map 0004-Reproduciable \
   0005-UefiCpuPkg-CpuExceptionHandlerLib-fix-push-instructi \
-  0006-OvmfPkg-AmdSev-drop-embedded-grub; do
+  0006-OvmfPkg-AmdSev-drop-embedded-grub \
+  0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header; do
   grep -q "$patch" "$D/components/ovmf/ovmf-build.sh"
 done
 grep -q 'AmdSev/AmdSevX64.dsc' "$D/components/ovmf/ovmf-build.sh"
 grep -q '0006-OvmfPkg-AmdSev-drop-embedded-grub.patch' "$D/components/ovmf/ovmf.sh"
 grep -q '0005-UefiCpuPkg' "$D/components/ovmf/ovmf.sh"
+grep -q '0007-OvmfPkg-QemuKernelLoaderFsDxe' "$D/components/ovmf/ovmf.sh"
 grep -q 'objcopy --strip-debug' "$D/mkosi.build"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
 grep -q '^CleanPackageMetadata=yes$' "$D/mkosi.conf"
@@ -226,6 +232,7 @@ PYTHONPYCACHEPREFIX="$pycache" python3 -m py_compile "$D"/scripts/*.py "$D"/test
 # measurements, so both must come from the single shared definition.
 grep -q 'kernel-cmdline.sh' "$D/scripts/make-release-artifacts.sh"
 grep -q 'kernel-cmdline.sh' "$D/../image/assemble.sh"
+grep -q 'normalize-kernel-header.py' "$D/../image/assemble.sh"
 if grep -q 'random.trust_bootloader' "$D/scripts/make-release-artifacts.sh"; then
   echo 'kernel command line must not be restated outside kernel-cmdline.sh' >&2
   exit 1
@@ -264,6 +271,9 @@ for component in dstack-rust image-tools container-stack sysbox nvattest kernel 
   grep -q '^component_build()' "$definition"
   grep -q '^COMPONENT_CACHE_PATHS=' "$definition"
 done
+# The image build and OVMF each implement the setup-header normalization; if
+# they drift, every CVM fails on RTMR[1] and nothing points at why.
+"$D/../tests/test-kernel-header-normalization.sh"
 "$D/tests/test-dev-cache.sh"
 "$D/tests/test-component-framework.sh"
 "$D/tests/test-component-merge.sh"
