@@ -216,31 +216,48 @@ SPDX-License-Identifier: Apache-2.0
     {% if public_sysinfo %}
     <h2>GPUs</h2>
     {% if !gpu_info.error.is_empty() %}
-    <p>{{ gpu_info.error }}</p>
+    <div class="info-section">{{ gpu_info.error }}</div>
     {% else if gpu_info.gpus.is_empty() %}
-    <p>No NVIDIA GPUs</p>
+    <div class="info-section">No NVIDIA GPUs</div>
     {% else %}
-    <p>
-        Confidential computing:
-        {% match gpu_info.cc_enabled %}
-        {% when Some with (enabled) %}enabled = {{ enabled }},
-        {% when None %}enabled = unknown,
-        {% endmatch %}
-        {% match gpu_info.cc_ready %}
-        {% when Some with (ready) %}ready = {{ ready }}
-        {% when None %}ready = unknown
-        {% endmatch %}
-    </p>
-    {% match gpu_info.sample_age_ms %}
-    {% when Some with (age) %}
-    <p>Sampled {{ age as f32 / 1000.0 }}s ago</p>
-    {% when None %}
-    {% endmatch %}
+    <div class="info-section">
+        <div class="info-grid">
+            <div class="info-row">
+                <div class="info-label">Confidential Computing</div>
+                <div class="info-value">
+                    {%- match gpu_info.cc_enabled -%}
+                    {%- when Some with (enabled) -%}
+                    {{- enabled -}}
+                    {%- when None -%}
+                    unknown
+                    {%- endmatch -%}
+                </div>
+            </div>
+            <div class="info-row">
+                <div class="info-label">GPU Ready State</div>
+                <div class="info-value">
+                    {%- match gpu_info.cc_ready -%}
+                    {%- when Some with (ready) -%}
+                    {{- ready -}}
+                    {%- when None -%}
+                    unknown
+                    {%- endmatch -%}
+                </div>
+            </div>
+            {%- match gpu_info.sample_age_ms %}
+            {%- when Some with (age) %}
+            <div class="info-row">
+                <div class="info-label">Sample Age</div>
+                <div class="info-value">{{ "{:.1}"|format(age as f32 / 1000.0) }} s</div>
+            </div>
+            {%- when None %}
+            {%- endmatch %}
+        </div>
+    </div>
     <table>
         <thead>
             <tr>
                 <th>Index</th>
-                <th>UUID</th>
                 <th>PCI</th>
                 <th>GPU %</th>
                 <th>Mem %</th>
@@ -254,8 +271,7 @@ SPDX-License-Identifier: Apache-2.0
             {% for gpu in gpu_info.gpus %}
             <tr>
                 <td>{{ gpu.index }}</td>
-                <td>{{ gpu.uuid }}</td>
-                <td>{{ gpu.pci_bus_id }}</td>
+                <td>{{ gpu.pci_bus_id|short_bdf }}</td>
                 <td>
                     {% match gpu.utilization_gpu %}
                     {% when Some with (value) %}{{ value }}%

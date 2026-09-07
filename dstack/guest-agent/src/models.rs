@@ -33,6 +33,25 @@ mod filters {
         Ok(hex::encode(s))
     }
 
+    /// Drops a zero PCI domain. NVML reports `00000000:01:00.0` where lspci and
+    /// the kernel print `0000:01:00.0` or just `01:00.0`.
+    ///
+    /// Only a zero domain is dropped, and only from the three-field form: a
+    /// non-zero domain distinguishes two cards that would otherwise display the
+    /// same address, and `00:00.0` is a bus, not a domain.
+    ///
+    /// Display only. `/metrics` keeps the full string, because that is what
+    /// host-side tooling joins on.
+    pub fn short_bdf(s: &str) -> Result<&str, rinja::Error> {
+        let Some((domain, rest)) = s.split_once(':') else {
+            return Ok(s);
+        };
+        if rest.contains(':') && !domain.is_empty() && domain.bytes().all(|b| b == b'0') {
+            return Ok(rest);
+        }
+        Ok(s)
+    }
+
     /// The label set every `dstack_gpu_*` series carries, matching
     /// dcgm-exporter so host-side tooling that speaks BDF can correlate.
     /// Written once here rather than repeated in the template for each metric.
@@ -217,5 +236,102 @@ mod tests {
         };
         let html = dashboard.render().expect("render");
         assert!(html.contains("70.1 W"), "{html}");
+    }
+
+    /// The CC fields are labelled rows, so the value carries no prose of its
+    /// own. What must not come back is the old run-on line, and the age has to
+    /// round like every other number on the page.
+    #[test]
+    fn dashboard_renders_the_gpu_header_as_labelled_rows() {
+        let html = dashboard_with(GpuInfoResponse {
+            gpus: vec![gpu(0)],
+            cc_enabled: Some(true),
+            cc_ready: Some(false),
+            sample_age_ms: Some(1_049),
+            ..Default::default()
+        });
+        assert!(html.contains(">Confidential Computing<"), "{html}");
+        assert!(html.contains(">true<"), "{html}");
+        assert!(html.contains(">GPU Ready State<"), "{html}");
+        assert!(html.contains(">false<"), "{html}");
+        assert!(html.contains("1.0 s"), "{html}");
+        assert!(!html.contains("enabled = true"), "{html}");
+    }
+
+    /// An unset field is a third state, not a false. Reporting a GPU whose CC
+    /// status could not be read as `false` would invert the claim.
+    #[test]
+    fn dashboard_distinguishes_unknown_cc_state_from_false() {
+        let html = dashboard_with(GpuInfoResponse {
+            gpus: vec![gpu(0)],
+            cc_enabled: None,
+            cc_ready: None,
+            ..Default::default()
+        });
+        assert!(html.contains(">unknown<"), "{html}");
+        assert!(!html.contains(">false<"), "{html}");
+    }
+
+    /// Every other block on the page is a card. A bare paragraph on the page
+    /// background is what this section used to render into.
+    #[test]
+    fn dashboard_keeps_the_gpu_section_inside_a_card() {
+        let html = dashboard_with(GpuInfoResponse::default());
+        assert!(
+            html.contains(r#"<div class="info-section">No NVIDIA GPUs</div>"#),
+            "{html}"
+        );
+    }
+
+    /// The zero domain is display noise, but only the noise may go. A non-zero
+    /// domain is what tells two cards on a multi-domain host apart, and
+    /// `00:00.0` is bus zero, not a domain that can be dropped.
+    #[test]
+    fn the_pci_domain_is_dropped_only_where_it_carries_nothing() {
+        use super::filters::short_bdf;
+
+        assert_eq!(short_bdf("00000000:01:00.0").unwrap(), "01:00.0");
+        assert_eq!(short_bdf("0000:01:00.0").unwrap(), "01:00.0");
+        assert_eq!(short_bdf("00010000:01:00.0").unwrap(), "00010000:01:00.0");
+        assert_eq!(short_bdf("00:00.0").unwrap(), "00:00.0");
+        assert_eq!(short_bdf("01:00.0").unwrap(), "01:00.0");
+    }
+
+    /// The dashboard drops the UUID column and shortens the address. Neither
+    /// may reach `/metrics`: those labels are what a host-side exporter joins
+    /// on, so they carry the identifiers verbatim.
+    #[test]
+    fn metrics_labels_keep_the_full_identifiers() {
+        let body = render(GpuInfoResponse {
+            gpus: vec![GpuDevice {
+                uuid: "GPU-b2880e21-86ab".into(),
+                pci_bus_id: "00000000:01:00.0".into(),
+                ..gpu(0)
+            }],
+            ..Default::default()
+        });
+        assert!(body.contains(r#"uuid="GPU-b2880e21-86ab""#), "{body}");
+        assert!(body.contains(r#"pci_bus_id="00000000:01:00.0""#), "{body}");
+    }
+
+    fn dashboard_with(gpu_info: GpuInfoResponse) -> String {
+        Dashboard {
+            app_name: String::new(),
+            app_id: vec![],
+            instance_id: vec![],
+            device_id: vec![],
+            key_provider_info: String::new(),
+            tcb_info: String::new(),
+            containers: vec![],
+            system_info: Default::default(),
+            public_sysinfo: true,
+            public_logs: false,
+            public_tcbinfo: false,
+            cloud_vendor: String::new(),
+            cloud_product: String::new(),
+            gpu_info,
+        }
+        .render()
+        .expect("render")
     }
 }
