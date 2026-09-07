@@ -183,6 +183,11 @@ fn collect_rtmr_mismatch(
 
 // Bump whenever expected RTMR computation changes so stale entries get ignored.
 // v3: all supported OVMF measurements use the Pre202505 RTMR[0] layout.
+//
+// Setup-header normalization did not need a bump: images that predate it are
+// measured exactly as before, and normalized images are new images whose
+// `os_image_hash` -- part of the `VmConfig` this key hashes -- has never been
+// cached.
 const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -199,6 +204,7 @@ struct ImagePaths {
     kernel_cmdline: String,
     is_dev: bool,
     version: String,
+    kernel_header_normalized: bool,
 }
 
 pub struct CvmVerifier {
@@ -313,6 +319,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        kernel_header_normalized: bool,
     ) -> Result<TdxMeasurementDetails> {
         let firmware = fw_path.display().to_string();
         let kernel = kernel_path.display().to_string();
@@ -332,6 +339,7 @@ impl CvmVerifier {
             .root_verity(true)
             .hotplug_off(vm_config.hotplug_off)
             .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+            .normalized_setup_header(kernel_header_normalized)
             .maybe_pic(vm_config.pic)
             .maybe_qemu_version(vm_config.qemu_version.clone())
             .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -361,6 +369,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        kernel_header_normalized: bool,
     ) -> Result<TdxMeasurements> {
         self.compute_measurement_details(
             vm_config,
@@ -368,6 +377,7 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            kernel_header_normalized,
         )
         .map(|details| details.measurements)
     }
@@ -379,6 +389,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        kernel_header_normalized: bool,
     ) -> Result<TdxMeasurements> {
         let cache_key = Self::vm_config_cache_key(vm_config)?;
 
@@ -392,6 +403,7 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            kernel_header_normalized,
         )?;
 
         if let Err(e) = self.store_measurements_in_cache(&cache_key, &measurements) {
@@ -646,6 +658,7 @@ impl CvmVerifier {
             kernel_cmdline,
             is_dev: image_info.is_dev,
             version: image_info.version,
+            kernel_header_normalized: image_info.kernel_header_normalized,
         })
     }
 
@@ -666,6 +679,7 @@ impl CvmVerifier {
             &image_paths.kernel_path,
             &image_paths.initrd_path,
             &image_paths.kernel_cmdline,
+            image_paths.kernel_header_normalized,
         )
     }
 
@@ -944,6 +958,7 @@ impl CvmVerifier {
                     &image_paths.kernel_path,
                     &image_paths.initrd_path,
                     &image_paths.kernel_cmdline,
+                    image_paths.kernel_header_normalized,
                 )
                 .context("Failed to compute expected measurements")?;
 
@@ -962,6 +977,7 @@ impl CvmVerifier {
                     &image_paths.kernel_path,
                     &image_paths.initrd_path,
                     &image_paths.kernel_cmdline,
+                    image_paths.kernel_header_normalized,
                 )
                 .context("Failed to compute expected measurements")?,
                 None,
@@ -2242,6 +2258,70 @@ mod tests {
             response.details.tee_variant,
             Some(ra_tls::attestation::TeeVariant::DstackTdx)
         );
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
+
+    /// Captured from a CVM whose OVMF normalizes the Linux setup header, so
+    /// RTMR[1] is the plain Authenticode hash of the shipped kernel. The host
+    /// ran QEMU 8.2.2 -- a version that *does* rewrite the header -- so this
+    /// only passes if the firmware actually undid that rewrite.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_with_normalized_kernel_header() {
+        let request: VerificationRequest = serde_json::from_str(include_str!(
+            "../fixtures/tdx-lite-normalized-attestation.json"
+        ))
+        .expect("normalized TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
+
+    /// The same image as the fixture above, captured on QEMU 10.2.1 -- a
+    /// version that does *not* rewrite the setup header. Its RTMR[1] is
+    /// byte-for-byte the one the 8.2.2 capture produced, which is the whole
+    /// point of normalizing: the digest no longer depends on the host's QEMU.
+    /// MRTD and RTMR[0] do differ, because page-add ordering and the generated
+    /// ACPI tables genuinely are version-specific.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_with_normalized_kernel_header_on_qemu_10_2() {
+        let request: VerificationRequest = serde_json::from_str(include_str!(
+            "../fixtures/tdx-lite-normalized-qemu-10-2-attestation.json"
+        ))
+        .expect("QEMU 10.2 normalized TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
         assert!(
             !image_cache_dir.exists(),
             "TDX lite verification must not download or cache OS images"

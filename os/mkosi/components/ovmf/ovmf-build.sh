@@ -51,7 +51,8 @@ git -C "$src" reset -q --hard "$REV"
 #        build byte-comparable with the production one.
 for patch in 0003-Debug-prefix-map 0004-Reproduciable \
   0005-UefiCpuPkg-CpuExceptionHandlerLib-fix-push-instructi \
-  0006-OvmfPkg-AmdSev-drop-embedded-grub; do
+  0006-OvmfPkg-AmdSev-drop-embedded-grub \
+  0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header; do
   patch -d "$src" -p1 --forward --fuzz=0 < \
     "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/$patch.patch"
 done
