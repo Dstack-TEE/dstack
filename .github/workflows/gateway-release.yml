@@ -69,6 +69,7 @@ jobs:
             DSTACK_REV=${{ env.GIT_REV }}
             IMAGE_VERSION=${{ env.VERSION }}
             IMAGE_SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}.git
             SOURCE_DATE_EPOCH=${{ env.TIMESTAMP }}
           annotations: |
             manifest:org.opencontainers.image.title=dstack-gateway
