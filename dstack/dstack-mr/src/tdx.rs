@@ -11,8 +11,9 @@
 //! intentionally excluded and must come from `VmConfig`.
 
 use crate::kernel::{
-    patched_kernel_authenticode_sha384, tdx_kernel_hash_uses_precomputed_high_mem,
-    TDX_KERNEL_HASH_COMPAT_2G_MEMORY, TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+    kernel_authenticode_sha384, patched_kernel_authenticode_sha384,
+    tdx_kernel_hash_uses_precomputed_high_mem, TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
+    TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
 };
 use crate::tdvf::{rtmr0_log_from_td_hob_hash_with_acpi_hashes, AcpiTableHashes, Tdvf};
 use crate::util::{measure_log, measure_sha384};
@@ -34,6 +35,11 @@ struct ImageMetadata {
     bios: String,
     #[serde(default)]
     ovmf_variant: Option<OvmfVariant>,
+    /// Declares whether this image's OVMF normalizes the Linux setup header
+    /// before measuring the kernel. Absent on every image built before that
+    /// landed, and `false` is exactly their behavior.
+    #[serde(default)]
+    kernel_header_normalized: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +157,12 @@ fn read_varuint(input: &mut &[u8]) -> Result<u64> {
     }
 }
 
+/// q35 keeps guest RAM in one block below 4G until it reaches this size, then
+/// caps the below-4G block at 2 GiB and moves the remainder above 4G
+/// (`lowmem = 0xb0000000 unless ram_size >= 0xb0000000`). The TD HOB memory
+/// ranges follow that split.
+const Q35_HIGH_MEMORY_SPLIT: u64 = 0xB000_0000;
+
 fn measure_td_hob_from_witness_data(data: &[u8], memory_size: u64) -> Result<Vec<u8>> {
     let mut input = data;
     let base_page = read_varuint(&mut input)?;
@@ -217,7 +229,7 @@ fn measure_td_hob_from_witness_data(data: &[u8], memory_size: u64) -> Result<Vec
     if last_end < last_start {
         bail!("Invalid last memory range: end < start");
     }
-    if memory_size >= TDX_KERNEL_HASH_STABLE_MIN_MEMORY {
+    if memory_size >= Q35_HIGH_MEMORY_SPLIT {
         if last_start < 0x80000000u64 {
             add_memory_resource_hob(0x07, last_start, 0x80000000u64 - last_start);
         }
@@ -321,15 +333,22 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
     let kernel_path = image_dir.join(&meta.kernel);
     let kernel =
         fs::read(&kernel_path).with_context(|| format!("cannot read {}", kernel_path.display()))?;
-    let kernel_authenticode = patched_kernel_authenticode_sha384(
-        &kernel,
-        initrd.len() as u32,
-        TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
-        0x28000,
-    )
-    .context("failed to compute high-memory QEMU-patched kernel hash")?;
+    // Which bytes OVMF will measure is a property of this image's firmware, so
+    // it is read from the image rather than from anything the host says.
+    let kernel_authenticode = if meta.kernel_header_normalized {
+        kernel_authenticode_sha384(&kernel)?
+    } else {
+        patched_kernel_authenticode_sha384(
+            &kernel,
+            initrd.len() as u32,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+            0x28000,
+        )
+        .context("failed to compute high-memory QEMU-patched kernel hash")?
+    };
 
     Ok(TdxOsImageMeasurement {
+        kernel_header_normalized: meta.kernel_header_normalized,
         image: TdxImageMeasurement {
             kernel_cmdline_sha384: crate::kernel::measure_cmdline(&measured_kernel_cmdline(
                 &base_cmdline,
@@ -361,19 +380,23 @@ pub fn tdx_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> 
 /// Compute expected TDX measurements from self-contained TDX measurement
 /// material and the three ACPI table digests captured in RTMR[0].
 ///
-/// This path intentionally does not download or read the OS image. Because
-/// QEMU's patched kernel Authenticode hash depends on exact guest RAM below
-/// `TDX_KERNEL_HASH_STABLE_MIN_MEMORY`, the no-image-download path supports
-/// CVMs at or above that threshold plus the exact 2 GiB placement, which QEMU
-/// patches to the same kernel bytes as the high-memory case.
+/// This path intentionally does not download or read the OS image. Every
+/// guest memory size is supported: the kernel digest is a plain hash of the
+/// image file, because the setup header is normalized on both sides.
 pub fn tdx_measurements_from_measurement_document(
     document: &TdxOsImageMeasurementDocument,
     vm_config: &VmConfig,
     acpi_hashes: &TdxRtmr0AcpiHashes,
 ) -> Result<crate::TdxMeasurements> {
-    if !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size) {
+    let measurement = document
+        .decode_measurement()
+        .map_err(anyhow::Error::msg)
+        .context("failed to decode TDX measurement CBOR")?;
+    if !measurement.kernel_header_normalized
+        && !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size)
+    {
         bail!(
-            "TDX lite attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes",
+            "TDX lite attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes. This restriction only applies to images whose OVMF does not normalize the kernel setup header, because QEMU's rewrite moves the initrd with guest RAM; re-emit the image to remove it",
             TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
             TDX_KERNEL_HASH_COMPAT_2G_MEMORY / 1024 / 1024,
             TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
@@ -381,11 +404,6 @@ pub fn tdx_measurements_from_measurement_document(
             vm_config.memory_size
         );
     }
-
-    let measurement = document
-        .decode_measurement()
-        .map_err(anyhow::Error::msg)
-        .context("failed to decode TDX measurement CBOR")?;
     let mrtd = select_mrtd(&measurement, vm_config)?;
 
     let td_hob_hash =
@@ -482,6 +500,7 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
         .root_verity(true)
         .hotplug_off(vm_config.hotplug_off)
         .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+        .normalized_setup_header(meta.kernel_header_normalized)
         .maybe_pic(vm_config.pic)
         .maybe_qemu_version(vm_config.qemu_version.clone())
         .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -507,6 +526,7 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
         initrd_data.len() as u32,
         vm_config.memory_size,
         0x28000,
+        meta.kernel_header_normalized,
     )
     .context("failed to compute RTMR1")?;
     let rtmr1 = measure_log(&rtmr1_log);
@@ -573,6 +593,7 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         .root_verity(true)
         .hotplug_off(vm_config.hotplug_off)
         .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+        .normalized_setup_header(meta.kernel_header_normalized)
         .maybe_pic(vm_config.pic)
         .maybe_qemu_version(vm_config.qemu_version.clone())
         .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -611,6 +632,7 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         initrd_data.len() as u32,
         vm_config.memory_size,
         0x28000,
+        meta.kernel_header_normalized,
     )
     .context("failed to compute RTMR1")?;
     let rtmr1 = measure_log(&rtmr1_log);

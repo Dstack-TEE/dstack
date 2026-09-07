@@ -126,6 +126,7 @@ fn main() -> Result<()> {
                 .initrd(&initrd_path)
                 .kernel_cmdline(&cmdline)
                 .maybe_two_pass_add_pages(config.two_pass_add_pages)
+                .normalized_setup_header(image_info.kernel_header_normalized)
                 .maybe_pic(config.pic)
                 .smm(config.smm)
                 .maybe_pci_hole64_size(config.pci_hole64_size)
@@ -341,6 +342,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
         .root_verity(true)
         .hotplug_off(vm.hotplug_off)
         .maybe_two_pass_add_pages(vm.qemu_single_pass_add_pages)
+        .normalized_setup_header(image_info.kernel_header_normalized)
         .maybe_pic(vm.pic)
         .maybe_qemu_version(vm.qemu_version.clone())
         .maybe_pci_hole64_size(if vm.pci_hole64_size > 0 {

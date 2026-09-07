@@ -2015,6 +2015,15 @@ impl SevOsImageMeasurementDocument {
 pub struct TdxOsImageMeasurement {
     pub image: TdxImageMeasurement,
     pub tdvf: TdxTdvfMeasurement,
+    /// Whether this image's OVMF normalizes the Linux setup header before
+    /// measuring the kernel, which decides what
+    /// [`TdxImageMeasurement::kernel_authenticode`] covers.
+    ///
+    /// Omitted from the CBOR when false, so a document from before the
+    /// normalization existed re-encodes byte for byte and keeps its
+    /// `os_image_hash`.
+    #[serde(default)]
+    pub kernel_header_normalized: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2025,10 +2034,15 @@ pub struct TdxImageMeasurement {
     /// `initrd=initrd` suffix, encoded as UTF-16LE with a trailing NUL.
     #[serde(with = "hex_bytes")]
     pub kernel_cmdline_sha384: Vec<u8>,
-    /// Authenticode SHA-384 digest of the QEMU-patched kernel image when the
-    /// guest memory is at or above QEMU's high-memory TDX initrd placement
-    /// threshold. Below that threshold the patched kernel header depends on the
-    /// exact guest memory size, so the no-image-download verifier rejects it.
+    /// Authenticode SHA-384 digest of the kernel image OVMF measures into
+    /// RTMR[1]. Which bytes that covers is
+    /// [`TdxOsImageMeasurement::kernel_header_normalized`].
+    ///
+    /// When the header is not normalized it is QEMU's rewritten copy, computed
+    /// at or above QEMU's high-memory TDX initrd placement threshold; below
+    /// that threshold the rewritten header depends on the exact guest memory
+    /// size, so the no-image-download verifier rejects those sizes. When it is
+    /// normalized it is the kernel file as shipped, with no such restriction.
     #[serde(with = "hex_bytes")]
     pub kernel_authenticode: Vec<u8>,
     /// SHA-384 of the initrd file bytes. This is the second RTMR[2] event.
@@ -2061,9 +2075,15 @@ struct CborTdxImageMeasurement {
     /// Measured kernel cmdline SHA-384.
     #[serde(rename = "cmdline_sha384", with = "hex_bytes")]
     kernel_cmdline_sha384: Vec<u8>,
-    /// QEMU-patched kernel Authenticode SHA-384.
+    /// Kernel Authenticode SHA-384. Covers QEMU's rewritten copy, or the
+    /// kernel file as shipped when `kernel_header_normalized` is set.
     #[serde(with = "hex_bytes")]
     kernel_authenticode: Vec<u8>,
+    /// Whether the image's OVMF normalizes the Linux setup header before
+    /// measuring. Omitted when false, so documents from before this existed
+    /// encode and decode unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    kernel_header_normalized: bool,
     /// Initrd SHA-384.
     #[serde(with = "hex_bytes")]
     initrd_sha384: Vec<u8>,
@@ -2100,6 +2120,7 @@ impl From<&TdxOsImageMeasurement> for CborTdxOsImageMeasurement {
             image: CborTdxImageMeasurement {
                 kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384.clone(),
                 kernel_authenticode: measurement.image.kernel_authenticode.clone(),
+                kernel_header_normalized: measurement.kernel_header_normalized,
                 initrd_sha384: measurement.image.initrd_sha384.clone(),
             },
             tdvf: CborTdxTdvfMeasurement {
@@ -2117,6 +2138,7 @@ impl From<&TdxOsImageMeasurement> for CborTdxOsImageMeasurement {
 impl From<CborTdxOsImageMeasurement> for TdxOsImageMeasurement {
     fn from(measurement: CborTdxOsImageMeasurement) -> Self {
         Self {
+            kernel_header_normalized: measurement.image.kernel_header_normalized,
             image: TdxImageMeasurement {
                 kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384,
                 kernel_authenticode: measurement.image.kernel_authenticode,
@@ -2149,6 +2171,7 @@ impl TdxOsImageMeasurement {
     pub const VERSION: u32 = 3;
 
     /// CBOR representation stored as `measurement.tdx.cbor`.
+    ///
     pub fn to_cbor_vec(&self) -> Vec<u8> {
         cbor_to_vec(
             &CborTdxOsImageMeasurement::from(self),
@@ -2362,6 +2385,11 @@ pub struct ImageInfo {
     /// fall back to version-based heuristics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ovmf_variant: Option<OvmfVariant>,
+    /// Whether this image's OVMF normalizes the Linux setup header before
+    /// measuring the kernel, which decides what RTMR[1] covers. Absent on
+    /// every image built before that landed, and `false` is their behavior.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub kernel_header_normalized: bool,
 }
 
 pub mod mr_config;
@@ -2700,5 +2728,101 @@ mod appcompose_sdk_parity {
              dropped from the compose hash they compute -- and that hash is what \
              gets whitelisted on chain. Update sdk/go and sdk/js, then this list."
         );
+    }
+}
+
+#[cfg(test)]
+mod image_info_tests {
+    use super::*;
+
+    /// The image-download verification path reads this out of metadata.json to
+    /// decide which kernel bytes RTMR[1] covers. If the field goes missing here
+    /// the parse still succeeds and every normalized image is measured the old
+    /// way, which is a silent attestation failure.
+    #[test]
+    fn metadata_declares_whether_the_kernel_header_is_normalized() {
+        let base = r#"{"cmdline":"c","kernel":"bzImage","initrd":"i","bios":"b""#;
+        let normalized: ImageInfo =
+            serde_json::from_str(&format!("{base},\"kernel_header_normalized\":true}}")).unwrap();
+        assert!(normalized.kernel_header_normalized);
+
+        // Every image built before the field existed omits it.
+        let legacy: ImageInfo = serde_json::from_str(&format!("{base}}}")).unwrap();
+        assert!(!legacy.kernel_header_normalized);
+    }
+}
+
+#[cfg(test)]
+mod tdx_measurement_cbor_tests {
+    use super::*;
+
+    fn measurement(kernel_header_normalized: bool) -> TdxOsImageMeasurement {
+        TdxOsImageMeasurement {
+            kernel_header_normalized,
+            image: TdxImageMeasurement {
+                kernel_cmdline_sha384: vec![0x11; 48],
+                kernel_authenticode: vec![0x22; 48],
+                initrd_sha384: vec![0x33; 48],
+            },
+            tdvf: TdxTdvfMeasurement {
+                ovmf_variant: OvmfVariant::default(),
+                mrtd: TdxMrtdCandidates {
+                    single_pass: vec![0x44; 48],
+                    two_pass: vec![0x55; 48],
+                },
+                td_hob_witness: vec![0x01, 0x02, 0x03],
+            },
+        }
+    }
+
+    /// Which kernel bytes the digest covers has to survive a round trip in
+    /// both directions.
+    #[test]
+    fn the_kernel_header_flag_round_trips() {
+        for normalized in [false, true] {
+            let original = measurement(normalized);
+            let decoded = TdxOsImageMeasurement::from_cbor_slice(&original.to_cbor_vec()).unwrap();
+            assert_eq!(decoded, original);
+            assert_eq!(decoded.kernel_header_normalized, normalized);
+        }
+    }
+
+    /// The flag is omitted when false, so a document from before the
+    /// normalization existed encodes to the same bytes it always did. Those
+    /// bytes are what `sha256sum.txt` -- and therefore `os_image_hash` --
+    /// commits to, and the document shape did not change, so the version does
+    /// not move either.
+    #[test]
+    fn a_pre_normalization_document_does_not_drift() {
+        let cbor = measurement(false).to_cbor_vec();
+        assert!(
+            !cbor.windows(24).any(|w| w == b"kernel_header_normalized"),
+            "the flag must not appear in a pre-normalization document"
+        );
+        let value = TdxOsImageMeasurement::cbor_json_value_from_slice(&cbor).unwrap();
+        assert_eq!(
+            value["version"],
+            serde_json::json!(TdxOsImageMeasurement::VERSION)
+        );
+        let twice = TdxOsImageMeasurement::from_cbor_slice(&cbor)
+            .unwrap()
+            .to_cbor_vec();
+        assert_eq!(cbor, twice);
+    }
+
+    #[test]
+    fn unknown_versions_are_rejected() {
+        // CBOR stores the version as the single unsigned byte following the
+        // "version" key, so rewriting it forges another version.
+        let key = [0x67, b'v', b'e', b'r', b's', b'i', b'o', b'n'];
+        let mut cbor = measurement(true).to_cbor_vec();
+        let at = cbor
+            .windows(key.len())
+            .position(|window| window == key)
+            .expect("encoded document contains a version key");
+        cbor[at + key.len()] = 2;
+
+        let err = TdxOsImageMeasurement::from_cbor_slice(&cbor).unwrap_err();
+        assert!(err.contains("unsupported version 2"), "unexpected: {err}");
     }
 }

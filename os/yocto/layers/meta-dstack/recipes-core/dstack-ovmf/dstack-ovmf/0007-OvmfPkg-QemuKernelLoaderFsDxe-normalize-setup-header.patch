@@ -1,0 +1,156 @@
+From: dstack <dstack@dstack.dev>
+Subject: [PATCH] OvmfPkg/QemuKernelLoaderFsDxe: normalize the Linux setup header
+
+QEMU is the boot loader for -kernel: it fills in the setup-header fields the
+Linux boot protocol expects a boot loader to supply, then serves the result
+over fw_cfg. This driver publishes those bytes as the virtual "kernel" file,
+and that is what gets measured into RTMR[1] (PCR[4]) and loaded.
+
+QEMU commit a7542a38f399 ("x86/loader: Don't update kernel header for CoCo
+VMs", first released in 10.2.0) stopped rewriting the header for confidential
+guests, so from 10.2 on the same kernel measures differently than it does on
+10.1 and earlier. Attestation has to know the host's QEMU version to predict
+its own RTMR[1], and the host declares that version.
+
+Zero the fields the boot protocol says a boot loader owns, which makes the
+published bytes independent of what QEMU did. The dstack image build applies
+the same normalization to the kernel it ships, so the measurement is the plain
+Authenticode hash of that file on every QEMU version.
+
+The field set is taken from Documentation/arch/x86/boot.rst rather than from
+QEMU's behavior: fields typed `write` are ones the boot loader fills in and the
+kernel supplies no value for. Fields typed `modify` are left alone because they
+carry real kernel-supplied values.
+
+Booting is unaffected. On the EFI-stub path the real-mode setup code never
+runs, and heap_end_ptr -- the only one of these fields a built kernel leaves
+non-zero -- is read only when the boot loader has set CAN_USE_HEAP, which this
+also clears.
+
+Signed-off-by: dstack <dstack@dstack.dev>
+---
+--- a/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c
++++ b/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c
+@@ -49,6 +49,111 @@
+   KERNEL_BLOB    *Next;
+ };
+ 
++//
++// Offsets into the Linux x86 setup header, from
++// Documentation/arch/x86/boot.rst.
++//
++#define LINUX_HDR_MAGIC_OFFSET      0x202
++#define LINUX_HDR_VERSION_OFFSET    0x206
++#define LINUX_HDR_LOADFLAGS_OFFSET  0x211
++#define LINUX_HDR_END_OFFSET        0x258
++
++//
++// CAN_USE_HEAP in loadflags. The kernel builds it clear; a boot loader sets it
++// when it has also filled in heap_end_ptr.
++//
++#define LINUX_LOADFLAGS_CAN_USE_HEAP  0x80
++
++//
++// setup_data (0x250) arrived in boot protocol 2.09. Below that the field
++// layout normalized here is not guaranteed, so the image is left alone.
++//
++#define LINUX_HDR_MIN_PROTOCOL  0x0209
++
++//
++// Every setup-header field boot.rst types as `write`: the boot loader fills it
++// in and the kernel supplies no value, so zeroing it discards nothing. Fields
++// typed `modify` carry real kernel-supplied values -- code32_start (0x214) is
++// the protected-mode entry point -- and are deliberately absent.
++//
++STATIC CONST struct {
++  UINT16    Offset;
++  UINT16    Size;
++} mLinuxBootLoaderWrittenFields[] = {
++  { 0x210, 1 }, // type_of_loader
++  { 0x218, 4 }, // ramdisk_image
++  { 0x21C, 4 }, // ramdisk_size
++  { 0x224, 2 }, // heap_end_ptr
++  { 0x226, 1 }, // ext_loader_ver
++  { 0x227, 1 }, // ext_loader_type
++  { 0x228, 4 }, // cmd_line_ptr
++  { 0x23C, 4 }, // hardware_subarch
++  { 0x240, 8 }, // hardware_subarch_data
++  { 0x250, 8 }, // setup_data
++};
++
++/**
++  Clear the setup-header fields a boot loader owns, so the measured kernel does
++  not depend on what QEMU wrote there.
++
++  QEMU acts as the boot loader for -kernel and fills these fields in before
++  serving the image over fw_cfg, which changes the bytes this driver publishes
++  and therefore the digest measured into RTMR[1]/PCR[4]. QEMU 10.2 stopped
++  doing that for confidential guests (commit a7542a38f399), so without this the
++  same kernel measures differently depending on the host's QEMU.
++
++  Zeroing is idempotent and matches what the image build already writes into
++  the shipped kernel, so the measurement equals the Authenticode hash of the
++  file on disk on every QEMU version.
++
++  @param[in,out] Data  The kernel blob, starting at the setup header.
++  @param[in]     Size  Size of the blob in bytes.
++**/
++STATIC
++VOID
++NormalizeLinuxSetupHeader (
++  IN OUT UINT8   *Data,
++  IN     UINT32  Size
++  )
++{
++  UINTN   Idx;
++  UINT16  Protocol;
++
++  if (Size < LINUX_HDR_END_OFFSET) {
++    return;
++  }
++
++  if (CompareMem (Data + LINUX_HDR_MAGIC_OFFSET, "HdrS", 4) != 0) {
++    //
++    // Not a Linux bzImage. OVMF boots arbitrary EFI binaries this way, and
++    // QEMU does not patch those either.
++    //
++    return;
++  }
++
++  Protocol = (UINT16)(Data[LINUX_HDR_VERSION_OFFSET] |
++                      (Data[LINUX_HDR_VERSION_OFFSET + 1] << 8));
++  if (Protocol < LINUX_HDR_MIN_PROTOCOL) {
++    DEBUG ((
++      DEBUG_WARN,
++      "%a: boot protocol %d.%02d is too old to normalize\n",
++      __func__,
++      Protocol >> 8,
++      Protocol & 0xFF
++      ));
++    return;
++  }
++
++  for (Idx = 0; Idx < ARRAY_SIZE (mLinuxBootLoaderWrittenFields); Idx++) {
++    ZeroMem (
++      Data + mLinuxBootLoaderWrittenFields[Idx].Offset,
++      mLinuxBootLoaderWrittenFields[Idx].Size
++      );
++  }
++
++  Data[LINUX_HDR_LOADFLAGS_OFFSET] &= (UINT8)~LINUX_LOADFLAGS_CAN_USE_HEAP;
++}
++
+ STATIC KERNEL_BLOB_ITEMS  mKernelBlobItems[] = {
+   {
+     L"kernel",
+@@ -1063,6 +1168,10 @@
+     ChunkData += BlobItems->FwCfgItem[Idx].Size;
+   }
+ 
++  if (StrCmp (Blob->Name, L"kernel") == 0) {
++    NormalizeLinuxSetupHeader (Blob->Data, Blob->Size);
++  }
++
+   Blob->Next   = mKernelBlobs;
+   mKernelBlobs = Blob;
+   mKernelBlobCount++;

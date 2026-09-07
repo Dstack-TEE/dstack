@@ -317,6 +317,45 @@ AML access to encrypted/private guest RAM. Verification now rejects tampered
 tables before the CVM is trusted with keys; the sandbox bounds what tampered
 AML could have done in the first place.
 
+### The kernel measurement does not depend on the host's QEMU
+
+QEMU is the boot loader for `-kernel`: it fills in the setup-header fields the
+Linux boot protocol expects a boot loader to supply, and OVMF measures the
+result into RTMR[1]. QEMU commit `a7542a38f399` ("x86/loader: Don't update
+kernel header for CoCo VMs", first released in 10.2.0) stopped rewriting the
+header for confidential guests, so the same kernel would otherwise measure
+differently depending on which QEMU the host chose to run.
+
+dstack removes that dependency instead of modelling it. The image build zeroes
+the boot-loader-written fields in the kernel it ships, and dstack's OVMF zeroes
+them again before the kernel blob is measured and loaded. RTMR[1] is therefore
+the plain Authenticode hash of the `bzImage` listed in `sha256sum.txt`, and the
+verifier needs nothing from the host to predict it -- not a QEMU version, not a
+memory size.
+
+Images built before this landed keep their original behavior: their firmware
+does not normalize, so their digest still covers QEMU's rewritten copy. Which
+of the two applies is declared by the image itself -- `kernel_header_normalized`,
+recorded in `metadata.json` for the image-download path and mirrored into the
+measurement document for the no-image-download path -- so it is never something
+the host gets to choose.
+
+Both carriers are bound to `os_image_hash`. `sha256sum.txt` hashes to
+`os_image_hash`, a downloaded image is checked file by file against it, and the
+measurement document is one of its entries.
+
+This matters because everything the host declares about its own VM is
+untrusted. A knob the verifier has to consult is a knob the host can lie about;
+here there is no knob. It also removes a class of correct-but-rejected
+deployments, since the previous QEMU-patched digest varied with guest RAM and
+was only reproducible at specific memory sizes.
+
+The normalized field set comes from the boot protocol rather than from QEMU's
+behavior: every field `Documentation/arch/x86/boot.rst` types as `write` is one
+the boot loader fills in and the kernel supplies no value for, so zeroing it
+discards nothing the kernel provided. Fields typed `modify` carry real
+kernel-supplied values and are left measured.
+
 ### TCB status is surfaced, not gated, during verification
 
 dstack's `validate_tcb` does not reject a quote based on its TCB status string (`UpToDate`, `OutOfDate`, `ConfigurationNeeded`, `SWHardeningNeeded`, ...). It only enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed. The verified report carries the `status` field through to the caller.

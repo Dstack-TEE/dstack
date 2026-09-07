@@ -2413,6 +2413,7 @@ mod tests {
 
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
         let measurement = TdxOsImageMeasurement {
+            kernel_header_normalized: true,
             image: TdxImageMeasurement {
                 kernel_cmdline_sha384: vec![0x10; 48],
                 kernel_authenticode: vec![0x20; 48],
