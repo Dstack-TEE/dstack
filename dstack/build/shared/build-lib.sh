@@ -12,6 +12,8 @@
 #   DOCKERFILE   - path to the Dockerfile
 #   GIT_REV      - git revision to build
 #   DSTACK_SRC_URL - git URL for dstack source
+#   IMAGE_VERSION - version recorded in the image metadata
+#   IMAGE_SOURCE_URL - repository URL recorded in the image metadata
 
 set -euo pipefail
 
@@ -52,6 +54,8 @@ docker_build() {
         --build-arg "SOURCE_DATE_EPOCH=$commit_timestamp"
         --build-arg "DSTACK_REV=$GIT_REV"
         --build-arg "DSTACK_SRC_URL=$DSTACK_SRC_URL"
+        --build-arg "IMAGE_VERSION=${IMAGE_VERSION:-dev}"
+        --build-arg "IMAGE_SOURCE_URL=${IMAGE_SOURCE_URL:-${DSTACK_SRC_URL%.git}}"
     )
 
     if [ -n "${NO_CACHE:-}" ]; then

@@ -27,6 +27,19 @@ RUN cd repo/dstack && cargo build --release -p dstack-kms --target x86_64-unknow
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
+ARG DSTACK_REV
+ARG IMAGE_VERSION=dev
+ARG IMAGE_SOURCE_URL=https://github.com/Dstack-TEE/dstack
+LABEL org.opencontainers.image.title="dstack-kms" \
+      org.opencontainers.image.description="Key management service for dstack confidential applications" \
+      org.opencontainers.image.source="${IMAGE_SOURCE_URL}" \
+      org.opencontainers.image.revision="${DSTACK_REV}" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.url="${IMAGE_SOURCE_URL}/tree/${DSTACK_REV}/dstack/kms" \
+      org.opencontainers.image.documentation="${IMAGE_SOURCE_URL}/blob/${DSTACK_REV}/dstack/kms/README.md" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.base.name="docker.io/library/debian:bookworm" \
+      org.opencontainers.image.base.digest="sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe"
 COPY --from=build-shared /pin-packages.sh /build/
 COPY ./shared/pinned-packages.txt /build/
 WORKDIR /build
@@ -42,4 +55,16 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
 WORKDIR /
 COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
 COPY --from=kms-builder /build/.GIT_REV /etc/
+RUN mkdir -p /etc/dstack-kms && printf '%s\n' \
+    "org.opencontainers.image.title=dstack-kms" \
+    "org.opencontainers.image.description=Key management service for dstack confidential applications" \
+    "org.opencontainers.image.source=${IMAGE_SOURCE_URL}" \
+    "org.opencontainers.image.revision=${DSTACK_REV}" \
+    "org.opencontainers.image.version=${IMAGE_VERSION}" \
+    "org.opencontainers.image.url=${IMAGE_SOURCE_URL}/tree/${DSTACK_REV}/dstack/kms" \
+    "org.opencontainers.image.documentation=${IMAGE_SOURCE_URL}/blob/${DSTACK_REV}/dstack/kms/README.md" \
+    "org.opencontainers.image.licenses=Apache-2.0" \
+    "org.opencontainers.image.base.name=docker.io/library/debian:bookworm" \
+    "org.opencontainers.image.base.digest=sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe" \
+    > /etc/dstack-kms/build-info
 CMD ["dstack-kms"]

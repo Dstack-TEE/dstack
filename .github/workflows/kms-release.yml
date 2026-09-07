@@ -29,12 +29,21 @@ jobs:
             dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
             dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
 
-      - name: Parse version from tag
+      - name: Parse and check version
         run: |
-          # Extract version from tag (e.g., kms-v1.2.3 -> 1.2.3)
-          VERSION=${GITHUB_REF#refs/tags/kms-v}
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Parsed version: $VERSION"
+          case "${GITHUB_REF}" in
+            refs/tags/kms-v*) VERSION=${GITHUB_REF#refs/tags/kms-v} ;;
+            *)
+              echo "This release workflow must run on a kms-v* tag; got ${GITHUB_REF}." >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "${VERSION}" ]; then
+            echo "The release version is empty." >&2
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Parsed version: ${VERSION}"
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -65,8 +74,21 @@ jobs:
             build-shared=dstack/build/shared
           build-args: |
             DSTACK_REV=${{ env.GIT_REV }}
+            IMAGE_VERSION=${{ env.VERSION }}
+            IMAGE_SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}
             SOURCE_DATE_EPOCH=${{ env.TIMESTAMP }}
+          annotations: |
+            manifest:org.opencontainers.image.title=dstack-kms
+            manifest:org.opencontainers.image.description=Key management service for dstack confidential applications
+            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            manifest:org.opencontainers.image.revision=${{ env.GIT_REV }}
+            manifest:org.opencontainers.image.version=${{ env.VERSION }}
+            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}/tree/${{ env.GIT_REV }}/dstack/kms
+            manifest:org.opencontainers.image.documentation=${{ github.server_url }}/${{ github.repository }}/blob/${{ env.GIT_REV }}/dstack/kms/README.md
+            manifest:org.opencontainers.image.licenses=Apache-2.0
+            manifest:org.opencontainers.image.base.name=docker.io/library/debian:bookworm
+            manifest:org.opencontainers.image.base.digest=sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
