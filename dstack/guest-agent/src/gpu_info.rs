@@ -309,12 +309,45 @@ fn unavailable(error: impl Into<String>) -> GpuInfoResponse {
 mod test_support {
     use super::*;
 
-    pub(super) fn set_snapshot(response: GpuInfoResponse) {
-        SNAPSHOT.set(response);
+    /// Serializes the tests that reach into process-global state.
+    ///
+    /// [`SNAPSHOT`], [`REFRESH_LOCK`] and [`COLLECTOR_OVERRIDE`] are one per
+    /// process while the harness runs tests on parallel threads, so without
+    /// this two tests race over the same cache entry and the same collector
+    /// path -- one pointing at a stub that sleeps, the other at a path that
+    /// does not exist.
+    static EXCLUSION: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    /// Held for the whole test body, not just the mutation, and restores the
+    /// collector override on the way out so a stub cannot leak into a test
+    /// that expects the real path.
+    pub(super) struct Exclusive {
+        _exclusion: tokio::sync::MutexGuard<'static, ()>,
+        _refresh: tokio::sync::MutexGuard<'static, ()>,
     }
 
-    pub(super) fn hold_refresh_lock() -> tokio::sync::MutexGuard<'static, ()> {
-        REFRESH_LOCK.try_lock().expect("refresh lock is free")
+    impl Drop for Exclusive {
+        fn drop(&mut self) {
+            *COLLECTOR_OVERRIDE
+                .write()
+                .or_panic("collector override poisoned") = None;
+        }
+    }
+
+    pub(super) async fn exclusive() -> Exclusive {
+        let exclusion = EXCLUSION.lock().await;
+        // Waits rather than try_lock: a refresh spawned by an earlier test may
+        // still be finishing, and failing a test for losing that race tests
+        // the harness rather than the code.
+        let refresh = REFRESH_LOCK.lock().await;
+        Exclusive {
+            _exclusion: exclusion,
+            _refresh: refresh,
+        }
+    }
+
+    pub(super) fn set_snapshot(response: GpuInfoResponse) {
+        SNAPSHOT.set(response);
     }
 
     pub(super) fn set_collector(path: &str) {
@@ -377,9 +410,9 @@ mod tests {
     /// `/metrics` reported zero GPUs forever at Prometheus' default 15s.
     #[tokio::test]
     async fn a_snapshot_older_than_the_ttl_is_still_served() {
-        // Hold the refresh lock so the spawned refresh cannot overwrite the
+        // Hold the globals so no refresh, and no other test, can overwrite the
         // snapshot mid-assertion on a machine that does have a GPU.
-        let _guard = test_support::hold_refresh_lock();
+        let _guard = test_support::exclusive().await;
         test_support::set_snapshot(sample_response());
 
         let served = serve(SNAPSHOT.get_allow_stale().ok());
@@ -408,7 +441,7 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
             .expect("chmod stub");
 
-        let _guard = test_support::hold_refresh_lock();
+        let _guard = test_support::exclusive().await;
         test_support::set_collector(&script.to_string_lossy());
 
         let outcome = timeout(Duration::from_millis(500), collect()).await;
@@ -434,6 +467,7 @@ mod tests {
     /// a panic and not a silent "no GPUs".
     #[tokio::test]
     async fn a_missing_collector_is_reported_as_an_error() {
+        let _guard = test_support::exclusive().await;
         test_support::set_collector("/nonexistent/dstack-util");
         let error = collect().await.expect_err("must fail");
         assert!(
