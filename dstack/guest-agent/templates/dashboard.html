@@ -112,6 +112,14 @@ SPDX-License-Identifier: Apache-2.0
             background-color: #edf2f7;
         }
 
+        /* The global link padding gives the hover pill some body, but in a
+           table cell it also sets the row height -- once the cells themselves
+           are tight, the one row holding a link stands taller than the rest. */
+        td a {
+            padding: 2px 8px;
+            margin-left: -8px;
+        }
+
         .info-section {
             background-color: white;
             padding: 6px 16px;
@@ -202,11 +210,11 @@ SPDX-License-Identifier: Apache-2.0
             </div>
             <div class="info-row">
                 <div class="info-label">Load Average</div>
-                <div class="info-value">1min: {{system_info.loadavg_one as f32 / 100.0}}%, 5min: {{system_info.loadavg_five as f32 / 100.0}}%, 15min: {{system_info.loadavg_fifteen as f32 / 100.0}}%</div>
+                <div class="info-value">1min: {{system_info.loadavg_one|load}}, 5min: {{system_info.loadavg_five|load}}, 15min: {{system_info.loadavg_fifteen|load}}</div>
             </div>
             <div class="info-row">
                 <div class="info-label">System Uptime</div>
-                <div class="info-value">{{system_info.uptime}}</div>
+                <div class="info-value">{{system_info.uptime|hduration}}</div>
             </div>
             {% for (i, disk) in system_info.disks.iter().enumerate() %}
             <div class="info-row">
