@@ -40,15 +40,15 @@ dstack_guest_uptime_seconds {{system_info.uptime}}
 
 # HELP dstack_guest_load1 System load average over 1 minute.
 # TYPE dstack_guest_load1 gauge
-dstack_guest_load1 {{system_info.loadavg_one}}
+dstack_guest_load1 {{system_info.loadavg_one|load}}
 
 # HELP dstack_guest_load5 System load average over 5 minutes.
 # TYPE dstack_guest_load5 gauge
-dstack_guest_load5 {{system_info.loadavg_five}}
+dstack_guest_load5 {{system_info.loadavg_five|load}}
 
 # HELP dstack_guest_load15 System load average over 15 minutes.
 # TYPE dstack_guest_load15 gauge
-dstack_guest_load15 {{system_info.loadavg_fifteen}}
+dstack_guest_load15 {{system_info.loadavg_fifteen|load}}
 
 # HELP dstack_guest_disk_total_bytes Disk size in bytes.
 # TYPE dstack_guest_disk_total_bytes gauge
@@ -205,15 +205,15 @@ system_uptime {{system_info.uptime}}
 
 # HELP system_load_average_1m System load average (1 minute) (deprecated: use dstack_guest_load1)
 # TYPE system_load_average_1m gauge
-system_load_average_1m {{system_info.loadavg_one}}
+system_load_average_1m {{system_info.loadavg_one|load}}
 
 # HELP system_load_average_5m System load average (5 minutes) (deprecated: use dstack_guest_load5)
 # TYPE system_load_average_5m gauge
-system_load_average_5m {{system_info.loadavg_five}}
+system_load_average_5m {{system_info.loadavg_five|load}}
 
 # HELP system_load_average_15m System load average (15 minutes) (deprecated: use dstack_guest_load15)
 # TYPE system_load_average_15m gauge
-system_load_average_15m {{system_info.loadavg_fifteen}}
+system_load_average_15m {{system_info.loadavg_fifteen|load}}
 
 # HELP disk_total_size Disk total size in bytes (deprecated: use dstack_guest_disk_total_bytes)
 # TYPE disk_total_size gauge

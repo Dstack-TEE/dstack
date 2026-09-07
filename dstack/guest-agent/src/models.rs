@@ -33,6 +33,40 @@ mod filters {
         Ok(hex::encode(s))
     }
 
+    /// Renders a second count as `1d 2h 3m 4s`. `SystemInfo.uptime` is a
+    /// `uint64` of seconds and the page printed it raw, so a guest one minute
+    /// into its life displayed `68` with no unit at all.
+    ///
+    /// Display only: `dstack_guest_uptime_seconds` keeps the raw count, which
+    /// is what a Prometheus gauge of that name has to carry.
+    pub fn hduration(s: &u64) -> Result<String, rinja::Error> {
+        let (days, hours) = (s / 86_400, (s % 86_400) / 3_600);
+        let (minutes, seconds) = ((s % 3_600) / 60, s % 60);
+        let mut out = String::new();
+        if days > 0 {
+            out.push_str(&format!("{days}d "));
+        }
+        if days > 0 || hours > 0 {
+            out.push_str(&format!("{hours}h "));
+        }
+        if days > 0 || hours > 0 || minutes > 0 {
+            out.push_str(&format!("{minutes}m "));
+        }
+        out.push_str(&format!("{seconds}s"));
+        Ok(out)
+    }
+
+    /// Recovers a load average from the fixed-point `u32` the wire carries.
+    ///
+    /// `SystemInfo.loadavg_*` is the load times 100, so every consumer has to
+    /// divide it back. The dashboard did divide, then appended a `%`; a load
+    /// average is a count of runnable tasks, not a percentage, and `1.00` on a
+    /// single-core guest means saturated rather than one percent. `/metrics`
+    /// did not divide at all, so a load of 0.40 was published as `40`.
+    pub fn load(s: &u32) -> Result<String, rinja::Error> {
+        Ok(format!("{:.2}", f64::from(*s) / 100.0))
+    }
+
     /// Drops a zero PCI domain. NVML reports `00000000:01:00.0` where lspci and
     /// the kernel print `0000:01:00.0` or just `01:00.0`.
     ///
@@ -312,6 +346,52 @@ mod tests {
         });
         assert!(body.contains(r#"uuid="GPU-b2880e21-86ab""#), "{body}");
         assert!(body.contains(r#"pci_bus_id="00000000:01:00.0""#), "{body}");
+    }
+
+    /// A bare `68` on the page said neither seconds nor minutes. The unit has
+    /// to survive every magnitude, including the boundary where a field first
+    /// becomes non-zero.
+    #[test]
+    fn uptime_is_rendered_with_units() {
+        use super::filters::hduration;
+
+        assert_eq!(hduration(&0).unwrap(), "0s");
+        assert_eq!(hduration(&68).unwrap(), "1m 8s");
+        assert_eq!(hduration(&3_600).unwrap(), "1h 0m 0s");
+        assert_eq!(hduration(&90_061).unwrap(), "1d 1h 1m 1s");
+    }
+
+    /// The wire carries the load times 100. Both consumers got it wrong in
+    /// opposite directions: the page divided and then called the result a
+    /// percentage, `/metrics` published the undivided integer.
+    #[test]
+    fn load_average_is_neither_scaled_nor_a_percentage() {
+        use super::filters::load;
+
+        assert_eq!(load(&40).unwrap(), "0.40");
+        assert_eq!(load(&100).unwrap(), "1.00");
+        assert_eq!(load(&1_234).unwrap(), "12.34");
+    }
+
+    /// A gauge named `load1` reporting 40 for a load of 0.40 is off by two
+    /// orders of magnitude, which is worse than the cosmetic `%` on the page.
+    #[test]
+    fn metrics_publish_load_averages_unscaled() {
+        let body = Metrics {
+            system_info: SystemInfo {
+                loadavg_one: 40,
+                loadavg_five: 100,
+                loadavg_fifteen: 1_234,
+                ..Default::default()
+            },
+            gpu_info: Default::default(),
+        }
+        .render()
+        .expect("render");
+        assert!(body.contains("dstack_guest_load1 0.40"), "{body}");
+        assert!(body.contains("dstack_guest_load5 1.00"), "{body}");
+        assert!(body.contains("dstack_guest_load15 12.34"), "{body}");
+        assert!(body.contains("system_load_average_1m 0.40"), "{body}");
     }
 
     fn dashboard_with(gpu_info: GpuInfoResponse) -> String {
