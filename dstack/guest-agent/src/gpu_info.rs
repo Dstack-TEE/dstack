@@ -14,10 +14,36 @@
 //!    short-lived child that can be killed when a driver call wedges. Nothing
 //!    stays resident between samples, and each sample re-initializes NVML, so a
 //!    driver that loads late is picked up instead of being cached as "no GPU".
-//! 3. **Stale beats nothing.** Callers get the last known snapshot with its age
-//!    attached and a refresh is kicked off behind them. Returning a placeholder
-//!    on expiry would mean a Prometheus scrape slower than the TTL -- which is
-//!    every realistic scrape interval -- never sees a single GPU series.
+//! 3. **A request never waits on the GPU.** Callers get the last known snapshot
+//!    with its age attached and a refresh is kicked off behind them. Returning
+//!    a placeholder on expiry would mean a Prometheus scrape slower than the
+//!    TTL -- which is every realistic scrape interval -- never sees a single
+//!    GPU series.
+//!
+//! The cache is not here because sampling is slow. One `dstack-util gpu-info`
+//! run, fork to exit, measured 94-99 ms on a single H200 in CC mode. It is here
+//! because that number describes the healthy path only, and three things do not
+//! follow from it:
+//!
+//! - `/metrics` also carries CPU, memory, disk and container state. Sampling
+//!   inline would put all of it behind a driver call that can wedge for
+//!   [`SAMPLE_TIMEOUT`], well past a default Prometheus scrape timeout, so one
+//!   stuck card would erase every metric this CVM reports rather than just the
+//!   GPU ones.
+//! - `/metrics`, the dashboard and the `GpuInfo` RPC can arrive together, and
+//!   each would otherwise fork its own collector to repeat the same `dlopen`
+//!   and `nvmlInit_v2`. [`REFRESH_LOCK`] collapses a burst into one sample.
+//! - Enumeration cost grows with card count, and only one card has been
+//!   measured.
+//!
+//! Refreshing is lazy: nothing resamples unless someone asks. A served snapshot
+//! is therefore roughly one scrape interval old, not [`SAMPLE_TTL`] old -- the
+//! TTL decides when a request triggers the next sample, not how fresh the
+//! answer is. `sample_age_ms`, and `dstack_gpu_sample_age_seconds` on
+//! `/metrics`, carry that age so a consumer can correct for it. A background
+//! ticker would cap the age at the TTL instead, at the price of a permanent
+//! ~2% of a core on every GPU guest whether or not anyone is watching, to
+//! publish a number the consumer can already derive.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -34,8 +60,10 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
-/// How long a successful snapshot is served before a refresh is triggered.
-/// Older snapshots are still served, just with a refresh started behind them.
+/// How long a successful snapshot is served before a request triggers a
+/// refresh. Older snapshots are still served, just with a refresh started
+/// behind them, so this bounds when resampling starts and not how old a served
+/// sample can be.
 const SAMPLE_TTL: Duration = Duration::from_secs(5);
 /// Backoff after a failed sample.
 ///
@@ -46,9 +74,13 @@ const SAMPLE_TTL: Duration = Duration::from_secs(5);
 /// Long enough to stop hammering, short enough that a recovered driver is
 /// picked up while an operator is still looking at the dashboard.
 const FAILURE_BACKOFF: Duration = Duration::from_secs(30);
-/// Upper bound on one `dstack-util gpu-info` run. Generous because a cold
-/// `nvmlInit_v2` on a multi-GPU CC system is not fast, but finite because the
-/// whole point of the child process is that a wedged driver can be abandoned.
+/// Upper bound on one `dstack-util gpu-info` run. Finite because the whole
+/// point of the child process is that a wedged driver can be abandoned.
+///
+/// A measured run on a single H200 in CC mode takes 94-99 ms, so this is two
+/// orders of magnitude of headroom. The margin stays until a multi-GPU CVM has
+/// been measured: `nvmlInit_v2` enumerates every card, and trading the untested
+/// case for faster recovery in the tested one is the wrong direction.
 const SAMPLE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The collector, installed into the rootfs alongside this agent.
