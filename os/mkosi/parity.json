@@ -170,6 +170,11 @@
     "usr/lib/systemd/system/debug-shell.service",
     "usr/lib/systemd/system/systemd-logind.service"
   ],
+  "required_ldconfig_entries": [
+    "libnvidia-ml.so.1",
+    "libnvidia-container.so.1",
+    "libnvidia-container-go.so.1"
+  ],
   "runtime_link_paths": [
     "usr/bin/nvattest",
     "usr/bin/nvidia-smi",
