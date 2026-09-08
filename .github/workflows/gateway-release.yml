@@ -6,6 +6,11 @@ name: Gateway Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the gateway-v prefix
+        required: true
+        type: string
   push:
     tags:
       - 'gateway-v*'
@@ -23,16 +28,15 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Parse and check version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           case "${GITHUB_REF}" in
             refs/tags/gateway-v*) VERSION=${GITHUB_REF#refs/tags/gateway-v} ;;
-            *)
-              echo "This release workflow must run on a gateway-v* tag; got ${GITHUB_REF}." >&2
-              exit 1
-              ;;
+            *) VERSION=${DISPATCH_VERSION} ;;
           esac
           if [ -z "${VERSION}" ]; then
-            echo "The release version is empty." >&2
+            echo "This release workflow needs a gateway-v* tag or a version input; got ${GITHUB_REF}." >&2
             exit 1
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
@@ -47,41 +51,30 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Get Git commit timestamps
-        run: |
-          echo "TIMESTAMP=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
-          echo "GIT_REV=$(git rev-parse HEAD)" >> $GITHUB_ENV
+      - name: Resolve the revision to build
+        run: echo "GIT_REV=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
+      # Release images are built through the same script contributors run by
+      # hand, so a published image can be reproduced and checked digest-for-digest.
+      # See the builder README for the reproduction recipe.
       - name: Build and push Docker image
         id: build-and-push
-        uses: docker/build-push-action@v5
         env:
-          SOURCE_DATE_EPOCH: ${{ env.TIMESTAMP }}
-        with:
-          context: dstack/gateway/dstack-app/builder
-          push: true
-          tags: ${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}
-          platforms: linux/amd64
-          provenance: false
-          build-contexts: |
-            build-shared=dstack/build/shared
-          build-args: |
-            DSTACK_REV=${{ env.GIT_REV }}
-            IMAGE_VERSION=${{ env.VERSION }}
-            IMAGE_SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
-            DSTACK_SRC_URL=${{ github.server_url }}/${{ github.repository }}.git
-            SOURCE_DATE_EPOCH=${{ env.TIMESTAMP }}
-          annotations: |
-            manifest:org.opencontainers.image.title=dstack-gateway
-            manifest:org.opencontainers.image.description=Gateway service for dstack confidential applications
-            manifest:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            manifest:org.opencontainers.image.revision=${{ env.GIT_REV }}
-            manifest:org.opencontainers.image.version=${{ env.VERSION }}
-            manifest:org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}/tree/${{ env.GIT_REV }}/dstack/gateway
-            manifest:org.opencontainers.image.documentation=${{ github.server_url }}/${{ github.repository }}/blob/${{ env.GIT_REV }}/dstack/gateway/dstack-app/builder/README.md
-            manifest:org.opencontainers.image.licenses=Apache-2.0
-            manifest:org.opencontainers.image.base.name=docker.io/library/debian:bookworm
-            manifest:org.opencontainers.image.base.digest=sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
+          PUSH: "1"
+          METADATA_FILE: ${{ runner.temp }}/build-metadata.json
+          GIT_REV: ${{ env.GIT_REV }}
+          IMAGE_VERSION: ${{ env.VERSION }}
+          IMAGE_SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+          DSTACK_SRC_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          dstack/gateway/dstack-app/builder/build-image.sh \
+            ${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}
+          digest=$(jq -r '."containerimage.digest"' "$METADATA_FILE")
+          if [ -z "$digest" ] || [ "$digest" = null ]; then
+            echo "the build did not report an image digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1

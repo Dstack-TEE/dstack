@@ -27,19 +27,6 @@ RUN cd repo/dstack && cargo build --release -p dstack-gateway --target x86_64-un
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
-ARG DSTACK_REV
-ARG IMAGE_VERSION=dev
-ARG IMAGE_SOURCE_URL=https://github.com/Dstack-TEE/dstack
-LABEL org.opencontainers.image.title="dstack-gateway" \
-      org.opencontainers.image.description="Gateway service for dstack confidential applications" \
-      org.opencontainers.image.source="${IMAGE_SOURCE_URL}" \
-      org.opencontainers.image.revision="${DSTACK_REV}" \
-      org.opencontainers.image.version="${IMAGE_VERSION}" \
-      org.opencontainers.image.url="${IMAGE_SOURCE_URL}/tree/${DSTACK_REV}/dstack/gateway" \
-      org.opencontainers.image.documentation="${IMAGE_SOURCE_URL}/blob/${DSTACK_REV}/dstack/gateway/dstack-app/builder/README.md" \
-      org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.base.name="docker.io/library/debian:bookworm" \
-      org.opencontainers.image.base.digest="sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe"
 COPY --from=build-shared pin-packages.sh /build/
 COPY ./shared/pinned-packages.txt /build/
 WORKDIR /build
@@ -54,18 +41,11 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=gateway-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-gateway /usr/local/bin/dstack-gateway
 COPY --from=gateway-builder /build/.GIT_REV /etc/
-RUN mkdir -p /etc/dstack-gateway && printf '%s\n' \
-    "org.opencontainers.image.title=dstack-gateway" \
-    "org.opencontainers.image.description=Gateway service for dstack confidential applications" \
-    "org.opencontainers.image.source=${IMAGE_SOURCE_URL}" \
-    "org.opencontainers.image.revision=${DSTACK_REV}" \
-    "org.opencontainers.image.version=${IMAGE_VERSION}" \
-    "org.opencontainers.image.url=${IMAGE_SOURCE_URL}/tree/${DSTACK_REV}/dstack/gateway" \
-    "org.opencontainers.image.documentation=${IMAGE_SOURCE_URL}/blob/${DSTACK_REV}/dstack/gateway/dstack-app/builder/README.md" \
-    "org.opencontainers.image.licenses=Apache-2.0" \
-    "org.opencontainers.image.base.name=docker.io/library/debian:bookworm" \
-    "org.opencontainers.image.base.digest=sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe" \
-    > /etc/dstack-gateway/build-info
+# The OCI metadata is generated once by build-lib.sh and injected here, as
+# the config labels and as the manifest annotations, so the three views of
+# the image can never disagree.
+ARG IMAGE_METADATA
+RUN mkdir -p /etc/dstack-gateway && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-gateway/build-info
 WORKDIR /app
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

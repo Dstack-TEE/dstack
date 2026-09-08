@@ -11,14 +11,16 @@ REPO_ROOT=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)
 CONTEXT_DIR="$SCRIPT_DIR"
 SHARED_DIR="$SCRIPT_DIR/shared"
 DOCKERFILE="$SCRIPT_DIR/Dockerfile"
+export CONTEXT_DIR DOCKERFILE
 
+# shellcheck source=/dev/null
 source "$REPO_ROOT/dstack/build/shared/build-lib.sh"
 
-NAME=${1:-}
-if [ -z "$NAME" ]; then
-    echo "Usage: $0 <image-name>[:<tag>]" >&2
+if [ "$#" -eq 0 ]; then
+    echo "Usage: $0 <image-name>[:<tag>]..." >&2
     exit 1
 fi
+TAGS=$(printf '%s\n' "$@")
 
 NO_CACHE=${NO_CACHE:-}
 GIT_REV=${GIT_REV:-HEAD}
@@ -30,7 +32,13 @@ ensure_buildkit
 touch "$SHARED_DIR/builder-pinned-packages.txt"
 touch "$SHARED_DIR/pinned-packages.txt"
 
-docker_build "$NAME" "" "$SHARED_DIR/pinned-packages.txt"
+METADATA=$(image_metadata \
+    "dstack-gateway" \
+    "Gateway service for dstack confidential applications" \
+    "dstack/gateway" \
+    "dstack/gateway/README.md")
+
+docker_build "$TAGS" "" "$SHARED_DIR/pinned-packages.txt" "$METADATA"
 docker_build "gateway-builder-temp" "gateway-builder" "$SHARED_DIR/builder-pinned-packages.txt"
 
 check_clean_tree "$SHARED_DIR"
