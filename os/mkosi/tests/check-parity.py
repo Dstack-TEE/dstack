@@ -91,6 +91,23 @@ for path, expected in spec.get("required_symlink_resolutions", {}).items():
         missing.append(
             f"netfilter frontend:/{path} resolves to {target}, wanted {expected}"
         )
+required_ldconfig_entries = spec.get("required_ldconfig_entries", [])
+if required_ldconfig_entries:
+    result = subprocess.run(
+        ["ldconfig", "-r", rootfs, "-p"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode:
+        missing.append("runtime linker cache: failed to read")
+    else:
+        cached = {
+            line.split()[0] for line in result.stdout.splitlines() if " => " in line
+        }
+        for soname in required_ldconfig_entries:
+            if soname not in cached:
+                missing.append(f"runtime linker cache: {soname}")
 for path in spec.get("runtime_link_paths", []):
     result = subprocess.run(
         ["lddtree", "-R", rootfs, f"/{path}"],
