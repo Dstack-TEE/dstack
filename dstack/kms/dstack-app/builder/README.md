@@ -18,13 +18,59 @@ The builder creates a Docker image that includes:
 To build the KMS Docker image, use the provided `build-image.sh` script:
 
 ```bash
-./build-image.sh <image-name>[:<tag>]
+./build-image.sh <image-name>[:<tag>]...
 ```
 
 For example:
 ```bash
 ./build-image.sh kvin/kms
 ```
+
+Optional environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `GIT_REV` | Revision to build (default `HEAD`) |
+| `IMAGE_VERSION` | Version recorded in the image metadata (default `dev`) |
+| `IMAGE_SOURCE_URL` | Repository URL recorded in the image metadata |
+| `NO_CACHE` | Set to any value to build without the layer cache |
+| `OCI_TAR` | Also write an OCI archive here, for digest comparison |
+| `PUSH` | Set to any value to push the tags instead of only loading them |
+
+## Reproducing a released image
+
+Release CI runs this same script, so a published image can be rebuilt and
+checked digest-for-digest. Pass the release tag's revision and version:
+
+```bash
+GIT_REV=kms-v0.6.0 \
+IMAGE_VERSION=0.6.0 \
+IMAGE_SOURCE_URL=https://github.com/Dstack-TEE/dstack \
+OCI_TAR=/tmp/kms.oci.tar \
+  ./build-image.sh dstacktee/dstack-kms:0.6.0
+
+python3 -c 'import json,tarfile;t=tarfile.open("/tmp/kms.oci.tar");print(json.load(t.extractfile("index.json"))["manifests"][0]["digest"])'
+```
+
+`IMAGE_VERSION` is part of the image metadata, so it must match the release for
+the digests to match. The printed digest is what the registry reports for
+`dstacktee/dstack-kms:0.6.0`; compare it with:
+
+```bash
+docker buildx imagetools inspect dstacktee/dstack-kms:0.6.0 --format '{{.Manifest.Digest}}'
+```
+
+This is the digest that `deploy-to-vmm.sh` pins in `KMS_IMAGE`, and that in turn
+feeds the compose hash registered on chain.
+
+## Image metadata
+
+The image carries its provenance as OCI metadata in three places, all generated
+from one definition in `dstack/build/shared/build-lib.sh`:
+
+- config labels — `docker inspect -f '{{json .Config.Labels}}' <image>`
+- manifest annotations — `docker buildx imagetools inspect <image>`
+- `/etc/dstack-kms/build-info` inside the image, readable from within the CVM
 
 ## Running the Built Image
 
