@@ -112,6 +112,7 @@
   },
   "required_kernel_config": [
     "CONFIG_ACPI_TABLE_UPGRADE=y",
+    "CONFIG_SWIOTLB_DYNAMIC=y",
     "CONFIG_INTEL_TDX_GUEST=y",
     "CONFIG_TDX_GUEST_DRIVER=y",
     "CONFIG_AMD_MEM_ENCRYPT=y",
