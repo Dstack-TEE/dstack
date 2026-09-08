@@ -675,7 +675,12 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Outcome> {
             Ok(Outcome::Listed(list_interfaces(libvirt_uri, &instance_id)))
         }
         Request::RemoveAll { instance_id, vm_id } => {
-            let removed = sweep_vm_interfaces(libvirt_uri, &instance_id, &vm_id)?;
+            let removed = sweep_vm_interfaces(
+                libvirt_uri,
+                &instance_id,
+                &vm_id,
+                config.filter_policy().requires_binding(),
+            )?;
             Ok(Outcome::Swept { removed })
         }
         Request::RemoveInterface { tap } => {
@@ -919,8 +924,8 @@ enum BindingCleanup {
 ///
 /// `validate_identity` caps the NIC index, so the whole space a VM can occupy
 /// is enumerable: 256 names, each a `stat` that usually misses. Cleanup is
-/// best-effort about bindings -- nothing is about to take these names, and a
-/// node running unfiltered TAPs need not have libvirtd at all.
+/// best-effort about unknown bindings on unfiltered nodes, which need not have
+/// libvirtd at all. Filtered nodes must confirm their bindings were released.
 ///
 /// A name with no interface is not skipped. An nwfilter binding outlives the
 /// TAP it was bound to, so the one state teardown must not leave behind is
@@ -929,7 +934,12 @@ enum BindingCleanup {
 /// less than the thing it replaced is not a sweep. Those names are decided
 /// against a single listing, because the whole point of enumerating a bounded
 /// space is that deciding one name stays cheap.
-fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Result<usize> {
+fn sweep_vm_interfaces(
+    libvirt_uri: &str,
+    instance_id: &str,
+    vm_id: &str,
+    requires_binding: bool,
+) -> Result<usize> {
     let identity = InterfaceIdentity {
         instance_id: instance_id.to_string(),
         vm_id: vm_id.to_string(),
@@ -945,7 +955,8 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
     // out by trying, once.
     let mut libvirt = true;
     let mut removed = 0;
-    let mut first_error = None;
+    let mut first_error = (requires_binding && bindings.is_none())
+        .then(|| anyhow::anyhow!("cannot confirm nwfilter cleanup: binding listing failed"));
     for nic_index in 0..=MAX_NIC_INDEX {
         let tap = tap_name(&InterfaceIdentity {
             nic_index,
@@ -955,15 +966,26 @@ fn sweep_vm_interfaces(libvirt_uri: &str, instance_id: &str, vm_id: &str) -> Res
         // A pass gets one answer about libvirt, not one per interface. Asking
         // again after it has failed is how a hung `libvirtd` turns a bounded
         // collection into an unbounded one.
-        let wanted = present || bindings.as_ref().is_some_and(|held| held.contains(&tap));
+        let known_binding = bindings.as_ref().is_some_and(|held| held.contains(&tap));
+        let wanted = present || known_binding;
         if libvirt && wanted && !is_macvtap(&tap) {
             if let Err(error) = delete_binding(libvirt_uri, &tap) {
                 warn!(%tap, %error, "failed to remove an nwfilter binding");
                 libvirt = false;
-                first_error.get_or_insert(error);
+                // Unfiltered nodes do not require a running libvirtd. An
+                // unknown, possible binding must not make a successful TAP
+                // deletion fail there. Still retain failures for bindings we
+                // actually found, including ones left by an older policy.
+                if requires_binding || known_binding {
+                    first_error.get_or_insert(error);
+                }
             } else if !present {
                 info!(%tap, %vm_id, "removed orphaned nwfilter binding");
             }
+        }
+        if !libvirt && known_binding {
+            first_error
+                .get_or_insert_with(|| anyhow::anyhow!("nwfilter binding {tap} was not released"));
         }
         if !present {
             continue;
@@ -2159,6 +2181,57 @@ mod tests {
         // and most of them miss.
         remove_interface(uri, &tap, BindingCleanup::Skip).unwrap();
     }
+    /// Run with the same isolated-network-namespace setup as the test above.
+    #[test]
+    #[ignore = "needs root and its own network namespace"]
+    fn sweeps_without_libvirt_follow_the_nodes_filter_policy() {
+        assert!(nix::unistd::Uid::effective().is_root());
+        assert_ne!(
+            std::fs::read_link("/proc/self/ns/net").unwrap(),
+            std::fs::read_link("/proc/1/ns/net").unwrap(),
+            "run this inside its own network namespace",
+        );
+        let uri = "qemu:///nonexistent-for-this-test";
+        for requires_binding in [false, true] {
+            let nic = identity("sweep-test", "vm-1", 0);
+            let tap = tap_name(&nic);
+            ip(&["tuntap", "add", "dev", &tap, "mode", "tap"]).unwrap();
+            let mut config = NetdConfig {
+                libvirt_uri: uri.into(),
+                ..Default::default()
+            };
+            config.network_filter = Some(NetworkFilterConfig {
+                mode: if requires_binding {
+                    crate::config::NetworkFilterMode::Libvirt
+                } else {
+                    crate::config::NetworkFilterMode::None
+                },
+                ..Default::default()
+            });
+            let sweep = || {
+                handle_request(
+                    &config,
+                    Request::RemoveAll {
+                        instance_id: nic.instance_id.clone(),
+                        vm_id: nic.vm_id.clone(),
+                    },
+                )
+            };
+            let result = sweep();
+            // Even a binding failure must not leave the TAP on the bridge.
+            assert!(!Path::new("/sys/class/net").join(&tap).exists());
+            if requires_binding {
+                assert!(result.is_err());
+                // A retry cannot claim success just because the TAP is gone:
+                // its binding may still exist in the unreachable libvirt.
+                assert!(sweep().is_err());
+            } else {
+                assert!(matches!(result.unwrap(), Outcome::Swept { removed: 1 }));
+                assert!(matches!(sweep().unwrap(), Outcome::Swept { removed: 0 }));
+            }
+        }
+    }
+
     /// A netd that answers a sweep with no count did not sweep. Reading the
     /// absent field as zero is the same conflation `queues` is shaped to
     /// avoid, and here it would report a netd that cannot collect a VM's

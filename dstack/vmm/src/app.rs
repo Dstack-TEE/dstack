@@ -530,13 +530,10 @@ impl App {
             })
             .await
             .context("GPU sanitization task failed")??;
-            if let Err(error) = self
-                .prepare_netd_networks(&vm_config, &mut runtime_networks)
-                .await
-            {
-                let _ = work_dir.clear_runtime_networks();
-                return Err(error);
-            }
+            // Keep any earlier snapshot on failure: preparation may not have
+            // been able to persist the cleanup marker for legacy NICs yet.
+            self.prepare_netd_networks(&vm_config, &mut runtime_networks)
+                .await?;
             let processes = match vm_config.config_qemu(
                 &work_dir,
                 &self.config.cvm,
@@ -560,12 +557,13 @@ impl App {
             }
             for process in processes {
                 if let Err(err) = self.supervisor.deploy(&process).await {
-                    self.release_vm_interfaces(&vm_config.manifest.id).await;
-                    if let Err(clear_err) = work_dir.clear_runtime_networks() {
-                        warn!(
-                            id,
-                            "failed to clear runtime networks after start failure: {clear_err}"
-                        );
+                    if self.release_vm_interfaces(&vm_config.manifest.id).await {
+                        if let Err(clear_err) = work_dir.clear_runtime_networks() {
+                            warn!(
+                                id,
+                                "failed to clear runtime networks after start failure: {clear_err}"
+                            );
+                        }
                     }
                     if let Some(vm_state) = self.lock().get_mut(id) {
                         vm_state.state.runtime_networks.clear();
@@ -643,10 +641,21 @@ impl App {
         // it no longer wants an interface, and gating it on wanting one is how
         // the interfaces it left behind would become unreachable to every
         // later launch.
+        let vm_workdir = self.work_dir(&vm.manifest.id)?;
+        if vm_workdir
+            .runtime_networks()
+            .iter()
+            .any(needs_netd_interface)
+        {
+            // Fail before a user-mode boot can overwrite a legacy snapshot
+            // when its replacement cleanup marker cannot be persisted.
+            vm_workdir.mark_network_cleanup_pending()?;
+        }
         self.release_vm_interfaces(&vm.manifest.id).await;
         if !networks.iter().any(needs_netd_interface) {
             return Ok(());
         }
+        vm_workdir.mark_network_cleanup_pending()?;
         let qemu_uid = Uid::effective().as_raw();
         // Only ever read back out of a log line: netd is told where the VM
         // lives so an operator holding an opaque TAP name can reach the VM
@@ -854,6 +863,22 @@ impl App {
     /// directory is what says to try again, and deleting it over a failed
     /// release is what strands an interface with nothing left to reach it.
     pub(crate) async fn release_vm_interfaces(&self, vm_id: &str) -> bool {
+        let workdir = match self.work_dir(vm_id) {
+            Ok(workdir) => workdir,
+            Err(error) => {
+                warn!(vm_id, %error, "cannot locate network cleanup state");
+                return false;
+            }
+        };
+        // Upgrade snapshots written before the marker existed. A failed sweep
+        // must remain recoverable even if the next boot replaces the snapshot
+        // with user-mode NICs or an update clears it.
+        if workdir.runtime_networks().iter().any(needs_netd_interface) {
+            if let Err(error) = workdir.mark_network_cleanup_pending() {
+                warn!(vm_id, %error, "cannot persist pending network cleanup");
+                return false;
+            }
+        }
         // Ask for the release, rather than asking whether it can be asked for.
         // A probe first would put a second round trip in front of every stop
         // and -- worse -- would make a *busy* netd look like an absent one and
@@ -868,6 +893,10 @@ impl App {
         .await
         {
             Ok(removed) => {
+                if let Err(error) = workdir.clear_network_cleanup_pending() {
+                    warn!(vm_id, %error, "cannot clear pending network cleanup");
+                    return false;
+                }
                 if removed > 0 {
                     info!(vm_id, removed, "released netd-managed interfaces");
                 }
@@ -1023,7 +1052,8 @@ impl App {
         // A VM that never asked netd for an interface -- user mode, a custom
         // netdev, or one that never launched -- has nothing for netd to be
         // holding, so an absent netd is not a reason to keep its directory.
-        let held_interfaces = vm_path.runtime_networks().iter().any(needs_netd_interface);
+        let held_interfaces = vm_path.network_cleanup_pending()
+            || vm_path.runtime_networks().iter().any(needs_netd_interface);
         let released = self.release_vm_interfaces(id).await;
 
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
@@ -2178,6 +2208,130 @@ mod tests {
             test_config(netd_socket, run_path),
             SupervisorClient::new("http://127.0.0.1:0"),
         )
+    }
+
+    /// A supervisor with no remaining process lets removal exercise the real
+    /// directory and netd paths without launching a VM.
+    async fn stopped_supervisor() -> (SupervisorClient, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut header = String::new();
+                loop {
+                    header.clear();
+                    assert!(reader.read_line(&mut header).await.unwrap() > 0);
+                    if header == "\r\n" {
+                        break;
+                    }
+                }
+                let body = serde_json::to_string(&supervisor_client::supervisor::Response::Data(
+                    Option::<supervisor_client::supervisor::ProcessInfo>::None,
+                ))
+                .unwrap();
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        (SupervisorClient::new(&format!("http://{address}")), task)
+    }
+
+    #[tokio::test]
+    async fn failed_release_survives_snapshot_replacement_and_removal_retry() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            supervisor.clone(),
+        );
+        let workdir = app.work_dir("vm-1").unwrap();
+        std::fs::create_dir_all(workdir.path()).unwrap();
+        // A legacy launch only left the runtime snapshot, without a marker.
+        let network = Networking {
+            nic: NicNetworking {
+                mode: NetworkingMode::Bridge,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        workdir.set_runtime_networks(&[network]).unwrap();
+        assert!(!workdir.network_cleanup_pending());
+        assert!(!app.release_vm_interfaces("vm-1").await);
+        assert!(workdir.network_cleanup_pending());
+        // A subsequent user-mode boot can replace the snapshot. Cleanup must
+        // still remember the bridge interfaces from the earlier boot.
+        workdir
+            .set_runtime_networks(&[Networking::default()])
+            .unwrap();
+        workdir.set_removing().unwrap();
+        assert!(app.lock().start_removing("vm-1"));
+        app.finish_remove_vm("vm-1", true).await.unwrap();
+        assert!(workdir.path().exists());
+        assert!(workdir.is_removing());
+        assert!(workdir.network_cleanup_pending());
+        assert!(app.refuse_if_removing("vm-1").is_err());
+
+        // Simulate restarting the VMM after netd has recovered.
+        let netd =
+            netd::testing::FakeNetd::spawn(netd::testing::Behavior::handling(&["remove_all"]));
+        let restarted = App::new(test_config(netd.socket(), dir.path()), supervisor);
+        restarted.finish_remove_vm("vm-1", true).await.unwrap();
+        assert!(!workdir.path().exists());
+        assert_eq!(netd.operations(), vec!["remove_all"]);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn removal_without_a_snapshot_distinguishes_pending_from_never_prepared() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            supervisor,
+        );
+        for (id, pending) in [("interrupted-prepare", true), ("user-only", false)] {
+            let workdir = app.work_dir(id).unwrap();
+            std::fs::create_dir_all(workdir.path()).unwrap();
+            if pending {
+                // Preparation wrote this before contacting netd, then crashed
+                // without ever writing runtime-networks.json.
+                workdir.mark_network_cleanup_pending().unwrap();
+            }
+            workdir.set_removing().unwrap();
+            app.finish_remove_vm(id, true).await.unwrap();
+            assert_eq!(workdir.path().exists(), pending);
+            assert_eq!(workdir.is_removing(), pending);
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn successful_sweep_clears_the_pending_marker() {
+        let netd =
+            netd::testing::FakeNetd::spawn(netd::testing::Behavior::handling(&["remove_all"]));
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(netd.socket(), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let workdir = app.work_dir("vm-1").unwrap();
+        std::fs::create_dir_all(workdir.path()).unwrap();
+        workdir.mark_network_cleanup_pending().unwrap();
+        assert!(app.release_vm_interfaces("vm-1").await);
+        assert!(!workdir.network_cleanup_pending());
+        assert!(workdir.path().exists());
     }
 
     /// A netd outage must not become a fleet that cannot be stopped.

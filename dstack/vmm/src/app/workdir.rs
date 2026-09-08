@@ -143,6 +143,26 @@ impl VmWorkDir {
         self.workdir.join("runtime-networks.json")
     }
 
+    /// Written before asking netd to create anything, and removed only after
+    /// a successful whole-VM sweep. Unlike the runtime snapshot, this survives
+    /// failed launches and changes to a topology that no longer uses netd.
+    pub fn mark_network_cleanup_pending(&self) -> Result<()> {
+        safe_write::safe_write(self.workdir.join(".netd-pending"), b"")
+            .context("failed to persist pending network cleanup")
+    }
+
+    pub fn network_cleanup_pending(&self) -> bool {
+        self.workdir.join(".netd-pending").exists()
+    }
+
+    pub fn clear_network_cleanup_pending(&self) -> Result<()> {
+        match fs::remove_file(self.workdir.join(".netd-pending")) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).context("failed to clear pending network cleanup"),
+        }
+    }
+
     pub fn runtime_networks(&self) -> Vec<Networking> {
         fs::read_to_string(self.runtime_networks_path())
             .ok()

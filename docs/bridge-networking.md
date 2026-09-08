@@ -283,6 +283,17 @@ directory stays and the next VMM start resumes the removal; `remove_all` is
 idempotent, so the retry costs one round trip. A VM that never asked `netd` for
 an interface is unaffected: there is nothing for `netd` to be holding.
 
+The VMM persists `.netd-pending` before asking netd to prepare an interface and
+clears it only after a successful whole-VM sweep. This cleanup marker survives
+failed launches and network configuration changes, even if the runtime snapshot
+is absent or replaced by a user-mode topology. Older snapshots are promoted to
+the marker before cleanup or replacement. A failed cleanup during an update
+also leaves the old snapshot intact.
+
+On an unfiltered node, an unavailable `libvirtd` does not make an otherwise
+successful TAP sweep fail. Filtered nodes still require confirmation that their
+nwfilter bindings have been released; deleting the TAP alone is not sufficient.
+
 What no VMM will retry is an interface whose VM directory an operator deleted
 by hand, or one recorded under an instance ID no VMM uses any more. `netd list`
 shows both, with the instance and VM they are recorded under:

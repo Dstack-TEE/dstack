@@ -1035,8 +1035,7 @@ impl VmmRpc for RpcHandler {
                 .info(&request.id)
                 .await?
                 .is_some_and(|info| info.state.status.is_running());
-            if !is_running {
-                self.app.release_vm_interfaces(&request.id).await;
+            if !is_running && self.app.release_vm_interfaces(&request.id).await {
                 vm_work_dir.clear_runtime_networks()?;
             }
             manifest.networks = networks;
