@@ -42,6 +42,11 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=verifier-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-verifier /usr/local/bin/dstack-verifier
 COPY --from=verifier-builder /build/.GIT_REV /etc/
+# The OCI metadata is generated once by build-lib.sh and injected here, as
+# the config labels and as the manifest annotations, so the three views of
+# the image can never disagree.
+ARG IMAGE_METADATA
+RUN mkdir -p /etc/dstack-verifier && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-verifier/build-info
 RUN mkdir -p /etc/dstack
 COPY dstack-verifier.toml /etc/dstack/dstack-verifier.toml
 WORKDIR /var/lib/dstack-verifier

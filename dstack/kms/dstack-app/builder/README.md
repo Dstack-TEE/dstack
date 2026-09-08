@@ -10,7 +10,7 @@ The builder creates a Docker image that includes:
 
 ## Prerequisites
 
-- Docker with BuildKit support (v20.10.0+)
+- Docker with Buildx v0.13.0+ (the script creates a BuildKit v0.20.2 builder)
 - Git
 
 ## Building the Image
@@ -18,13 +18,70 @@ The builder creates a Docker image that includes:
 To build the KMS Docker image, use the provided `build-image.sh` script:
 
 ```bash
-./build-image.sh <image-name>[:<tag>]
+./build-image.sh <image-name>[:<tag>]...
 ```
 
 For example:
 ```bash
 ./build-image.sh kvin/kms
 ```
+
+Optional environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `GIT_REV` | Revision to build (default `HEAD`) |
+| `IMAGE_VERSION` | Version recorded in the image metadata (default `dev`) |
+| `IMAGE_SOURCE_URL` | Repository URL recorded in the image metadata |
+| `NO_CACHE` | Set to any value to build without the layer cache |
+| `OCI_TAR` | Also write an OCI archive here, for digest comparison |
+| `METADATA_FILE` | Write the validated OCI manifest digest and build metadata here |
+| `PUSH` | Set to any value to push the tags instead of only loading them |
+
+Publication and OCI export happen only after both package lists pass validation.
+`NO_CACHE` applies to the validation builds; export then reuses their cached result.
+Manual release workflows require an existing component release tag and check out
+that tag, rather than building the branch selected in the workflow UI.
+
+## Reproducing a released image
+
+Release CI runs this same script, so a published image can be rebuilt and
+checked digest-for-digest. Use a clean checkout of the release commit so the
+Dockerfile, package lists, shared scripts and copied files also match the release.
+From the repository root (fetch the tag first if it is not available locally):
+
+```bash
+git switch --detach "kms-v0.6.0^{commit}"
+cd dstack/kms/dstack-app/builder
+
+GIT_REV=HEAD \
+IMAGE_VERSION=0.6.0 \
+IMAGE_SOURCE_URL=https://github.com/Dstack-TEE/dstack \
+OCI_TAR=/tmp/kms.oci.tar \
+  ./build-image.sh dstacktee/dstack-kms:0.6.0
+
+python3 -c 'import json,tarfile;t=tarfile.open("/tmp/kms.oci.tar");print(json.load(t.extractfile("index.json"))["manifests"][0]["digest"])'
+```
+
+`IMAGE_VERSION` is part of the image metadata, so it must match the release for
+the digests to match. The printed digest is what the registry reports for
+`dstacktee/dstack-kms:0.6.0`; compare it with:
+
+```bash
+docker buildx imagetools inspect dstacktee/dstack-kms:0.6.0 --format '{{.Manifest.Digest}}'
+```
+
+This is the digest that `deploy-to-vmm.sh` pins in `KMS_IMAGE`, and that in turn
+feeds the compose hash registered on chain.
+
+## Image metadata
+
+The image carries its provenance as OCI metadata in three places, all generated
+from one definition in `dstack/build/shared/build-lib.sh`:
+
+- config labels — `docker inspect -f '{{json .Config.Labels}}' <image>`
+- manifest annotations — `docker buildx imagetools inspect <image>`
+- `/etc/dstack-kms/build-info` inside the image, readable from within the CVM
 
 ## Running the Built Image
 

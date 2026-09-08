@@ -6,6 +6,11 @@ name: Gateway Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release tag version without the gateway-v prefix
+        required: true
+        type: string
   push:
     tags:
       - 'gateway-v*'
@@ -19,15 +24,30 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
+      - name: Parse and check version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            VERSION=$DISPATCH_VERSION
+          else
+            case "$GITHUB_REF" in
+              refs/tags/gateway-v*) VERSION=${GITHUB_REF#refs/tags/gateway-v} ;;
+              *) echo "Expected a gateway-v* tag" >&2; exit 1 ;;
+            esac
+          fi
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Version must be a valid Docker tag" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=gateway-v$VERSION" >> "$GITHUB_ENV"
+
+      # Manual runs rebuild an existing release tag, not the selected branch.
       - name: Checkout repository
         uses: actions/checkout@v5
-
-      - name: Parse version from tag
-        run: |
-          # Extract version from tag (e.g., gateway-v1.2.3 -> 1.2.3)
-          VERSION=${GITHUB_REF#refs/tags/gateway-v}
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Parsed version: $VERSION"
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && env.RELEASE_TAG || github.sha }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -38,27 +58,31 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Get Git commit timestamps
-        run: |
-          echo "TIMESTAMP=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
-          echo "GIT_REV=$(git rev-parse HEAD)" >> $GITHUB_ENV
+      - name: Resolve the revision to build
+        run: echo "GIT_REV=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
+      # Release images are built through the same script contributors run by
+      # hand, so a published image can be reproduced and checked digest-for-digest.
+      # See the builder README for the reproduction recipe.
       - name: Build and push Docker image
         id: build-and-push
-        uses: docker/build-push-action@v5
         env:
-          SOURCE_DATE_EPOCH: ${{ env.TIMESTAMP }}
-        with:
-          context: dstack/gateway/dstack-app/builder
-          push: true
-          tags: ${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}
-          platforms: linux/amd64
-          provenance: false
-          build-contexts: |
-            build-shared=dstack/build/shared
-          build-args: |
-            DSTACK_REV=${{ env.GIT_REV }}
-            SOURCE_DATE_EPOCH=${{ env.TIMESTAMP }}
+          PUSH: "1"
+          METADATA_FILE: ${{ runner.temp }}/build-metadata.json
+          GIT_REV: ${{ env.GIT_REV }}
+          IMAGE_VERSION: ${{ env.VERSION }}
+          IMAGE_NAME: ${{ vars.DOCKERHUB_ORG }}/dstack-gateway:${{ env.VERSION }}
+          IMAGE_SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+          DSTACK_SRC_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          dstack/gateway/dstack-app/builder/build-image.sh \
+            "$IMAGE_NAME"
+          digest=$(jq -r '."containerimage.digest"' "$METADATA_FILE")
+          if [ -z "$digest" ] || [ "$digest" = null ]; then
+            echo "the build did not report an image digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v1
@@ -70,6 +94,8 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ env.GIT_REV }}
           name: "Gateway Release v${{ env.VERSION }}"
           body: |
             ## Docker Image Information

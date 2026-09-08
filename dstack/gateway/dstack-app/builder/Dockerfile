@@ -41,6 +41,11 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=gateway-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-gateway /usr/local/bin/dstack-gateway
 COPY --from=gateway-builder /build/.GIT_REV /etc/
+# The OCI metadata is generated once by build-lib.sh and injected here, as
+# the config labels and as the manifest annotations, so the three views of
+# the image can never disagree.
+ARG IMAGE_METADATA
+RUN mkdir -p /etc/dstack-gateway && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-gateway/build-info
 WORKDIR /app
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

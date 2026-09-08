@@ -42,4 +42,9 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
 WORKDIR /
 COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
 COPY --from=kms-builder /build/.GIT_REV /etc/
+# The OCI metadata is generated once by build-lib.sh and injected here, as
+# the config labels and as the manifest annotations, so the three views of
+# the image can never disagree.
+ARG IMAGE_METADATA
+RUN mkdir -p /etc/dstack-kms && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-kms/build-info
 CMD ["dstack-kms"]
