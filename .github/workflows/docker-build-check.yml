@@ -16,18 +16,31 @@ on:
       - 'dstack/**'
       - 'rust-toolchain.toml'
       - '.github/workflows/docker-build-check.yml'
+      - '.github/workflows/kms-release.yml'
+      - '.github/workflows/gateway-release.yml'
+      - '.github/workflows/verifier-release.yml'
   pull_request:
     branches: [ next, 'release/**' ]
     paths:
       - 'dstack/**'
       - 'rust-toolchain.toml'
       - '.github/workflows/docker-build-check.yml'
+      - '.github/workflows/kms-release.yml'
+      - '.github/workflows/gateway-release.yml'
+      - '.github/workflows/verifier-release.yml'
 
 env:
   DSTACK_REV: ${{ github.event.pull_request.head.sha || github.sha }}
   DSTACK_SRC_URL: ${{ github.event.pull_request.head.repo.clone_url || format('{0}/{1}', github.server_url, github.repository) }}
 
 jobs:
+  build-script-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test release build orchestration
+        run: python3 -m unittest discover -s dstack/build/shared/tests -v
+
   gateway:
     runs-on: ubuntu-latest
     steps:

@@ -22,7 +22,7 @@
 #                      Release CI passes the tag version; pass the same value to
 #                      reproduce a published image.
 #   IMAGE_SOURCE_URL - repository URL recorded in the image metadata
-#   PUSH             - non-empty to push the image instead of loading it
+#   PUSH             - non-empty to publish after local validation
 #   OCI_TAR          - path to also write an OCI archive to. The manifest digest
 #                      of that archive is what a registry reports, so this is the
 #                      way to check a local rebuild against a published digest.
@@ -98,17 +98,19 @@ image_metadata() {
         "org.opencontainers.image.base.digest=$base_digest"
 }
 
-# docker_build <tags> [target] [pkg_list_file] [metadata]
+# docker_build <tags> [target] [pkg_list_file] [metadata] [mode]
 #
 #   tags          - newline-separated list of image tags
 #   target        - build stage to stop at, empty for the final image
 #   pkg_list_file - where to record the installed Debian packages
 #   metadata      - "key=value" lines from image_metadata, empty to record none
+#   mode          - load (default), or export after package validation
 docker_build() {
     local tags=$1
     local target=${2:-}
     local pkg_list_file=${3:-}
     local metadata=${4:-}
+    local mode=${5:-load}
 
     local commit_timestamp
     commit_timestamp=$(git -C "$REPO_ROOT" show -s --format=%ct "$GIT_REV")
@@ -145,36 +147,53 @@ docker_build() {
         args+=(--build-arg "IMAGE_METADATA=$metadata")
     fi
 
-    # Only the final image is publishable. Intermediate stages are built purely
-    # to extract their package lists and must never reach a registry.
-    #
-    # oci-mediatypes keeps the pushed manifest byte-identical to the OCI archive
-    # a local rebuild produces, which is what makes the digests comparable.
-    if [ -n "${PUSH:-}" ] && [ -z "$target" ]; then
-        args+=(--output "type=image,push=true,oci-mediatypes=true,rewrite-timestamp=true")
-    fi
-    if [ -n "${OCI_TAR:-}" ] && [ -z "$target" ]; then
-        args+=(--output "type=oci,oci-mediatypes=true,rewrite-timestamp=true,dest=$OCI_TAR")
-    fi
-    # Always load locally as well: extract_packages inspects the built image.
-    args+=(--output "type=docker,rewrite-timestamp=true")
-    # Guard this like the outputs above: the intermediate stage builds run after
-    # the final one and would otherwise overwrite its reported digest.
-    if [ -n "${METADATA_FILE:-}" ] && [ -z "$target" ]; then
-        args+=(--metadata-file "$METADATA_FILE")
-    fi
-
-    if [ -n "${NO_CACHE:-}" ]; then
-        args+=(--no-cache)
-    fi
+    # A validation build has only a Docker exporter. Never mix it with an OCI
+    # exporter: on classic Docker stores its digest overwrites the OCI digest in
+    # BuildKit's metadata response. Export the validated, cached result separately.
+    local outputs=()
+    case "$mode" in
+        load)
+            outputs+=("type=docker,rewrite-timestamp=true")
+            if [ -n "${NO_CACHE:-}" ]; then
+                args+=(--no-cache)
+            fi
+            ;;
+        export)
+            if [ -n "$target" ] || [ -n "$pkg_list_file" ]; then
+                echo "only validated final images may be exported" >&2
+                return 1
+            fi
+            if [ -n "${OCI_TAR:-}" ]; then
+                outputs+=("type=oci,oci-mediatypes=true,rewrite-timestamp=true,dest=$OCI_TAR")
+            fi
+            if [ -n "${PUSH:-}" ]; then
+                outputs+=("type=image,push=true,oci-mediatypes=true,rewrite-timestamp=true")
+            fi
+            if [ "${#outputs[@]}" -eq 0 ]; then
+                # METADATA_FILE alone still reports the registry-compatible OCI
+                # digest, not the manifest produced by a classic Docker exporter.
+                outputs+=("type=image,push=false,oci-mediatypes=true,rewrite-timestamp=true")
+            fi
+            if [ -n "${METADATA_FILE:-}" ]; then
+                args+=(--metadata-file "$METADATA_FILE")
+            fi
+            ;;
+        *)
+            echo "unknown build mode: $mode" >&2
+            return 1
+            ;;
+    esac
 
     if [ -n "$target" ]; then
         args+=(--target "$target")
     fi
 
-    docker buildx build "${args[@]}" \
-        --file "$DOCKERFILE" \
-        "$CONTEXT_DIR"
+    local output
+    for output in "${outputs[@]}"; do
+        docker buildx build "${args[@]}" --output "$output" \
+            --file "$DOCKERFILE" \
+            "$CONTEXT_DIR"
+    done
 
     extract_packages "$(head -n1 <<<"$tags")" "$pkg_list_file"
 }
@@ -189,5 +208,32 @@ check_clean_tree() {
     if [ -n "$git_status" ]; then
         echo "The working tree has updates in $rel_path. Commit or stash before re-running." >&2
         exit 1
+    fi
+}
+
+# Build and validate all package lists before exporting or updating remote tags.
+# The export reuses the validated cache even when NO_CACHE was requested for the
+# validation builds. check_clean_tree ensures extraction did not change inputs.
+build_component() {
+    local tags=$1
+    local builder_tag=$2
+    local builder_target=$3
+    local shared_dir=$4
+    local metadata=$5
+
+    if [ -n "${PUSH:-}${OCI_TAR:-}${METADATA_FILE:-}" ]; then
+        # Do not let package extraction erase pre-existing changes and make an
+        # unvalidated set of build inputs appear clean before publication.
+        check_clean_tree "$shared_dir"
+    fi
+
+    # Build the intermediate stage first: with NO_CACHE it must not replace the
+    # final image's cached dependencies between validation and export.
+    docker_build "$builder_tag" "$builder_target" "$shared_dir/builder-pinned-packages.txt"
+    docker_build "$tags" "" "$shared_dir/pinned-packages.txt" "$metadata"
+    check_clean_tree "$shared_dir"
+
+    if [ -n "${PUSH:-}${OCI_TAR:-}${METADATA_FILE:-}" ]; then
+        docker_build "$tags" "" "" "$metadata" export
     fi
 }

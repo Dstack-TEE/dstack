@@ -10,7 +10,7 @@ The builder creates a Docker image that includes:
 
 ## Prerequisites
 
-- Docker with BuildKit support (v20.10.0+)
+- Docker with Buildx v0.13.0+ (the script creates a BuildKit v0.20.2 builder)
 - Git
 
 ## Building the Image
@@ -35,15 +35,26 @@ Optional environment variables:
 | `IMAGE_SOURCE_URL` | Repository URL recorded in the image metadata |
 | `NO_CACHE` | Set to any value to build without the layer cache |
 | `OCI_TAR` | Also write an OCI archive here, for digest comparison |
+| `METADATA_FILE` | Write the validated OCI manifest digest and build metadata here |
 | `PUSH` | Set to any value to push the tags instead of only loading them |
+
+Publication and OCI export happen only after both package lists pass validation.
+`NO_CACHE` applies to the validation builds; export then reuses their cached result.
+Manual release workflows require an existing component release tag and check out
+that tag, rather than building the branch selected in the workflow UI.
 
 ## Reproducing a released image
 
 Release CI runs this same script, so a published image can be rebuilt and
-checked digest-for-digest. Pass the release tag's revision and version:
+checked digest-for-digest. Use a clean checkout of the release commit so the
+Dockerfile, package lists, shared scripts and copied files also match the release.
+From the repository root (fetch the tag first if it is not available locally):
 
 ```bash
-GIT_REV=kms-v0.6.0 \
+git switch --detach "kms-v0.6.0^{commit}"
+cd dstack/kms/dstack-app/builder
+
+GIT_REV=HEAD \
 IMAGE_VERSION=0.6.0 \
 IMAGE_SOURCE_URL=https://github.com/Dstack-TEE/dstack \
 OCI_TAR=/tmp/kms.oci.tar \

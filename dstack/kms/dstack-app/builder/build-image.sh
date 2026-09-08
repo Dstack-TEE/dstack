@@ -24,7 +24,7 @@ TAGS=$(printf '%s\n' "$@")
 
 NO_CACHE=${NO_CACHE:-}
 GIT_REV=${GIT_REV:-HEAD}
-GIT_REV=$(git -C "$REPO_ROOT" rev-parse "$GIT_REV")
+GIT_REV=$(git -C "$REPO_ROOT" rev-parse --verify "${GIT_REV}^{commit}")
 DSTACK_SRC_URL=${DSTACK_SRC_URL:-https://github.com/Dstack-TEE/dstack.git}
 
 ensure_buildkit
@@ -38,7 +38,4 @@ METADATA=$(image_metadata \
     "dstack/kms" \
     "dstack/kms/README.md")
 
-docker_build "$TAGS" "" "$SHARED_DIR/pinned-packages.txt" "$METADATA"
-docker_build "kms-builder-temp" "kms-builder" "$SHARED_DIR/builder-pinned-packages.txt"
-
-check_clean_tree "$SHARED_DIR"
+build_component "$TAGS" "kms-builder-temp" "kms-builder" "$SHARED_DIR" "$METADATA"
