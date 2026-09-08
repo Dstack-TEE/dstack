@@ -112,6 +112,7 @@
   },
   "required_kernel_config": [
     "CONFIG_ACPI_TABLE_UPGRADE=y",
+    "CONFIG_SWIOTLB_DYNAMIC=y",
     "CONFIG_INTEL_TDX_GUEST=y",
     "CONFIG_TDX_GUEST_DRIVER=y",
     "CONFIG_AMD_MEM_ENCRYPT=y",
@@ -169,6 +170,11 @@
     "usr/lib/systemd/system/serial-getty@.service",
     "usr/lib/systemd/system/debug-shell.service",
     "usr/lib/systemd/system/systemd-logind.service"
+  ],
+  "required_ldconfig_entries": [
+    "libnvidia-ml.so.1",
+    "libnvidia-container.so.1",
+    "libnvidia-container-go.so.1"
   ],
   "runtime_link_paths": [
     "usr/bin/nvattest",
