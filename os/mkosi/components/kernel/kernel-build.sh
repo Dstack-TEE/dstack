@@ -52,7 +52,9 @@ rm -rf "$src" "$BUILD_DIR/kernel-build" "$STAGING/usr/lib/modules/$KERNEL_VERSIO
 tar -C "$BUILD_DIR" --no-same-owner -xf "$tarball"
 for patch in \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch" \
-  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch"; do
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0003-dma-direct-return-struct-page-from-alloc-from-pool.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch"; do
     patch -d "$src" -p1 --fuzz=0 < "$patch"
 done
 
