@@ -126,6 +126,19 @@ fn sanitize_optional<T: AsRef<str>>(value: Option<T>) -> Option<T> {
     value.filter(|value| !value.as_ref().trim().is_empty())
 }
 
+pub(crate) fn vm_runtime_status(removing: bool, started: bool, is_running: bool) -> &'static str {
+    if removing {
+        "removing"
+    } else {
+        match (started, is_running) {
+            (true, true) => "running",
+            (true, false) => "exited",
+            (false, true) => "stopping",
+            (false, false) => "stopped",
+        }
+    }
+}
+
 impl VmInfo {
     /// Takes no `CvmConfig` on purpose. Everything it reports about a VM's
     /// data plane was decided when that VM launched and written into
@@ -271,6 +284,18 @@ fn app_url(id: &str, custom_gateway_urls: &[String], gateway: &GatewayConfig) ->
 }
 
 impl VmState {
+    pub(crate) fn runtime_status(
+        &self,
+        process: Option<&ProcessInfo>,
+        workdir: &VmWorkDir,
+    ) -> &'static str {
+        vm_runtime_status(
+            self.state.removing,
+            workdir.started().unwrap_or(false),
+            process.is_some_and(|info| info.state.status.is_running()),
+        )
+    }
+
     pub fn merged_info(&self, process: Option<&ProcessInfo>, workdir: &VmWorkDir) -> VmInfo {
         fn truncate(duration: Duration) -> Duration {
             Duration::from_secs(duration.as_secs())
@@ -287,17 +312,7 @@ impl VmState {
         }
 
         let is_running = process.is_some_and(|info| info.state.status.is_running());
-        let started = workdir.started().unwrap_or(false);
-        let status = if self.state.removing {
-            "removing"
-        } else {
-            match (started, is_running) {
-                (true, true) => "running",
-                (true, false) => "exited",
-                (false, true) => "stopping",
-                (false, false) => "stopped",
-            }
-        };
+        let status = self.runtime_status(process, workdir);
         let uptime = display_timestamp(process.and_then(|info| info.state.started_at.as_ref()));
         let exited_at = display_timestamp(process.and_then(|info| info.state.stopped_at.as_ref()));
         let instance_id = sanitize_optional(
@@ -328,8 +343,20 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::{interfaces_to_proto, networking_to_proto, sanitize_optional};
+    use super::{
+        interfaces_to_proto, networking_to_proto, sanitize_optional, vm_runtime_status,
+    };
     use crate::config::{NetworkingMode, NicNetworking};
+
+    #[test]
+    fn runtime_status_covers_lifecycle() {
+        assert_eq!(vm_runtime_status(true, true, true), "removing");
+        assert_eq!(vm_runtime_status(true, false, false), "removing");
+        assert_eq!(vm_runtime_status(false, true, true), "running");
+        assert_eq!(vm_runtime_status(false, true, false), "exited");
+        assert_eq!(vm_runtime_status(false, false, true), "stopping");
+        assert_eq!(vm_runtime_status(false, false, false), "stopped");
+    }
 
     /// Custom mode hands the operator the whole netdev string and the VMM never
     /// parses it, so it has no data-plane state to report. Reporting the
