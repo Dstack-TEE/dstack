@@ -11,7 +11,9 @@ component_cache_key() {
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0003-dma-direct-return-struct-page-from-alloc-from-pool.patch" \
-      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch"
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0005-swiotlb-preserve-allocation-virtual-address.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0006-swiotlb-free-dynamic-pools-from-process-context.patch"
     key_tools gcc ld make pahole
     key_packages binutils dwarves bc bison flex libssl-dev libelf-dev
 }

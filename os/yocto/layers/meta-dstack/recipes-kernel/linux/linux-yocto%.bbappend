@@ -50,6 +50,24 @@ SRC_URI:append = " file://0002-acpi-sandbox-block-aml-systemmemory-ram-access.pa
 SRC_URI:append = " file://0003-dma-direct-return-struct-page-from-alloc-from-pool.patch \
                    file://0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch"
 
+# The same address mismatch inside swiotlb's dynamic pools, plus its
+# atomic-context consequence. Backported from the same v7.3 dma-mapping tree;
+# neither commit is in linux-6.18.y.
+#
+#   0005 swiotlb_alloc_tlb() drops the virtual address dma_alloc_from_pool()
+#        hands back through its out-parameter, and swiotlb_init_io_tlb_pool()
+#        recomputes one with phys_to_virt(). For an atomic-pool backed
+#        transient pool that address is wrong, so dma_free_from_pool() cannot
+#        recognize the chunk on release.
+#   0006 the release then falls through to set_memory_encrypted(), which takes
+#        vmap_purge_lock from an RCU callback -- "BUG: scheduling while
+#        atomic", followed by a kernel panic. Run the teardown from a
+#        workqueue with queue_rcu_work() instead.
+#
+# Both paths need CONFIG_SWIOTLB_DYNAMIC=y (dstack.cfg) to be reachable.
+SRC_URI:append = " file://0005-swiotlb-preserve-allocation-virtual-address.patch \
+                   file://0006-swiotlb-free-dynamic-pools-from-process-context.patch"
+
 KERNEL_FEATURES:append = " features/cgroups/cgroups.scc \
                           features/overlayfs/overlayfs.scc \
                           features/netfilter/netfilter.scc \
