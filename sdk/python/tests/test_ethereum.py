@@ -104,3 +104,17 @@ SY7zfjPHe3Qp8vCO9HqjzjqhXNKhRANCAAT5XHKyj7JRGHl2nQ2SltGKjQ3A7MPJ
         assert len(w) == 1
         assert issubclass(w[0].category, DeprecationWarning)
         assert "Please don't use getTlsKey method" in str(w[0].message)
+
+
+def test_to_account_secure_hashes_full_key_material_for_get_key_response():
+    """Regression: the GetKeyResponse branch previously fell through unhashed,
+    silently contradicting the "SHA256 of full key material" docstring."""
+    mock_result = GetKeyResponse(
+        key="1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        signature_chain=["sig1", "sig2"],
+    )
+
+    legacy_account = to_account(mock_result)
+    secure_account = to_account_secure(mock_result)
+
+    assert secure_account.address != legacy_account.address

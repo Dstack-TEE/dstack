@@ -33,6 +33,6 @@ export function toViemAccountSecure(keyResponse: GetKeyResponse | GetTlsKeyRespo
     const hex = bytesToHex(sha256(keyResponse.asUint8Array()))
     return privateKeyToAccount(`0x${hex}`)
   }
-  const hex = Array.from(keyResponse.key).map(b => b.toString(16).padStart(2, '0')).join('')
+  const hex = bytesToHex(sha256(keyResponse.key))
   return privateKeyToAccount(`0x${hex}`)
 }
