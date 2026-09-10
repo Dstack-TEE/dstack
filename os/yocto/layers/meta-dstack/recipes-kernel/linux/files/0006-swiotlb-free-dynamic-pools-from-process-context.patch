@@ -1,0 +1,102 @@
+From e13d4d9a4915d9dbd0961594442704a4f26160dc Mon Sep 17 00:00:00 2001
+From: "Aneesh Kumar K.V (Arm)" <aneesh.kumar@kernel.org>
+Date: Fri, 17 Jul 2026 23:34:39 +0530
+Subject: [PATCH] dma: swiotlb: free dynamic pools from process context
+
+Backport of upstream e13d4d9a4915 ("dma: swiotlb: free dynamic pools from
+process context"), merged for v7.3 and not present in linux-6.18.y. Rebased
+onto 6.18 context; no functional change from upstream.
+
+swiotlb_dyn_free() is used after removing a dynamic swiotlb pool from
+RCU-protected lists. It can call swiotlb_free_tlb(), which may need to
+restore the encryption state of an unencrypted pool with
+set_memory_encrypted() before freeing the pages.
+
+RCU callbacks run in atomic context, but set_memory_encrypted() is not
+guaranteed to be atomic-safe on all architectures. For example, page
+attribute updates may allocate page tables or take sleeping locks.
+
+Use queue_rcu_work() for dynamic pool freeing instead. This keeps the RCU
+grace period before freeing a published pool, while running the actual pool
+teardown from workqueue context. Use the same helper for the transient-pool
+error path, since that path may also be reached from atomic DMA mapping
+context.
+
+Upstream-Status: Backport [https://git.kernel.org/linus/e13d4d9a4915]
+Tested-by: Michael Kelley <mhklinux@outlook.com>
+Tested-by: Mostafa Saleh <smostafa@google.com>
+Reviewed-by: Petr Tesarik <ptesarik@suse.com>
+Signed-off-by: Aneesh Kumar K.V (Arm) <aneesh.kumar@kernel.org>
+Link: https://lore.kernel.org/r/20260717180442.110954-22-aneesh.kumar@kernel.org
+Signed-off-by: Marek Szyprowski <m.szyprowski@samsung.com>
+---
+--- a/include/linux/swiotlb.h
++++ b/include/linux/swiotlb.h
+@@ -64,7 +64,7 @@
+  * @areas:	Array of memory area descriptors.
+  * @slots:	Array of slot descriptors.
+  * @node:	Member of the IO TLB memory pool list.
+- * @rcu:	RCU head for swiotlb_dyn_free().
++ * @dyn_free:	RCU work item used to free the pool from process context.
+  * @transient:  %true if transient memory pool.
+  */
+ struct io_tlb_pool {
+@@ -79,7 +79,7 @@
+ 	struct io_tlb_slot *slots;
+ #ifdef CONFIG_SWIOTLB_DYNAMIC
+ 	struct list_head node;
+-	struct rcu_head rcu;
++	struct rcu_work dyn_free;
+ 	bool transient;
+ #endif
+ };
+--- a/kernel/dma/swiotlb.c
++++ b/kernel/dma/swiotlb.c
+@@ -748,13 +748,10 @@
+ 	add_mem_pool(mem, pool);
+ }
+ 
+-/**
+- * swiotlb_dyn_free() - RCU callback to free a memory pool
+- * @rcu:	RCU head in the corresponding struct io_tlb_pool.
+- */
+-static void swiotlb_dyn_free(struct rcu_head *rcu)
++static void swiotlb_dyn_free_work(struct work_struct *work)
+ {
+-	struct io_tlb_pool *pool = container_of(rcu, struct io_tlb_pool, rcu);
++	struct io_tlb_pool *pool =
++		container_of(to_rcu_work(work), struct io_tlb_pool, dyn_free);
+ 	size_t slots_size = array_size(sizeof(*pool->slots), pool->nslabs);
+ 	size_t tlb_size = pool->end - pool->start;
+ 
+@@ -763,6 +760,12 @@
+ 	kfree(pool);
+ }
+ 
++static void swiotlb_schedule_dyn_free(struct io_tlb_pool *pool)
++{
++	INIT_RCU_WORK(&pool->dyn_free, swiotlb_dyn_free_work);
++	queue_rcu_work(system_wq, &pool->dyn_free);
++}
++
+ /**
+  * __swiotlb_find_pool() - find the IO TLB pool for a physical address
+  * @dev:        Device which has mapped the DMA buffer.
+@@ -809,7 +812,7 @@
+ 	list_del_rcu(&pool->node);
+ 	spin_unlock_irqrestore(&dev->dma_io_tlb_lock, flags);
+ 
+-	call_rcu(&pool->rcu, swiotlb_dyn_free);
++	swiotlb_schedule_dyn_free(pool);
+ }
+ 
+ #endif	/* CONFIG_SWIOTLB_DYNAMIC */
+@@ -1233,7 +1236,7 @@
+ 	index = swiotlb_search_pool_area(dev, pool, 0, orig_addr,
+ 					 alloc_size, alloc_align_mask);
+ 	if (index < 0) {
+-		swiotlb_dyn_free(&pool->rcu);
++		swiotlb_schedule_dyn_free(pool);
+ 		return -1;
+ 	}
+ 

@@ -1,0 +1,131 @@
+From 8a9dc4a028e726ff64f0a7b2931485c9ce87e2c0 Mon Sep 17 00:00:00 2001
+From: "Aneesh Kumar K.V (Arm)" <aneesh.kumar@kernel.org>
+Date: Fri, 17 Jul 2026 23:34:22 +0530
+Subject: [PATCH] dma: free atomic pool pages by physical address
+
+dma_direct_alloc_pages() may satisfy atomic allocations from the coherent
+atomic pools. The pool allocation is keyed by the virtual address stored in
+the gen_pool, but the pages API returns only the backing struct page.
+
+On architectures with CONFIG_DMA_DIRECT_REMAP, atomic pool chunks are added
+to the gen_pool using their remapped virtual address.
+dma_direct_free_pages() reconstructs a linear-map address with
+page_address(page) and passes that to dma_free_from_pool(). That address
+does not match the gen_pool virtual range, so the pool lookup can fail and
+the code can fall through to freeing a pool-owned page through the normal
+page allocator path.
+
+Add a page-based pool free helper that looks up the owning pool chunk by
+physical address, translates it back to the gen_pool virtual address, and
+frees that address to the pool. Use it from dma_direct_free_pages() while
+keeping the existing virtual-address helper for coherent allocation frees.
+
+Upstream-Status: Backport [https://git.kernel.org/linus/8a9dc4a028e7]
+Tested-by: Michael Kelley <mhklinux@outlook.com>
+Tested-by: Mostafa Saleh <smostafa@google.com>
+Signed-off-by: Aneesh Kumar K.V (Arm) <aneesh.kumar@kernel.org>
+Link: https://lore.kernel.org/r/20260717180442.110954-5-aneesh.kumar@kernel.org
+Signed-off-by: Marek Szyprowski <m.szyprowski@samsung.com>
+---
+ include/linux/dma-map-ops.h |  1 +
+ kernel/dma/direct.c         |  4 +--
+ kernel/dma/pool.c           | 61 +++++++++++++++++++++++++++++++++++++
+ 3 files changed, 64 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/dma-map-ops.h b/include/linux/dma-map-ops.h
+index bcb5b5428aea94..137e015c175006 100644
+--- a/include/linux/dma-map-ops.h
++++ b/include/linux/dma-map-ops.h
+@@ -215,6 +215,7 @@ struct page *dma_alloc_from_pool(struct device *dev, size_t size,
+ 		void **cpu_addr, gfp_t flags,
+ 		bool (*phys_addr_ok)(struct device *, phys_addr_t, size_t));
+ bool dma_free_from_pool(struct device *dev, void *start, size_t size);
++bool dma_free_from_pool_page(struct device *dev, struct page *page, size_t size);
+ 
+ int dma_direct_set_offset(struct device *dev, phys_addr_t cpu_start,
+ 		dma_addr_t dma_start, u64 size);
+diff --git a/kernel/dma/direct.c b/kernel/dma/direct.c
+index b4cb2c03e5d7c7..17f1e097499e2b 100644
+--- a/kernel/dma/direct.c
++++ b/kernel/dma/direct.c
+@@ -381,9 +381,9 @@ void dma_direct_free_pages(struct device *dev, size_t size,
+ {
+ 	void *vaddr = page_address(page);
+ 
+-	/* If cpu_addr is not from an atomic pool, dma_free_from_pool() fails */
++	/* If page is not from an atomic pool, dma_free_from_pool_page() fails */
+ 	if (IS_ENABLED(CONFIG_DMA_COHERENT_POOL) &&
+-	    dma_free_from_pool(dev, vaddr, size))
++	    dma_free_from_pool_page(dev, page, size))
+ 		return;
+ 
+ 	if (dma_set_encrypted(dev, vaddr, size))
+diff --git a/kernel/dma/pool.c b/kernel/dma/pool.c
+index b0303efbc15327..e981c1faaadfae 100644
+--- a/kernel/dma/pool.c
++++ b/kernel/dma/pool.c
+@@ -311,3 +311,64 @@ bool dma_free_from_pool(struct device *dev, void *start, size_t size)
+ 
+ 	return false;
+ }
++
++struct dma_pool_phys_match {
++	phys_addr_t phys;
++	size_t size;
++	unsigned long addr;
++	bool found;
++};
++
++static void dma_pool_find_phys(struct gen_pool *pool, struct gen_pool_chunk *chunk,
++			       void *data)
++{
++	struct dma_pool_phys_match *match = data;
++	phys_addr_t end = match->phys + match->size - 1;
++	phys_addr_t chunk_end;
++
++	if (match->found)
++		return;
++
++	chunk_end = chunk->phys_addr + (chunk->end_addr - chunk->start_addr);
++	if (match->phys < chunk->phys_addr || end > chunk_end)
++		return;
++
++	match->addr = chunk->start_addr + (match->phys - chunk->phys_addr);
++	match->found = true;
++}
++
++static bool dma_free_from_pool_phys(struct gen_pool *pool, phys_addr_t phys,
++				    size_t size)
++{
++	struct dma_pool_phys_match match = {
++		.phys = phys,
++		.size = size,
++	};
++
++	gen_pool_for_each_chunk(pool, dma_pool_find_phys, &match);
++	if (!match.found)
++		return false;
++
++	gen_pool_free(pool, match.addr, size);
++	return true;
++}
++
++/*
++ * FIXME: We could avoid this by storing the remapped virtual address in
++ * struct page and using that for lookup.
++ */
++bool dma_free_from_pool_page(struct device *dev, struct page *page, size_t size)
++{
++	struct gen_pool *pool = NULL;
++	phys_addr_t phys = page_to_phys(page);
++
++	if (!IS_ENABLED(CONFIG_DMA_DIRECT_REMAP))
++		return dma_free_from_pool(dev, page_address(page), size);
++
++	while ((pool = dma_guess_pool(pool, 0))) {
++		if (dma_free_from_pool_phys(pool, phys, size))
++			return true;
++	}
++
++	return false;
++}
