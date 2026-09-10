@@ -1734,7 +1734,7 @@ fn make_vm_config(
         tdx_attestation_variant_from_requirements(requirements).unwrap_or_else(|| {
             cfg.cvm
                 .tdx_attestation_variant
-                .resolve(manifest.memory, image_supports_tdx_lite(image))
+                .resolve(image_supports_tdx_lite(image))
         })
     } else {
         dstack_types::TdxAttestationVariant::Legacy
@@ -2565,17 +2565,17 @@ mod tests {
         Ok(())
     }
 
+    /// 1 GiB used to fall back to legacy: it is below 3 GiB and not the 2 GiB
+    /// exemption. That heuristic existed for images whose OVMF leaves the setup
+    /// header for QEMU to rewrite, which the build system no longer produces.
     #[test]
-    fn tdx_auto_variant_uses_legacy_for_low_non_2g_memory() -> Result<()> {
+    fn tdx_auto_variant_uses_lite_for_low_non_2g_memory() -> Result<()> {
         let config = test_tdx_config()?;
         let manifest = test_manifest(1024);
         let image = test_tdx_image(true);
         let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
 
-        assert!(vm_config.get("tdx_attestation_variant").is_none());
-        // tdx_measurement is attached whenever the image supports it, even
-        // when the resolved variant is legacy, so a verifier can still
-        // choose lite verification for this boot.
+        assert_eq!(vm_config["tdx_attestation_variant"], "lite");
         assert!(vm_config.get("tdx_measurement").is_some());
         assert_eq!(
             vm_config["os_image_hash"]
