@@ -2192,7 +2192,7 @@ impl TdxOsImageMeasurement {
         if cbor.version != Self::VERSION {
             return Err(format!(
                 "TdxOsImageMeasurement: unsupported version {}, expected {}. \
-                 Rebuild the image so measurement.tdx.cbor carries the kernel \
+                 rebuild the image so measurement.tdx.cbor carries the kernel \
                  command line, then re-register its os_image_hash.",
                 cbor.version,
                 Self::VERSION
