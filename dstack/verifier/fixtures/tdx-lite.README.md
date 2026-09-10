@@ -16,23 +16,41 @@ Files:
   `GetQuoteResponse` is Intel TDX only and carries no versioned attestation;
   use `Attest` for the platform-adaptive form.
 
-Captured with:
+Recaptured for measurement document version 4, which replaced the command-line
+digest with the command line itself. The original capture predates that, and a
+digest cannot be turned back into the string the new document needs, so these
+two files were retaken from a fresh boot rather than re-encoded.
+
+The image is a pre-normalization one, taken as built: the build system
+hardcodes `kernel_header_normalized: true` and fails when the OVMF patch does
+not apply, so it can no longer produce the image this pair exercises. Only its
+derived `measurement.tdx.cbor`, `sha256sum.txt` and `digest.txt` were
+regenerated with the current `dstack-mr`, which is why `os_image_hash` moved.
 
 ```bash
-E2E_APP_TIMEOUT=900 ./e2e/run.sh up \
-  --image-dir images \
-  --image dstack-0.6.0 \
-  --apps 1 \
-  --force \
-  --kms-image-verify \
-  --kms-no-qemu
+# 1. regenerate the derived measurement material in a copy of the image dir
+dstack-mr tdx-measurement-cbor "$IMAGE_DIR" > "$IMAGE_DIR/measurement.tdx.cbor"
+#    then refresh that file's sha256sum.txt line and digest.txt
+
+# 2. boot it, with an app-compose prelaunch script that calls the guest agent
+dstack-vmm -c vmm.toml
+vmm-cli.py compose --key-provider none --prelaunch-script capture.sh ...
+vmm-cli.py deploy --image "$IMAGE_NAME" --vcpu 2 --memory 2G ...
+
+# 3. capture.sh, inside the guest
+curl -s --unix-socket /var/run/dstack.sock "http://localhost/GetQuote?report_data=$RD"
+curl -s --unix-socket /var/run/dstack.sock "http://localhost/Attest?report_data=$RD"
 ```
+
+`report_data` is 64 bytes of `0x42`, matching `tests/e2e/attestation`.
 
 Important fixture properties:
 
 - `vm_config.tdx_attestation_variant = "lite"`
-- `vm_config.memory_size = 2147483648` (2 GiB)
-- `vm_config.os_image_hash = e6f5cfec20c02e7b97baa213d0f718020b55e040172d90ccbcb946d56c8b09db`
+- `vm_config.memory_size = 2147483648` (2 GiB), `vm_config.cpu_count = 2`
+- `vm_config.os_image_hash = 1440bbf5b3a79bcef4bb6013d82d52c12d53fe8d19c21c65fb6b636865179ca1`
+- `vm_config.tdx_measurement.measurement` is a version 4 document, and its
+  `image.kernel_header_normalized` is absent, i.e. false.
 - `vm_config.tdx_measurement.{checksum_file,measurement}` are JSON base64 byte
   strings.
 - The raw top-level `event_log` and stripped attestation keep the three named
@@ -74,6 +92,12 @@ Images whose OVMF normalizes the Linux setup header declare
 the measurement document, and their RTMR[1] is the plain Authenticode hash of the shipped
 `bzImage`. The two fixtures above cover the pre-normalization behavior, which
 every image built before that landed still has.
+
+Both normalized fixtures keep their original captures. Their measurement
+documents were re-encoded to version 4 in place: the command line that rebuilt
+them was confirmed by reproducing the version 3 digest exactly, and the quote,
+event log and every RTMR are untouched, because the measured command line did
+not change. `sha256sum.txt` and `os_image_hash` moved with the document.
 
 `tdx-lite-normalized-qemu-10-2-attestation.json` is the **same image** captured
 on **QEMU 10.2.1**, a version that does *not* rewrite the header. The pair is
