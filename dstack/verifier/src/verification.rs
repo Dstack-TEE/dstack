@@ -2264,6 +2264,104 @@ mod tests {
         );
     }
 
+    /// Rebuild the fixture's measurement document around a different kernel
+    /// command line, keeping every hash that commits to it consistent:
+    /// `measurement.tdx.cbor`, its `sha256sum.txt` entry, and the
+    /// `os_image_hash` over that file. Nothing in the image-identity chain can
+    /// object to the result.
+    fn forge_command_line(attestation: &mut ra_tls::attestation::Attestation, suffix: &str) {
+        use sha2::{Digest, Sha256};
+
+        let mut config: serde_json::Value =
+            serde_json::from_str(&attestation.config).expect("vm_config parses");
+        let mut document: dstack_types::TdxOsImageMeasurementDocument =
+            serde_json::from_value(config["tdx_measurement"].clone())
+                .expect("tdx_measurement parses");
+
+        let mut measurement =
+            dstack_types::TdxOsImageMeasurement::from_cbor_slice(&document.measurement)
+                .expect("measurement decodes");
+        let previous = Sha256::digest(&document.measurement);
+        measurement.image.base_cmdline.push_str(suffix);
+        document.measurement = measurement.to_cbor_vec();
+
+        let checksum = String::from_utf8(document.checksum_file).expect("checksum file is utf-8");
+        let mut rewritten = String::new();
+        for line in checksum.lines() {
+            let (hash, name) = line.split_once("  ").expect("checksum line");
+            if name == "measurement.tdx.cbor" {
+                assert_eq!(hash, hex::encode(previous), "fixture checksum is stale");
+                rewritten.push_str(&hex::encode(Sha256::digest(&document.measurement)));
+            } else {
+                rewritten.push_str(hash);
+            }
+            rewritten.push_str("  ");
+            rewritten.push_str(name);
+            rewritten.push('\n');
+        }
+        document.checksum_file = rewritten.into_bytes();
+
+        config["os_image_hash"] =
+            serde_json::json!(hex::encode(Sha256::digest(&document.checksum_file)));
+        config["tdx_measurement"] = serde_json::to_value(&document).expect("document serializes");
+        attestation.config = config.to_string();
+    }
+
+    /// The document carries the kernel command line itself, not a digest of it,
+    /// so nothing stops a host from writing a different one and rebuilding
+    /// every hash that commits to it. What stops it is RTMR[2], which the CVM
+    /// extended with the command line it was actually booted with.
+    ///
+    /// This forges exactly that: an image identity that is internally
+    /// consistent and therefore passes every `os_image_hash` check. Only the
+    /// measurement comparison can reject it.
+    #[tokio::test]
+    async fn tdx_lite_rejects_a_self_consistent_forged_command_line() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
+                .expect("TDX lite verifier fixture parses");
+        let bytes = request.attestation.expect("fixture carries an attestation");
+
+        let mut attestation =
+            match VersionedAttestation::from_bytes(&bytes).expect("attestation decodes") {
+                VersionedAttestation::V0 { attestation } => attestation,
+                VersionedAttestation::V1 { .. } => {
+                    panic!("fixture is expected to be a legacy attestation")
+                }
+            };
+        forge_command_line(&mut attestation, " forged=1");
+        let forged = VersionedAttestation::V0 { attestation }
+            .to_bytes()
+            .expect("attestation re-encodes");
+
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier
+            .verify(VerificationRequest {
+                quote: None,
+                event_log: None,
+                vm_config: None,
+                attestation: Some(forged),
+                debug: None,
+            })
+            .await
+            .expect("verifier runs");
+
+        assert!(!response.is_valid, "a forged command line must not verify");
+        assert!(!response.details.os_image_hash_verified);
+        let reason = response.reason.unwrap_or_default();
+        assert!(
+            reason.contains("RTMR2 mismatch"),
+            "expected the command line to be caught by RTMR[2], got: {reason}"
+        );
+    }
+
     /// Captured from a CVM whose OVMF normalizes the Linux setup header, so
     /// RTMR[1] is the plain Authenticode hash of the shipped kernel. The host
     /// ran QEMU 8.2.2 -- a version that *does* rewrite the header -- so this
