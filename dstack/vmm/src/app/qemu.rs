@@ -9,14 +9,15 @@ use super::{
     hugepage_numa_nodes,
     image::Image,
     mr_config::{snp_host_data, tdx_mr_config_id},
-    network::{mac_address_for_vm_index, validate_resolved_networks},
+    network::{
+        ingress_nic, mac_address_for_vm_index, validate_resolved_networks,
+        warn_if_vhost_net_missing,
+    },
     pci_numa_node, round_up, GpuConfig, VmWorkDir,
 };
 use crate::{
     app::Manifest,
-    config::{
-        CvmConfig, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, ProcessAnnotation,
-    },
+    config::{CvmConfig, CvmPlatform, Networking, NetworkingMode, ProcessAnnotation},
     netd::{tap_name, InterfaceIdentity},
     vm_launcher::{ChildCommand, LaunchSpec, OpenFile},
 };
@@ -167,6 +168,14 @@ fn create_hd(
     Ok(())
 }
 
+fn on_off(enabled: bool) -> &'static str {
+    if enabled {
+        "on"
+    } else {
+        "off"
+    }
+}
+
 fn virtio_pci_device(device: &str, snp: bool) -> String {
     if snp {
         format!("{device},disable-legacy=on,iommu_platform=true")
@@ -177,6 +186,34 @@ fn virtio_pci_device(device: &str, snp: bool) -> String {
 
 struct PreparedVolume {
     source: String,
+}
+
+/// First descriptor the per-VM launcher may hand to QEMU. Zero through two are
+/// the standard streams.
+const FIRST_INHERITED_FD: i32 = 3;
+
+/// Descriptors the launcher opens for each macvtap NIC, one per queue pair.
+///
+/// Both the launcher's open list and the `-netdev` arguments derive from this
+/// one layout, so they cannot disagree about which descriptor belongs to which
+/// NIC.
+fn macvtap_fd_layout(networks: &[Networking]) -> Vec<Vec<i32>> {
+    let mut next_fd = FIRST_INHERITED_FD;
+    networks
+        .iter()
+        .map(|network| {
+            if network.nic.mode != NetworkingMode::Macvtap {
+                return Vec::new();
+            }
+            (0..network.queue_pairs())
+                .map(|_| {
+                    let fd = next_fd;
+                    next_fd += 1;
+                    fd
+                })
+                .collect()
+        })
+        .collect()
 }
 
 struct PreparedQemuLaunch {
@@ -210,6 +247,7 @@ impl PreparedQemuLaunch {
         let platform = cfg.resolved_platform();
         let networks = networks.to_vec();
         validate_resolved_networks(&networks)?;
+        warn_if_vhost_net_missing(&networks);
         let volumes = vm
             .manifest
             .volumes
@@ -354,7 +392,7 @@ impl VmConfig {
         let has_macvtap = prepared
             .networks
             .iter()
-            .any(|network| network.mode == NetworkingMode::Macvtap);
+            .any(|network| network.nic.mode == NetworkingMode::Macvtap);
         let Some(socket) = prepared.swtpm_socket.as_deref() else {
             if has_macvtap {
                 return self.wrap_launcher(&prepared, process, None, None);
@@ -398,14 +436,17 @@ impl VmConfig {
         swtpm: Option<ChildCommand>,
         swtpm_socket: Option<PathBuf>,
     ) -> Result<Vec<ProcessConfig>> {
+        // Each queue pair is a separate open of the same macvtap character
+        // device; the kernel attaches one tap queue per open.
         let open_files = prepared
             .networks
             .iter()
-            .enumerate()
-            .filter(|(_, network)| network.mode == NetworkingMode::Macvtap)
-            .map(|(index, network)| OpenFile {
-                fd: (3 + index) as i32,
-                path: network.device.clone().into(),
+            .zip(macvtap_fd_layout(&prepared.networks))
+            .flat_map(|(network, fds)| {
+                fds.into_iter().map(|fd| OpenFile {
+                    fd,
+                    path: network.device.clone().into(),
+                })
             })
             .collect();
         let spec = LaunchSpec {
@@ -596,11 +637,7 @@ impl QemuCommandBuilder<'_> {
     }
 
     fn configure_networking(&self, command: &mut Command) -> Result<()> {
-        let hostfwd_index = self
-            .prepared
-            .networks
-            .iter()
-            .position(|networking| networking.mode == NetworkingMode::User);
+        let macvtap_fds = macvtap_fd_layout(&self.prepared.networks);
         for (index, networking) in self.prepared.networks.iter().enumerate() {
             let net_id = format!("net{index}");
             let mac = mac_address_for_vm_index(
@@ -608,51 +645,68 @@ impl QemuCommandBuilder<'_> {
                 &networking.mac_prefix_bytes(),
                 index,
             );
-            let net_device = virtio_pci_device(
-                &format!("virtio-net-pci,netdev={net_id},mac={mac}"),
-                self.is_amd_sev_snp(),
-            );
-            let netdev = match networking.mode {
+            let queues = networking.queue_pairs();
+            let vhost = networking.vhost_enabled();
+            let mut device = format!("virtio-net-pci,netdev={net_id},mac={mac}");
+            if queues > 1 {
+                // One vector per queue direction, plus config and control.
+                device.push_str(&format!(",mq=on,vectors={}", 2 * queues + 2));
+            }
+            let net_device = virtio_pci_device(&device, self.is_amd_sev_snp());
+            let netdev = match networking.nic.mode {
                 NetworkingMode::User => {
+                    // The user-mode backend has neither, so both are ignored
+                    // here. A caller who *named* this mode and then asked for
+                    // vhost or more than one queue pair is refused by the RPC;
+                    // one who inherited it is not, and lands here.
                     let mut netdev = format!(
                         "user,id={net_id},net={},dhcpstart={},restrict={}",
                         networking.net,
                         networking.dhcp_start,
                         if networking.restrict { "yes" } else { "no" }
                     );
-                    if hostfwd_index == Some(index) {
-                        for mapping in &self.vm.manifest.port_map {
-                            netdev.push_str(&format!(
-                                ",hostfwd={}:{}:{}-:{}",
-                                mapping.protocol.as_str(),
-                                mapping.address,
-                                mapping.from,
-                                mapping.to
-                            ));
+                    // Only the mappings that resolve to this NIC. A mapping
+                    // lands on exactly one, and that NIC's backend decides the
+                    // mechanism, so a bridge NIC's ports go to netd instead of
+                    // being claimed here as well.
+                    for mapping in &self.vm.manifest.port_map {
+                        if ingress_nic(mapping, &self.prepared.networks) != Some(index) {
+                            continue;
                         }
+                        netdev.push_str(&format!(
+                            ",hostfwd={}:{}:{}-:{}",
+                            mapping.protocol.as_str(),
+                            mapping.address,
+                            mapping.from,
+                            mapping.to
+                        ));
                     }
                     netdev
                 }
                 NetworkingMode::Bridge => {
-                    tracing::info!("bridge networking: mac={mac} bridge={}", networking.bridge);
-                    match self.cfg.network_filter.mode {
-                        NetworkFilterMode::None => {
-                            format!("bridge,id={net_id},br={}", networking.bridge)
-                        }
-                        NetworkFilterMode::Libvirt => {
-                            let tap = tap_name(&InterfaceIdentity {
-                                instance_id: self.cfg.instance_id.clone(),
-                                vm_id: self.vm.manifest.id.clone(),
-                                nic_index: index,
-                            });
-                            // Keep the filtered backend conservative: QEMU
-                            // uses the TAP path on which libvirt installed the
-                            // nwfilter binding instead of opening vhost-net.
-                            format!(
-                                "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost=off"
-                            )
-                        }
+                    tracing::info!(
+                        "bridge networking: mac={mac} bridge={} vhost={vhost} queues={queues}",
+                        networking.nic.bridge
+                    );
+                    // netd owns the TAP. It is the one component here with
+                    // CAP_NET_ADMIN, so it is the only one that can bind an
+                    // nwfilter or create a persistent IFF_MULTI_QUEUE device --
+                    // and having it own every bridge TAP is what keeps a VM's
+                    // networking from depending on which of those a node
+                    // happens to use.
+                    let tap = tap_name(&InterfaceIdentity {
+                        instance_id: self.cfg.instance_id.clone(),
+                        vm_id: self.vm.manifest.id.clone(),
+                        nic_index: index,
+                    });
+                    let mut netdev = format!(
+                        "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost={}",
+                        on_off(vhost)
+                    );
+                    if queues > 1 {
+                        netdev.push_str(&format!(",queues={queues}"));
                     }
+                    netdev
                 }
                 NetworkingMode::Custom => {
                     if !networking.netdev.contains(&format!("id={net_id}")) {
@@ -666,7 +720,23 @@ impl QemuCommandBuilder<'_> {
                     if networking.device.is_empty() {
                         bail!("macvtap interface {index} has not been prepared by netd");
                     }
-                    format!("tap,id={net_id},fd={},vhost=off", 3 + index)
+                    let fds = macvtap_fds
+                        .get(index)
+                        .filter(|fds| !fds.is_empty())
+                        .with_context(|| {
+                            format!("macvtap interface {index} has no launcher descriptors")
+                        })?;
+                    let selector = if fds.len() == 1 {
+                        format!("fd={}", fds[0])
+                    } else {
+                        let fds = fds
+                            .iter()
+                            .map(|fd| fd.to_string())
+                            .collect::<Vec<_>>()
+                            .join(":");
+                        format!("fds={fds}")
+                    };
+                    format!("tap,id={net_id},{selector},vhost={}", on_off(vhost))
                 }
             };
             command.arg("-netdev").arg(netdev);
@@ -1028,14 +1098,14 @@ mod tests {
     };
 
     use super::{
-        amd_sev_snp_memory_backend_arg, parse_amd_sev_snp_qmp_capabilities, virtio_pci_device,
-        PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        amd_sev_snp_memory_backend_arg, macvtap_fd_layout, parse_amd_sev_snp_qmp_capabilities,
+        virtio_pci_device, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, GpuSpec, Manifest, PortMapping, VmVolume, VmWorkDir};
     use crate::config::{
-        Config, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, Protocol,
-        DEFAULT_CONFIG,
+        Config, CvmPlatform, NetworkFilterMode, Networking, NetworkingMode, NicNetworking,
+        Protocol, DEFAULT_CONFIG,
     };
     use crate::netd::{tap_name, InterfaceIdentity};
     use dstack_types::{KeyProviderKind, TeeVariant};
@@ -1087,8 +1157,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn qemu_command_builder_does_not_require_prepared_paths_to_exist() {
+    /// Minimal launch fixture. Nothing it points at has to exist on disk; every
+    /// test overrides the fields it asserts on.
+    fn test_launch_fixture() -> (Config, VmConfig, PreparedQemuLaunch) {
         let mut config: Config = Figment::from(Toml::string(DEFAULT_CONFIG))
             .extract()
             .unwrap();
@@ -1110,6 +1181,7 @@ mod tests {
                     protocol: Protocol::Tcp,
                     from: 18080,
                     to: 8080,
+                    nic_index: None,
                 }],
                 created_at_ms: 0,
                 hugepages: false,
@@ -1158,7 +1230,7 @@ mod tests {
             workdir: PathBuf::from("/does-not-exist/vm-1"),
             gateway_enabled: false,
         };
-        let mut prepared = PreparedQemuLaunch {
+        let prepared = PreparedQemuLaunch {
             workdir: VmWorkDir::new("/does-not-exist/vm-1"),
             platform: CvmPlatform::Tdx,
             networks: vec![config.cvm.networking.clone(), config.cvm.networking.clone()],
@@ -1175,6 +1247,172 @@ mod tests {
             snp_host_data: None,
             snp_launch_params: None,
         };
+        (config, vm, prepared)
+    }
+
+    /// Builds the `-netdev`/`-device` pairs for one NIC layout.
+    fn net_args(config: &Config, networks: Vec<Networking>) -> Vec<String> {
+        let (_, vm, mut prepared) = test_launch_fixture();
+        prepared.networks = networks;
+        let process = QemuCommandBuilder {
+            vm: &vm,
+            cfg: &config.cvm,
+            gpus: &GpuConfig::default(),
+            prepared: &prepared,
+        }
+        .build()
+        .unwrap();
+        process
+            .args
+            .windows(2)
+            .filter(|args| args[0] == "-netdev" || args[0] == "-device")
+            .map(|args| args[1].clone())
+            .collect()
+    }
+
+    fn bridge_network(config: &Config) -> Networking {
+        let mut networking = config.cvm.networking.clone();
+        networking.nic.mode = NetworkingMode::Bridge;
+        networking.nic.bridge = "br0".into();
+        // The vhost tests below are about what an opted-in node builds; the
+        // shipped default leaves it off.
+        networking.nic.vhost = Some(true);
+        networking
+    }
+
+    #[test]
+    fn every_bridge_nic_gets_the_netd_tap() {
+        // Not only the filtered or multiqueue ones. A bridge NIC's host
+        // interface has one owner, so the netdev QEMU is handed does not
+        // change with the node's filter mode or its queue count.
+        let (mut config, ..) = test_launch_fixture();
+        config.cvm.instance_id = "vmm-a".into();
+        let mut networking = bridge_network(&config);
+        networking.nic.queues = Some(1);
+        let args = net_args(&config, vec![networking]);
+        let tap = tap_name(&InterfaceIdentity {
+            instance_id: "vmm-a".into(),
+            vm_id: "vm-1".into(),
+            nic_index: 0,
+        });
+        assert!(args.contains(&format!(
+            "tap,id=net0,ifname={tap},script=no,downscript=no,vhost=on"
+        )));
+        // A single queue pair must keep the historical device line byte for byte.
+        assert!(args.iter().any(
+            |arg| arg.starts_with("virtio-net-pci,netdev=net0,mac=") && !arg.contains("mq=on")
+        ));
+    }
+
+    #[test]
+    fn disabling_vhost_keeps_the_netd_tap_and_turns_the_data_plane_off() {
+        let (mut config, ..) = test_launch_fixture();
+        config.cvm.instance_id = "vmm-a".into();
+        let mut networking = bridge_network(&config);
+        networking.nic.vhost = Some(false);
+        let args = net_args(&config, vec![networking]);
+        let tap = tap_name(&InterfaceIdentity {
+            instance_id: "vmm-a".into(),
+            vm_id: "vm-1".into(),
+            nic_index: 0,
+        });
+        assert!(args.contains(&format!(
+            "tap,id=net0,ifname={tap},script=no,downscript=no,vhost=off"
+        )));
+    }
+
+    #[test]
+    fn multiqueue_bridge_uses_the_netd_tap_and_derives_vectors() {
+        let (mut config, ..) = test_launch_fixture();
+        config.cvm.instance_id = "vmm-a".into();
+        let mut networking = bridge_network(&config);
+        networking.nic.queues = Some(4);
+        let args = net_args(&config, vec![networking]);
+        let tap = tap_name(&InterfaceIdentity {
+            instance_id: "vmm-a".into(),
+            vm_id: "vm-1".into(),
+            nic_index: 0,
+        });
+        assert!(args.contains(&format!(
+            "tap,id=net0,ifname={tap},script=no,downscript=no,vhost=on,queues=4"
+        )));
+        // vectors = 2 per queue pair, plus config and control.
+        assert!(args.iter().any(|arg| arg.contains("mq=on,vectors=10")));
+    }
+
+    #[test]
+    fn macvtap_queues_take_one_inherited_descriptor_each() {
+        let (config, ..) = test_launch_fixture();
+        let mut first = config.cvm.networking.clone();
+        first.nic.mode = NetworkingMode::Macvtap;
+        first.nic.parent = "eth0".into();
+        first.nic.vhost = Some(true);
+        first.device = "/dev/tap7".into();
+        first.nic.queues = Some(2);
+        let mut second = first.clone();
+        second.device = "/dev/tap9".into();
+        second.nic.queues = Some(3);
+
+        let networks = vec![first, second];
+        let args = net_args(&config, networks.clone());
+        assert!(args.contains(&"tap,id=net0,fds=3:4,vhost=on".to_string()));
+        assert!(args.contains(&"tap,id=net1,fds=5:6:7,vhost=on".to_string()));
+
+        // The launcher must open exactly those descriptors, in that order.
+        let layout = macvtap_fd_layout(&networks);
+        assert_eq!(layout, vec![vec![3, 4], vec![5, 6, 7]]);
+    }
+
+    #[test]
+    fn macvtap_keeps_a_single_fd_argument_for_one_queue() {
+        let (config, ..) = test_launch_fixture();
+        let mut networking = config.cvm.networking.clone();
+        networking.nic.mode = NetworkingMode::Macvtap;
+        networking.nic.parent = "eth0".into();
+        networking.nic.vhost = Some(true);
+        networking.device = "/dev/tap7".into();
+        let args = net_args(&config, vec![networking]);
+        assert!(args.contains(&"tap,id=net0,fd=3,vhost=on".to_string()));
+    }
+
+    /// The operator owns a custom netdev string and the VMM cannot edit it, so
+    /// the generated device line must never claim more queues than that string
+    /// provides -- QEMU refuses the mismatch, from inside the per-VM launcher
+    /// where the reason is hard to see.
+    #[test]
+    fn custom_netdev_keeps_its_string_and_stays_single_queue() {
+        let (config, ..) = test_launch_fixture();
+        let mut networking = config.cvm.networking.clone();
+        networking.nic.mode = NetworkingMode::Custom;
+        networking.netdev = "tap,id=net0,ifname=custom0,vhost=on,queues=8".into();
+        // Even a queue count that reached the entry some other way is ignored.
+        networking.nic.queues = Some(8);
+        let args = net_args(&config, vec![networking]);
+        assert!(args.contains(&"tap,id=net0,ifname=custom0,vhost=on,queues=8".to_string()));
+        assert!(
+            args.iter().all(|arg| !arg.contains("mq=on")),
+            "custom mode must not generate a multiqueue device line: {args:?}"
+        );
+    }
+
+    #[test]
+    fn user_mode_ignores_vhost_and_keeps_its_netdev() {
+        let (config, ..) = test_launch_fixture();
+        let mut networking = config.cvm.networking.clone();
+        networking.nic.mode = NetworkingMode::User;
+        networking.nic.vhost = Some(true);
+        let args = net_args(&config, vec![networking]);
+        assert!(args
+            .iter()
+            .any(|arg| arg.starts_with("user,id=net0,") && !arg.contains("vhost")));
+        assert!(args.iter().any(
+            |arg| arg.starts_with("virtio-net-pci,netdev=net0,mac=") && !arg.contains("mq=on")
+        ));
+    }
+
+    #[test]
+    fn qemu_command_builder_does_not_require_prepared_paths_to_exist() {
+        let (mut config, vm, mut prepared) = test_launch_fixture();
 
         let process = QemuCommandBuilder {
             vm: &vm,
@@ -1256,22 +1494,10 @@ mod tests {
         }));
 
         for network in &mut prepared.networks {
-            network.mode = NetworkingMode::Bridge;
-            network.bridge = "br0".into();
+            network.nic.mode = NetworkingMode::Bridge;
+            network.nic.bridge = "br0".into();
+            network.nic.vhost = Some(false);
         }
-        let process = QemuCommandBuilder {
-            vm: &vm,
-            cfg: &config.cvm,
-            gpus: &GpuConfig::default(),
-            prepared: &prepared,
-        }
-        .build()
-        .unwrap();
-        assert!(process
-            .args
-            .iter()
-            .any(|arg| arg == "bridge,id=net0,br=br0"));
-
         config.cvm.instance_id = "vmm-a".into();
         config.cvm.network_filter.mode = NetworkFilterMode::Libvirt;
         let process = QemuCommandBuilder {
@@ -1290,6 +1516,10 @@ mod tests {
         assert!(process.args.iter().any(|arg| {
             arg == &format!("tap,id=net0,ifname={expected_tap},script=no,downscript=no,vhost=off")
         }));
+        assert!(process
+            .args
+            .iter()
+            .all(|arg| !arg.contains("mq=on") && !arg.contains("vectors=")));
 
         prepared.swtpm_socket = Some(PathBuf::from("/does-not-exist/vm-1/swtpm/swtpm.sock"));
         let process = QemuCommandBuilder {
@@ -1318,16 +1548,12 @@ mod tests {
 
         prepared.swtpm_socket = None;
         prepared.networks = vec![Networking {
-            mode: NetworkingMode::Custom,
-            bridge: String::new(),
-            parent: String::new(),
-            macvtap_mode: String::new(),
-            device: String::new(),
-            mac_prefix: String::new(),
-            net: String::new(),
-            dhcp_start: String::new(),
-            restrict: false,
+            nic: NicNetworking {
+                mode: NetworkingMode::Custom,
+                ..NicNetworking::default()
+            },
             netdev: "tap,id=wrong".into(),
+            ..Networking::default()
         }];
         let error = QemuCommandBuilder {
             vm: &vm,

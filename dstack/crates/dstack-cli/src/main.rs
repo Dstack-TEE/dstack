@@ -102,7 +102,8 @@ enum Command {
         /// disk size in GB.
         #[arg(long, default_value_t = 20)]
         disk: u32,
-        /// expose a port: `vm` | `host:vm` | `proto:host:vm` | `proto:addr:host:vm`
+        /// expose a port: `vm` | `host:vm` | `proto:host:vm` | `proto:addr:host:vm`,
+        /// each optionally suffixed `@<nic>` to name the NIC it enters through
         /// (host omitted/`auto`/`0` ⇒ a free host port is picked). Repeatable.
         #[arg(long = "port", value_name = "SPEC")]
         ports: Vec<String>,

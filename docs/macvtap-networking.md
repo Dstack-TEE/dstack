@@ -19,6 +19,9 @@ Configure a NIC through node configuration or an authorized VMM RPC request:
 
 `parent` must name an existing host interface. `macvtap_mode` may be
 `private`, `bridge`, `vepa`, or `passthru`; an empty value selects `private`.
+Macvtap NICs also honour the `vhost` and `queues` settings described in
+[network-data-plane.md](network-data-plane.md); netd creates the interface with
+matching hardware queues and the launcher opens `/dev/tapN` once per queue.
 The configured netd socket permissions apply in the same way as for
 libvirt-filtered bridge networking.
 
@@ -49,8 +52,9 @@ and the same deterministic MAC address passed to QEMU. Netd then:
 4. reads its kernel-assigned ifindex and waits for `/dev/tap<ifindex>`; and
 5. returns that runtime device path to the VMM.
 
-The per-VM launcher opens the character device, places it at the fd referenced
-by QEMU's `-netdev tap,fd=...` argument, and then execs QEMU. This keeps device
+The per-VM launcher opens the character device once per queue pair, places the
+descriptors at the fds referenced by QEMU's `-netdev tap,fd=...` (or `fds=...`)
+argument, and then execs QEMU. This keeps device
 paths out of persistent VM
 configuration, works with both Supervisor and systemd process managers, and
 does not pass network fds through `sudo`.

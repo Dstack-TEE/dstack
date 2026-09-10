@@ -33,7 +33,25 @@ pub fn tcp_port_free(addr: &str, port: u16) -> bool {
 /// * `<host>:<vm>`               — tcp, 127.0.0.1
 /// * `<proto>:<host>:<vm>`
 /// * `<proto>:<addr>:<host>:<vm>`
+///
+/// Any of them may carry a trailing `@<nic>` naming which NIC the traffic
+/// enters through, as `vmm-cli.py --port` does. Without it the VMM picks: the
+/// first user-mode NIC, else the first bridge NIC. A single-NIC VM never needs
+/// it.
 pub fn parse_port(spec: &str) -> Result<PortMapping> {
+    let (spec, nic_index) = match spec.rsplit_once('@') {
+        // Only digits. `parse()` would take " 1" and "+1" as 1, and a NIC index
+        // is a position in a list the caller wrote.
+        Some((rest, nic)) if nic.bytes().all(|byte| byte.is_ascii_digit()) && !nic.is_empty() => (
+            rest,
+            Some(
+                nic.parse::<u32>()
+                    .with_context(|| format!("invalid NIC index in --port '{spec}'"))?,
+            ),
+        ),
+        Some((_, nic)) => bail!("invalid NIC index in --port '{spec}': '{nic}' is not a number"),
+        None => (spec, None),
+    };
     let parts: Vec<&str> = spec.split(':').collect();
     let (proto, addr, host, vm) = match parts.as_slice() {
         [vm] => ("tcp", "127.0.0.1", "auto", *vm),
@@ -58,6 +76,7 @@ pub fn parse_port(spec: &str) -> Result<PortMapping> {
         host_address: addr.to_string(),
         host_port,
         vm_port,
+        nic_index,
     })
 }
 
@@ -89,5 +108,24 @@ mod tests {
         assert!(parse_port("sctp:8080:80").is_err());
         assert!(parse_port("70000:80").is_err());
         assert!(parse_port("8080:0").is_err());
+    }
+
+    #[test]
+    fn a_mapping_can_name_the_nic_it_enters_through() {
+        assert_eq!(parse_port("8080:80").unwrap().nic_index, None);
+
+        let pinned = parse_port("udp:0.0.0.0:7483:51820@1").unwrap();
+        assert_eq!(pinned.nic_index, Some(1));
+        assert_eq!(pinned.protocol, "udp");
+        assert_eq!(pinned.host_address, "0.0.0.0");
+        assert_eq!(pinned.host_port, 7483);
+        assert_eq!(pinned.vm_port, 51820);
+
+        // Unpinned must stay unpinned rather than default to NIC 0: the VMM
+        // resolves it to the first user-mode NIC, which need not be the first.
+        assert_eq!(parse_port("8080:80@0").unwrap().nic_index, Some(0));
+        for bad in ["8080:80@", "8080:80@ 1", "8080:80@+1", "8080:80@a"] {
+            assert!(parse_port(bad).is_err(), "{bad} must be refused");
+        }
     }
 }

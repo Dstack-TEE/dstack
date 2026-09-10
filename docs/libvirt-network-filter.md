@@ -14,10 +14,17 @@ host mechanism.
 
 The measurable acceptance criteria are:
 
-- `network_filter = "none"` preserves the existing QEMU `-netdev bridge`
-  behavior and does not require `netd` or libvirt.
+- `network_filter = "none"` installs no nwfilter binding. It does not remove
+  the `netd` dependency: `netd` creates the TAP for every bridge NIC either
+  way, and the VMM uses `-netdev tap` either way. What changes is only whether
+  that TAP carries a binding.
 - `network_filter = "libvirt"` creates the TAP and filter binding before QEMU
   is submitted to Supervisor, and uses QEMU `-netdev tap`.
+- An nwfilter binding outlives the TAP it was bound to, so a teardown clears
+  the binding at every name that VM could have used, whether or not the
+  interface is still there. `dstack-vmm netd list` shows a binding whose
+  interface is already gone as a `binding` row; remove one with
+  `dstack-vmm netd remove-interface <name>`.
 - A failed TAP or filter setup prevents QEMU from starting and rolls back all
   interfaces prepared for that VM.
 - Normal stop and removal delete the filter binding and TAP.
@@ -53,8 +60,11 @@ allowed_macvtap_parents = []
 
 Macvtap is excluded from `allowed_network_modes` by default. Empty bridge and
 macvtap-parent allowlists prevent RPC callers from overriding the respective
-node defaults. If macvtap is explicitly enabled, callers may select only a
-parent in `allowed_macvtap_parents`; the macvtap forwarding mode always comes
+node defaults. If macvtap is explicitly enabled, callers may select a
+parent listed in `allowed_macvtap_parents`, the node's own configured parent, or
+one this VM already holds — restating a value the node would have supplied
+anyway grants nothing new. The same applies to `bridge_name` and
+`allowed_bridges`. The macvtap forwarding mode always comes
 from `[cvm.networking].macvtap_mode` and cannot be selected through deployment
 RPCs. These allowlists authorize attachment targets; an nwfilter is not a
 substitute for that authorization.
@@ -82,7 +92,8 @@ For libvirt mode, startup is:
 2. Create the TAP for the configured QEMU UID and attach it to the bridge.
 3. Create a libvirt nwfilter binding for the TAP.
 4. Bring the TAP up and return success.
-5. Start QEMU directly with `-netdev tap,script=no,downscript=no`.
+5. Start QEMU directly with `-netdev tap,script=no,downscript=no`, carrying
+   `vhost=on|off` and, above one queue pair, `queues=N`.
 
 Teardown stops QEMU first, removes the binding, and deletes the TAP. Operations
 are serialized by `netd`. The design intentionally does not add ownership
@@ -98,11 +109,31 @@ arguments. It never accepts a command, executable path, TAP name, or raw XML
 from a client. Filter XML is generated internally with XML escaping and is
 validated by libvirt.
 
+Teardown by identity only reaches the NIC indices its caller still has a record
+of, and that record is written *after* the interface exists — a VMM killed in
+between leaves a TAP nothing on disk points at, and a manifest that lost a NIC
+leaves the same thing behind. `remove_all` names a VM instead of an interface
+and derives every name that VM could occupy, so neither has to be recorded for
+teardown to work. The VMM sweeps before preparing a launch as well as on stop,
+which makes a launch self-healing regardless of what the record says.
+
+A bridge prepare also carries two things `netd` does not need to build the TAP.
+`workdir` names the VM's directory on the host: untrusted, never read for a
+decision, and present only so an operator reading `netd`'s log can get from an
+opaque TAP name back to the VM. `ingress` states the host ports that NIC should make
+reachable at its guest, which the VMM cannot arrange itself — it runs without
+`CAP_NET_ADMIN` by design, and QEMU's `hostfwd=` entries need a user-mode netdev
+that a bridge NIC does not have. The `netd` in this repository builds interfaces
+and does not forward ports; it says so by leaving `ingress` out of its response,
+the same reading `queues` gets, so a caller can tell "this netd does not do that"
+from "nothing was asked for" instead of assuming ports were forwarded because a
+TAP came back.
+
 ## Deployment modes
 
-Production should run one shared service. `netd` reads only the `[netd]`
-section, so its root-owned configuration can be small and independent of every
-VMM instance:
+Production should run one shared service. `netd` reads the `[netd]` section,
+plus `cvm.network_filter.mode` if the file has one, so its root-owned
+configuration can be small and independent of every VMM instance:
 
 ```toml
 # /etc/dstack/netd.toml
@@ -110,7 +141,32 @@ VMM instance:
 socket = "/run/dstack/netd.sock"
 socket_mode = 0o660
 libvirt_uri = "qemu:///system"
+
+# Required here because this file has no [cvm] section for netd to read the
+# node's policy from.
+[netd.network_filter]
+mode = "libvirt"
+filter = "clean-traffic"
+parameters = {}
 ```
+
+`[netd.network_filter]` is netd's own copy of the invariant, not a convenience.
+netd is the privileged side of the socket, and anything that can reach the
+socket can ask for an unfiltered TAP on a host bridge — a request a filtering
+node has to refuse in the daemon rather than in its caller. When netd and the
+VMM share one `vmm.toml`, leaving it unset derives it from
+`[cvm.network_filter]` so the two cannot drift apart; a malformed section is a
+startup error rather than a silent fallback to "filter nothing".
+
+The request says only *whether* to bind a filter, never which one. A caller that
+named the filter could name `allow-arp`, which contains no drop rule at all, or
+pin `clean-traffic` to the gateway's MAC and IP through its parameters, and
+still satisfy a policy that asked for "some filter".
+
+A macvtap parent is refused when filtering is required and the parent is a host
+bridge or is enslaved to one: nwfilter does not apply to macvtap, so that
+request is the same unfiltered access to the same segment, spelled with a
+different operation.
 
 Production deployments can use systemd socket activation. The socket unit
 owns the filesystem mode and ownership; `netd.socket_mode` applies only to the
@@ -162,10 +218,38 @@ sudo dstack-vmm --config ./vmm.toml \
   --netd-socket /run/dstack-dev/netd.sock
 ```
 
-User networking and bridge networking with `mode = "none"` never connect to
-`netd`. Libvirt mode fails closed if `netd` is unavailable.
+User networking and a caller-supplied netdev never ask `netd` to build an
+interface. The VMM still contacts the socket for such a VM -- every launch and
+every stop releases whatever the VM held, before it decides whether it needs
+anything built -- but nothing about the VM depends on the answer. Bridge and
+macvtap do ask, and fail closed if `netd` is unavailable.
 
-Filtered TAP netdevs currently set `vhost=off`. This keeps the initial backend
-on the directly bound TAP path and avoids adding `/dev/vhost-net` permissions
-to the QEMU user. It is a deliberate security-first throughput tradeoff; a
-future configurable vhost mode requires equivalent filter integration tests.
+Filtered TAP netdevs follow the node's `vhost` and `queues` settings like any
+other TAP-backed NIC (see [network-data-plane.md](network-data-plane.md)). The
+nwfilter binding is installed on the host TAP interface, so packets traverse it
+whether they were written by QEMU or by a vhost worker; filtering is unaffected
+by the data plane choice. Enabling vhost does require the QEMU user to be able
+to open `/dev/vhost-net`.
+
+`netd` creates the TAP for unfiltered bridge NICs too. Those TAPs carry no
+nwfilter binding, so a bridge node needs `netd` even when
+`network_filter.mode = "none"` — see
+[bridge-networking.md](bridge-networking.md) for why the host interface has a
+single owner.
+
+An empty filter name is what selects that unfiltered TAP, so `mode = "libvirt"`
+with an empty `filter` is rejected at config load rather than quietly producing
+an unbound TAP.
+
+Removal carries the same distinction: the VMM tells `netd` whether the interface
+it is asking about was created with a binding, from a record made when it was
+built rather than from configuration that may have changed since. A binding it
+was told about must be gone before `netd` returns; otherwise `netd` still asks
+libvirt to clear one — an interface name is reused by the same VM, and a
+leftover binding's rules would be inherited — but a `libvirtd` it cannot reach
+is a warning rather than a failure. So a node with `virsh` installed and no
+running `libvirtd` can create and destroy multiqueue TAPs. The flag defaults to
+true on the wire, so an older VMM's removals still drop their bindings.
+
+`netd` requires the `virsh` binary to be present whatever the filter mode; it is
+`libvirtd` that unfiltered work does not need.

@@ -620,7 +620,7 @@ h1, h2, h3, h4, h5, h6 {
 
 .runtime-network-item {
   display: grid;
-  grid-template-columns: 1.1fr 0.6fr 0.8fr 1.4fr;
+  grid-template-columns: 1.1fr 0.6fr 0.8fr 1.4fr 0.7fr 0.7fr;
   gap: 12px;
   overflow-wrap: anywhere;
 }
@@ -1420,11 +1420,33 @@ h1, h2, h3, h4, h5, h6 {
   font-size: 14px;
 }
 
+/* Fixed track widths summed to a floor wider than the dialog, which put a
+   horizontal scrollbar under the Networking section on any window narrower than
+   about 930px. The tracks shrink and the tuning pair wraps instead. */
 .network-config-row {
   display: grid;
-  grid-template-columns: 160px minmax(180px, 1fr) 100px;
+  grid-template-columns: minmax(120px, 160px) minmax(140px, 1fr) minmax(200px, auto) auto;
   gap: 12px;
   align-items: center;
+}
+
+.network-config-tuning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.network-config-tuning select {
+  flex: 1 1 140px;
+  min-width: 110px;
+  max-width: 160px;
+}
+
+.network-config-tuning input {
+  flex: 1 1 150px;
+  min-width: 90px;
+  max-width: 190px;
 }
 
 .network-config-placeholder {
