@@ -5,7 +5,7 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use certbot::{CertBotConfig, ChallengeKind, WorkDir, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
 use clap::Parser;
 use documented::DocumentedFields;
@@ -201,17 +201,25 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
 
 async fn renew(config: &PathBuf, once: bool, force: bool) -> Result<()> {
     let bot_config = load_config(config).context("Failed to load configuration")?;
-    let bot = bot_config
-        .build_bot()
-        .await
-        .context("Failed to build bot")?;
     if once {
+        let bot = bot_config
+            .build_bot()
+            .await
+            .context("Failed to build bot")?;
         bot.renew_and_run_hook(force).await?;
-    } else {
-        tokio::select! {
-            _ = bot.run() => unreachable!("certbot daemon returned"),
-            result = shutdown_signal() => result?,
-        }
+        return Ok(());
+    }
+
+    // Install the shutdown handler before build_bot(), which can do network
+    // I/O (e.g. creating the ACME account), so a SIGTERM/Ctrl-C arriving
+    // during startup is handled instead of hard-killing the process.
+    let bot = tokio::select! {
+        bot = bot_config.build_bot() => bot.context("Failed to build bot")?,
+        result = shutdown_signal() => return result,
+    };
+    tokio::select! {
+        _ = bot.run() => bail!("certbot daemon exited unexpectedly"),
+        result = shutdown_signal() => result?,
     }
     Ok(())
 }
