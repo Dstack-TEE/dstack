@@ -2178,6 +2178,18 @@ impl TdxOsImageMeasurement {
     /// is rejected rather than carried forward.
     pub const VERSION: u32 = 4;
 
+    /// `COMMAND_LINE_SIZE` on x86_64. A longer string cannot be the command
+    /// line any TDX guest booted with, so a document carrying one is malformed
+    /// rather than merely wrong.
+    ///
+    /// This is a contract check, not a resource guard: the document already
+    /// arrives inside an attestation bounded well below anything worth
+    /// defending against. What it buys is the error. Without it an oversized
+    /// string is measured like any other and rejected as an `RTMR2 mismatch`,
+    /// which points at the quote instead of at the document. It also restores
+    /// the length check the version 3 digest field carried.
+    const MAX_CMDLINE_LEN: usize = 2048;
+
     /// CBOR representation stored as `measurement.tdx.cbor`.
     ///
     pub fn to_cbor_vec(&self) -> Vec<u8> {
@@ -2196,6 +2208,15 @@ impl TdxOsImageMeasurement {
                  command line, then re-register its os_image_hash.",
                 cbor.version,
                 Self::VERSION
+            ));
+        }
+        let cmdline_len = cbor.image.base_cmdline.len();
+        if cmdline_len > Self::MAX_CMDLINE_LEN {
+            return Err(format!(
+                "TdxOsImageMeasurement: kernel command line is {} bytes, over the {} \
+                 byte x86_64 COMMAND_LINE_SIZE",
+                cmdline_len,
+                Self::MAX_CMDLINE_LEN
             ));
         }
         Ok(cbor.into())
@@ -2783,6 +2804,25 @@ mod tdx_measurement_cbor_tests {
                 td_hob_witness: vec![0x01, 0x02, 0x03],
             },
         }
+    }
+
+    /// A command line longer than the kernel could ever have been handed is a
+    /// malformed document, and saying so beats measuring it and reporting an
+    /// RTMR[2] mismatch that points at the quote instead.
+    #[test]
+    fn an_oversized_command_line_is_rejected_by_name() {
+        let mut oversized = measurement(true);
+        oversized.image.base_cmdline = "a".repeat(TdxOsImageMeasurement::MAX_CMDLINE_LEN + 1);
+        let err = TdxOsImageMeasurement::from_cbor_slice(&oversized.to_cbor_vec())
+            .expect_err("an oversized command line must not decode");
+        assert!(err.contains("COMMAND_LINE_SIZE"), "{err}");
+
+        // The bound itself still decodes, so it rejects nothing a guest could
+        // actually have booted with.
+        let mut at_limit = measurement(true);
+        at_limit.image.base_cmdline = "a".repeat(TdxOsImageMeasurement::MAX_CMDLINE_LEN);
+        TdxOsImageMeasurement::from_cbor_slice(&at_limit.to_cbor_vec())
+            .expect("the limit itself is valid");
     }
 
     /// Which kernel bytes the digest covers has to survive a round trip in
