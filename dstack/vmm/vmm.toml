@@ -84,8 +84,10 @@ qemu_hotplug_off = false
 # TDX attestation/hash scheme policy:
 # - "legacy": digest.txt + legacy verifier
 # - "lite": digest.txt + measurement.tdx.cbor + no-QEMU verifier
-# - "auto": legacy for CVM memory below 3 GiB except exactly 2 GiB; otherwise
-#   lite when the image supports it, legacy when it does not.
+# - "auto": lite when the image ships measurement.tdx.cbor, legacy when it does
+#   not. Memory size does not take part: the kernel hash only depended on it
+#   for images whose OVMF leaves the setup header for QEMU to rewrite, and the
+#   build system no longer produces those.
 tdx_attestation_variant = "auto"
 
 host_share_mode = "9p"

@@ -272,20 +272,31 @@ pub enum TdxAttestationVariantConfig {
 }
 
 impl TdxAttestationVariantConfig {
-    const TWO_GIB_MIB: u32 = 2 * 1024;
-    const THREE_GIB_MIB: u32 = 3 * 1024;
-
-    pub fn resolve(self, memory_mib: u32, image_supports_lite: bool) -> TdxAttestationVariant {
+    /// `auto` follows the image and nothing else.
+    ///
+    /// It used to also refuse lite below 3 GiB, exempting exactly 2 GiB,
+    /// because QEMU's setup-header rewrite moves the initrd with guest RAM and
+    /// so makes the patched kernel Authenticode hash memory-dependent. Images
+    /// whose OVMF normalizes the setup header measure the shipped `bzImage`
+    /// instead, which no guest RAM size can move, and that is every image the
+    /// build system can now produce: it hardcodes `kernel_header_normalized`
+    /// and fails when the OVMF patch does not apply.
+    ///
+    /// A pre-normalization image is the one case this no longer covers. The
+    /// no-download verifier still rejects those below the threshold, with an
+    /// error naming the memory sizes and telling the operator to re-emit the
+    /// image, so the failure is explicit rather than a silent mismatch. Set
+    /// `tdx_attestation_variant = "legacy"` to keep running one as is.
+    pub fn resolve(self, image_supports_lite: bool) -> TdxAttestationVariant {
+        use TdxAttestationVariant::{Legacy, Lite};
         match self {
-            Self::Legacy => TdxAttestationVariant::Legacy,
-            Self::Lite => TdxAttestationVariant::Lite,
+            Self::Legacy => Legacy,
+            Self::Lite => Lite,
             Self::Auto => {
-                if memory_mib < Self::THREE_GIB_MIB && memory_mib != Self::TWO_GIB_MIB {
-                    TdxAttestationVariant::Legacy
-                } else if image_supports_lite {
-                    TdxAttestationVariant::Lite
+                if image_supports_lite {
+                    Lite
                 } else {
-                    TdxAttestationVariant::Legacy
+                    Legacy
                 }
             }
         }
@@ -360,9 +371,10 @@ pub struct CvmConfig {
 
     /// TDX attestation/hash scheme policy. `legacy` keeps the existing
     /// digest.txt measurement path; `lite` opts into split measurement CBOR;
-    /// `auto` selects `legacy` for
-    /// CVMs below 3 GiB except exactly 2 GiB, otherwise uses `lite` when the
-    /// image carries TDX measurement material and falls back to `legacy`.
+    /// `auto` uses `lite` when the image carries TDX measurement material and
+    /// falls back to `legacy` when it does not. See
+    /// [`TdxAttestationVariantConfig::resolve`] for why memory size no longer
+    /// takes part.
     #[serde(default)]
     pub tdx_attestation_variant: TdxAttestationVariantConfig,
 
@@ -1164,30 +1176,13 @@ mod tests {
 
         use dstack_types::TdxAttestationVariant::{Legacy, Lite};
 
-        // Explicit settings bypass auto heuristics.
-        assert_eq!(
-            TdxAttestationVariantConfig::Legacy.resolve(2048, true),
-            Legacy
-        );
-        assert_eq!(TdxAttestationVariantConfig::Lite.resolve(1024, false), Lite);
+        // Explicit settings bypass auto entirely.
+        assert_eq!(TdxAttestationVariantConfig::Legacy.resolve(true), Legacy);
+        assert_eq!(TdxAttestationVariantConfig::Lite.resolve(false), Lite);
 
-        // Auto avoids lite for sub-3 GiB memory sizes except exactly 2 GiB.
-        assert_eq!(
-            TdxAttestationVariantConfig::Auto.resolve(1024, true),
-            Legacy
-        );
-        assert_eq!(
-            TdxAttestationVariantConfig::Auto.resolve(2816, true),
-            Legacy
-        );
-        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(2048, true), Lite);
-
-        // At 3 GiB and above, auto follows image support.
-        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(3072, true), Lite);
-        assert_eq!(
-            TdxAttestationVariantConfig::Auto.resolve(3072, false),
-            Legacy
-        );
+        // Auto follows image support alone; memory no longer takes part.
+        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(true), Lite);
+        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(false), Legacy);
     }
 
     fn default_config() -> Config {
