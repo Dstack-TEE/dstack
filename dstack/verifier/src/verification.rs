@@ -648,7 +648,7 @@ impl CvmVerifier {
         let fw_path = image_dir.join(&image_info.bios);
         let kernel_path = image_dir.join(&image_info.kernel);
         let initrd_path = image_dir.join(&image_info.initrd);
-        let kernel_cmdline = image_info.cmdline + " initrd=initrd";
+        let kernel_cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
         Ok(ImagePaths {
             image_dir,

@@ -292,12 +292,22 @@ fn rtmr1_log_from_kernel_hash(kernel_hash: Vec<u8>) -> Vec<Vec<u8>> {
     ]
 }
 
+/// The kernel command-line suffix OVMF appends before measuring.
+///
+/// `QemuKernelLoaderFsDxe` exposes the initrd as a loader-fs file and appends
+/// this so the kernel picks it up, so the measured command line is never the
+/// bare image-provided one. Every site that reconstructs the measured command
+/// line must go through [`measured_kernel_cmdline`] rather than restating this.
+pub const OVMF_INITRD_CMDLINE_SUFFIX: &str = " initrd=initrd";
+
 /// Return the measured TDX kernel command line for a metadata cmdline.
 ///
 /// This mirrors the existing dstack TDX measurement replay path, which measures
 /// the image-provided cmdline plus OVMF/QEMU's `initrd=initrd` suffix.
+///
+/// AMD SEV-SNP does not share this suffix; see `sev::normalize_kernel_cmdline`.
 pub fn measured_kernel_cmdline(base_cmdline: &str) -> String {
-    format!("{base_cmdline} initrd=initrd")
+    format!("{base_cmdline}{OVMF_INITRD_CMDLINE_SUFFIX}")
 }
 
 /// Generate the image-static TDX measurement material from an image directory.
@@ -649,4 +659,78 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         rtmr1,
         rtmr2,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::measure_cmdline;
+
+    /// Shaped like a real `os/image/kernel-cmdline.sh` command line: it always
+    /// carries `dstack.rootfs_hash`, which is what pins the rootfs.
+    const SAMPLE_BASE_CMDLINE: &str = "console=ttyS0 init=/init panic=1 \
+         dstack.rootfs_hash=1111111111111111111111111111111111111111111111111111111111111111 \
+         dstack.rootfs_size=4096";
+
+    fn sample_measurement() -> TdxOsImageMeasurement {
+        TdxOsImageMeasurement {
+            image: TdxImageMeasurement {
+                kernel_cmdline_sha384: measure_cmdline(&measured_kernel_cmdline(
+                    SAMPLE_BASE_CMDLINE,
+                )),
+                kernel_authenticode: vec![0x22; 48],
+                initrd_sha384: vec![0x33; 48],
+            },
+            tdvf: TdxTdvfMeasurement {
+                ovmf_variant: OvmfVariant::Pre202505,
+                mrtd: TdxMrtdCandidates {
+                    single_pass: vec![0x44; 48],
+                    two_pass: vec![0x55; 48],
+                },
+                td_hob_witness: vec![0x66; 16],
+            },
+            kernel_header_normalized: true,
+        }
+    }
+
+    #[test]
+    fn measured_kernel_cmdline_appends_the_ovmf_suffix() {
+        assert_eq!(
+            measured_kernel_cmdline(SAMPLE_BASE_CMDLINE),
+            format!("{SAMPLE_BASE_CMDLINE}{OVMF_INITRD_CMDLINE_SUFFIX}"),
+        );
+        assert_eq!(OVMF_INITRD_CMDLINE_SUFFIX, " initrd=initrd");
+    }
+
+    /// Golden vector. The command-line event is the first RTMR[2] entry, so a
+    /// change here silently invalidates every deployed `os_image_hash`. If this
+    /// fails, the measurement protocol changed: that must be a deliberate,
+    /// reviewed decision, not a side effect.
+    #[test]
+    fn rtmr2_command_line_event_digest_is_stable() {
+        let digest = measure_cmdline(&measured_kernel_cmdline(SAMPLE_BASE_CMDLINE));
+        assert_eq!(hex::encode(digest), "bb4154e6e429e184bc63d544ae5720f868e5859b378b13bab69860e1fc65c09f1b67277bba010841fbe8bc3619e58d58");
+    }
+
+    /// Golden vector for the full RTMR[2] replay (command line, then initrd).
+    #[test]
+    fn rtmr2_replay_is_stable() {
+        let cmdline_digest = measure_cmdline(&measured_kernel_cmdline(SAMPLE_BASE_CMDLINE));
+        let initrd_digest = vec![0x33; 48];
+        assert_eq!(
+            hex::encode(measure_log(&[cmdline_digest, initrd_digest])),
+            "2fb6d31492cd2f073fe8fdaa9dbdff4dfdde92bf07f9a16c2b7123ae7be5090007974d33bfe8807ac56974160f8f2948",
+        );
+    }
+
+    /// Golden vector for the CBOR that `sha256sum.txt` commits to, and hence
+    /// for `os_image_hash` itself. Changing the encoding requires rebuilding and
+    /// re-registering every image, so it must never change accidentally.
+    #[test]
+    fn tdx_measurement_document_cbor_is_stable() {
+        assert_eq!(
+            hex::encode(sample_measurement().to_cbor_vec()),
+            "a36776657273696f6e0365696d616765a46e636d646c696e655f7368613338345830bb4154e6e429e184bc63d544ae5720f868e5859b378b13bab69860e1fc65c09f1b67277bba010841fbe8bc3619e58d58736b65726e656c5f61757468656e7469636f6465583022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222278186b65726e656c5f6865616465725f6e6f726d616c697a6564f56d696e697472645f73686133383458303333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333336474647666a3646f766d6669707265323032353035646d727464a26b73696e676c655f7061737358304444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444446874776f5f7061737358305555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555556674645f686f625066666666666666666666666666666666",
+        );
+    }
 }
