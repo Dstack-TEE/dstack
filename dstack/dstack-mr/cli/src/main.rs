@@ -112,7 +112,7 @@ fn main() -> Result<()> {
             let firmware_path = parent_dir.join(&image_info.bios).display().to_string();
             let kernel_path = parent_dir.join(&image_info.kernel).display().to_string();
             let initrd_path = parent_dir.join(&image_info.initrd).display().to_string();
-            let cmdline = image_info.cmdline + " initrd=initrd";
+            let cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
             // The image declares its OVMF layout. Older metadata.json files
             // predate the field, so fall back to the only layout that existed.
@@ -323,7 +323,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
     let firmware = image_dir.join(&image_info.bios).display().to_string();
     let kernel = image_dir.join(&image_info.kernel).display().to_string();
     let initrd = image_dir.join(&image_info.initrd).display().to_string();
-    let cmdline = format!("{} initrd=initrd", image_info.cmdline);
+    let cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
     // Same resolution order as the verifier (see verifier::compute_measurement_details):
     // explicit vm_config.ovmf_variant > image_info.ovmf_variant > legacy default.

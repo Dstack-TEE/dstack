@@ -2028,12 +2028,15 @@ pub struct TdxOsImageMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TdxImageMeasurement {
-    /// SHA-384 of the exact kernel command line event measured into RTMR[2].
+    /// The image-provided kernel command line, without OVMF's `initrd=initrd`
+    /// suffix.
     ///
-    /// The measured value is the image-provided command line plus OVMF/QEMU's
-    /// `initrd=initrd` suffix, encoded as UTF-16LE with a trailing NUL.
-    #[serde(with = "hex_bytes")]
-    pub kernel_cmdline_sha384: Vec<u8>,
+    /// The RTMR[2] command-line event is derived from this, so the document is
+    /// self-describing: a verifier that never downloads the image can still
+    /// report the effective command line and check what it pins, notably
+    /// `dstack.rootfs_hash`. This supersedes the `kernel_cmdline_sha384` digest
+    /// carried by version 3, which could not be turned back into a string.
+    pub base_cmdline: String,
     /// Authenticode SHA-384 digest of the kernel image OVMF measures into
     /// RTMR[1]. Which bytes that covers is
     /// [`TdxOsImageMeasurement::kernel_header_normalized`].
@@ -2072,9 +2075,11 @@ pub struct TdxMrtdCandidates {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CborTdxImageMeasurement {
-    /// Measured kernel cmdline SHA-384.
-    #[serde(rename = "cmdline_sha384", with = "hex_bytes")]
-    kernel_cmdline_sha384: Vec<u8>,
+    /// Image-provided kernel cmdline, without OVMF's `initrd=initrd` suffix.
+    /// Named to match `CborSevOsImageMeasurement`, which already carries the
+    /// equivalent string under the same key.
+    #[serde(rename = "cmdline")]
+    base_cmdline: String,
     /// Kernel Authenticode SHA-384. Covers QEMU's rewritten copy, or the
     /// kernel file as shipped when `kernel_header_normalized` is set.
     #[serde(with = "hex_bytes")]
@@ -2118,7 +2123,7 @@ impl From<&TdxOsImageMeasurement> for CborTdxOsImageMeasurement {
         Self {
             version: TdxOsImageMeasurement::VERSION,
             image: CborTdxImageMeasurement {
-                kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384.clone(),
+                base_cmdline: measurement.image.base_cmdline.clone(),
                 kernel_authenticode: measurement.image.kernel_authenticode.clone(),
                 kernel_header_normalized: measurement.kernel_header_normalized,
                 initrd_sha384: measurement.image.initrd_sha384.clone(),
@@ -2140,7 +2145,7 @@ impl From<CborTdxOsImageMeasurement> for TdxOsImageMeasurement {
         Self {
             kernel_header_normalized: measurement.image.kernel_header_normalized,
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384,
+                base_cmdline: measurement.image.base_cmdline,
                 kernel_authenticode: measurement.image.kernel_authenticode,
                 initrd_sha384: measurement.image.initrd_sha384,
             },
@@ -2168,7 +2173,22 @@ pub struct TdxOsImageMeasurementDocument {
 }
 
 impl TdxOsImageMeasurement {
-    pub const VERSION: u32 = 3;
+    /// Version 4 replaced the `cmdline_sha384` digest with the `cmdline`
+    /// string. Version 3 only ever shipped in v0.6.0 release candidates, so it
+    /// is rejected rather than carried forward.
+    pub const VERSION: u32 = 4;
+
+    /// `COMMAND_LINE_SIZE` on x86_64. A longer string cannot be the command
+    /// line any TDX guest booted with, so a document carrying one is malformed
+    /// rather than merely wrong.
+    ///
+    /// This is a contract check, not a resource guard: the document already
+    /// arrives inside an attestation bounded well below anything worth
+    /// defending against. What it buys is the error. Without it an oversized
+    /// string is measured like any other and rejected as an `RTMR2 mismatch`,
+    /// which points at the quote instead of at the document. It also restores
+    /// the length check the version 3 digest field carried.
+    const MAX_CMDLINE_LEN: usize = 2048;
 
     /// CBOR representation stored as `measurement.tdx.cbor`.
     ///
@@ -2183,9 +2203,20 @@ impl TdxOsImageMeasurement {
         let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
         if cbor.version != Self::VERSION {
             return Err(format!(
-                "TdxOsImageMeasurement: unsupported version {}, expected {}",
+                "TdxOsImageMeasurement: unsupported version {}, expected {}. \
+                 rebuild the image so measurement.tdx.cbor carries the kernel \
+                 command line, then re-register its os_image_hash.",
                 cbor.version,
                 Self::VERSION
+            ));
+        }
+        let cmdline_len = cbor.image.base_cmdline.len();
+        if cmdline_len > Self::MAX_CMDLINE_LEN {
+            return Err(format!(
+                "TdxOsImageMeasurement: kernel command line is {} bytes, over the {} \
+                 byte x86_64 COMMAND_LINE_SIZE",
+                cmdline_len,
+                Self::MAX_CMDLINE_LEN
             ));
         }
         Ok(cbor.into())
@@ -2760,7 +2791,7 @@ mod tdx_measurement_cbor_tests {
         TdxOsImageMeasurement {
             kernel_header_normalized,
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: vec![0x11; 48],
+                base_cmdline: "console=ttyS0 dstack.rootfs_hash=11".to_string(),
                 kernel_authenticode: vec![0x22; 48],
                 initrd_sha384: vec![0x33; 48],
             },
@@ -2773,6 +2804,25 @@ mod tdx_measurement_cbor_tests {
                 td_hob_witness: vec![0x01, 0x02, 0x03],
             },
         }
+    }
+
+    /// A command line longer than the kernel could ever have been handed is a
+    /// malformed document, and saying so beats measuring it and reporting an
+    /// RTMR[2] mismatch that points at the quote instead.
+    #[test]
+    fn an_oversized_command_line_is_rejected_by_name() {
+        let mut oversized = measurement(true);
+        oversized.image.base_cmdline = "a".repeat(TdxOsImageMeasurement::MAX_CMDLINE_LEN + 1);
+        let err = TdxOsImageMeasurement::from_cbor_slice(&oversized.to_cbor_vec())
+            .expect_err("an oversized command line must not decode");
+        assert!(err.contains("COMMAND_LINE_SIZE"), "{err}");
+
+        // The bound itself still decodes, so it rejects nothing a guest could
+        // actually have booted with.
+        let mut at_limit = measurement(true);
+        at_limit.image.base_cmdline = "a".repeat(TdxOsImageMeasurement::MAX_CMDLINE_LEN);
+        TdxOsImageMeasurement::from_cbor_slice(&at_limit.to_cbor_vec())
+            .expect("the limit itself is valid");
     }
 
     /// Which kernel bytes the digest covers has to survive a round trip in
