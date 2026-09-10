@@ -17,6 +17,8 @@ IMAGE_INSTALL = "\
     containerd-cni \
     stargz-snapshotter \
     dstack-guest \
+    kata-agent-coco \
+    coco-guest-components \
     wireguard-tools \
     cryptsetup \
     curl \

@@ -1,0 +1,14 @@
+[Unit]
+Description=Confidential Containers REST API Server
+Documentation=https://github.com/confidential-containers/guest-components
+After=network.target coco-attestation-agent.service coco-confidential-data-hub.service
+Wants=coco-attestation-agent.service coco-confidential-data-hub.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/api-server-rest --features all --bind 127.0.0.1:8006 --aa_addr unix:///run/confidential-containers/attestation-agent/attestation-agent.sock --cdh_addr unix:///run/confidential-containers/cdh.sock
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
