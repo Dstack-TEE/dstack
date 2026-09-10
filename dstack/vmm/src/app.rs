@@ -1152,6 +1152,14 @@ impl App {
             })
             .cloned()
             .collect::<Vec<_>>();
+        if !request.status.is_empty() {
+            infos.retain(|vm| match self.work_dir(&vm.config.manifest.id) {
+                Ok(work_dir) => {
+                    vm.runtime_status(vms.get(&vm.config.manifest.id), &work_dir) == request.status
+                }
+                Err(_) => false,
+            });
+        }
         infos.sort_by(|a, b| {
             a.config
                 .manifest

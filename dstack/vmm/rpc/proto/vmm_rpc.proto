@@ -197,7 +197,7 @@ message UpdateVmRequest {
   repeated NetworkingConfig networks = 20;
 }
 
-// Parameters for listing CVMs with pagination and keyword filtering.
+// Parameters for listing CVMs with pagination and filtering.
 message StatusRequest {
   // List of VM IDs
   repeated string ids = 1;
@@ -209,6 +209,9 @@ message StatusRequest {
   uint32 page = 4;
   // Page size
   uint32 page_size = 5;
+  // Filter by VM status: running, stopped, exited, stopping, or removing.
+  // Empty means all statuses.
+  string status = 6;
 }
 
 // Summary of the current fleet status.

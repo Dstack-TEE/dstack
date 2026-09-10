@@ -121,6 +121,19 @@ SPDX-License-Identifier: Apache-2.0
         <input type="text" v-model="searchQuery" placeholder="Search instances..." @keyup.enter="loadVMList()">
         <button class="btn-search" @click="loadVMList()">Search</button>
       </div>
+      <select
+        v-model="statusFilter"
+        class="status-filter-select"
+        aria-label="Filter by status"
+        @change="onStatusFilterChange()"
+      >
+        <option value="">All statuses</option>
+        <option value="running">Running</option>
+        <option value="stopped">Stopped</option>
+        <option value="exited">Exited</option>
+        <option value="stopping">Stopping</option>
+        <option value="removing">Removing</option>
+      </select>
       <div class="vm-count">
         <span class="count-label">Total Instances:</span>
         <span class="count-value">{{ totalVMs }}</span>
