@@ -2415,7 +2415,7 @@ mod tests {
         let measurement = TdxOsImageMeasurement {
             kernel_header_normalized: true,
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: vec![0x10; 48],
+                base_cmdline: "console=ttyS0 dstack.rootfs_hash=10".to_string(),
                 kernel_authenticode: vec![0x20; 48],
                 initrd_sha384: vec![0x30; 48],
             },

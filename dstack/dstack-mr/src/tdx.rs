@@ -326,8 +326,8 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
 
     // Validate that the image identity carried by the measured cmdline is
     // well-formed. The normalized rootfs hash is not stored separately to keep
-    // the TDX projection compact; it is already committed by the measured
-    // kernel command line digest.
+    // the TDX projection compact; it is already committed by the command line
+    // the document carries.
     crate::sev::rootfs_hash_from_cmdline(Some(&base_cmdline))
         .context("failed to parse dstack.rootfs_hash from TDX cmdline")?;
 
@@ -360,9 +360,7 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
     Ok(TdxOsImageMeasurement {
         kernel_header_normalized: meta.kernel_header_normalized,
         image: TdxImageMeasurement {
-            kernel_cmdline_sha384: crate::kernel::measure_cmdline(&measured_kernel_cmdline(
-                &base_cmdline,
-            )),
+            base_cmdline: base_cmdline.clone(),
             kernel_authenticode,
             initrd_sha384: measure_sha384(&initrd),
         },
@@ -443,11 +441,13 @@ pub fn tdx_measurements_from_measurement_document(
         "tdx.measurement.image.initrd_sha384",
         48,
     )?;
-    let kernel_cmdline_hash = validate_bytes_field(
-        &measurement.image.kernel_cmdline_sha384,
-        "tdx.measurement.image.kernel_cmdline_sha384",
-        48,
-    )?;
+    // Now that the document carries the command line rather than its digest,
+    // the no-download path can enforce the same rootfs-identity invariant the
+    // build path does, instead of trusting an opaque 48-byte value.
+    crate::sev::rootfs_hash_from_cmdline(Some(&measurement.image.base_cmdline))
+        .context("failed to parse dstack.rootfs_hash from tdx.measurement.image.base_cmdline")?;
+    let kernel_cmdline_hash =
+        crate::kernel::measure_cmdline(&measured_kernel_cmdline(&measurement.image.base_cmdline));
     let rtmr2 = measure_log(&[kernel_cmdline_hash, initrd_hash]);
 
     Ok(crate::TdxMeasurements {
@@ -675,9 +675,7 @@ mod tests {
     fn sample_measurement() -> TdxOsImageMeasurement {
         TdxOsImageMeasurement {
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: measure_cmdline(&measured_kernel_cmdline(
-                    SAMPLE_BASE_CMDLINE,
-                )),
+                base_cmdline: SAMPLE_BASE_CMDLINE.to_string(),
                 kernel_authenticode: vec![0x22; 48],
                 initrd_sha384: vec![0x33; 48],
             },
@@ -730,7 +728,7 @@ mod tests {
     fn tdx_measurement_document_cbor_is_stable() {
         assert_eq!(
             hex::encode(sample_measurement().to_cbor_vec()),
-            "a36776657273696f6e0365696d616765a46e636d646c696e655f7368613338345830bb4154e6e429e184bc63d544ae5720f868e5859b378b13bab69860e1fc65c09f1b67277bba010841fbe8bc3619e58d58736b65726e656c5f61757468656e7469636f6465583022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222278186b65726e656c5f6865616465725f6e6f726d616c697a6564f56d696e697472645f73686133383458303333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333336474647666a3646f766d6669707265323032353035646d727464a26b73696e676c655f7061737358304444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444446874776f5f7061737358305555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555556674645f686f625066666666666666666666666666666666",
+            "a36776657273696f6e0465696d616765a467636d646c696e65788c636f6e736f6c653d747479533020696e69743d2f696e69742070616e69633d312064737461636b2e726f6f7466735f686173683d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131312064737461636b2e726f6f7466735f73697a653d34303936736b65726e656c5f61757468656e7469636f6465583022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222278186b65726e656c5f6865616465725f6e6f726d616c697a6564f56d696e697472645f73686133383458303333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333336474647666a3646f766d6669707265323032353035646d727464a26b73696e676c655f7061737358304444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444446874776f5f7061737358305555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555556674645f686f625066666666666666666666666666666666",
         );
     }
 }

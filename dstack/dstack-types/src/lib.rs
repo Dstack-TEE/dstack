@@ -2028,12 +2028,15 @@ pub struct TdxOsImageMeasurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TdxImageMeasurement {
-    /// SHA-384 of the exact kernel command line event measured into RTMR[2].
+    /// The image-provided kernel command line, without OVMF's `initrd=initrd`
+    /// suffix.
     ///
-    /// The measured value is the image-provided command line plus OVMF/QEMU's
-    /// `initrd=initrd` suffix, encoded as UTF-16LE with a trailing NUL.
-    #[serde(with = "hex_bytes")]
-    pub kernel_cmdline_sha384: Vec<u8>,
+    /// The RTMR[2] command-line event is derived from this, so the document is
+    /// self-describing: a verifier that never downloads the image can still
+    /// report the effective command line and check what it pins, notably
+    /// `dstack.rootfs_hash`. This supersedes the `kernel_cmdline_sha384` digest
+    /// carried by version 3, which could not be turned back into a string.
+    pub base_cmdline: String,
     /// Authenticode SHA-384 digest of the kernel image OVMF measures into
     /// RTMR[1]. Which bytes that covers is
     /// [`TdxOsImageMeasurement::kernel_header_normalized`].
@@ -2072,9 +2075,11 @@ pub struct TdxMrtdCandidates {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CborTdxImageMeasurement {
-    /// Measured kernel cmdline SHA-384.
-    #[serde(rename = "cmdline_sha384", with = "hex_bytes")]
-    kernel_cmdline_sha384: Vec<u8>,
+    /// Image-provided kernel cmdline, without OVMF's `initrd=initrd` suffix.
+    /// Named to match `CborSevOsImageMeasurement`, which already carries the
+    /// equivalent string under the same key.
+    #[serde(rename = "cmdline")]
+    base_cmdline: String,
     /// Kernel Authenticode SHA-384. Covers QEMU's rewritten copy, or the
     /// kernel file as shipped when `kernel_header_normalized` is set.
     #[serde(with = "hex_bytes")]
@@ -2118,7 +2123,7 @@ impl From<&TdxOsImageMeasurement> for CborTdxOsImageMeasurement {
         Self {
             version: TdxOsImageMeasurement::VERSION,
             image: CborTdxImageMeasurement {
-                kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384.clone(),
+                base_cmdline: measurement.image.base_cmdline.clone(),
                 kernel_authenticode: measurement.image.kernel_authenticode.clone(),
                 kernel_header_normalized: measurement.kernel_header_normalized,
                 initrd_sha384: measurement.image.initrd_sha384.clone(),
@@ -2140,7 +2145,7 @@ impl From<CborTdxOsImageMeasurement> for TdxOsImageMeasurement {
         Self {
             kernel_header_normalized: measurement.image.kernel_header_normalized,
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: measurement.image.kernel_cmdline_sha384,
+                base_cmdline: measurement.image.base_cmdline,
                 kernel_authenticode: measurement.image.kernel_authenticode,
                 initrd_sha384: measurement.image.initrd_sha384,
             },
@@ -2168,7 +2173,10 @@ pub struct TdxOsImageMeasurementDocument {
 }
 
 impl TdxOsImageMeasurement {
-    pub const VERSION: u32 = 3;
+    /// Version 4 replaced the `cmdline_sha384` digest with the `cmdline`
+    /// string. Version 3 only ever shipped in v0.6.0 release candidates, so it
+    /// is rejected rather than carried forward.
+    pub const VERSION: u32 = 4;
 
     /// CBOR representation stored as `measurement.tdx.cbor`.
     ///
@@ -2183,7 +2191,9 @@ impl TdxOsImageMeasurement {
         let cbor = cbor_from_slice::<CborTdxOsImageMeasurement>(bytes, "TdxOsImageMeasurement")?;
         if cbor.version != Self::VERSION {
             return Err(format!(
-                "TdxOsImageMeasurement: unsupported version {}, expected {}",
+                "TdxOsImageMeasurement: unsupported version {}, expected {}. \
+                 Rebuild the image so measurement.tdx.cbor carries the kernel \
+                 command line, then re-register its os_image_hash.",
                 cbor.version,
                 Self::VERSION
             ));
@@ -2760,7 +2770,7 @@ mod tdx_measurement_cbor_tests {
         TdxOsImageMeasurement {
             kernel_header_normalized,
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: vec![0x11; 48],
+                base_cmdline: "console=ttyS0 dstack.rootfs_hash=11".to_string(),
                 kernel_authenticode: vec![0x22; 48],
                 initrd_sha384: vec![0x33; 48],
             },
