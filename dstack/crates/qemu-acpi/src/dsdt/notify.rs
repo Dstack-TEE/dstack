@@ -147,6 +147,20 @@ pub(crate) fn pcnt(
     Some(Scope::raw(Path::new("\\_SB_.PCI0"), children))
 }
 
+/// The `(devfn, BSEL)` of each root port on `pcie.0`, in slot order.
+///
+/// QEMU numbers BSEL with a depth-first walk of the root bus's child list
+/// (`acpi_set_bsel`, `hw/acpi/pcihp.c`), so the mapping depends on the order
+/// dstack-vmm creates devices in:
+///
+/// - root ports are created in ascending slot order, one endpoint at function
+///   0 each;
+/// - PXB expanders are created before any root port, so their buses sit behind
+///   the `pcie.0` root ports in the child list. Root ports under a PXB still
+///   take BSEL values, but only after these ones, and QEMU emits no AML for
+///   them.
+///
+/// Reordering those devices in the VMM changes the measured DSDT.
 fn root_ports(slot_count: u32, count: u32, pxb_devfn: Option<u8>) -> Vec<(u8, u32)> {
     let mut ports = Vec::with_capacity(count as usize);
     let mut slot = slot_count;
