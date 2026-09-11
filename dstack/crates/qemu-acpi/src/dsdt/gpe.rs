@@ -24,7 +24,7 @@
 //! `_E01` is deliberately empty here: it is the PCI hotplug event, and the
 //! baseline machine has no hotplug-capable bridge for it to scan.
 
-use acpi_tables::aml::{Method, MethodCall, Name, Path, Scope};
+use acpi_tables::aml::{Acquire, Method, MethodCall, Name, Path, Release, Scope};
 
 use super::ops::emit_all;
 
@@ -49,10 +49,18 @@ pub(crate) fn e02() -> Vec<u8> {
     )])
 }
 
-/// `Scope (_GPE) { Method (_E01, 0, NotSerialized) {} }`, the PCI hotplug
-/// event.
-pub(crate) fn e01() -> Vec<u8> {
-    let handler = Method::new(Path::new("_E01"), 0, false, vec![]);
+/// `Scope (_GPE) { Method (_E01, 0, NotSerialized) { ... } }`, the PCI
+/// hotplug event. QEMU leaves the method empty when no bus supplies PCNT.
+pub(crate) fn e01(has_pcnt: bool) -> Vec<u8> {
+    let acquire = Acquire::new(Path::new("\\_SB_.PCI0.BLCK"), 0xffff);
+    let scan = MethodCall::new(Path::new("\\_SB_.PCI0.PCNT"), vec![]);
+    let release = Release::new(Path::new("\\_SB_.PCI0.BLCK"));
+    let children: Vec<&dyn acpi_tables::Aml> = if has_pcnt {
+        vec![&acquire, &scan, &release]
+    } else {
+        vec![]
+    };
+    let handler = Method::new(Path::new("_E01"), 0, false, children);
     emit_all(&[&Scope::new(Path::new("_GPE"), vec![&handler])])
 }
 
@@ -70,6 +78,18 @@ mod tests {
 
     #[test]
     fn e01_matches_qemu() {
-        super::super::fixture::assert_region(&super::e01(), 8245, 8258);
+        super::super::fixture::assert_region(&super::e01(false), 8245, 8258);
+    }
+
+    #[test]
+    fn e01_scans_root_port_buses_when_pcnt_exists() {
+        use sha2::{Digest, Sha256};
+
+        let e01 = super::e01(true);
+        assert_eq!(e01.len() - super::e01(false).len(), 51);
+        assert_eq!(
+            hex::encode(Sha256::digest(e01)),
+            "6e22ff760f3c9e6263713cd7590518d1fd5ca2cd2344e8856bb618d2bef6d470"
+        );
     }
 }

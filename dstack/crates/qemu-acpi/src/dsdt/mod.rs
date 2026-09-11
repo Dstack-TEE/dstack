@@ -101,14 +101,22 @@ pub(crate) fn body(config: &MachineConfig) -> Result<Vec<u8>, Error> {
     ));
     out.extend(sstate::build()); //      7732..7774  Scope(\) _S3/_S4/_S5
     out.extend(fwcf::build()); //        7774..7834  Scope(\_SB.PCI0) FWCF
+    let pxb_devfn = has_pxb.then_some(0x80);
     out.extend(notify::build(
         regular_slots,
         root_ports,
         modern_serial_irq,
-        has_pxb.then_some(0x80),
+        pxb_devfn,
+        pci_hotplug,
     ));
+    let pcnt = pci_hotplug
+        .then(|| notify::pcnt(regular_slots, root_ports, pxb_devfn))
+        .flatten();
+    if let Some(pcnt) = &pcnt {
+        out.extend(pcnt);
+    }
     if pci_hotplug {
-        out.extend(gpe::e01());
+        out.extend(gpe::e01(pcnt.is_some()));
     }
     Ok(out)
 }
