@@ -2544,6 +2544,24 @@ mod tests {
     }
 
     #[test]
+    fn vm_config_declares_the_given_qemu_version() -> Result<()> {
+        let config = test_tdx_config()?;
+        let manifest = test_manifest(2048);
+        let image = test_tdx_image(true);
+        let vm_config = make_vm_config(
+            &config,
+            &manifest,
+            &image,
+            &hex_of(0x22, 32),
+            None,
+            None,
+            Some("9.2.1".to_string()),
+        )?;
+        assert_eq!(vm_config["qemu_version"], "9.2.1");
+        Ok(())
+    }
+
+    #[test]
     fn vm_measurement_config_includes_verity_volume_count() -> Result<()> {
         let config = test_tdx_config()?;
         let mut manifest = test_manifest(2048);
