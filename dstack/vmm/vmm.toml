@@ -59,6 +59,8 @@ use_mrconfigid = true
 # QEMU flags
 #qemu_single_pass_add_pages = false
 #qemu_pic = true
+# Explicit QEMU version override. When unset, the version is detected from
+# the binary at qemu_path before every VM start.
 #qemu_version = ""
 # Size of the 64-bit PCI hole. Accepts a plain byte count, hex, or a unit
 # suffix: "512G", "2T", "1P" -- all binary multipliers, as are the "1PB" and

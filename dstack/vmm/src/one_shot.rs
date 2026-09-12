@@ -245,12 +245,15 @@ Compose file content (first 200 chars):
     let mr_config = vm_work_dir
         .prepare_mr_config(&manifest, &config.cvm, &app_compose)
         .context("Failed to prepare mr_config")?;
+    // One-shot loads its config immediately before the start, so the
+    // load-time value in `config.cvm.qemu_version` is already fresh.
     let sys_config_str = make_sys_config(
         &config,
         &manifest,
         &compose_hash,
         mr_config,
         app_compose.requirements.as_ref(),
+        config.cvm.qemu_version.clone(),
     )?;
     let sys_config_path = vm_work_dir.shared_dir().join(".sys-config.json");
     fs_err::write(&sys_config_path, &sys_config_str).context("Failed to write sys config")?;
