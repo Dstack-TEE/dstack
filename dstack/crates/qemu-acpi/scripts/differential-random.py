@@ -39,6 +39,10 @@ class Case:
     smm: bool = False
     pic: bool = False
     pci_hole64_size: int = 0
+    # How the host-shared directory is attached. dstack-mr accepts all three
+    # and models none of them, on the theory that each contributes exactly one
+    # PCI slot and the DSDT records only _ADR. These cases hold it to that.
+    share_mode: str = "9p"
 
 
 def fixed_cases():
@@ -58,6 +62,27 @@ def fixed_cases():
         Case(hugepages=True, gpus=1),
         Case(hugepages=True, gpus=8, switches=4),
         Case(version="9.1.0", hugepages=True, gpus=1, hotplug_off=True),
+        # Root ports on pcie.0 carry ACPI hotplug AML whose BSEL values follow
+        # QEMU's reverse child-list walk, and the whole block disappears when
+        # bridge hotplug is off. Pin both branches with root ports present.
+        Case(gpus=8),
+        Case(gpus=8, hotplug_off=True),
+        Case(hugepages=True, gpus=8, switches=4, hotplug_off=True),
+        # The per-version cases above all run without root ports, so no version
+        # tier was pinned against the hotplug AML. Cross the two at the tier
+        # boundaries: pre-9.2 link triggering, the 9.2 cutoff, and the 11.1
+        # serial IRQ change.
+        Case(version="8.0.0", gpus=8),
+        Case(version="9.2.0", gpus=8),
+        Case(version="11.1.0", gpus=8),
+        # Likewise the large-CPU cases are all GPU-less, so the CPU AML has
+        # never been pinned alongside root ports. 255 is the x2APIC boundary.
+        Case(cpus=255, gpus=8),
+        Case(cpus=256, gpus=8, switches=4),
+        # dstack-mr accepts three host sharing modes and models none of them.
+        Case(share_mode="vvfat"),
+        Case(share_mode="vhd"),
+        Case(share_mode="vhd", gpus=8, switches=2),
     ]
     return cases
 
@@ -93,6 +118,7 @@ def random_case(rng):
         smm=rng.choice([False, True]),
         pic=rng.choice([False, True]),
         pci_hole64_size=rng.choice([0, 32 << 30, 1 << 40]),
+        share_mode=rng.choice(["9p", "vvfat", "vhd"]),
     )
 
 
@@ -127,12 +153,8 @@ def qemu_args(case):
             "-device",
             f"virtio-net-pci,netdev=net{index}",
         ]
-    args += [
-        "-device",
-        "vhost-vsock-pci,guest-cid=3",
-        "-virtfs",
-        "local,path=/bin,mount_tag=host-shared,readonly=on,security_model=none,id=virtfs0",
-    ]
+    args += ["-device", "vhost-vsock-pci,guest-cid=3"]
+    args += host_share_args(case.share_mode)
     if case.root_verity:
         args += [
             "-drive",
@@ -184,6 +206,31 @@ def qemu_args(case):
     if case.pci_hole64_size:
         args += ["-global", f"q35-pcihost.pci-hole64-size=0x{case.pci_hole64_size:x}"]
     return args
+
+
+def host_share_args(mode):
+    """Return the -device arguments dstack-vmm emits for each host sharing mode."""
+    if mode == "9p":
+        return [
+            "-virtfs",
+            "local,path=/bin,mount_tag=host-shared,readonly=on,"
+            "security_model=none,id=virtfs0",
+        ]
+    if mode == "vvfat":
+        return [
+            "-blockdev",
+            "driver=vvfat,node-name=vvfat0,read-only=on,dir=/tmp,label=SHARED",
+            "-device",
+            "virtio-blk-pci,drive=vvfat0",
+        ]
+    if mode == "vhd":
+        return [
+            "-drive",
+            "file=/bin/sh,if=none,id=hd2,format=raw,readonly=on",
+            "-device",
+            "virtio-blk-pci,drive=hd2",
+        ]
+    raise RuntimeError(f"unknown host sharing mode {mode}")
 
 
 def command(kind, payload):

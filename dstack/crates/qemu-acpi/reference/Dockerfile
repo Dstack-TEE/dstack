@@ -4,7 +4,7 @@
 FROM ubuntu:24.04 AS builder
 
 ARG QEMU_REPOSITORY=https://github.com/kvinwang/qemu-tdx.git
-ARG QEMU_REVISION=9de6fdfff3a84103b83ca6b2e8c4fb8e05cf9195
+ARG QEMU_REVISION=0f3d3f6ed099e4cf0b79f59e8b6ba0083b7c414f
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates git ninja-build pkg-config python3 python3-venv \
@@ -31,7 +31,7 @@ RUN CFLAGS='-O2 -DDUMP_ACPI_TABLES -Wno-builtin-macro-redefined -D__DATE__="" -D
 
 FROM ubuntu:24.04
 
-ARG QEMU_REVISION=9de6fdfff3a84103b83ca6b2e8c4fb8e05cf9195
+ARG QEMU_REVISION=0f3d3f6ed099e4cf0b79f59e8b6ba0083b7c414f
 LABEL org.opencontainers.image.source="https://github.com/kvinwang/qemu-tdx" \
       org.opencontainers.image.revision="${QEMU_REVISION}" \
       org.opencontainers.image.licenses="GPL-2.0-or-later"
