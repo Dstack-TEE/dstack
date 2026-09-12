@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -189,6 +190,7 @@ fn collect_rtmr_mismatch(
 // `os_image_hash` -- part of the `VmConfig` this key hashes -- has never been
 // cached.
 const MEASUREMENT_CACHE_VERSION: u32 = 3;
+const IMAGE_DOWNLOAD_ATTEMPTS: u32 = 3;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
@@ -212,6 +214,7 @@ pub struct CvmVerifier {
     pub download_url: String,
     pub download_timeout: Duration,
     pub attestation_verifier: Arc<AttestationVerifier>,
+    download_locks: tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl CvmVerifier {
@@ -226,7 +229,16 @@ impl CvmVerifier {
             download_url,
             download_timeout,
             attestation_verifier,
+            download_locks: tokio::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn lock_for_image(&self, hex_os_image_hash: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.download_locks.lock().await;
+        locks
+            .entry(hex_os_image_hash.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     fn measurement_cache_dir(&self) -> PathBuf {
@@ -630,14 +642,18 @@ impl CvmVerifier {
 
         let metadata_path = image_dir.join("metadata.json");
         if !metadata_path.exists() {
-            info!("Image {hex_os_image_hash} not found, downloading");
-            tokio::time::timeout(
-                self.download_timeout,
-                self.download_image(&hex_os_image_hash, &image_dir),
-            )
-            .await
-            .context("Download image timeout")?
-            .with_context(|| format!("Failed to download image {hex_os_image_hash}"))?;
+            let lock = self.lock_for_image(&hex_os_image_hash).await;
+            let _guard = lock.lock().await;
+            if !metadata_path.exists() {
+                info!("Image {hex_os_image_hash} not found, downloading");
+                tokio::time::timeout(
+                    self.download_timeout,
+                    self.download_image(&hex_os_image_hash, &image_dir),
+                )
+                .await
+                .context("Download image timeout")?
+                .with_context(|| format!("Failed to download image {hex_os_image_hash}"))?;
+            }
         }
 
         let image_info =
@@ -1277,6 +1293,68 @@ impl CvmVerifier {
         Ok(())
     }
 
+    fn is_truncated_download_error(err: &anyhow::Error) -> bool {
+        for cause in err.chain() {
+            if let Some(reqwest_err) = cause.downcast_ref::<reqwest::Error>() {
+                if reqwest_err.is_body() || reqwest_err.is_decode() {
+                    return true;
+                }
+            }
+        }
+        let text = format!("{err:#}");
+        text.contains("truncated image download")
+            || text.contains("end of file before message length reached")
+    }
+
+    async fn download_image_tarball(
+        client: &reqwest::Client,
+        url: &str,
+        tarball_path: &Path,
+    ) -> Result<()> {
+        let response = client
+            .get(url)
+            .send()
+            .await
+            .context("Failed to download image")?;
+
+        if !response.status().is_success() {
+            bail!(
+                "Failed to download image: HTTP status {}, url: {url}",
+                response.status(),
+            );
+        }
+
+        let expected_len = response.content_length();
+        let mut file = tokio::fs::File::create(tarball_path)
+            .await
+            .context("Failed to create tarball file")?;
+        let mut written = 0u64;
+        let mut response = response;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .context("failed to read image download body")?
+        {
+            written += chunk.len() as u64;
+            file.write_all(&chunk)
+                .await
+                .context("Failed to write chunk to file")?;
+        }
+        file.flush()
+            .await
+            .context("Failed to flush image archive")?;
+        drop(file);
+
+        if let Some(expected) = expected_len {
+            if written != expected {
+                bail!(
+                    "truncated image download: got {written} bytes, content-length {expected}, url: {url}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub async fn download_image(&self, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
         let url = self
             .download_url
@@ -1293,38 +1371,26 @@ impl CvmVerifier {
 
         info!("Downloading image from {}", url);
         let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to download image")?;
-
-        if !response.status().is_success() {
-            bail!(
-                "Failed to download image: HTTP status {}, url: {url}",
-                response.status(),
-            );
-        }
-
-        // Save the tarball to a temporary file using streaming
         let tarball_path = tmp_dir.join("image.tar.gz");
-        let mut file = tokio::fs::File::create(&tarball_path)
-            .await
-            .context("Failed to create tarball file")?;
-        let mut response = response;
-        while let Some(chunk) = response.chunk().await? {
-            file.write_all(&chunk)
-                .await
-                .context("Failed to write chunk to file")?;
+        let mut attempt = 1;
+        loop {
+            match Self::download_image_tarball(&client, &url, &tarball_path).await {
+                Ok(()) => break,
+                Err(err)
+                    if Self::is_truncated_download_error(&err)
+                        && attempt < IMAGE_DOWNLOAD_ATTEMPTS =>
+                {
+                    warn!(
+                        "truncated image download from {url}, retrying ({attempt}/{IMAGE_DOWNLOAD_ATTEMPTS}): {err:#}"
+                    );
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
         }
 
         let extracted_dir = tmp_dir.join("extracted");
         fs_err::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
-
-        file.flush()
-            .await
-            .context("Failed to flush image archive")?;
-        drop(file);
         Self::extract_image_archive(&tarball_path, &extracted_dir)?;
 
         let sha256sum_path = extracted_dir.join("sha256sum.txt");
@@ -1421,7 +1487,11 @@ impl Mrs {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        io::Write,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use super::*;
 
@@ -2175,6 +2245,143 @@ mod tests {
             fs_err::read(output.join("metadata.json")).unwrap(),
             b"artifact"
         );
+    }
+
+    fn sample_os_image_archive() -> (Vec<u8>, VmConfig) {
+        let metadata = br#"{"cmdline":"console=ttyS0","kernel":"bzImage","initrd":"initrd.img","bios":"OVMF.fd"}"#;
+        let files: [(&str, &[u8]); 4] = [
+            ("OVMF.fd", b"bios"),
+            ("bzImage", b"kernel"),
+            ("initrd.img", b"initrd"),
+            ("metadata.json", metadata),
+        ];
+        let mut files_doc = String::new();
+        for (name, payload) in files {
+            files_doc.push_str(&format!(
+                "{}  {name}\n",
+                hex::encode(Sha256::digest(payload))
+            ));
+        }
+        let os_image_hash = Sha256::digest(files_doc.as_bytes());
+        let mut tarball = tar::Builder::new(Vec::new());
+        for (name, payload) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tarball.append_data(&mut header, name, payload).unwrap();
+        }
+        let payload = files_doc.as_bytes();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tarball
+            .append_data(&mut header, "sha256sum.txt", payload)
+            .unwrap();
+        let tar_bytes = tarball.into_inner().unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&tar_bytes).unwrap();
+        let archive = encoder.finish().unwrap();
+        let vm_config = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+        }))
+        .unwrap();
+        (archive, vm_config)
+    }
+
+    async fn spawn_scripted_http_server(
+        responses: Vec<(u64, Vec<u8>)>,
+    ) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_clone = hits.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let index = hits_clone.fetch_add(1, Ordering::SeqCst);
+                let (content_length, body) = responses
+                    .get(index)
+                    .or_else(|| responses.last())
+                    .cloned()
+                    .expect("scripted HTTP response");
+                let mut buf = vec![0u8; 1024];
+                let mut collected = Vec::new();
+                loop {
+                    match tokio::io::AsyncReadExt::read(&mut socket, &mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            collected.extend_from_slice(&buf[..n]);
+                            if collected.windows(4).any(|window| window == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, header.as_bytes()).await;
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, &body).await;
+                let _ = tokio::io::AsyncWriteExt::shutdown(&mut socket).await;
+            }
+        });
+        (
+            format!("http://{addr}/{{OS_IMAGE_HASH}}.tar.gz"),
+            hits,
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_hash_downloads_single_flight() {
+        let (archive, vm_config) = sample_os_image_archive();
+        let (url, hits, server) =
+            spawn_scripted_http_server(vec![(archive.len() as u64, archive)]).await;
+        let cache = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = cache.path().display().to_string();
+        verifier.download_url = url;
+        verifier.download_timeout = Duration::from_secs(30);
+        let verifier = Arc::new(verifier);
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let verifier = verifier.clone();
+            let vm_config = vm_config.clone();
+            handles.push(tokio::spawn(async move {
+                verifier.ensure_image_downloaded(&vm_config).await
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn truncated_image_download_retries_after_content_length_mismatch() {
+        let (archive, vm_config) = sample_os_image_archive();
+        let truncated = archive[..archive.len() / 2].to_vec();
+        let (url, hits, server) = spawn_scripted_http_server(vec![
+            (archive.len() as u64, truncated),
+            (archive.len() as u64, archive),
+        ])
+        .await;
+        let cache = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = cache.path().display().to_string();
+        verifier.download_url = url;
+        verifier.download_timeout = Duration::from_secs(30);
+
+        verifier.ensure_image_downloaded(&vm_config).await.unwrap();
+        assert!(hits.load(Ordering::SeqCst) >= 2);
+        server.abort();
     }
 
     #[tokio::test]
