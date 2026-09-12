@@ -280,7 +280,7 @@ impl CvmConfig {
                 Some(version)
             }
             Err(err) => {
-                warn!("failed to detect QEMU version at VM start: {err}");
+                warn!("failed to detect QEMU version at VM start: {err:?}");
                 self.qemu_version.clone()
             }
         }
