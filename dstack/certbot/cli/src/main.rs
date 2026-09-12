@@ -210,18 +210,29 @@ async fn renew(config: &PathBuf, once: bool, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Install the shutdown handler before build_bot(), which can do network
-    // I/O (e.g. creating the ACME account), so a SIGTERM/Ctrl-C arriving
-    // during startup is handled instead of hard-killing the process.
-    let bot = tokio::select! {
-        bot = bot_config.build_bot() => bot.context("Failed to build bot")?,
-        result = shutdown_signal() => return result,
+    // Startup and the renew loop are raced against shutdown as one future, so
+    // the signal listener covers the whole daemon lifetime. build_bot() does
+    // network I/O (resolving the DNS zone, creating the ACME account), and a
+    // SIGTERM/Ctrl-C arriving there used to fall through to the default
+    // disposition and hard-kill the process. Racing the two phases separately
+    // would leave a gap between them with no listener registered: tokio never
+    // restores the default disposition once a handler is installed, and drops
+    // a signal that arrives while nothing is subscribed, so such a SIGTERM
+    // would neither terminate nor unblock the process.
+    let daemon = async {
+        let bot = bot_config
+            .build_bot()
+            .await
+            .context("Failed to build bot")?;
+        bot.run().await;
+        // run() loops forever today, but that is not enforced by its type: a
+        // future early return should exit with an error, not panic.
+        bail!("certbot daemon exited unexpectedly")
     };
     tokio::select! {
-        _ = bot.run() => bail!("certbot daemon exited unexpectedly"),
-        result = shutdown_signal() => result?,
+        result = daemon => result,
+        result = shutdown_signal() => result,
     }
-    Ok(())
 }
 
 async fn shutdown_signal() -> Result<()> {
