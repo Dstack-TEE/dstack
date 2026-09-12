@@ -42,6 +42,19 @@ mod tests {
     }
 
     #[test]
+    fn no_gpu_hotplug_off_matches_qemu_byte_for_byte() -> Result<(), Error> {
+        let mut c = config(0, 0);
+        c.hotplug_off = true;
+        let actual = build(&c)?;
+        let expected = include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-base.bin");
+        assert_eq!(&actual.tables[..expected.len()], *expected);
+        assert!(actual.tables[expected.len()..]
+            .iter()
+            .all(|byte| *byte == 0));
+        Ok(())
+    }
+
+    #[test]
     fn numa_loader_and_rsdp_match_qemu_byte_for_byte() -> Result<(), Error> {
         let mut numa = config(1, 0);
         numa.hugepages = true;
@@ -176,28 +189,28 @@ mod tests {
                 0,
                 1,
                 0,
-                "f47ab428541cb334c6de6e59e7fcf44a5db7b314e9dd4c643978968917eb25b2",
+                "f22f486b0e33ed0aad80e6cb26726652d671d3c58f521827825a26f069e499a3",
             ),
             (
                 1,
                 0,
                 8,
                 0,
-                "ae3fefc72eb747cbff363e4f5ac7f3366f257849dc5f2719a9368303abaef4cc",
+                "037b07a2b0d6dc1d3b8370bb8d84564b74cd4f9a09163252c4a8b08d9ad0be70",
             ),
             (
                 1,
                 0,
                 1,
                 1,
-                "8a48a13bc6041d73f7decce488054a8d25800cc82e11fa9bd1687e010ac9c9b0",
+                "6f1e598f7b9acbc24c33c573c81112b4e9df7d576d18e82d94b0253c4a69da71",
             ),
             (
                 1,
                 0,
                 1,
                 4,
-                "2052ea73c74e1462947e600c95742e48cae0f7a84bc0ec79ab12f7a7818aec7a",
+                "e23873ce836a73783d043173f9757da1b36151a3a2987c8ab978e33570120eb9",
             ),
         ];
         for (nics, volumes, gpus, switches, expected) in cases {

@@ -32,7 +32,7 @@ jobs:
       run:
         working-directory: dstack
     env:
-      REFERENCE_IMAGE: kvin/dstack-acpi-tables@sha256:54e692d8c68c6f02dd7c655bf6de6e7f3ad7a43fded6ca00d8e998918108a3b4
+      REFERENCE_IMAGE: kvin/dstack-acpi-tables@sha256:98c42e609d84408cfb9a5e95e04f22058bb999ea62c72de43b9b2a18954d14e6
     steps:
       - uses: actions/checkout@v5
 

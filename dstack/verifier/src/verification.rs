@@ -2462,6 +2462,56 @@ mod tests {
             .expect_err("an extra vCPU must change the ACPI tables");
     }
 
+    /// Reproduces the VM shape from the captured eight-GPU QEMU 10.2.1
+    /// attestation. The expected digests come from the CVM event log, not from
+    /// this generator.
+    ///
+    /// The loader digest only pins table sizes and offsets; the tables digest
+    /// pins the AML bytes themselves, including the root-port hotplug AML.
+    ///
+    /// The CVM ran with `pci_hole64_size = 0`, so QEMU sized the DSDT's 64-bit
+    /// PCI window from the BARs OVMF assigned to the eight GPUs instead. The
+    /// guest reported that window as `[mem 0x380000000000-0x3bc006013fff]`;
+    /// this test passes its length explicitly so that the `_CRS` bytes match.
+    #[test]
+    fn tdx_lite_acpi_matches_captured_eight_gpu_qemu_10_2_vm() {
+        let vm_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "cpu_count": 256,
+            "memory_size": 1_649_267_441_664u64,
+            "qemu_version": "10.2.1",
+            "pci_hole64_size": 0x3c0_0601_4000u64,
+            "hugepages": false,
+            "num_gpus": 8,
+            "num_nvswitches": 0,
+            "num_nics": 1,
+            "num_verity_volumes": 0,
+            "hotplug_off": false,
+            "host_share_mode": "9p",
+            "ovmf_variant": "pre202505",
+            "tdx_attestation_variant": "lite"
+        }))
+        .expect("captured VM config parses");
+
+        let actual = dstack_mr::tdx::expected_rtmr0_acpi_hashes(
+            &vm_config,
+            dstack_types::OvmfVariant::Pre202505,
+        )
+        .expect("ACPI blobs are generated through the verifier measurement path");
+
+        assert_eq!(
+            hex::encode(actual.loader),
+            "01f02cba34d8f7213872ce341a587c636016a6268d0b9c2d2198058a8a709fe38cde80f67c808067444cb8fa11cdd27c"
+        );
+        assert_eq!(
+            hex::encode(actual.rsdp),
+            "a5a7aa6b9b601386fab910a1840bbcef2a87c130e683b9630ebe53311fe1ed7cc80863f29f167350c147ae34082981e9"
+        );
+        assert_eq!(
+            hex::encode(actual.tables),
+            "bbfdfdee5883455bce28fee44d807f2ed9999651e860aba5b2cd91d35040d7ef42ff36bb0fe5ace1299501e869519344"
+        );
+    }
+
     #[test]
     fn tdx_lite_acpi_hash_mismatch_names_the_table() {
         let expected = TdxRtmr0AcpiHashes {
