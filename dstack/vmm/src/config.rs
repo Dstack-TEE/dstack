@@ -258,32 +258,24 @@ impl CvmConfig {
 
     /// The QEMU version to declare for a VM being started now.
     ///
-    /// An explicit `qemu_version` in the config file always wins. Otherwise
-    /// the version is re-detected from the binary currently at `qemu_path`:
-    /// the load-time detection is cached, but the binary can be replaced
-    /// while the VMM keeps running, and the verifier picks an ACPI model from
-    /// the declared version, so a stale value breaks RTMR0 replay. When the
-    /// re-detection fails, fall back to the load-time value, mirroring the
-    /// previous behavior of starting without a fresh version.
-    pub fn resolve_qemu_version(&self) -> Option<String> {
-        if self.qemu_version_explicit {
-            return self.qemu_version.clone();
+    /// The verifier picks an ACPI table model from this, so it has to
+    /// describe the binary this start executes -- not one detected earlier
+    /// and cached across a package upgrade. An explicit config value wins;
+    /// otherwise the binary at `qemu_path` is asked. Neither available fails
+    /// the start, rather than booting a CVM that cannot be attested.
+    pub fn resolve_qemu_version(&self) -> Result<String> {
+        if let Some(version) = &self.qemu_version {
+            return Ok(version.clone());
         }
-        match detect_qemu_version(&self.qemu_path) {
-            Ok(version) => {
-                if self.qemu_version.as_deref() != Some(version.as_str()) {
-                    info!(
-                        "QEMU version changed since config load: {:?} -> {version}",
-                        self.qemu_version
-                    );
-                }
-                Some(version)
-            }
-            Err(err) => {
-                warn!("failed to detect QEMU version at VM start: {err:?}");
-                self.qemu_version.clone()
-            }
-        }
+        let version = detect_qemu_version(&self.qemu_path).with_context(|| {
+            format!(
+                "failed to detect the QEMU version of {}; \
+                 set `qemu_version` in vmm.toml to declare it explicitly",
+                self.qemu_path.display()
+            )
+        })?;
+        info!("QEMU version: {version}");
+        Ok(version)
     }
 }
 
@@ -393,10 +385,6 @@ pub struct CvmConfig {
     pub qemu_pic: Option<bool>,
     /// QEMU qemu_version
     pub qemu_version: Option<String>,
-    /// Whether `qemu_version` was set explicitly in the config file. Set by
-    /// `Config::extract_or_default`; not part of the config format.
-    #[serde(skip)]
-    qemu_version_explicit: bool,
     /// QEMU pci_hole64_size
     #[serde(with = "size_parser::human_size")]
     pub qemu_pci_hole64_size: u64,
@@ -1073,22 +1061,6 @@ impl Config {
                 }
             }
             info!("QEMU path: {}", me.cvm.qemu_path.display());
-
-            // Detect QEMU version if not already set
-            me.cvm.qemu_version_explicit = me.cvm.qemu_version.is_some();
-            match &me.cvm.qemu_version {
-                None => match detect_qemu_version(&me.cvm.qemu_path) {
-                    Ok(version) => {
-                        info!("Detected QEMU version: {version}");
-                        me.cvm.qemu_version = Some(version);
-                    }
-                    Err(e) => {
-                        warn!("Failed to detect QEMU version: {e}");
-                        // Continue without version - the system will use defaults
-                    }
-                },
-                Some(version) => info!("Configured QEMU version: {version}"),
-            }
         }
         Ok(me)
     }
@@ -1099,72 +1071,48 @@ mod tests {
     use super::*;
 
     #[cfg(unix)]
-    fn write_fake_qemu(dir: &std::path::Path, version: &str) -> PathBuf {
+    fn cvm_with_qemu(dir: &tempfile::TempDir, script: &str) -> CvmConfig {
         use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("qemu-system-x86_64");
-        std::fs::write(
-            &path,
-            format!(
-                "#!/bin/sh\necho 'QEMU emulator version {version} (Debian 2:{version}+dfsg-1)'\n"
-            ),
-        )
-        .unwrap();
+        let path = dir.path().join("qemu-system-x86_64");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+        let config: Config = Figment::from(load_config_figment(None)).extract().unwrap();
+        CvmConfig {
+            qemu_path: path,
+            qemu_version: None,
+            ..config.cvm
+        }
     }
 
-    #[cfg(unix)]
-    fn cvm_config_with_qemu(qemu_path: PathBuf) -> CvmConfig {
-        let mut config: Config = Figment::from(load_config_figment(None)).extract().unwrap();
-        config.cvm.qemu_path = qemu_path;
-        config.cvm
-    }
-
-    // Reproduces the production mismatch: the VMM caches the QEMU version at
-    // config load, so when the binary at qemu_path is replaced while the VMM
-    // keeps running, the next VM start declares the stale cached version
-    // while executing the replaced binary.
+    // Regression: a VMM staying up across a QEMU upgrade used to declare the
+    // version it detected at config load while executing the new binary.
     #[cfg(unix)]
     #[test]
-    fn qemu_version_is_redetected_after_binary_replacement() {
+    fn qemu_version_follows_the_binary_at_qemu_path() {
         let dir = tempfile::tempdir().unwrap();
-        let qemu_path = write_fake_qemu(dir.path(), "10.1.0");
-        let mut cvm = cvm_config_with_qemu(qemu_path.clone());
-        // Config load caches the version of the binary present at that time.
-        cvm.qemu_version = Some(detect_qemu_version(&qemu_path).unwrap());
-        assert_eq!(cvm.qemu_version.as_deref(), Some("10.1.0"));
-        // The binary is replaced while the VMM keeps running.
-        write_fake_qemu(dir.path(), "9.2.1");
-        // The version declared for the next start must match the binary that
-        // will actually execute.
-        let declared = cvm.resolve_qemu_version();
-        assert_eq!(declared.as_deref(), Some("9.2.1"));
+        let cvm = cvm_with_qemu(&dir, "echo 'QEMU emulator version 10.1.0'");
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "10.1.0");
+
+        cvm_with_qemu(&dir, "echo 'QEMU emulator version 9.2.1'");
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "9.2.1");
     }
 
     #[cfg(unix)]
     #[test]
-    fn explicit_qemu_version_overrides_detection() {
+    fn explicit_qemu_version_wins_over_the_binary() {
         let dir = tempfile::tempdir().unwrap();
-        let qemu_path = write_fake_qemu(dir.path(), "9.2.1");
-        let mut cvm = cvm_config_with_qemu(qemu_path);
+        let mut cvm = cvm_with_qemu(&dir, "echo 'QEMU emulator version 9.2.1'");
         cvm.qemu_version = Some("8.2.2".to_string());
-        cvm.qemu_version_explicit = true;
-        assert_eq!(cvm.resolve_qemu_version().as_deref(), Some("8.2.2"));
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "8.2.2");
     }
 
     #[cfg(unix)]
     #[test]
-    fn qemu_version_detection_failure_falls_back_to_load_time_value() {
+    fn an_undetectable_qemu_version_fails_the_start() {
         let dir = tempfile::tempdir().unwrap();
-        let qemu_path = write_fake_qemu(dir.path(), "10.1.0");
-        let mut cvm = cvm_config_with_qemu(qemu_path.clone());
-        cvm.qemu_version = Some(detect_qemu_version(&qemu_path).unwrap());
-        // The binary disappears before the next VM start.
-        std::fs::remove_file(&qemu_path).unwrap();
-        assert_eq!(cvm.resolve_qemu_version().as_deref(), Some("10.1.0"));
-        // Without a load-time value there is nothing to fall back to.
-        cvm.qemu_version = None;
-        assert_eq!(cvm.resolve_qemu_version(), None);
+        let cvm = cvm_with_qemu(&dir, "echo 'wrapper speaks no version'");
+        let err = format!("{:#}", cvm.resolve_qemu_version().unwrap_err());
+        assert!(err.contains("set `qemu_version` in vmm.toml"), "{err}");
     }
 
     #[test]

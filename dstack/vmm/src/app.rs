@@ -1305,17 +1305,12 @@ impl App {
         let mr_config = work_dir
             .prepare_mr_config(&manifest, &cfg.cvm, &app_compose)
             .context("Failed to prepare mr_config")?;
-        // Detect the version of the QEMU binary this start will execute so
-        // the declared version cannot go stale if the binary is replaced
-        // while the VMM keeps running.
-        let qemu_version = cfg.cvm.resolve_qemu_version();
         let sys_config_str = make_sys_config(
             cfg,
             &manifest,
             &hex::encode(compose_hash),
             mr_config,
             app_compose.requirements.as_ref(),
-            qemu_version,
         )?;
         fs::write(shared_dir.join(SYS_CONFIG), &sys_config_str)
             .context("Failed to write vm config")?;
@@ -1608,7 +1603,6 @@ pub(crate) fn make_sys_config(
     compose_hash: &str,
     mr_config: Option<String>,
     requirements: Option<&dstack_types::Requirements>,
-    qemu_version: Option<String>,
 ) -> Result<String> {
     let image_path = cfg.image.path.join(&manifest.image);
     let image = Image::load(image_path).context("Failed to load image info")?;
@@ -1650,7 +1644,6 @@ pub(crate) fn make_sys_config(
         compose_hash,
         mr_config.clone(),
         requirements,
-        qemu_version,
     )?;
     let mut sys_config = json!({
         "kms_urls": kms_urls,
@@ -1730,7 +1723,6 @@ fn make_vm_config(
     _compose_hash: &str,
     mr_config: Option<String>,
     requirements: Option<&dstack_types::Requirements>,
-    qemu_version: Option<String>,
 ) -> Result<serde_json::Value> {
     let platform = cfg.cvm.resolved_platform();
     let is_amd_sev_snp = platform == crate::config::CvmPlatform::AmdSevSnp && !manifest.no_tee;
@@ -1812,7 +1804,7 @@ fn make_vm_config(
         memory_size: manifest.memory as u64 * 1024 * 1024,
         qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
         pic: cfg.cvm.qemu_pic,
-        qemu_version,
+        qemu_version: Some(cfg.cvm.resolve_qemu_version()?),
         pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
         hugepages: manifest.hugepages,
         num_gpus: gpus.gpus.len() as u32,
@@ -2483,6 +2475,9 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.cvm.platform = Some(CvmPlatform::Tdx);
         config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Auto;
+        // No QEMU binary under test; declare the version the way a host
+        // without a detectable one has to.
+        config.cvm.qemu_version = Some("9.2.1".to_string());
         Ok(config)
     }
 
@@ -2520,44 +2515,12 @@ mod tests {
         let image = test_tdx_image(true);
         let compose_hash = hex_of(0x22, 32);
 
-        let bridge_config = make_vm_config(
-            &config,
-            &bridge_manifest,
-            &image,
-            &compose_hash,
-            None,
-            None,
-            None,
-        )?;
-        let user_config = make_vm_config(
-            &config,
-            &user_manifest,
-            &image,
-            &compose_hash,
-            None,
-            None,
-            None,
-        )?;
+        let bridge_config =
+            make_vm_config(&config, &bridge_manifest, &image, &compose_hash, None, None)?;
+        let user_config =
+            make_vm_config(&config, &user_manifest, &image, &compose_hash, None, None)?;
 
         assert_eq!(bridge_config, user_config);
-        Ok(())
-    }
-
-    #[test]
-    fn vm_config_declares_the_given_qemu_version() -> Result<()> {
-        let config = test_tdx_config()?;
-        let manifest = test_manifest(2048);
-        let image = test_tdx_image(true);
-        let vm_config = make_vm_config(
-            &config,
-            &manifest,
-            &image,
-            &hex_of(0x22, 32),
-            None,
-            None,
-            Some("9.2.1".to_string()),
-        )?;
-        assert_eq!(vm_config["qemu_version"], "9.2.1");
         Ok(())
     }
 
@@ -2580,7 +2543,6 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             None,
-            None,
         )?;
 
         assert_eq!(vm_config["num_verity_volumes"], 2);
@@ -2600,7 +2562,6 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             None,
-            None,
         )?;
 
         assert_eq!(vm_config["swtpm"], true);
@@ -2615,15 +2576,7 @@ mod tests {
         let config = test_tdx_config()?;
         let manifest = test_manifest(1024);
         let image = test_tdx_image(true);
-        let vm_config = make_vm_config(
-            &config,
-            &manifest,
-            &image,
-            &hex_of(0x22, 32),
-            None,
-            None,
-            None,
-        )?;
+        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
         assert!(vm_config.get("tdx_measurement").is_some());
@@ -2641,15 +2594,7 @@ mod tests {
         let config = test_tdx_config()?;
         let manifest = test_manifest(2048);
         let image = test_tdx_image(true);
-        let vm_config = make_vm_config(
-            &config,
-            &manifest,
-            &image,
-            &hex_of(0x22, 32),
-            None,
-            None,
-            None,
-        )?;
+        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
         assert!(vm_config.get("tdx_measurement").is_some());
@@ -2667,15 +2612,7 @@ mod tests {
         let config = test_tdx_config()?;
         let manifest = test_manifest(3072);
         let image = test_tdx_image(false);
-        let vm_config = make_vm_config(
-            &config,
-            &manifest,
-            &image,
-            &hex_of(0x22, 32),
-            None,
-            None,
-            None,
-        )?;
+        let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
 
         assert!(vm_config.get("tdx_attestation_variant").is_none());
         assert!(vm_config.get("tdx_measurement").is_none());
@@ -2705,7 +2642,6 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             Some(&requirements),
-            None,
         )?;
 
         assert!(vm_config.get("tdx_attestation_variant").is_none());
@@ -2732,7 +2668,6 @@ mod tests {
             &hex_of(0x22, 32),
             None,
             Some(&requirements),
-            None,
         )?;
 
         assert_eq!(vm_config["tdx_attestation_variant"], "lite");
@@ -2770,6 +2705,7 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
         config.cvm.platform = Some(CvmPlatform::AmdSevSnp);
+        config.cvm.qemu_version = Some("9.2.1".to_string());
         config.cvm.nvidia_attestation_proxy_url = Some("http://10.0.2.2:8090".to_string());
         let compose_hash = hex_of(0x22, 32);
         let manifest = Manifest {
@@ -2829,14 +2765,8 @@ mod tests {
         let build_hash = Sha256::digest(sha256sum.as_bytes()).to_vec();
         fs::write(image_dir.join("digest.txt"), hex::encode(&build_hash))?;
 
-        let sys_config_document = make_sys_config(
-            &config,
-            &manifest,
-            &compose_hash,
-            Some(mr_config),
-            None,
-            None,
-        )?;
+        let sys_config_document =
+            make_sys_config(&config, &manifest, &compose_hash, Some(mr_config), None)?;
         let sys_config: serde_json::Value = serde_json::from_str(&sys_config_document)?;
         assert!(sys_config.get("tee_simulator").is_none());
         // A host must never nominate the trust anchor that authenticates its
