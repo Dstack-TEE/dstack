@@ -90,7 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Deprecated
-- os: the Yocto guest-OS backend (`os/yocto/`) is deprecated in favor of mkosi (`os/mkosi/`), which is now the default and recommended backend. `os/build.sh` defaults to `--backend mkosi`, and `make os-image` / `make os-repro-check` build with mkosi. The Yocto builds move to `make os-image-yocto` / `make os-repro-check-yocto`; `make os-image-mkosi` / `make os-repro-check-mkosi` remain as aliases. Every Yocto entrypoint prints a deprecation warning, and the backend is kept only to rebuild existing Yocto images
+- os: the Yocto guest-OS backend (`os/yocto/`) is deprecated in favor of mkosi (`os/mkosi/`), which is now the default and recommended backend. `os/build.sh` defaults to `--backend mkosi`, and `make os-image` / `make os-repro-check` build with mkosi. The Yocto builds move to `make os-image-yocto` / `make os-repro-check-yocto`; `make os-image-mkosi` / `make os-repro-check-mkosi` remain as aliases. Every Yocto entrypoint prints a deprecation warning, and the backend is kept only to rebuild existing Yocto images. The mkosi build still reads patches, units and scripts from `os/yocto/`, so the directory stays until those files move
 
 ### Removed
 - sdk: `TlsKeyOptions.path` in the JavaScript SDK. `GetTlsKeyArgs` has no such field and `getTlsKey` never read it, so a caller who set it was silently ignored. Breaking at the type level only, and only for code whose value was already being discarded. `deriveKey`'s `path` is a real, deprecated Tappd-era parameter and stays; the Python, Rust and Go v0 TLS-key options never carried one

@@ -180,7 +180,8 @@ forge clean
 1. Build guest-OS artifacts with `make os-image`, which uses the default mkosi
    backend (see `docs/building-guest-os.md`). The Yocto backend (`os/yocto/`,
    `make os-image-yocto`, `--backend yocto`) is deprecated: never use it for new
-   images or features
+   images or features. Do not delete `os/yocto/` either: mkosi still reads
+   patches, units, and scripts from it (`grep -rn yocto os/mkosi`)
 2. Download or build guest OS image
 3. Run components in separate terminals:
    - KMS: `./dstack-kms -c kms.toml`

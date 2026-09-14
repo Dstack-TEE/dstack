@@ -24,7 +24,7 @@ This tutorial guides you through setting up guest OS images for deploying Confid
 
 ## What You'll Configure
 
-- **Guest OS images** - Pre-built mkosi (Debian-based) images for CVMs
+- **Guest OS images** - Pre-built guest OS images for CVMs
 - **VMM image directory** - Proper organization for multiple image versions
 - **Image verification** - Confirm VMM can access the images
 

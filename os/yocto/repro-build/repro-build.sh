@@ -94,7 +94,7 @@ set -e
 git clone https://github.com/Dstack-TEE/dstack.git
 cd dstack/
 git checkout $(git -C $THIS_DIR rev-parse HEAD)
-RELEASE_FLAVORS='${RELEASE_FLAVORS}' make os-image
+RELEASE_FLAVORS='${RELEASE_FLAVORS}' make os-image-yocto
 EOF
 echo "==========================="
 

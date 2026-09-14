@@ -11,8 +11,8 @@ and endpoint identity.
 ## Inputs
 
 - The release image package for the exact release candidate, produced by the
-  unified build entrypoint `os/build.sh` (the `<name>-<version>-uki.tar.gz`
-  dist archive). It contains `disk.raw`, `sha256sum.txt`, `digest.txt`, and
+  guest-OS build (`make os-image`; see `docs/building-guest-os.md`) as the
+  `<name>-<version>-uki.tar.gz` archive. It contains `disk.raw`, `sha256sum.txt`, `digest.txt`, and
   `measurement.{gcp,aws}.cbor`. The build output also contains an
   `aws-pcrs.json` side-car, but that file is not part of the archive.
 - The dstack monorepo sources pinned at the exact release revision, for the
@@ -27,14 +27,14 @@ and endpoint identity.
 The release evidence is the image package itself: every measured file is
 listed in `sha256sum.txt`, and the unified image identity is
 `os_image_hash = sha256(sha256sum.txt)` (also recorded as `digest.txt`).
-There is no separately generated release manifest; the same `os/build.sh`
-flow produces both the image and its evidence.
+There is no separately generated release manifest; the same build produces
+both the image and its evidence.
 
 Rebuild from clean, pinned sources and require a byte-identical result:
 
 ```bash
 git status --porcelain   # must be empty at the pinned release revision
-make os-image           # reproducible mkosi backend; emits os/mkosi/repro-build/build/out/prod/<name>-<version>-uki.tar.gz
+make os-image            # reproducible mkosi backend; emits os/mkosi/repro-build/build/out/prod/<name>-<version>-uki.tar.gz
 ```
 
 Compare the rebuilt package against the published one. `sha256sum.txt` lists
@@ -54,9 +54,9 @@ expected=$(sha256sum published/sha256sum.txt | awk '{print $1}')
 test "$expected" = "$(cat published/digest.txt)"
 ```
 
-The mkosi backend pins its Debian snapshot and verifies upstream source and
-toolchain archives by SHA-256 during the rebuild; for full supply-chain
-independence, mirror those inputs by content hash.
+The mkosi backend pins its inputs to an immutable Debian snapshot, SHA-256
+checked archives, and fixed Git revisions (`os/mkosi/versions.env`); for full
+supply-chain independence, mirror those inputs by content hash.
 
 Run the hardening audit against the release kernel config and rootfs; it must
 exit zero with `failures=0`:

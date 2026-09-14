@@ -11,6 +11,10 @@ default.
 > `os/yocto/` is **deprecated**. It remains only so existing Yocto images can
 > still be rebuilt. Do not use it for new images, new features, or release
 > work. See [Deprecated: Yocto backend](#deprecated-yocto-backend).
+>
+> The mkosi build still reads some patches, units, and scripts from
+> `os/yocto/`, so that directory must not be deleted yet; see
+> [`../os/README.md`](../os/README.md).
 
 ## What the build produces
 
@@ -74,10 +78,12 @@ equivalent to:
 
 The build refuses to run from a dirty worktree, because the recorded source
 revision would not describe the compiled sources. Commit or stash changes
-first, or set `DSTACK_ALLOW_DIRTY=1` to record the revision as `-modified`.
+first. (Native `os/mkosi/build.sh` builds also accept `DSTACK_ALLOW_DIRTY=1`,
+which records the revision as `-modified`; the containerized build does not
+forward it.)
 
-On a 16-job host a cold production build takes about 30 minutes with warm
-package downloads; allow 30–45 minutes with cold network caches.
+A cold production build takes roughly 30–45 minutes on a 16-job host,
+depending mostly on network speed.
 
 ## Outputs
 
@@ -90,7 +96,8 @@ os/mkosi/repro-build/build/out/prod/
 └── dstack-<version>-uki.tar.gz
 ```
 
-Use `-o DIR` to choose a different build directory. When the build finishes it
+To use a different build directory, run
+`./os/mkosi/repro-build/repro-build.sh -o DIR`. When the build finishes it
 prints the `os_image_hash` and the SHA-256 of both archives.
 
 The bare-metal archive includes the kernel, initramfs, OVMF firmware,
@@ -137,8 +144,8 @@ remain under `os/mkosi/repro-build/build/a/`.
 
 The containerized build is the recommended release path. On a host with the
 pinned mkosi version (see `MKOSI_VERSION` in `os/mkosi/versions.env`) and the
-packages reported by `mkosi --directory os/mkosi dependencies`, the backend can
-be driven directly:
+packages reported by `mkosi --directory os/mkosi dependencies`, and with root
+privileges (or a working user namespace), the backend can be driven directly:
 
 ```bash
 ./os/mkosi/build.sh lint                                  # static contract, seconds
@@ -168,7 +175,7 @@ directory back to the calling user when it exits.
 
 mkosi assembles its build root as an overlayfs, which cannot be stacked on
 another overlayfs. Choose a build directory on a regular filesystem with
-`-o DIR`.
+`./os/mkosi/repro-build/repro-build.sh -o DIR`.
 
 ### A fetch fails
 
@@ -195,7 +202,8 @@ them.
 > [!WARNING]
 > The Yocto backend is deprecated and will be removed. Do not use it for new
 > images or releases, and do not add features to it. Every build entrypoint
-> prints a deprecation warning.
+> prints a deprecation warning. Files under `os/yocto/` that the mkosi build
+> still reads remain live inputs of the default image until they are moved.
 
 The Yocto backend is kept only so existing Yocto-built images can still be
 rebuilt and verified. Its entrypoints have moved to explicitly named targets:
