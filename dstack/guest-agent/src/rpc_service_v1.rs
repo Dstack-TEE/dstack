@@ -39,7 +39,7 @@ use fs_err as fs;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::warn;
 
-use crate::rpc_service::{issue_cert_for_request, pad64, AppState};
+use crate::rpc_service::{issue_cert_for_request, pad64, AppState, AttestationWire};
 
 pub(crate) mod keys;
 
@@ -186,6 +186,7 @@ impl DstackGuestRpc for V1RpcHandler {
                 not_before: request.not_before,
                 not_after: request.not_after,
             },
+            AttestationWire::MsgpackV1,
         )
         .await?;
         Ok(IssueCertResponse {
@@ -209,9 +210,11 @@ impl DstackGuestRpc for V1RpcHandler {
         // On the async executor that parks a worker thread for the duration and
         // stalls every other connection this agent is serving.
         let state = self.state.clone();
-        let attestation = tokio::task::spawn_blocking(move || state.attest_cvm(report_data))
-            .await
-            .context("the attestation task panicked")??;
+        let attestation = tokio::task::spawn_blocking(move || {
+            state.attest_cvm(report_data, AttestationWire::MsgpackV1)
+        })
+        .await
+        .context("the attestation task panicked")??;
         Ok(AttestResponse {
             attestation,
             boottime_gpu_evidence: boottime_gpu_evidence(
@@ -623,6 +626,140 @@ mod tests {
         assert!(report_data[5..].iter().all(|b| *b == 0));
     }
 
+    /// v1 `Attest` commits to the MessagePack V1 schema. The fixture platform
+    /// produces the legacy SCALE form (as `RealPlatform` does for a TDX CVM with
+    /// V1 runtime events), so this pins the re-encoding rather than a platform
+    /// that already happened to emit V1.
+    #[tokio::test]
+    async fn attest_always_returns_msgpack() {
+        use ra_tls::attestation::VersionedAttestation;
+
+        let (state, _guard) = state().await;
+        let legacy = state
+            .attest_cvm([0u8; 64], AttestationWire::Legacy)
+            .unwrap();
+        assert_eq!(
+            legacy.first(),
+            Some(&0x00),
+            "the fixture must exercise the legacy-to-V1 re-encoding"
+        );
+
+        let response = V1RpcHandler::new(state)
+            .attest(AttestRequest {
+                report_data: b"hello".to_vec(),
+                include_boottime_gpu_evidence: false,
+            })
+            .await
+            .unwrap();
+
+        let first = *response.attestation.first().unwrap();
+        assert!(
+            matches!(first, 0x80..=0x8f | 0xde | 0xdf),
+            "expected a MessagePack map, got first byte {first:#04x}"
+        );
+        let attestation = VersionedAttestation::from_bytes(&response.attestation).unwrap();
+        let VersionedAttestation::V1 { attestation } = attestation else {
+            panic!("v1 Attest must return the V1 schema");
+        };
+        assert_eq!(&attestation.report_data().unwrap()[..5], b"hello");
+        assert!(attestation.platform.tdx_quote().is_some());
+    }
+
+    /// End to end: the exact bytes v1 `Attest` hands out, encoded through
+    /// `AttestationWire::MsgpackV1`, pass full attestation verification -- the
+    /// DCAP quote, the RTMR3 replay and the report data -- and verify to the
+    /// same identity as the frozen v0 `Attest` output in the legacy form.
+    ///
+    /// The test platform patches the requested report data into the fixture
+    /// quote, which breaks its signature for any other value. Asking for the
+    /// fixture's own report data leaves the captured quote intact.
+    ///
+    /// Like the `dstack-verifier` fixture tests, this fetches DCAP collateral
+    /// from the default PCCS, so it needs network access.
+    #[tokio::test]
+    async fn attest_output_passes_attestation_verification() {
+        use crate::rpc_service::InternalRpcHandler;
+        use dstack_guest_agent_rpc::v0::{dstack_guest_server::DstackGuestRpc as _, RawQuoteArgs};
+        use ra_tls::attestation::{AttestationVerifier, VersionedAttestation};
+
+        let report_data =
+            VersionedAttestation::from_bytes(include_bytes!("../fixtures/attestation.bin"))
+                .unwrap()
+                .into_v1()
+                .report_data()
+                .unwrap();
+        let verifier = AttestationVerifier::new_prod(None).unwrap();
+
+        let (state, _guard) = state().await;
+        let v1 = V1RpcHandler::new(state.clone())
+            .attest(AttestRequest {
+                report_data: report_data.to_vec(),
+                include_boottime_gpu_evidence: false,
+            })
+            .await
+            .unwrap()
+            .attestation;
+        let v0 = InternalRpcHandler::new(state)
+            .attest(RawQuoteArgs {
+                report_data: report_data.to_vec(),
+            })
+            .await
+            .unwrap()
+            .attestation;
+
+        let mut identities = Vec::new();
+        for (surface, bytes, expect_v1) in [("v1", &v1, true), ("v0", &v0, false)] {
+            let attestation = VersionedAttestation::from_bytes(bytes).unwrap();
+            assert_eq!(
+                matches!(attestation, VersionedAttestation::V1 { .. }),
+                expect_v1,
+                "{surface} Attest returned the wrong wire form"
+            );
+            let verified = attestation
+                .into_v1()
+                .verify(&verifier)
+                .await
+                .unwrap_or_else(|err| panic!("{surface} Attest output must verify: {err:#}"));
+            assert_eq!(verified.report_data, report_data, "{surface}");
+            let app = verified.decode_app_info(false).unwrap();
+            identities.push((
+                app.app_id,
+                app.compose_hash,
+                app.instance_id,
+                app.mr_aggregated,
+                app.os_image_hash,
+            ));
+        }
+        assert_eq!(
+            identities[0], identities[1],
+            "v1 and v0 Attest verified to different identities"
+        );
+
+        // Control: any other report data is patched into the quote body the
+        // signature covers, so the same path must now reject it. Without this
+        // the test cannot tell a verification that ran from one that did not.
+        let mut other = report_data;
+        other[0] ^= 1;
+        let (forge_state, _forge_guard) = setup_test_state().await;
+        let forged = V1RpcHandler::new(forge_state)
+            .attest(AttestRequest {
+                report_data: other.to_vec(),
+                include_boottime_gpu_evidence: false,
+            })
+            .await
+            .unwrap()
+            .attestation;
+        assert!(
+            VersionedAttestation::from_bytes(&forged)
+                .unwrap()
+                .into_v1()
+                .verify(&verifier)
+                .await
+                .is_err(),
+            "a quote whose report data no longer matches its signature must not verify"
+        );
+    }
+
     #[tokio::test]
     async fn rejects_report_data_longer_than_64_bytes() {
         let (state, _guard) = state().await;
@@ -806,6 +943,32 @@ mod tests {
         assert!(
             err.contains("not_before must be earlier than not_after"),
             "{err}"
+        );
+    }
+
+    /// `IssueCert` commits to MessagePack as `Attest` does: the attestation
+    /// goes into the CSR as V1, and the signer embeds it in the certificate in
+    /// the form it received. The fixture platform produces the legacy form, so
+    /// this pins the re-encoding (see
+    /// `rpc_service::tests::v0_get_tls_key_keeps_the_legacy_wire_format`).
+    #[tokio::test]
+    async fn issue_cert_embeds_a_msgpack_attestation() {
+        use crate::rpc_service::tests::embedded_attestation;
+        use ra_tls::attestation::VersionedAttestation;
+
+        let (state, _guard) = state().await;
+        let issued = V1RpcHandler::new(state)
+            .issue_cert(IssueCertRequest {
+                subject: "example".to_string(),
+                usage_ra_tls: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let attestation = embedded_attestation(&issued.certificate_chain[0]);
+        assert!(
+            matches!(attestation, VersionedAttestation::V1 { .. }),
+            "v1 IssueCert must embed the V1 schema"
         );
     }
 
