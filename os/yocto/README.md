@@ -9,7 +9,7 @@
 > deprecation warning.
 
 > [!CAUTION]
-> **Do not delete or stop maintaining this directory yet.** The mkosi backend
+> **Do not delete this directory yet.** The mkosi backend
 > still reads files from `os/yocto/layers/` and `os/yocto/tools/` as live build
 > inputs: kernel, OVMF and ZFS patches, the initramfs `init` script, several
 > systemd units and configuration files, the AWS hardening audit script, and
