@@ -1250,7 +1250,7 @@ pub(crate) mod testing {
     }
 
     pub(crate) struct FakeNetd {
-        _dir: tempfile::TempDir,
+        _dir: Option<tempfile::TempDir>,
         socket: PathBuf,
         seen: Arc<Mutex<Vec<(String, Value)>>>,
     }
@@ -1261,7 +1261,15 @@ pub(crate) mod testing {
         /// connect at once.
         pub(crate) fn spawn(handles: &[&str]) -> Self {
             let dir = tempfile::tempdir().expect("tempdir");
-            let socket = dir.path().join("netd.sock");
+            let mut netd = Self::spawn_at(&dir.path().join("netd.sock"), handles);
+            netd._dir = Some(dir);
+            netd
+        }
+
+        /// As [`FakeNetd::spawn`], on a socket path the caller chose -- for a
+        /// netd that comes up after the VMM already started asking for it.
+        pub(crate) fn spawn_at(socket: &Path, handles: &[&str]) -> Self {
+            let socket = socket.to_path_buf();
             let listener = UnixListener::bind(&socket).expect("bind");
             let state = FakeState {
                 handles: Arc::new(handles.iter().map(|name| name.to_string()).collect()),
@@ -1279,7 +1287,7 @@ pub(crate) mod testing {
                 let _ = ignite.launch_on(NetdListener(listener)).await;
             });
             Self {
-                _dir: dir,
+                _dir: None,
                 socket,
                 seen,
             }

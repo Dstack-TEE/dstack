@@ -270,25 +270,25 @@ sudo dstack-vmm netd remove-vm --instance path-3f9a1c8e7d2b4a60 --vm 0a1b2c3d4e5
 
 ### When a release does not land
 
-Every stop and every removal asks `netd` to sweep that VM's interfaces, by
-deriving each of the 256 names its identity could produce. That needs no
-record, and it reaches what a per-NIC teardown cannot: an interface a crash
-left behind before anything on disk pointed at it, or one whose NIC the
-manifest has since dropped.
+The VMM writes `.netd-pending` into the VM's directory before it asks `netd`
+to build anything, and deletes it only after `netd` has swept every interface
+that VM could hold. The marker is the only record the VMM keeps of what `netd`
+may hold, so it survives failed launches and changes to a topology that no
+longer uses `netd`. A VM without it has nothing to release, and its stop,
+removal and launch never contact `netd` for one.
 
-A removal deletes the VM's directory, and that directory — with its `.removing`
-marker — is the only thing left that says to try again. So it is deleted only
-once the sweep has landed. If `netd` refused, or was not there to ask, the
-directory stays and the next VMM start resumes the removal; `RemoveVm` is
-idempotent, so the retry costs one round trip. A VM that never asked `netd` for
-an interface is unaffected: there is nothing for `netd` to be holding.
+A sweep derives each of the 256 names the VM's identity could produce, so it
+needs no record of which NICs existed: it also reaches an interface a crash left
+behind, or one whose NIC the manifest has since dropped. It is idempotent, and
+every path that releases a VM retries it until it lands:
 
-The VMM persists `.netd-pending` before asking netd to prepare an interface and
-clears it only after a successful whole-VM sweep. This cleanup marker survives
-failed launches and network configuration changes, even if the runtime snapshot
-is absent or replaced by a user-mode topology. Older snapshots are promoted to
-the marker before cleanup or replacement. A failed cleanup during an update
-also leaves the old snapshot intact.
+- a launch sweeps before it prepares;
+- a stop that could not reach `netd` leaves the marker, and the VMM checks
+  stopped VMs with a marker every minute and sweeps them;
+- a removal keeps the VM's directory, and the VM marked as being removed, and
+  retries the sweep with backoff until `netd` answers. The directory is deleted
+  after that, with `.removing` last, so a removal interrupted by a crash is
+  resumed by the next VMM start.
 
 On an unfiltered node, an unavailable `libvirtd` does not make an otherwise
 successful TAP sweep fail. Filtered nodes still require confirmation that their

@@ -849,26 +849,28 @@ impl VmmRpc for RpcHandler {
             warn!("Failed to set started: {}", err);
         }
 
-        let result = self
+        if let Err(err) = self
             .app
             .load_vm(&work_dir, &Default::default(), false)
             .await
-            .context("Failed to load VM");
-        let result = match result {
-            Ok(()) => {
-                if !request.stopped {
-                    self.app.start_vm(&id).await
-                } else {
-                    Ok(())
-                }
-            }
-            Err(err) => Err(err),
-        };
-        if let Err(err) = result {
+            .context("Failed to load VM")
+        {
+            // Never started, so netd holds nothing for it.
             if let Err(err) = fs::remove_dir_all(&work_dir) {
                 warn!("Failed to remove work dir: {}", err);
             }
             return Err(err);
+        }
+        if !request.stopped {
+            if let Err(err) = self.app.start_vm(&id).await {
+                // A failed start may leave interfaces netd could not release.
+                // The normal removal keeps the directory, and with it
+                // `.netd-pending`, until they are gone.
+                if let Err(remove_err) = self.app.remove_vm(&id).await {
+                    warn!(vm_id = %id, "failed to remove VM after start failure: {remove_err:#}");
+                }
+                return Err(err);
+            }
         }
 
         Ok(Id { id })

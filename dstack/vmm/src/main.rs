@@ -107,9 +107,8 @@ enum NetdCommand {
     /// Delete every interface netd holds for one VM.
     ///
     /// For a VM whose VMM will never ask again -- one whose directory was
-    /// deleted by hand, or whose instance is gone. A VMM sweeps its own VMs on
-    /// every stop and every removal, and keeps a removal pending until the
-    /// sweep lands; this is for when no VMM will ever run that sweep.
+    /// deleted by hand, or whose instance is gone. A VMM retries the sweep for
+    /// its own VMs until it lands; this is for when no VMM will ever run it.
     RemoveVm {
         /// The `cvm.instance_id` of the VMM that created them. `netd list`
         /// shows it.
@@ -215,6 +214,14 @@ async fn auto_restart_task(app: App) {
         if let Err(err) = app.try_restart_exited_vms().await {
             error!("Failed to restart exited VMs: {err:?}");
         }
+    }
+}
+
+async fn network_cleanup_task(app: App) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        app.reconcile_network_cleanup().await;
     }
 }
 
@@ -469,6 +476,7 @@ async fn main() -> Result<()> {
     state.reload_vms().await.context("Failed to reload VMs")?;
     tokio::spawn(auto_restart_task(state.clone()));
     tokio::spawn(log_rotation_task(state.clone()));
+    tokio::spawn(network_cleanup_task(state.clone()));
 
     tokio::select! {
         result = run_external_api(state.clone(), figment.clone(), api_auth) => {

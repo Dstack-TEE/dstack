@@ -119,8 +119,10 @@ of, and that record is written *after* the interface exists — a VMM killed in
 between leaves a TAP nothing on disk points at, and a manifest that lost a NIC
 leaves the same thing behind. `RemoveVm` names a VM instead of an interface
 and derives every name that VM could occupy, so neither has to be recorded for
-teardown to work. The VMM sweeps before preparing a launch as well as on stop,
-which makes a launch self-healing regardless of what the record says.
+teardown to work. The VMM keeps a single `.netd-pending` marker per VM from
+before its first prepare until a sweep succeeds, and sweeps whenever that marker
+is present: before a launch, on stop, on removal, and periodically for stopped
+VMs. See [bridge-networking.md](bridge-networking.md#when-a-release-does-not-land).
 
 A prepare also carries `workdir`, which `netd` does not need to build the TAP.
 It names the VM's directory on the host: untrusted, never read for a decision,
@@ -217,10 +219,10 @@ sudo dstack-vmm --config ./vmm.toml \
 ```
 
 User networking and a caller-supplied netdev never ask `netd` to build an
-interface. The VMM still contacts the socket for such a VM -- every launch and
-every stop releases whatever the VM held, before it decides whether it needs
-anything built -- but nothing about the VM depends on the answer. Bridge and
-macvtap do ask, and fail closed if `netd` is unavailable.
+interface, and a VM that has never used `netd` never contacts it. A VM that
+moved from bridge or macvtap to user networking still releases what it held,
+but nothing about its launch depends on the answer. Bridge and macvtap do ask,
+and fail closed if `netd` is unavailable.
 
 Filtered TAP netdevs follow the node's `vhost` and `queues` settings like any
 other TAP-backed NIC (see [network-data-plane.md](network-data-plane.md)). The

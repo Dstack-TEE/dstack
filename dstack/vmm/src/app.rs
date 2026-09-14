@@ -300,6 +300,14 @@ pub(crate) enum PullStatus {
     Failed(String),
 }
 
+/// First delay before a removal asks netd again to release a VM's interfaces.
+#[cfg(not(test))]
+const RELEASE_RETRY_INITIAL: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const RELEASE_RETRY_INITIAL: Duration = Duration::from_millis(20);
+/// Longest delay between those attempts.
+const RELEASE_RETRY_MAX: Duration = Duration::from_secs(60);
+
 #[derive(Clone)]
 pub struct App {
     pub config: Arc<Config>,
@@ -598,11 +606,9 @@ impl App {
         self.set_started(id, false)?;
         self.stop_vm_process(id).await?;
         // Not fallible: a VM that has been asked to stop is stopped whether or
-        // not netd could be reached. What is left behind is reclaimed by this
-        // VM's next launch, which releases before it prepares, or by its
-        // removal, which will not finish until the release lands. A VM that is
-        // never started or removed again keeps its interfaces, and its
-        // directory is still there to say whose they are.
+        // not netd could be reached. What is left behind keeps its marker and
+        // is released by `reconcile_network_cleanup`, the next launch, or the
+        // removal, whichever comes first.
         self.release_vm_interfaces(id).await;
         Ok(())
     }
@@ -628,27 +634,15 @@ impl App {
             );
         }
 
-        // Whatever an earlier boot left behind: a crash between creating an
-        // interface and recording it, a NIC this VM no longer has, or a whole
-        // backend it no longer uses. Prepare replaces the names it is about to
-        // use, but only those, so an index nothing will claim again is only
+        // Whatever an earlier boot left behind: a failed stop, a crash between
+        // creating an interface and using it, a NIC this VM no longer has, or
+        // a backend it no longer uses. Prepare replaces the names it is about
+        // to use, but only those, so an index nothing will claim again is only
         // reachable from here.
         //
-        // Before the early return, and not inside it. A VM that has moved from
-        // a bridge to user-mode networking needs this release precisely because
-        // it no longer wants an interface, and gating it on wanting one is how
-        // the interfaces it left behind would become unreachable to every
-        // later launch.
+        // Before the early return: a VM that moved from a bridge to user-mode
+        // networking still has to give back what it held.
         let vm_workdir = self.work_dir(&vm.manifest.id)?;
-        if vm_workdir
-            .runtime_networks()
-            .iter()
-            .any(needs_netd_interface)
-        {
-            // Fail before a user-mode boot can overwrite a legacy snapshot
-            // when its replacement cleanup marker cannot be persisted.
-            vm_workdir.mark_network_cleanup_pending()?;
-        }
         self.release_vm_interfaces(&vm.manifest.id).await;
         if !networks.iter().any(needs_netd_interface) {
             return Ok(());
@@ -838,13 +832,12 @@ impl App {
 
     /// Releases every host interface netd holds for this VM.
     ///
-    /// Unconditional and non-fatal, which is one decision made twice. The
-    /// release path must not be gated on a predicate that can change under it:
-    /// `needs_netd_interface` reads the VM's *current* backend, and a VM whose
-    /// NIC was a bridge when its TAP was built and is a user-mode NIC now would
-    /// skip the release for interfaces that exist. And a VM must be able to
-    /// stop when the daemon holding its interfaces cannot be reached, or a
-    /// netd outage becomes a fleet that cannot be stopped.
+    /// Gated on `.netd-pending` alone, never on the VM's current networking:
+    /// a VM whose NIC was a bridge when its TAP was built and is a user-mode
+    /// NIC now still holds that TAP. Non-fatal, because a VM must be able to
+    /// stop when netd cannot be reached; what a failed release leaves behind
+    /// keeps its marker, and [`App::reconcile_network_cleanup`], the next
+    /// launch or the removal retries it.
     ///
     /// Returns whether netd is known to hold nothing for this VM any more.
     /// A removal reads that to decide whether it may delete the workdir: the
@@ -858,14 +851,8 @@ impl App {
                 return false;
             }
         };
-        // Upgrade snapshots written before the marker existed. A failed sweep
-        // must remain recoverable even if the next boot replaces the snapshot
-        // with user-mode NICs or an update clears it.
-        if workdir.runtime_networks().iter().any(needs_netd_interface) {
-            if let Err(error) = workdir.mark_network_cleanup_pending() {
-                warn!(vm_id, %error, "cannot persist pending network cleanup");
-                return false;
-            }
+        if !workdir.network_cleanup_pending() {
+            return true;
         }
         // Ask for the release, rather than asking whether it can be asked for.
         // A probe first would put a second round trip in front of every stop
@@ -949,27 +936,19 @@ impl App {
             }
         }
 
-        // Clear the in-memory mark if anything below fails before ownership of
-        // the removal is handed to the background task. In particular, a
-        // removal that cannot persist its crash-recovery marker must not start:
-        // without that marker a netd outage could leave interfaces no later
-        // VMM start knows to release.
-        let mut mark = RemovalMark::new(self.clone(), id);
-
-        // Persist the removing marker so crash recovery can resume
-        let work_dir = self.work_dir(id)?;
-        work_dir
+        // Clears the in-memory mark if the removal cannot start. In particular,
+        // a removal that cannot persist its crash-recovery marker must not
+        // start: a crash would then forget it.
+        let mark = RemovalMark::new(self.clone(), id);
+        self.work_dir(id)?
             .set_removing()
             .with_context(|| format!("failed to write .removing marker for {id}"))?;
 
         // User-initiated removal always deletes the workdir
         let app = self.clone();
-        let id = id.to_string();
-        // `finish_remove_vm` owns the mark from here. Do not clear it in the
-        // request task while the background removal is still running.
-        mark.retain();
         tokio::spawn(async move {
-            if let Err(err) = app.finish_remove_vm(&id, true).await {
+            let id = mark.id.clone();
+            if let Err(err) = app.finish_remove_vm(mark, true).await {
                 error!("Background cleanup failed for {id}: {err:?}");
             }
         });
@@ -981,11 +960,11 @@ impl App {
     /// remove from supervisor, optionally delete workdir, and free CID.
     ///
     /// `delete_workdir`: true for user-initiated removal, false for orphan cleanup.
-    async fn finish_remove_vm(&self, id: &str, delete_workdir: bool) -> Result<()> {
-        // Ordinary exits clear the mark, including the `?`s below and a panic
-        // in this task, which `tokio::spawn` would otherwise swallow. The one
-        // recoverable incomplete outcome explicitly retains it.
-        let mut mark = RemovalMark::new(self.clone(), id);
+    ///
+    /// Owns the removal mark, which is cleared however this ends, including the
+    /// `?`s below and a panic in the task.
+    async fn finish_remove_vm(&self, mark: RemovalMark, delete_workdir: bool) -> Result<()> {
+        let id = mark.id.as_str();
         // Held across the stop, the wait and the release, not just the release.
         // `removing` turns launches away, but a launch that passed that check
         // before the marker was set is already inside the lock: it has not
@@ -1037,39 +1016,33 @@ impl App {
         }
 
         let vm_path = self.work_dir(id)?;
-        // Read before the release, because the release is what makes it stale.
-        // A VM that never asked netd for an interface -- user mode, a custom
-        // netdev, or one that never launched -- has nothing for netd to be
-        // holding, so an absent netd is not a reason to keep its directory.
-        let held_interfaces = vm_path.network_cleanup_pending()
-            || vm_path.runtime_networks().iter().any(needs_netd_interface);
-        let released = self.release_vm_interfaces(id).await;
-
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
         // Orphaned supervisor processes without the marker keep their data intact.
         if !(delete_workdir || vm_path.is_removing()) {
+            self.release_vm_interfaces(id).await;
             if vm_path.path().exists() {
                 info!(
                     "VM {id} workdir preserved (orphan cleanup): {}",
                     vm_path.path().display()
                 );
             }
-        } else if held_interfaces && !released {
-            // The `.removing` marker and the directory are what a later boot
-            // reads to retry this, and `remove_all` is idempotent, so keeping
-            // them costs one retry and losing them strands every interface
-            // netd still holds: nothing else on the host can name them.
-            warn!(
-                "VM {id} keeps its directory because netd did not release its interfaces; \
-                 the removal resumes at the next VMM start"
-            );
-            // The disk marker says this removal must be retried. Keep the
-            // matching in-memory state too, so start/update/stop cannot revive
-            // the VM before that retry happens.
-            mark.retain();
-            return Ok(());
-        } else if vm_path.path().exists() {
-            if let Err(err) = fs::remove_dir_all(&vm_path) {
+        } else {
+            // The directory holds `.netd-pending`, the only record of what netd
+            // may still hold for this VM, so it goes only once the release has
+            // landed. The release is idempotent: retry until it does. The VM
+            // stays marked as being removed meanwhile, so nothing can start it,
+            // and a repeated removal request is already in progress.
+            let mut delay = RELEASE_RETRY_INITIAL;
+            while !self.release_vm_interfaces(id).await {
+                warn!(
+                    "VM {id} is waiting for netd to release its interfaces; retrying in {delay:?}"
+                );
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(RELEASE_RETRY_MAX);
+            }
+            if let Err(err) = vm_path.remove_all() {
+                // `.removing` is deleted last, so what is left is resumed by
+                // the next reload.
                 error!("failed to remove VM directory for {id}: {err:?}");
             }
         }
@@ -1099,11 +1072,12 @@ impl App {
                 return false;
             }
         }
+        let mark = RemovalMark::new(self.clone(), id);
         let app = self.clone();
-        let id = id.to_string();
         tokio::spawn(async move {
+            let id = mark.id.clone();
             // Don't pass delete_workdir=true; rely on .removing marker check inside
-            if let Err(err) = app.finish_remove_vm(&id, false).await {
+            if let Err(err) = app.finish_remove_vm(mark, false).await {
                 error!("Background cleanup failed for {id}: {err:?}");
             }
         });
@@ -1676,6 +1650,45 @@ impl App {
         Ok(())
     }
 
+    /// Releases what netd still holds for VMs that are not running.
+    ///
+    /// A stop whose release failed, or a VM that exited on its own, leaves
+    /// `.netd-pending` behind with nothing scheduled to act on it. Checking
+    /// here makes that state converge without waiting for the VM to be
+    /// started or removed. Costs a file check per VM when nothing is pending.
+    pub(crate) async fn reconcile_network_cleanup(&self) {
+        let ids: Vec<String> = self.lock().vms.keys().cloned().collect();
+        for id in ids {
+            self.reconcile_vm_network_cleanup(&id).await;
+        }
+    }
+
+    async fn reconcile_vm_network_cleanup(&self, id: &str) {
+        let pending = self
+            .work_dir(id)
+            .is_ok_and(|workdir| workdir.network_cleanup_pending());
+        // A removal releases the VM itself, and holds the launch lock for as
+        // long as that takes.
+        if !pending || self.refuse_if_removing(id).is_err() {
+            return;
+        }
+        // A launch holds this lock until QEMU is deployed, so the running
+        // check below cannot see a launch half done.
+        let _launch = self.launch_lock(id).await;
+        if self.refuse_if_removing(id).is_err() {
+            return;
+        }
+        match self.supervisor.info(id).await {
+            Ok(Some(info)) if info.state.status.is_running() => return,
+            Ok(_) => {}
+            Err(error) => {
+                debug!(id, "skipping network cleanup: {error:#}");
+                return;
+            }
+        }
+        self.release_vm_interfaces(id).await;
+    }
+
     pub(crate) async fn try_restart_exited_vms(&self) -> Result<()> {
         let running_vms = self
             .supervisor
@@ -2237,71 +2250,76 @@ mod tests {
         (SupervisorClient::new(&format!("http://{address}")), task)
     }
 
+    /// A VM directory holding `.netd-pending`, as a launch leaves it.
+    fn pending_workdir(app: &App, id: &str) -> VmWorkDir {
+        let workdir = app.work_dir(id).unwrap();
+        std::fs::create_dir_all(workdir.path()).unwrap();
+        workdir.mark_network_cleanup_pending().unwrap();
+        workdir
+    }
+
+    /// A removal keeps retrying while netd is away, keeps the VM marked as
+    /// being removed so nothing can start it, and finishes on its own once netd
+    /// comes back -- without a VMM restart or another request.
     #[tokio::test]
-    async fn failed_release_survives_snapshot_replacement_and_removal_retry() {
+    async fn a_removal_retries_until_netd_releases_and_then_finishes() {
         let (supervisor, server) = stopped_supervisor().await;
         let dir = tempfile::tempdir().unwrap();
-        let app = App::new(
-            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
-            supervisor.clone(),
-        );
-        let workdir = app.work_dir("vm-1").unwrap();
-        std::fs::create_dir_all(workdir.path()).unwrap();
-        // A legacy launch only left the runtime snapshot, without a marker.
-        let network = Networking {
-            nic: NicNetworking {
-                mode: NetworkingMode::Bridge,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        workdir.set_runtime_networks(&[network]).unwrap();
-        assert!(!workdir.network_cleanup_pending());
-        assert!(!app.release_vm_interfaces("vm-1").await);
-        assert!(workdir.network_cleanup_pending());
-        // A subsequent user-mode boot can replace the snapshot. Cleanup must
-        // still remember the bridge interfaces from the earlier boot.
-        workdir
-            .set_runtime_networks(&[Networking::default()])
-            .unwrap();
+        let socket = dir.path().join("netd.sock");
+        let app = App::new(test_config(&socket, dir.path()), supervisor);
+        let workdir = pending_workdir(&app, "vm-1");
         workdir.set_removing().unwrap();
+
         assert!(app.lock().start_removing("vm-1"));
-        app.finish_remove_vm("vm-1", true).await.unwrap();
+        let mark = RemovalMark::new(app.clone(), "vm-1");
+        let removal = tokio::spawn({
+            let app = app.clone();
+            async move { app.finish_remove_vm(mark, true).await }
+        });
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !removal.is_finished(),
+            "nothing released, so nothing removed"
+        );
         assert!(workdir.path().exists());
-        assert!(workdir.is_removing());
         assert!(workdir.network_cleanup_pending());
         assert!(app.refuse_if_removing("vm-1").is_err());
+        // Asking again while it retries is the same removal.
+        assert!(!app.lock().start_removing("vm-1"));
 
-        // Simulate restarting the VMM after netd has recovered.
-        let netd = netd::testing::FakeNetd::spawn(&["RemoveVm"]);
-        let restarted = App::new(test_config(netd.socket(), dir.path()), supervisor);
-        restarted.finish_remove_vm("vm-1", true).await.unwrap();
+        let netd = netd::testing::FakeNetd::spawn_at(&socket, &["RemoveVm"]);
+        tokio::time::timeout(Duration::from_secs(10), removal)
+            .await
+            .expect("the removal converges once netd answers")
+            .unwrap()
+            .unwrap();
         assert!(!workdir.path().exists());
-        assert_eq!(netd.methods(), vec!["RemoveVm"]);
+        assert!(app.refuse_if_removing("vm-1").is_ok());
+        assert!(netd.methods().iter().all(|method| method == "RemoveVm"));
         server.abort();
     }
 
+    /// A VM that never asked netd for an interface has nothing to wait for:
+    /// its removal completes with netd absent.
     #[tokio::test]
-    async fn removal_without_a_snapshot_distinguishes_pending_from_never_prepared() {
+    async fn a_removal_with_nothing_pending_does_not_wait_for_netd() {
         let (supervisor, server) = stopped_supervisor().await;
         let dir = tempfile::tempdir().unwrap();
         let app = App::new(
             test_config(&dir.path().join("absent-netd.sock"), dir.path()),
             supervisor,
         );
-        for (id, pending) in [("interrupted-prepare", true), ("user-only", false)] {
-            let workdir = app.work_dir(id).unwrap();
-            std::fs::create_dir_all(workdir.path()).unwrap();
-            if pending {
-                // Preparation wrote this before contacting netd, then crashed
-                // without ever writing runtime-networks.json.
-                workdir.mark_network_cleanup_pending().unwrap();
-            }
-            workdir.set_removing().unwrap();
-            app.finish_remove_vm(id, true).await.unwrap();
-            assert_eq!(workdir.path().exists(), pending);
-            assert_eq!(workdir.is_removing(), pending);
-        }
+        let workdir = app.work_dir("user-only").unwrap();
+        std::fs::create_dir_all(workdir.path()).unwrap();
+        workdir.set_removing().unwrap();
+        assert!(app.lock().start_removing("user-only"));
+        let mark = RemovalMark::new(app.clone(), "user-only");
+        tokio::time::timeout(Duration::from_secs(10), app.finish_remove_vm(mark, true))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!workdir.path().exists());
         server.abort();
     }
 
@@ -2313,21 +2331,35 @@ mod tests {
             test_config(netd.socket(), dir.path()),
             SupervisorClient::new("http://127.0.0.1:0"),
         );
-        let workdir = app.work_dir("vm-1").unwrap();
-        std::fs::create_dir_all(workdir.path()).unwrap();
-        workdir.mark_network_cleanup_pending().unwrap();
+        let workdir = pending_workdir(&app, "vm-1");
         assert!(app.release_vm_interfaces("vm-1").await);
         assert!(!workdir.network_cleanup_pending());
         assert!(workdir.path().exists());
     }
 
+    /// The marker is the only thing that says netd may hold something. Without
+    /// it there is nothing to release and nobody to ask, so a user-mode VM on a
+    /// node with no netd never waits on one.
+    #[tokio::test]
+    async fn a_vm_with_nothing_pending_never_asks_netd() {
+        let netd = netd::testing::FakeNetd::spawn(&["RemoveVm"]);
+        let app = app_talking_to(netd.socket());
+        assert!(app.release_vm_interfaces("vm-1").await);
+        assert!(netd.methods().is_empty());
+    }
+
     /// A netd outage must not become a fleet that cannot be stopped.
     #[tokio::test]
     async fn a_stop_survives_a_netd_that_is_not_there() {
-        let app = app_talking_to(Path::new("/nonexistent/dstack-netd.sock"));
-        // Returns rather than propagating: there is no error type here on
-        // purpose, because there is no caller that should act on one.
-        app.release_vm_interfaces("vm-1").await;
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(Path::new("/nonexistent/dstack-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let workdir = pending_workdir(&app, "vm-1");
+        // Returns rather than propagating, and keeps the marker for a retry.
+        assert!(!app.release_vm_interfaces("vm-1").await);
+        assert!(workdir.network_cleanup_pending());
     }
 
     /// A removal deletes the workdir, and the workdir is the only thing left
@@ -2336,36 +2368,13 @@ mod tests {
     /// netd that is not there to ask -- means it may still.
     #[tokio::test]
     async fn a_release_says_whether_netd_still_holds_anything() {
-        let netd = netd::testing::FakeNetd::spawn(&["RemoveVm"]);
-        let app = app_talking_to(netd.socket());
-        assert!(app.release_vm_interfaces("vm-1").await);
-
-        // Refused: netd is up and still holding whatever it had.
-        let refusing = netd::testing::FakeNetd::spawn(&[]);
-        let app = app_talking_to(refusing.socket());
-        assert!(!app.release_vm_interfaces("vm-1").await);
-
-        // Not there to ask. A VM that never asked netd for an interface is
-        // unaffected -- the removal checks that separately -- but one that did
-        // must keep its directory so a later start can try again.
-        let app = app_talking_to(Path::new("/nonexistent/dstack-netd.sock"));
-        assert!(!app.release_vm_interfaces("vm-1").await);
-    }
-
-    /// A refused sweep is not a reason to fail the stop. What netd holds stays
-    /// until this VM launches again or until an operator names it, but the
-    /// stop still succeeds: a netd outage must not become a fleet that cannot
-    /// be stopped.
-    #[tokio::test]
-    async fn a_netd_that_refuses_the_sweep_does_not_fail_the_stop() {
-        let netd = netd::testing::FakeNetd::spawn(&[]);
-        let app = app_talking_to(netd.socket());
-        app.release_vm_interfaces("vm-1").await;
-        assert_eq!(
-            netd.methods(),
-            vec!["RemoveVm"],
-            "asked once, and not asked about afterwards"
-        );
+        for (handles, released) in [(&["RemoveVm"][..], true), (&[][..], false)] {
+            let netd = netd::testing::FakeNetd::spawn(handles);
+            let app = app_talking_to(netd.socket());
+            let workdir = pending_workdir(&app, "vm-1");
+            assert_eq!(app.release_vm_interfaces("vm-1").await, released);
+            assert_eq!(workdir.network_cleanup_pending(), !released);
+        }
     }
 
     /// One request, no question in front of it. A probe on the hot path is a
@@ -2373,9 +2382,10 @@ mod tests {
     /// answer it reads as an absent one, and an absent netd's release is
     /// skipped.
     #[tokio::test]
-    async fn a_stop_asks_netd_to_sweep_without_a_question_first() {
+    async fn a_release_asks_netd_to_sweep_without_a_question_first() {
         let netd = netd::testing::FakeNetd::spawn(&["RemoveVm"]);
         let app = app_talking_to(netd.socket());
+        pending_workdir(&app, "vm-1");
         app.release_vm_interfaces("vm-1").await;
 
         assert_eq!(netd.methods(), vec!["RemoveVm"]);
@@ -2385,6 +2395,37 @@ mod tests {
         // A sweep names no NIC: reaching the indices the caller can no longer
         // name is the entire point.
         assert!(sweep.get("nic_index").is_none());
+    }
+
+    /// A stop whose release failed leaves the marker with nothing scheduled to
+    /// act on it. Reconciliation releases it once netd answers, and leaves a
+    /// VM that is being removed to its removal.
+    #[tokio::test]
+    async fn reconciliation_releases_what_a_stopped_vm_still_holds() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let netd = netd::testing::FakeNetd::spawn(&["RemoveVm"]);
+        let app = App::new(
+            test_config(netd.socket(), netd.socket().parent().unwrap()),
+            supervisor,
+        );
+        let workdir = pending_workdir(&app, "vm-1");
+
+        assert!(app.lock().start_removing("vm-1"));
+        app.reconcile_vm_network_cleanup("vm-1").await;
+        assert!(
+            netd.methods().is_empty(),
+            "a removal owns this VM's release"
+        );
+        drop(RemovalMark::new(app.clone(), "vm-1"));
+
+        app.reconcile_vm_network_cleanup("vm-1").await;
+        assert_eq!(netd.methods(), vec!["RemoveVm"]);
+        assert!(!workdir.network_cleanup_pending());
+
+        // Nothing pending: nothing to ask.
+        app.reconcile_vm_network_cleanup("vm-1").await;
+        assert_eq!(netd.methods(), vec!["RemoveVm"]);
+        server.abort();
     }
 
     /// The orphan cleanup runs for an ID that never loaded, so a guard living
@@ -2417,22 +2458,6 @@ mod tests {
         assert!(
             app.refuse_if_removing("vm-1").is_ok(),
             "the mark is cleared however the removal ends"
-        );
-    }
-
-    /// Once a removal deliberately keeps its crash-recovery marker, dropping
-    /// the guard must not make the VM launchable again in the current process.
-    #[tokio::test]
-    async fn a_removal_waiting_for_netd_stays_marked() {
-        let app = test_app();
-        assert!(app.lock().start_removing("vm-1"));
-        {
-            let mut mark = RemovalMark::new(app.clone(), "vm-1");
-            mark.retain();
-        }
-        assert!(
-            app.refuse_if_removing("vm-1").is_err(),
-            "the in-memory state must agree with the retained disk marker"
         );
     }
 
@@ -3650,7 +3675,6 @@ impl AppState {
 struct RemovalMark {
     app: App,
     id: String,
-    clear_on_drop: bool,
 }
 
 impl RemovalMark {
@@ -3658,21 +3682,12 @@ impl RemovalMark {
         Self {
             app,
             id: id.to_string(),
-            clear_on_drop: true,
         }
-    }
-
-    /// Leave the removal mark in place after this guard goes out of scope.
-    fn retain(&mut self) {
-        self.clear_on_drop = false;
     }
 }
 
 impl Drop for RemovalMark {
     fn drop(&mut self) {
-        if !self.clear_on_drop {
-            return;
-        }
         let mut state = self.app.lock();
         state.removing.remove(&self.id);
         if let Some(vm) = state.vms.get_mut(&self.id) {
