@@ -34,7 +34,7 @@ Rebuild from clean, pinned sources and require a byte-identical result:
 
 ```bash
 git status --porcelain   # must be empty at the pinned release revision
-make os-image           # reproducible mkosi backend; emits os/mkosi/repro-build/build/out/prod/<name>-<version>-uki.tar.gz
+make os-image            # reproducible mkosi backend; emits os/mkosi/repro-build/build/out/prod/<name>-<version>-uki.tar.gz
 ```
 
 Compare the rebuilt package against the published one. `sha256sum.txt` lists
@@ -54,9 +54,9 @@ expected=$(sha256sum published/sha256sum.txt | awk '{print $1}')
 test "$expected" = "$(cat published/digest.txt)"
 ```
 
-The mkosi backend pins its Debian snapshot and verifies upstream source and
-toolchain archives by SHA-256 during the rebuild; for full supply-chain
-independence, mirror those inputs by content hash.
+The mkosi backend pins its inputs to an immutable Debian snapshot, SHA-256
+checked archives, and fixed Git revisions (`os/mkosi/versions.env`); for full
+supply-chain independence, mirror those inputs by content hash.
 
 Run the hardening audit against the release kernel config and rootfs; it must
 exit zero with `failures=0`:

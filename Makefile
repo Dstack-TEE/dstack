@@ -13,7 +13,7 @@ OS_YOCTO_SUBMODULES := \
 	os/yocto/deps/meta-rust-bin \
 	os/yocto/deps/meta-security
 
-.PHONY: help core core-check core-test sdk-test os os-mkosi os-image os-repro-check \
+.PHONY: help core core-check core-test sdk-test os os-image os-repro-check \
 	os-image-mkosi os-repro-check-mkosi os-yocto os-deps os-image-yocto os-repro-check-yocto
 
 help:
@@ -46,9 +46,6 @@ sdk-test:
 
 os:
 	./os/build.sh
-
-os-mkosi:
-	./os/build.sh --backend mkosi
 
 # The mkosi backend vendors no submodules, so these do not depend on os-deps.
 os-image:

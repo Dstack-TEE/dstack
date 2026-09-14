@@ -100,8 +100,8 @@ Scripts follow the same ownership boundaries: component-specific helpers stay
 beside their component under `dstack/`; files installed into every guest live
 in `os/common/rootfs/`; backend-neutral image tooling lives in `os/image/`;
 mkosi-only helpers live in `os/mkosi/scripts/` (deprecated Yocto-only helpers
-in `os/yocto/scripts/`); and repository-wide standalone
-utilities live in `tools/`.
+in `os/yocto/scripts/`); and repository-wide standalone utilities live in
+`tools/`.
 
 Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 

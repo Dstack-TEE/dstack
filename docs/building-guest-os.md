@@ -74,7 +74,9 @@ equivalent to:
 
 The build refuses to run from a dirty worktree, because the recorded source
 revision would not describe the compiled sources. Commit or stash changes
-first, or set `DSTACK_ALLOW_DIRTY=1` to record the revision as `-modified`.
+first. (Native `os/mkosi/build.sh` builds also accept `DSTACK_ALLOW_DIRTY=1`,
+which records the revision as `-modified`; the containerized build does not
+forward it.)
 
 On a 16-job host a cold production build takes about 30 minutes with warm
 package downloads; allow 30–45 minutes with cold network caches.

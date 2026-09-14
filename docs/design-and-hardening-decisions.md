@@ -1,10 +1,10 @@
 # Design and Hardening Decisions in the dstack Yocto Layer
 
 > [!NOTE]
-> The Yocto backend is deprecated; the default guest-OS backend is mkosi
-> (`os/mkosi/`). Decisions below that are not Yocto-specific (firmware, guest
-> drivers, timekeeping, hardening) still apply to the mkosi image; see
-> [`../os/mkosi/README.md`](../os/mkosi/README.md) for how it realizes them.
+> This document describes the deprecated Yocto backend. The default guest-OS
+> backend is mkosi (`os/mkosi/`); see
+> [`../os/mkosi/README.md`](../os/mkosi/README.md) for how its image is built
+> and where it differs.
 
 ## Overview
 
