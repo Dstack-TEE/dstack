@@ -4,7 +4,7 @@ By default, dstack-vmm uses **user** networking (QEMU's built-in SLIRP stack, no
 
 ## When to use bridge networking
 
-- High connection concurrency (passt becomes CPU-bound at ~25K+ concurrent connections)
+- High connection concurrency (user-mode networking becomes CPU-bound at ~25K+ concurrent connections)
 - Workloads that need full L2 network access
 - Environments where VMs need to be directly reachable on the LAN
 
@@ -21,11 +21,11 @@ bridge = "virbr0"
 ### Per-VM override
 
 Individual VMs can override the global networking mode via:
-- **CLI**: `vmm-cli.py deploy --net bridge` or `--net passt`
+- **CLI**: `vmm-cli.py deploy --net bridge`, `--net user`, or `--net macvtap`
 - **Web UI**: Networking dropdown in the deploy dialog
 - **API**: `networking: { mode: "bridge" }` in `VmConfiguration`
 
-Only the mode is per-VM; the bridge interface name always comes from the global config.
+The bridge interface name comes from the global config unless the node lists it in `cvm.allowed_bridges`. VMs may also override the vhost and queue settings — see [network-data-plane.md](network-data-plane.md).
 
 ## Host setup
 
@@ -143,28 +143,36 @@ mode = "bridge"
 bridge = "dstack-br0"
 ```
 
-### QEMU bridge helper setup (required for both options)
+### netd is required
 
-The bridge helper allows QEMU to create and attach TAP devices without VMM needing root privileges.
+Bridge networking needs `netd`, the privileged helper that owns every host
+interface a bridge or macvtap NIC uses. It is the same binary:
 
 ```bash
-# Allow QEMU to use the bridge
-sudo mkdir -p /etc/qemu
-echo "allow virbr0" | sudo tee /etc/qemu/bridge.conf
-# Or for manual bridge: echo "allow dstack-br0" | sudo tee /etc/qemu/bridge.conf
-
-# Set setuid on bridge helper
-sudo chmod u+s /usr/lib/qemu/qemu-bridge-helper
+sudo dstack-vmm --config vmm.toml netd
 ```
+
+Nothing else on the node needs `CAP_NET_ADMIN`: the VMM itself still runs
+unprivileged, and `netd` holds the privilege behind a Unix socket whose
+filesystem permissions authorize callers.
+
+This used to be conditional — `netd` built the TAP when libvirt filtering was on
+or when the NIC wanted more than one queue pair, and otherwise QEMU's setuid
+`qemu-bridge-helper` did. Two owners meant two answers to the same questions:
+which netdev QEMU gets, whether vhost is really on, and what a bridge NIC's TAP
+is built with. So a bridge NIC's host interface has one owner now, on every
+node.
+
+`qemu-bridge-helper` is no longer used, and `/etc/qemu/bridge.conf` no longer
+needs an `allow` line for the bridge.
 
 ## How it works
 
-- VMM passes `-netdev bridge,id=net0,br=<bridge>` to QEMU
-- QEMU's bridge helper (setuid) creates a TAP device and attaches it to the bridge
+- `netd` creates a persistent TAP, attaches it to the bridge, binds the nwfilter if the node filters, and the VMM passes `-netdev tap,id=net0,ifname=<tap>,...`
 - Guest MAC address is derived from SHA256 of the VM ID, with an optional configurable prefix (stable across restarts for DHCP IP consistency)
 - The host DHCP server (dnsmasq) assigns an IP to the VM
-- When QEMU exits, the TAP device is automatically destroyed
-- VMM does not need root or `CAP_NET_ADMIN`
+- The TAP outlives QEMU and is deleted when the VMM tears the VM's networking down
+- The VMM process needs neither root nor `CAP_NET_ADMIN`; `netd` holds that privilege in a separate service
 
 ### MAC address prefix
 
@@ -194,13 +202,15 @@ The remaining bytes are derived from the VM ID hash. The prefix applies to all n
 
 ### Mixing networking modes
 
-Bridge and passt VMs can coexist. Set the global default in `vmm.toml` and override per-VM as needed:
+Bridge and user-mode VMs can coexist. Set the global default in `vmm.toml` and override per-VM as needed:
 
 ```bash
-# Global default is bridge, but deploy this VM with passt
-vmm-cli.py deploy --name my-vm --image dstack-0.5.6 --compose app.yaml --net passt
+# Global default is bridge, but deploy this VM with user networking
+vmm-cli.py deploy --name my-vm --image dstack-0.5.6 --compose app.yaml --net user
 ```
 
-### vhost-net and TDX
+### vhost-net and multiqueue
 
-vhost-net (kernel data plane offload for virtio-net) is **not enabled** for bridge mode. TDX encrypts guest memory, which prevents the host kernel from performing DMA-based packet offload. The default QEMU userspace virtio backend is used instead.
+Bridge NICs can run on the host kernel's vhost-net data plane and expose several virtio-net queue pairs. Both are off by default and enabled per node or per VM — see [network-data-plane.md](network-data-plane.md) for the knobs, the enablement checklist, the mode support matrix, and how to pick a queue count.
+
+vhost-net works in a TDX guest: the virtio rings and buffers live in shared, unencrypted memory so that a host-side backend can reach them, which is the same mechanism `vhost-vsock-pci` has always relied on.

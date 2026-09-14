@@ -39,19 +39,34 @@ message VmInfo {
   repeated GuestEvent events = 14;
   // Effective network interfaces resolved against node config.
   repeated NetworkInterfaceStatus interfaces = 15;
+  // Whether a QEMU process exists for this VM right now. The interfaces above
+  // are what it built only while this is true; otherwise they are what the next
+  // launch would build.
+  bool running = 16;
 }
 
 // Runtime status of a resolved VM network interface.
 message NetworkInterfaceStatus {
-  // Product-facing mode: "user", "bridge", or "custom".
+  // Product-facing mode: "user", "bridge", "macvtap", or "custom".
   string mode = 1;
-  // QEMU/network backend shape: "slirp", "tap_bridge", or "custom".
+  // QEMU/network backend shape: "slirp", "tap_bridge", "macvtap", or "custom".
   string backend = 2;
   string mac = 3;
   // Linux bridge name for tap_bridge backend.
   optional string bridge_name = 4;
   // QEMU netdev id, e.g. "net0".
   optional string netdev_id = 5;
+  // Effective vhost-net data plane state for this interface. Absent for custom
+  // mode, where the operator supplies the whole netdev string and the VMM does
+  // not parse it, so it knows of no data-plane state to report.
+  optional bool vhost = 6;
+  // Effective virtio-net queue pairs. Absent for custom mode, for the same
+  // reason as vhost.
+  optional uint32 queues = 7;
+  // Effective macvtap forwarding mode, for macvtap interfaces only. Node
+  // configuration decides it, so it is reported here with the rest of the
+  // resolved state rather than on the VM's own NetworkingConfig.
+  optional string macvtap_mode = 8;
 }
 
 // Structured log or lifecycle event emitted by the guest or runtime.
@@ -132,9 +147,16 @@ message NetworkingConfig {
   string bridge_name = 2;
   // Parent host interface for macvtap mode.
   string parent = 3;
-  // Effective macvtap forwarding mode in responses. Deployment requests must
-  // leave this empty because the mode is controlled by node configuration.
+  // Deployment requests must leave this empty: the forwarding mode is node
+  // configuration, and a VM never pins one. The effective value is reported on
+  // NetworkInterfaceStatus.macvtap_mode instead.
   string macvtap_mode = 4;
+  // Move packet processing into the host kernel vhost-net data plane. Unset
+  // inherits the node default. User mode has no vhost backend and ignores it.
+  optional bool vhost = 5;
+  // virtio-net queue pairs. Unset inherits the node default. Bounded by the
+  // node's cvm.max_net_queues.
+  optional uint32 queues = 6;
 }
 
 // Requested GPU layout for a CVM.
@@ -301,6 +323,13 @@ message NetworkingCapabilities {
   reserved "forward_service_enabled";
   // Default bridge configured in vmm.toml [cvm.networking].bridge.
   string default_bridge = 4;
+  // Largest virtio-net queue pair count a deployment request may ask for.
+  uint32 max_queues = 5;
+  // Whether the node's own backend runs the vhost-net data plane. A NIC that
+  // pins neither vhost nor a queue count follows this, and without vhost the
+  // queue count does not scale with vCPUs -- so a client cannot describe what
+  // an empty queue field will do without it.
+  bool default_vhost = 6;
 }
 
 // Aggregated metadata exposed through GetMeta.

@@ -80,7 +80,10 @@ SPDX-License-Identifier: Apache-2.0
     :port-mapping-enabled="config.portMappingEnabled"
     :networking-modes="networkingModes"
     :default-bridge="defaultBridge"
+    :max-net-queues="maxNetQueues"
     :default-networking-label="defaultNetworkingLabel"
+    :default-mode-tunable="defaultModeTunable"
+    :default-vhost-on="defaultVhostOn"
     @close="showCreateDialog = false"
     @submit="createVm"
     @load-compose="loadComposeFile"
@@ -95,7 +98,10 @@ SPDX-License-Identifier: Apache-2.0
     :port-mapping-enabled="config.portMappingEnabled"
     :networking-modes="networkingModes"
     :default-bridge="defaultBridge"
+    :max-net-queues="maxNetQueues"
     :default-networking-label="defaultNetworkingLabel"
+    :default-mode-tunable="defaultModeTunable"
+    :default-vhost-on="defaultVhostOn"
     :kms-enabled="kmsEnabled(updateDialog.vm || {})"
     :compose-hash-preview="updateComposeHashPreview"
     @close="updateDialog.show = false"
@@ -345,11 +351,16 @@ SPDX-License-Identifier: Apache-2.0
 
         <div v-if="vm.interfaces?.length" class="runtime-network-section">
           <h4>VMM Network Interfaces</h4>
+          <small v-if="!vm.running" class="hint">
+            Not running; shown as the next launch would build them.
+          </small>
           <div v-for="(iface, index) in vm.interfaces" :key="iface.netdev_id || index" class="runtime-network-item">
             <span>{{ networkModeLabel(iface.mode) }} / {{ iface.backend || '-' }}</span>
             <span>{{ iface.netdev_id || '-' }}</span>
-            <span>{{ iface.bridge_name || '-' }}</span>
+            <span>{{ iface.bridge_name || iface.macvtap_mode || '-' }}</span>
             <span>{{ iface.mac || '-' }}</span>
+            <span>vhost: {{ iface.vhost === null || iface.vhost === undefined ? '-' : (iface.vhost ? 'on' : 'off') }}</span>
+            <span>queues: {{ iface.queues || '-' }}</span>
           </div>
         </div>
 

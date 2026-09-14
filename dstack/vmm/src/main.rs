@@ -219,6 +219,22 @@ async fn main() -> Result<()> {
         if let Some(socket) = netd_args.socket.as_deref() {
             netd_config.socket = socket.into();
         }
+        if netd_config.network_filter.is_none() {
+            // netd and the VMM normally share one vmm.toml, so the node has
+            // already stated whether its bridge traffic is filtered and with
+            // what. Reading it here keeps the two from drifting apart, which is
+            // what a second setting to keep in sync would invite.
+            //
+            // A malformed section is an error rather than a default: this is
+            // the daemon's security policy, and `[cvm.network_filter] mode =
+            // "Libvirt"` -- which the VMM itself refuses to start on -- must not
+            // quietly resolve to "filter nothing" here.
+            netd_config.network_filter = Some(
+                figment
+                    .extract_inner("cvm.network_filter")
+                    .context("failed to load [cvm.network_filter] for netd")?,
+            );
+        }
         return netd::serve(netd_config).await;
     }
 
