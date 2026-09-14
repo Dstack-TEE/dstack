@@ -20,59 +20,61 @@ fn detect_qemu_version(qemu_path: &PathBuf) -> Result<String> {
     let output = Command::new(qemu_path)
         .arg("--version")
         .output()
-        .context("Failed to execute qemu --version")?;
+        .context("failed to execute qemu --version")?;
 
     if !output.status.success() {
-        bail!("QEMU version command failed with status: {}", output.status);
+        bail!("qemu --version failed with status: {}", output.status);
     }
 
-    let version_output =
-        String::from_utf8(output.stdout).context("QEMU version output is not valid UTF-8")?;
+    // A wrapper script can print a banner before the version line, on either
+    // stream, so search both instead of just the first line of stdout.
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    parse_qemu_version_from_output(&combined).with_context(|| {
+        format!(
+            "unrecognized qemu --version output: {}",
+            first_lines(&combined)
+        )
+    })
+}
 
-    parse_qemu_version_from_output(&version_output)
-        .context("Could not parse QEMU version from output")
+/// A bounded excerpt of a command's output, for error messages.
+fn first_lines(output: &str) -> String {
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" | ")
+        .chars()
+        .take(200)
+        .collect()
+}
+
+fn looks_like_version(word: &str) -> bool {
+    word.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && (word.contains('.') || word.chars().all(|c| c.is_ascii_digit() || c == '-'))
+}
+
+/// QEMU's own wording: `QEMU emulator version 9.2.1 (Debian ...)`.
+fn version_after_qemu_marker(line: &str) -> Option<&str> {
+    let rest = line.split_once("QEMU emulator version ")?.1;
+    let word = rest.split_whitespace().next()?;
+    looks_like_version(word).then_some(word)
 }
 
 fn parse_qemu_version_from_output(output: &str) -> Result<String> {
-    // Parse version from output like:
-    // "QEMU emulator version 8.2.2 (Debian 2:8.2.2+ds-0ubuntu1.4+tdx1.0)"
-    // "QEMU emulator version 9.1.0"
+    // Only QEMU's own wording counts, wherever it appears. Guessing at a
+    // version-shaped word instead would read one out of a wrapper's banner.
     let version = output
         .lines()
-        .next()
-        .and_then(|line| {
-            let words: Vec<&str> = line.split_whitespace().collect();
-
-            // First try: Look for "version" keyword and get the next word (only if it looks like a version)
-            if let Some(version_idx) = words.iter().position(|&word| word == "version") {
-                if let Some(next_word) = words.get(version_idx + 1) {
-                    // Only use the word after "version" if it looks like a version number
-                    if next_word.chars().next().is_some_and(|c| c.is_ascii_digit())
-                        && (next_word.contains('.')
-                            || next_word.chars().all(|c| c.is_ascii_digit() || c == '-'))
-                    {
-                        return Some(*next_word);
-                    }
-                }
-            }
-
-            // Fallback: find first word that looks like a version number
-            words
-                .iter()
-                .find(|word| {
-                    // Check if word starts with digit and contains dots (version-like)
-                    word.chars().next().is_some_and(|c| c.is_ascii_digit())
-                        && (word.contains('.')
-                            || word.chars().all(|c| c.is_ascii_digit() || c == '-'))
-                })
-                .copied()
-        })
-        .context("Could not parse QEMU version from output")?;
-
-    // Extract just the version number (e.g., "8.2.2" from "8.2.2+ds-0ubuntu1.4+tdx1.0")
-    let clean_version = version.split('+').next().unwrap_or(version).to_string();
-
-    Ok(clean_version)
+        .find_map(version_after_qemu_marker)
+        .context("no `QEMU emulator version` line")?;
+    // "8.2.2+ds-0ubuntu1.4+tdx1.0" -> "8.2.2"
+    Ok(version.split('+').next().unwrap_or(version).to_string())
 }
 
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
@@ -1108,9 +1110,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_wrapper_banner_does_not_hide_the_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let cvm = cvm_with_qemu(
+            &dir,
+            "echo 'wrapper: exec /usr/libexec/qemu-kvm' >&2; \
+             echo 'QEMU emulator version 9.2.1'",
+        );
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "9.2.1");
+    }
+
+    // A banner carrying a version-shaped word must not be mistaken for the
+    // QEMU version: a wrong guess boots a CVM that cannot be attested.
+    #[cfg(unix)]
+    #[test]
     fn an_undetectable_qemu_version_fails_the_start() {
         let dir = tempfile::tempdir().unwrap();
-        let cvm = cvm_with_qemu(&dir, "echo 'wrapper speaks no version'");
+        let cvm = cvm_with_qemu(&dir, "echo 'wrapper: exec /usr/libexec/qemu-kvm-8.2.0'");
         let err = format!("{:#}", cvm.resolve_qemu_version().unwrap_err());
         assert!(err.contains("set `qemu_version` in vmm.toml"), "{err}");
     }
@@ -1181,10 +1197,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_qemu_version_fallback() {
+    fn test_parse_qemu_version_without_qemu_wording() {
         let output = "Some unusual format 8.1.5 with version info";
-        let version = parse_qemu_version_from_output(output).unwrap();
-        assert_eq!(version, "8.1.5");
+        assert!(parse_qemu_version_from_output(output).is_err());
     }
 
     #[test]
