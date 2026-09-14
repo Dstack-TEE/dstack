@@ -145,8 +145,9 @@ parameters = {}
 
 # Shared privileged networking service. Required by bridge and macvtap
 # networking: it builds every host interface those modes use, binds their
-# nwfilters, and releases them again. User mode and a caller-supplied netdev
-# need nothing from it. Socket filesystem permissions authorize clients.
+# nwfilters, and releases them again. It does not forward host ports. User mode
+# and a caller-supplied netdev need nothing from it. Socket filesystem
+# permissions authorize clients.
 [netd]
 socket = "/run/dstack/netd.sock"
 # Applied when netd creates the socket itself. A systemd socket unit controls

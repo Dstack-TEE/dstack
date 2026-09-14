@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{bail, Result};
 use sha2::{Digest, Sha256};
 
-use super::Manifest;
+use super::{Manifest, PortMapping};
 use crate::config::{
     CvmConfig, NetworkFilterMode, Networking, NetworkingMode, NicNetworking, MAX_NET_QUEUES,
 };
@@ -87,9 +87,10 @@ pub(crate) fn resolved_networks(manifest: &Manifest, cfg: &CvmConfig) -> Vec<Net
 /// -- libvirt filtering, multiqueue -- under which netd was consulted and
 /// outside of which the VMM built the interface some other way. Each of those
 /// paths had to answer the same questions again and answer them differently:
-/// which netdev QEMU gets, whether vhost is really on, and how the interface
-/// is torn down. A host interface has one owner now, whatever the node's
-/// filter mode or the NIC's queue count.
+/// which netdev QEMU gets, whether vhost is really on, and, once port mappings
+/// grew a NIC, where a bridge NIC's host ports go. A host interface has one
+/// owner now, and `port_map` on a bridge reaches netd on every node rather than
+/// only on the ones that happened to filter or to have scaled their queues.
 ///
 /// The cost is stated plainly: bridge and macvtap need a netd on the host. User
 /// mode and a caller-supplied netdev still need nothing.
@@ -201,6 +202,57 @@ pub(crate) fn warn_if_vhost_net_missing(networks: &[Networking]) {
     }
 }
 
+/// Which NIC an unpinned port mapping's traffic enters through.
+///
+/// The first user-mode NIC, which is where QEMU's `hostfwd=` entries have
+/// always gone. There is no second choice: nothing else on this host publishes
+/// a port, so a VM without one has nowhere to put a mapping and the launch
+/// says so.
+pub(crate) fn default_ingress_nic(networks: &[Networking]) -> Option<usize> {
+    networks
+        .iter()
+        .position(|network| network.nic.mode == NetworkingMode::User)
+}
+
+/// Whether a NIC of this mode has a mechanism to publish a host port at all.
+///
+/// QEMU's `hostfwd=`, and nothing else. A bridge TAP is built by netd, and the
+/// netd in this repository does not forward host ports; macvtap bypasses the
+/// host bridge; a custom netdev is a string the VMM does not interpret.
+pub(crate) fn mode_carries_ingress(mode: NetworkingMode) -> bool {
+    matches!(mode, NetworkingMode::User)
+}
+
+/// Which NIC a port mapping's traffic enters through.
+///
+/// One mapping resolves to at most one NIC, and only a user-mode NIC has a
+/// mechanism to carry it, so a pin to any other kind resolves to nothing
+/// rather than to a NIC with no path into the guest.
+///
+/// `None` is a mapping with nowhere to go: a VM with no user-mode NIC, or one
+/// whose NICs changed under a mapping that named one. The launch warns about
+/// each of those rather than dropping it in silence.
+pub(crate) fn ingress_nic(mapping: &PortMapping, networks: &[Networking]) -> Option<usize> {
+    mapping
+        .nic_index
+        .or_else(|| default_ingress_nic(networks))
+        .filter(|index| {
+            networks
+                .get(*index)
+                .is_some_and(|network| mode_carries_ingress(network.nic.mode))
+        })
+}
+
+/// Names the mappings that resolve to no NIC, for a launch to warn about.
+pub(crate) fn stranded_ingress<'a>(
+    port_map: &'a [PortMapping],
+    networks: &'a [Networking],
+) -> impl Iterator<Item = &'a PortMapping> {
+    port_map
+        .iter()
+        .filter(|mapping| ingress_nic(mapping, networks).is_none())
+}
+
 /// Derives a deterministic, locally administered unicast MAC address.
 ///
 /// Index zero preserves the legacy single-NIC derivation. Later interfaces
@@ -228,9 +280,11 @@ pub(crate) fn mac_address_for_vm_index(vm_id: &str, prefix: &[u8], index: usize)
 #[cfg(test)]
 mod tests {
     use super::{
-        mac_address_for_vm_index, needs_netd_interface, resolved_networks, settle_vhost,
-        validate_resolved_networks,
+        default_ingress_nic, ingress_nic, mac_address_for_vm_index, needs_netd_interface,
+        resolved_networks, settle_vhost, stranded_ingress, validate_resolved_networks,
     };
+    use crate::app::PortMapping;
+    use crate::config::Protocol;
     use crate::config::{Networking, NetworkingMode, NicNetworking};
 
     fn macvtap_network() -> NicNetworking {
@@ -471,5 +525,81 @@ mod tests {
             mac_address_for_vm_index("vm-123", &[], 1),
             "c6:74:2c:65:14:b9"
         );
+    }
+
+    fn nic(mode: NetworkingMode) -> Networking {
+        Networking {
+            nic: NicNetworking {
+                mode,
+                ..NicNetworking::default()
+            },
+            ..Networking::default()
+        }
+    }
+
+    fn mapping(host_port: u16, nic_index: Option<usize>) -> PortMapping {
+        PortMapping {
+            address: "0.0.0.0".parse().unwrap(),
+            protocol: Protocol::Tcp,
+            from: host_port,
+            to: host_port,
+            nic_index,
+        }
+    }
+
+    #[test]
+    fn an_unpinned_mapping_still_lands_where_hostfwd_always_put_it() {
+        // Existing VMs must not move. QEMU's `hostfwd=` has always gone to the
+        // first user-mode NIC, so that stays the answer wherever there is one.
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::User)];
+        assert_eq!(default_ingress_nic(&networks), Some(1));
+        assert_eq!(ingress_nic(&mapping(443, None), &networks), Some(1));
+
+        // With no user-mode NIC there is nowhere at all. netd builds a bridge
+        // TAP but does not forward host ports, and macvtap and custom have no
+        // path either.
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::Bridge)];
+        assert_eq!(default_ingress_nic(&networks), None);
+
+        let networks = [nic(NetworkingMode::Macvtap), nic(NetworkingMode::Custom)];
+        assert_eq!(default_ingress_nic(&networks), None);
+        assert_eq!(ingress_nic(&mapping(443, None), &networks), None);
+    }
+
+    #[test]
+    fn a_pinned_mapping_goes_where_it_says() {
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::User)];
+        assert_eq!(ingress_nic(&mapping(443, Some(1)), &networks), Some(1));
+        // Out of range resolves to nothing rather than to something arbitrary.
+        // Deployment refuses it outright; a manifest that lost a NIC lands here.
+        assert_eq!(ingress_nic(&mapping(443, Some(7)), &networks), None);
+    }
+
+    /// A pin has to be checked against the backend, not just the count.
+    /// Naming a macvtap or custom NIC used to resolve to that index and then
+    /// fall out of every branch that could act on it: no `hostfwd=`, no netd
+    /// request, and no warning either.
+    #[test]
+    fn a_pin_to_a_backend_with_no_ingress_resolves_to_nothing() {
+        let networks = [
+            nic(NetworkingMode::Macvtap),
+            nic(NetworkingMode::Custom),
+            nic(NetworkingMode::Bridge),
+            nic(NetworkingMode::User),
+        ];
+        assert_eq!(ingress_nic(&mapping(443, Some(0)), &networks), None);
+        assert_eq!(ingress_nic(&mapping(443, Some(1)), &networks), None);
+        // A bridge TAP is netd's, and netd does not forward host ports.
+        assert_eq!(ingress_nic(&mapping(443, Some(2)), &networks), None);
+        assert_eq!(ingress_nic(&mapping(443, Some(3)), &networks), Some(3));
+
+        // And an unpinned mapping on a VM with nowhere to put it is named,
+        // rather than counted as delivered.
+        let networks = [nic(NetworkingMode::Macvtap)];
+        let port_map = [mapping(443, None), mapping(8080, Some(0))];
+        let stranded: Vec<_> = stranded_ingress(&port_map, &networks)
+            .map(|mapping| mapping.from)
+            .collect();
+        assert_eq!(stranded, vec![443, 8080]);
     }
 }

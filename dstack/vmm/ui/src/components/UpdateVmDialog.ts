@@ -176,7 +176,10 @@ const UpdateVmDialogComponent = {
         </div>
 
         <div class="form-group full-width" v-if="portMappingEnabled">
-          <port-mapping-editor :ports="dialog.ports" />
+          <port-mapping-editor
+            :ports="dialog.ports"
+            :nic-count="Math.max(dialog.networks.length, 1)"
+          />
         </div>
 
         <div class="form-group full-width">
