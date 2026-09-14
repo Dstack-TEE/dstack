@@ -34,7 +34,7 @@ Rebuild from clean, pinned sources and require a byte-identical result:
 
 ```bash
 git status --porcelain   # must be empty at the pinned release revision
-./os/build.sh            # reproducible Yocto backend; emits images/<name>-<version>-uki.tar.gz
+make os-image           # reproducible mkosi backend; emits os/mkosi/repro-build/build/out/prod/<name>-<version>-uki.tar.gz
 ```
 
 Compare the rebuilt package against the published one. `sha256sum.txt` lists
@@ -54,9 +54,9 @@ expected=$(sha256sum published/sha256sum.txt | awk '{print $1}')
 test "$expected" = "$(cat published/digest.txt)"
 ```
 
-BitBake enforces per-recipe input checksums during the rebuild; for full
-supply-chain independence, mirror the Yocto `downloads/` input cache by
-content hash.
+The mkosi backend pins its Debian snapshot and verifies upstream source and
+toolchain archives by SHA-256 during the rebuild; for full supply-chain
+independence, mirror those inputs by content hash.
 
 Run the hardening audit against the release kernel config and rootfs; it must
 exit zero with `failures=0`:
@@ -284,7 +284,7 @@ An AWS EC2 NitroTPM deployment can be promoted only when:
 
 1. a reproducible rebuild from the clean, pinned release sources yields a
    byte-identical `sha256sum.txt` (and therefore the same `os_image_hash`);
-2. Yocto input content is mirrored or otherwise available by content hash;
+2. build input content is mirrored or otherwise available by content hash;
 3. independently recomputed AWS PCRs and the UKI AuthentiCode hash match the
    published build-output `aws-pcrs.json` side-car (when provided) and the
    `boot_pcr_digest` in `measurement.aws.cbor`;

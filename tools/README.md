@@ -9,7 +9,7 @@ one runtime component or one guest-OS backend.
   an ACME server can validate against the records it writes.
 - `sca/` builds self-contained application images.
 - `dev-stack.sh` preserves the unsupported legacy all-in-one host, guest, and
-  deployment helper.
+  deployment helper. It builds guests with the deprecated Yocto backend.
 - `vm-runner/` preserves the unsupported legacy direct-QEMU runner and GPU
   passthrough helper.
 

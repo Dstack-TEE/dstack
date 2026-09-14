@@ -342,7 +342,7 @@ jobs:
         run: |
           set -euo pipefail
           {
-            echo "Guest OS image \`$VERSION\`, built by the experimental Debian/mkosi backend."
+            echo "Guest OS image \`$VERSION\`, built by the Debian/mkosi backend."
             echo
             echo "Register \`os_image_hash\` on chain to authorize this image; see"
             echo "[docs/onchain-governance.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/onchain-governance.md)."
@@ -360,14 +360,14 @@ jobs:
           # --verify-tag: the tag is the publish trigger, so it must already
           # exist. This job never creates one.
           #
-          # --prerelease tracks the backend's own status: os/mkosi is still
-          # experimental, and its packages are Debian rather than Yocto even
-          # though the release contract is shared. Drop the flag once the
-          # backend is declared stable.
+          # --prerelease is kept until release maintainers promote a stable
+          # mkosi-built release. os/mkosi is the default backend and Yocto is
+          # deprecated, but dropping the flag is a release decision, not a
+          # backend-status one.
           #
           # The title names the product, not the build backend: the tag prefix
-          # only exists to keep this workflow's trigger distinct from the Yocto
-          # one, and it should not leak into the release listing.
+          # only exists to keep this workflow's trigger distinct from the
+          # deprecated Yocto one, and it should not leak into the release listing.
           gh release create "$TAG" \
             "dist/dstack-$VERSION.tar.gz" \
             "dist/dstack-$VERSION-uki.tar.gz" \
