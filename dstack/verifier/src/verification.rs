@@ -2264,6 +2264,83 @@ mod tests {
         );
     }
 
+    /// The guest agent's v1 surfaces always hand out the MessagePack V1 schema,
+    /// while every captured fixture is the legacy SCALE form. Re-encoding a
+    /// fixture as V1 must not change a single verification outcome: the same
+    /// quote, event log, image and ACPI checks run, and they reach the same
+    /// verdict with the same details.
+    #[tokio::test]
+    async fn msgpack_and_scale_encodings_verify_identically() {
+        let fixtures = [
+            (
+                "tdx-lite",
+                include_str!("../fixtures/tdx-lite-attestation.json"),
+            ),
+            (
+                "tdx-lite-normalized",
+                include_str!("../fixtures/tdx-lite-normalized-attestation.json"),
+            ),
+            (
+                "tdx-lite-normalized-qemu-10-2",
+                include_str!("../fixtures/tdx-lite-normalized-qemu-10-2-attestation.json"),
+            ),
+            (
+                "sev-snp",
+                include_str!("../fixtures/sev-snp-attestation.json"),
+            ),
+        ];
+
+        for (name, fixture) in fixtures {
+            let request: VerificationRequest =
+                serde_json::from_str(fixture).expect("verifier fixture parses");
+            let scale = request
+                .attestation
+                .clone()
+                .expect("fixture carries an attestation");
+            let legacy = VersionedAttestation::from_bytes(&scale).expect("fixture decodes");
+            assert!(
+                matches!(legacy, VersionedAttestation::V0 { .. }),
+                "{name}: fixture is expected to be the legacy form"
+            );
+            let msgpack = VersionedAttestation::V1 {
+                attestation: legacy.into_v1(),
+            }
+            .to_bytes()
+            .expect("attestation re-encodes as V1");
+            assert!(
+                matches!(msgpack.first(), Some(0x80..=0x8f | 0xde | 0xdf)),
+                "{name}: re-encoded attestation is not a MessagePack map"
+            );
+
+            let mut responses = Vec::new();
+            for attestation in [scale, msgpack] {
+                let cache = tempfile::tempdir().expect("temp cache dir");
+                let verifier = CvmVerifier::new(
+                    cache.path().join("cache").display().to_string(),
+                    "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+                    Duration::from_secs(1),
+                    test_attestation_verifier(),
+                );
+                let response = verifier
+                    .verify(VerificationRequest {
+                        attestation: Some(attestation),
+                        ..request.clone()
+                    })
+                    .await
+                    .expect("verifier runs");
+                assert!(response.is_valid, "{name}: {:?}", response.reason);
+                assert!(response.details.quote_verified, "{name}");
+                assert!(response.details.event_log_verified, "{name}");
+                assert!(response.details.os_image_hash_verified, "{name}");
+                responses.push(serde_json::to_value(&response).expect("response serializes"));
+            }
+            assert_eq!(
+                responses[0], responses[1],
+                "{name}: MessagePack and SCALE encodings verified differently"
+            );
+        }
+    }
+
     /// Rebuild the fixture's measurement document around a different kernel
     /// command line, keeping every hash that commits to it consistent:
     /// `measurement.tdx.cbor`, its `sha256sum.txt` entry, and the
