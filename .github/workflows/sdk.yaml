@@ -78,6 +78,11 @@ jobs:
           workspaces: |
             sdk/rust
             dstack
+          # Save only from pushes to protected branches; pull requests restore
+          # from those. This cache is about 1 GB, and one per pull request ref
+          # would quickly push the repository past its cache quota and evict
+          # the entries that are actually shared.
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: SDK tests
         if: steps.changes.outputs.relevant == 'true'

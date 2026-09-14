@@ -33,13 +33,20 @@ env:
   DSTACK_REV: ${{ github.event.pull_request.head.sha || github.sha }}
   DSTACK_SRC_URL: ${{ github.event.pull_request.head.repo.clone_url || format('{0}/{1}', github.server_url, github.repository) }}
 
+# Builds go through the `docker` driver, i.e. the daemon's own BuildKit, rather
+# than the `docker-container` builder setup-buildx creates by default. With a
+# container builder every `--load` compresses the result into a tarball and
+# imports it into the daemon; for the `*-builder` targets, which carry the Rust
+# toolchain and the cargo target directory, that alone was two to three
+# minutes. With the daemon's builder the image lands in the store directly, and
+# the second build of the `*-builder` target is a cache hit on the first.
+#
 # No BuildKit layer cache (`cache-to: type=gha`). The source is cloned at
 # DSTACK_REV inside the build, so the cargo layer misses on every commit, and
-# `mode=max` still exported the whole builder stage -- toolchain plus target
-# directory -- to the Actions cache: about two and a half minutes per job, and
-# gigabytes of blobs competing with the cargo caches other workflows depend on.
-# What it could have saved was the pinned-package install, roughly fifteen
-# seconds.
+# `mode=max` still exported the whole builder stage to the Actions cache: about
+# two and a half minutes per job, and most of the repository's 10 GB cache
+# quota, which evicted the cargo caches the other workflows depend on. What it
+# could have saved was the pinned-package install, roughly fifteen seconds.
 jobs:
   build-script-tests:
     runs-on: ubuntu-latest
@@ -55,6 +62,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Build Gateway Docker image
         uses: docker/build-push-action@v5
@@ -106,6 +115,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Build KMS Docker image
         uses: docker/build-push-action@v5
@@ -158,6 +169,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
 
       - name: Build Verifier Docker image
         uses: docker/build-push-action@v5
