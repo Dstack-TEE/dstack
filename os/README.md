@@ -23,6 +23,16 @@ os/
 > and it will be removed. Do not build new images with it, add features to it,
 > or port changes to it unless you are maintaining a legacy image.
 
+> [!CAUTION]
+> **Do not delete or stop maintaining `os/yocto/` yet.** The mkosi backend
+> still reads files from `os/yocto/layers/` and `os/yocto/tools/` as live build
+> inputs: kernel, OVMF and ZFS patches, the initramfs `init` script, several
+> systemd units and configuration files, the AWS hardening audit script, and
+> the version and parity references checked by `os/mkosi/tests/acceptance.sh`.
+> A change to one of those files changes the default mkosi image, and removing
+> them breaks it. Move a file into `os/common/` or `os/mkosi/` before retiring
+> it from the Yocto tree. `grep -rn yocto os/mkosi` lists the current uses.
+
 A backend can be added at `os/<backend>/` without moving shared payload or
 duplicating release packaging. Both backends implement the same
 artifact-manifest and common release-assembly contract; see
@@ -76,13 +86,15 @@ manifest to `../image/assemble.sh` for backend-independent packaging.
 
 ## Source boundaries
 
-Each backend stages only the inputs it needs:
+Neither backend depends on a nested dstack submodule. The mkosi backend mounts
+the repository as an ephemeral mkosi build source, so build scripts cannot
+mutate the checkout; its component descriptors declare which paths feed each
+component's cache key. The deprecated Yocto guest recipe stages only the inputs
+it needs:
 
 - `dstack/` for core Rust services,
 - `sdk/rust/` for public Rust SDK workspace members,
 - `os/common/rootfs/` for OS-owned payload.
-
-It does not copy the entire repository or depend on a nested dstack submodule.
 
 ## Licensing
 

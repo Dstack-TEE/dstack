@@ -8,6 +8,16 @@
 > or treat it as the reference implementation. Its entrypoints print a
 > deprecation warning.
 
+> [!CAUTION]
+> **Do not delete or stop maintaining this directory yet.** The mkosi backend
+> still reads files from `os/yocto/layers/` and `os/yocto/tools/` as live build
+> inputs: kernel, OVMF and ZFS patches, the initramfs `init` script, several
+> systemd units and configuration files, the AWS hardening audit script, and
+> the version and parity references checked by `os/mkosi/tests/acceptance.sh`.
+> A change to one of those files changes the default mkosi image, and removing
+> them breaks it. Move a file into `os/common/` or `os/mkosi/` before retiring
+> it from the Yocto tree. `grep -rn yocto os/mkosi` lists the current uses.
+
 This directory contains the Yocto backend imported from `meta-dstack`.
 dstack-owned layers live in `layers/`; external layers and BitBake live in
 `deps/` as git submodules.
