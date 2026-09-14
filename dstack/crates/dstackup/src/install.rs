@@ -294,6 +294,9 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
                     host_address: "127.0.0.1".into(),
                     host_port: kms_port as u32,
                     vm_port: 8000,
+                    // Unpinned: this deploys the node default topology, which
+                    // is one NIC, and the VMM resolves that itself.
+                    nic_index: None,
                 }],
                 ..Default::default()
             };

@@ -200,6 +200,43 @@ The remaining bytes are derived from the VM ID hash. The prefix applies to all n
 - Docker's nftables chains (`DOCKER-FORWARD`) run before libvirt's but do not block virbr0 traffic
 - Use `setup-bridge.sh check --bridge <name>` to diagnose missing rules
 
+### Which NIC a port mapping uses
+
+A port mapping says which NIC its traffic enters through:
+
+```bash
+vmm-cli.py deploy ... --port udp:0.0.0.0:7483:51820@0 --port tcp:127.0.0.1:7484:8001@0
+```
+
+Leave `@<nic>` off and the VMM picks the first user-mode NIC — where QEMU's
+`hostfwd=` entries have always gone. If the VM has no user-mode NIC, the mapping
+has no publishing backend and the launch log names it as stranded. A single-NIC
+user-mode VM never needs the suffix.
+
+With several NICs the choice used to be made silently, and not always the way an
+operator would have. A bridge NIC for external traffic beside a user-mode NIC for
+management — the topology multi-NIC was added for — put every published port on
+the *management* NIC: the traffic reached the guest, but over slirp, bypassing
+whatever the bridge NIC's nwfilter was there to enforce and hiding the client's
+address behind the slirp gateway. A second user-mode NIC could never publish
+anything at all, because only the first was ever selected.
+
+A mapping resolves to at most one NIC. The only backend that can carry it is
+QEMU user networking through `hostfwd=`; `netd` builds bridge interfaces but
+does not publish host ports.
+
+### Which ports a bridge NIC can publish
+
+QEMU publishes a port with `hostfwd=` on a user-mode NIC, and that is the only
+mechanism this host has. **The `netd` in this repository builds interfaces; it
+does not forward host ports**, so a bridge NIC cannot carry a port mapping.
+
+`--port …@<nic>` therefore only ever names a user-mode NIC. Pinning to a bridge,
+macvtap or custom NIC is refused at deployment, where the caller is there to be
+told. An unpinned mapping goes to the first user-mode NIC; a VM that has none is
+not refused — it may have been deployed before this — but every mapping it
+strands is named in the launch log.
+
 ### Mixing networking modes
 
 Bridge and user-mode VMs can coexist. Set the global default in `vmm.toml` and override per-VM as needed:

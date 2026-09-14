@@ -42,8 +42,9 @@ use tracing::{debug, error, info, warn};
 
 pub use image::{Image, ImageInfo};
 pub(crate) use network::{
-    filters_bridge_traffic, needs_netd_interface, resolve_networking, resolved_networks,
-    settle_vhost, validate_resolved_network, validate_resolved_networks,
+    filters_bridge_traffic, mode_carries_ingress, needs_netd_interface, resolve_networking,
+    resolved_networks, settle_vhost, stranded_ingress, validate_resolved_network,
+    validate_resolved_networks,
 };
 pub use qemu::VmConfig;
 // Exported so the RPC layer can assert that everything it reports is
@@ -56,7 +57,7 @@ mod host_share;
 mod id_pool;
 mod image;
 mod mr_config;
-mod network;
+pub(crate) mod network;
 mod qemu;
 pub(crate) mod registry;
 mod vm_info;
@@ -92,6 +93,10 @@ pub struct PortMapping {
     pub protocol: Protocol,
     pub from: u16,
     pub to: u16,
+    /// Which NIC carries this mapping. `None` resolves by the node's rule; see
+    /// [`crate::app::network::ingress_nic`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nic_index: Option<usize>,
 }
 
 /// An extra disk attached to the VM (e.g. a pre-baked verity volume). `source`
@@ -552,6 +557,21 @@ impl App {
         vm: &VmConfig,
         networks: &mut [Networking],
     ) -> Result<()> {
+        // Before the early return, because a mapping with nowhere to go is a
+        // property of the resolved topology and not of whether netd is in it.
+        // Deployment refuses every way of asking for one, so reaching this
+        // means an edit removed the NIC out from under a mapping that named it.
+        for mapping in stranded_ingress(&vm.manifest.port_map, networks) {
+            warn!(
+                vm_id = %vm.manifest.id,
+                "port mapping {} {}:{} names NIC {:?}, which this VM no longer has a backend \
+                 for; it will not be published",
+                mapping.protocol.as_str(),
+                mapping.address,
+                mapping.from,
+                mapping.nic_index,
+            );
+        }
         if !networks.iter().any(needs_netd_interface) {
             return Ok(());
         }
