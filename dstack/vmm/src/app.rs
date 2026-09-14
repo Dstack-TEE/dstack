@@ -1804,7 +1804,7 @@ fn make_vm_config(
         memory_size: manifest.memory as u64 * 1024 * 1024,
         qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
         pic: cfg.cvm.qemu_pic,
-        qemu_version: cfg.cvm.qemu_version.clone(),
+        qemu_version: Some(cfg.cvm.resolve_qemu_version()?),
         pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
         hugepages: manifest.hugepages,
         num_gpus: gpus.gpus.len() as u32,
@@ -2475,6 +2475,9 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.cvm.platform = Some(CvmPlatform::Tdx);
         config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Auto;
+        // No QEMU binary under test; declare the version the way a host
+        // without a detectable one has to.
+        config.cvm.qemu_version = Some("9.2.1".to_string());
         Ok(config)
     }
 
@@ -2702,6 +2705,7 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
         config.cvm.platform = Some(CvmPlatform::AmdSevSnp);
+        config.cvm.qemu_version = Some("9.2.1".to_string());
         config.cvm.nvidia_attestation_proxy_url = Some("http://10.0.2.2:8090".to_string());
         let compose_hash = hex_of(0x22, 32);
         let manifest = Manifest {
