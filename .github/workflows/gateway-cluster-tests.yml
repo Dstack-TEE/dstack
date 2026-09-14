@@ -99,6 +99,12 @@ jobs:
       - name: Collect node logs on failure
         if: failure()
         working-directory: dstack/gateway/test-run/cluster
+        # The compose files require `${FIXTURE_NS:?}`, and the suite script
+        # exports it only to itself. Unset here, every `docker compose` call in
+        # this step -- not just the fixture one -- fails at interpolation, and
+        # the step still passes, so the artifact carries no container logs.
+        env:
+          FIXTURE_NS: dstack-fixture-cluster
         run: |
           mkdir -p run/logs
           # By project, discovered from the daemon. A bare `docker compose` here
@@ -117,7 +123,7 @@ jobs:
           # this suite's service list and its logs have to be asked for
           # separately -- they are where a quote-verification failure explains
           # itself.
-          FIXTURE_NS=dstack-fixture-cluster docker compose -p dstack-fixture-cluster -f ../attestation/fixture.yml logs \
+          docker compose -p "$FIXTURE_NS" -f ../attestation/fixture.yml logs \
             --no-color > "run/logs/fixture.log" 2>&1 || true
           docker compose ps -a > run/logs/compose-ps.txt 2>&1 || true
 

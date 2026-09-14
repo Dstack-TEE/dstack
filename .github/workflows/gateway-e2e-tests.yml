@@ -110,6 +110,12 @@ jobs:
       - name: Collect container logs on failure
         if: failure()
         working-directory: dstack/gateway/test-run/e2e
+        # The compose files require `${FIXTURE_NS:?}`, and the suite script
+        # exports it only to itself. Unset here, every `docker compose` call in
+        # this step -- not just the fixture one -- fails at interpolation, and
+        # the step still passes, so the artifact carries no container logs.
+        env:
+          FIXTURE_NS: dstack-fixture-e2e
         run: |
           # By compose service, not by container name: the shared attestation
           # fixture deliberately does not pin one, so that more than one suite
@@ -122,7 +128,7 @@ jobs:
           # this suite's service list and its logs have to be asked for
           # separately -- they are where a quote-verification failure explains
           # itself.
-          FIXTURE_NS=dstack-fixture-e2e docker compose -p dstack-fixture-e2e -f ../attestation/fixture.yml logs \
+          docker compose -p "$FIXTURE_NS" -f ../attestation/fixture.yml logs \
             --no-color > "/tmp/gateway-e2e-logs/fixture.log" 2>&1 || true
           docker compose ps -a > /tmp/gateway-e2e-logs/compose-ps.txt 2>&1 || true
 
