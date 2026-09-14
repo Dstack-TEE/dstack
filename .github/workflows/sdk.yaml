@@ -67,11 +67,22 @@ jobs:
           # This additional target is needed for wasm32 compatibility check.
           targets: wasm32-unknown-unknown, thumbv6m-none-eabi
 
+      # Both workspaces: `sdk/rust` for the SDK crates, and `dstack` for the
+      # release simulator that `sdk/run-tests.sh` builds before any suite runs.
+      # Without the second entry that build starts cold every time and is most
+      # of the job's wall time.
       - name: Cache cargo
         if: steps.changes.outputs.relevant == 'true'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: sdk/rust
+          workspaces: |
+            sdk/rust
+            dstack
+          # Save only from pushes to protected branches; pull requests restore
+          # from those. This cache is about 1 GB, and one per pull request ref
+          # would quickly push the repository past its cache quota and evict
+          # the entries that are actually shared.
+          save-if: ${{ github.event_name == 'push' }}
 
       - name: SDK tests
         if: steps.changes.outputs.relevant == 'true'
