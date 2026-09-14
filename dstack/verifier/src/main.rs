@@ -92,6 +92,14 @@ fn load_config(figment: &Figment) -> Result<Config> {
     Ok(config)
 }
 
+fn socket_addr(config: &Config) -> Result<std::net::SocketAddr> {
+    let ip = config
+        .address
+        .parse::<IpAddr>()
+        .with_context(|| format!("invalid verifier address: {}", config.address))?;
+    Ok(std::net::SocketAddr::from((ip, config.port)))
+}
+
 #[post("/verify", data = "<request>")]
 async fn verify_cvm(
     verifier: &State<Arc<CvmVerifier>>,
@@ -351,6 +359,10 @@ async fn main() -> Result<()> {
         Arc::new(AttestationVerifier::load(&config.attestation)?),
     ));
 
+    let addr = socket_addr(&config)?;
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("failed to bind {addr}"))?;
     let rocket_figment = Figment::from(rocket::Config::default()).merge(config_figment);
     rocket::custom(rocket_figment)
         .mount("/", rocket::routes![verify_cvm, health])
@@ -360,7 +372,7 @@ async fn main() -> Result<()> {
                 info!("dstack-verifier started successfully");
             })
         }))
-        .launch()
+        .launch_on(listener)
         .await
         .map_err(|err| anyhow::anyhow!("launch rocket failed: {err:?}"))?;
     Ok(())
@@ -391,6 +403,10 @@ image_download_timeout_secs = 7
         assert_eq!(loaded.address, "127.0.0.1");
         assert_eq!(loaded.port, 18080);
         assert_eq!(loaded.image_download_timeout_secs, 7);
+        assert_eq!(
+            socket_addr(&loaded).unwrap(),
+            "127.0.0.1:18080".parse().unwrap()
+        );
 
         for (name, body, expected) in [
             (
