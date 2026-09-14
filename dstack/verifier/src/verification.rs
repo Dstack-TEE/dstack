@@ -2341,6 +2341,163 @@ mod tests {
         }
     }
 
+    /// Verify one attestation through the full `CvmVerifier` path with image
+    /// download disabled, and require every check to pass.
+    async fn verify_lite_attestation(name: &str, attestation: Vec<u8>) -> serde_json::Value {
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+        let response = verifier
+            .verify(VerificationRequest {
+                quote: None,
+                event_log: None,
+                vm_config: None,
+                attestation: Some(attestation),
+                debug: None,
+            })
+            .await
+            .expect("verifier runs");
+        assert!(response.is_valid, "{name}: {:?}", response.reason);
+        assert!(response.details.quote_verified, "{name}");
+        assert!(response.details.event_log_verified, "{name}");
+        assert!(response.details.os_image_hash_verified, "{name}");
+        assert!(response.details.acpi_tables_verified, "{name}");
+        serde_json::to_value(&response).expect("response serializes")
+    }
+
+    fn fixture_attestation(fixture: &str) -> Vec<u8> {
+        let request: VerificationRequest =
+            serde_json::from_str(fixture).expect("verifier fixture parses");
+        request.attestation.expect("fixture carries an attestation")
+    }
+
+    fn is_msgpack_v1(bytes: &[u8]) -> bool {
+        matches!(
+            VersionedAttestation::from_bytes(bytes),
+            Ok(VersionedAttestation::V1 { .. })
+        ) && matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf))
+    }
+
+    /// Captured from a real TDX CVM: `/v1/Attest` and the frozen `/Attest`
+    /// asked for the same report data in the same boot. The platform produced
+    /// the legacy form (V1 runtime events), so the v1 bytes are the guest
+    /// agent's own MessagePack re-encoding, and they must verify to exactly the
+    /// response the legacy bytes do.
+    #[tokio::test]
+    async fn verifies_real_v1_attest_identically_to_v0_from_the_same_boot() {
+        let v1 = fixture_attestation(include_str!("../fixtures/tdx-lite-v1-attest.json"));
+        let v0 = fixture_attestation(include_str!("../fixtures/tdx-lite-v0-attest.json"));
+        assert!(is_msgpack_v1(&v1), "/v1/Attest must be MessagePack V1");
+        assert_eq!(v0.first(), Some(&0x00), "/Attest must be legacy SCALE");
+
+        let v1_response = verify_lite_attestation("v1 Attest", v1).await;
+        let v0_response = verify_lite_attestation("v0 Attest", v0).await;
+        assert_eq!(
+            v1_response, v0_response,
+            "v1 and v0 Attest from one boot verified differently"
+        );
+    }
+
+    /// Captured from the same boot: the certificate chains `/v1/IssueCert`
+    /// and the frozen `/GetTlsKey` returned with `usage_ra_tls` set, signed by
+    /// the CVM's local CA. The v1 leaf embeds MessagePack V1. Each leaf must
+    /// chain to its CA, pass RA-TLS verification with the report data bound to
+    /// its own public key, and carry an attestation that passes the full image
+    /// check -- and both must name the same CVM.
+    #[tokio::test]
+    async fn verifies_real_v1_issue_cert_chain_and_embedded_attestation() {
+        use ra_tls::traits::CertExt as _;
+
+        let mut identities = Vec::new();
+        for (name, pem, expect_v1) in [
+            (
+                "v1 IssueCert",
+                include_str!("../fixtures/tdx-lite-v1-issue-cert.pem"),
+                true,
+            ),
+            (
+                "v0 GetTlsKey",
+                include_str!("../fixtures/tdx-lite-v0-get-tls-key.pem"),
+                false,
+            ),
+        ] {
+            let chain: Vec<_> = x509_parser::pem::Pem::iter_from_buffer(pem.as_bytes())
+                .map(|pem| pem.expect("PEM block parses"))
+                .collect();
+            assert_eq!(chain.len(), 2, "{name}: leaf and CA");
+            let leaf = chain[0].parse_x509().expect("leaf parses");
+            let ca = chain[1].parse_x509().expect("CA parses");
+            leaf.verify_signature(Some(ca.public_key()))
+                .unwrap_or_else(|err| panic!("{name}: leaf is not signed by its CA: {err}"));
+
+            let embedded = leaf
+                .get_extension_bytes(ra_tls::oids::PHALA_RATLS_ATTESTATION)
+                .expect("extension reads")
+                .expect("leaf carries an attestation");
+            assert_eq!(is_msgpack_v1(&embedded), expect_v1, "{name}: wire form");
+
+            let verified =
+                ra_tls::attestation::verify_der(&chain[0].contents, &test_attestation_verifier())
+                    .await
+                    .unwrap_or_else(|err| panic!("{name}: RA-TLS verification failed: {err:#}"));
+            assert_eq!(
+                verified.public_key_der,
+                leaf.public_key().raw,
+                "{name}: attestation must be bound to the leaf key"
+            );
+
+            let response = verify_lite_attestation(name, embedded).await;
+            identities.push(response["details"]["app_info"].clone());
+        }
+        assert_eq!(
+            identities[0], identities[1],
+            "v1 and v0 certificates from one boot name different CVMs"
+        );
+    }
+
+    /// The certificate verification must not be vacuous: a leaf whose embedded
+    /// attestation was captured for a different key is rejected.
+    #[tokio::test]
+    async fn rejects_a_real_v1_certificate_attestation_bound_to_another_key() {
+        let v1_leaf = x509_parser::pem::Pem::iter_from_buffer(
+            include_str!("../fixtures/tdx-lite-v1-issue-cert.pem").as_bytes(),
+        )
+        .next()
+        .expect("leaf present")
+        .expect("PEM block parses");
+        let v0_leaf = x509_parser::pem::Pem::iter_from_buffer(
+            include_str!("../fixtures/tdx-lite-v0-get-tls-key.pem").as_bytes(),
+        )
+        .next()
+        .expect("leaf present")
+        .expect("PEM block parses");
+        // The v1 attestation checked against the v0 leaf's key: same quote, same
+        // CVM, wrong binding.
+        let v1_cert = v1_leaf.parse_x509().expect("leaf parses");
+        let v0_cert = v0_leaf.parse_x509().expect("leaf parses");
+        let attestation = ra_tls::attestation::from_der(&v1_leaf.contents)
+            .expect("extension decodes")
+            .expect("leaf carries an attestation");
+        assert!(is_msgpack_v1(
+            &attestation.clone().to_bytes().expect("re-encodes")
+        ));
+        assert_ne!(v1_cert.public_key().raw, v0_cert.public_key().raw);
+        let err = attestation
+            .into_v1()
+            .verify_with_ra_pubkey(v0_cert.public_key().raw, &test_attestation_verifier())
+            .await
+            .err()
+            .expect("an attestation bound to another key must not verify");
+        assert!(
+            err.to_string().contains("report data mismatch"),
+            "unexpected error: {err:#}"
+        );
+    }
+
     /// Rebuild the fixture's measurement document around a different kernel
     /// command line, keeping every hash that commits to it consistent:
     /// `measurement.tdx.cbor`, its `sha256sum.txt` entry, and the
