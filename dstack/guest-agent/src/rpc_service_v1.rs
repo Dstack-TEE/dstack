@@ -665,6 +665,98 @@ mod tests {
         assert!(attestation.platform.tdx_quote().is_some());
     }
 
+    /// End to end: the exact bytes v1 `Attest` hands out, encoded through
+    /// `AttestationWire::MsgpackV1`, pass full attestation verification -- the
+    /// DCAP quote, the RTMR3 replay and the report data -- and verify to the
+    /// same identity as the frozen v0 `Attest` output in the legacy form.
+    ///
+    /// The test platform patches the requested report data into the fixture
+    /// quote, which breaks its signature for any other value. Asking for the
+    /// fixture's own report data leaves the captured quote intact.
+    #[tokio::test]
+    async fn attest_output_passes_attestation_verification() {
+        use crate::rpc_service::InternalRpcHandler;
+        use dstack_guest_agent_rpc::v0::{dstack_guest_server::DstackGuestRpc as _, RawQuoteArgs};
+        use ra_tls::attestation::{AttestationVerifier, VersionedAttestation};
+
+        let report_data =
+            VersionedAttestation::from_bytes(include_bytes!("../fixtures/attestation.bin"))
+                .unwrap()
+                .into_v1()
+                .report_data()
+                .unwrap();
+        let verifier = AttestationVerifier::new_prod(None).unwrap();
+
+        let (state, _guard) = state().await;
+        let v1 = V1RpcHandler::new(state.clone())
+            .attest(AttestRequest {
+                report_data: report_data.to_vec(),
+                include_boottime_gpu_evidence: false,
+            })
+            .await
+            .unwrap()
+            .attestation;
+        let v0 = InternalRpcHandler::new(state)
+            .attest(RawQuoteArgs {
+                report_data: report_data.to_vec(),
+            })
+            .await
+            .unwrap()
+            .attestation;
+
+        let mut identities = Vec::new();
+        for (surface, bytes, expect_v1) in [("v1", &v1, true), ("v0", &v0, false)] {
+            let attestation = VersionedAttestation::from_bytes(bytes).unwrap();
+            assert_eq!(
+                matches!(attestation, VersionedAttestation::V1 { .. }),
+                expect_v1,
+                "{surface} Attest returned the wrong wire form"
+            );
+            let verified = attestation
+                .into_v1()
+                .verify(&verifier)
+                .await
+                .unwrap_or_else(|err| panic!("{surface} Attest output must verify: {err:#}"));
+            assert_eq!(verified.report_data, report_data, "{surface}");
+            let app = verified.decode_app_info(false).unwrap();
+            identities.push((
+                app.app_id,
+                app.compose_hash,
+                app.instance_id,
+                app.mr_aggregated,
+                app.os_image_hash,
+            ));
+        }
+        assert_eq!(
+            identities[0], identities[1],
+            "v1 and v0 Attest verified to different identities"
+        );
+
+        // Control: any other report data is patched into the quote body the
+        // signature covers, so the same path must now reject it. Without this
+        // the test cannot tell a verification that ran from one that did not.
+        let mut other = report_data;
+        other[0] ^= 1;
+        let (forge_state, _forge_guard) = setup_test_state().await;
+        let forged = V1RpcHandler::new(forge_state)
+            .attest(AttestRequest {
+                report_data: other.to_vec(),
+                include_boottime_gpu_evidence: false,
+            })
+            .await
+            .unwrap()
+            .attestation;
+        assert!(
+            VersionedAttestation::from_bytes(&forged)
+                .unwrap()
+                .into_v1()
+                .verify(&verifier)
+                .await
+                .is_err(),
+            "a quote whose report data no longer matches its signature must not verify"
+        );
+    }
+
     #[tokio::test]
     async fn rejects_report_data_longer_than_64_bytes() {
         let (state, _guard) = state().await;
