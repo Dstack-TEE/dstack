@@ -15,3 +15,7 @@ rm -rf "$B/var/log/apt"
 # Host keys must be unique per booted development VM, never shared by all
 # guests built from one image. OpenSSH generates them on first boot.
 rm -f "$B"/etc/ssh/ssh_host_*_key "$B"/etc/ssh/ssh_host_*_key.pub
+
+# Build outputs are merged after package installation, so refresh the final
+# rootfs cache after manually staged NVIDIA and container-runtime libraries.
+ldconfig -r "$B"

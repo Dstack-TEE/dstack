@@ -20,6 +20,12 @@ pub struct Machine<'a> {
     pub initrd: &'a str,
     pub kernel_cmdline: &'a str,
     pub two_pass_add_pages: Option<bool>,
+    /// Whether this image's OVMF normalizes the Linux setup header before
+    /// measuring the kernel. Defaults to `false`, which is the behavior of
+    /// every image built before the normalization landed; callers that have
+    /// the image metadata set it from `kernel_header_normalized`.
+    #[builder(default = false)]
+    pub normalized_setup_header: bool,
     pub pic: Option<bool>,
     pub qemu_version: Option<String>,
     #[builder(default = false)]
@@ -137,6 +143,7 @@ impl Machine<'_> {
             initrd_data.len() as u32,
             self.memory_size,
             0x28000,
+            self.normalized_setup_header,
         )?;
         debug_print_log("RTMR1", &rtmr1_log);
         let rtmr1 = measure_log(&rtmr1_log);

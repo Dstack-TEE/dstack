@@ -58,6 +58,8 @@ or-panic.workspace = true
 cc-eventlog.workspace = true
 listenfd.workspace = true
 libc.workspace = true
+cached-cell.workspace = true
+lspci.workspace = true
 
 [dev-dependencies]
 # The test-only mock platform builds attestations from a fixture, which needs

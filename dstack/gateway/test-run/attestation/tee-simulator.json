@@ -1,0 +1,5 @@
+{
+  "platform": "dstack-tdx",
+  "mock_attestation_seed": "4747474747474747474747474747474747474747474747474747474747474747",
+  "collateral_base_url": "http://mock-attestation:8088"
+}

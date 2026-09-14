@@ -52,7 +52,11 @@ rm -rf "$src" "$BUILD_DIR/kernel-build" "$STAGING/usr/lib/modules/$KERNEL_VERSIO
 tar -C "$BUILD_DIR" --no-same-owner -xf "$tarball"
 for patch in \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch" \
-  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch"; do
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0003-dma-direct-return-struct-page-from-alloc-from-pool.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0005-swiotlb-preserve-allocation-virtual-address.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0006-swiotlb-free-dynamic-pools-from-process-context.patch"; do
     patch -d "$src" -p1 --fuzz=0 < "$patch"
 done
 
@@ -62,6 +66,7 @@ make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" x86_64_defco
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" olddefconfig
 "$ROOT/os/common/scripts/check-kernel-config.sh" "$BUILD_DIR/kernel-build/.config" \
     "$MKOSI_DIR/components/kernel/kernel.config"
+"$ROOT/os/common/scripts/check-lxc-kernel-config.sh" "$BUILD_DIR/kernel-build/.config"
 make -C "$src" O="$BUILD_DIR/kernel-build" PAHOLE="$pahole_wrapper" -j"$JOBS" bzImage modules
 make -C "$src" O="$BUILD_DIR/kernel-build" \
     PAHOLE="$pahole_wrapper" INSTALL_MOD_PATH="$STAGING" modules_install

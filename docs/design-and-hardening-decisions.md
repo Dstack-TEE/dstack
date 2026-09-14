@@ -1,5 +1,11 @@
 # Design and Hardening Decisions in the dstack Yocto Layer
 
+> [!NOTE]
+> This document describes the deprecated Yocto backend. The default guest-OS
+> backend is mkosi (`os/mkosi/`); see
+> [`../os/mkosi/README.md`](../os/mkosi/README.md) for how its image is built
+> and where it differs.
+
 ## Overview
 
 The dstack-owned Yocto layer under `os/yocto/layers/meta-dstack/` is designed to create a minimally secure image for booting Confidential Virtual Machines (CVMs). Our design philosophy prioritizes attack surface reduction while maintaining TDX-aware functionality. This document outlines the architectural decisions and trade-offs made during development.

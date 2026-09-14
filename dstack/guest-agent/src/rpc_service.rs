@@ -143,12 +143,18 @@ impl AppStateInner {
         self.platform.attestation_for_info()
     }
 
-    async fn issue_cert(&self, key: &KeyPair, config: CertConfigV2) -> Result<Vec<String>> {
+    async fn issue_cert(
+        &self,
+        key: &KeyPair,
+        config: CertConfigV2,
+        wire: AttestationWire,
+    ) -> Result<Vec<String>> {
         let pubkey = key.public_key_der();
-        let attestation = self
-            .platform
-            .certificate_attestation(&pubkey)
-            .context("Failed to get certificate attestation")?;
+        let attestation = wire.apply(
+            self.platform
+                .certificate_attestation(&pubkey)
+                .context("Failed to get certificate attestation")?,
+        );
         let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),
             pubkey,
@@ -178,6 +184,8 @@ impl AppStateInner {
                     not_after: None,
                     not_before: None,
                 },
+                // Served only by the frozen v0 `Info` (`app_cert`).
+                AttestationWire::Legacy,
             )
             .await
             .context("Failed to get app cert")?
@@ -297,8 +305,15 @@ impl AppState {
             .quote_response(report_data, &self.inner.vm_config)
     }
 
-    pub(crate) fn attest_cvm(&self, report_data: [u8; 64]) -> Result<Vec<u8>> {
-        self.inner.platform.attest_cvm(report_data)?.to_bytes()
+    /// Encoded attestation bytes for `Attest`, in the wire form the calling
+    /// surface commits to.
+    pub(crate) fn attest_cvm(
+        &self,
+        report_data: [u8; 64],
+        wire: AttestationWire,
+    ) -> Result<Vec<u8>> {
+        wire.apply(self.inner.platform.attest_cvm(report_data)?)
+            .to_bytes()
     }
 
     /// The application's root secp256k1 key, the root of every derived key and
@@ -402,8 +417,9 @@ impl AppState {
         &self,
         key: &KeyPair,
         config: CertConfigV2,
+        wire: AttestationWire,
     ) -> Result<Vec<String>> {
-        self.inner.issue_cert(key, config).await
+        self.inner.issue_cert(key, config, wire).await
     }
 }
 
@@ -440,6 +456,35 @@ pub(crate) struct CertRequestFields {
     pub(crate) not_after: Option<u64>,
 }
 
+/// The wire form of an attestation the agent hands out, either directly
+/// (`Attest`) or embedded in a CSR and the certificate issued from it
+/// (`GetTlsKey`, `IssueCert`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttestationWire {
+    /// The v0.5.11 behaviour, for the frozen surfaces: legacy SCALE whenever
+    /// the attestation can be represented by it, MessagePack otherwise.
+    ///
+    /// Relying parties before 0.5.9 decode only SCALE. That includes a KMS
+    /// before 0.5.9 signing the CSR, and a source KMS before 0.5.9 verifying
+    /// the certificate a KMS onboards with.
+    Legacy,
+    /// Always the MessagePack V1 schema, for `dstack.guest.v1`. v1 has no
+    /// released client to stay compatible with, so it commits to one wire
+    /// format instead of letting the attestation's contents pick it.
+    MsgpackV1,
+}
+
+impl AttestationWire {
+    pub(crate) fn apply(self, attestation: VersionedAttestation) -> VersionedAttestation {
+        match self {
+            Self::Legacy => attestation,
+            Self::MsgpackV1 => VersionedAttestation::V1 {
+                attestation: attestation.into_v1(),
+            },
+        }
+    }
+}
+
 /// A freshly issued certificate and the key that backs it.
 pub(crate) struct IssuedCert {
     pub(crate) key: String,
@@ -453,6 +498,7 @@ pub(crate) struct IssuedCert {
 pub(crate) async fn issue_cert_for_request(
     state: &AppState,
     request: CertRequestFields,
+    wire: AttestationWire,
 ) -> Result<IssuedCert> {
     validate_cert_validity(request.not_before, request.not_after)?;
     let key = generate_cert_key()?;
@@ -467,7 +513,7 @@ pub(crate) async fn issue_cert_for_request(
         not_after: request.not_after,
         not_before: request.not_before,
     };
-    let certificate_chain = state.issue_cert(&key, config).await?;
+    let certificate_chain = state.issue_cert(&key, config, wire).await?;
     Ok(IssuedCert {
         key: key.serialize_pem(),
         certificate_chain,
@@ -578,6 +624,7 @@ impl DstackGuestRpc for InternalRpcHandler {
                 not_before: request.not_before,
                 not_after: request.not_after,
             },
+            AttestationWire::Legacy,
         )
         .await?;
         Ok(GetTlsKeyResponse {
@@ -756,7 +803,9 @@ impl DstackGuestRpc for InternalRpcHandler {
     async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
         Ok(AttestResponse {
-            attestation: self.state.attest_cvm(report_data)?,
+            attestation: self
+                .state
+                .attest_cvm(report_data, AttestationWire::Legacy)?,
         })
     }
 
@@ -824,7 +873,11 @@ impl TappdRpc for InternalRpcHandlerV0 {
             not_before: None,
             not_after: None,
         };
-        let certificate_chain = self.state.inner.issue_cert(&derived_key, config).await?;
+        let certificate_chain = self
+            .state
+            .inner
+            .issue_cert(&derived_key, config, AttestationWire::Legacy)
+            .await?;
         Ok(GetTlsKeyResponse {
             key: derived_key.serialize_pem(),
             certificate_chain,
@@ -1056,6 +1109,20 @@ pub(crate) mod tests {
         }
     }
 
+    /// The attestation embedded in a PEM certificate the agent issued, in the
+    /// wire form it was embedded with.
+    pub(crate) fn embedded_attestation(pem: &str) -> VersionedAttestation {
+        use base64::engine::general_purpose::STANDARD;
+        let body: String = pem
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .collect();
+        let der = STANDARD.decode(body).expect("certificate PEM body");
+        ra_tls::attestation::from_der(&der)
+            .expect("decode certificate attestation")
+            .expect("certificate carries an attestation")
+    }
+
     pub(crate) async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
         setup_test_state_with_platform(None).await
     }
@@ -1151,6 +1218,7 @@ pub(crate) mod tests {
             no_instance_id: false,
             secure_time: false,
             storage_fs: None,
+            storage_discard: true,
             swap_size: 0,
             event_log_version: EventLogVersion::V1,
             port_policy: Default::default(),
@@ -1270,6 +1338,10 @@ pNs85uhOZE8z2jr8Pg==
                 let report_data =
                     ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
                 let attestation = patch_report_data(&self.attestation, report_data);
+                // Same legacy mirroring as `attest_cvm` below.
+                if matches!(self.attestation, VersionedAttestation::V0 { .. }) {
+                    return Ok(attestation.try_into_legacy()?.into_versioned());
+                }
                 Ok(VersionedAttestation::V1 { attestation })
             }
 
@@ -1297,6 +1369,12 @@ pNs85uhOZE8z2jr8Pg==
 
             fn attest_cvm(&self, report_data: [u8; 64]) -> Result<VersionedAttestation> {
                 let attestation = patch_report_data(&self.attestation, report_data);
+                // Mirror `RealPlatform`: a dstack TDX attestation whose runtime
+                // events are all V1 comes out in the legacy form, which is the
+                // case the v1 handler has to re-encode.
+                if matches!(self.attestation, VersionedAttestation::V0 { .. }) {
+                    return Ok(attestation.try_into_legacy()?.into_versioned());
+                }
                 Ok(VersionedAttestation::V1 { attestation })
             }
         }
@@ -1539,6 +1617,42 @@ pNs85uhOZE8z2jr8Pg==
             err.to_string().contains("Intel TDX only"),
             "unexpected error: {err}"
         );
+    }
+
+    /// v0 `GetTlsKey` embeds the attestation in the legacy form it always
+    /// did, both in the CSR the KMS decodes and in the certificate it signs.
+    #[tokio::test]
+    async fn v0_get_tls_key_keeps_the_legacy_wire_format() {
+        let (state, _guard) = setup_test_state().await;
+        let response = InternalRpcHandler::new(state)
+            .get_tls_key(GetTlsKeyArgs {
+                subject: "example".to_string(),
+                usage_ra_tls: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let attestation = embedded_attestation(&response.certificate_chain[0]);
+        assert!(matches!(attestation, VersionedAttestation::V0 { .. }));
+    }
+
+    /// v0 `Attest` keeps the legacy SCALE form for an attestation it can
+    /// represent, so relying parties older than 0.5.9 and KMS onboarding from an
+    /// older source keep decoding it. The v1 counterpart lives in
+    /// `rpc_service_v1::tests::attest_always_returns_msgpack`.
+    #[tokio::test]
+    async fn v0_attest_keeps_the_legacy_wire_format() {
+        let (state, _guard) = setup_test_state().await;
+        let response = InternalRpcHandler::new(state)
+            .attest(RawQuoteArgs {
+                report_data: b"hello".to_vec(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.attestation.first(), Some(&0x00));
+        let attestation = VersionedAttestation::from_bytes(&response.attestation).unwrap();
+        assert!(matches!(attestation, VersionedAttestation::V0 { .. }));
+        assert_eq!(&attestation.into_v1().report_data().unwrap()[..5], b"hello");
     }
 
     #[tokio::test]

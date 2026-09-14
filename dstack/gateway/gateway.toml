@@ -60,7 +60,6 @@ insecure_enable_debug_rpc = false
 # arbitrary custom domains, so enabling this lets any DNS zone owner reach the
 # gateway's own loopback on a port of their choosing, bypassing port_policy.
 insecure_localhost_backend = false
-insecure_skip_attestation = false
 address = "127.0.0.1:8012"
 
 [core.wg]

@@ -21,6 +21,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The change detection below diffs against the base commit.
+          fetch-depth: 0
+
+      # Which files changed, decided here rather than with a workflow-level
+      # `paths:` filter.
+      #
+      # `sdk-tests` is a required status check. A workflow skipped by `paths:`
+      # reports nothing at all, so the check never arrives and the pull request
+      # waits on it forever -- the filter has to live inside a job that always
+      # runs and always reports. Everything expensive below is gated on this
+      # output; when nothing relevant moved the job costs a checkout and a diff.
+      #
+      # `dstack/` is in the pattern because `sdk/run-tests.sh` starts the
+      # simulator, which is built from that workspace -- these suites exercise
+      # the agent's wire surface, not just the client libraries. The whole
+      # directory rather than the simulator's dependency closure: the closure is
+      # a dozen crates deep and would go stale the first time a dependency
+      # moved, and a filter that silently stops covering something is worse than
+      # one that occasionally runs when it need not.
+      - name: Detect relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "push build: running everything"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA...HEAD")
+          echo "$changed"
+          if echo "$changed" | grep -qE '^(sdk/|dstack/|rust-toolchain\.toml|\.github/workflows/sdk\.yaml)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "nothing this job covers changed"
+          fi
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.92.0
@@ -29,14 +67,23 @@ jobs:
           # This additional target is needed for wasm32 compatibility check.
           targets: wasm32-unknown-unknown, thumbv6m-none-eabi
 
+      - name: Cache cargo
+        if: steps.changes.outputs.relevant == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/rust
+
       - name: SDK tests
+        if: steps.changes.outputs.relevant == 'true'
         run: cd sdk && ./run-tests.sh
 
       - name: Verify WASM compilation
+        if: steps.changes.outputs.relevant == 'true'
         # Ensures SDK types can be used in smart contracts
         run: cargo check --manifest-path sdk/rust/Cargo.toml --target=wasm32-unknown-unknown -p dstack-sdk-types
 
       - name: Verify no_std compatibility
+        if: steps.changes.outputs.relevant == 'true'
         run: |
           cargo test --manifest-path sdk/rust/Cargo.toml -p dstack-sdk-types --test no_std_test --no-default-features
           cargo check --manifest-path sdk/rust/Cargo.toml -p no_std_check --target thumbv6m-none-eabi

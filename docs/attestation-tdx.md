@@ -60,7 +60,8 @@ git checkout <release-revision>
 make os-image
 ```
 
-The resulting `dstack-<version>.tar.gz` contains:
+The resulting `os/mkosi/repro-build/build/out/prod/dstack-<version>.tar.gz`
+contains:
 
 - ovmf.fd: virtual firmware
 - bzImage: kernel image

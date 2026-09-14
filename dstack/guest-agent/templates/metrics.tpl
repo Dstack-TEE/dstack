@@ -40,15 +40,15 @@ dstack_guest_uptime_seconds {{system_info.uptime}}
 
 # HELP dstack_guest_load1 System load average over 1 minute.
 # TYPE dstack_guest_load1 gauge
-dstack_guest_load1 {{system_info.loadavg_one}}
+dstack_guest_load1 {{system_info.loadavg_one|load}}
 
 # HELP dstack_guest_load5 System load average over 5 minutes.
 # TYPE dstack_guest_load5 gauge
-dstack_guest_load5 {{system_info.loadavg_five}}
+dstack_guest_load5 {{system_info.loadavg_five|load}}
 
 # HELP dstack_guest_load15 System load average over 15 minutes.
 # TYPE dstack_guest_load15 gauge
-dstack_guest_load15 {{system_info.loadavg_fifteen}}
+dstack_guest_load15 {{system_info.loadavg_fifteen|load}}
 
 # HELP dstack_guest_disk_total_bytes Disk size in bytes.
 # TYPE dstack_guest_disk_total_bytes gauge
@@ -73,6 +73,79 @@ dstack_guest_disk_used_bytes{name="{{disk.name|prometheus_label}}", mount_point=
 {% for disk in system_info.disks %}
 dstack_guest_disk_used_ratio{name="{{disk.name|prometheus_label}}", mount_point="{{disk.mount_point|prometheus_label}}"} {% if disk.total_size > 0 %}{{(disk.total_size - disk.free_size) as f64 / disk.total_size as f64}}{% else %}0{% endif %}
 {% endfor %}
+
+# HELP dstack_gpu_nvml_up 1 if the last GPU sample succeeded, 0 otherwise.
+# TYPE dstack_gpu_nvml_up gauge
+dstack_gpu_nvml_up {% if gpu_info.error.is_empty() %}1{% else %}0{% endif %}
+
+{%- match gpu_info.sample_age_ms %}{% when Some with (age) %}
+
+# HELP dstack_gpu_sample_age_seconds Age of the GPU sample being served.
+# TYPE dstack_gpu_sample_age_seconds gauge
+dstack_gpu_sample_age_seconds {{ age as f64 / 1000.0 }}
+{%- when None %}{% endmatch %}
+
+{%- match gpu_info.cc_enabled %}{% when Some with (enabled) %}
+
+# HELP dstack_gpu_cc_enabled 1 if NVIDIA confidential computing is enabled.
+# TYPE dstack_gpu_cc_enabled gauge
+dstack_gpu_cc_enabled {% if enabled %}1{% else %}0{% endif %}
+{%- when None %}{% endmatch %}
+
+{%- match gpu_info.cc_ready %}{% when Some with (ready) %}
+
+# HELP dstack_gpu_cc_ready 1 if NVIDIA CC GPUs are accepting client requests.
+# TYPE dstack_gpu_cc_ready gauge
+dstack_gpu_cc_ready {% if ready %}1{% else %}0{% endif %}
+{%- when None %}{% endmatch %}
+
+# HELP dstack_gpu_utilization_percent GPU SM duty cycle, percent.
+# TYPE dstack_gpu_utilization_percent gauge
+{%- for gpu in gpu_info.gpus %}{% match gpu.utilization_gpu %}{% when Some with (value) %}
+dstack_gpu_utilization_percent{{ gpu|gpu_labels }} {{ value }}
+{%- when None %}{% endmatch %}{% endfor %}
+
+# HELP dstack_gpu_memory_utilization_percent GPU memory-bus duty cycle, percent.
+# TYPE dstack_gpu_memory_utilization_percent gauge
+{%- for gpu in gpu_info.gpus %}{% match gpu.utilization_memory %}{% when Some with (value) %}
+dstack_gpu_memory_utilization_percent{{ gpu|gpu_labels }} {{ value }}
+{%- when None %}{% endmatch %}{% endfor %}
+
+# HELP dstack_gpu_memory_total_bytes GPU framebuffer size in bytes.
+# TYPE dstack_gpu_memory_total_bytes gauge
+{%- for gpu in gpu_info.gpus %}{% match gpu.memory_total_bytes %}{% when Some with (value) %}
+dstack_gpu_memory_total_bytes{{ gpu|gpu_labels }} {{ value }}
+{%- when None %}{% endmatch %}{% endfor %}
+
+# HELP dstack_gpu_memory_used_bytes GPU framebuffer used in bytes.
+# TYPE dstack_gpu_memory_used_bytes gauge
+{%- for gpu in gpu_info.gpus %}{% match gpu.memory_used_bytes %}{% when Some with (value) %}
+dstack_gpu_memory_used_bytes{{ gpu|gpu_labels }} {{ value }}
+{%- when None %}{% endmatch %}{% endfor %}
+
+# HELP dstack_gpu_memory_free_bytes GPU framebuffer free in bytes.
+# TYPE dstack_gpu_memory_free_bytes gauge
+{%- for gpu in gpu_info.gpus %}{% match gpu.memory_free_bytes %}{% when Some with (value) %}
+dstack_gpu_memory_free_bytes{{ gpu|gpu_labels }} {{ value }}
+{%- when None %}{% endmatch %}{% endfor %}
+
+# HELP dstack_gpu_temperature_celsius GPU temperature in Celsius.
+# TYPE dstack_gpu_temperature_celsius gauge
+{%- for gpu in gpu_info.gpus %}{% match gpu.temperature_c %}{% when Some with (value) %}
+dstack_gpu_temperature_celsius{{ gpu|gpu_labels }} {{ value }}
+{%- when None %}{% endmatch %}{% endfor %}
+
+# HELP dstack_gpu_power_usage_milliwatts GPU power usage in milliwatts.
+# TYPE dstack_gpu_power_usage_milliwatts gauge
+{%- for gpu in gpu_info.gpus %}{% match gpu.power_usage_mw %}{% when Some with (value) %}
+dstack_gpu_power_usage_milliwatts{{ gpu|gpu_labels }} {{ value }}
+{%- when None %}{% endmatch %}{% endfor %}
+
+# HELP dstack_gpu_query_errors Number of NVML field queries that failed on this GPU.
+# TYPE dstack_gpu_query_errors gauge
+{%- for gpu in gpu_info.gpus %}
+dstack_gpu_query_errors{{ gpu|gpu_labels }} {{ gpu.errors.len() }}
+{%- endfor %}
 
 # Everything below is the pre-rename exposition, kept verbatim so existing
 # dashboards keep working through one release cycle. Deprecated: use the
@@ -132,15 +205,15 @@ system_uptime {{system_info.uptime}}
 
 # HELP system_load_average_1m System load average (1 minute) (deprecated: use dstack_guest_load1)
 # TYPE system_load_average_1m gauge
-system_load_average_1m {{system_info.loadavg_one}}
+system_load_average_1m {{system_info.loadavg_one|load}}
 
 # HELP system_load_average_5m System load average (5 minutes) (deprecated: use dstack_guest_load5)
 # TYPE system_load_average_5m gauge
-system_load_average_5m {{system_info.loadavg_five}}
+system_load_average_5m {{system_info.loadavg_five|load}}
 
 # HELP system_load_average_15m System load average (15 minutes) (deprecated: use dstack_guest_load15)
 # TYPE system_load_average_15m gauge
-system_load_average_15m {{system_info.loadavg_fifteen}}
+system_load_average_15m {{system_info.loadavg_fifteen|load}}
 
 # HELP disk_total_size Disk total size in bytes (deprecated: use dstack_guest_disk_total_bytes)
 # TYPE disk_total_size gauge

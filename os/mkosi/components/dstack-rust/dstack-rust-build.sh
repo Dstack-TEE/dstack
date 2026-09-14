@@ -7,8 +7,8 @@ DEST=$(realpath -m "$DEST")
 FLAVOR=${2:-prod}
 install -d "$DEST/usr/bin" "$DEST/usr/lib/systemd/system" \
   "$DEST/etc/systemd/journald.conf.d" "$DEST/etc/systemd/resolved.conf.d" \
-  "$DEST/etc/systemd/system/docker.service.d" \
-  "$DEST/etc/systemd/system/containerd.service.d" "$DEST/etc/sysctl.d"
+  "$DEST/usr/lib/systemd/system/docker.service.d" \
+  "$DEST/usr/lib/systemd/system/containerd.service.d" "$DEST/etc/sysctl.d"
 for s in dstack-prepare ephemeral-docker app-compose; do
   install -m0755 "$ROOT/os/common/rootfs/$s.sh" "$DEST/usr/bin/$s.sh"
 done
@@ -18,10 +18,11 @@ install -m0644 "$ROOT/os/common/rootfs/journald.conf" "$DEST/etc/systemd/journal
 install -m0644 "$ROOT/os/common/rootfs/llmnr.conf" "$DEST/etc/systemd/resolved.conf.d/dstack.conf"
 install -m0644 "$ROOT/os/common/rootfs/tdx-attest.conf" "$DEST/etc/"
 install -m0644 "$ROOT/os/common/rootfs/sysctl.d/99-dstack.conf" "$DEST/etc/sysctl.d/"
+# Vendor drop-ins go beside the units, not into the operator's /etc layer.
 install -m0644 "$ROOT/os/common/rootfs/docker.service.d/"* \
-  "$DEST/etc/systemd/system/docker.service.d/"
+  "$DEST/usr/lib/systemd/system/docker.service.d/"
 install -m0644 "$ROOT/os/common/rootfs/containerd.service.d/"* \
-  "$DEST/etc/systemd/system/containerd.service.d/"
+  "$DEST/usr/lib/systemd/system/containerd.service.d/"
 
 # Cargo.lock and --locked pin every registry/git dependency. The hermetic
 # mkosi build root may fetch missing inputs but cannot update the lock file.
@@ -77,7 +78,7 @@ if [[ ${DSTACK_SKIP_RUST:-0} != 1 ]]; then
     # else systemd never reads it and dstack-prepare loses its ordering against
     # the simulator that has to publish the TEE ABI first.
     install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-tee-simulator/files/tee-simulator.conf" \
-      "$DEST/etc/systemd/system/dstack-prepare.service.d/tee-simulator.conf"
+      "$DEST/usr/lib/systemd/system/dstack-prepare.service.d/tee-simulator.conf"
   fi
 fi
 find "$DEST" -print0 | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH:?}"

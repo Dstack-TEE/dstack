@@ -1,4 +1,6 @@
-FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
+# The payload shared with the mkosi backend lives in os/common/nvidia so neither
+# image backend reaches into the other's tree. See os/common/README.md.
+FILESEXTRAPATHS:prepend := "${THISDIR}/../../../../../common/nvidia:"
 
 # Only start the fabric manager when NVSwitch hardware is present, so the
 # service is silently skipped (not failed) on non-NVSwitch instances.

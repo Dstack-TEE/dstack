@@ -43,6 +43,14 @@ objcopy --remove-section=.gnu_debuglink "$lnc/libnvidia-container.so.1.18.1"
 install -m0755 "$lnc/nvidia-container-cli" "$STAGE/usr/bin/"
 install -Dm0755 "$lnc/libnvidia-container.so.1.18.1" "$STAGE/usr/lib/x86_64-linux-gnu/libnvidia-container.so.1.18.1"
 ln -sfn libnvidia-container.so.1.18.1 "$STAGE/usr/lib/x86_64-linux-gnu/libnvidia-container.so.1"
+# nvcgo (WITH_NVCGO=yes) builds the Go-side lib and installs it under
+# $lnc/deps/usr/local/lib (Makefile prefix=/usr/local). libnvidia-container.so.1
+# dlopen()s it at runtime -- it is not a DT_NEEDED, so ldd and
+# "nvidia-container-cli --version" never surface it; the OCI hook only fails at
+# GPU-container init when the dlopen misses. Ship it alongside the C lib.
+objcopy --remove-section=.gnu_debuglink "$lnc/deps/usr/local/lib/libnvidia-container-go.so.1.18.1"
+install -Dm0755 "$lnc/deps/usr/local/lib/libnvidia-container-go.so.1.18.1" "$STAGE/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1.18.1"
+ln -sfn libnvidia-container-go.so.1.18.1 "$STAGE/usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1"
 
 nct="$BUILD_DIR/nvidia-container-toolkit"
 checkout https://github.com/NVIDIA/nvidia-container-toolkit.git "$NVIDIA_CONTAINER_TOOLKIT_REVISION" "$nct"

@@ -9,6 +9,7 @@ pub mod backend;
 pub mod config;
 mod container_health;
 mod gpu_attest;
+mod gpu_info;
 mod guest_api_service;
 mod health;
 mod http_routes;

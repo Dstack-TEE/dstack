@@ -26,6 +26,7 @@ SRC_URI = "gitsm://github.com/tianocore/edk2.git;branch=master;protocol=https \
            file://0004-Reproduciable.patch \
            file://0005-UefiCpuPkg-CpuExceptionHandlerLib-fix-push-instructi.patch \
            file://0006-OvmfPkg-AmdSev-drop-embedded-grub.patch \
+           file://0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch \
            "
 
 # Pinned to edk2-stable202502 (Feb 2025) instead of the latest stable202505.
@@ -87,6 +88,11 @@ DEPENDS = "nasm-native acpica-native ovmf-native util-linux-native"
 # grub, and that grub cannot be built here anyway (OE has no x86_64-efi grub
 # modules / no sevsecret). The patch fails loud if a future edk2 bump changes
 # the AmdSev layout.
+#
+# 0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch zeroes the
+# setup-header fields QEMU writes as boot loader, so RTMR[1] no longer depends
+# on the host's QEMU version. It pairs with os/image/normalize-kernel-header.py,
+# which applies the same normalization to the shipped bzImage.
 OVMF_BUILD_SEV ??= "1"
 
 EDK_TOOLS_DIR="edk2_basetools"

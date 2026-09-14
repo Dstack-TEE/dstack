@@ -1,6 +1,10 @@
 SUMMARY = "NVidia Persistenced systemd service"
 LICENSE = "CLOSED"
 
+# The payload shared with the mkosi backend lives in os/common/nvidia so neither
+# image backend reaches into the other's tree. See os/common/README.md.
+FILESEXTRAPATHS:prepend := "${THISDIR}/../../../../../common/nvidia:"
+
 SRC_URI += "\
     file://nvidia-persistenced.service \
 "

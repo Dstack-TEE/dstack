@@ -22,8 +22,11 @@ KERNEL_IMAGETYPE = "bzImage"
 # Do NOT embed per-app dstack.mr_config_id here: AWS app/config binding is
 # measured from the shared-disk MrConfigV3 into NitroTPM PCR8 at guest setup,
 # so the UKI/AMI stays app-independent (PCR4 is OS-only).
+# Keep in sync with dstack_kernel_cmdline() in os/image/kernel-cmdline.sh, which
+# documents why pci=nommconf is absent (Blackwell needs PCIe extended config
+# space) and why pci=noearly stays.
 UKI_CMDLINE_BASE = "console=ttyS0 init=/init panic=1 net.ifnames=0 biosdevname=0 \
-mce=off oops=panic pci=noearly pci=nommconf random.trust_cpu=y random.trust_bootloader=n \
+mce=off oops=panic pci=noearly random.trust_cpu=y random.trust_bootloader=n \
 tsc=reliable no-kvmclock"
 
 # Flavor settings (should match dstack-rootfs.bb, set via multiconfig)

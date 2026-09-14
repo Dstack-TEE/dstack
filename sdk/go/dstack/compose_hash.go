@@ -120,6 +120,7 @@ type AppCompose struct {
 	Requirements            *Requirements   `json:"requirements,omitempty"`
 	InitScript              []string        `json:"init_script,omitempty"`
 	StorageFs               string          `json:"storage_fs,omitempty"`
+	StorageDiscard          *bool           `json:"storage_discard,omitempty"`
 	// SwapSize is a human size string, e.g. "2G", matching what the guest reads.
 	SwapSize        string         `json:"swap_size,omitempty"`
 	EventLogVersion *uint32        `json:"event_log_version,omitempty"`

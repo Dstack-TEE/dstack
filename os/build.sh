@@ -12,8 +12,8 @@ Usage: ${0##*/} [--backend NAME] [--flavors "FLAVOR ..."] [--build-dir DIR]
 Build dstack guest OS release artifacts with a selected backend.
 
 Available backends:
-  yocto    Reproducible Yocto build (default)
-  mkosi    Experimental pinned Debian/mkosi build
+  mkosi    Reproducible pinned Debian/mkosi build (default, recommended)
+  yocto    Legacy Yocto build (deprecated; do not use for new work)
 
 A backend lives at os/<name>/build.sh and implements the "image" action.
 The common image contract is documented in os/README.md.
@@ -21,7 +21,7 @@ EOF
 }
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-BACKEND=yocto
+BACKEND=mkosi
 FLAVORS=${FLAVORS:-prod}
 BUILD_DIR=
 

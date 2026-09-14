@@ -129,12 +129,70 @@ message DiskInfo {
   uint64 free_size = 5;
 }
 
+// One NVIDIA GPU sampled through NVML.
+//
+// Optional numeric fields are unset when that query failed, so a consumer can
+// tell a genuine zero from a missing sample. `errors` lists the failed queries
+// for this card, one entry each, so counting them does not mean re-parsing a
+// joined string.
+//
+// `uuid` is the stable identity; `index` and `pci_bus_id` are ordinal/location
+// helpers. `uuid` and `pci_bus_id` are plain strings rather than `optional`
+// because an empty value is already unambiguous: NVML never returns one, and
+// the matching `errors` entry names the query that failed. `index` is always
+// populated, so a device is identifiable even when both lookups fail.
+message GpuDevice {
+  // NVML device index (PCI order)
+  uint32 index = 1;
+  string uuid = 2;
+  // PCI BDF from nvmlPciInfo.busId
+  string pci_bus_id = 3;
+  // SM duty cycle, percent
+  optional uint32 utilization_gpu = 4;
+  // Memory-bus duty cycle, percent
+  optional uint32 utilization_memory = 5;
+  optional uint64 memory_total_bytes = 6;
+  optional uint64 memory_used_bytes = 7;
+  optional uint64 memory_free_bytes = 8;
+  optional uint32 temperature_c = 9;
+  optional uint32 power_usage_mw = 10;
+  // Failed queries for this card, one per entry; empty if all fields succeeded
+  repeated string errors = 11;
+}
+
+// GPU inventory collected through NVML.
+//
+// `error` is non-empty when NVML itself is unavailable, or when the sample
+// could not be taken at all. In that case `gpus` is empty. An empty `gpus`
+// with an empty `error` means the collector ran and the guest has no NVIDIA
+// GPUs.
+//
+// `cc_ready` and `cc_enabled` are both system-wide, not per device: NVML
+// exposes them as `nvmlSystemGetConfComputeGpusReadyState` and
+// `nvmlSystemGetConfComputeSettings`, which nvml-wrapper hangs off `Device`
+// without using the device handle. `cc_enabled` says the CC feature is turned
+// on; `cc_ready` says the SPDM handshake finished and the GPUs are accepting
+// client work. Both unset when the query is unsupported or failed.
+//
+// `sample_age_ms` is how old the returned sample is. The agent serves the last
+// known snapshot rather than nothing, so consumers must decide for themselves
+// how stale is too stale. Unset when the response carries no sample.
+message GpuInfoResponse {
+  repeated GpuDevice gpus = 1;
+  string error = 2;
+  optional bool cc_ready = 3;
+  optional bool cc_enabled = 4;
+  optional uint64 sample_age_ms = 5;
+}
+
 // Direct gRPC surface exposed by the in-guest agent.
 service GuestApi {
   // Returns attestation material and identifiers for the calling guest.
   rpc Info(google.protobuf.Empty) returns (GuestInfo);
   // Reports the guest's OS/kernel and resource statistics.
   rpc SysInfo(google.protobuf.Empty) returns (SystemInfo);
+  // Reports per-GPU utilization, memory, temperature, power, and CC ready state.
+  rpc GpuInfo(google.protobuf.Empty) returns (GpuInfoResponse);
   // Dumps NIC/Gateway configuration so operators can debug connectivity.
   rpc NetworkInfo(google.protobuf.Empty) returns (NetworkInformation);
   // Enumerates the containers running under the guest supervisor.
@@ -147,6 +205,7 @@ service GuestApi {
 service ProxiedGuestApi {
   rpc Info(Id) returns (GuestInfo);
   rpc SysInfo(Id) returns (SystemInfo);
+  rpc GpuInfo(Id) returns (GpuInfoResponse);
   rpc NetworkInfo(Id) returns (NetworkInformation);
   rpc ListContainers(Id) returns (ListContainersResponse);
   rpc Shutdown(Id) returns (google.protobuf.Empty);

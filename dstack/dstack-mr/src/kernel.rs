@@ -237,15 +237,35 @@ pub(crate) fn patched_kernel_authenticode_sha384(
     authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")
 }
 
-/// Measures a QEMU-patched TDX kernel image.
+/// Compute the first RTMR[1] event digest for an image whose OVMF normalizes
+/// the Linux setup header: the Authenticode SHA-384 of the kernel file itself.
+///
+/// Both sides zero the boot-loader-written fields --
+/// `os/image/normalize-kernel-header.py` in the image build and
+/// `0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch` in the
+/// firmware -- so what OVMF measures is the file, on every QEMU version and at
+/// every guest memory size.
+pub(crate) fn kernel_authenticode_sha384(kernel_data: &[u8]) -> Result<Vec<u8>> {
+    authenticode_sha384_hash(kernel_data).context("failed to compute kernel hash")
+}
+
+/// Measures the TDX kernel image OVMF loads.
+///
+/// `normalized_setup_header` says which kernel bytes OVMF ends up measuring:
+/// the kernel file as shipped when the image's firmware normalizes the setup
+/// header, otherwise QEMU's rewritten copy.
 pub(crate) fn rtmr1_log(
     kernel_data: &[u8],
     initrd_size: u32,
     mem_size: u64,
     acpi_data_size: u32,
+    normalized_setup_header: bool,
 ) -> Result<Vec<Vec<u8>>> {
-    let kernel_hash =
-        patched_kernel_authenticode_sha384(kernel_data, initrd_size, mem_size, acpi_data_size)?;
+    let kernel_hash = if normalized_setup_header {
+        kernel_authenticode_sha384(kernel_data)?
+    } else {
+        patched_kernel_authenticode_sha384(kernel_data, initrd_size, mem_size, acpi_data_size)?
+    };
     Ok(vec![
         kernel_hash,
         measure_sha384(b"Calling EFI Application from Boot Option"),
@@ -268,6 +288,56 @@ mod tests {
 
     fn initrd_addr(kernel: &[u8]) -> u32 {
         u32::from_le_bytes(kernel[0x218..0x21c].try_into().unwrap())
+    }
+
+    /// A minimal PE/COFF so `authenticode_sha384_hash` has something to walk.
+    fn pe_kernel() -> Vec<u8> {
+        let mut kernel = vec![0u8; 0x2000];
+        let lfanew = 0x40usize;
+        kernel[0x3c..0x40].copy_from_slice(&(lfanew as u32).to_le_bytes());
+        kernel[lfanew..lfanew + 4].copy_from_slice(&object::pe::IMAGE_NT_SIGNATURE.to_le_bytes());
+        let coff = lfanew + 4;
+        // SizeOfOptionalHeader, then PE32+ magic and SizeOfHeaders.
+        kernel[coff + 16..coff + 18].copy_from_slice(&0xf0u16.to_le_bytes());
+        let opt = coff + 20;
+        kernel[opt..opt + 2].copy_from_slice(&0x020bu16.to_le_bytes());
+        kernel[opt + 60..opt + 64].copy_from_slice(&0x400u32.to_le_bytes());
+        // Setup header: protocol 2.12, and a non-zero heap_end_ptr like a real
+        // build has, so the two branches cannot coincide by accident.
+        kernel[0x202..0x206].copy_from_slice(b"HdrS");
+        kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
+        // XLF_CAN_BE_LOADED_ABOVE_4G, so QEMU derives the initrd address from
+        // available low memory and the patched digest moves with guest RAM.
+        kernel[0x236..0x238].copy_from_slice(&0x0040u16.to_le_bytes());
+        kernel[0x224..0x226].copy_from_slice(&0x50a0u16.to_le_bytes());
+        kernel
+    }
+
+    /// The flag has to reach the digest, not just the struct: an image whose
+    /// firmware normalizes must measure the file, and one whose firmware does
+    /// not must measure QEMU's rewritten copy.
+    #[test]
+    fn the_normalized_flag_selects_which_kernel_bytes_are_measured() {
+        let kernel = pe_kernel();
+        let normalized = rtmr1_log(&kernel, 0x1000, 0x8000_0000, 0x28000, true).unwrap();
+        let patched = rtmr1_log(&kernel, 0x1000, 0x8000_0000, 0x28000, false).unwrap();
+        assert_ne!(normalized[0], patched[0]);
+        assert_eq!(normalized[0], kernel_authenticode_sha384(&kernel).unwrap());
+        assert_eq!(
+            patched[0],
+            patched_kernel_authenticode_sha384(&kernel, 0x1000, 0x8000_0000, 0x28000).unwrap()
+        );
+    }
+
+    /// Normalizing is what makes the digest independent of guest RAM, so the
+    /// two branches must disagree about that too.
+    #[test]
+    fn only_the_patched_digest_moves_with_guest_memory() {
+        let kernel = pe_kernel();
+        let at = |mem| rtmr1_log(&kernel, 0x1000, mem, 0x28000, true).unwrap()[0].clone();
+        assert_eq!(at(0x8000_0000), at(0xA000_0000));
+        let patched_at = |mem| rtmr1_log(&kernel, 0x1000, mem, 0x28000, false).unwrap()[0].clone();
+        assert_ne!(patched_at(0x8000_0000), patched_at(0xA000_0000));
     }
 
     #[test]

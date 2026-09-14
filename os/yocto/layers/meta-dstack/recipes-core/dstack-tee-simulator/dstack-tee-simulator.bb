@@ -52,9 +52,9 @@ do_install() {
     install -m 0644 ${THISDIR}/files/dstack-tee-simulator.service \
         ${D}${systemd_system_unitdir}
 
-    install -d ${D}${sysconfdir}/systemd/system/dstack-prepare.service.d
+    install -d ${D}${systemd_system_unitdir}/dstack-prepare.service.d
     install -m 0644 ${THISDIR}/files/tee-simulator.conf \
-        ${D}${sysconfdir}/systemd/system/dstack-prepare.service.d/tee-simulator.conf
+        ${D}${systemd_system_unitdir}/dstack-prepare.service.d/tee-simulator.conf
 }
 
 # Unit/drop-in live next to this recipe; include them in task checksums.
@@ -63,7 +63,7 @@ do_install[file-checksums] += "\
     ${THISDIR}/files/tee-simulator.conf:True \
 "
 
-FILES:${PN} += "${sysconfdir}/systemd/system/dstack-prepare.service.d/tee-simulator.conf"
+FILES:${PN} += "${systemd_system_unitdir}/dstack-prepare.service.d/tee-simulator.conf"
 
 # Cargo embeds build paths into binaries; allow TMPDIR references.
 INSANE_SKIP:${PN} += "buildpaths"

@@ -88,7 +88,7 @@ fn test_tdvf_parse_produces_correct_measurements() -> Result<()> {
     let firmware_path = image_dir.join(&image_info.bios).display().to_string();
     let kernel_path = image_dir.join(&image_info.kernel).display().to_string();
     let initrd_path = image_dir.join(&image_info.initrd).display().to_string();
-    let cmdline = image_info.cmdline + " initrd=initrd";
+    let cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
     eprintln!("Building machine configuration...");
     let machine = Machine::builder()

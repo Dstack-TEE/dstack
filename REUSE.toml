@@ -83,6 +83,7 @@ SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
 path = [
+    "os/common/nvidia/**",
     "os/common/rootfs/**",
     "os/common/scripts/**",
 ]

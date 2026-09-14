@@ -1,4 +1,12 @@
 /run/
 .env
 /e2e/dstack-gateway
+/cluster/dstack-gateway
+/cluster/run/
 __pycache__/
+/proxy-e2e/dstack-gateway
+/proxy-e2e/test_proxy.sh
+/proxy-e2e/proxy/
+/proxy-e2e/run/
+*.lock
+.suite.lock

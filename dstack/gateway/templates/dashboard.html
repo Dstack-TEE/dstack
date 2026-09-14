@@ -522,7 +522,7 @@ SPDX-License-Identifier: Apache-2.0
         </tr>
         <tr>
             <td>Account URI</td>
-            <td>{{ acme_info.account_uri }}</td>
+            <td id="acme-account-uri">{{ acme_info.account_uri }}</td>
         </tr>
         <tr>
             <td>Historical Certificate Public Keys</td>
@@ -548,6 +548,24 @@ SPDX-License-Identifier: Apache-2.0
                 <input type="text" id="certbot-acme-url" placeholder="https://acme-v02.api.letsencrypt.org/directory (default)">
             </td>
             <td>ACME server URL (empty = Let's Encrypt production)</td>
+        </tr>
+        <tr>
+            <td>ACME Account</td>
+            <td>
+                <button class="action-btn warning" onclick="rotateAcmeCredentials()">Register / Rotate</button>
+            </td>
+            <td>
+                Registers the shared ACME account. Every run registers a <em>new</em> one, so
+                <code>dns-persist-01</code> validation records and account-pinned CAA have to be
+                republished afterwards.
+            </td>
+        </tr>
+        <tr>
+            <td>Issuer Domain Name</td>
+            <td>
+                <input type="text" id="certbot-issuer-domain-name" placeholder="letsencrypt.org (default)">
+            </td>
+            <td>Name of the CA in dns-persist-01 and CAA records; must be one the ACME server advertises</td>
         </tr>
         <tr>
             <td>Renewal Interval</td>
@@ -761,6 +779,13 @@ SPDX-License-Identifier: Apache-2.0
                 </select>
             </div>
             <div class="modal-field">
+                <label>Validation Challenge</label>
+                <select id="edit-domain-challenge">
+                    <option value="dns-01">dns-01 (certbot writes DNS; needs a credential)</option>
+                    <option value="dns-persist-01">dns-persist-01 (one record published by hand; experimental)</option>
+                </select>
+            </div>
+            <div class="modal-field">
                 <label>Port (0 = default)</label>
                 <input type="number" id="edit-domain-port" placeholder="443" min="0" max="65535">
             </div>
@@ -779,6 +804,39 @@ SPDX-License-Identifier: Apache-2.0
         </div>
     </div>
 
+    <!-- DNS Records To Publish Modal -->
+    <div id="dns-records-modal" class="modal-overlay">
+        <div class="modal">
+            <h3>What is left to do</h3>
+            <div id="dns-records-repin" style="display: none;">
+                <p style="color: #b00;">
+                    The rotation succeeded and the cluster is on the new account, but these
+                    domains&#39; CAA records still name the old one, so nothing issues for them
+                    until a <code>SetCaa</code> run takes. Re-running the rotation would
+                    register yet another account against a rate-limited quota.
+                </p>
+                <pre id="dns-records-repin-list" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                <div class="modal-actions">
+                    <button class="action-btn warning" onclick="retryCaa()">Run SetCaa</button>
+                </div>
+            </div>
+            <div id="dns-records-publish">
+                <p style="color: #666;">
+                    This domain validates with <code>dns-persist-01</code>, so the gateway holds no
+                    DNS credential for it and cannot write these itself. Certificates are only
+                    issued once they are published.
+                </p>
+                <pre id="dns-records-list" style="white-space: pre-wrap; word-break: break-all;"></pre>
+                <div class="modal-actions">
+                    <button class="action-btn secondary" onclick="copyDnsRecords()">Copy</button>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn primary" onclick="hideModal('dns-records-modal')">Done</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Add ZT-Domain Modal -->
     <div id="add-zt-domain-modal" class="modal-overlay">
         <div class="modal">
@@ -791,6 +849,13 @@ SPDX-License-Identifier: Apache-2.0
                 <label>DNS Credential</label>
                 <select id="domain-dns-cred">
                     <option value="">Use Default</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label>Validation Challenge</label>
+                <select id="domain-challenge">
+                    <option value="dns-01">dns-01 (certbot writes DNS; needs a credential)</option>
+                    <option value="dns-persist-01">dns-persist-01 (one record published by hand; experimental)</option>
                 </select>
             </div>
             <div class="modal-field">
@@ -952,6 +1017,7 @@ SPDX-License-Identifier: Apache-2.0
                 });
                 const data = await response.json();
                 document.getElementById('certbot-acme-url').value = data.acme_url || '';
+                document.getElementById('certbot-issuer-domain-name').value = data.issuer_domain_name || '';
                 document.getElementById('certbot-renew-interval').value = data.renew_interval_secs || 43200;
                 document.getElementById('certbot-renew-before').value = data.renew_before_expiration_secs || 2592000;
                 document.getElementById('certbot-renew-timeout').value = data.renew_timeout_secs || 300;
@@ -962,6 +1028,7 @@ SPDX-License-Identifier: Apache-2.0
 
         async function saveCertbotConfig() {
             const acmeUrl = document.getElementById('certbot-acme-url').value.trim();
+            const issuerDomainName = document.getElementById('certbot-issuer-domain-name').value.trim();
             const renewInterval = parseInt(document.getElementById('certbot-renew-interval').value) || undefined;
             const renewBefore = parseInt(document.getElementById('certbot-renew-before').value) || undefined;
             const renewTimeout = parseInt(document.getElementById('certbot-renew-timeout').value) || undefined;
@@ -969,6 +1036,7 @@ SPDX-License-Identifier: Apache-2.0
             try {
                 const body = {};
                 if (acmeUrl !== undefined) body.acme_url = acmeUrl;
+                if (issuerDomainName !== undefined) body.issuer_domain_name = issuerDomainName;
                 if (renewInterval !== undefined) body.renew_interval_secs = renewInterval;
                 if (renewBefore !== undefined) body.renew_before_expiration_secs = renewBefore;
                 if (renewTimeout !== undefined) body.renew_timeout_secs = renewTimeout;
@@ -1227,6 +1295,7 @@ SPDX-License-Identifier: Apache-2.0
                         <th>Port</th>
                         <th>Node</th>
                         <th>Priority</th>
+                        <th>Challenge</th>
                         <th>DNS Credential</th>
                         <th>Status</th>
                         <th>Expires</th>
@@ -1239,7 +1308,12 @@ SPDX-License-Identifier: Apache-2.0
                 const certStatus = item.cert_status || {};
                 const hasCert = certStatus.has_cert;
                 const expiresAt = certStatus.not_after ? new Date(certStatus.not_after * 1000).toLocaleDateString() : 'N/A';
-                const dnsCredName = getDnsCredName(config.dns_cred_id);
+                const challenge = config.challenge || 'dns-01';
+                // A dns-persist-01 domain holds no credential by design, so
+                // naming one here would read as a misconfiguration.
+                const dnsCredName = challenge === 'dns-persist-01'
+                    ? 'None (published by hand)'
+                    : getDnsCredName(config.dns_cred_id);
                 const portDisplay = config.port ? config.port : '-';
                 const nodeDisplay = (config.node !== undefined && config.node !== null) ? `Node ${config.node}` : 'Any';
                 const priorityDisplay = config.priority || 0;
@@ -1250,6 +1324,7 @@ SPDX-License-Identifier: Apache-2.0
                         <td>${portDisplay}</td>
                         <td>${nodeDisplay}</td>
                         <td>${priorityDisplay}</td>
+                        <td>${escapeHtml(challenge)}</td>
                         <td>${escapeHtml(dnsCredName)}</td>
                         <td>
                             <div class="cert-status">
@@ -1262,6 +1337,7 @@ SPDX-License-Identifier: Apache-2.0
                         <td class="timestamp" data-original="${expiresAt}">${certStatus.not_after || 0}</td>
                         <td>
                             <button class="action-btn secondary" onclick="showEditZtDomainModal('${escapeHtml(config.domain)}')">Edit</button>
+                            ${challenge === 'dns-persist-01' ? `<button class="action-btn secondary" onclick="showZtDomainRecords('${escapeHtml(config.domain)}')">Records</button>` : ''}
                             <button class="action-btn warning" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', false)">Renew</button>
                             <button class="action-btn secondary" onclick="renewZtDomainCert('${escapeHtml(config.domain)}', true)">Force Renew</button>
                             <button class="action-btn danger" onclick="deleteZtDomain('${escapeHtml(config.domain)}')">Delete</button>
@@ -1297,6 +1373,10 @@ SPDX-License-Identifier: Apache-2.0
             document.getElementById('domain-port').value = '443';
             document.getElementById('domain-node').value = '0';
             document.getElementById('domain-priority').value = '0';
+            // Reset with the rest: a form whose every visible field was blanked
+            // reads as fresh, and a challenge left over from the last add is
+            // sent unconditionally.
+            document.getElementById('domain-challenge').value = 'dns-01';
             showModal('add-zt-domain-modal');
         }
 
@@ -1322,6 +1402,7 @@ SPDX-License-Identifier: Apache-2.0
             document.getElementById('edit-domain-port').value = config.port || 0;
             document.getElementById('edit-domain-node').value = (config.node !== undefined && config.node !== null) ? config.node : 0;
             document.getElementById('edit-domain-priority').value = config.priority || 0;
+            document.getElementById('edit-domain-challenge').value = config.challenge || 'dns-01';
 
             updateEditDnsCredSelect();
             document.getElementById('edit-domain-dns-cred').value = config.dns_cred_id || '';
@@ -1345,7 +1426,11 @@ SPDX-License-Identifier: Apache-2.0
             const body = {
                 domain: domain,
                 port: port,
-                priority: priority
+                priority: priority,
+                // UpdateZtDomain replaces the whole record and an omitted
+                // challenge decodes as dns-01, so editing anything else would
+                // silently downgrade a dns-persist-01 domain.
+                challenge: document.getElementById('edit-domain-challenge').value
             };
             // Only include dns_cred_id if not empty (empty means use default)
             if (dnsCredId) {
@@ -1389,7 +1474,9 @@ SPDX-License-Identifier: Apache-2.0
             const body = {
                 domain: domain,
                 port: port,
-                priority: priority
+                priority: priority,
+                // Chosen once, at creation; the edit form carries it forward.
+                challenge: document.getElementById('domain-challenge').value
             };
             // Only include dns_cred_id if not empty (empty means use default)
             if (dnsCredId) {
@@ -1409,9 +1496,25 @@ SPDX-License-Identifier: Apache-2.0
                     const err = await response.text();
                     throw new Error(err);
                 }
+                const added = await response.json();
                 hideModal('add-zt-domain-modal');
                 showToast('ZT-Domain added', 'success');
                 await loadZtDomains();
+                // Only for dns-persist-01: `required_dns_records` is non-empty
+                // for dns-01 too -- the CAA lines the gateway writes itself --
+                // and this dialog says the operator has to publish them.
+                if (body.challenge === 'dns-persist-01') {
+                    const records = added.required_dns_records || [];
+                    if (records.length === 0) {
+                        // Empty until the cluster has an ACME account: every
+                        // record names it. Saying so beats a success toast and
+                        // no dialog, because under this method the records the
+                        // operator publishes are the whole setup.
+                        showToast('No records yet \u2014 register an ACME account first', 'error');
+                    } else {
+                        showRequiredDnsRecords(records);
+                    }
+                }
             } catch (e) {
                 showToast('Failed to add ZT-Domain: ' + e.message, 'error');
             }
@@ -1468,6 +1571,103 @@ SPDX-License-Identifier: Apache-2.0
         }
 
         // ==================== UI Helpers ====================
+
+        async function rotateAcmeCredentials() {
+            const warning = [
+                'Register a new ACME account?',
+                '',
+                'This registers a new account at the CA, which is rate-limited, and rewrites the CAA records of every dns-01 domain to name it. Rewriting installs a temporary ";" guard and deletes the old records first, so a DNS provider failure part-way through can leave a domain with CAA that blocks all issuance until a later SetCaa succeeds.',
+                '',
+                'dns-persist-01 domains keep naming the old account until you republish their records by hand.'
+            ].join('\n');
+            if (!confirm(warning)) {
+                return;
+            }
+            try {
+                const response = await fetch('/prpc/Admin.RotateAcmeCredentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+                const result = await response.json();
+                // The account URI is server-rendered, so it would otherwise keep
+                // showing the account this rotation just replaced.
+                document.getElementById('acme-account-uri').textContent = result.account_uri;
+                showToast('ACME account: ' + result.account_uri, 'success');
+                await loadZtDomains();
+                // Everything still outstanding goes in the dialog, not a toast:
+                // a toast is gone in three seconds and the modal below would
+                // cover it, leaving a page that reads as a clean rotation. The
+                // response is the only place either list is reported.
+                showRequiredDnsRecords(result.required_dns_records, result.repin_failed_domains);
+            } catch (e) {
+                showToast('Failed to register ACME account: ' + e.message, 'error');
+            }
+        }
+
+        function showZtDomainRecords(domain) {
+            const item = ztDomains.find(d => d.config && d.config.domain === domain);
+            const records = item && item.required_dns_records;
+            if (!records || records.length === 0) {
+                // Empty until the cluster has an ACME account: every record
+                // names it. RotateAcmeCredentials registers one.
+                showToast('No records yet — register an ACME account first', 'error');
+                return;
+            }
+            showRequiredDnsRecords(records);
+        }
+
+        // Both halves of "this operation is not finished" in one dialog: the
+        // records only an operator can publish, and the domains whose CAA the
+        // gateway tried to re-pin and could not. A dns-01-only cluster has the
+        // second without the first, so either one alone still opens it.
+        function showRequiredDnsRecords(records, repinFailed) {
+            records = records || [];
+            repinFailed = repinFailed || [];
+            if (records.length === 0 && repinFailed.length === 0) {
+                return;
+            }
+            document.getElementById('dns-records-publish').style.display =
+                records.length > 0 ? '' : 'none';
+            document.getElementById('dns-records-list').textContent = records.join('\n');
+            document.getElementById('dns-records-repin').style.display =
+                repinFailed.length > 0 ? '' : 'none';
+            document.getElementById('dns-records-repin-list').textContent = repinFailed.join('\n');
+            showModal('dns-records-modal');
+        }
+
+        async function retryCaa() {
+            try {
+                const response = await fetch('/prpc/Admin.SetCaa', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                });
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+                // SetCaa raises on partial failure, so reaching here means every
+                // domain took. Unlike rotation it is idempotent, which is why
+                // this is the operation to repeat and rotation is not.
+                document.getElementById('dns-records-repin').style.display = 'none';
+                showToast('CAA re-pinned', 'success');
+            } catch (e) {
+                showToast('SetCaa failed, run it again: ' + e.message, 'error');
+            }
+        }
+
+        async function copyDnsRecords() {
+            const text = document.getElementById('dns-records-list').textContent;
+            try {
+                await navigator.clipboard.writeText(text);
+                showToast('Records copied', 'success');
+            } catch (e) {
+                showToast('Copy failed: ' + e.message, 'error');
+            }
+        }
 
         function showModal(id) {
             document.getElementById(id).classList.add('active');

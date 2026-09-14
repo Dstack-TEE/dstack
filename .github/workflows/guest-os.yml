@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: Build Guest Images (Yocto)
+# DEPRECATED: the Yocto backend is superseded by mkosi. Guest OS releases are
+# built by mkosi-build.yml; this workflow is kept only to rebuild legacy images.
+name: Build Guest Images (Yocto, deprecated)
 
 on:
   workflow_dispatch:
@@ -23,8 +25,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Build production guest OS
-        run: make os-image
+      - name: Build production guest OS (deprecated Yocto backend)
+        run: make os-image-yocto
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

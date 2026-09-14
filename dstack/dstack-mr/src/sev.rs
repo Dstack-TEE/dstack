@@ -320,7 +320,17 @@ fn build_sev_hashes_page(
     Ok(page)
 }
 
-fn measured_kernel_cmdline(input: &str) -> String {
+/// Normalize an image-provided kernel command line for AMD SEV-SNP.
+///
+/// Unlike TDX, SNP does **not** get OVMF's `initrd=initrd` suffix: with
+/// `kernel-hashes=on` QEMU builds the SEV hash table itself from the exact
+/// `-append` string instead of routing the initrd through OVMF's loader fs, so
+/// the measured command line is the one the VMM passed. This therefore only
+/// strips surrounding whitespace.
+///
+/// Do not confuse it with [`crate::tdx::measured_kernel_cmdline`], which does
+/// append the suffix. The two are not interchangeable.
+fn normalize_kernel_cmdline(input: &str) -> String {
     input.trim().to_string()
 }
 
@@ -674,7 +684,7 @@ pub fn compute_expected_measurement(input: &MeasurementInput) -> Result<[u8; 48]
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("vcpu_type is required"))?;
 
-    let cmdline = measured_kernel_cmdline(&input.base_cmdline);
+    let cmdline = normalize_kernel_cmdline(&input.base_cmdline);
     let resolved_sections = input
         .ovmf_sections
         .iter()
@@ -746,10 +756,10 @@ fn sev_os_image_measurement(
 ) -> Result<dstack_types::SevOsImageMeasurement> {
     // Validate that the measured command line commits the rootfs identity. The
     // compact image projection does not carry a separate rootfs_hash because it
-    // is already committed by `kernel_cmdline_sha256`.
+    // is already committed by the `base_cmdline` string itself.
     rootfs_hash_from_cmdline(Some(&input.base_cmdline))?;
     Ok(dstack_types::SevOsImageMeasurement {
-        base_cmdline: measured_kernel_cmdline(&input.base_cmdline),
+        base_cmdline: normalize_kernel_cmdline(&input.base_cmdline),
         ovmf_hash: decode_required_hex("ovmf_hash", &input.ovmf_hash, 48)?,
         kernel_hash: decode_required_hex("kernel_hash", &input.kernel_hash, 32)?,
         initrd_hash: effective_initrd_hash_from_hex(&input.initrd_hash)?,
@@ -862,11 +872,11 @@ pub fn sev_os_image_measurement_for_image_dir(
     let ovmf = ovmf_measurement_info(&image_dir.join(bios))?;
     // Validate that the measured command line commits the rootfs identity. The
     // compact image projection does not carry a separate rootfs_hash because it
-    // is already committed by `kernel_cmdline_sha256`.
+    // is already committed by the `base_cmdline` string itself.
     rootfs_hash_from_cmdline(meta.cmdline.as_deref())?;
 
     Ok(dstack_types::SevOsImageMeasurement {
-        base_cmdline: measured_kernel_cmdline(
+        base_cmdline: normalize_kernel_cmdline(
             meta.cmdline
                 .as_deref()
                 .context("metadata.json cmdline is required for amd sev-snp measurement")?,

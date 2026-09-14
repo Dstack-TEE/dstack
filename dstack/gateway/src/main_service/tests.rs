@@ -43,7 +43,7 @@ async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
     tweak(&mut config);
     let options = ProxyOptions {
         config,
-        my_app_id: None,
+        my_app_id: b"test-app-id".to_vec(),
         tls_config: TlsConfig {
             certs: "".to_string(),
             key: "".to_string(),
@@ -2133,8 +2133,8 @@ async fn a_poisoned_peer_record_costs_only_its_own_instance() {
 #[tokio::test]
 async fn a_cvm_registered_on_another_node_becomes_a_wg_peer_here() {
     let state = create_test_state().await;
-    // What a peer node allocated out of its own slice. `test-run/cluster.sh`
-    // and the e2e configs give each node a /24 of its own, so a peer's address
+    // What a peer node allocated out of its own slice. The `test-run` suites
+    // give each node a /24 of its own, so a peer's address
     // is outside this node's pool *and* outside its interface network — yet
     // every CVM is handed every gateway as a WireGuard server, so this node
     // still has to carry it.

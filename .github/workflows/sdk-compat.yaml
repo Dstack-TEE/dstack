@@ -7,11 +7,29 @@ name: SDK compatibility
 permissions:
   contents: read
 
+# Released SDKs against the current agent: nothing to re-check unless the SDKs
+# or the agent they talk to changed. Not a required status check, so a
+# workflow-level filter is safe.
+#
+# `dstack/**` rather than the guest-agent directories alone. The agent under
+# test is built through `simulator_start`, whose dependency closure reaches a
+# dozen crates in that workspace; naming the three obvious ones would leave the
+# rest silently uncovered the moment one of them changed behaviour.
 on:
   push:
     branches: [next, 'release/**']
+    paths:
+      - 'sdk/**'
+      - 'dstack/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/sdk-compat.yaml'
   pull_request:
     branches: [next, 'release/**']
+    paths:
+      - 'sdk/**'
+      - 'dstack/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/sdk-compat.yaml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,8 +42,40 @@ env:
   RUSTUP_TOOLCHAIN: 1.92.0
 
 jobs:
+  # The agent the released SDKs are tested against, built once.
+  #
+  # Both matrix legs call `simulator_start`, which builds
+  # `dstack-guest-agent-simulator` out of the current tree -- the same binary,
+  # from the same commit, compiled twice in parallel. Nothing here replaces that
+  # call or hands the legs a binary from elsewhere: they still build from their
+  # own checkout, so what they test is still what this commit produces. This job
+  # only puts the artifacts in the cache first, under a key both legs restore,
+  # so the build they run finds its work already done.
+  #
+  # A `needs:` rather than a skip switch in `simulator_build` on purpose. That
+  # switch would be a path where the binary under test did not come from the
+  # checkout, which is not worth trading for a few minutes.
+  simulator:
+    name: Build the agent under test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+          shared-key: sdk-compat-agent
+
+      - name: Build the simulator
+        run: ./sdk/simulator/build.sh
+
   sdk-compat:
     name: ${{ matrix.tag }} SDKs vs current agent
+    needs: simulator
     runs-on: ubuntu-latest
     strategy:
       # Each tag is an independent claim; one failing should not hide the other.
@@ -61,6 +111,16 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.92.0
+
+      # Restore only. The `simulator` job above populated this key; a leg that
+      # saved as well would race its twin for the same entry and gain nothing,
+      # since the next run's `simulator` job writes it again anyway.
+      - name: Restore the agent build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+          shared-key: sdk-compat-agent
+          save-if: false
 
       - name: Install Go
         uses: actions/setup-go@v5

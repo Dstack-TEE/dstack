@@ -16,6 +16,10 @@ fi
 THIS_SCRIPT=$(realpath "$THIS_SCRIPT")
 THIS_DIR=$(dirname "$THIS_SCRIPT")
 
+# DEPRECATED: the Yocto backend is superseded by os/mkosi.
+echo "WARNING: the Yocto guest-OS backend is deprecated; use the mkosi backend instead" >&2
+echo "WARNING: (make os-image, or ./os/build.sh --backend mkosi). See docs/building-guest-os.md." >&2
+
 LAYERS="$THIS_DIR/deps/meta-yocto/meta-poky \
     $THIS_DIR/deps/meta-yocto/meta-yocto-bsp \
     $THIS_DIR/deps/meta-confidential-compute \

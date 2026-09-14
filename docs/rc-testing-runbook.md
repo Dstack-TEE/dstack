@@ -287,7 +287,7 @@ req.json`, with `req.json` holding `{"attestation": "<hex>"}` captured from
 `/v1/Attest`, gives a full result offline. Flip one byte and re-run: a flip
 inside the report signature or the launch measurement must come back
 `VEK does not sign the attestation report`. Choose the byte deliberately —
-flipping into the outer CBOR framing instead fails at decode, which proves only
+flipping into the outer MessagePack framing instead fails at decode, which proves only
 that the parser works.
 
 ### One `curl` does not cover the proxy

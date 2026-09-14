@@ -20,59 +20,61 @@ fn detect_qemu_version(qemu_path: &PathBuf) -> Result<String> {
     let output = Command::new(qemu_path)
         .arg("--version")
         .output()
-        .context("Failed to execute qemu --version")?;
+        .context("failed to execute qemu --version")?;
 
     if !output.status.success() {
-        bail!("QEMU version command failed with status: {}", output.status);
+        bail!("qemu --version failed with status: {}", output.status);
     }
 
-    let version_output =
-        String::from_utf8(output.stdout).context("QEMU version output is not valid UTF-8")?;
+    // A wrapper script can print a banner before the version line, on either
+    // stream, so search both instead of just the first line of stdout.
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    parse_qemu_version_from_output(&combined).with_context(|| {
+        format!(
+            "unrecognized qemu --version output: {}",
+            first_lines(&combined)
+        )
+    })
+}
 
-    parse_qemu_version_from_output(&version_output)
-        .context("Could not parse QEMU version from output")
+/// A bounded excerpt of a command's output, for error messages.
+fn first_lines(output: &str) -> String {
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" | ")
+        .chars()
+        .take(200)
+        .collect()
+}
+
+fn looks_like_version(word: &str) -> bool {
+    word.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && (word.contains('.') || word.chars().all(|c| c.is_ascii_digit() || c == '-'))
+}
+
+/// QEMU's own wording: `QEMU emulator version 9.2.1 (Debian ...)`.
+fn version_after_qemu_marker(line: &str) -> Option<&str> {
+    let rest = line.split_once("QEMU emulator version ")?.1;
+    let word = rest.split_whitespace().next()?;
+    looks_like_version(word).then_some(word)
 }
 
 fn parse_qemu_version_from_output(output: &str) -> Result<String> {
-    // Parse version from output like:
-    // "QEMU emulator version 8.2.2 (Debian 2:8.2.2+ds-0ubuntu1.4+tdx1.0)"
-    // "QEMU emulator version 9.1.0"
+    // Only QEMU's own wording counts, wherever it appears. Guessing at a
+    // version-shaped word instead would read one out of a wrapper's banner.
     let version = output
         .lines()
-        .next()
-        .and_then(|line| {
-            let words: Vec<&str> = line.split_whitespace().collect();
-
-            // First try: Look for "version" keyword and get the next word (only if it looks like a version)
-            if let Some(version_idx) = words.iter().position(|&word| word == "version") {
-                if let Some(next_word) = words.get(version_idx + 1) {
-                    // Only use the word after "version" if it looks like a version number
-                    if next_word.chars().next().is_some_and(|c| c.is_ascii_digit())
-                        && (next_word.contains('.')
-                            || next_word.chars().all(|c| c.is_ascii_digit() || c == '-'))
-                    {
-                        return Some(*next_word);
-                    }
-                }
-            }
-
-            // Fallback: find first word that looks like a version number
-            words
-                .iter()
-                .find(|word| {
-                    // Check if word starts with digit and contains dots (version-like)
-                    word.chars().next().is_some_and(|c| c.is_ascii_digit())
-                        && (word.contains('.')
-                            || word.chars().all(|c| c.is_ascii_digit() || c == '-'))
-                })
-                .copied()
-        })
-        .context("Could not parse QEMU version from output")?;
-
-    // Extract just the version number (e.g., "8.2.2" from "8.2.2+ds-0ubuntu1.4+tdx1.0")
-    let clean_version = version.split('+').next().unwrap_or(version).to_string();
-
-    Ok(clean_version)
+        .find_map(version_after_qemu_marker)
+        .context("no `QEMU emulator version` line")?;
+    // "8.2.2+ds-0ubuntu1.4+tdx1.0" -> "8.2.2"
+    Ok(version.split('+').next().unwrap_or(version).to_string())
 }
 
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
@@ -255,6 +257,28 @@ impl CvmConfig {
     pub fn resolved_platform(&self) -> CvmPlatform {
         self.platform.unwrap_or_else(CvmPlatform::detect)
     }
+
+    /// The QEMU version to declare for a VM being started now.
+    ///
+    /// The verifier picks an ACPI table model from this, so it has to
+    /// describe the binary this start executes -- not one detected earlier
+    /// and cached across a package upgrade. An explicit config value wins;
+    /// otherwise the binary at `qemu_path` is asked. Neither available fails
+    /// the start, rather than booting a CVM that cannot be attested.
+    pub fn resolve_qemu_version(&self) -> Result<String> {
+        if let Some(version) = &self.qemu_version {
+            return Ok(version.clone());
+        }
+        let version = detect_qemu_version(&self.qemu_path).with_context(|| {
+            format!(
+                "failed to detect the QEMU version of {}; \
+                 set `qemu_version` in vmm.toml to declare it explicitly",
+                self.qemu_path.display()
+            )
+        })?;
+        info!("QEMU version: {version}");
+        Ok(version)
+    }
 }
 
 /// VMM-side policy for selecting the TDX attestation/hash scheme.
@@ -272,20 +296,31 @@ pub enum TdxAttestationVariantConfig {
 }
 
 impl TdxAttestationVariantConfig {
-    const TWO_GIB_MIB: u32 = 2 * 1024;
-    const THREE_GIB_MIB: u32 = 3 * 1024;
-
-    pub fn resolve(self, memory_mib: u32, image_supports_lite: bool) -> TdxAttestationVariant {
+    /// `auto` follows the image and nothing else.
+    ///
+    /// It used to also refuse lite below 3 GiB, exempting exactly 2 GiB,
+    /// because QEMU's setup-header rewrite moves the initrd with guest RAM and
+    /// so makes the patched kernel Authenticode hash memory-dependent. Images
+    /// whose OVMF normalizes the setup header measure the shipped `bzImage`
+    /// instead, which no guest RAM size can move, and that is every image the
+    /// build system can now produce: it hardcodes `kernel_header_normalized`
+    /// and fails when the OVMF patch does not apply.
+    ///
+    /// A pre-normalization image is the one case this no longer covers. The
+    /// no-download verifier still rejects those below the threshold, with an
+    /// error naming the memory sizes and telling the operator to re-emit the
+    /// image, so the failure is explicit rather than a silent mismatch. Set
+    /// `tdx_attestation_variant = "legacy"` to keep running one as is.
+    pub fn resolve(self, image_supports_lite: bool) -> TdxAttestationVariant {
+        use TdxAttestationVariant::{Legacy, Lite};
         match self {
-            Self::Legacy => TdxAttestationVariant::Legacy,
-            Self::Lite => TdxAttestationVariant::Lite,
+            Self::Legacy => Legacy,
+            Self::Lite => Lite,
             Self::Auto => {
-                if memory_mib < Self::THREE_GIB_MIB && memory_mib != Self::TWO_GIB_MIB {
-                    TdxAttestationVariant::Legacy
-                } else if image_supports_lite {
-                    TdxAttestationVariant::Lite
+                if image_supports_lite {
+                    Lite
                 } else {
-                    TdxAttestationVariant::Legacy
+                    Legacy
                 }
             }
         }
@@ -359,9 +394,10 @@ pub struct CvmConfig {
     pub qemu_hotplug_off: bool,
     /// TDX attestation/hash scheme policy. `legacy` keeps the existing
     /// digest.txt measurement path; `lite` opts into split measurement CBOR;
-    /// `auto` selects `legacy` for
-    /// CVMs below 3 GiB except exactly 2 GiB, otherwise uses `lite` when the
-    /// image carries TDX measurement material and falls back to `legacy`.
+    /// `auto` uses `lite` when the image carries TDX measurement material and
+    /// falls back to `legacy` when it does not. See
+    /// [`TdxAttestationVariantConfig::resolve`] for why memory size no longer
+    /// takes part.
     #[serde(default)]
     pub tdx_attestation_variant: TdxAttestationVariantConfig,
 
@@ -1238,21 +1274,6 @@ impl Config {
                 }
             }
             info!("QEMU path: {}", me.cvm.qemu_path.display());
-
-            // Detect QEMU version if not already set
-            match &me.cvm.qemu_version {
-                None => match detect_qemu_version(&me.cvm.qemu_path) {
-                    Ok(version) => {
-                        info!("Detected QEMU version: {version}");
-                        me.cvm.qemu_version = Some(version);
-                    }
-                    Err(e) => {
-                        warn!("Failed to detect QEMU version: {e}");
-                        // Continue without version - the system will use defaults
-                    }
-                },
-                Some(version) => info!("Configured QEMU version: {version}"),
-            }
         }
         Ok(me)
     }
@@ -1261,6 +1282,65 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn cvm_with_qemu(dir: &tempfile::TempDir, script: &str) -> CvmConfig {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.path().join("qemu-system-x86_64");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config: Config = Figment::from(load_config_figment(None)).extract().unwrap();
+        CvmConfig {
+            qemu_path: path,
+            qemu_version: None,
+            ..config.cvm
+        }
+    }
+
+    // Regression: a VMM staying up across a QEMU upgrade used to declare the
+    // version it detected at config load while executing the new binary.
+    #[cfg(unix)]
+    #[test]
+    fn qemu_version_follows_the_binary_at_qemu_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let cvm = cvm_with_qemu(&dir, "echo 'QEMU emulator version 10.1.0'");
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "10.1.0");
+
+        cvm_with_qemu(&dir, "echo 'QEMU emulator version 9.2.1'");
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "9.2.1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn explicit_qemu_version_wins_over_the_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cvm = cvm_with_qemu(&dir, "echo 'QEMU emulator version 9.2.1'");
+        cvm.qemu_version = Some("8.2.2".to_string());
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "8.2.2");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_wrapper_banner_does_not_hide_the_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let cvm = cvm_with_qemu(
+            &dir,
+            "echo 'wrapper: exec /usr/libexec/qemu-kvm' >&2; \
+             echo 'QEMU emulator version 9.2.1'",
+        );
+        assert_eq!(cvm.resolve_qemu_version().unwrap(), "9.2.1");
+    }
+
+    // A banner carrying a version-shaped word must not be mistaken for the
+    // QEMU version: a wrong guess boots a CVM that cannot be attested.
+    #[cfg(unix)]
+    #[test]
+    fn an_undetectable_qemu_version_fails_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let cvm = cvm_with_qemu(&dir, "echo 'wrapper: exec /usr/libexec/qemu-kvm-8.2.0'");
+        let err = format!("{:#}", cvm.resolve_qemu_version().unwrap_err());
+        assert!(err.contains("set `qemu_version` in vmm.toml"), "{err}");
+    }
 
     #[test]
     fn auto_restart_config_rejects_hot_loop_and_inverted_backoff() {
@@ -1328,10 +1408,9 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_qemu_version_fallback() {
+    fn test_parse_qemu_version_without_qemu_wording() {
         let output = "Some unusual format 8.1.5 with version info";
-        let version = parse_qemu_version_from_output(output).unwrap();
-        assert_eq!(version, "8.1.5");
+        assert!(parse_qemu_version_from_output(output).is_err());
     }
 
     #[test]
@@ -1375,30 +1454,13 @@ mod tests {
 
         use dstack_types::TdxAttestationVariant::{Legacy, Lite};
 
-        // Explicit settings bypass auto heuristics.
-        assert_eq!(
-            TdxAttestationVariantConfig::Legacy.resolve(2048, true),
-            Legacy
-        );
-        assert_eq!(TdxAttestationVariantConfig::Lite.resolve(1024, false), Lite);
+        // Explicit settings bypass auto entirely.
+        assert_eq!(TdxAttestationVariantConfig::Legacy.resolve(true), Legacy);
+        assert_eq!(TdxAttestationVariantConfig::Lite.resolve(false), Lite);
 
-        // Auto avoids lite for sub-3 GiB memory sizes except exactly 2 GiB.
-        assert_eq!(
-            TdxAttestationVariantConfig::Auto.resolve(1024, true),
-            Legacy
-        );
-        assert_eq!(
-            TdxAttestationVariantConfig::Auto.resolve(2816, true),
-            Legacy
-        );
-        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(2048, true), Lite);
-
-        // At 3 GiB and above, auto follows image support.
-        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(3072, true), Lite);
-        assert_eq!(
-            TdxAttestationVariantConfig::Auto.resolve(3072, false),
-            Legacy
-        );
+        // Auto follows image support alone; memory no longer takes part.
+        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(true), Lite);
+        assert_eq!(TdxAttestationVariantConfig::Auto.resolve(false), Legacy);
     }
 
     fn default_config() -> Config {

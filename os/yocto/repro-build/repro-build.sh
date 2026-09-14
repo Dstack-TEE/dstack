@@ -1,4 +1,6 @@
 #! /bin/bash
+# DEPRECATED: the Yocto backend is superseded by os/mkosi; see
+# os/mkosi/repro-build/repro-build.sh.
 set -e
 
 usage() {
@@ -24,6 +26,15 @@ while getopts ":n" opt; do
     esac
 done
 
+
+# The Yocto backend is deprecated in favor of os/mkosi. It is kept only so
+# existing Yocto images can still be rebuilt; new work must use mkosi.
+cat >&2 <<'DEPRECATED'
+WARNING: the Yocto guest-OS backend is deprecated. Use the mkosi backend:
+WARNING:   make os-image                      (containerized build)
+WARNING:   ./os/build.sh --backend mkosi      (native build)
+WARNING: See docs/building-guest-os.md.
+DEPRECATED
 
 BUILDER_NAME=dstack-build
 THIS_DIR=$(cd $(dirname $0); pwd)
@@ -83,7 +94,7 @@ set -e
 git clone https://github.com/Dstack-TEE/dstack.git
 cd dstack/
 git checkout $(git -C $THIS_DIR rev-parse HEAD)
-RELEASE_FLAVORS='${RELEASE_FLAVORS}' make os-image
+RELEASE_FLAVORS='${RELEASE_FLAVORS}' make os-image-yocto
 EOF
 echo "==========================="
 

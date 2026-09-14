@@ -411,6 +411,20 @@ verbose rm -rf "${OUTPUT_DIR}/"
 verbose mkdir -p "${OUTPUT_DIR}/"
 verbose cp "$INITRAMFS_IMAGE" "${OUTPUT_DIR}/initramfs.cpio.gz"
 verbose cp "$KERNEL_IMAGE" "${OUTPUT_DIR}/bzImage"
+# QEMU acts as the boot loader for -kernel and fills in the setup-header fields
+# the Linux boot protocol expects a boot loader to supply; OVMF measures the
+# result into RTMR[1]. QEMU >= 10.2 stopped doing that for confidential guests,
+# so leaving the header as built would make the same image measure differently
+# per QEMU version. Normalizing here, and again in OVMF before it measures,
+# makes RTMR[1] the plain Authenticode hash of this file. Runs before
+# tdx-measurement-cbor and sha256sum.txt below, so both cover the normalized
+# kernel. The matching half is in OVMF: metadata.json declares
+# kernel_header_normalized below, and what makes that declaration true is
+# 0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch, which this
+# same build applies -- ovmf-build.sh and the bitbake recipe both fail if it
+# does not apply. See os/image/README.md.
+verbose "$(dirname "${BASH_SOURCE[0]}")/normalize-kernel-header.py" \
+    "${OUTPUT_DIR}/bzImage"
 verbose cp "$OVMF_FIRMWARE" "${OUTPUT_DIR}/ovmf.fd"
 
 # AMD SEV firmware (additive). Shipped alongside the TDX firmware so a SEV-SNP
@@ -459,7 +473,8 @@ cat <<EOF > "${OUTPUT_DIR}/metadata.json"
     "builder": "$BACKEND",
     "shared_ro": true,
     "is_dev": ${IS_DEV},
-    "ovmf_variant": "$OVMF_VARIANT"
+    "ovmf_variant": "$OVMF_VARIANT",
+    "kernel_header_normalized": true
 }
 EOF
 

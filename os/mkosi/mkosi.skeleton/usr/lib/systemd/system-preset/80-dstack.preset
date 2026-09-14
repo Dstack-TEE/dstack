@@ -11,6 +11,7 @@ enable dstack-guest-agent.socket
 enable dstack-guest-agent.service
 enable app-compose.service
 enable dstack-gateway-checker.service
+enable nvidia-module-options.service
 enable nvidia-persistenced.service
 enable nvidia-fabricmanager.service
 enable containerd-stargz-grpc.service

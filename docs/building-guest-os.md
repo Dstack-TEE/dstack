@@ -6,6 +6,16 @@ image. You do **not** need to build an image for normal self-hosted onboarding:
 `dstackup install` downloads and verifies a published guest-OS release by
 default.
 
+> [!IMPORTANT]
+> **mkosi is the default and recommended OS backend.** The Yocto backend under
+> `os/yocto/` is **deprecated**. It remains only so existing Yocto images can
+> still be rebuilt. Do not use it for new images, new features, or release
+> work. See [Deprecated: Yocto backend](#deprecated-yocto-backend).
+>
+> The mkosi build still reads some patches, units, and scripts from
+> `os/yocto/`, so that directory must not be deleted yet; see
+> [`../os/README.md`](../os/README.md).
+
 ## What the build produces
 
 The default `prod` build produces:
@@ -16,19 +26,26 @@ The default `prod` build produces:
 - dm-verity rootfs data, launch-measurement material, checksums, and the unified
   `digest.txt` OS identity.
 
-Yocto is currently the only implemented OS backend. Backend-independent rootfs
-payload, artifact contract, measurement, and release packaging live outside
-`os/yocto/`; see [`../os/README.md`](../os/README.md).
+The mkosi backend lives in `os/mkosi/`. Backend-independent rootfs payload,
+artifact contract, measurement, and release packaging live outside the backend;
+see [`../os/README.md`](../os/README.md). Backend internals, the
+reproducibility model, and the component cache are described in
+[`../os/mkosi/README.md`](../os/mkosi/README.md).
 
 ## Prerequisites
 
 Use an x86-64 Linux host with:
 
 - Git;
-- Docker Engine, usable by the current user;
-- outbound HTTPS access for Git, Yocto source archives, and Rust crates;
-- substantial free disk space for Yocto downloads, work directories, and
-  shared-state cache.
+- Docker Engine, usable by the current user, that can run `--privileged`
+  containers (mkosi needs loop devices, device-mapper, and mounts);
+- outbound HTTPS access for the pinned Debian snapshot, upstream source
+  archives, and Rust crates;
+- tens of gigabytes of free disk space on a regular filesystem (not overlayfs)
+  for the build directory.
+
+No Rust, Go, C, or C++ toolchain is needed on the host; every compiler is pinned
+and runs inside mkosi's build overlay.
 
 TEE hardware is not required to build the image. It is required only when you
 boot and attest the resulting image on the corresponding platform.
@@ -51,42 +68,37 @@ cd dstack
 make os-image
 ```
 
-`make os-image` initializes only the eight Yocto dependency submodules and
-runs one complete production image build in the pinned Ubuntu builder
-container. It is equivalent to:
+`make os-image` runs one complete, cold production image build in a container
+that pins mkosi and the host tools it drives. It needs no submodules and is
+equivalent to:
 
 ```bash
-git submodule update --init --depth 1 -- \
-  os/yocto/deps/bitbake \
-  os/yocto/deps/openembedded-core \
-  os/yocto/deps/meta-yocto \
-  os/yocto/deps/meta-confidential-compute \
-  os/yocto/deps/meta-virtualization \
-  os/yocto/deps/meta-openembedded \
-  os/yocto/deps/meta-rust-bin \
-  os/yocto/deps/meta-security
-
-cd os/yocto/repro-build
-./repro-build.sh -n
+./os/mkosi/repro-build/repro-build.sh
 ```
 
-The first build downloads and compiles the complete Yocto toolchain and guest
-userspace, so it is much slower than an incremental rebuild. The `-n` option
-means “build once”; it does not skip BitBake or image assembly.
+The build refuses to run from a dirty worktree, because the recorded source
+revision would not describe the compiled sources. Commit or stash changes
+first. (Native `os/mkosi/build.sh` builds also accept `DSTACK_ALLOW_DIRTY=1`,
+which records the revision as `-modified`; the containerized build does not
+forward it.)
+
+A cold production build takes roughly 30–45 minutes on a 16-job host,
+depending mostly on network speed.
 
 ## Outputs
 
-Release archives are written under:
+Release artifacts are written under:
 
 ```text
-os/yocto/repro-build/dist/
+os/mkosi/repro-build/build/out/prod/
+├── dstack-<version>/
 ├── dstack-<version>.tar.gz
-├── dstack-<version>-uki.tar.gz
-└── reproduce.sh
+└── dstack-<version>-uki.tar.gz
 ```
 
-`reproduce.sh` is emitted when the source tree is clean. The unpacked build
-tree and caches remain under `os/yocto/repro-build/build-a/`.
+To use a different build directory, run
+`./os/mkosi/repro-build/repro-build.sh -o DIR`. When the build finishes it
+prints the `os_image_hash` and the SHA-256 of both archives.
 
 The bare-metal archive includes the kernel, initramfs, OVMF firmware,
 partitioned dm-verity rootfs, platform measurement CBOR files,
@@ -97,7 +109,7 @@ Inspect and verify an archive with:
 
 ```bash
 mkdir -p /tmp/dstack-image
-tar -xzf os/yocto/repro-build/dist/dstack-<version>.tar.gz \
+tar -xzf os/mkosi/repro-build/build/out/prod/dstack-<version>.tar.gz \
   -C /tmp/dstack-image
 cd /tmp/dstack-image/dstack-<version>
 sha256sum -c sha256sum.txt
@@ -109,112 +121,102 @@ test "$(sha256sum sha256sum.txt | awk '{print $1}')" = "$(cat digest.txt)"
 Production is the default. To build both variants once:
 
 ```bash
-cd os/yocto/repro-build
-RELEASE_FLAVORS="prod dev" ./repro-build.sh -n
+FLAVORS="prod dev" ./os/mkosi/repro-build/repro-build.sh
 ```
 
-The development archive is named `dstack-dev-<version>.tar.gz` and records
-`"is_dev": true` in `metadata.json`.
+The development archive is written to `out/dev/dstack-dev-<version>.tar.gz`
+and records `"is_dev": true` in `metadata.json`.
 
 ## Check reproducibility
 
-For a release candidate, omit `-n`:
+For a release candidate:
 
 ```bash
 make os-repro-check
 ```
 
-This builds independent `build-a` and `build-b` trees and compares the
-release-relevant output allowlist. It takes roughly twice the resources of a
-single build. Remove both ignored build trees if you specifically need a
-from-scratch comparison:
-
-```bash
-rm -rf os/yocto/repro-build/build-a \
-       os/yocto/repro-build/build-b \
-       os/yocto/repro-build/dist
-make os-repro-check
-```
+This performs two cold production builds in different build paths and with
+different job counts, then compares both release archives byte for byte. It
+takes roughly twice the resources of a single build. The first leg's artifacts
+remain under `os/mkosi/repro-build/build/a/`.
 
 ## Incremental backend development
 
-The reproducible wrapper is the recommended release path. On a host with the
-packages listed in `os/yocto/repro-build/Dockerfile.repro`, the generic
-backend entrypoint can also be used directly from the repository root:
+The containerized build is the recommended release path. On a host with the
+pinned mkosi version (see `MKOSI_VERSION` in `os/mkosi/versions.env`) and the
+packages reported by `mkosi --directory os/mkosi dependencies`, and with root
+privileges (or a working user namespace), the backend can be driven directly:
 
 ```bash
-./os/build.sh \
-  --backend yocto \
-  --flavors prod \
-  --build-dir "$PWD/os/yocto/bb-build"
+./os/mkosi/build.sh lint                                  # static contract, seconds
+./os/mkosi/build.sh image "$PWD/os/mkosi/build"           # cached iteration build
+./os/mkosi/build.sh --no-cache image "$PWD/os/mkosi/build"  # cold build
+./os/build.sh --flavors "prod dev" --build-dir "$PWD/os/mkosi/build"
 ```
 
-This keeps the native BitBake cache in `os/yocto/bb-build/` and writes
-assembled images under the repository-root `images/` directory. Build both
-flavors with `--flavors "prod dev"`.
+A native `image` build reuses a component-output cache by default and skips the
+release tarballs; `disk.raw`, the measurements, and `metadata.json` are still
+produced. Pass `--archive` to get the tarballs from a cached build, or
+`--no-cache` for a release-equivalent cold build. See
+[`../os/mkosi/README.md`](../os/mkosi/README.md) for cache details.
 
-The generic entrypoint dispatches to `os/<backend>/build.sh`. A future
-backend such as mkosi can implement the same artifact-manifest contract without
-changing the common assembler or release consumers.
+The generic entrypoint `os/build.sh` dispatches to `os/<backend>/build.sh` and
+defaults to `mkosi`.
 
 ## Troubleshooting
-
-### A dependency directory is empty
-
-Run:
-
-```bash
-make os-deps
-git submodule status -- os/yocto/deps
-```
-
-Every listed dependency should start with a space, not `-`.
 
 ### Docker permission is denied
 
 Ensure `docker version` works as the same non-root user that owns the
-checkout. Do not run only part of the build as root; mixed ownership in
-`build-a/` makes incremental builds difficult to repair.
+checkout. The build container runs privileged and hands ownership of the build
+directory back to the calling user when it exits.
 
-### A fetch task fails
+### The workspace is on overlayfs
 
-Yocto fetches many upstream sources. Preserve `build-a/`, confirm outbound
-network and DNS access, then rerun `make os-image`; completed downloads and
-tasks are reused.
+mkosi assembles its build root as an overlayfs, which cannot be stacked on
+another overlayfs. Choose a build directory on a regular filesystem with
+`./os/mkosi/repro-build/repro-build.sh -o DIR`.
 
-### `docker-compose do_fetch` repeatedly shows 0–100%
+### A fetch fails
 
-This is not one archive being downloaded in a loop. Docker Compose has hundreds
-of independently checksummed Go-module sources, while BitBake's terminal
-percentage describes only the current source URL. The percentage therefore
-returns to zero for every module even though the task timer and PID stay the
-same.
-
-Let the first fetch finish. If it is interrupted, rerun the same command;
-completed files have `.done` markers in the build directory's `downloads/`
-cache and are not downloaded again. To confirm which URL is currently being
-fetched during a native `make os` build, inspect the latest task log:
-
-```bash
-find os/yocto/bb-build/tmp-mc-* -path '*docker-compose/*/temp/log.do_fetch' \
-  -print -exec tail -n 5 {} \;
-```
+Confirm outbound network and DNS access, then rerun the same command. Package
+downloads come from an immutable Debian snapshot, so a retry fetches identical
+content.
 
 ### The disk fills up
 
-The largest disposable directories are:
+The disposable build directories are:
 
 ```text
-os/yocto/repro-build/build-a/
-os/yocto/repro-build/build-b/
-os/yocto/bb-build/
+os/mkosi/repro-build/build/
+os/mkosi/build/
+~/.cache/dstack/mkosi-dev/        # native component cache
 ```
 
-They are ignored by Git and can be removed when no build is running. Keep
-`dist/` separately if you need the release archives.
+They are ignored by Git (or live outside the checkout) and can be removed when
+no build is running. Copy the release archives elsewhere first if you need
+them.
 
-### `reproduce.sh` is missing
+## Deprecated: Yocto backend
 
-The image archives are still valid. The wrapper intentionally skips generating
-`reproduce.sh` when `git status --porcelain` reports a dirty source tree,
-because that script can reproduce only committed source revisions.
+> [!WARNING]
+> The Yocto backend is deprecated and will be removed. Do not use it for new
+> images or releases, and do not add features to it. Every build entrypoint
+> prints a deprecation warning. Files under `os/yocto/` that the mkosi build
+> still reads remain live inputs of the default image until they are moved.
+
+The Yocto backend is kept only so existing Yocto-built images can still be
+rebuilt and verified. Its entrypoints have moved to explicitly named targets:
+
+| Deprecated command | Replacement |
+|--------------------|-------------|
+| `make os-image-yocto` | `make os-image` |
+| `make os-repro-check-yocto` | `make os-repro-check` |
+| `make os-yocto` / `./os/build.sh --backend yocto` | `make os` / `./os/build.sh` |
+| `make os-deps` | not needed; mkosi uses no submodules |
+
+`make os-image-yocto` initializes the eight Yocto dependency submodules and runs
+`os/yocto/repro-build/repro-build.sh -n` in its pinned Ubuntu builder container.
+Archives are written to `os/yocto/repro-build/dist/`; use
+`RELEASE_FLAVORS="prod dev"` to build both flavors. See
+[`../os/yocto/README.md`](../os/yocto/README.md) for the remaining details.

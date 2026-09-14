@@ -58,6 +58,13 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
     let handler = GuestApiHandler::construct(context)
         .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
     let system_info = handler.sys_info().await.unwrap_or_default();
+    // Only sampled when the page will actually render it. Asking otherwise
+    // would spawn a collector on guests that keep their sysinfo private.
+    let gpu_info = if public_sysinfo {
+        crate::gpu_info::gpu_info()
+    } else {
+        Default::default()
+    };
 
     let containers = list_containers().await.unwrap_or_default().containers;
     let model = crate::models::Dashboard {
@@ -74,6 +81,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         public_tcbinfo,
         cloud_vendor,
         cloud_product,
+        gpu_info,
     };
     match model.render() {
         Ok(html) => Ok(RawHtml(html)),
@@ -93,7 +101,11 @@ async fn metrics(state: &State<AppState>) -> Result<String, String> {
         .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
 
     let system_info = handler.sys_info().await.unwrap_or_default();
-    let model = crate::models::Metrics { system_info };
+    let gpu_info = crate::gpu_info::gpu_info();
+    let model = crate::models::Metrics {
+        system_info,
+        gpu_info,
+    };
     match model.render() {
         Ok(body) => Ok(body),
         Err(err) => Err(format!("Failed to render template: {err}")),

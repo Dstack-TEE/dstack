@@ -1,20 +1,22 @@
-# Experimental mkosi backend
+# mkosi backend
 
-This is an experimental Debian/mkosi implementation of the dstack guest OS.
-It is not yet a replacement for the release Yocto backend. Its acceptance
-target is functional parity with the Yocto image, not merely release archive
-compatibility. `parity.json` is the machine-checked inventory used by a build.
+This is the default and recommended Debian/mkosi implementation of the dstack
+guest OS, and the backend used to build guest-OS releases. It replaces the
+deprecated Yocto backend under `../yocto/`; new images, features, and fixes
+belong here. Its acceptance target is functional parity with the Yocto image,
+not merely release archive compatibility. `parity.json` is the machine-checked
+inventory used by a build.
 
 The backend builds the same dstack services plus the pinned Yocto component
-set: Linux 6.18, NVIDIA 595.58.03 (open modules, userspace, firmware, Fabric
+set: Linux 6.18, NVIDIA 595.91.07 (open modules, userspace, firmware, Fabric
 Manager and NSCQ), nvattest 2026.06.09 with the OCSP-freshness patch, OpenZFS
 2.4.0, Sysbox 0.6.7, NVIDIA Container Toolkit, nerdctl, CNI plugins and
 stargz-snapshotter 0.18.2.
 
-The kernel tracks the same series as the production Yocto backend
+The kernel tracks the same series as the deprecated Yocto backend
 (`PREFERRED_VERSION_linux-yocto` in `meta-dstack`), which `tests/acceptance.sh`
 enforces. That is what keeps the component set patch-free: ZFS 2.4.0 declares
-`Linux-Maximum: 6.18` and the NVIDIA 595.58.03 open modules build against this
+`Linux-Maximum: 6.18` and the NVIDIA 595.91.07 open modules build against this
 series unmodified, so neither carries an out-of-tree compatibility patch that
 production does not also carry.
 
@@ -58,8 +60,8 @@ mkosi needs for loop devices, device-mapper and mounts. It pins the last layer
 the backend itself does not: mkosi and the host tools it drives.
 
 ```sh
-make os-image-mkosi          # single production build
-make os-repro-check-mkosi    # build twice, compare byte for byte
+make os-image                # single production build
+make os-repro-check          # build twice, compare byte for byte
 ./os/mkosi/repro-build/repro-build.sh -o /path/to/build-dir
 ```
 
@@ -68,7 +70,7 @@ The native interface remains available when those host tools are present:
 ```sh
 ./os/mkosi/build.sh lint
 ./os/mkosi/build.sh image "$PWD/os/mkosi/build"
-./os/build.sh --backend mkosi --build-dir "$PWD/os/mkosi/build"
+./os/build.sh --build-dir "$PWD/os/mkosi/build"   # mkosi is the default backend
 ./os/mkosi/build.sh repro-check "$PWD/os/mkosi/repro"
 # QEMU smoke-test the assembled UKI disk (host OVMF path is distro-specific)
 qemu-system-x86_64 -machine q35 -m 2G -nographic \

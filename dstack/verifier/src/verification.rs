@@ -183,6 +183,11 @@ fn collect_rtmr_mismatch(
 
 // Bump whenever expected RTMR computation changes so stale entries get ignored.
 // v3: all supported OVMF measurements use the Pre202505 RTMR[0] layout.
+//
+// Setup-header normalization did not need a bump: images that predate it are
+// measured exactly as before, and normalized images are new images whose
+// `os_image_hash` -- part of the `VmConfig` this key hashes -- has never been
+// cached.
 const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -199,6 +204,7 @@ struct ImagePaths {
     kernel_cmdline: String,
     is_dev: bool,
     version: String,
+    kernel_header_normalized: bool,
 }
 
 pub struct CvmVerifier {
@@ -313,6 +319,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        kernel_header_normalized: bool,
     ) -> Result<TdxMeasurementDetails> {
         let firmware = fw_path.display().to_string();
         let kernel = kernel_path.display().to_string();
@@ -332,6 +339,7 @@ impl CvmVerifier {
             .root_verity(true)
             .hotplug_off(vm_config.hotplug_off)
             .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+            .normalized_setup_header(kernel_header_normalized)
             .maybe_pic(vm_config.pic)
             .maybe_qemu_version(vm_config.qemu_version.clone())
             .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -361,6 +369,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        kernel_header_normalized: bool,
     ) -> Result<TdxMeasurements> {
         self.compute_measurement_details(
             vm_config,
@@ -368,6 +377,7 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            kernel_header_normalized,
         )
         .map(|details| details.measurements)
     }
@@ -379,6 +389,7 @@ impl CvmVerifier {
         kernel_path: &Path,
         initrd_path: &Path,
         kernel_cmdline: &str,
+        kernel_header_normalized: bool,
     ) -> Result<TdxMeasurements> {
         let cache_key = Self::vm_config_cache_key(vm_config)?;
 
@@ -392,6 +403,7 @@ impl CvmVerifier {
             kernel_path,
             initrd_path,
             kernel_cmdline,
+            kernel_header_normalized,
         )?;
 
         if let Err(e) = self.store_measurements_in_cache(&cache_key, &measurements) {
@@ -636,7 +648,7 @@ impl CvmVerifier {
         let fw_path = image_dir.join(&image_info.bios);
         let kernel_path = image_dir.join(&image_info.kernel);
         let initrd_path = image_dir.join(&image_info.initrd);
-        let kernel_cmdline = image_info.cmdline + " initrd=initrd";
+        let kernel_cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
         Ok(ImagePaths {
             image_dir,
@@ -646,6 +658,7 @@ impl CvmVerifier {
             kernel_cmdline,
             is_dev: image_info.is_dev,
             version: image_info.version,
+            kernel_header_normalized: image_info.kernel_header_normalized,
         })
     }
 
@@ -666,6 +679,7 @@ impl CvmVerifier {
             &image_paths.kernel_path,
             &image_paths.initrd_path,
             &image_paths.kernel_cmdline,
+            image_paths.kernel_header_normalized,
         )
     }
 
@@ -944,6 +958,7 @@ impl CvmVerifier {
                     &image_paths.kernel_path,
                     &image_paths.initrd_path,
                     &image_paths.kernel_cmdline,
+                    image_paths.kernel_header_normalized,
                 )
                 .context("Failed to compute expected measurements")?;
 
@@ -962,6 +977,7 @@ impl CvmVerifier {
                     &image_paths.kernel_path,
                     &image_paths.initrd_path,
                     &image_paths.kernel_cmdline,
+                    image_paths.kernel_header_normalized,
                 )
                 .context("Failed to compute expected measurements")?,
                 None,
@@ -2242,6 +2258,402 @@ mod tests {
             response.details.tee_variant,
             Some(ra_tls::attestation::TeeVariant::DstackTdx)
         );
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
+
+    /// The guest agent's v1 surfaces always hand out the MessagePack V1 schema,
+    /// while every captured fixture is the legacy SCALE form. Re-encoding a
+    /// fixture as V1 must not change a single verification outcome: the same
+    /// quote, event log, image and ACPI checks run, and they reach the same
+    /// verdict with the same details.
+    #[tokio::test]
+    async fn msgpack_and_scale_encodings_verify_identically() {
+        let fixtures = [
+            (
+                "tdx-lite",
+                include_str!("../fixtures/tdx-lite-attestation.json"),
+            ),
+            (
+                "tdx-lite-normalized",
+                include_str!("../fixtures/tdx-lite-normalized-attestation.json"),
+            ),
+            (
+                "tdx-lite-normalized-qemu-10-2",
+                include_str!("../fixtures/tdx-lite-normalized-qemu-10-2-attestation.json"),
+            ),
+            (
+                "sev-snp",
+                include_str!("../fixtures/sev-snp-attestation.json"),
+            ),
+        ];
+
+        for (name, fixture) in fixtures {
+            let request: VerificationRequest =
+                serde_json::from_str(fixture).expect("verifier fixture parses");
+            let scale = request
+                .attestation
+                .clone()
+                .expect("fixture carries an attestation");
+            let legacy = VersionedAttestation::from_bytes(&scale).expect("fixture decodes");
+            assert!(
+                matches!(legacy, VersionedAttestation::V0 { .. }),
+                "{name}: fixture is expected to be the legacy form"
+            );
+            let msgpack = VersionedAttestation::V1 {
+                attestation: legacy.into_v1(),
+            }
+            .to_bytes()
+            .expect("attestation re-encodes as V1");
+            assert!(
+                matches!(msgpack.first(), Some(0x80..=0x8f | 0xde | 0xdf)),
+                "{name}: re-encoded attestation is not a MessagePack map"
+            );
+
+            let mut responses = Vec::new();
+            for attestation in [scale, msgpack] {
+                let cache = tempfile::tempdir().expect("temp cache dir");
+                let verifier = CvmVerifier::new(
+                    cache.path().join("cache").display().to_string(),
+                    "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+                    Duration::from_secs(1),
+                    test_attestation_verifier(),
+                );
+                let response = verifier
+                    .verify(VerificationRequest {
+                        attestation: Some(attestation),
+                        ..request.clone()
+                    })
+                    .await
+                    .expect("verifier runs");
+                assert!(response.is_valid, "{name}: {:?}", response.reason);
+                assert!(response.details.quote_verified, "{name}");
+                assert!(response.details.event_log_verified, "{name}");
+                assert!(response.details.os_image_hash_verified, "{name}");
+                responses.push(serde_json::to_value(&response).expect("response serializes"));
+            }
+            assert_eq!(
+                responses[0], responses[1],
+                "{name}: MessagePack and SCALE encodings verified differently"
+            );
+        }
+    }
+
+    /// Verify one attestation through the full `CvmVerifier` path with image
+    /// download disabled, and require every check to pass.
+    async fn verify_lite_attestation(name: &str, attestation: Vec<u8>) -> serde_json::Value {
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+        let response = verifier
+            .verify(VerificationRequest {
+                quote: None,
+                event_log: None,
+                vm_config: None,
+                attestation: Some(attestation),
+                debug: None,
+            })
+            .await
+            .expect("verifier runs");
+        assert!(response.is_valid, "{name}: {:?}", response.reason);
+        assert!(response.details.quote_verified, "{name}");
+        assert!(response.details.event_log_verified, "{name}");
+        assert!(response.details.os_image_hash_verified, "{name}");
+        assert!(response.details.acpi_tables_verified, "{name}");
+        serde_json::to_value(&response).expect("response serializes")
+    }
+
+    fn fixture_attestation(fixture: &str) -> Vec<u8> {
+        let request: VerificationRequest =
+            serde_json::from_str(fixture).expect("verifier fixture parses");
+        request.attestation.expect("fixture carries an attestation")
+    }
+
+    fn is_msgpack_v1(bytes: &[u8]) -> bool {
+        matches!(
+            VersionedAttestation::from_bytes(bytes),
+            Ok(VersionedAttestation::V1 { .. })
+        ) && matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf))
+    }
+
+    /// Captured from a real TDX CVM: `/v1/Attest` and the frozen `/Attest`
+    /// asked for the same report data in the same boot. The platform produced
+    /// the legacy form (V1 runtime events), so the v1 bytes are the guest
+    /// agent's own MessagePack re-encoding, and they must verify to exactly the
+    /// response the legacy bytes do.
+    #[tokio::test]
+    async fn verifies_real_v1_attest_identically_to_v0_from_the_same_boot() {
+        let v1 = fixture_attestation(include_str!("../fixtures/tdx-lite-v1-attest.json"));
+        let v0 = fixture_attestation(include_str!("../fixtures/tdx-lite-v0-attest.json"));
+        assert!(is_msgpack_v1(&v1), "/v1/Attest must be MessagePack V1");
+        assert_eq!(v0.first(), Some(&0x00), "/Attest must be legacy SCALE");
+
+        let v1_response = verify_lite_attestation("v1 Attest", v1).await;
+        let v0_response = verify_lite_attestation("v0 Attest", v0).await;
+        assert_eq!(
+            v1_response, v0_response,
+            "v1 and v0 Attest from one boot verified differently"
+        );
+    }
+
+    /// Captured from the same boot: the certificate chains `/v1/IssueCert`
+    /// and the frozen `/GetTlsKey` returned with `usage_ra_tls` set, signed by
+    /// the CVM's local CA. The v1 leaf embeds MessagePack V1. Each leaf must
+    /// chain to its CA, pass RA-TLS verification with the report data bound to
+    /// its own public key, and carry an attestation that passes the full image
+    /// check -- and both must name the same CVM.
+    #[tokio::test]
+    async fn verifies_real_v1_issue_cert_chain_and_embedded_attestation() {
+        use ra_tls::traits::CertExt as _;
+
+        let mut identities = Vec::new();
+        for (name, pem, expect_v1) in [
+            (
+                "v1 IssueCert",
+                include_str!("../fixtures/tdx-lite-v1-issue-cert.pem"),
+                true,
+            ),
+            (
+                "v0 GetTlsKey",
+                include_str!("../fixtures/tdx-lite-v0-get-tls-key.pem"),
+                false,
+            ),
+        ] {
+            let chain: Vec<_> = x509_parser::pem::Pem::iter_from_buffer(pem.as_bytes())
+                .map(|pem| pem.expect("PEM block parses"))
+                .collect();
+            assert_eq!(chain.len(), 2, "{name}: leaf and CA");
+            let leaf = chain[0].parse_x509().expect("leaf parses");
+            let ca = chain[1].parse_x509().expect("CA parses");
+            leaf.verify_signature(Some(ca.public_key()))
+                .unwrap_or_else(|err| panic!("{name}: leaf is not signed by its CA: {err}"));
+
+            let embedded = leaf
+                .get_extension_bytes(ra_tls::oids::PHALA_RATLS_ATTESTATION)
+                .expect("extension reads")
+                .expect("leaf carries an attestation");
+            assert_eq!(is_msgpack_v1(&embedded), expect_v1, "{name}: wire form");
+
+            let verified =
+                ra_tls::attestation::verify_der(&chain[0].contents, &test_attestation_verifier())
+                    .await
+                    .unwrap_or_else(|err| panic!("{name}: RA-TLS verification failed: {err:#}"));
+            assert_eq!(
+                verified.public_key_der,
+                leaf.public_key().raw,
+                "{name}: attestation must be bound to the leaf key"
+            );
+
+            let response = verify_lite_attestation(name, embedded).await;
+            identities.push(response["details"]["app_info"].clone());
+        }
+        assert_eq!(
+            identities[0], identities[1],
+            "v1 and v0 certificates from one boot name different CVMs"
+        );
+    }
+
+    /// The certificate verification must not be vacuous: a leaf whose embedded
+    /// attestation was captured for a different key is rejected.
+    #[tokio::test]
+    async fn rejects_a_real_v1_certificate_attestation_bound_to_another_key() {
+        let v1_leaf = x509_parser::pem::Pem::iter_from_buffer(
+            include_str!("../fixtures/tdx-lite-v1-issue-cert.pem").as_bytes(),
+        )
+        .next()
+        .expect("leaf present")
+        .expect("PEM block parses");
+        let v0_leaf = x509_parser::pem::Pem::iter_from_buffer(
+            include_str!("../fixtures/tdx-lite-v0-get-tls-key.pem").as_bytes(),
+        )
+        .next()
+        .expect("leaf present")
+        .expect("PEM block parses");
+        // The v1 attestation checked against the v0 leaf's key: same quote, same
+        // CVM, wrong binding.
+        let v1_cert = v1_leaf.parse_x509().expect("leaf parses");
+        let v0_cert = v0_leaf.parse_x509().expect("leaf parses");
+        let attestation = ra_tls::attestation::from_der(&v1_leaf.contents)
+            .expect("extension decodes")
+            .expect("leaf carries an attestation");
+        assert!(is_msgpack_v1(
+            &attestation.clone().to_bytes().expect("re-encodes")
+        ));
+        assert_ne!(v1_cert.public_key().raw, v0_cert.public_key().raw);
+        let err = attestation
+            .into_v1()
+            .verify_with_ra_pubkey(v0_cert.public_key().raw, &test_attestation_verifier())
+            .await
+            .err()
+            .expect("an attestation bound to another key must not verify");
+        assert!(
+            err.to_string().contains("report data mismatch"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// Rebuild the fixture's measurement document around a different kernel
+    /// command line, keeping every hash that commits to it consistent:
+    /// `measurement.tdx.cbor`, its `sha256sum.txt` entry, and the
+    /// `os_image_hash` over that file. Nothing in the image-identity chain can
+    /// object to the result.
+    fn forge_command_line(attestation: &mut ra_tls::attestation::Attestation, suffix: &str) {
+        use sha2::{Digest, Sha256};
+
+        let mut config: serde_json::Value =
+            serde_json::from_str(&attestation.config).expect("vm_config parses");
+        let mut document: dstack_types::TdxOsImageMeasurementDocument =
+            serde_json::from_value(config["tdx_measurement"].clone())
+                .expect("tdx_measurement parses");
+
+        let mut measurement =
+            dstack_types::TdxOsImageMeasurement::from_cbor_slice(&document.measurement)
+                .expect("measurement decodes");
+        let previous = Sha256::digest(&document.measurement);
+        measurement.image.base_cmdline.push_str(suffix);
+        document.measurement = measurement.to_cbor_vec();
+
+        let checksum = String::from_utf8(document.checksum_file).expect("checksum file is utf-8");
+        let mut rewritten = String::new();
+        for line in checksum.lines() {
+            let (hash, name) = line.split_once("  ").expect("checksum line");
+            if name == "measurement.tdx.cbor" {
+                assert_eq!(hash, hex::encode(previous), "fixture checksum is stale");
+                rewritten.push_str(&hex::encode(Sha256::digest(&document.measurement)));
+            } else {
+                rewritten.push_str(hash);
+            }
+            rewritten.push_str("  ");
+            rewritten.push_str(name);
+            rewritten.push('\n');
+        }
+        document.checksum_file = rewritten.into_bytes();
+
+        config["os_image_hash"] =
+            serde_json::json!(hex::encode(Sha256::digest(&document.checksum_file)));
+        config["tdx_measurement"] = serde_json::to_value(&document).expect("document serializes");
+        attestation.config = config.to_string();
+    }
+
+    /// The document carries the kernel command line itself, not a digest of it,
+    /// so nothing stops a host from writing a different one and rebuilding
+    /// every hash that commits to it. What stops it is RTMR[2], which the CVM
+    /// extended with the command line it was actually booted with.
+    ///
+    /// This forges exactly that: an image identity that is internally
+    /// consistent and therefore passes every `os_image_hash` check. Only the
+    /// measurement comparison can reject it.
+    #[tokio::test]
+    async fn tdx_lite_rejects_a_self_consistent_forged_command_line() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
+                .expect("TDX lite verifier fixture parses");
+        let bytes = request.attestation.expect("fixture carries an attestation");
+
+        let mut attestation =
+            match VersionedAttestation::from_bytes(&bytes).expect("attestation decodes") {
+                VersionedAttestation::V0 { attestation } => attestation,
+                VersionedAttestation::V1 { .. } => {
+                    panic!("fixture is expected to be a legacy attestation")
+                }
+            };
+        forge_command_line(&mut attestation, " forged=1");
+        let forged = VersionedAttestation::V0 { attestation }
+            .to_bytes()
+            .expect("attestation re-encodes");
+
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier
+            .verify(VerificationRequest {
+                quote: None,
+                event_log: None,
+                vm_config: None,
+                attestation: Some(forged),
+                debug: None,
+            })
+            .await
+            .expect("verifier runs");
+
+        assert!(!response.is_valid, "a forged command line must not verify");
+        assert!(!response.details.os_image_hash_verified);
+        let reason = response.reason.unwrap_or_default();
+        assert!(
+            reason.contains("RTMR2 mismatch"),
+            "expected the command line to be caught by RTMR[2], got: {reason}"
+        );
+    }
+
+    /// Captured from a CVM whose OVMF normalizes the Linux setup header, so
+    /// RTMR[1] is the plain Authenticode hash of the shipped kernel. The host
+    /// ran QEMU 8.2.2 -- a version that *does* rewrite the header -- so this
+    /// only passes if the firmware actually undid that rewrite.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_with_normalized_kernel_header() {
+        let request: VerificationRequest = serde_json::from_str(include_str!(
+            "../fixtures/tdx-lite-normalized-attestation.json"
+        ))
+        .expect("normalized TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
+
+    /// The same image as the fixture above, captured on QEMU 10.2.1 -- a
+    /// version that does *not* rewrite the setup header. Its RTMR[1] is
+    /// byte-for-byte the one the 8.2.2 capture produced, which is the whole
+    /// point of normalizing: the digest no longer depends on the host's QEMU.
+    /// MRTD and RTMR[0] do differ, because page-add ordering and the generated
+    /// ACPI tables genuinely are version-specific.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_with_normalized_kernel_header_on_qemu_10_2() {
+        let request: VerificationRequest = serde_json::from_str(include_str!(
+            "../fixtures/tdx-lite-normalized-qemu-10-2-attestation.json"
+        ))
+        .expect("QEMU 10.2 normalized TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
         assert!(
             !image_cache_dir.exists(),
             "TDX lite verification must not download or cache OS images"

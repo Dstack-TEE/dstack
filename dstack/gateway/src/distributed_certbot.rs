@@ -11,7 +11,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use certbot::{AcmeClient, Dns01Client};
+use certbot::{
+    advisory_dns_wait, resolve_issuer_domain_name, AcmeAccount, AcmeClient, ChallengeKind,
+    Dns01Client, ValidationMethod,
+};
 use dstack_guest_agent_rpc::v0::RawQuoteArgs;
 use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
@@ -32,6 +35,73 @@ const ROTATION_LOCK_TIMEOUT_SECS: u64 = 600;
 
 /// Default ACME URL (Let's Encrypt production)
 const DEFAULT_ACME_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
+
+/// How long a `dns-persist-01` domain waits for its record to become visible.
+///
+/// A `dns-01` domain reads this from its DNS credential; a `dns-persist-01`
+/// domain has none, so it starts from the same 300s a credential defaults to
+/// and is clamped by [`advisory_dns_wait`] like every other domain.
+const DNS_PERSIST_MAX_DNS_WAIT: Duration = Duration::from_secs(300);
+
+/// What an ACME credential rotation left behind.
+#[derive(Debug)]
+pub struct RotationOutcome {
+    /// URI of the new ACME account.
+    pub account_uri: String,
+    /// Domains whose CAA could not be re-pinned to the new account.
+    pub repin_failed: Vec<String>,
+    /// Domains whose CAA records were re-pinned to the new account.
+    pub domains_updated: usize,
+    /// Records an operator has to publish by hand, for domains the gateway
+    /// cannot write. Non-empty means issuance for those domains is broken until
+    /// they are published.
+    pub required_dns_records: Vec<String>,
+}
+
+/// What the CAA re-pin pass over a rotation's domains produced.
+///
+/// The three numbers a rotation reports are all derived from one tally, so they
+/// cannot disagree: `total` counts every domain the rotation covered, `manual`
+/// the ones a re-pin was never attempted for -- a `dns-persist-01` domain has
+/// no CAA the gateway can write -- and `failed` the ones that were tried and
+/// did not take.
+#[derive(Debug, Default)]
+struct RepinTally {
+    /// Domains skipped because the gateway cannot write their DNS.
+    manual: usize,
+    /// Domains a re-pin was attempted for and failed.
+    failed: Vec<String>,
+}
+
+impl RepinTally {
+    /// Domains a re-pin was actually attempted for.
+    ///
+    /// The denominator a failure count belongs over. Counting the manual ones
+    /// in reports them as successes: "2/5 failed" says three domains were
+    /// re-pinned when the other three were never candidates.
+    fn attempted(&self, total: usize) -> usize {
+        total.saturating_sub(self.manual)
+    }
+
+    /// Domains now pinned to the new account.
+    fn updated(&self, total: usize) -> usize {
+        self.attempted(total).saturating_sub(self.failed.len())
+    }
+}
+
+/// How one ZT domain answers ACME challenges.
+struct DomainValidation {
+    method: ValidationMethod,
+    /// How long to wait for the challenge records to become visible.
+    max_dns_wait: Duration,
+}
+
+impl DomainValidation {
+    /// Whether the gateway can write this domain's DNS records itself.
+    fn writes_dns(&self) -> bool {
+        matches!(self.method, ValidationMethod::Dns01 { .. })
+    }
+}
 
 /// Multi-domain certificate manager
 pub struct DistributedCertBot {
@@ -120,11 +190,102 @@ impl DistributedCertBot {
         }
     }
 
+    /// Build the ACME validation method for one ZT domain.
+    ///
+    /// `dns-01` resolves the zone through the provider API, so a missing or
+    /// broken credential surfaces here rather than at the first order.
+    /// `dns-persist-01` reads no credential at all: the gateway CVM holds no
+    /// DNS write access for that domain, which is the point of the method.
+    async fn validation_for(
+        &self,
+        domain: &str,
+        config: &ZtDomainConfig,
+    ) -> Result<DomainValidation> {
+        let renew_timeout = self.config()?.renew_timeout;
+        match config.challenge {
+            ChallengeKind::Dns01 => {
+                let dns_cred = dns_credential_for(&self.kv_store, config)?;
+                let client = self.dns_client(domain, &dns_cred).await?;
+                Ok(DomainValidation {
+                    method: ValidationMethod::Dns01 {
+                        client,
+                        txt_ttl: dns_cred.dns_txt_ttl,
+                        issuer_domain_name: self.issuer_domain_name()?,
+                    },
+                    max_dns_wait: advisory_dns_wait(dns_cred.max_dns_wait, renew_timeout),
+                })
+            }
+            ChallengeKind::DnsPersist01 => Ok(DomainValidation {
+                method: ValidationMethod::DnsPersist01 {
+                    issuer_domain_name: self.issuer_domain_name()?,
+                },
+                max_dns_wait: advisory_dns_wait(DNS_PERSIST_MAX_DNS_WAIT, renew_timeout),
+            }),
+        }
+    }
+
+    /// Issuer Domain Name to name in `dns-persist-01` records and in the CAA
+    /// records written for either challenge.
+    fn issuer_domain_name(&self) -> Result<String> {
+        resolve_issuer_domain_name(&self.config()?.issuer_domain_name)
+            .context("invalid issuer_domain_name in the certbot config")
+    }
+
+    /// The DNS records a ZT domain's zone has to contain, as zone-file lines.
+    ///
+    /// Rendered from the stored account URI with no ACME round trip, so the
+    /// admin listing endpoints stay cheap. Empty until an ACME account exists —
+    /// every record names one — and empty rather than an error when the stored
+    /// credentials cannot be read, since listing a domain must not depend on
+    /// them.
+    pub fn required_dns_records(&self, config: &ZtDomainConfig) -> Vec<String> {
+        let Ok(issuer_domain_name) = self.issuer_domain_name() else {
+            return Vec::new();
+        };
+        let Some(account_uri) = self
+            .kv_store
+            .get_acme_credentials()
+            .ok()
+            .flatten()
+            .and_then(|creds| extract_account_uri(&creds.acme_credentials))
+        else {
+            return Vec::new();
+        };
+        // The gateway only ever orders `*.{domain}`, so that is the whole set of
+        // identifiers the CA will look records up for.
+        certbot::required_dns_records(
+            config.challenge,
+            &issuer_domain_name,
+            &account_uri,
+            &[format!("*.{}", config.domain)],
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+    }
+
+    /// Log the records an operator has to publish for a domain, and return them.
+    fn report_manual_records(&self, config: &ZtDomainConfig) -> Vec<String> {
+        let records = self.required_dns_records(config);
+        for record in &records {
+            warn!(
+                "cert[{}]: publish this record by hand: {record}",
+                config.domain
+            );
+        }
+        records
+    }
+
     /// Rotate the shared ACME account without interrupting certificate serving.
     ///
-    /// The sequence is: validate every domain's DNS credential, create the
+    /// The sequence is: validate every domain's DNS credential, register the
     /// replacement account, publish the new credentials, then re-pin every
-    /// domain's CAA record to the new account. Publishing before re-pinning
+    /// domain's CAA record to the new account.
+    ///
+    /// A cluster with no ZT domain registers an account and stops there, which
+    /// is how a `dns-persist-01` deployment bootstraps: the record an operator
+    /// publishes names the account, so there is nothing to publish -- and
+    /// therefore nothing that can be issued -- until one exists. Publishing before re-pinning
     /// makes the failure mode convergent: if some domains fail to re-pin, the
     /// cluster is already on the new account and rerunning `SetCaa` finishes
     /// the switch without registering yet another account (Let's Encrypt caps
@@ -142,7 +303,7 @@ impl DistributedCertBot {
     ///
     /// Runs under the shared ACME lock, so a concurrent reconciliation or
     /// first-use registration on any node is refused for the duration.
-    pub async fn rotate_acme_credentials(&self) -> Result<(String, usize)> {
+    pub async fn rotate_acme_credentials(&self) -> Result<RotationOutcome> {
         let rotation_lock = self.acquire_acme_lock("rotate ACME credentials")?;
         let result = self.do_rotate_acme_credentials().await;
         if let Err(err) = self.release_rotation_lock(&rotation_lock) {
@@ -151,7 +312,7 @@ impl DistributedCertBot {
         result
     }
 
-    async fn do_rotate_acme_credentials(&self) -> Result<(String, usize)> {
+    async fn do_rotate_acme_credentials(&self) -> Result<RotationOutcome> {
         let configs = self.kv_store.list_zt_domain_configs();
         let certbot_config = self.config()?;
         let acme_url = if certbot_config.acme_url.is_empty() {
@@ -163,34 +324,29 @@ impl DistributedCertBot {
         // Validate every domain's DNS credential up front: constructing a DNS
         // client resolves the zone through an authenticated API call, so a
         // misconfigured domain aborts the rotation here with no side effects
-        // and no ACME account consumed.
+        // and no ACME account consumed. A dns-persist-01 domain has no
+        // credential to check and is prepared without touching any provider.
         let mut prepared = Vec::with_capacity(configs.len());
         for config in &configs {
-            let dns_cred = dns_credential_for(&self.kv_store, config)?;
-            let dns_client = self
-                .dns_client(&config.domain, &dns_cred)
+            let validation = self
+                .validation_for(&config.domain, config)
                 .await
                 .with_context(|| format!("DNS credential check failed for {}", config.domain))?;
-            prepared.push((&config.domain, dns_cred, dns_client));
+            prepared.push((config, validation));
         }
         let total = prepared.len();
-        let mut prepared = prepared.into_iter();
-        let Some((first_domain, first_cred, first_client)) = prepared.next() else {
-            bail!("no ZT-Domain configured for ACME credential rotation");
-        };
 
-        let client = AcmeClient::new_account(
-            acme_url,
-            first_client,
-            first_cred.max_dns_wait,
-            first_cred.dns_txt_ttl,
-        )
-        .await
-        .context("failed to create replacement ACME account")?;
-        let credentials = client
-            .dump_credentials()
-            .context("failed to encode replacement ACME credentials")?;
-        let account_uri = client.account_id().to_string();
+        // Registration needs no domain: it proves nothing about one. A cluster
+        // with no ZT domain yet registers here and gets an account URI, which is
+        // what a `dns-persist-01` record has to name before the domain it
+        // authorizes can ever be issued.
+        let account = AcmeClient::register_account(acme_url)
+            .await
+            .context("failed to create replacement ACME account")?;
+        let AcmeAccount {
+            credentials,
+            account_uri,
+        } = account;
 
         // Publish immediately. From here the cluster converges on the new
         // account, and recovering from a partial re-pin below never needs to
@@ -203,40 +359,46 @@ impl DistributedCertBot {
         // Re-pin every domain's CAA to the new account, best effort across all
         // domains: one failing domain must not block re-pinning the rest. The
         // first domain reuses the registration client, which is already bound
-        // to its DNS client and the new credentials.
-        let mut failed = Vec::new();
-        let mut record = |domain: &String, result: Result<()>| match result {
+        // to its validation method and the new credentials.
+        //
+        // A dns-persist-01 domain has nothing to re-pin from here, and rotation
+        // is not transparent for it either: its `_validation-persist` record
+        // still names the *old* account, so orders for that domain fail until
+        // the operator republishes. Those records are reported below.
+        let mut tally = RepinTally::default();
+        let repin = |tally: &mut RepinTally, domain: &str, result: Result<()>| match result {
             Ok(()) => info!("cert[{domain}]: CAA re-pinned to {account_uri}"),
             Err(err) => {
                 error!("cert[{domain}]: failed to re-pin CAA: {err:?}");
-                failed.push(domain.clone());
+                tally.failed.push(domain.to_string());
             }
         };
-        record(
-            first_domain,
-            client
-                .set_caa_records(std::slice::from_ref(first_domain))
-                .await
-                .context("failed to update CAA records"),
-        );
-        for (domain, dns_cred, dns_client) in prepared {
+        for (config, validation) in prepared {
+            if !validation.writes_dns() {
+                tally.manual += 1;
+                continue;
+            }
             let result = async {
-                let client = AcmeClient::load(
-                    dns_client,
-                    &credentials,
-                    dns_cred.max_dns_wait,
-                    dns_cred.dns_txt_ttl,
-                )
-                .await
-                .context("failed to prepare ACME client")?;
+                let client =
+                    AcmeClient::load(validation.method, &credentials, validation.max_dns_wait)
+                        .await
+                        .context("failed to prepare ACME client")?;
                 client
-                    .set_caa_records(std::slice::from_ref(domain))
+                    .set_caa_records(std::slice::from_ref(&config.domain))
                     .await
                     .context("failed to update CAA records")
             }
             .await;
-            record(domain, result);
+            repin(&mut tally, &config.domain, result);
         }
+
+        // Rendered after the new credentials are published, so the records name
+        // the account the cluster has actually switched to.
+        let manual = configs
+            .iter()
+            .filter(|config| config.challenge != ChallengeKind::Dns01)
+            .flat_map(|config| self.report_manual_records(config))
+            .collect::<Vec<_>>();
 
         // Attest the new account only after CAA re-pinning: attestation does
         // not gate issuance, so its agent round trips must not widen the
@@ -247,16 +409,38 @@ impl DistributedCertBot {
             warn!("failed to attest rotated ACME account: {err:?}");
         }
 
-        if !failed.is_empty() {
-            bail!(
+        if !tally.failed.is_empty() {
+            // Reported, not raised. The account is registered and the cluster is
+            // already using it, so an error here reads as "nothing happened" and
+            // invites a retry -- which would register yet another account
+            // against a rate-limited quota and rewrite CAA a second time. What
+            // is left is a `SetCaa` run, and the caller is told exactly that.
+            //
+            // Out of the domains a re-pin was attempted for, not out of every
+            // domain: a dns-persist-01 domain was never a candidate, and
+            // counting it in the denominator reports it as re-pinned.
+            error!(
                 "rotated to {account_uri} and published the new credentials, but failed to \
-                 re-pin CAA for {}/{total} domains: {}; rerun SetCaa until it succeeds — \
+                 re-pin CAA for {}/{} domains: {}; rerun SetCaa until it succeeds — \
                  retrying the rotation would register yet another account",
-                failed.len(),
-                failed.join(", ")
+                tally.failed.len(),
+                tally.attempted(total),
+                tally.failed.join(", ")
             );
         }
-        Ok((account_uri, total))
+        if tally.manual > 0 {
+            warn!(
+                "{}/{total} domains use dns-persist-01: issuance for them stays \
+                 broken until the records above name the new account {account_uri}",
+                tally.manual
+            );
+        }
+        Ok(RotationOutcome {
+            account_uri,
+            domains_updated: tally.updated(total),
+            required_dns_records: manual,
+            repin_failed: tally.failed,
+        })
     }
 
     /// Get the current certbot configuration from KV store.
@@ -376,8 +560,17 @@ impl DistributedCertBot {
     async fn do_set_caa_all(&self, configs: Vec<ZtDomainConfig>) -> Result<()> {
         let total = configs.len();
         let mut failed = Vec::new();
+        let mut skipped = 0usize;
         for config in configs {
             let domain = config.domain.clone();
+            // A dns-persist-01 domain has no DNS write access to reconcile with.
+            // Log the records the operator owns instead of failing the call, so
+            // one such domain does not make SetCaa unusable for the rest.
+            if config.challenge != ChallengeKind::Dns01 {
+                self.report_manual_records(&config);
+                skipped += 1;
+                continue;
+            }
             match self.set_caa(&domain, &config).await {
                 Ok(()) => info!("cert[{domain}]: CAA records reconciled"),
                 Err(err) => {
@@ -388,14 +581,22 @@ impl DistributedCertBot {
         }
 
         if !failed.is_empty() {
+            // Out of the domains actually attempted. Counting the skipped
+            // dns-persist-01 ones in the denominator would read as though they
+            // had succeeded, which is the same miscount `RepinTally::attempted`
+            // exists to avoid on the rotation path.
             bail!(
-                "failed to set CAA records for {}/{total} domains: {}; \
+                "failed to set CAA records for {}/{} domains: {}; \
                  they may retain guard CAA records that block issuance until a rerun succeeds",
                 failed.len(),
+                total - skipped,
                 failed.join(", ")
             );
         }
-        info!("CAA records reconciled for {total} domains");
+        info!(
+            "CAA records reconciled for {} domains ({skipped} on dns-persist-01 left to the operator)",
+            total - skipped
+        );
         Ok(())
     }
 
@@ -413,10 +614,9 @@ impl DistributedCertBot {
         // the lock may call [`Self::acquire_acme_lock`], and keeping the
         // registering variant out of this path is what makes that structural
         // rather than a rule to remember.
-        let dns_cred = dns_credential_for(&self.kv_store, config)?;
         let acme_url = self.acme_url()?;
         let acme_client = self
-            .load_stored_acme_client(domain, &dns_cred, &acme_url)
+            .load_stored_acme_client(domain, config, &acme_url)
             .await
             .context("failed to initialize ACME client")?
             .context("no shared ACME account is registered for this cluster")?;
@@ -627,12 +827,10 @@ impl DistributedCertBot {
         domain: &str,
         config: &ZtDomainConfig,
     ) -> Result<AcmeClient> {
-        // Get DNS credential (from config or default)
-        let dns_cred = dns_credential_for(&self.kv_store, config)?;
         let acme_url = self.acme_url()?;
 
         if let Some(client) = self
-            .load_stored_acme_client(domain, &dns_cred, &acme_url)
+            .load_stored_acme_client(domain, config, &acme_url)
             .await?
         {
             info!("loaded global ACME account credentials from KvStore");
@@ -650,7 +848,7 @@ impl DistributedCertBot {
         // lock and look again before spending a registration.
         let rotation_lock = self.acquire_acme_lock("register the shared ACME account")?;
         let client = self
-            .register_or_adopt_account(domain, &dns_cred, &acme_url)
+            .register_or_adopt_account(domain, config, &acme_url)
             .await;
         if let Err(err) = self.release_rotation_lock(&rotation_lock) {
             error!("failed to release ACME rotation lock: {err:?}");
@@ -670,7 +868,7 @@ impl DistributedCertBot {
     async fn load_stored_acme_client(
         &self,
         domain: &str,
-        dns_cred: &DnsCredential,
+        config: &ZtDomainConfig,
         acme_url: &str,
     ) -> Result<Option<AcmeClient>> {
         let Some(creds) = self
@@ -688,12 +886,11 @@ impl DistributedCertBot {
                  call RotateAcmeCredentials to switch directories"
             );
         }
-        let dns01_client = self.dns_client(domain, dns_cred).await?;
+        let validation = self.validation_for(domain, config).await?;
         let client = AcmeClient::load(
-            dns01_client,
+            validation.method,
             &creds.acme_credentials,
-            dns_cred.max_dns_wait,
-            dns_cred.dns_txt_ttl,
+            validation.max_dns_wait,
         )
         .await
         .context("failed to load ACME client from KvStore credentials")?;
@@ -709,11 +906,11 @@ impl DistributedCertBot {
     async fn register_or_adopt_account(
         &self,
         domain: &str,
-        dns_cred: &DnsCredential,
+        config: &ZtDomainConfig,
         acme_url: &str,
     ) -> Result<AcmeClient> {
         if let Some(client) = self
-            .load_stored_acme_client(domain, dns_cred, acme_url)
+            .load_stored_acme_client(domain, config, acme_url)
             .await?
         {
             info!("adopted the ACME account registered while this node waited for the lock");
@@ -721,15 +918,10 @@ impl DistributedCertBot {
         }
 
         info!("creating new global ACME account at {acme_url}");
-        let dns01_client = self.dns_client(domain, dns_cred).await?;
-        let client = AcmeClient::new_account(
-            acme_url,
-            dns01_client,
-            dns_cred.max_dns_wait,
-            dns_cred.dns_txt_ttl,
-        )
-        .await
-        .context("failed to create new ACME account")?;
+        let validation = self.validation_for(domain, config).await?;
+        let client = AcmeClient::new_account(acme_url, validation.method, validation.max_dns_wait)
+            .await
+            .context("failed to create new ACME account")?;
 
         let creds_json = client
             .dump_credentials()
@@ -967,6 +1159,7 @@ mod tests {
             port: 443,
             node: None,
             priority: 0,
+            challenge: ChallengeKind::Dns01,
         }
     }
 
@@ -1168,7 +1361,7 @@ mod tests {
         let err = match certbot
             .register_or_adopt_account(
                 "app.example.com",
-                &unreachable_dns_credential(),
+                &test_zt_domain_config(),
                 DEFAULT_ACME_URL,
             )
             .await
@@ -1185,6 +1378,74 @@ mod tests {
     /// Two rotations on this node are ordered by the same lock that orders two
     /// nodes: the lock lives in the KV store, so a second in-process run sees
     /// the first one's record.
+    /// The check has to finish inside the timeout wrapping the order, or the
+    /// "proceed anyway" exit it is designed around is never reached and the
+    /// renewal dies with a timeout instead of a diagnosis. Both defaults are
+    /// 300s, which is exactly the case that fails.
+    #[test]
+    fn the_dns_wait_ends_before_the_order_times_out() {
+        let default_credential = Duration::from_secs(300);
+        let default_renew_timeout = Duration::from_secs(300);
+        assert!(
+            advisory_dns_wait(default_credential, default_renew_timeout) < default_renew_timeout
+        );
+
+        // Lowering renew_timeout from the dashboard has to keep the invariant,
+        // which is why this is derived rather than a constant.
+        for secs in [30, 60, 120, 600] {
+            let renew_timeout = Duration::from_secs(secs);
+            assert!(
+                advisory_dns_wait(DNS_PERSIST_MAX_DNS_WAIT, renew_timeout) < renew_timeout,
+                "renew_timeout={secs}s leaves no room for the order"
+            );
+        }
+    }
+
+    /// A dns-persist-01 domain is never a re-pin candidate, so counting it into
+    /// the denominator reports it as re-pinned. Five domains, three of them
+    /// manual and the other two failing, is "2/2 failed" and zero updated --
+    /// not "2/5 failed", which claims three succeeded.
+    #[test]
+    fn the_failure_count_is_out_of_the_domains_actually_tried() {
+        let tally = RepinTally {
+            manual: 3,
+            failed: vec!["a.example".to_string(), "b.example".to_string()],
+        };
+        assert_eq!(tally.attempted(5), 2);
+        assert_eq!(tally.updated(5), 0);
+    }
+
+    /// Every domain manual: nothing was attempted and nothing was updated. The
+    /// arithmetic has to land on zero rather than underflow, which as a usize
+    /// subtraction would panic the rotation after the account was published.
+    #[test]
+    fn an_all_manual_rotation_updates_nothing() {
+        let tally = RepinTally {
+            manual: 4,
+            failed: vec![],
+        };
+        assert_eq!(tally.attempted(4), 0);
+        assert_eq!(tally.updated(4), 0);
+    }
+
+    /// The ordinary case: every domain tried and every one taken.
+    #[test]
+    fn a_clean_rotation_updates_every_domain() {
+        let tally = RepinTally::default();
+        assert_eq!(tally.attempted(3), 3);
+        assert_eq!(tally.updated(3), 3);
+    }
+
+    /// A credential asking for less than its share keeps asking for less: the
+    /// clamp is a ceiling, not a target.
+    #[test]
+    fn a_shorter_configured_wait_is_left_alone() {
+        assert_eq!(
+            advisory_dns_wait(Duration::from_secs(20), Duration::from_secs(300)),
+            Duration::from_secs(20)
+        );
+    }
+
     #[tokio::test]
     async fn rotate_acme_credentials_rejects_concurrent_runs() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
@@ -1220,16 +1481,27 @@ mod tests {
         );
     }
 
+    /// Registering without a domain is the `dns-persist-01` bootstrap: the
+    /// record names the account, so the account comes first. The run here gets
+    /// as far as the ACME server -- an unroutable one, so the test stays
+    /// offline -- which is proof enough that no domain was demanded before it.
     #[tokio::test]
-    async fn rotate_acme_credentials_requires_a_configured_domain() {
+    async fn rotate_acme_credentials_registers_without_any_domain() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
         let certbot = test_certbot(data_dir.path());
+        certbot
+            .kv_store
+            .set_certbot_config(&crate::kv::GlobalCertbotConfig {
+                acme_url: "http://127.0.0.1:1/directory".to_string(),
+                ..Default::default()
+            })
+            .expect("failed to store certbot config");
         let err = certbot
             .rotate_acme_credentials()
             .await
-            .expect_err("rotation without domains should fail");
+            .expect_err("an unroutable ACME server cannot register an account");
         assert!(
-            err.to_string().contains("no ZT-Domain configured"),
+            err.to_string().contains("replacement ACME account"),
             "unexpected error: {err}"
         );
         // The failed rotation must release the KV lock so a later run can proceed.

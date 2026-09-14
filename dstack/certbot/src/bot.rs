@@ -9,14 +9,16 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use fs_err as fs;
 use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
-use crate::acme_client::{acme_matches, read_pem};
+use crate::acme_client::{acme_matches, read_pem, ChallengeKind, RequiredRecord, ValidationMethod};
+use crate::dns_persist::{resolve_issuer_domain_name, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
 
 use super::{AcmeClient, Dns01Client};
+use crate::acme_client::advisory_dns_wait;
 
 #[allow(clippy::duplicated_attributes)]
 #[derive(Clone, Debug, bon::Builder)]
@@ -27,6 +29,15 @@ pub struct CertBotConfig {
     auto_set_caa: bool,
     credentials_file: PathBuf,
     auto_create_account: bool,
+    /// ACME challenge used to prove control of the domains.
+    #[builder(default)]
+    challenge: ChallengeKind,
+    /// Issuer Domain Name naming the CA in `dns-persist-01` and CAA records.
+    ///
+    /// Must be one of the `issuer-domain-names` the CA sends in the challenge.
+    #[builder(default = LETS_ENCRYPT_ISSUER_DOMAIN_NAME.to_string())]
+    issuer_domain_name: String,
+    /// Cloudflare API token. Unused, and warned about, under `dns-persist-01`.
     cf_api_token: String,
     cf_api_url: Option<String>,
     cert_file: PathBuf,
@@ -57,17 +68,12 @@ pub struct CertBot {
 
 async fn create_new_account(
     config: &CertBotConfig,
-    dns01_client: Dns01Client,
+    validation: ValidationMethod,
 ) -> Result<AcmeClient> {
     info!("creating new ACME account");
-    let client = AcmeClient::new_account(
-        &config.acme_url,
-        dns01_client,
-        config.max_dns_wait,
-        config.dns_txt_ttl,
-    )
-    .await
-    .context("failed to create new account")?;
+    let client = AcmeClient::new_account(&config.acme_url, validation, dns_wait(config))
+        .await
+        .context("failed to create new account")?;
     let credentials = client
         .dump_credentials()
         .context("failed to dump credentials")?;
@@ -87,39 +93,20 @@ async fn create_new_account(
 impl CertBot {
     /// Build a new `CertBot` from a `CertBotConfig`.
     pub async fn build(config: CertBotConfig) -> Result<Self> {
-        let base_domain = config
-            .cert_subject_alt_names
-            .first()
-            .context("cert_subject_alt_names is empty")?
-            .trim()
-            .trim_start_matches("*.")
-            .trim_end_matches('.')
-            .to_string();
-        let dns01_client = Dns01Client::new_cloudflare(
-            base_domain,
-            config.cf_api_token.clone(),
-            config.cf_api_url.clone(),
-        )
-        .await?;
+        let validation = build_validation_method(&config).await?;
         let acme_client = match fs::read_to_string(&config.credentials_file) {
             Ok(credentials) => {
                 if acme_matches(&credentials, &config.acme_url) {
-                    AcmeClient::load(
-                        dns01_client,
-                        &credentials,
-                        config.max_dns_wait,
-                        config.dns_txt_ttl,
-                    )
-                    .await?
+                    AcmeClient::load(validation, &credentials, dns_wait(&config)).await?
                 } else {
-                    create_new_account(&config, dns01_client).await?
+                    create_new_account(&config, validation).await?
                 }
             }
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 if !config.auto_create_account {
                     return Err(e).context("credentials file not found");
                 }
-                create_new_account(&config, dns01_client).await?
+                create_new_account(&config, validation).await?
             }
             Err(e) => {
                 return Err(e).context("failed to read credentials file");
@@ -261,6 +248,96 @@ impl CertBot {
         self.acme_client
             .set_caa_records(&self.config.cert_subject_alt_names)
             .await
+    }
+
+    /// The DNS records that have to exist for the configured domains.
+    pub fn required_dns_records(&self) -> Vec<RequiredRecord> {
+        self.acme_client
+            .required_dns_records(&self.config.cert_subject_alt_names)
+    }
+}
+
+/// The DNS wait this configuration should actually use.
+///
+/// `renew_timeout` wraps the whole renewal here exactly as it does in the
+/// gateway, and the defaults are skewed the same way -- further, in fact:
+/// `max_dns_wait` defaults to 300s against a 120s renewal budget, so an
+/// unanswered check runs the renewal into its timeout every time instead of
+/// reporting the record it could not see.
+fn dns_wait(config: &CertBotConfig) -> Duration {
+    advisory_dns_wait(config.max_dns_wait, config.renew_timeout)
+}
+
+/// The Issuer Domain Name this configuration names, checked before it is used.
+///
+/// Both challenges read the same setting, so both get the same treatment: empty
+/// means the default, and a value that would not survive being written into a
+/// CAA or validation record is refused here rather than at the point it would
+/// corrupt a zone.
+fn issuer_domain_name(config: &CertBotConfig) -> Result<String> {
+    resolve_issuer_domain_name(&config.issuer_domain_name)
+        .context("invalid issuer_domain_name in the certbot configuration")
+}
+
+/// Resolve the configured challenge into a live validation method.
+///
+/// `dns-01` resolves the Cloudflare zone here, which is an authenticated call,
+/// so a bad credential fails at startup rather than at the first renewal.
+/// `dns-persist-01` talks to no provider at all.
+async fn build_validation_method(config: &CertBotConfig) -> Result<ValidationMethod> {
+    match config.challenge {
+        ChallengeKind::Dns01 => {
+            // Named here rather than left to the provider. `cf_api_token` is
+            // `#[serde(default)]` so a dns-persist-01 config can omit it, which
+            // also means a dns-01 config that forgets it no longer fails
+            // deserialization -- it reaches Cloudflare and comes back as an
+            // "Invalid format for Authorization header", naming the header
+            // instead of the setting the operator has to add.
+            if config.cf_api_token.is_empty() {
+                bail!(
+                    "cf_api_token is required with dns-01, which proves control by writing a \
+                     TXT record through the DNS provider; set it, or switch to \
+                     challenge = \"dns-persist-01\", which needs no provider credential"
+                );
+            }
+            let base_domain = config
+                .cert_subject_alt_names
+                .first()
+                .context("cert_subject_alt_names is empty")?
+                .trim()
+                .trim_start_matches("*.")
+                .trim_end_matches('.')
+                .to_string();
+            let client = Dns01Client::new_cloudflare(
+                base_domain,
+                config.cf_api_token.clone(),
+                config.cf_api_url.clone(),
+            )
+            .await?;
+            Ok(ValidationMethod::Dns01 {
+                client,
+                txt_ttl: config.dns_txt_ttl,
+                issuer_domain_name: issuer_domain_name(config)?,
+            })
+        }
+        ChallengeKind::DnsPersist01 => {
+            // Refuse rather than silently skip: `auto_set_caa` promises the CAA
+            // records are kept in sync, and without DNS write access nothing here
+            // can keep that promise. `certbot dns-records` prints what to publish.
+            if config.auto_set_caa {
+                bail!(
+                    "auto_set_caa is not supported with dns-persist-01, which has no DNS \
+                     write access; set auto_set_caa = false and publish the records from \
+                     `certbot dns-records` by hand"
+                );
+            }
+            if !config.cf_api_token.is_empty() {
+                warn!("ignoring cf_api_token: dns-persist-01 needs no DNS provider credential");
+            }
+            Ok(ValidationMethod::DnsPersist01 {
+                issuer_domain_name: issuer_domain_name(config)?,
+            })
+        }
     }
 }
 

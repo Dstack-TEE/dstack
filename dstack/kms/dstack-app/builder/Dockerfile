@@ -9,7 +9,7 @@ ARG DSTACK_REV
 ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
 RUN ./pin-packages.sh ./builder-pinned-packages.txt
-RUN apt-get update && \
+RUN apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
     git \
     build-essential \
@@ -35,11 +35,16 @@ WORKDIR /build
 # and AMD KDS clients eagerly at startup, so a base image without CA
 # certificates fails to boot before it serves anything.
 RUN ./pin-packages.sh ./pinned-packages.txt && \
-    apt-get update && \
+    apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 WORKDIR /
 COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
 COPY --from=kms-builder /build/.GIT_REV /etc/
+# The OCI metadata is generated once by build-lib.sh and injected here, as
+# the config labels and as the manifest annotations, so the three views of
+# the image can never disagree.
+ARG IMAGE_METADATA
+RUN mkdir -p /etc/dstack-kms && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-kms/build-info
 CMD ["dstack-kms"]

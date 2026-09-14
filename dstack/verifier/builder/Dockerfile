@@ -9,7 +9,7 @@ ARG DSTACK_REV
 ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
 RUN ./pin-packages.sh ./builder-pinned-packages.txt
-RUN apt-get update && \
+RUN apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
     git \
     build-essential \
@@ -35,13 +35,18 @@ COPY --from=build-shared pin-packages.sh /build/
 COPY builder/shared/pinned-packages.txt /build/
 WORKDIR /build
 RUN ./pin-packages.sh ./pinned-packages.txt && \
-    apt-get update && \
+    apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 COPY --from=verifier-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-verifier /usr/local/bin/dstack-verifier
 COPY --from=verifier-builder /build/.GIT_REV /etc/
+# The OCI metadata is generated once by build-lib.sh and injected here, as
+# the config labels and as the manifest annotations, so the three views of
+# the image can never disagree.
+ARG IMAGE_METADATA
+RUN mkdir -p /etc/dstack-verifier && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-verifier/build-info
 RUN mkdir -p /etc/dstack
 COPY dstack-verifier.toml /etc/dstack/dstack-verifier.toml
 WORKDIR /var/lib/dstack-verifier

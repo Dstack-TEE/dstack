@@ -24,18 +24,16 @@ TEE hardware is not needed for the build. Follow the prerequisites in
 repository root:
 
 ```bash
-make os-deps
-cd os/yocto/repro-build
-RELEASE_FLAVORS="dev" ./repro-build.sh -n
+FLAVORS="dev" ./os/mkosi/repro-build/repro-build.sh
 ```
 
 The artifact used below is
-`os/yocto/repro-build/dist/dstack-dev-<version>.tar.gz`. Confirm that it really
-is a development image:
+`os/mkosi/repro-build/build/out/dev/dstack-dev-<version>.tar.gz`. Confirm that
+it really is a development image:
 
 ```bash
 mkdir -p ~/.dstack-vmm/image
-tar -xzf os/yocto/repro-build/dist/dstack-dev-*.tar.gz \
+tar -xzf os/mkosi/repro-build/build/out/dev/dstack-dev-*.tar.gz \
   -C ~/.dstack-vmm/image
 jq '{version, git_revision, is_dev}' \
   ~/.dstack-vmm/image/dstack-dev-*/metadata.json

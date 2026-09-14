@@ -24,7 +24,7 @@ This tutorial guides you through setting up guest OS images for deploying Confid
 
 ## What You'll Configure
 
-- **Guest OS images** - Pre-built Yocto-based images for CVMs
+- **Guest OS images** - Pre-built guest OS images for CVMs
 - **VMM image directory** - Proper organization for multiple image versions
 - **Image verification** - Confirm VMM can access the images
 
@@ -56,7 +56,8 @@ If you prefer to set up guest images manually, follow these steps.
 
 To produce the image from source instead of downloading a release, follow the
 [guest-OS build guide](../building-guest-os.md). Use the generated
-`os/yocto/repro-build/dist/dstack-<version>.tar.gz` archive in Step 3 below.
+`os/mkosi/repro-build/build/out/prod/dstack-<version>.tar.gz` archive in Step 3
+below.
 
 ### Step 1: Create Image Directory Structure
 
@@ -396,5 +397,5 @@ With guest images configured and VMM able to access them, you're ready to deploy
 
 - [Guest OS source and build backends](../../os/)
 - [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)
-- [Yocto Project](https://www.yoctoproject.org/)
+- [mkosi](https://github.com/systemd/mkosi)
 - [TDX Guest Architecture](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html)

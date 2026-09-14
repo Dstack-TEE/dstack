@@ -1847,7 +1847,7 @@ fn make_vm_config(
         tdx_attestation_variant_from_requirements(requirements).unwrap_or_else(|| {
             cfg.cvm
                 .tdx_attestation_variant
-                .resolve(manifest.memory, image_supports_tdx_lite(image))
+                .resolve(image_supports_tdx_lite(image))
         })
     } else {
         dstack_types::TdxAttestationVariant::Legacy
@@ -1917,7 +1917,7 @@ fn make_vm_config(
         memory_size: manifest.memory as u64 * 1024 * 1024,
         qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
         pic: cfg.cvm.qemu_pic,
-        qemu_version: cfg.cvm.qemu_version.clone(),
+        qemu_version: Some(cfg.cvm.resolve_qemu_version()?),
         pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
         hugepages: manifest.hugepages,
         num_gpus: gpus.gpus.len() as u32,
@@ -2519,8 +2519,9 @@ mod tests {
 
     fn dummy_tdx_measurement_document() -> TdxOsImageMeasurementDocument {
         let measurement = TdxOsImageMeasurement {
+            kernel_header_normalized: true,
             image: TdxImageMeasurement {
-                kernel_cmdline_sha384: vec![0x10; 48],
+                base_cmdline: "console=ttyS0 dstack.rootfs_hash=10".to_string(),
                 kernel_authenticode: vec![0x20; 48],
                 initrd_sha384: vec![0x30; 48],
             },
@@ -2580,6 +2581,9 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.cvm.platform = Some(CvmPlatform::Tdx);
         config.cvm.tdx_attestation_variant = TdxAttestationVariantConfig::Auto;
+        // No QEMU binary under test; declare the version the way a host
+        // without a detectable one has to.
+        config.cvm.qemu_version = Some("9.2.1".to_string());
         Ok(config)
     }
 
@@ -2663,17 +2667,17 @@ mod tests {
         Ok(())
     }
 
+    /// 1 GiB used to fall back to legacy: it is below 3 GiB and not the 2 GiB
+    /// exemption. That heuristic existed for images whose OVMF leaves the setup
+    /// header for QEMU to rewrite, which the build system no longer produces.
     #[test]
-    fn tdx_auto_variant_uses_legacy_for_low_non_2g_memory() -> Result<()> {
+    fn tdx_auto_variant_uses_lite_for_low_non_2g_memory() -> Result<()> {
         let config = test_tdx_config()?;
         let manifest = test_manifest(1024);
         let image = test_tdx_image(true);
         let vm_config = make_vm_config(&config, &manifest, &image, &hex_of(0x22, 32), None, None)?;
 
-        assert!(vm_config.get("tdx_attestation_variant").is_none());
-        // tdx_measurement is attached whenever the image supports it, even
-        // when the resolved variant is legacy, so a verifier can still
-        // choose lite verification for this boot.
+        assert_eq!(vm_config["tdx_attestation_variant"], "lite");
         assert!(vm_config.get("tdx_measurement").is_some());
         assert_eq!(
             vm_config["os_image_hash"]
@@ -2800,6 +2804,7 @@ mod tests {
         let mut config: Config = Figment::from(load_config_figment(None)).extract()?;
         config.image.path = image_root;
         config.cvm.platform = Some(CvmPlatform::AmdSevSnp);
+        config.cvm.qemu_version = Some("9.2.1".to_string());
         config.cvm.nvidia_attestation_proxy_url = Some("http://10.0.2.2:8090".to_string());
         let compose_hash = hex_of(0x22, 32);
         let manifest = Manifest {

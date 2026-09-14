@@ -24,9 +24,22 @@ auth_token = "e2e-admin-token"
 [core.debug]
 # TEST ONLY - do not use in production; enables debug RPC
 insecure_enable_debug_rpc = true
-insecure_skip_attestation = false
 port = 9015
 address = "0.0.0.0"
+
+# Verify peer quotes against the development roots the mock collateral service
+# derives from the simulator's seed. Verification itself runs the normal
+# production path -- this only says the anchor may come from outside the vendor
+# set, which is what makes attestation testable off TDX hardware. It does not
+# switch any check off; there is no longer a switch that does.
+[core.attestation]
+insecure_allow_external_trust_anchors = true
+
+[core.attestation.urls]
+pccs = "http://mock-attestation:8088"
+
+[core.attestation.root_ca]
+tdx = "/var/lib/attestation/tdx-root-ca.pem"
 
 [core.sync]
 enabled = true

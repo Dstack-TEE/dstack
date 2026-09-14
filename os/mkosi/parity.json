@@ -34,19 +34,24 @@
       "usr/lib/systemd/system/zfs.target",
       "usr/libexec/zfs/zed.d"
     ],
-    "nvidia-595.58.03": [
+    "nvidia-595.91.07": [
       "usr/bin/nvidia-smi",
       "usr/bin/nvidia-persistenced",
       "usr/bin/nv-fabricmanager",
       "usr/lib/systemd/system/nvidia-fabricmanager.service",
       "usr/bin/nvidia-gpu-detect",
+      "usr/bin/nvidia-module-options",
+      "usr/lib/systemd/system/nvidia-module-options.service",
+      "usr/lib/modprobe.d/nvidia-blacklist.conf",
       "usr/lib/x86_64-linux-gnu/libnvidia-nscq.so.2",
-      "etc/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
+      "usr/lib/systemd/system/nvidia-fabricmanager.service.d/10-nvswitch-condition.conf"
     ],
     "nvidia-container": [
       "usr/bin/nvidia-container-cli",
       "usr/bin/nvidia-container-runtime",
       "usr/bin/nvidia-ctk",
+      "usr/lib/x86_64-linux-gnu/libnvidia-container.so.1",
+      "usr/lib/x86_64-linux-gnu/libnvidia-container-go.so.1",
       "etc/nvidia-container-runtime/config.toml"
     ],
     "nvattest-2026.06.09": [
@@ -85,7 +90,7 @@
   "dev_only_paths": [
     "usr/bin/dstack-tee-simulator",
     "usr/bin/swtpm",
-    "etc/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
+    "usr/lib/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
     "usr/bin/strace",
     "usr/bin/gdb",
     "usr/sbin/sshd",
@@ -94,11 +99,11 @@
   ],
   "required_rootfs_globs": {
     "nvidia-firmware": [
-      "usr/lib/firmware/nvidia/595.58.03/*"
+      "usr/lib/firmware/nvidia/595.91.07/*"
     ],
     "nvidia-libraries": [
-      "usr/lib/x86_64-linux-gnu/libcuda.so.595.58.03",
-      "usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.58.03"
+      "usr/lib/x86_64-linux-gnu/libcuda.so.595.91.07",
+      "usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.91.07"
     ],
     "cni-plugins": [
       "usr/lib/cni/loopback",
@@ -107,6 +112,7 @@
   },
   "required_kernel_config": [
     "CONFIG_ACPI_TABLE_UPGRADE=y",
+    "CONFIG_SWIOTLB_DYNAMIC=y",
     "CONFIG_INTEL_TDX_GUEST=y",
     "CONFIG_TDX_GUEST_DRIVER=y",
     "CONFIG_AMD_MEM_ENCRYPT=y",
@@ -137,12 +143,19 @@
     "CONFIG_NF_TABLES_BRIDGE=m",
     "CONFIG_NFT_BRIDGE_META=m",
     "CONFIG_NFT_BRIDGE_REJECT=m",
-    "CONFIG_NETFILTER_XT_TARGET_CHECKSUM=m"
+    "CONFIG_NETFILTER_XT_TARGET_CHECKSUM=m",
+    "CONFIG_NET_SCH_HTB=y",
+    "CONFIG_NET_SCH_INGRESS=y",
+    "CONFIG_NET_CLS_U32=y",
+    "CONFIG_NET_ACT_POLICE=y",
+    "CONFIG_CHECKPOINT_RESTORE=y",
+    "CONFIG_MACVLAN=y",
+    "CONFIG_NETFILTER_XT_MATCH_COMMENT=m"
   ],
   "prod_forbidden_paths": [
     "usr/bin/dstack-tee-simulator",
     "usr/bin/swtpm",
-    "etc/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
+    "usr/lib/systemd/system/dstack-prepare.service.d/tee-simulator.conf",
     "usr/bin/strace",
     "usr/bin/gdb",
     "usr/sbin/sshd",
@@ -157,6 +170,11 @@
     "usr/lib/systemd/system/serial-getty@.service",
     "usr/lib/systemd/system/debug-shell.service",
     "usr/lib/systemd/system/systemd-logind.service"
+  ],
+  "required_ldconfig_entries": [
+    "libnvidia-ml.so.1",
+    "libnvidia-container.so.1",
+    "libnvidia-container-go.so.1"
   ],
   "runtime_link_paths": [
     "usr/bin/nvattest",

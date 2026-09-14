@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Yocto implementation of the guest-OS backend contract in os/README.md.
+# DEPRECATED: use the mkosi backend (os/mkosi/) instead.
 set -eo pipefail
 
 usage() {
@@ -41,6 +42,15 @@ case "$ACTION" in
         exit 1
         ;;
 esac
+
+# The Yocto backend is deprecated in favor of os/mkosi. It is kept only so
+# existing Yocto images can still be rebuilt; new work must use mkosi.
+cat >&2 <<'DEPRECATED'
+WARNING: the Yocto guest-OS backend is deprecated. Use the mkosi backend:
+WARNING:   make os-image                      (containerized build)
+WARNING:   ./os/build.sh --backend mkosi      (native build)
+WARNING: See docs/building-guest-os.md.
+DEPRECATED
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DIST_DIR=${DIST_DIR:-"$PWD/images"}

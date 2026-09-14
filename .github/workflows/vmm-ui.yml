@@ -7,11 +7,19 @@ name: VMM UI build
 permissions:
   contents: read
 
+# Only the VMM's web UI is built here. Not a required status check, so a
+# workflow-level filter is safe.
 on:
   push:
     branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/vmm/ui/**'
+      - '.github/workflows/vmm-ui.yml'
   pull_request:
     branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/vmm/ui/**'
+      - '.github/workflows/vmm-ui.yml'
 
 jobs:
   build:

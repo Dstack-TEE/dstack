@@ -24,7 +24,7 @@ dstack protects the execution environment, not your application code. Bugs in yo
 
 Infrastructure operators can still deny service. They can shut down your workload, throttle resources, or block network access. If availability matters, plan for redundancy across providers.
 
-**Persistent-storage freshness, integrity, and availability.** Disk encryption protects the confidentiality of data at rest. The default ZFS storage filesystem also provides integrity checking; switching the storage filesystem to ext4 may forgo strong integrity protection. Neither filesystem proves that an attached disk represents the latest application state. An infrastructure operator can withhold, delete, replace, or restore an earlier valid encrypted disk image. Applications that require rollback-resistant state must anchor a monotonic version or state commitment in an external trusted service, ledger, or equivalent freshness mechanism.
+**Persistent-storage freshness, integrity, and availability.** Disk encryption protects the confidentiality of data at rest, not its integrity: the LUKS2 volume carries no authentication tag, so detecting a modified block is left to the filesystem. The default ZFS checksums every block and fails the read; with `storage_fs` set to ext4, file data is not checksummed and a modified block reaches the application. Neither filesystem proves that an attached disk represents the latest application state. An infrastructure operator can withhold, delete, replace, or restore an earlier valid encrypted disk image. Applications that require rollback-resistant state must anchor a monotonic version or state commitment in an external trusted service, ledger, or equivalent freshness mechanism.
 
 ## Security Guarantees
 
@@ -317,6 +317,45 @@ AML access to encrypted/private guest RAM. Verification now rejects tampered
 tables before the CVM is trusted with keys; the sandbox bounds what tampered
 AML could have done in the first place.
 
+### The kernel measurement does not depend on the host's QEMU
+
+QEMU is the boot loader for `-kernel`: it fills in the setup-header fields the
+Linux boot protocol expects a boot loader to supply, and OVMF measures the
+result into RTMR[1]. QEMU commit `a7542a38f399` ("x86/loader: Don't update
+kernel header for CoCo VMs", first released in 10.2.0) stopped rewriting the
+header for confidential guests, so the same kernel would otherwise measure
+differently depending on which QEMU the host chose to run.
+
+dstack removes that dependency instead of modelling it. The image build zeroes
+the boot-loader-written fields in the kernel it ships, and dstack's OVMF zeroes
+them again before the kernel blob is measured and loaded. RTMR[1] is therefore
+the plain Authenticode hash of the `bzImage` listed in `sha256sum.txt`, and the
+verifier needs nothing from the host to predict it -- not a QEMU version, not a
+memory size.
+
+Images built before this landed keep their original behavior: their firmware
+does not normalize, so their digest still covers QEMU's rewritten copy. Which
+of the two applies is declared by the image itself -- `kernel_header_normalized`,
+recorded in `metadata.json` for the image-download path and mirrored into the
+measurement document for the no-image-download path -- so it is never something
+the host gets to choose.
+
+Both carriers are bound to `os_image_hash`. `sha256sum.txt` hashes to
+`os_image_hash`, a downloaded image is checked file by file against it, and the
+measurement document is one of its entries.
+
+This matters because everything the host declares about its own VM is
+untrusted. A knob the verifier has to consult is a knob the host can lie about;
+here there is no knob. It also removes a class of correct-but-rejected
+deployments, since the previous QEMU-patched digest varied with guest RAM and
+was only reproducible at specific memory sizes.
+
+The normalized field set comes from the boot protocol rather than from QEMU's
+behavior: every field `Documentation/arch/x86/boot.rst` types as `write` is one
+the boot loader fills in and the kernel supplies no value for, so zeroing it
+discards nothing the kernel provided. Fields typed `modify` carry real
+kernel-supplied values and are left measured.
+
 ### TCB status is surfaced, not gated, during verification
 
 dstack's `validate_tcb` does not reject a quote based on its TCB status string (`UpToDate`, `OutOfDate`, `ConfigurationNeeded`, `SWHardeningNeeded`, ...). It only enforces hard invariants: debug mode must be off, and the SEAM/service-TD measurements must be well-formed. The verified report carries the `status` field through to the caller.
@@ -329,9 +368,11 @@ The one case dstack does not leave to downstream is a genuinely invalid TCB: `dc
 
 ### Development modes are auditable, not production-safe
 
-dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `attest_rpc_cert = false`, gateway `core.debug.insecure_skip_attestation = true`, KMS `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
+dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `attest_rpc_cert = false`, KMS `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
 
 This is intentional. Runtime configuration that affects the trust boundary is visible in attestation measurements or public contract state. Cargo feature gates are not automatically more auditable because feature unification can enable a feature through a dependency graph, and the resulting runtime behavior is not represented as a measured deployment setting.
+
+This argument has a limit, and it is worth stating because it is what keeps the list short. A switch qualifies only if the trust decision still happens and is merely recorded as a measured setting. A switch that decides *whether* attestation happens at all does not qualify: there is then no measurement to audit, because the thing that would have produced it was skipped. Gateway `core.debug.insecure_skip_attestation` was such a switch -- it turned off both the peer identity check on WaveKV sync and the gateway's own app id lookup -- and it was removed rather than documented.
 
 Production verifiers should reject deployments that use these development settings. Operators should treat them the same way they treat debug-mode TEE quotes: useful for testing, invalid for production trust.
 

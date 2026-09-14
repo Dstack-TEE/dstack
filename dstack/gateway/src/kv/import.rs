@@ -419,8 +419,8 @@ mod tests {
         let shapes = [
             // deploy-to-vmm.sh: /18 pools inside a shared /16 interface.
             ("10.8.0.1/16", "10.8.0.0/18", "10.8.0.5", "10.8.64.5"),
-            // test-run/cluster.sh and e2e/configs: a /24 per node, and no
-            // node's interface covers another's.
+            // The test-run suites: a /24 per node, and no node's interface
+            // covers another's.
             ("10.0.41.1/24", "10.0.41.0/24", "10.0.41.5", "10.0.42.5"),
         ];
         for (ip, pool, mine, peers) in shapes {

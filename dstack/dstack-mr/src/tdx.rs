@@ -11,8 +11,9 @@
 //! intentionally excluded and must come from `VmConfig`.
 
 use crate::kernel::{
-    patched_kernel_authenticode_sha384, tdx_kernel_hash_uses_precomputed_high_mem,
-    TDX_KERNEL_HASH_COMPAT_2G_MEMORY, TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+    kernel_authenticode_sha384, patched_kernel_authenticode_sha384,
+    tdx_kernel_hash_uses_precomputed_high_mem, TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
+    TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
 };
 use crate::tdvf::{rtmr0_log_from_td_hob_hash_with_acpi_hashes, AcpiTableHashes, Tdvf};
 use crate::util::{measure_log, measure_sha384};
@@ -34,6 +35,11 @@ struct ImageMetadata {
     bios: String,
     #[serde(default)]
     ovmf_variant: Option<OvmfVariant>,
+    /// Declares whether this image's OVMF normalizes the Linux setup header
+    /// before measuring the kernel. Absent on every image built before that
+    /// landed, and `false` is exactly their behavior.
+    #[serde(default)]
+    kernel_header_normalized: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +109,8 @@ fn machine_from_vm_config(vm_config: &VmConfig, ovmf_variant: OvmfVariant) -> cr
 /// otherwise replays the digests the guest reported in its event log, which
 /// makes those three RTMR0 entries self-consistent but unconstrained; comparing
 /// against these expected digests is what turns them into a verified value.
+/// The verifier does exactly that on both TDX paths, and treats a mismatch --
+/// and a VM shape this cannot model -- as fatal rather than unverified.
 pub fn expected_rtmr0_acpi_hashes(
     vm_config: &VmConfig,
     ovmf_variant: OvmfVariant,
@@ -148,6 +156,12 @@ fn read_varuint(input: &mut &[u8]) -> Result<u64> {
         }
     }
 }
+
+/// q35 keeps guest RAM in one block below 4G until it reaches this size, then
+/// caps the below-4G block at 2 GiB and moves the remainder above 4G
+/// (`lowmem = 0xb0000000 unless ram_size >= 0xb0000000`). The TD HOB memory
+/// ranges follow that split.
+const Q35_HIGH_MEMORY_SPLIT: u64 = 0xB000_0000;
 
 fn measure_td_hob_from_witness_data(data: &[u8], memory_size: u64) -> Result<Vec<u8>> {
     let mut input = data;
@@ -215,7 +229,7 @@ fn measure_td_hob_from_witness_data(data: &[u8], memory_size: u64) -> Result<Vec
     if last_end < last_start {
         bail!("Invalid last memory range: end < start");
     }
-    if memory_size >= TDX_KERNEL_HASH_STABLE_MIN_MEMORY {
+    if memory_size >= Q35_HIGH_MEMORY_SPLIT {
         if last_start < 0x80000000u64 {
             add_memory_resource_hob(0x07, last_start, 0x80000000u64 - last_start);
         }
@@ -278,12 +292,22 @@ fn rtmr1_log_from_kernel_hash(kernel_hash: Vec<u8>) -> Vec<Vec<u8>> {
     ]
 }
 
+/// The kernel command-line suffix OVMF appends before measuring.
+///
+/// `QemuKernelLoaderFsDxe` exposes the initrd as a loader-fs file and appends
+/// this so the kernel picks it up, so the measured command line is never the
+/// bare image-provided one. Every site that reconstructs the measured command
+/// line must go through [`measured_kernel_cmdline`] rather than restating this.
+pub const OVMF_INITRD_CMDLINE_SUFFIX: &str = " initrd=initrd";
+
 /// Return the measured TDX kernel command line for a metadata cmdline.
 ///
 /// This mirrors the existing dstack TDX measurement replay path, which measures
 /// the image-provided cmdline plus OVMF/QEMU's `initrd=initrd` suffix.
+///
+/// AMD SEV-SNP does not share this suffix; see `sev::normalize_kernel_cmdline`.
 pub fn measured_kernel_cmdline(base_cmdline: &str) -> String {
-    format!("{base_cmdline} initrd=initrd")
+    format!("{base_cmdline}{OVMF_INITRD_CMDLINE_SUFFIX}")
 }
 
 /// Generate the image-static TDX measurement material from an image directory.
@@ -302,8 +326,8 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
 
     // Validate that the image identity carried by the measured cmdline is
     // well-formed. The normalized rootfs hash is not stored separately to keep
-    // the TDX projection compact; it is already committed by the measured
-    // kernel command line digest.
+    // the TDX projection compact; it is already committed by the command line
+    // the document carries.
     crate::sev::rootfs_hash_from_cmdline(Some(&base_cmdline))
         .context("failed to parse dstack.rootfs_hash from TDX cmdline")?;
 
@@ -319,19 +343,24 @@ pub fn tdx_os_image_measurement_for_image_dir(image_dir: &Path) -> Result<TdxOsI
     let kernel_path = image_dir.join(&meta.kernel);
     let kernel =
         fs::read(&kernel_path).with_context(|| format!("cannot read {}", kernel_path.display()))?;
-    let kernel_authenticode = patched_kernel_authenticode_sha384(
-        &kernel,
-        initrd.len() as u32,
-        TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
-        0x28000,
-    )
-    .context("failed to compute high-memory QEMU-patched kernel hash")?;
+    // Which bytes OVMF will measure is a property of this image's firmware, so
+    // it is read from the image rather than from anything the host says.
+    let kernel_authenticode = if meta.kernel_header_normalized {
+        kernel_authenticode_sha384(&kernel)?
+    } else {
+        patched_kernel_authenticode_sha384(
+            &kernel,
+            initrd.len() as u32,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+            0x28000,
+        )
+        .context("failed to compute high-memory QEMU-patched kernel hash")?
+    };
 
     Ok(TdxOsImageMeasurement {
+        kernel_header_normalized: meta.kernel_header_normalized,
         image: TdxImageMeasurement {
-            kernel_cmdline_sha384: crate::kernel::measure_cmdline(&measured_kernel_cmdline(
-                &base_cmdline,
-            )),
+            base_cmdline: base_cmdline.clone(),
             kernel_authenticode,
             initrd_sha384: measure_sha384(&initrd),
         },
@@ -359,19 +388,23 @@ pub fn tdx_measurement_hash_for_image_dir(image_dir: &Path) -> Result<[u8; 32]> 
 /// Compute expected TDX measurements from self-contained TDX measurement
 /// material and the three ACPI table digests captured in RTMR[0].
 ///
-/// This path intentionally does not download or read the OS image. Because
-/// QEMU's patched kernel Authenticode hash depends on exact guest RAM below
-/// `TDX_KERNEL_HASH_STABLE_MIN_MEMORY`, the no-image-download path supports
-/// CVMs at or above that threshold plus the exact 2 GiB placement, which QEMU
-/// patches to the same kernel bytes as the high-memory case.
+/// This path intentionally does not download or read the OS image. Every
+/// guest memory size is supported: the kernel digest is a plain hash of the
+/// image file, because the setup header is normalized on both sides.
 pub fn tdx_measurements_from_measurement_document(
     document: &TdxOsImageMeasurementDocument,
     vm_config: &VmConfig,
     acpi_hashes: &TdxRtmr0AcpiHashes,
 ) -> Result<crate::TdxMeasurements> {
-    if !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size) {
+    let measurement = document
+        .decode_measurement()
+        .map_err(anyhow::Error::msg)
+        .context("failed to decode TDX measurement CBOR")?;
+    if !measurement.kernel_header_normalized
+        && !tdx_kernel_hash_uses_precomputed_high_mem(vm_config.memory_size)
+    {
         bail!(
-            "TDX lite attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes",
+            "TDX lite attestation without image download requires memory_size == {} bytes ({} MiB) or >= {} bytes ({} MiB); got {} bytes. This restriction only applies to images whose OVMF does not normalize the kernel setup header, because QEMU's rewrite moves the initrd with guest RAM; re-emit the image to remove it",
             TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
             TDX_KERNEL_HASH_COMPAT_2G_MEMORY / 1024 / 1024,
             TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
@@ -379,11 +412,6 @@ pub fn tdx_measurements_from_measurement_document(
             vm_config.memory_size
         );
     }
-
-    let measurement = document
-        .decode_measurement()
-        .map_err(anyhow::Error::msg)
-        .context("failed to decode TDX measurement CBOR")?;
     let mrtd = select_mrtd(&measurement, vm_config)?;
 
     let td_hob_hash =
@@ -413,11 +441,13 @@ pub fn tdx_measurements_from_measurement_document(
         "tdx.measurement.image.initrd_sha384",
         48,
     )?;
-    let kernel_cmdline_hash = validate_bytes_field(
-        &measurement.image.kernel_cmdline_sha384,
-        "tdx.measurement.image.kernel_cmdline_sha384",
-        48,
-    )?;
+    // Now that the document carries the command line rather than its digest,
+    // the no-download path can enforce the same rootfs-identity invariant the
+    // build path does, instead of trusting an opaque 48-byte value.
+    crate::sev::rootfs_hash_from_cmdline(Some(&measurement.image.base_cmdline))
+        .context("failed to parse dstack.rootfs_hash from tdx.measurement.image.base_cmdline")?;
+    let kernel_cmdline_hash =
+        crate::kernel::measure_cmdline(&measured_kernel_cmdline(&measurement.image.base_cmdline));
     let rtmr2 = measure_log(&[kernel_cmdline_hash, initrd_hash]);
 
     Ok(crate::TdxMeasurements {
@@ -480,6 +510,7 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
         .root_verity(true)
         .hotplug_off(vm_config.hotplug_off)
         .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+        .normalized_setup_header(meta.kernel_header_normalized)
         .maybe_pic(vm_config.pic)
         .maybe_qemu_version(vm_config.qemu_version.clone())
         .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -505,6 +536,7 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
         initrd_data.len() as u32,
         vm_config.memory_size,
         0x28000,
+        meta.kernel_header_normalized,
     )
     .context("failed to compute RTMR1")?;
     let rtmr1 = measure_log(&rtmr1_log);
@@ -571,6 +603,7 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         .root_verity(true)
         .hotplug_off(vm_config.hotplug_off)
         .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+        .normalized_setup_header(meta.kernel_header_normalized)
         .maybe_pic(vm_config.pic)
         .maybe_qemu_version(vm_config.qemu_version.clone())
         .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -609,6 +642,7 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         initrd_data.len() as u32,
         vm_config.memory_size,
         0x28000,
+        meta.kernel_header_normalized,
     )
     .context("failed to compute RTMR1")?;
     let rtmr1 = measure_log(&rtmr1_log);
@@ -625,4 +659,76 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
         rtmr1,
         rtmr2,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kernel::measure_cmdline;
+
+    /// Shaped like a real `os/image/kernel-cmdline.sh` command line: it always
+    /// carries `dstack.rootfs_hash`, which is what pins the rootfs.
+    const SAMPLE_BASE_CMDLINE: &str = "console=ttyS0 init=/init panic=1 \
+         dstack.rootfs_hash=1111111111111111111111111111111111111111111111111111111111111111 \
+         dstack.rootfs_size=4096";
+
+    fn sample_measurement() -> TdxOsImageMeasurement {
+        TdxOsImageMeasurement {
+            image: TdxImageMeasurement {
+                base_cmdline: SAMPLE_BASE_CMDLINE.to_string(),
+                kernel_authenticode: vec![0x22; 48],
+                initrd_sha384: vec![0x33; 48],
+            },
+            tdvf: TdxTdvfMeasurement {
+                ovmf_variant: OvmfVariant::Pre202505,
+                mrtd: TdxMrtdCandidates {
+                    single_pass: vec![0x44; 48],
+                    two_pass: vec![0x55; 48],
+                },
+                td_hob_witness: vec![0x66; 16],
+            },
+            kernel_header_normalized: true,
+        }
+    }
+
+    #[test]
+    fn measured_kernel_cmdline_appends_the_ovmf_suffix() {
+        assert_eq!(
+            measured_kernel_cmdline(SAMPLE_BASE_CMDLINE),
+            format!("{SAMPLE_BASE_CMDLINE}{OVMF_INITRD_CMDLINE_SUFFIX}"),
+        );
+        assert_eq!(OVMF_INITRD_CMDLINE_SUFFIX, " initrd=initrd");
+    }
+
+    /// Golden vector. The command-line event is the first RTMR[2] entry, so a
+    /// change here silently invalidates every deployed `os_image_hash`. If this
+    /// fails, the measurement protocol changed: that must be a deliberate,
+    /// reviewed decision, not a side effect.
+    #[test]
+    fn rtmr2_command_line_event_digest_is_stable() {
+        let digest = measure_cmdline(&measured_kernel_cmdline(SAMPLE_BASE_CMDLINE));
+        assert_eq!(hex::encode(digest), "bb4154e6e429e184bc63d544ae5720f868e5859b378b13bab69860e1fc65c09f1b67277bba010841fbe8bc3619e58d58");
+    }
+
+    /// Golden vector for the full RTMR[2] replay (command line, then initrd).
+    #[test]
+    fn rtmr2_replay_is_stable() {
+        let cmdline_digest = measure_cmdline(&measured_kernel_cmdline(SAMPLE_BASE_CMDLINE));
+        let initrd_digest = vec![0x33; 48];
+        assert_eq!(
+            hex::encode(measure_log(&[cmdline_digest, initrd_digest])),
+            "2fb6d31492cd2f073fe8fdaa9dbdff4dfdde92bf07f9a16c2b7123ae7be5090007974d33bfe8807ac56974160f8f2948",
+        );
+    }
+
+    /// Golden vector for the CBOR that `sha256sum.txt` commits to, and hence
+    /// for `os_image_hash` itself. Changing the encoding requires rebuilding and
+    /// re-registering every image, so it must never change accidentally.
+    #[test]
+    fn tdx_measurement_document_cbor_is_stable() {
+        assert_eq!(
+            hex::encode(sample_measurement().to_cbor_vec()),
+            "a36776657273696f6e0465696d616765a467636d646c696e65788c636f6e736f6c653d747479533020696e69743d2f696e69742070616e69633d312064737461636b2e726f6f7466735f686173683d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131312064737461636b2e726f6f7466735f73697a653d34303936736b65726e656c5f61757468656e7469636f6465583022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222278186b65726e656c5f6865616465725f6e6f726d616c697a6564f56d696e697472645f73686133383458303333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333336474647666a3646f766d6669707265323032353035646d727464a26b73696e676c655f7061737358304444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444446874776f5f7061737358305555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555556674645f686f625066666666666666666666666666666666",
+        );
+    }
 }

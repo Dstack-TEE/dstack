@@ -20,3 +20,8 @@ tdx-attest.workspace = true
 dstack-guest-agent-rpc.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
 tokio.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+x509-parser.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

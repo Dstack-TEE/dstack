@@ -182,6 +182,15 @@ the method that derives a stable, attestable key.
 `not_before` must be earlier than `not_after` when both are set; otherwise the
 call fails.
 
+With `usage_ra_tls` set, the certificate carries the CVM's attestation in the
+`PHALA_RATLS_ATTESTATION` extension (OID `1.3.6.1.4.1.62397.1.8`). v1 always puts
+the MessagePack V1 schema there (see [Attestation](#attestation)), both in the CSR
+and in the certificate issued from it, because the signer embeds the attestation
+in the form it received. Two requirements follow: the KMS that signs the CSR must
+be 0.5.9 or later, and so must any RA-TLS peer that verifies the certificate.
+v0 `GetTlsKey` keeps the legacy SCALE form wherever it can represent the
+attestation.
+
 This first cut serves only the integrated one-step mode, where the agent holds the
 key. A mode that signs a caller-supplied CSR or public key, so the private key
 never leaves the caller, is a plausible extension. It would arrive as added fields
@@ -536,9 +545,9 @@ which covers every supported platform.
 implementation is `dstack/dstack-attest/src/v1.rs`, and `dstack-verifier` is the
 reference consumer.
 
-The wire format is sniffed from the first byte. A leading `0x00` marks the legacy
-SCALE-encoded V0 form; a MessagePack map prefix marks V1. V1 decodes as a
-MessagePack map produced by `rmp_serde::to_vec_named`:
+v1 `Attest` always returns the V1 schema: a MessagePack map produced by
+`rmp_serde::to_vec_named`, whatever platform the CVM runs on and whatever
+runtime event-log version it uses:
 
 ```text
 { "version": u64,
@@ -554,6 +563,15 @@ which `GetQuote` had no field for. The other three platforms have no TDX quote,
 which is why `GetQuote` could not answer on them at all.
 
 `stack.data.report_data` carries the 64 bytes the caller asked for.
+
+A general `VersionedAttestation` decoder still has to accept the legacy form, in
+which the first byte is `0x00` and the rest is SCALE-encoded V0. The frozen v0
+`Attest` and `GetTlsKey` still produce it, and so do the KMS and gateway
+certificates built on them and every older release; a decoder tells the two
+forms apart by that first byte. A client that reads only v1 `Attest` can treat
+anything other than a MessagePack map as malformed. MessagePack needs dstack
+0.5.9 or later on the verifying side (`dstack-verifier`, KMS, gateway); earlier
+releases decode only SCALE.
 
 V2 runtime events in the event log always include the hex-encoded preimage of
 their digest; a verifier should check that `sha384(hex_decode(preimage))` equals
@@ -711,7 +729,7 @@ For readers porting from the unversioned API.
 
 | v0 | v1 | Note |
 |---|---|---|
-| `GetTlsKey` | `IssueCert` | Renamed; same behaviour |
+| `GetTlsKey` | `IssueCert` | Renamed; the embedded RA-TLS attestation is always MessagePack V1 |
 | `GetKeyArgs.path` + `.purpose` | `GetKeyRequest.domain` | Merged; both KDF inputs now |
 | `GetKeyArgs.algorithm` (defaulted) | `GetKeyRequest.algorithm` | Required; no `k256` alias |
 | — | `GetKeyResponse.public_key` | Added |

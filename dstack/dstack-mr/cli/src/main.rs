@@ -112,7 +112,7 @@ fn main() -> Result<()> {
             let firmware_path = parent_dir.join(&image_info.bios).display().to_string();
             let kernel_path = parent_dir.join(&image_info.kernel).display().to_string();
             let initrd_path = parent_dir.join(&image_info.initrd).display().to_string();
-            let cmdline = image_info.cmdline + " initrd=initrd";
+            let cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
             // The image declares its OVMF layout. Older metadata.json files
             // predate the field, so fall back to the only layout that existed.
@@ -126,6 +126,7 @@ fn main() -> Result<()> {
                 .initrd(&initrd_path)
                 .kernel_cmdline(&cmdline)
                 .maybe_two_pass_add_pages(config.two_pass_add_pages)
+                .normalized_setup_header(image_info.kernel_header_normalized)
                 .maybe_pic(config.pic)
                 .smm(config.smm)
                 .maybe_pci_hole64_size(config.pci_hole64_size)
@@ -322,7 +323,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
     let firmware = image_dir.join(&image_info.bios).display().to_string();
     let kernel = image_dir.join(&image_info.kernel).display().to_string();
     let initrd = image_dir.join(&image_info.initrd).display().to_string();
-    let cmdline = format!("{} initrd=initrd", image_info.cmdline);
+    let cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
     // Same resolution order as the verifier (see verifier::compute_measurement_details):
     // explicit vm_config.ovmf_variant > image_info.ovmf_variant > legacy default.
@@ -341,6 +342,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
         .root_verity(true)
         .hotplug_off(vm.hotplug_off)
         .maybe_two_pass_add_pages(vm.qemu_single_pass_add_pages)
+        .normalized_setup_header(image_info.kernel_header_normalized)
         .maybe_pic(vm.pic)
         .maybe_qemu_version(vm.qemu_version.clone())
         .maybe_pci_hole64_size(if vm.pci_hole64_size > 0 {
