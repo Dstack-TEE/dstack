@@ -9,7 +9,7 @@ ARG DSTACK_REV
 ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
 RUN ./pin-packages.sh ./builder-pinned-packages.txt
-RUN apt-get update && \
+RUN apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
     git \
     build-essential \
@@ -35,7 +35,7 @@ COPY --from=build-shared pin-packages.sh /build/
 COPY builder/shared/pinned-packages.txt /build/
 WORKDIR /build
 RUN ./pin-packages.sh ./pinned-packages.txt && \
-    apt-get update && \
+    apt-get update -o APT::Update::Error-Mode=any && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
