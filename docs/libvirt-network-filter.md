@@ -20,6 +20,11 @@ The measurable acceptance criteria are:
   that TAP carries a binding.
 - `network_filter = "libvirt"` creates the TAP and filter binding before QEMU
   is submitted to Supervisor, and uses QEMU `-netdev tap`.
+- An nwfilter binding outlives the TAP it was bound to, so a teardown clears
+  the binding at every name that VM could have used, whether or not the
+  interface is still there. `dstack-vmm netd list` shows a binding whose
+  interface is already gone as a `binding` row; remove one with
+  `dstack-vmm netd remove-interface <name>`.
 - A failed TAP or filter setup prevents QEMU from starting and rolls back all
   interfaces prepared for that VM.
 - Normal stop and removal delete the filter binding and TAP.
@@ -108,6 +113,19 @@ sockets and distinct filesystem permissions.
 arguments. It never accepts a command, executable path, TAP name, or raw XML
 from a client. Filter XML is generated internally with XML escaping and is
 validated by libvirt.
+
+Teardown by identity only reaches the NIC indices its caller still has a record
+of, and that record is written *after* the interface exists — a VMM killed in
+between leaves a TAP nothing on disk points at, and a manifest that lost a NIC
+leaves the same thing behind. `RemoveVm` names a VM instead of an interface
+and derives every name that VM could occupy, so neither has to be recorded for
+teardown to work. The VMM sweeps before preparing a launch as well as on stop,
+which makes a launch self-healing regardless of what the record says.
+
+A prepare also carries `workdir`, which `netd` does not need to build the TAP.
+It names the VM's directory on the host: untrusted, never read for a decision,
+and present only so an operator reading `netd`'s log can get from an opaque TAP
+name back to the VM.
 
 ## Deployment modes
 
@@ -199,8 +217,10 @@ sudo dstack-vmm --config ./vmm.toml \
 ```
 
 User networking and a caller-supplied netdev never ask `netd` to build an
-interface. Bridge and macvtap do ask, and fail closed if `netd` is
-unavailable.
+interface. The VMM still contacts the socket for such a VM -- every launch and
+every stop releases whatever the VM held, before it decides whether it needs
+anything built -- but nothing about the VM depends on the answer. Bridge and
+macvtap do ask, and fail closed if `netd` is unavailable.
 
 Filtered TAP netdevs follow the node's `vhost` and `queues` settings like any
 other TAP-backed NIC (see [network-data-plane.md](network-data-plane.md)). The

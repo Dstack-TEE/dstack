@@ -26,6 +26,9 @@ message PrepareBridgeRequest {
   bool filtered = 5;
   // virtio-net queue pairs. Zero or one creates a single-queue TAP.
   uint32 queues = 6;
+  // The VM's working directory on the host. Only logged, so an operator can
+  // get from a TAP name back to the VM; never used for a decision.
+  string workdir = 7;
 }
 
 message PrepareMacvtapRequest {
@@ -37,6 +40,9 @@ message PrepareMacvtapRequest {
   string mode = 5;
   // virtio-net queue pairs. Zero or one creates a single-queue device.
   uint32 queues = 6;
+  // The VM's working directory on the host. Only logged; see
+  // PrepareBridgeRequest.workdir.
+  string workdir = 7;
 }
 
 // What netd built, so the caller can verify it before handing it to QEMU.
@@ -46,6 +52,45 @@ message PreparedInterface {
   string device = 2;
   // Queue pairs the interface was created with.
   uint32 queues = 3;
+}
+
+// Names one VM of one VMM instance.
+message VmRef {
+  string instance_id = 1;
+  string vm_id = 2;
+}
+
+message RemoveVmResponse {
+  // How many interfaces were deleted.
+  uint32 removed = 1;
+}
+
+message InterfaceName {
+  string tap = 1;
+}
+
+message ListInterfacesRequest {
+  // Only interfaces recorded as this instance's. Empty lists every interface
+  // netd owns, including ones it cannot attribute.
+  string instance_id = 1;
+}
+
+// One host resource netd holds.
+message InterfaceRecord {
+  string tap = 1;
+  // "tap", "macvtap", or "binding" for an nwfilter binding whose interface is
+  // already gone.
+  string kind = 2;
+  // The owner, when the interface carries an ownership record that
+  // re-derives its name. Absent means the owner is unknown, not that there is
+  // none.
+  optional string instance_id = 3;
+  optional string vm_id = 4;
+  optional uint32 nic_index = 5;
+}
+
+message InterfaceList {
+  repeated InterfaceRecord interfaces = 1;
 }
 
 message CheckInterfaceRequest {
@@ -64,6 +109,17 @@ service Netd {
   // Delete an interface and its binding. Deleting one that does not exist
   // succeeds.
   rpc RemoveInterface(InterfaceIdentity) returns (google.protobuf.Empty);
+  // Delete every interface and binding one VM could hold, by deriving each
+  // name its identity can produce. Reaches interfaces the caller has no record
+  // of: one a crash left before it was recorded, or one whose NIC the VM no
+  // longer has.
+  rpc RemoveVm(VmRef) returns (RemoveVmResponse);
+  // Delete one interface by name. For interfaces nothing can attribute, such
+  // as ones built before netd recorded ownership. The name must be one netd
+  // could have created.
+  rpc RemoveInterfaceByName(InterfaceName) returns (google.protobuf.Empty);
+  // Everything netd holds, read off the host.
+  rpc ListInterfaces(ListInterfacesRequest) returns (InterfaceList);
   // Verify an interface, and optionally its binding, exists. For operations
   // and integration diagnostics; launches use the Prepare calls.
   rpc CheckInterface(CheckInterfaceRequest) returns (google.protobuf.Empty);

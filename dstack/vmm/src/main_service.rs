@@ -928,6 +928,21 @@ impl VmmRpc for RpcHandler {
 
     async fn update_vm(self, request: UpdateVmRequest) -> Result<Id> {
         info!(vm_id = %request.id, "update_vm RPC called");
+        // A VM being removed is not one to reconfigure. Before the lock,
+        // because removal holds it across the whole teardown and anything that
+        // only asked afterwards would wait that out in order to be told no.
+        self.app.refuse_if_removing(&request.id)?;
+        // Held from here rather than around the parts that touch the host,
+        // because everything below writes into the workdir -- the compose
+        // file first, the manifest last -- and `put_manifest` creates the
+        // directory it writes into. An update that resumed after a removal
+        // deleted that directory would recreate it holding nothing but a
+        // manifest: invisible to `list_vms`, unloadable at every start, and
+        // claiming the VM's netd interfaces against collection forever.
+        let _launch = self.app.launch_lock(&request.id).await;
+        // Again under the lock: removal can have claimed the VM while this
+        // waited for it.
+        self.app.refuse_if_removing(&request.id)?;
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
@@ -1008,18 +1023,19 @@ impl VmmRpc for RpcHandler {
                 let networks = networks_from_proto(&request.networks, &cvm)?;
                 resolve_requested_networks(&networks, &cvm, manifest.vcpu)?
             };
+            // Under the launch lock this whole call holds. Reading "not
+            // running" outside it and acting on the answer inside is the exact
+            // race the lock exists to close: a launch can start, prepare its
+            // interfaces and deploy QEMU in between, and the release would
+            // then delete the interfaces of a VM that is running -- silently,
+            // since QEMU stays up and the supervisor still reports it healthy.
             let is_running = self
                 .app
                 .supervisor
                 .info(&request.id)
                 .await?
                 .is_some_and(|info| info.state.status.is_running());
-            if !is_running {
-                let runtime_networks = vm_work_dir.runtime_networks();
-                self.app
-                    .remove_netd_networks(&request.id, &runtime_networks)
-                    .await
-                    .context("failed to remove previous netd-managed networking")?;
+            if !is_running && self.app.release_vm_interfaces(&request.id).await {
                 vm_work_dir.clear_runtime_networks()?;
             }
             manifest.networks = networks;
@@ -1772,6 +1788,9 @@ mod tests {
         .expect("a named backend is an override");
     }
 
+    /// Deliberately restated rather than calling `NetworkingMode::as_str`: the
+    /// test below checks that what `GetInfo` reports is accepted back, and a
+    /// helper that shares the production mapping could only ever agree with it.
     fn networking_mode_name_for_test(mode: NetworkingMode) -> &'static str {
         match mode {
             NetworkingMode::Bridge => "bridge",

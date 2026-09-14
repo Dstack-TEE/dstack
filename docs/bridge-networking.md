@@ -171,7 +171,8 @@ needs an `allow` line for the bridge.
 - `netd` creates a persistent TAP, attaches it to the bridge, binds the nwfilter if the node filters, and the VMM passes `-netdev tap,id=net0,ifname=<tap>,...`
 - Guest MAC address is derived from SHA256 of the VM ID, with an optional configurable prefix (stable across restarts for DHCP IP consistency)
 - The host DHCP server (dnsmasq) assigns an IP to the VM
-- The TAP outlives QEMU and is deleted when the VMM tears the VM's networking down
+- The TAP outlives QEMU and is deleted when the VMM tears the VM's networking down, so a VM that crashes does not leave its filter rules attached to a name the next VM could take
+- Every interface `netd` creates records which VM of which VMM instance it belongs to, in the kernel's interface alias — see [Who owns an interface](#who-owns-an-interface)
 - The VMM process needs neither root nor `CAP_NET_ADMIN`; `netd` holds that privilege in a separate service
 
 ### MAC address prefix
@@ -236,6 +237,76 @@ macvtap or custom NIC is refused at deployment, where the caller is there to be
 told. An unpinned mapping goes to the first user-mode NIC; a VM that has none is
 not refused — it may have been deployed before this — but every mapping it
 strands is named in the launch log.
+
+## Who owns an interface
+
+`netd` names an interface `dt<12 hex>`, a digest of (VMM instance, VM, NIC
+index). That answers "where is this VM's interface" but not "whose is this
+interface" — and the second question is the one a leaked interface poses. So
+`netd` also records the identity on the interface itself:
+
+```console
+$ ip -d link show dtc41d9e0b7a52 | grep alias
+    alias dstack1:0:path-3f9a1c8e7d2b4a60:0a1b2c3d4e5f6071
+```
+
+The kernel holds that for exactly the interface's lifetime, so unlike a file on
+disk it cannot be written late, lost, or left behind. It is a hint, never an
+authority: a record is believed only when re-deriving the interface name from
+it reproduces the name it is written on, so a forged, truncated or ambiguous
+record reads the same as no record at all.
+
+Teardown does not need it — a sweep derives the names it deletes. What needs it
+is an operator, and a host running several VMM instances, where it is the only
+thing that tells one instance's interfaces from another's.
+
+```bash
+# What netd holds on this host
+sudo dstack-vmm netd list
+
+# Everything one VM holds, for a VM whose VMM will never ask again
+sudo dstack-vmm netd remove-vm --instance path-3f9a1c8e7d2b4a60 --vm 0a1b2c3d4e5f6071
+```
+
+### When a release does not land
+
+Every stop and every removal asks `netd` to sweep that VM's interfaces, by
+deriving each of the 256 names its identity could produce. That needs no
+record, and it reaches what a per-NIC teardown cannot: an interface a crash
+left behind before anything on disk pointed at it, or one whose NIC the
+manifest has since dropped.
+
+A removal deletes the VM's directory, and that directory — with its `.removing`
+marker — is the only thing left that says to try again. So it is deleted only
+once the sweep has landed. If `netd` refused, or was not there to ask, the
+directory stays and the next VMM start resumes the removal; `RemoveVm` is
+idempotent, so the retry costs one round trip. A VM that never asked `netd` for
+an interface is unaffected: there is nothing for `netd` to be holding.
+
+The VMM persists `.netd-pending` before asking netd to prepare an interface and
+clears it only after a successful whole-VM sweep. This cleanup marker survives
+failed launches and network configuration changes, even if the runtime snapshot
+is absent or replaced by a user-mode topology. Older snapshots are promoted to
+the marker before cleanup or replacement. A failed cleanup during an update
+also leaves the old snapshot intact.
+
+On an unfiltered node, an unavailable `libvirtd` does not make an otherwise
+successful TAP sweep fail. Filtered nodes still require confirmation that their
+nwfilter bindings have been released; deleting the TAP alone is not sufficient.
+
+What no VMM will retry is an interface whose VM directory an operator deleted
+by hand, or one recorded under an instance ID no VMM uses any more. `netd list`
+shows both, with the instance and VM they are recorded under:
+
+```bash
+sudo dstack-vmm netd list
+sudo dstack-vmm netd remove-vm --instance <instance> --vm <vm>
+sudo dstack-vmm netd remove-interface dtc41d9e0b7a52
+```
+
+Changing `cvm.instance_id` — or `run_path`, which it is derived from — strands
+interfaces the same way. Running VMs keep working until they stop, and
+`netd list` still shows the old instance ID, which is what `remove-vm` needs.
 
 ### Mixing networking modes
 
