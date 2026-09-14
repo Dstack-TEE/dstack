@@ -131,7 +131,9 @@ message IssueCertRequest {
   string subject = 1;
   // DNS alternative names for the certificate.
   repeated string alt_names = 2;
-  // Include the attestation quote in the certificate (RA-TLS).
+  // Include the attestation in the certificate (RA-TLS). The embedded
+  // attestation is always the MessagePack V1 schema, so the signing KMS and
+  // any verifying peer must be dstack 0.5.9 or later.
   bool usage_ra_tls = 3;
   // Key usage server auth.
   bool usage_server_auth = 4;
@@ -223,7 +225,8 @@ message AttestRequest {
 }
 
 message AttestResponse {
-  // The versioned dstack attestation.
+  // The versioned dstack attestation, always the MessagePack V1 schema
+  // (never the legacy SCALE form). See `docs/guest-api-v1.md`.
   bytes attestation = 1;
 
   // Boot-time GPU attestation evidence. Empty unless the request set
