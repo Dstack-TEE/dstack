@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::app::{
-    clamp_queues_without_netd, make_sys_config, needs_netd_interface, resolved_networks,
-    settle_vhost, simulator_config_for_manifest, sync_tee_simulator_config, Image, VmConfig,
-    VmWorkDir,
+    make_sys_config, needs_netd_interface, resolved_networks, settle_vhost,
+    simulator_config_for_manifest, sync_tee_simulator_config, Image, VmConfig, VmWorkDir,
 };
 use crate::config::Config;
 use crate::main_service;
@@ -280,42 +279,19 @@ Compose file content (first 200 chars):
         gateway_enabled: app_compose.gateway_enabled(),
     };
 
-    // One-shot has no netd lifecycle, so a bridge NIC that only wanted the
-    // vCPU-scaled default drops to a single queue here exactly as it would on a
-    // server without netd. Anything still needing an interface was asked for
-    // explicitly, and is refused rather than silently downgraded.
-    let requested = if manifest.networks.is_empty() {
-        vec![config.cvm.networking.nic.clone()]
-    } else {
-        manifest.networks.clone()
-    };
     let mut runtime_networks = resolved_networks(&manifest, &config.cvm);
-    let clamped = clamp_queues_without_netd(&requested, &mut runtime_networks, &config.cvm, false);
-    // The server settles vhost after clamping, because clamping changes whether
-    // a NIC needs netd and that changes which netdev it gets. Skipping it here
-    // left `vhost_enabled()` reading as a request rather than a decision, so
-    // the launch warned about a `/dev/vhost-net` the netdev it then built does
-    // not open.
-    let vhost_denied = settle_vhost(&mut runtime_networks, &config.cvm);
-    if vhost_denied > 0 {
-        tracing::warn!(
-            "no qemu-bridge-helper found, so {vhost_denied} bridge interface(s) fall back to the \
-             non-vhost bridge netdev; set cvm.qemu_bridge_helper to enable vhost"
-        );
-    }
-    if clamped > 0 {
-        tracing::warn!(
-            "one-shot execution has no netd, so {clamped} bridge interface(s) fall back to a \
-             single queue pair; run the VMM server to let queue pairs scale with vCPUs"
-        );
-    }
-    if !dry_run
-        && runtime_networks
-            .iter()
-            .any(|network| needs_netd_interface(network, &config.cvm))
-    {
+    // Settle the data plane before anything reads it, so `vhost_enabled()` is a
+    // decision rather than a request and the launch does not warn about a
+    // `/dev/vhost-net` the netdev it then builds never opens.
+    settle_vhost(&mut runtime_networks);
+    // Bridge and macvtap host interfaces belong to netd, whose lifecycle
+    // one-shot does not manage. Refusing is the honest answer: the alternative
+    // was to quietly build a different interface here than the server would,
+    // and then report the VM as if it had the one it asked for.
+    if !dry_run && runtime_networks.iter().any(needs_netd_interface) {
         anyhow::bail!(
-            "one-shot execution does not manage netd interface lifecycle; run the VMM server directly or use --dry-run"
+            "one-shot execution does not manage netd interface lifecycle, which bridge and \
+             macvtap networking need; run the VMM server directly or use --dry-run"
         );
     }
 

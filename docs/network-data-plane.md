@@ -64,8 +64,8 @@ refuses a request for four queue pairs should not hand out sixteen by itself.
 The hard ceiling from any source is 64.
 
 Without vhost the default is a single queue pair. The QEMU main loop drains
-every queue on one thread, so extra queues buy little while still costing a
-netd interface, more MSI-X vectors, and a changed guest device. An explicit
+every queue on one thread, so extra queues buy little while still costing more
+MSI-X vectors and a changed guest device. An explicit
 queue count is still honoured without vhost, since that combination is a
 deliberate request rather than a default. The two defaults travelling together
 also means a node that never sets `vhost` keeps building the device its VMs
@@ -150,9 +150,9 @@ measured, so attestation and app identity are unaffected. Before flipping it:
    restarting. The VMM warns at startup when its own access fails, but it
    cannot refuse on that basis — QEMU need not share its credentials.
 
-2. **Restart `netd` before or together with the VMM.** Multiqueue bridge NICs
-   are prepared by `netd`, and the VMM checks that `netd` echoes the queue
-   count it built. An older `netd` fails that check; the launch is rolled back
+2. **Restart `netd` before or together with the VMM.** Every bridge and
+   macvtap NIC is prepared by `netd`, and the VMM checks that `netd` echoes the
+   queue count it built. An older `netd` fails that check; the launch is rolled back
    and fails with the reason in the VMM log, but the VM does not start until
    `netd` is upgraded.
 
@@ -165,35 +165,22 @@ measured, so attestation and app identity are unaffected. Before flipping it:
 | Mode | netdev | vhost | queues > 1 |
 |---|---|---|---|
 | `user` | `user,...` | no backend | not supported |
-| `bridge` | `tap,ifname=` via netd, else `tap,br=,helper=`, else `bridge,br=` | yes | yes, through netd |
-| `bridge` with libvirt filtering | `tap,ifname=` | yes | yes, through netd |
+| `bridge` | `tap,ifname=` via netd | yes | yes |
 | `macvtap` | `tap,fd=` / `tap,fds=` | yes | yes |
 | `custom` | operator's own string | operator's own string | no, not settable |
 
-QEMU's `bridge` netdev accepts neither `vhost=` nor `queues=`, so enabling
-vhost switches bridge mode to a `tap` netdev driven by the same setuid
-`qemu-bridge-helper`. The VMM still needs no network privileges. The helper has
-no compiled-in default path for the `tap` netdev, so the VMM probes the known
-distribution locations; set `cvm.qemu_bridge_helper` if yours is elsewhere. If
-no helper is found the NIC falls back to the non-vhost `bridge` netdev with a
-warning, because a node-wide setting must not stop a node from booting VMs
-that never asked for it.
-
-The helper returns exactly one descriptor, which is why more than one queue
-pair in bridge mode is created by `netd` instead: it adds a persistent
-`multi_queue` TAP that QEMU then opens once per queue. `netd` requires the
-`virsh` binary to be installed even when nothing is filtered, though it does
-not require a reachable `libvirtd`. That applies whether or
-not libvirt filtering is on, so a bridge node needs `netd` to get the default
-queue count (see [libvirt-network-filter.md](libvirt-network-filter.md)).
-Without it, bridge NICs fall back to a single queue pair with a warning rather
-than failing to launch; a VM that asked for a queue count explicitly still
-fails, so the caller learns their request was not met. `netd` is probed by
-connecting, not by looking for its socket file, because a `netd` that died
-leaves the socket behind. One-shot `dstack-vmm run` has no netd lifecycle at
-all and behaves like a node without it. `netd` reports back the
-queue count it created, and the VMM refuses to launch on a mismatch — a `netd`
-deployed separately as a root service can be older than the VMM asking it for
+QEMU's `bridge` netdev accepts neither `vhost=` nor `queues=`, and the setuid
+`qemu-bridge-helper` behind its `tap` netdev returns exactly one descriptor. So
+bridge mode runs on a TAP that `netd` creates: persistent, `multi_queue` when
+asked for, and opened once per queue by QEMU. That is true of every bridge NIC,
+filtered or not, single-queue or not — see
+[bridge-networking.md](bridge-networking.md) for why the host interface has one
+owner. `netd` requires the `virsh` binary to be installed even when nothing is
+filtered, though it does not require a reachable `libvirtd`. One-shot
+`dstack-vmm run` does not manage netd interface lifecycle, so it refuses bridge
+and macvtap NICs outside `--dry-run`. `netd` reports back the queue count it
+created, and the VMM refuses to launch on a mismatch — a `netd` deployed
+separately as a root service can be older than the VMM asking it for
 multiqueue, and QEMU would otherwise reject the interface from inside the
 per-VM launcher.
 
@@ -253,7 +240,7 @@ multiqueue line rate with zero `swiotlb buffer is full` events.
 `vectors` is derived, never configured: `2N + 2`, one vector per queue
 direction plus config and control. One queue pair emits no `mq=on` or
 `vectors=` at all, leaving the guest device line byte for byte identical to the
-one before this feature. The `-netdev` half does change wherever vhost is on,
+one before this feature. The `-netdev` half carries `vhost=on|off` either way,
 since that is what selects the backend.
 
 ## Requirements

@@ -953,9 +953,9 @@ impl VmmRpc for RpcHandler {
             if !is_running {
                 let runtime_networks = vm_work_dir.runtime_networks();
                 self.app
-                    .remove_filtered_networks(&request.id, &runtime_networks)
+                    .remove_netd_networks(&request.id, &runtime_networks)
                     .await
-                    .context("failed to remove previous filtered networking")?;
+                    .context("failed to remove previous netd-managed networking")?;
                 vm_work_dir.clear_runtime_networks()?;
             }
             manifest.networks = networks;

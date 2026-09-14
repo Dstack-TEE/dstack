@@ -357,11 +357,6 @@ pub struct CvmConfig {
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,
-    /// Path to `qemu-bridge-helper`, used to attach an unprivileged TAP to a
-    /// host bridge. Empty probes the known distribution locations.
-    #[serde(default)]
-    pub qemu_bridge_helper: String,
-
     /// TDX attestation/hash scheme policy. `legacy` keeps the existing
     /// digest.txt measurement path; `lite` opts into split measurement CBOR;
     /// `auto` selects `legacy` for
@@ -772,16 +767,6 @@ impl Config {
             (1..=MAX_NET_QUEUES).contains(&self.cvm.max_net_queues),
             "cvm.max_net_queues must be between 1 and {MAX_NET_QUEUES}"
         );
-        // The helper path is interpolated into QEMU's `-netdev` option list,
-        // which QEMU splits on ',' and '='. A path carrying either would not be
-        // passed through, it would end the option and start a bogus one, and the
-        // launch failure names neither this setting nor the file. Volume sources
-        // are rejected for the same reason.
-        anyhow::ensure!(
-            !self.cvm.qemu_bridge_helper.contains([',', '=']),
-            "cvm.qemu_bridge_helper must not contain ',' or '=': {}",
-            self.cvm.qemu_bridge_helper
-        );
         anyhow::ensure!(
             !self
                 .cvm
@@ -907,10 +892,6 @@ fn validate_networking(networking: &Networking) -> Result<()> {
         "cvm.networking.inherit_mode is per-deployment state and cannot be set on the node default"
     );
     anyhow::ensure!(
-        networking.netd_interface.is_none(),
-        "cvm.networking.netd_interface is runtime state and cannot be set in configuration"
-    );
-    anyhow::ensure!(
         networking.device.is_empty(),
         "cvm.networking.device is runtime state and cannot be set in configuration"
     );
@@ -976,6 +957,19 @@ pub enum NetworkingMode {
     Bridge,
     Custom,
     Macvtap,
+}
+
+impl NetworkingMode {
+    /// The name this mode is written as in `vmm.toml`, in the RPC, and in
+    /// anything an operator reads.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NetworkingMode::User => "user",
+            NetworkingMode::Bridge => "bridge",
+            NetworkingMode::Custom => "custom",
+            NetworkingMode::Macvtap => "macvtap",
+        }
+    }
 }
 
 /// What a single NIC pins: the fields a deployment may name, a VM's manifest
@@ -1062,41 +1056,7 @@ pub struct Networking {
     // ── Custom fields ──────────────────────────────────────────────
     #[serde(default)]
     pub netdev: String,
-
     // ── Runtime markers ────────────────────────────────────────────
-    /// What netd built for this NIC, recorded when it was built.
-    ///
-    /// Runtime state, like `device`: resolution always clears it. Teardown
-    /// reads this rather than re-deriving it from node configuration, because
-    /// an operator may change `network_filter.mode` or `max_net_queues` while
-    /// the VM runs, and what has to be removed is what was created.
-    #[serde(default, skip_serializing_if = "NetdInterface::is_none")]
-    pub netd_interface: NetdInterface,
-}
-
-/// The host interface netd created for a NIC, if any.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NetdInterface {
-    /// netd was not involved: user mode, custom mode, or a bridge NIC that
-    /// QEMU's own bridge helper attaches.
-    #[default]
-    None,
-    /// netd created the interface and bound no libvirt nwfilter to it.
-    Unfiltered,
-    /// netd created the interface and bound a libvirt nwfilter to it, which
-    /// removal has to delete before the interface goes away.
-    Filtered,
-}
-
-impl NetdInterface {
-    pub fn is_none(&self) -> bool {
-        matches!(self, NetdInterface::None)
-    }
-
-    pub fn is_filtered(&self) -> bool {
-        matches!(self, NetdInterface::Filtered)
-    }
 }
 
 impl Networking {
@@ -1449,25 +1409,21 @@ mod tests {
             .expect("default VMM config should parse")
     }
 
-    /// The two ownership markers are additive on disk: manifests and runtime
-    /// network snapshots written before they existed still load, and an entry
-    /// that carries neither serializes exactly as it used to.
+    /// The ownership marker is additive on disk: manifests and runtime network
+    /// snapshots written before it existed still load, and an entry that does
+    /// not carry it serializes exactly as it used to.
     #[test]
     fn ownership_markers_are_omitted_when_unset_and_default_when_absent() {
         let mut networking: Networking =
             serde_json::from_str(r#"{"mode":"bridge","bridge":"br0"}"#).unwrap();
         assert!(!networking.nic.inherit_mode);
-        assert_eq!(networking.netd_interface, NetdInterface::None);
 
         let json = serde_json::to_string(&networking).unwrap();
         assert!(!json.contains("inherit_mode"), "{json}");
-        assert!(!json.contains("netd_interface"), "{json}");
 
         networking.nic.inherit_mode = true;
-        networking.netd_interface = NetdInterface::Filtered;
         let json = serde_json::to_string(&networking).unwrap();
         assert!(json.contains(r#""inherit_mode":true"#), "{json}");
-        assert!(json.contains(r#""netd_interface":"filtered""#), "{json}");
         assert_eq!(
             serde_json::from_str::<Networking>(&json).unwrap(),
             networking
@@ -1665,7 +1621,6 @@ mod networking_shape_tests {
             "vhost": false,
             "queues": 4,
             "inherit_mode": true,
-            "netd_interface": "filtered",
         });
 
         // A resolved value keeps every field, at the same names as before.
@@ -1692,26 +1647,6 @@ mod networking_shape_tests {
         assert_eq!(stored.as_object().unwrap().len(), 6);
         assert!(stored.get("macvtap_mode").is_none());
         assert!(stored.get("net").is_none());
-    }
-
-    /// The path is interpolated into QEMU's `-netdev` option list, which QEMU
-    /// splits on ',' and '='. A path carrying either would end the option and
-    /// start a bogus one, and the launch failure names neither the setting nor
-    /// the file.
-    #[test]
-    fn a_bridge_helper_path_cannot_end_the_qemu_option_it_sits_in() {
-        use rocket::figment::providers::Format as _;
-        let mut config: Config = rocket::figment::Figment::from(
-            rocket::figment::providers::Toml::string(DEFAULT_CONFIG),
-        )
-        .extract()
-        .unwrap();
-        config.cvm.qemu_bridge_helper = "/opt/qemu,helper".into();
-        let error = config.validate().unwrap_err();
-        assert!(error.to_string().contains("qemu_bridge_helper"), "{error}");
-
-        config.cvm.qemu_bridge_helper = "/usr/libexec/qemu-bridge-helper".into();
-        config.validate().unwrap();
     }
 
     /// The TOML section still deserializes through the flatten.

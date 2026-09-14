@@ -94,10 +94,6 @@ pub enum Request {
     Remove {
         #[serde(flatten)]
         identity: InterfaceIdentity,
-        /// Whether this interface was created with an nwfilter binding.
-        /// Macvtap TAPs never carry one, and removal detects them rather than
-        /// trusting this field.
-        filtered: bool,
     },
     /// Verify a deterministic TAP and binding for operations and integration
     /// diagnostics. The VMM startup path uses Prepare rather than Check.
@@ -181,8 +177,12 @@ impl std::fmt::Display for Unreachable {
 impl std::error::Error for Unreachable {}
 
 /// Whether this error means netd was never reached.
+///
+/// `downcast_ref` rather than a walk over `chain()`: a marker attached with
+/// `context` is not a link in the source chain, it is the context *of* a link,
+/// and `chain()` yields the wrapper rather than the marker inside it.
 pub fn is_unreachable(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| cause.is::<Unreachable>())
+    error.downcast_ref::<Unreachable>().is_some()
 }
 
 pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
@@ -193,11 +193,23 @@ pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterfa
         Request::Check { .. } => "check",
     };
     let exchange = async {
-        let mut stream = UnixStream::connect(socket)
-            .await
-            .map_err(anyhow::Error::from)
-            .context(Unreachable)
-            .with_context(|| format!("failed to connect to netd at {}", socket.display()))?;
+        let mut stream = UnixStream::connect(socket).await.map_err(|error| {
+            // Only the two errnos that mean "nothing is listening". A socket
+            // the VMM's user cannot open (`EACCES`) or a VMM out of descriptors
+            // is a different problem, and must not be reported as a missing
+            // netd.
+            let absent = matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            );
+            let error = anyhow::Error::from(error)
+                .context(format!("failed to connect to netd at {}", socket.display()));
+            if absent {
+                error.context(Unreachable)
+            } else {
+                error
+            }
+        })?;
         let message = serde_json::to_vec(request)?;
         if message.len() as u64 > MAX_MESSAGE_SIZE {
             bail!("netd request is too large");
@@ -291,10 +303,10 @@ async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Resul
     // Access is authorized by the Unix socket's owner, group, and mode. Any
     // process that can connect is trusted with the complete netd protocol.
     let outcome = match read_request(stream).await {
-        // A peer that connects and closes without sending is the VMM's
-        // reachability check: netd that died leaves its socket behind, so the
-        // VMM connects to tell the two apart. Answering that with a parse error
-        // and a warning would fill the log with reports of it working.
+        // A peer that connects and closes without sending is asking whether
+        // anything is listening: netd that died leaves its socket behind.
+        // Answering that with a parse error and a warning would fill the log
+        // with reports of it working.
         Ok(None) => {
             debug!("netd liveness probe");
             return Ok(());
@@ -359,10 +371,15 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
         Request::PrepareMacvtap(request) => {
             prepare_macvtap(libvirt_uri, &request, config.filter_policy())
         }
-        Request::Remove { identity, filtered } => {
+        Request::Remove { identity } => {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
-            remove_interface(libvirt_uri, &tap, binding_cleanup(filtered))?;
+            // Best effort about the binding, whatever was built. The strict
+            // rule exists for prepare, where a binding left at the name would
+            // block the one about to be created; at removal nothing is about
+            // to take the name, and failing here would leave the interface
+            // itself up on the bridge rather than just a stale binding.
+            remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort)?;
             Ok(Prepared::tap(tap))
         }
         Request::Check { identity, filtered } => {
@@ -506,7 +523,19 @@ fn prepare_bridge(
     let tap = tap_name(&request.identity);
     // A failed VMM start may leave a deterministic resource behind. Replacing
     // it makes prepare idempotent without accepting a caller-selected TAP.
-    remove_interface(libvirt_uri, &tap, binding_cleanup(filtered))?;
+    // A binding outlives the interface it was bound to and TAP names are
+    // derived, so the same name comes back: clear whatever is there. Insist
+    // only when this prepare is about to create a replacement libvirt would
+    // refuse as a duplicate.
+    remove_interface(
+        libvirt_uri,
+        &tap,
+        if filtered {
+            BindingCleanup::Required
+        } else {
+            BindingCleanup::BestEffort
+        },
+    )?;
 
     let uid = request.qemu_uid.to_string();
     let queues = validate_queues(request.queues)?;
@@ -700,16 +729,6 @@ fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
     Ok(())
 }
 
-/// A caller that knows a binding is there needs it gone; one that does not
-/// still clears whatever it finds, without failing when libvirt is absent.
-fn binding_cleanup(filtered: bool) -> BindingCleanup {
-    if filtered {
-        BindingCleanup::Required
-    } else {
-        BindingCleanup::BestEffort
-    }
-}
-
 /// Normalizes a requested queue pair count. Zero means the caller did not ask
 /// for multiqueue, which is the same device shape as one queue pair.
 fn validate_queues(queues: u32) -> Result<u32> {
@@ -895,7 +914,6 @@ mod tests {
     fn remove_protocol_keeps_identity_fields_flat() {
         let request = Request::Remove {
             identity: identity("instance", "vm", 2),
-            filtered: true,
         };
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["operation"], "remove");
@@ -920,50 +938,6 @@ mod tests {
         assert_eq!(value["instance_id"], "instance");
         assert_eq!(value["bridge"], "br0");
         assert!(value.get("identity").is_none());
-    }
-
-    /// `filtered` says which of two shapes was built, and both are reachable
-    /// on any node this build can produce. There is no released peer that omits
-    /// it -- netd does not exist before v0.6 -- so it is required rather than
-    /// defaulted, and a request that leaves it out is a bug, not an old client.
-    #[test]
-    fn removal_states_which_shape_it_is_undoing() {
-        let error = serde_json::from_value::<Request>(serde_json::json!({
-            "operation": "remove",
-            "instance_id": "instance",
-            "vm_id": "vm",
-            "nic_index": 0,
-        }))
-        .unwrap_err();
-        assert!(error.to_string().contains("filtered"), "{error}");
-
-        for filtered in [true, false] {
-            let decoded: Request = serde_json::from_value(serde_json::json!({
-                "operation": "remove",
-                "instance_id": "instance",
-                "vm_id": "vm",
-                "nic_index": 0,
-                "filtered": filtered,
-            }))
-            .unwrap();
-            let Request::Remove {
-                filtered: decoded, ..
-            } = decoded
-            else {
-                panic!("wrong variant");
-            };
-            assert_eq!(decoded, filtered);
-        }
-    }
-
-    /// A binding outlives the interface it was bound to, and TAP names are a
-    /// deterministic hash of the VM identity, so the same name comes back.
-    /// Removing an interface therefore clears whatever binding is there, and
-    /// only insists when the caller is about to create a replacement.
-    #[test]
-    fn binding_cleanup_insists_only_when_a_replacement_follows() {
-        assert_eq!(binding_cleanup(true), BindingCleanup::Required);
-        assert_eq!(binding_cleanup(false), BindingCleanup::BestEffort);
     }
 
     #[test]
@@ -1207,5 +1181,18 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn an_unreachable_netd_is_recognized_through_the_contexts_stacked_on_it() {
+        let error = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound))
+            .context("failed to connect to netd at /run/netd.sock")
+            .context(Unreachable)
+            .context("failed to prepare netd-managed networking");
+        assert!(is_unreachable(&error));
+
+        let other = anyhow::anyhow!("netd prepare_bridge failed: no such bridge")
+            .context("failed to prepare netd-managed networking");
+        assert!(!is_unreachable(&other));
     }
 }
