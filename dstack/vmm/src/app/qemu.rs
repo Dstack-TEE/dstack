@@ -697,7 +697,7 @@ impl QemuCommandBuilder<'_> {
                     let tap = tap_name(&InterfaceIdentity {
                         instance_id: self.cfg.instance_id.clone(),
                         vm_id: self.vm.manifest.id.clone(),
-                        nic_index: index,
+                        nic_index: index as u32,
                     });
                     let mut netdev = format!(
                         "tap,id={net_id},ifname={tap},script=no,downscript=no,vhost={}",

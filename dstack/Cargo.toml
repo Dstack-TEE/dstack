@@ -36,6 +36,7 @@ members = [
     "tee-simulator",
     "vmm",
     "vmm/rpc",
+    "vmm/netd-rpc",
     "gateway",
     "gateway/rpc",
     "certbot",
@@ -88,6 +89,7 @@ dstack-gateway-rpc = { path = "gateway/rpc" }
 dstack-kms-rpc = { path = "kms/rpc" }
 dstack-guest-agent-rpc = { path = "guest-agent/rpc" }
 dstack-vmm-rpc = { path = "vmm/rpc" }
+dstack-netd-rpc = { path = "vmm/netd-rpc" }
 dstack-cli-core = { path = "crates/dstack-cli-core" }
 dstack-volume = { path = "crates/dstack-volume" }
 dstack-api-auth = { path = "crates/api-auth" }

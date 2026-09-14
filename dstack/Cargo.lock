@@ -2188,6 +2188,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dstack-netd-rpc"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "prost 0.13.5",
+ "prpc",
+ "prpc-build",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dstack-nvidia-attest-proxy"
 version = "0.6.0"
 dependencies = [
@@ -2383,6 +2395,7 @@ dependencies = [
  "dstack-build-info",
  "dstack-kms-rpc",
  "dstack-mr",
+ "dstack-netd-rpc",
  "dstack-types",
  "dstack-vmm-rpc",
  "fatfs",
@@ -2394,6 +2407,7 @@ dependencies = [
  "hex",
  "hex_fmt",
  "host-api",
+ "http-client",
  "humantime",
  "insta",
  "key-provider-client",

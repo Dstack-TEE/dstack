@@ -87,6 +87,21 @@ impl PrpcClient {
     }
 }
 
+/// The reason a pRPC server gave for failing a JSON request, if it gave one.
+///
+/// Servers built on `ra-rpc` answer a failed call with `{"error": "..."}`.
+/// Without it the caller learns only a status code, which says that the call
+/// failed but not why.
+fn server_error_message(body: &[u8]) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct ErrorBody {
+        error: String,
+    }
+    serde_json::from_slice::<ErrorBody>(body)
+        .ok()
+        .map(|body| body.error)
+}
+
 fn normalize_json_response_body(body: &[u8]) -> &[u8] {
     if body.is_empty() {
         b"null"
@@ -127,7 +142,10 @@ impl RequestClient for PrpcClient {
             None => request.await?,
         };
         if status != 200 {
-            anyhow::bail!("Invalid status code: {status}, path={path}");
+            match server_error_message(&body) {
+                Some(error) => anyhow::bail!("{path} failed with status {status}: {error}"),
+                None => anyhow::bail!("Invalid status code: {status}, path={path}"),
+            }
         }
         let response = serde_json::from_slice(normalize_json_response_body(&body))
             .context("Failed to deserialize response")?;
@@ -150,6 +168,15 @@ mod response_tests {
         let value: () = serde_json::from_slice(normalize_json_response_body(b""))
             .expect("empty response should decode as unit");
         assert_eq!(value, ());
+    }
+
+    #[test]
+    fn a_server_error_body_yields_its_message() {
+        assert_eq!(
+            super::server_error_message(br#"{"error": "no such bridge"}"#).as_deref(),
+            Some("no such bridge")
+        );
+        assert_eq!(super::server_error_message(b"<html>502</html>"), None);
     }
 
     #[test]

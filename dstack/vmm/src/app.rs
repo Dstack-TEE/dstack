@@ -5,10 +5,7 @@
 use crate::{
     config::{Config, Networking, NetworkingMode, NicNetworking, ProcessAnnotation, Protocol},
     logrotate,
-    netd::{
-        self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest,
-        Request as NetdRequest,
-    },
+    netd::{self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest},
 };
 
 use anyhow::{bail, Context, Result};
@@ -584,7 +581,7 @@ impl App {
             let identity = InterfaceIdentity {
                 instance_id: self.config.cvm.instance_id.clone(),
                 vm_id: vm.manifest.id.clone(),
-                nic_index,
+                nic_index: nic_index as u32,
             };
             let mac = network::mac_address_for_vm_index(
                 &vm.manifest.id,
@@ -593,43 +590,44 @@ impl App {
             );
             let queues = network.queue_pairs();
             let filtered = filters_bridge_traffic(network, &self.config.cvm);
-            let request = match network.nic.mode {
-                NetworkingMode::Bridge => NetdRequest::PrepareBridge(PrepareBridgeRequest {
-                    identity: identity.clone(),
-                    bridge: network.nic.bridge.clone(),
-                    mac,
-                    qemu_uid,
-                    // Which filter, and with what parameters, is netd's to
-                    // decide from its own configuration. An unfiltered TAP is
-                    // only asked for by multiqueue, where the node may not run
-                    // libvirt at all.
-                    filtered,
-                    queues,
-                }),
-                NetworkingMode::Macvtap => NetdRequest::PrepareMacvtap(PrepareMacvtapRequest {
-                    identity: identity.clone(),
-                    parent: network.nic.parent.clone(),
-                    mac,
-                    qemu_uid,
-                    mode: network.macvtap_mode.clone(),
-                    queues,
-                }),
+            let netd = netd::client(&self.config.netd.socket);
+            let result = match network.nic.mode {
+                NetworkingMode::Bridge => {
+                    netd.prepare_bridge(PrepareBridgeRequest {
+                        identity: Some(identity.clone()),
+                        bridge: network.nic.bridge.clone(),
+                        mac,
+                        qemu_uid,
+                        // Which filter, and with what parameters, is netd's
+                        // to decide from its own configuration. An unfiltered
+                        // TAP is only asked for by multiqueue, where the node
+                        // may not run libvirt at all.
+                        filtered,
+                        queues,
+                    })
+                    .await
+                }
+                NetworkingMode::Macvtap => {
+                    netd.prepare_macvtap(PrepareMacvtapRequest {
+                        identity: Some(identity.clone()),
+                        parent: network.nic.parent.clone(),
+                        mac,
+                        qemu_uid,
+                        mode: network.macvtap_mode.clone(),
+                        queues,
+                    })
+                    .await
+                }
                 NetworkingMode::User | NetworkingMode::Custom => continue,
             };
-            let response = match netd::request(&self.config.netd.socket, &request).await {
+            let response = match result {
                 Ok(response) => response,
                 Err(error) => {
-                    // The client may have timed out while netd was still finishing
-                    // this Prepare. Remove the in-flight identity first; netd's
-                    // serialized accept loop processes it after Prepare completes.
-                    if let Err(cleanup_error) = netd::request(
-                        &self.config.netd.socket,
-                        &NetdRequest::Remove {
-                            identity: identity.clone(),
-                        },
-                    )
-                    .await
-                    {
+                    // The client may have timed out while netd was still
+                    // finishing this Prepare. Remove the in-flight identity
+                    // first; netd runs operations in arrival order, so the
+                    // removal runs after the Prepare completes.
+                    if let Err(cleanup_error) = netd.remove_interface(identity.clone()).await {
                         warn!(%cleanup_error, "failed to roll back in-flight netd network");
                     }
                     self.roll_back_prepared_networks(prepared).await;
@@ -660,24 +658,20 @@ impl App {
             // so a failure has to unwind the same way a failed Prepare does.
             let accepted = (|| {
                 if network.nic.mode == NetworkingMode::Macvtap {
-                    network.device = response
-                        .device
-                        .clone()
-                        .context("netd response omitted macvtap device")?;
+                    if response.device.is_empty() {
+                        bail!("netd response omitted macvtap device");
+                    }
+                    network.device = response.device.clone();
                 }
                 // QEMU refuses a TAP whose IFF_MULTI_QUEUE state disagrees with
                 // its own `queues=`, and reports it from inside the per-VM
-                // launcher. netd echoes what it built, so a netd too old to
-                // understand the request fails here, where the reason is
-                // legible.
-                if queues > 1 && response.queues != Some(queues) {
+                // launcher. netd echoes what it built, so a mismatch fails
+                // here, where the reason is legible.
+                if queues > 1 && response.queues != queues {
                     bail!(
                         "netd prepared interface {nic_index} with {} queue pairs instead of \
-                         {queues}; its version may predate multiqueue support",
-                        response.queues.map_or_else(
-                            || "an unreported number of".to_string(),
-                            |q| q.to_string()
-                        )
+                         {queues}",
+                        response.queues
                     );
                 }
                 Ok(())
@@ -742,10 +736,9 @@ impl App {
 
     /// Removes interfaces netd already built for a launch that then failed.
     async fn roll_back_prepared_networks(&self, prepared: Vec<InterfaceIdentity>) {
+        let netd = netd::client(&self.config.netd.socket);
         for identity in prepared.into_iter().rev() {
-            if let Err(cleanup_error) =
-                netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity }).await
-            {
+            if let Err(cleanup_error) = netd.remove_interface(identity).await {
                 warn!(%cleanup_error, "failed to roll back prepared network interface");
             }
         }
@@ -757,6 +750,7 @@ impl App {
         vm_id: &str,
         networks: &[Networking],
     ) -> Result<()> {
+        let netd = netd::client(&self.config.netd.socket);
         let mut first_error = None;
         for (nic_index, network) in networks.iter().enumerate().rev() {
             if !needs_netd_interface(network) {
@@ -765,11 +759,9 @@ impl App {
             let identity = InterfaceIdentity {
                 instance_id: self.config.cvm.instance_id.clone(),
                 vm_id: vm_id.to_string(),
-                nic_index,
+                nic_index: nic_index as u32,
             };
-            if let Err(error) =
-                netd::request(&self.config.netd.socket, &NetdRequest::Remove { identity }).await
-            {
+            if let Err(error) = netd.remove_interface(identity).await {
                 first_error.get_or_insert(error);
             }
         }

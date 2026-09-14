@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Small privileged broker for TAP creation and libvirt nwfilter bindings.
+//!
+//! netd serves the `Netd` pRPC service (see `netd-rpc/proto/netd_rpc.proto`)
+//! over a Unix socket. Each operation is its own RPC method with its own
+//! request and response messages.
 
 use std::{
     fs::{File, OpenOptions, Permissions},
-    io::Write as _,
+    io::{self, Write as _},
     os::{
         fd::AsRawFd,
         unix::{
@@ -14,28 +18,34 @@ use std::{
             net::UnixStream as StdUnixStream,
         },
     },
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use http_client::{prpc::PrpcClient, ConnectionReuse};
 use listenfd::ListenFd;
-use serde::{Deserialize, Serialize};
+use ra_rpc::{CallContext, RpcCall};
+use rocket::listener::{unix::UnixStream as RocketUnixStream, Endpoint, Listener};
 use sha2::{Digest, Sha256};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{UnixListener, UnixStream},
-    time::timeout,
-};
-use tracing::{debug, info, warn};
+use tokio::net::UnixListener;
+use tracing::{info, warn};
 use uuid::Uuid;
 use wait_timeout::ChildExt;
 
+use dstack_netd_rpc::netd_server::{NetdRpc, NetdServer};
+pub use dstack_netd_rpc::{
+    netd_client::NetdClient, CheckInterfaceRequest, InterfaceIdentity, PrepareBridgeRequest,
+    PrepareMacvtapRequest, PreparedInterface,
+};
+
 use crate::config::{NetdConfig, NetworkFilterConfig};
 
-const MAX_MESSAGE_SIZE: u64 = 64 * 1024;
-const CONNECTION_TIMEOUT: Duration = Duration::from_secs(35);
+/// Bounds a whole call from the VMM, including waiting for netd to finish the
+/// operations queued ahead of it.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const IP_PATH: &str = "/usr/sbin/ip";
 const VIRSH_PATH: &str = "/usr/bin/virsh";
@@ -43,100 +53,6 @@ const LOCK_PATH: &str = "/run/lock/dstack-netd.lock";
 /// Upper bound on TAP queue pairs netd will create. Mirrors the VMM's own cap
 /// so a malformed request cannot ask the kernel for an unbounded device.
 const MAX_QUEUES: u32 = 64;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InterfaceIdentity {
-    pub instance_id: String,
-    pub vm_id: String,
-    pub nic_index: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareBridgeRequest {
-    #[serde(flatten)]
-    pub identity: InterfaceIdentity,
-    pub bridge: String,
-    pub mac: String,
-    pub qemu_uid: u32,
-    /// Whether to bind an nwfilter to the TAP. *Which* filter, and with what
-    /// parameters, is netd's own configuration to decide -- a caller that named
-    /// them could name one that filters nothing, or pin the binding to the
-    /// gateway's MAC and IP, and still satisfy a node policy that only asked
-    /// for "some filter". An unfiltered TAP is what multiqueue bridge
-    /// networking needs on nodes that do not run libvirt.
-    pub filtered: bool,
-    /// virtio-net queue pairs. Zero or one creates a single-queue TAP. QEMU
-    /// rejects a device whose `IFF_MULTI_QUEUE` state differs from its own
-    /// `queues=` argument, so this must match the launch exactly.
-    pub queues: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareMacvtapRequest {
-    #[serde(flatten)]
-    pub identity: InterfaceIdentity,
-    pub parent: String,
-    pub mac: String,
-    pub qemu_uid: u32,
-    #[serde(default)]
-    pub mode: String,
-    /// virtio-net queue pairs. The device is created with matching hardware
-    /// queues; QEMU then opens the character device once per queue.
-    #[serde(default)]
-    pub queues: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "operation", rename_all = "snake_case")]
-pub enum Request {
-    PrepareBridge(PrepareBridgeRequest),
-    PrepareMacvtap(PrepareMacvtapRequest),
-    Remove {
-        #[serde(flatten)]
-        identity: InterfaceIdentity,
-    },
-    /// Verify a deterministic TAP and binding for operations and integration
-    /// diagnostics. The VMM startup path uses Prepare rather than Check.
-    Check {
-        #[serde(flatten)]
-        identity: InterfaceIdentity,
-        filtered: bool,
-    },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Response {
-    ok: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    tap: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    device: Option<String>,
-    /// Queue pairs the interface was actually created with. Absent from a netd
-    /// that predates multiqueue, which is how the VMM tells the difference
-    /// between "one queue was requested" and "this netd ignored the request".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    queues: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-/// What netd built, echoed back so the caller can verify it matches the
-/// request before handing the interface to QEMU.
-struct Prepared {
-    tap: String,
-    device: Option<String>,
-    queues: Option<u32>,
-}
-
-impl Prepared {
-    fn tap(tap: String) -> Self {
-        Self {
-            tap,
-            device: None,
-            queues: None,
-        }
-    }
-}
 
 pub fn tap_name(identity: &InterfaceIdentity) -> String {
     let input = format!(
@@ -155,92 +71,33 @@ pub fn instance_id(configured: &str, run_path: &Path) -> String {
     format!("path-{}", hex::encode(&digest[..8]))
 }
 
-pub struct PreparedInterface {
-    pub device: Option<String>,
-    pub queues: Option<u32>,
-}
-
-/// Marker carried in the error chain when the VMM could not reach netd at all.
+/// A client for the netd listening at `socket`.
 ///
-/// "netd refused this" and "netd is not there" call for different advice, and
-/// the caller cannot tell them apart from the message alone -- a callback probe
-/// afterwards would answer about a different moment.
-#[derive(Debug)]
-pub struct Unreachable;
-
-impl std::fmt::Display for Unreachable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("netd is not reachable")
-    }
+/// Every call opens its own connection. netd may have been restarted since the
+/// last one, and a pooled connection to the previous process would fail a
+/// request that a fresh one would have delivered.
+pub fn client(socket: &Path) -> NetdClient<PrpcClient> {
+    NetdClient::new(
+        PrpcClient::new_unix(socket.display().to_string(), "/prpc".into())
+            .with_connection_reuse(ConnectionReuse::Fresh)
+            .with_request_timeout(REQUEST_TIMEOUT),
+    )
 }
-
-impl std::error::Error for Unreachable {}
 
 /// Whether this error means netd was never reached.
 ///
-/// `downcast_ref` rather than a walk over `chain()`: a marker attached with
-/// `context` is not a link in the source chain, it is the context *of* a link,
-/// and `chain()` yields the wrapper rather than the marker inside it.
+/// Only the two errnos that mean "nothing is listening". A socket the VMM's
+/// user cannot open (`EACCES`) or a VMM out of descriptors is a different
+/// problem, and must not be reported as a missing netd.
 pub fn is_unreachable(error: &anyhow::Error) -> bool {
-    error.downcast_ref::<Unreachable>().is_some()
-}
-
-pub async fn request(socket: &Path, request: &Request) -> Result<PreparedInterface> {
-    let operation = match request {
-        Request::PrepareBridge(_) => "prepare_bridge",
-        Request::PrepareMacvtap(_) => "prepare_macvtap",
-        Request::Remove { .. } => "remove",
-        Request::Check { .. } => "check",
-    };
-    let exchange = async {
-        let mut stream = UnixStream::connect(socket).await.map_err(|error| {
-            // Only the two errnos that mean "nothing is listening". A socket
-            // the VMM's user cannot open (`EACCES`) or a VMM out of descriptors
-            // is a different problem, and must not be reported as a missing
-            // netd.
-            let absent = matches!(
+    error.chain().any(|cause| {
+        cause.downcast_ref::<io::Error>().is_some_and(|error| {
+            matches!(
                 error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
-            );
-            let error = anyhow::Error::from(error)
-                .context(format!("failed to connect to netd at {}", socket.display()));
-            if absent {
-                error.context(Unreachable)
-            } else {
-                error
-            }
-        })?;
-        let message = serde_json::to_vec(request)?;
-        if message.len() as u64 > MAX_MESSAGE_SIZE {
-            bail!("netd request is too large");
-        }
-        stream.write_all(&message).await?;
-        stream.shutdown().await?;
-        let mut response = Vec::new();
-        stream
-            .take(MAX_MESSAGE_SIZE + 1)
-            .read_to_end(&mut response)
-            .await?;
-        if response.len() as u64 > MAX_MESSAGE_SIZE {
-            bail!("netd response is too large");
-        }
-        let response: Response =
-            serde_json::from_slice(&response).context("failed to decode netd response")?;
-        if !response.ok {
-            bail!(
-                "netd {operation} failed: {}",
-                response.error.as_deref().unwrap_or("unknown error")
-            );
-        }
-        response.tap.context("netd response omitted TAP name")?;
-        Ok(PreparedInterface {
-            device: response.device,
-            queues: response.queues,
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            )
         })
-    };
-    timeout(Duration::from_secs(30), exchange)
-        .await
-        .context("timed out waiting for netd")?
+    })
 }
 
 pub async fn serve(config: NetdConfig) -> Result<()> {
@@ -255,16 +112,43 @@ pub async fn serve(config: NetdConfig) -> Result<()> {
         None => bind_listener(&config)?,
     };
     info!(address = ?listener.local_addr()?, "netd listening");
-    loop {
-        let (mut stream, _) = listener.accept().await?;
-        // This timeout bounds async socket reads and writes. handle_request is
-        // synchronous, so helper execution is bounded separately by
-        // COMMAND_TIMEOUT rather than preempted by this future timeout.
-        match timeout(CONNECTION_TIMEOUT, serve_connection(&config, &mut stream)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => warn!(%error, "netd connection failed"),
-            Err(_) => warn!("netd connection timed out"),
-        }
+    // Access is authorized by the Unix socket's owner, group, and mode. Any
+    // process that can connect is trusted with every netd method.
+    // Rocket's defaults only: a root daemon should not pick up a `Rocket.toml`
+    // from its working directory or `ROCKET_*` variables from its environment.
+    let figment = rocket::figment::Figment::from(rocket::Config::default())
+        .merge(("ident", false))
+        .merge(("cli_colors", false));
+    let ignite = rocket::custom(figment)
+        .manage(NetdState::new(config, LOCK_PATH.into()))
+        .mount("/prpc", ra_rpc::prpc_routes!(NetdState, NetdHandler))
+        .ignite()
+        .await
+        .map_err(|error| anyhow!("failed to ignite netd: {error}"))?;
+    ignite
+        .launch_on(NetdListener(listener))
+        .await
+        .map_err(|error| anyhow!("netd server failed: {error}"))?;
+    Ok(())
+}
+
+/// Adapts the socket netd bound, or was handed by systemd, to Rocket.
+struct NetdListener(UnixListener);
+
+impl Listener for NetdListener {
+    type Accept = RocketUnixStream;
+    type Connection = RocketUnixStream;
+
+    async fn accept(&self) -> io::Result<Self::Accept> {
+        Ok(self.0.accept().await?.0)
+    }
+
+    async fn connect(&self, accept: Self::Accept) -> io::Result<Self::Connection> {
+        Ok(accept)
+    }
+
+    fn endpoint(&self) -> io::Result<Endpoint> {
+        self.0.local_addr()?.try_into()
     }
 }
 
@@ -290,7 +174,7 @@ fn activated_listener() -> Result<Option<UnixListener>> {
 
 fn bind_listener(config: &NetdConfig) -> Result<UnixListener> {
     let listener = {
-        let _lock = OperationLock::acquire()?;
+        let _lock = OperationLock::acquire(Path::new(LOCK_PATH))?;
         prepare_socket_path(&config.socket)?;
         UnixListener::bind(&config.socket)
             .with_context(|| format!("failed to bind netd socket {}", config.socket.display()))?
@@ -299,79 +183,89 @@ fn bind_listener(config: &NetdConfig) -> Result<UnixListener> {
     Ok(listener)
 }
 
-async fn serve_connection(config: &NetdConfig, stream: &mut UnixStream) -> Result<()> {
-    // Access is authorized by the Unix socket's owner, group, and mode. Any
-    // process that can connect is trusted with the complete netd protocol.
-    let outcome = match read_request(stream).await {
-        // A peer that connects and closes without sending is asking whether
-        // anything is listening: netd that died leaves its socket behind.
-        // Answering that with a parse error and a warning would fill the log
-        // with reports of it working.
-        Ok(None) => {
-            debug!("netd liveness probe");
-            return Ok(());
-        }
-        Ok(Some(request)) => handle_request(config, request),
-        // A request that arrived but could not be understood still gets an
-        // answer. A VMM newer than this netd sends operations it does not
-        // know, and "unknown variant `prepare_foo`" is what tells the operator
-        // to upgrade; a closed connection tells them nothing.
-        Err(error) => Err(error),
-    };
-    let response = match outcome {
-        Ok(prepared) => Response {
-            ok: true,
-            tap: Some(prepared.tap),
-            device: prepared.device,
-            queues: prepared.queues,
-            error: None,
-        },
-        Err(error) => {
-            warn!(%error, "netd request failed");
-            Response {
-                ok: false,
-                tap: None,
-                device: None,
-                queues: None,
-                error: Some(format!("{error:#}")),
-            }
-        }
-    };
-    let encoded = serde_json::to_vec(&response)?;
-    stream.write_all(&encoded).await?;
-    stream.shutdown().await?;
-    Ok(())
+pub struct NetdState {
+    config: Arc<NetdConfig>,
+    /// Runs operations one at a time, in the order they arrived.
+    ///
+    /// The VMM relies on that order: after a Prepare times out on its side it
+    /// sends a removal for the same interface, which must run after the
+    /// Prepare it undoes rather than before it. Tokio's mutex queues waiters
+    /// fairly. [`OperationLock`] still serializes against other netd
+    /// processes, but an flock gives no ordering between its waiters.
+    serial: Arc<tokio::sync::Mutex<()>>,
+    lock_path: Arc<PathBuf>,
 }
 
-/// Reads one request, or `None` if the peer closed without sending anything.
-async fn read_request(stream: &mut UnixStream) -> Result<Option<Request>> {
-    let mut message = Vec::new();
-    stream
-        .take(MAX_MESSAGE_SIZE + 1)
-        .read_to_end(&mut message)
-        .await?;
-    if message.is_empty() {
-        return Ok(None);
+impl NetdState {
+    fn new(config: NetdConfig, lock_path: PathBuf) -> Self {
+        Self {
+            config: Arc::new(config),
+            serial: Arc::new(tokio::sync::Mutex::new(())),
+            lock_path: Arc::new(lock_path),
+        }
     }
-    if message.len() as u64 > MAX_MESSAGE_SIZE {
-        bail!("request exceeds {MAX_MESSAGE_SIZE} bytes");
-    }
-    serde_json::from_slice(&message)
-        .map(Some)
-        .context("invalid netd request")
 }
 
-fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
-    let libvirt_uri = config.libvirt_uri.as_str();
-    let _lock = OperationLock::acquire()?;
-    match request {
-        Request::PrepareBridge(request) => {
-            prepare_bridge(libvirt_uri, &request, config.filter_policy())
-        }
-        Request::PrepareMacvtap(request) => {
-            prepare_macvtap(libvirt_uri, &request, config.filter_policy())
-        }
-        Request::Remove { identity } => {
+pub struct NetdHandler {
+    config: Arc<NetdConfig>,
+    serial: Arc<tokio::sync::Mutex<()>>,
+    lock_path: Arc<PathBuf>,
+}
+
+impl RpcCall<NetdState> for NetdHandler {
+    type PrpcService = NetdServer<Self>;
+
+    fn construct(context: CallContext<'_, NetdState>) -> Result<Self> {
+        Ok(Self {
+            config: context.state.config.clone(),
+            serial: context.state.serial.clone(),
+            lock_path: context.state.lock_path.clone(),
+        })
+    }
+}
+
+impl NetdHandler {
+    /// Runs one host operation under both locks.
+    ///
+    /// The operations shell out to `ip` and `virsh` and wait on them, so they
+    /// run on the blocking pool. The queue slot moves into that task: if the
+    /// request future is dropped, the next operation still waits for this one
+    /// to finish instead of starting beside it.
+    async fn run<T, F>(self, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&NetdConfig) -> Result<T> + Send + 'static,
+    {
+        let slot = self.serial.lock_owned().await;
+        let config = self.config;
+        let lock_path = self.lock_path;
+        tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            let _lock = OperationLock::acquire(&lock_path)?;
+            operation(&config)
+        })
+        .await
+        .context("netd operation task failed")?
+    }
+}
+
+impl NetdRpc for NetdHandler {
+    async fn prepare_bridge(self, request: PrepareBridgeRequest) -> Result<PreparedInterface> {
+        self.run(move |config| {
+            prepare_bridge(&config.libvirt_uri, &request, config.filter_policy())
+        })
+        .await
+    }
+
+    async fn prepare_macvtap(self, request: PrepareMacvtapRequest) -> Result<PreparedInterface> {
+        self.run(move |config| {
+            prepare_macvtap(&config.libvirt_uri, &request, config.filter_policy())
+        })
+        .await
+    }
+
+    async fn remove_interface(self, identity: InterfaceIdentity) -> Result<()> {
+        self.run(move |config| {
             validate_identity(&identity)?;
             let tap = tap_name(&identity);
             // Best effort about the binding, whatever was built. The strict
@@ -379,34 +273,53 @@ fn handle_request(config: &NetdConfig, request: Request) -> Result<Prepared> {
             // block the one about to be created; at removal nothing is about
             // to take the name, and failing here would leave the interface
             // itself up on the bridge rather than just a stale binding.
-            remove_interface(libvirt_uri, &tap, BindingCleanup::BestEffort)?;
-            Ok(Prepared::tap(tap))
-        }
-        Request::Check { identity, filtered } => {
-            validate_identity(&identity)?;
-            let tap = tap_name(&identity);
+            remove_interface(&config.libvirt_uri, &tap, BindingCleanup::BestEffort)
+        })
+        .await
+    }
+
+    async fn check_interface(self, request: CheckInterfaceRequest) -> Result<()> {
+        self.run(move |config| {
+            let identity = required_identity(&request.identity)?;
+            let tap = tap_name(identity);
             if !Path::new("/sys/class/net").join(&tap).exists() {
                 bail!("TAP {tap} does not exist");
             }
             // An unfiltered TAP has no binding to dump; asking for one would
             // report a healthy multiqueue interface as broken.
-            if filtered && !is_macvtap(&tap) {
-                virsh(libvirt_uri, &["nwfilter-binding-dumpxml", &tap], None)?;
+            if request.filtered && !is_macvtap(&tap) {
+                virsh(
+                    &config.libvirt_uri,
+                    &["nwfilter-binding-dumpxml", &tap],
+                    None,
+                )?;
             }
-            Ok(Prepared::tap(tap))
-        }
+            Ok(())
+        })
+        .await
     }
+}
+
+/// The identity a request names, validated.
+///
+/// Message fields are optional on the wire, and an interface name derived from
+/// a missing identity would name some interface nobody asked for.
+fn required_identity(identity: &Option<InterfaceIdentity>) -> Result<&InterfaceIdentity> {
+    let identity = identity
+        .as_ref()
+        .context("request does not name an interface identity")?;
+    validate_identity(identity)?;
+    Ok(identity)
 }
 
 fn prepare_macvtap(
     libvirt_uri: &str,
     request: &PrepareMacvtapRequest,
     filter: &NetworkFilterConfig,
-) -> Result<Prepared> {
-    let identity = &request.identity;
+) -> Result<PreparedInterface> {
+    let identity = required_identity(&request.identity)?;
     let parent = request.parent.as_str();
     let qemu_uid = request.qemu_uid;
-    validate_identity(identity)?;
     validate_name("parent", parent, 15, "_.-")?;
     if !Path::new("/sys/class/net").join(parent).exists() {
         bail!("parent interface {parent} does not exist");
@@ -472,10 +385,10 @@ fn prepare_macvtap(
     match result {
         Ok(device) => {
             info!(%tap, %parent, %mode, %device, %queues, "prepared macvtap");
-            Ok(Prepared {
+            Ok(PreparedInterface {
                 tap,
-                device: Some(device),
-                queues: Some(queues),
+                device,
+                queues,
             })
         }
         Err(error) => {
@@ -488,14 +401,14 @@ fn prepare_macvtap(
 struct OperationLock(File);
 
 impl OperationLock {
-    fn acquire() -> Result<Self> {
+    fn acquire(path: &Path) -> Result<Self> {
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(false)
-            .open(LOCK_PATH)
-            .with_context(|| format!("failed to open {LOCK_PATH}"))?;
+            .open(path)
+            .with_context(|| format!("failed to open {}", path.display()))?;
         // SAFETY: flock only acts on the valid file descriptor owned by file.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
             return Err(std::io::Error::last_os_error()).context("failed to lock netd operations");
@@ -517,10 +430,10 @@ fn prepare_bridge(
     libvirt_uri: &str,
     request: &PrepareBridgeRequest,
     filter: &NetworkFilterConfig,
-) -> Result<Prepared> {
-    validate_prepare_bridge(request, filter)?;
+) -> Result<PreparedInterface> {
+    let identity = validate_prepare_bridge(request, filter)?;
     let filtered = request.filtered;
-    let tap = tap_name(&request.identity);
+    let tap = tap_name(identity);
     // A failed VMM start may leave a deterministic resource behind. Replacing
     // it makes prepare idempotent without accepting a caller-selected TAP.
     // A binding outlives the interface it was bound to and TAP names are
@@ -550,7 +463,7 @@ fn prepare_bridge(
     let result = (|| {
         ip(&["link", "set", "dev", &tap, "master", &request.bridge])?;
         if filtered {
-            let xml = binding_xml(request, &tap, filter);
+            let xml = binding_xml(identity, &request.mac, &tap, filter);
             virsh(
                 libvirt_uri,
                 &["nwfilter-binding-create", "--validate", "/dev/stdin"],
@@ -565,10 +478,10 @@ fn prepare_bridge(
         return Err(error);
     }
     info!(%tap, bridge = %request.bridge, %filtered, %queues, "prepared TAP");
-    Ok(Prepared {
+    Ok(PreparedInterface {
         tap,
-        device: None,
-        queues: Some(queues),
+        device: String::new(),
+        queues,
     })
 }
 
@@ -624,7 +537,7 @@ fn is_macvtap(interface: &str) -> bool {
 /// Deletes an interface's nwfilter binding, if it has one.
 ///
 /// Goes through the same `COMMAND_TIMEOUT`-bounded helper as every other virsh
-/// call. netd's accept loop is strictly serialized, so an unbounded call here
+/// call. netd runs one operation at a time, so an unbounded call here
 /// would let one unreachable libvirt stall every other VM's prepare and remove.
 fn delete_binding(uri: &str, tap: &str) -> Result<()> {
     match virsh(uri, &["nwfilter-binding-delete", tap], None) {
@@ -643,11 +556,16 @@ fn delete_binding(uri: &str, tap: &str) -> Result<()> {
     }
 }
 
-fn binding_xml(request: &PrepareBridgeRequest, tap: &str, filter: &NetworkFilterConfig) -> String {
-    let owner_uuid = stable_uuid(&request.identity);
+fn binding_xml(
+    identity: &InterfaceIdentity,
+    mac: &str,
+    tap: &str,
+    filter: &NetworkFilterConfig,
+) -> String {
+    let owner_uuid = stable_uuid(identity);
     let owner_name = format!(
         "dstack:{}:{}:{}",
-        request.identity.instance_id, request.identity.vm_id, request.identity.nic_index
+        identity.instance_id, identity.vm_id, identity.nic_index
     );
     let mut parameters = String::new();
     for (name, value) in &filter.parameters {
@@ -664,7 +582,7 @@ fn binding_xml(request: &PrepareBridgeRequest, tap: &str, filter: &NetworkFilter
         xml_escape(&owner_name),
         owner_uuid,
         xml_escape(tap),
-        xml_escape(&request.mac),
+        xml_escape(mac),
         xml_escape(&filter.filter),
         parameters
     )
@@ -685,11 +603,12 @@ fn stable_uuid(identity: &InterfaceIdentity) -> Uuid {
     Uuid::from_bytes(bytes)
 }
 
-fn validate_prepare_bridge(
-    request: &PrepareBridgeRequest,
+/// Validates a bridge prepare and returns the identity it names.
+fn validate_prepare_bridge<'a>(
+    request: &'a PrepareBridgeRequest,
     filter: &NetworkFilterConfig,
-) -> Result<()> {
-    validate_identity(&request.identity)?;
+) -> Result<&'a InterfaceIdentity> {
+    let identity = required_identity(&request.identity)?;
     validate_name("bridge", &request.bridge, 15, "_.-")?;
     // Unfiltered bridge TAPs exist for unfiltered multiqueue, and netd holds
     // that policy itself rather than trusting the caller with it. netd is the
@@ -711,7 +630,7 @@ fn validate_prepare_bridge(
         bail!("{} is not a host bridge", request.bridge);
     }
     validate_mac(&request.mac)?;
-    Ok(())
+    Ok(identity)
 }
 
 fn validate_identity(identity: &InterfaceIdentity) -> Result<()> {
@@ -861,7 +780,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    fn identity(instance: &str, vm: &str, nic_index: usize) -> InterfaceIdentity {
+    fn identity(instance: &str, vm: &str, nic_index: u32) -> InterfaceIdentity {
         InterfaceIdentity {
             instance_id: instance.into(),
             vm_id: vm.into(),
@@ -881,7 +800,7 @@ mod tests {
     #[test]
     fn binding_xml_escapes_values() {
         let request = PrepareBridgeRequest {
-            identity: identity("instance<&", "vm", 0),
+            identity: Some(identity("instance<&", "vm", 0)),
             bridge: "br0".into(),
             mac: "02:00:00:00:00:01".into(),
             qemu_uid: 1000,
@@ -893,7 +812,12 @@ mod tests {
             filter: "clean-traffic".into(),
             parameters: BTreeMap::from([("IP".into(), "10.0.0.2<&".into())]),
         };
-        let xml = binding_xml(&request, "dt123", &filter);
+        let xml = binding_xml(
+            request.identity.as_ref().unwrap(),
+            &request.mac,
+            "dt123",
+            &filter,
+        );
         assert!(xml.contains("instance&lt;&amp;"));
         assert!(xml.contains("10.0.0.2&lt;&amp;"));
         assert!(!xml.contains("instance<&"));
@@ -911,156 +835,11 @@ mod tests {
     }
 
     #[test]
-    fn remove_protocol_keeps_identity_fields_flat() {
-        let request = Request::Remove {
-            identity: identity("instance", "vm", 2),
-        };
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["operation"], "remove");
-        assert_eq!(value["instance_id"], "instance");
-        assert_eq!(value["vm_id"], "vm");
-        assert_eq!(value["nic_index"], 2);
-        assert!(value.get("identity").is_none());
-    }
-
-    #[test]
-    fn bridge_prepare_protocol_is_named_explicitly() {
-        let request = Request::PrepareBridge(PrepareBridgeRequest {
-            identity: identity("instance", "vm", 0),
-            bridge: "br0".into(),
-            mac: "02:00:00:00:00:01".into(),
-            qemu_uid: 1000,
-            filtered: true,
-            queues: 0,
-        });
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["operation"], "prepare_bridge");
-        assert_eq!(value["instance_id"], "instance");
-        assert_eq!(value["bridge"], "br0");
-        assert!(value.get("identity").is_none());
-    }
-
-    #[test]
     fn queue_counts_normalize_to_at_least_one_and_stay_bounded() {
         assert_eq!(validate_queues(0).unwrap(), 1);
         assert_eq!(validate_queues(1).unwrap(), 1);
         assert_eq!(validate_queues(MAX_QUEUES).unwrap(), MAX_QUEUES);
         assert!(validate_queues(MAX_QUEUES + 1).is_err());
-    }
-
-    #[test]
-    fn queue_count_travels_with_the_prepare_request() {
-        let request = Request::PrepareBridge(PrepareBridgeRequest {
-            identity: identity("instance", "vm", 0),
-            bridge: "br0".into(),
-            mac: "02:00:00:00:00:01".into(),
-            qemu_uid: 1000,
-            filtered: false,
-            queues: 4,
-        });
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["queues"], 4);
-        assert_eq!(value["filtered"], false);
-
-        // QEMU refuses a device whose IFF_MULTI_QUEUE state disagrees with its
-        // own `queues=`, so a request that leaves the count to netd's
-        // imagination is one netd must not answer.
-        let error = serde_json::from_value::<Request>(serde_json::json!({
-            "operation": "prepare_bridge",
-            "instance_id": "instance",
-            "vm_id": "vm",
-            "nic_index": 0,
-            "bridge": "br0",
-            "mac": "02:00:00:00:00:01",
-            "qemu_uid": 1000,
-            "filtered": true,
-        }))
-        .unwrap_err();
-        assert!(error.to_string().contains("queues"), "{error}");
-        assert_eq!(validate_queues(0).unwrap(), 1);
-    }
-
-    #[test]
-    fn macvtap_prepare_has_a_dedicated_operation() {
-        let request = Request::PrepareMacvtap(PrepareMacvtapRequest {
-            identity: identity("instance", "vm", 1),
-            parent: "eth0".into(),
-            mac: "02:00:00:00:00:01".into(),
-            qemu_uid: 1000,
-            mode: "private".into(),
-            queues: 0,
-        });
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["operation"], "prepare_macvtap");
-        assert_eq!(value["instance_id"], "instance");
-        assert_eq!(value["parent"], "eth0");
-        assert!(value.get("identity").is_none());
-    }
-
-    #[test]
-    fn bridge_prepare_has_a_dedicated_operation() {
-        let request = Request::PrepareBridge(PrepareBridgeRequest {
-            identity: identity("instance", "vm", 0),
-            bridge: "br0".into(),
-            mac: "02:00:00:00:00:01".into(),
-            qemu_uid: 1000,
-            filtered: true,
-            queues: 0,
-        });
-        let value = serde_json::to_value(request).unwrap();
-        assert_eq!(value["operation"], "prepare_bridge");
-        assert_eq!(value["instance_id"], "instance");
-        assert_eq!(value["bridge"], "br0");
-        assert!(value.get("identity").is_none());
-    }
-
-    /// Connecting and closing without sending is how the VMM checks that netd
-    /// is alive, because a netd that died leaves its socket behind. It has to
-    /// be handled promptly, and quietly: the VMM does it once per status query
-    /// that mentions a stopped VM, and netd's accept loop is serialized, so
-    /// treating a probe as a failed request would both fill the log and put
-    /// noise in front of real work.
-    #[tokio::test]
-    async fn a_connection_that_sends_nothing_is_a_liveness_probe() {
-        let (mut server, client) = UnixStream::pair().unwrap();
-        drop(client);
-        let result = timeout(
-            Duration::from_secs(1),
-            serve_connection(&NetdConfig::default(), &mut server),
-        )
-        .await;
-        assert!(result.is_ok(), "disconnected peer blocked the handler");
-        assert!(result.unwrap().is_ok(), "a probe is not a failed request");
-    }
-
-    /// Only an empty connection is a probe. A peer that does send something,
-    /// and sends nonsense, is still a request -- and still gets an answer it
-    /// can read, which is how a VMM newer than its netd learns to say so.
-    #[tokio::test]
-    async fn a_request_that_cannot_be_understood_still_gets_an_answer() {
-        let (mut server, client) = UnixStream::pair().unwrap();
-        drop(client);
-        assert!(read_request(&mut server).await.unwrap().is_none());
-
-        let (mut server, mut client) = UnixStream::pair().unwrap();
-        // An operation only a newer VMM knows about.
-        client
-            .write_all(br#"{"operation":"prepare_something_new"}"#)
-            .await
-            .unwrap();
-        client.shutdown().await.unwrap();
-        serve_connection(&NetdConfig::default(), &mut server)
-            .await
-            .unwrap();
-
-        let mut reply = Vec::new();
-        client.read_to_end(&mut reply).await.unwrap();
-        let reply: serde_json::Value = serde_json::from_slice(&reply).unwrap();
-        assert_eq!(reply["ok"], false);
-        assert!(
-            reply["error"].as_str().unwrap().contains("unknown variant"),
-            "{reply}"
-        );
     }
 
     /// netd is the privileged side of this socket. "Build me a TAP on br0 with
@@ -1070,11 +849,7 @@ mod tests {
     #[test]
     fn a_filtering_node_refuses_an_unfiltered_bridge_tap() {
         let request = PrepareBridgeRequest {
-            identity: InterfaceIdentity {
-                instance_id: "i".into(),
-                vm_id: "v".into(),
-                nic_index: 0,
-            },
+            identity: Some(identity("i", "v", 0)),
             // A name no host has, so the check after this one is the one that
             // fails when this one does not.
             bridge: "dstack-nobr0".into(),
@@ -1126,7 +901,7 @@ mod tests {
             return;
         };
         let request = PrepareMacvtapRequest {
-            identity: identity("i", "v", 0),
+            identity: Some(identity("i", "v", 0)),
             parent: bridge.clone(),
             mac: "02:00:00:00:00:01".into(),
             qemu_uid: 1000,
@@ -1147,7 +922,7 @@ mod tests {
     #[test]
     fn the_bound_filter_comes_from_netds_own_configuration() {
         let request = PrepareBridgeRequest {
-            identity: identity("i", "v", 0),
+            identity: Some(identity("i", "v", 0)),
             bridge: "br0".into(),
             mac: "02:00:00:00:00:01".into(),
             qemu_uid: 1000,
@@ -1155,7 +930,7 @@ mod tests {
             queues: 1,
         };
         // Nothing on the wire can name a filter: the field does not exist.
-        let wire = serde_json::to_value(Request::PrepareBridge(request.clone())).unwrap();
+        let wire = serde_json::to_value(&request).unwrap();
         assert!(wire.get("filter").is_none(), "{wire}");
         assert!(wire.get("parameters").is_none(), "{wire}");
 
@@ -1164,7 +939,12 @@ mod tests {
             filter: "clean-traffic".into(),
             parameters: BTreeMap::from([("IP".into(), "10.0.0.2".into())]),
         };
-        let xml = binding_xml(&request, "dt123", &policy);
+        let xml = binding_xml(
+            request.identity.as_ref().unwrap(),
+            &request.mac,
+            "dt123",
+            &policy,
+        );
         assert!(xml.contains("filter='clean-traffic'"), "{xml}");
         assert!(xml.contains("value='10.0.0.2'"), "{xml}");
     }
@@ -1183,16 +963,112 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
-    #[test]
-    fn an_unreachable_netd_is_recognized_through_the_contexts_stacked_on_it() {
-        let error = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::NotFound))
-            .context("failed to connect to netd at /run/netd.sock")
-            .context(Unreachable)
-            .context("failed to prepare netd-managed networking");
-        assert!(is_unreachable(&error));
+    /// The VMM tells "netd is not running" apart from "netd refused". Both
+    /// ways a Unix socket can have nobody behind it must read as the former,
+    /// through the context the pRPC client stacks on the transport error.
+    #[tokio::test]
+    async fn a_socket_with_no_netd_behind_it_is_unreachable() {
+        let dir = tempfile::tempdir().unwrap();
 
-        let other = anyhow::anyhow!("netd prepare_bridge failed: no such bridge")
-            .context("failed to prepare netd-managed networking");
-        assert!(!is_unreachable(&other));
+        let missing = dir.path().join("missing.sock");
+        let error = client(&missing)
+            .remove_interface(identity("i", "v", 0))
+            .await
+            .unwrap_err();
+        assert!(is_unreachable(&error), "{error:#}");
+
+        // A socket file left behind by a netd that exited.
+        let stale = dir.path().join("stale.sock");
+        drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+        let error = client(&stale)
+            .remove_interface(identity("i", "v", 0))
+            .await
+            .unwrap_err();
+        assert!(is_unreachable(&error), "{error:#}");
+
+        let refused = anyhow::anyhow!("this netd requires an nwfilter binding on every bridge TAP");
+        assert!(!is_unreachable(&refused));
+    }
+
+    /// After a Prepare times out on the VMM's side, the VMM removes the same
+    /// interface. That removal must run after the Prepare, not beside or
+    /// before it, or the Prepare would leave behind the interface the removal
+    /// was sent to delete.
+    #[tokio::test]
+    async fn operations_run_one_at_a_time_in_arrival_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = NetdState::new(NetdConfig::default(), dir.path().join("netd.lock"));
+        let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut tasks = Vec::new();
+        for index in 0..8 {
+            let handler = NetdHandler {
+                config: state.config.clone(),
+                serial: state.serial.clone(),
+                lock_path: state.lock_path.clone(),
+            };
+            let order = order.clone();
+            tasks.push(tokio::spawn(handler.run(move |_| {
+                order.lock().unwrap().push((index, "start"));
+                // Long enough that a later operation running beside this one
+                // would interleave with it.
+                std::thread::sleep(Duration::from_millis(if index == 0 { 100 } else { 5 }));
+                order.lock().unwrap().push((index, "end"));
+                Ok(())
+            })));
+            // Let this request take its place in the queue before the next
+            // one arrives.
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+        let expected: Vec<_> = (0..8).flat_map(|i| [(i, "start"), (i, "end")]).collect();
+        assert_eq!(*order.lock().unwrap(), expected);
+    }
+
+    /// Serves netd's routes on a temporary socket, without the root and host
+    /// tool checks `serve` makes.
+    async fn spawn_test_netd(dir: &Path) -> PathBuf {
+        let socket = dir.join("netd.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let ignite = rocket::custom(rocket::Config::figment().merge(("log_level", "off")))
+            .manage(NetdState::new(NetdConfig::default(), dir.join("netd.lock")))
+            .mount("/prpc", ra_rpc::prpc_routes!(NetdState, NetdHandler))
+            .ignite()
+            .await
+            .unwrap();
+        tokio::spawn(ignite.launch_on(NetdListener(listener)));
+        socket
+    }
+
+    /// A refusal has to reach the VMM with netd's reason in it: that reason is
+    /// what an operator acts on, and a bare status code names nothing.
+    #[tokio::test]
+    async fn a_refused_request_reaches_the_caller_with_netds_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = spawn_test_netd(dir.path()).await;
+
+        // Refused by validation, before any host tool runs.
+        let error = client(&socket)
+            .check_interface(CheckInterfaceRequest {
+                identity: None,
+                filtered: false,
+            })
+            .await
+            .unwrap_err();
+        assert!(!is_unreachable(&error), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("does not name an interface identity"),
+            "{error:#}"
+        );
+
+        let error = client(&socket)
+            .remove_interface(identity("", "v", 0))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("invalid instance ID"),
+            "{error:#}"
+        );
     }
 }
