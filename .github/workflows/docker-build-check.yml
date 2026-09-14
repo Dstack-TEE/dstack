@@ -33,6 +33,13 @@ env:
   DSTACK_REV: ${{ github.event.pull_request.head.sha || github.sha }}
   DSTACK_SRC_URL: ${{ github.event.pull_request.head.repo.clone_url || format('{0}/{1}', github.server_url, github.repository) }}
 
+# No BuildKit layer cache (`cache-to: type=gha`). The source is cloned at
+# DSTACK_REV inside the build, so the cargo layer misses on every commit, and
+# `mode=max` still exported the whole builder stage -- toolchain plus target
+# directory -- to the Actions cache: about two and a half minutes per job, and
+# gigabytes of blobs competing with the cargo caches other workflows depend on.
+# What it could have saved was the pinned-package install, roughly fifteen
+# seconds.
 jobs:
   build-script-tests:
     runs-on: ubuntu-latest
@@ -62,15 +69,6 @@ jobs:
           build-args: |
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
-          # Layer cache, scoped per image so the three jobs do not overwrite one
-          # another's. It covers the pinned-package install and the toolchain
-          # setup. The cargo build below cannot be cached: the source arrives
-          # through `git clone` at DSTACK_REV inside the build rather than from
-          # the build context, so BuildKit has nothing to key it on. That is
-          # deliberate -- the revision is what the image records in
-          # /etc/.GIT_REV -- so the ceiling here is the layers above the clone.
-          cache-from: type=gha,scope=gateway
-          cache-to: type=gha,mode=max,scope=gateway
 
       - name: Verify pinned packages
         run: |
@@ -122,15 +120,6 @@ jobs:
           build-args: |
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
-          # Layer cache, scoped per image so the three jobs do not overwrite one
-          # another's. It covers the pinned-package install and the toolchain
-          # setup. The cargo build below cannot be cached: the source arrives
-          # through `git clone` at DSTACK_REV inside the build rather than from
-          # the build context, so BuildKit has nothing to key it on. That is
-          # deliberate -- the revision is what the image records in
-          # /etc/.GIT_REV -- so the ceiling here is the layers above the clone.
-          cache-from: type=gha,scope=kms
-          cache-to: type=gha,mode=max,scope=kms
 
       - name: Verify pinned packages
         run: |
@@ -184,15 +173,6 @@ jobs:
           build-args: |
             DSTACK_REV=${{ env.DSTACK_REV }}
             DSTACK_SRC_URL=${{ env.DSTACK_SRC_URL }}
-          # Layer cache, scoped per image so the three jobs do not overwrite one
-          # another's. It covers the pinned-package install and the toolchain
-          # setup. The cargo build below cannot be cached: the source arrives
-          # through `git clone` at DSTACK_REV inside the build rather than from
-          # the build context, so BuildKit has nothing to key it on. That is
-          # deliberate -- the revision is what the image records in
-          # /etc/.GIT_REV -- so the ceiling here is the layers above the clone.
-          cache-from: type=gha,scope=verifier
-          cache-to: type=gha,mode=max,scope=verifier
 
       - name: Verify pinned packages (runtime)
         run: |
