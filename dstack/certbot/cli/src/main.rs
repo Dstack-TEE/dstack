@@ -5,7 +5,7 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use certbot::{CertBotConfig, ChallengeKind, WorkDir, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
 use clap::Parser;
 use documented::DocumentedFields;
@@ -201,19 +201,38 @@ fn load_config(config: &PathBuf) -> Result<CertBotConfig> {
 
 async fn renew(config: &PathBuf, once: bool, force: bool) -> Result<()> {
     let bot_config = load_config(config).context("Failed to load configuration")?;
-    let bot = bot_config
-        .build_bot()
-        .await
-        .context("Failed to build bot")?;
     if once {
+        let bot = bot_config
+            .build_bot()
+            .await
+            .context("Failed to build bot")?;
         bot.renew_and_run_hook(force).await?;
-    } else {
-        tokio::select! {
-            _ = bot.run() => unreachable!("certbot daemon returned"),
-            result = shutdown_signal() => result?,
-        }
+        return Ok(());
     }
-    Ok(())
+
+    // Startup and the renew loop are raced against shutdown as one future, so
+    // the signal listener covers the whole daemon lifetime. build_bot() does
+    // network I/O (resolving the DNS zone, creating the ACME account), and a
+    // SIGTERM/Ctrl-C arriving there used to fall through to the default
+    // disposition and hard-kill the process. Racing the two phases separately
+    // would leave a gap between them with no listener registered: tokio never
+    // restores the default disposition once a handler is installed, and drops
+    // a signal that arrives while nothing is subscribed, so such a SIGTERM
+    // would neither terminate nor unblock the process.
+    let daemon = async {
+        let bot = bot_config
+            .build_bot()
+            .await
+            .context("Failed to build bot")?;
+        bot.run().await;
+        // run() loops forever today, but that is not enforced by its type: a
+        // future early return should exit with an error, not panic.
+        bail!("certbot daemon exited unexpectedly")
+    };
+    tokio::select! {
+        result = daemon => result,
+        result = shutdown_signal() => result,
+    }
 }
 
 async fn shutdown_signal() -> Result<()> {
