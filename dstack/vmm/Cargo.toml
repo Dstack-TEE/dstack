@@ -40,6 +40,8 @@ serde_ini.workspace = true
 supervisor-client.workspace = true
 ra-rpc = { workspace = true, features = ["client", "rocket", "openapi"] }
 dstack-vmm-rpc.workspace = true
+dstack-netd-rpc.workspace = true
+http-client = { workspace = true, features = ["prpc"] }
 dstack-kms-rpc.workspace = true
 path-absolutize.workspace = true
 host-api.workspace = true

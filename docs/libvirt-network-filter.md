@@ -70,11 +70,16 @@ run directory.
 
 ## Architecture
 
-`netd` is a host-level privilege broker. It accepts a small, bounded JSON
-protocol over a Unix stream socket. The socket's filesystem owner, group, and
-mode are the authorization boundary: every process that can connect is fully
-trusted to use the netd protocol. A single process can serve multiple VMMs; a
-dedicated process can use another socket for development or isolation.
+`netd` is a host-level privilege broker. It serves the `Netd` pRPC service
+(`dstack/vmm/netd-rpc/proto/netd_rpc.proto`) over a Unix stream socket, with
+one method per operation. The socket's filesystem owner, group, and mode are
+the authorization boundary: every process that can connect is fully trusted to
+call every netd method. A single process can serve multiple VMMs; a dedicated
+process can use another socket for development or isolation.
+
+The VMM and netd must come from the same release. After upgrading, restart
+`dstack-netd` together with the VMM; a VMM cannot talk to a netd from a release
+that predates the pRPC service.
 
 When netd creates the socket itself, `socket_mode` defaults to `0o660`. Ensure
 that each authorized VMM process can reach the socket through its owning group
@@ -90,8 +95,8 @@ For libvirt mode, startup is:
 5. Start QEMU directly with `-netdev tap,script=no,downscript=no`, carrying
    `vhost=on|off` and, above one queue pair, `queues=N`.
 
-Teardown stops QEMU first, removes the binding, and deletes the TAP. Operations
-are serialized by `netd`. The design intentionally does not add ownership
+Teardown stops QEMU first, removes the binding, and deletes the TAP. `netd`
+runs operations one at a time, in the order they arrive. The design intentionally does not add ownership
 aliases; deployments must use unique instance IDs.
 
 The protocol does not pin a client to an instance namespace, so any process
