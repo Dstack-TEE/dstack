@@ -1,4 +1,12 @@
-# Yocto backend for the dstack guest OS
+# Yocto backend for the dstack guest OS (deprecated)
+
+> [!WARNING]
+> **This backend is deprecated.** Use the mkosi backend in
+> [`../mkosi/`](../mkosi/README.md) (`make os-image`) instead. The Yocto backend
+> is kept only so existing Yocto-built images can still be rebuilt and verified,
+> and it will be removed. Do not build new images with it, add features to it,
+> or treat it as the reference implementation. Its entrypoints print a
+> deprecation warning.
 
 This directory contains the Yocto backend imported from `meta-dstack`.
 dstack-owned layers live in `layers/`; external layers and BitBake live in
@@ -8,13 +16,13 @@ For the repository-wide OS layout and backend contract, see [`../README.md`](../
 
 ## Reproducible build
 
-From the repository root, the tested one-build entrypoint is:
+From the repository root, the legacy one-build entrypoint is:
 
 ```bash
-make os-image
+make os-image-yocto
 ```
 
-Use `make os-repro-check` to build twice and compare release outputs. The full
+Use `make os-repro-check-yocto` to build twice and compare release outputs. The full
 prerequisite, output, verification, flavor, incremental-build, and
 troubleshooting instructions are in the
 [guest-OS build guide](../../docs/building-guest-os.md).

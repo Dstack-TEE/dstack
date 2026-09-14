@@ -790,18 +790,12 @@ For highest assurance, build images from source:
 ```bash
 git clone https://github.com/Dstack-TEE/dstack.git
 cd dstack
-git submodule update --init -- \
-  os/yocto/deps/bitbake \
-  os/yocto/deps/openembedded-core \
-  os/yocto/deps/meta-yocto \
-  os/yocto/deps/meta-confidential-compute \
-  os/yocto/deps/meta-virtualization \
-  os/yocto/deps/meta-openembedded \
-  os/yocto/deps/meta-rust-bin \
-  os/yocto/deps/meta-security
-cd os/yocto/repro-build
-./repro-build.sh -n  # Reproducible build
+git checkout <release-revision>
+make os-image        # reproducible mkosi build
 ```
+
+See [Build the dstack guest OS](../building-guest-os.md) for outputs and the
+byte-for-byte reproducibility check.
 
 This ensures you know exactly what code is in the image, and anyone can independently verify the measurements match.
 
@@ -858,4 +852,4 @@ With the foundation complete, you're ready to explore:
 - [Intel TDX Documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/documentation.html)
 - [DCAP Attestation Guide](https://download.01.org/intel-sgx/latest/dcap-latest/linux/docs/)
 - [dstack Attestation Source](https://github.com/Dstack-TEE/dstack/tree/main/attestation)
-- [Reproducible guest-OS builds](../../os/yocto/repro-build/)
+- [Reproducible guest-OS builds](../building-guest-os.md)

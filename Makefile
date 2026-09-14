@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+# Submodules for the deprecated Yocto backend.
 OS_YOCTO_SUBMODULES := \
 	os/yocto/deps/bitbake \
 	os/yocto/deps/openembedded-core \
@@ -12,8 +13,8 @@ OS_YOCTO_SUBMODULES := \
 	os/yocto/deps/meta-rust-bin \
 	os/yocto/deps/meta-security
 
-.PHONY: help core core-check core-test sdk-test os os-yocto os-deps os-image os-repro-check \
-	os-image-mkosi os-repro-check-mkosi
+.PHONY: help core core-check core-test sdk-test os os-mkosi os-image os-repro-check \
+	os-image-mkosi os-repro-check-mkosi os-yocto os-deps os-image-yocto os-repro-check-yocto
 
 help:
 	@echo "dstack monorepo targets:"
@@ -21,13 +22,15 @@ help:
 	@echo "  core-check  check the Rust workspace"
 	@echo "  core-test   test the Rust workspace with the simulator"
 	@echo "  sdk-test    run all public SDK tests"
-	@echo "  os          build the guest OS natively with the default backend"
-	@echo "  os-yocto    build the guest OS natively with Yocto"
-	@echo "  os-deps     initialize only the Yocto dependency submodules"
-	@echo "  os-image    build one production guest image in the pinned container"
-	@echo "  os-repro-check  build twice and compare reproducible outputs"
-	@echo "  os-image-mkosi  build one production guest image with the mkosi backend"
-	@echo "  os-repro-check-mkosi  build twice with mkosi and compare outputs"
+	@echo "  os          build the guest OS natively with the default (mkosi) backend"
+	@echo "  os-image    build one production guest image with mkosi in the pinned container"
+	@echo "  os-repro-check  build twice with mkosi and compare outputs byte for byte"
+	@echo ""
+	@echo "Deprecated Yocto targets (do not use for new work; use the mkosi targets above):"
+	@echo "  os-yocto              build the guest OS natively with Yocto"
+	@echo "  os-deps               initialize only the Yocto dependency submodules"
+	@echo "  os-image-yocto        build one production guest image with Yocto"
+	@echo "  os-repro-check-yocto  build twice with Yocto and compare outputs"
 
 core:
 	cargo build --manifest-path dstack/Cargo.toml
@@ -44,21 +47,30 @@ sdk-test:
 os:
 	./os/build.sh
 
+os-mkosi:
+	./os/build.sh --backend mkosi
+
+# The mkosi backend vendors no submodules, so these do not depend on os-deps.
+os-image:
+	./os/mkosi/repro-build/repro-build.sh
+
+os-repro-check:
+	./os/mkosi/repro-build/repro-build.sh -c
+
+# Aliases kept for existing callers.
+os-image-mkosi: os-image
+
+os-repro-check-mkosi: os-repro-check
+
+# Deprecated Yocto backend. Kept only to rebuild existing Yocto images.
 os-yocto:
 	./os/build.sh --backend yocto
 
 os-deps:
 	git submodule update --init --depth 1 -- $(OS_YOCTO_SUBMODULES)
 
-os-image: os-deps
+os-image-yocto: os-deps
 	cd os/yocto/repro-build && ./repro-build.sh -n
 
-os-repro-check: os-deps
+os-repro-check-yocto: os-deps
 	cd os/yocto/repro-build && ./repro-build.sh
-
-# The mkosi backend vendors no submodules, so these do not depend on os-deps.
-os-image-mkosi:
-	./os/mkosi/repro-build/repro-build.sh
-
-os-repro-check-mkosi:
-	./os/mkosi/repro-build/repro-build.sh -c
