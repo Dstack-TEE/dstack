@@ -673,6 +673,9 @@ mod tests {
     /// The test platform patches the requested report data into the fixture
     /// quote, which breaks its signature for any other value. Asking for the
     /// fixture's own report data leaves the captured quote intact.
+    ///
+    /// Like the `dstack-verifier` fixture tests, this fetches DCAP collateral
+    /// from the default PCCS, so it needs network access.
     #[tokio::test]
     async fn attest_output_passes_attestation_verification() {
         use crate::rpc_service::InternalRpcHandler;

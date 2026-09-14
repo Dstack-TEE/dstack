@@ -566,12 +566,12 @@ which is why `GetQuote` could not answer on them at all.
 
 A general `VersionedAttestation` decoder still has to accept the legacy form, in
 which the first byte is `0x00` and the rest is SCALE-encoded V0. The frozen v0
-`Attest` and `GetTlsKey`, KMS and gateway certificates, and older releases still
-produce it, and a decoder
-tells the two forms apart by that first byte. A client that reads only v1
-`Attest` can treat anything other than a MessagePack map as malformed.
-MessagePack needs dstack 0.5.9 or later on the verifying side (`dstack-verifier`,
-KMS, gateway). Earlier releases decode only SCALE.
+`Attest` and `GetTlsKey` still produce it, and so do the KMS and gateway
+certificates built on them and every older release; a decoder tells the two
+forms apart by that first byte. A client that reads only v1 `Attest` can treat
+anything other than a MessagePack map as malformed. MessagePack needs dstack
+0.5.9 or later on the verifying side (`dstack-verifier`, KMS, gateway); earlier
+releases decode only SCALE.
 
 V2 runtime events in the event log always include the hex-encoded preimage of
 their digest; a verifier should check that `sha384(hex_decode(preimage))` equals
