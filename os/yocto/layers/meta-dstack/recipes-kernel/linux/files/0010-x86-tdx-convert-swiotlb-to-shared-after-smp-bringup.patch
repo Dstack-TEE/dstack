@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 14 Sep 2026 20:30:52 -0700
+Subject: [PATCH 10/10] x86/tdx: convert the SWIOTLB buffer to shared after SMP
+ bring-up
+
+mem_encrypt_init() converts the default SWIOTLB buffer from private to
+shared before SMP bring-up. The buffer lives in memory the firmware has
+already accepted, so the VMM has to remove every private page backing
+it. For each removed page the VMM forces all vCPUs out of the TD, and at
+this point the not-yet-woken APs busy-wait inside the TD in firmware,
+so every removal waits for a TD exit from every AP. With 248 vCPUs the
+default 1 GiB buffer takes about 68 seconds to convert.
+
+Defer the conversion for TDX guests to fs_initcall_sync. By then the
+APs are online, idle in HLT outside the TD, and have stopped the
+periodic tick because clocksource_done_booting() enabled high
+resolution timers. Converting right after smp_init() is not enough: the
+idle APs still take the jiffies tick and re-enter the TD about 1000
+times per second each, and the conversion took over 200 seconds. No
+device maps the bounce buffer before device probing starts at
+device_initcall. Other memory encryption platforms are unchanged.
+
+With this change the conversion takes about 6 seconds and the 248-vCPU
+TD reaches init in 39-51 seconds.
+---
+ arch/x86/mm/mem_encrypt.c | 29 +++++++++++++++++++++++++++--
+ 1 file changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/arch/x86/mm/mem_encrypt.c b/arch/x86/mm/mem_encrypt.c
+index 95bae74fd..f405c4123 100644
+--- a/arch/x86/mm/mem_encrypt.c
++++ b/arch/x86/mm/mem_encrypt.c
+@@ -85,14 +85,39 @@ static void print_mem_encrypt_feature_info(void)
+ 	}
+ }
+ 
++/*
++ * Converting the SWIOTLB buffer to shared makes the VMM remove every private
++ * page it backs. For each page the VMM has to force all vCPUs out of the TD,
++ * and before SMP bring-up the not-yet-woken APs are busy-waiting inside the
++ * TD in firmware, so every removal waits for an exit from every AP. With
++ * hundreds of vCPUs this takes minutes for the default 1 GiB buffer. Once
++ * the APs are online they idle in HLT outside the TD and the removal is
++ * cheap only after they have also stopped the periodic tick, which happens
++ * once clocksource_done_booting() (fs_initcall) enables high resolution
++ * timers and NOHZ. No device uses the bounce buffer before device probing
++ * starts, so do the conversion from fs_initcall_sync.
++ */
++static int __init tdx_swiotlb_update_mem_attributes(void)
++{
++	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
++		swiotlb_update_mem_attributes();
++	return 0;
++}
++fs_initcall_sync(tdx_swiotlb_update_mem_attributes);
++
+ /* Architecture __weak replacement functions */
+ void __init mem_encrypt_init(void)
+ {
+ 	if (!cc_platform_has(CC_ATTR_MEM_ENCRYPT))
+ 		return;
+ 
+-	/* Call into SWIOTLB to update the SWIOTLB DMA buffers */
+-	swiotlb_update_mem_attributes();
++	/*
++	 * Call into SWIOTLB to update the SWIOTLB DMA buffers. TDX guests
++	 * defer this until secondary CPUs are online, see
++	 * tdx_swiotlb_update_mem_attributes().
++	 */
++	if (!cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
++		swiotlb_update_mem_attributes();
+ 
+ 	snp_secure_tsc_prepare();
+ 
+-- 
+2.43.0
+
