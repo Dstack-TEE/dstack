@@ -695,9 +695,13 @@ fn sweep_vm_interfaces(
         if present {
             take_down(&tap);
         }
+        let macvtap = present && is_macvtap(&tap);
+        // A device netd did not create is refused below, before anything at
+        // its name is touched, as a manual removal refuses it.
+        let foreign = present && !macvtap && !is_tuntap(&tap);
         // A macvtap never carries a binding of its own, but a name that was a
         // filtered TAP before can still hold one that is listed.
-        let wanted = known_binding || (present && !is_macvtap(&tap));
+        let wanted = !foreign && (known_binding || (present && !macvtap));
         if libvirt && wanted {
             if let Err(error) = delete_binding(libvirt_uri, &tap) {
                 warn!(%tap, %error, "failed to remove an nwfilter binding");
@@ -773,8 +777,9 @@ fn remove_interface_by_name(libvirt_uri: &str, tap: &str, requires_binding: bool
             Err(error) => possible(error),
         },
         // A macvtap carries no binding of its own, and there is no listing
-        // saying an older one is left.
-        Err(_) if macvtap => None,
+        // saying an older one is left. A filtering node still needs that
+        // confirmed, as a sweep does.
+        Err(_) if macvtap && !requires_binding => None,
         Err(listing_error) => {
             // A `libvirtd` that did not answer the listing will not answer a
             // deletion either, and waiting for it would outlast the request.
