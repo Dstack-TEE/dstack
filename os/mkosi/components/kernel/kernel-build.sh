@@ -56,7 +56,9 @@ for patch in \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0003-dma-direct-return-struct-page-from-alloc-from-pool.patch" \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch" \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0005-swiotlb-preserve-allocation-virtual-address.patch" \
-  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0006-swiotlb-free-dynamic-pools-from-process-context.patch"; do
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0006-swiotlb-free-dynamic-pools-from-process-context.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0007-sched-smp-batch-wake-q-ipis-in-tdx-guests.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0008-x86-kvm-runtime-pv-single-target-ipi-in-tdx-guests.patch"; do
     patch -d "$src" -p1 --fuzz=0 < "$patch"
 done
 
