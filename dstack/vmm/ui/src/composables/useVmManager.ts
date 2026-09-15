@@ -323,6 +323,7 @@ function useVmManager() {
   const expandedVMs = ref(new Set() as Set<string>);
   const networkInfo = ref({} as Record<string, any>);
   const searchQuery = ref('');
+  const statusFilter = ref('');
   const currentPage = ref(1);
   const pageInput = ref(1);
   const pageSize = ref(Number.parseInt(localStorage.getItem('pageSize') || '50', 10));
@@ -708,6 +709,7 @@ type CreateVmPayloadSource = {
       const request: VmmTypes.IStatusRequest = {
         brief: true,
         keyword: searchQuery.value || undefined,
+        status: statusFilter.value || undefined,
         page: currentPage.value,
         page_size: pageSize.value,
       };
@@ -1609,6 +1611,12 @@ type CreateVmPayloadSource = {
     loadVMList();
   }
 
+  function onStatusFilterChange() {
+    currentPage.value = 1;
+    pageInput.value = 1;
+    loadVMList();
+  }
+
   async function startVm(id: string) {
     try {
       await vmmRpc.startVm({ id });
@@ -1911,6 +1919,7 @@ type CreateVmPayloadSource = {
     expandedVMs,
     networkInfo,
     searchQuery,
+    statusFilter,
     currentPage,
     pageInput,
     pageSize,
@@ -1966,6 +1975,7 @@ type CreateVmPayloadSource = {
     nextPage,
     prevPage,
     onPageSizeChange,
+    onStatusFilterChange,
     copyToClipboard,
     downloadAppCompose,
     downloadUserConfig,
