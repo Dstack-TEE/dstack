@@ -535,8 +535,6 @@ impl App {
             })
             .await
             .context("GPU sanitization task failed")??;
-            // Keep any earlier snapshot on failure: preparation may not have
-            // been able to persist the cleanup marker for legacy NICs yet.
             self.prepare_netd_networks(&vm_config, &mut runtime_networks)
                 .await?;
             let processes = match vm_config.config_qemu(
@@ -647,6 +645,9 @@ impl App {
         if !networks.iter().any(needs_netd_interface) {
             return Ok(());
         }
+        // Still set only if the release above did not land, in which case netd
+        // may hold something from before this launch no matter how it ends.
+        let held_before_launch = vm_workdir.network_cleanup_pending();
         vm_workdir.mark_network_cleanup_pending()?;
         let qemu_uid = Uid::effective().as_raw();
         // Only ever read back out of a log line: netd is told where the VM
@@ -708,18 +709,28 @@ impl App {
             let response = match result {
                 Ok(response) => response,
                 Err(error) => {
-                    // The client may have timed out while netd was still
-                    // finishing this Prepare. Remove the in-flight identity
-                    // first; netd runs operations in arrival order, so the
-                    // removal runs after the Prepare completes.
-                    if let Err(cleanup_error) = netd.remove_interface(identity.clone()).await {
-                        warn!(%cleanup_error, "failed to roll back in-flight netd network");
+                    let unreachable = netd::is_unreachable(&error);
+                    if unreachable && prepared.is_empty() && !held_before_launch {
+                        // The first request of this launch never reached a
+                        // netd, so none holds anything for this VM. Keeping
+                        // the marker would make every later stop and removal
+                        // wait for a netd this node may never run.
+                        if let Err(clear_error) = vm_workdir.clear_network_cleanup_pending() {
+                            warn!(%clear_error, "failed to clear pending network cleanup");
+                        }
+                    } else {
+                        // The client may have timed out while netd was still
+                        // finishing this Prepare. Remove the in-flight identity
+                        // first; netd runs operations in arrival order, so the
+                        // removal runs after the Prepare completes.
+                        if let Err(cleanup_error) = netd.remove_interface(identity.clone()).await {
+                            warn!(%cleanup_error, "failed to roll back in-flight netd network");
+                        }
+                        self.roll_back_prepared_networks(prepared).await;
                     }
-                    self.roll_back_prepared_networks(prepared).await;
                     // netd's own message is about a socket or a TAP, so
                     // neither the NIC that asked nor what a node has to install
                     // to satisfy it appears anywhere in the failure.
-                    let unreachable = netd::is_unreachable(&error);
                     let mode = network.nic.mode.as_str();
                     let error = Err(error).context("failed to prepare netd-managed networking");
                     return if unreachable {
@@ -790,12 +801,11 @@ impl App {
     }
 
     /// A running VM whose snapshot is missing, because a VMM that predates the
-    /// snapshot -- or predates it recording what netd built -- started it.
+    /// snapshot started it.
     ///
     /// Guessing is all that is left, so guess the way that VMM would have, and
-    /// then write the guess down. Leaving the marker unset would make every
-    /// later teardown re-derive it from node configuration that may by then
-    /// have moved, which is the failure this snapshot exists to prevent.
+    /// then write the guess down, so what is reported for this boot does not
+    /// drift with node configuration that may by then have moved.
     ///
     /// The way *that* VMM would have, not this one: a build old enough to leave
     /// no snapshot had no vhost and no multiqueue at all, so whatever this
@@ -1658,8 +1668,35 @@ impl App {
     /// started or removed. Costs a file check per VM when nothing is pending.
     pub(crate) async fn reconcile_network_cleanup(&self) {
         let ids: Vec<String> = self.lock().vms.keys().cloned().collect();
-        for id in ids {
-            self.reconcile_vm_network_cleanup(&id).await;
+        let pending: Vec<String> = ids
+            .into_iter()
+            .filter(|id| {
+                self.work_dir(id)
+                    .is_ok_and(|workdir| workdir.network_cleanup_pending())
+            })
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+        // A running VM keeps its marker for as long as it runs. One listing
+        // skips those up front, so a pass does not queue behind every running
+        // VM's launch lock only to find it running. Each remaining VM is still
+        // checked again under its lock.
+        let running: HashSet<String> = match self.supervisor.list().await {
+            Ok(processes) => processes
+                .into_iter()
+                .filter(|process| process.state.status.is_running())
+                .map(|process| process.config.id)
+                .collect(),
+            Err(error) => {
+                debug!("skipping network cleanup: {error:#}");
+                return;
+            }
+        };
+        for id in pending {
+            if !running.contains(&id) {
+                self.reconcile_vm_network_cleanup(&id).await;
+            }
         }
     }
 
@@ -2346,6 +2383,75 @@ mod tests {
         let app = app_talking_to(netd.socket());
         assert!(app.release_vm_interfaces("vm-1").await);
         assert!(netd.methods().is_empty());
+    }
+
+    fn bridge_vm(app: &App, id: &str) -> (VmConfig, Vec<Networking>) {
+        let mut manifest = test_manifest(2048);
+        manifest.id = id.to_string();
+        manifest.networks = vec![NicNetworking {
+            mode: NetworkingMode::Bridge,
+            bridge: "dstack-br0".to_string(),
+            ..NicNetworking::default()
+        }];
+        let networks = app.runtime_networks(&manifest);
+        let vm = VmConfig {
+            workdir: app.work_dir(id).unwrap().path().to_path_buf(),
+            manifest,
+            image: test_tdx_image(true),
+            cid: 3,
+            gateway_enabled: false,
+        };
+        (vm, networks)
+    }
+
+    /// A launch that never reached a netd built nothing, so it must not leave
+    /// a marker that makes every later stop and removal wait for one. What
+    /// an earlier boot may still hold keeps its marker.
+    #[tokio::test]
+    async fn a_launch_that_never_reached_netd_leaves_nothing_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let (vm, mut networks) = bridge_vm(&app, "vm-1");
+        let workdir = app.work_dir("vm-1").unwrap();
+        std::fs::create_dir_all(workdir.path()).unwrap();
+
+        let error = app
+            .prepare_netd_networks(&vm, &mut networks)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("run dstack-vmm netd"),
+            "{error:#}"
+        );
+        assert!(!workdir.network_cleanup_pending());
+
+        workdir.mark_network_cleanup_pending().unwrap();
+        app.prepare_netd_networks(&vm, &mut networks)
+            .await
+            .unwrap_err();
+        assert!(
+            workdir.network_cleanup_pending(),
+            "an unreleased earlier boot is still pending"
+        );
+    }
+
+    /// A netd that answered, even with a refusal, may have built something:
+    /// the marker stays.
+    #[tokio::test]
+    async fn a_launch_netd_refused_stays_pending() {
+        let netd = netd::testing::FakeNetd::spawn(&[]);
+        let app = app_talking_to(netd.socket());
+        let (vm, mut networks) = bridge_vm(&app, "vm-1");
+        let workdir = app.work_dir("vm-1").unwrap();
+        std::fs::create_dir_all(workdir.path()).unwrap();
+        app.prepare_netd_networks(&vm, &mut networks)
+            .await
+            .unwrap_err();
+        assert!(workdir.network_cleanup_pending());
+        assert_eq!(netd.methods(), vec!["PrepareBridge", "RemoveInterface"]);
     }
 
     /// A netd outage must not become a fleet that cannot be stopped.

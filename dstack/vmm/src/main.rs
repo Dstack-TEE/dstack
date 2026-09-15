@@ -219,6 +219,8 @@ async fn auto_restart_task(app: App) {
 
 async fn network_cleanup_task(app: App) {
     let mut interval = tokio::time::interval(Duration::from_secs(60));
+    // A pass can outlast the period while netd is slow; do not burst after it.
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
         app.reconcile_network_cleanup().await;

@@ -49,6 +49,8 @@ use crate::config::{NetdConfig, NetworkFilterConfig};
 /// operations queued ahead of it.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bound on listing nwfilter bindings. See [`existing_bindings`].
+const LISTING_TIMEOUT: Duration = Duration::from_secs(10);
 const IP_PATH: &str = "/usr/sbin/ip";
 const VIRSH_PATH: &str = "/usr/bin/virsh";
 const LOCK_PATH: &str = "/run/lock/dstack-netd.lock";
@@ -384,11 +386,11 @@ impl NetdRpc for NetdHandler {
 
     async fn remove_interface_by_name(self, request: InterfaceName) -> Result<()> {
         self.run(move |config| {
-            let tap = request.tap;
-            if !is_managed_name(&tap) {
-                bail!("{tap} is not a name netd could have created");
-            }
-            remove_interface(&config.libvirt_uri, &tap, BindingCleanup::BestEffort)
+            remove_interface_by_name(
+                &config.libvirt_uri,
+                &request.tap,
+                config.filter_policy().requires_binding(),
+            )
         })
         .await
     }
@@ -666,14 +668,17 @@ fn sweep_vm_interfaces(
         nic_index: 0,
     };
     validate_identity(&identity)?;
-    let bindings = existing_bindings(libvirt_uri);
-    // Not `bindings.is_some()`. A listing that could not be produced says
+    let listing = existing_bindings(libvirt_uri);
+    // Not `listing.is_ok()`. A listing that could not be produced says
     // nothing about whether a *deletion* will work, and reading it as "libvirt
     // is down, skip the bindings" would mean a node whose listing breaks for
     // any reason silently stops cleaning up bindings at all -- which is worse
     // than the per-name asking this listing exists to avoid. The pass finds
-    // out by trying, once.
-    let mut libvirt = true;
+    // out by trying, once. The exception is a listing that timed out: a
+    // `libvirtd` that did not answer it will not answer a deletion either, and
+    // waiting for that one too would outlast the caller's request.
+    let mut libvirt = !listing.as_ref().is_err_and(timed_out);
+    let bindings = listing.ok();
     let mut removed = 0;
     let mut first_error = (requires_binding && bindings.is_none())
         .then(|| anyhow::anyhow!("cannot confirm nwfilter cleanup: binding listing failed"));
@@ -729,6 +734,59 @@ fn sweep_vm_interfaces(
     }
 }
 
+/// Deletes one interface, and any binding at its name, for an operator.
+///
+/// `netd list` shows a binding whose interface is gone as its own row, and this
+/// is how an operator removes it, so a binding that is known to exist, or that
+/// is all the name could still hold, has to be confirmed gone before this
+/// reports success. Only a binding that merely might sit next to a live
+/// interface on a node that does not filter is best effort: `libvirtd` need
+/// not be running there, and the interface still has to go. The same rules as
+/// [`sweep_vm_interfaces`].
+fn remove_interface_by_name(libvirt_uri: &str, tap: &str, requires_binding: bool) -> Result<()> {
+    if !is_managed_name(tap) {
+        bail!("{tap} is not a name netd could have created");
+    }
+    let present = Path::new("/sys/class/net").join(tap).exists();
+    if present && !is_macvtap(tap) && !is_tuntap(tap) {
+        bail!("refusing to delete {tap}: it is neither a tun/tap nor a macvtap device");
+    }
+    let mut binding_error = None;
+    if !(present && is_macvtap(tap)) {
+        let known_binding = existing_bindings(libvirt_uri).map(|held| held.contains(tap));
+        match known_binding {
+            Ok(false) if !present => {}
+            Ok(known) => {
+                if let Err(error) = delete_binding(libvirt_uri, tap) {
+                    if known || requires_binding {
+                        binding_error = Some(error);
+                    } else {
+                        warn!(%tap, "could not clear a possible nwfilter binding: {error:#}");
+                    }
+                }
+            }
+            Err(listing_error) => {
+                if let Err(error) = delete_binding(libvirt_uri, tap) {
+                    if present && !requires_binding {
+                        warn!(%tap, "could not clear a possible nwfilter binding: {error:#}");
+                    } else {
+                        binding_error = Some(error.context(format!(
+                            "cannot confirm the binding is gone: {listing_error:#}"
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    // The interface goes even when its binding could not: a TAP left on the
+    // bridge is worse than a binding with nothing to filter.
+    remove_interface(libvirt_uri, tap, BindingCleanup::Skip)?;
+    match binding_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
 /// Every resource netd owns, read off the host rather than out of a record.
 ///
 /// Ownership is the reserved name plus the kernel's own answer about what kind
@@ -738,7 +796,7 @@ fn sweep_vm_interfaces(
 /// interface inventory that refused to be produced without it would be
 /// unavailable exactly where unfiltered TAPs live.
 fn list_interfaces(libvirt_uri: &str, instance_id: &str) -> Vec<InterfaceRecord> {
-    let bindings = existing_bindings(libvirt_uri);
+    let bindings = existing_bindings(libvirt_uri).ok();
     let mut records = Vec::new();
     let mut seen = HashSet::new();
     if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
@@ -1064,25 +1122,49 @@ fn virsh_output(uri: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<String
 /// call. Narrowing to netd's own name space is what makes parsing a human
 /// table safe: a header, a rule line, or a column that moves cannot produce a
 /// `dt` name, and a binding at any other name is not netd's to reason about.
-fn existing_bindings(uri: &str) -> Option<HashSet<String>> {
-    match virsh_output(uri, &["nwfilter-binding-list"], None) {
-        Ok(output) => Some(
-            output
-                .lines()
-                .filter_map(|line| line.split_whitespace().next())
-                .filter(|name| is_managed_name(name))
-                .map(str::to_string)
-                .collect(),
-        ),
-        Err(error) => {
-            debug!("could not list nwfilter bindings: {error:#}");
-            None
-        }
-    }
+fn existing_bindings(uri: &str) -> Result<HashSet<String>> {
+    // Shorter than a mutation's timeout. A sweep or a manual removal asks this
+    // first, and the whole request has to fit in the VMM's own request
+    // timeout, which a hung `libvirtd` would otherwise use up on its own.
+    let output = run_command_with_timeout(
+        VIRSH_PATH,
+        &["--connect", uri, "nwfilter-binding-list"],
+        None,
+        LISTING_TIMEOUT,
+    )
+    .inspect_err(|error| debug!("could not list nwfilter bindings: {error:#}"))?;
+    Ok(output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| is_managed_name(name))
+        .map(str::to_string)
+        .collect())
 }
 
 fn run_command(program: &str, args: &[&str], stdin: Option<&[u8]>) -> Result<()> {
     run_command_with_timeout(program, args, stdin, COMMAND_TIMEOUT).map(|_| ())
+}
+
+/// A helper that did not finish in time. Typed so a caller can tell a hung
+/// daemon, which will not answer the next request either, from a refusal.
+#[derive(Debug)]
+struct CommandTimedOut {
+    program: String,
+    timeout: Duration,
+}
+
+impl std::fmt::Display for CommandTimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} timed out after {:?}", self.program, self.timeout)
+    }
+}
+
+impl std::error::Error for CommandTimedOut {}
+
+fn timed_out(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<CommandTimedOut>().is_some())
 }
 
 fn run_command_with_timeout(
@@ -1112,10 +1194,11 @@ fn run_command_with_timeout(
     if child.wait_timeout(command_timeout)?.is_none() {
         let _ = child.kill();
         let _ = child.wait();
-        bail!(
-            "{} timed out after {command_timeout:?}",
-            Path::new(program).display()
-        );
+        return Err(CommandTimedOut {
+            program: Path::new(program).display().to_string(),
+            timeout: command_timeout,
+        }
+        .into());
     }
     let output = child.wait_with_output()?;
     if !output.status.success() {
@@ -1506,6 +1589,11 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+        // Recognised through whatever context a caller adds.
+        assert!(timed_out(&error.context("while listing")));
+        let refused = run_command_with_timeout("/bin/sh", &["-c", "exit 1"], None, COMMAND_TIMEOUT)
+            .unwrap_err();
+        assert!(!timed_out(&refused));
     }
 
     /// A whole-VM sweep names a VM and no NIC: reaching the indices the caller
@@ -1769,6 +1857,43 @@ mod tests {
                 assert_eq!(sweep().unwrap(), 0);
             }
         }
+    }
+
+    /// Run with the same isolated-network-namespace setup as the tests above.
+    /// A manual removal reports success only once nothing at the name is left
+    /// that the node's policy needs confirmed.
+    #[test]
+    #[ignore = "needs root and its own network namespace"]
+    fn a_manual_removal_does_not_claim_a_binding_it_could_not_confirm() {
+        assert!(nix::unistd::Uid::effective().is_root());
+        assert_ne!(
+            std::fs::read_link("/proc/self/ns/net").unwrap(),
+            std::fs::read_link("/proc/1/ns/net").unwrap(),
+            "run this inside its own network namespace",
+        );
+        let uri = "qemu:///nonexistent-for-this-test";
+        let tap = tap_name(&identity("manual-test", "vm-1", 0));
+
+        // Nothing but a possible binding at the name, and no libvirt to ask.
+        let error = remove_interface_by_name(uri, &tap, false).unwrap_err();
+        assert!(format!("{error:#}").contains("cannot confirm"), "{error:#}");
+
+        for requires_binding in [false, true] {
+            ip(&["tuntap", "add", "dev", &tap, "mode", "tap"]).unwrap();
+            let result = remove_interface_by_name(uri, &tap, requires_binding);
+            assert!(
+                !Path::new("/sys/class/net").join(&tap).exists(),
+                "the interface goes whatever happened to its binding"
+            );
+            assert_eq!(result.is_err(), requires_binding, "{result:?}");
+        }
+
+        let impostor = tap_name(&identity("manual-test", "not-a-tap", 0));
+        ip(&["link", "add", &impostor, "type", "dummy"]).unwrap();
+        let refused = remove_interface_by_name(uri, &impostor, false).unwrap_err();
+        assert!(refused.to_string().contains("refusing to delete"));
+        ip(&["link", "delete", "dev", &impostor]).unwrap();
+        assert!(remove_interface_by_name(uri, "eth0", false).is_err());
     }
 
     /// The VMM tells "netd is not running" apart from "netd refused". Both
