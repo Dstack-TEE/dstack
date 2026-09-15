@@ -92,14 +92,17 @@ jobs:
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Make package public
+      - name: Verify anonymous pull access
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
-          gh api --method PATCH \
-            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/dstack-kms" \
-            -f visibility=public \
-            --jq 'select(.visibility == "public") | .html_url'
+          token=$(curl -fsSL \
+            "https://ghcr.io/token?scope=repository:dstack-tee/dstack-kms:pull" \
+            | jq -er .token)
+          curl -fsSL -o /dev/null \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+            "https://ghcr.io/v2/dstack-tee/dstack-kms/manifests/$IMAGE_DIGEST"
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1

@@ -78,14 +78,17 @@ jobs:
           platforms: linux/amd64
           provenance: false
 
-      - name: Make package public
+      - name: Verify anonymous pull access
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
-          gh api --method PATCH \
-            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/local-key-provider" \
-            -f visibility=public \
-            --jq 'select(.visibility == "public") | .html_url'
+          token=$(curl -fsSL \
+            "https://ghcr.io/token?scope=repository:dstack-tee/local-key-provider:pull" \
+            | jq -er .token)
+          curl -fsSL -o /dev/null \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+            "https://ghcr.io/v2/dstack-tee/local-key-provider/manifests/$IMAGE_DIGEST"
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
