@@ -15,7 +15,8 @@ component_cache_key() {
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0005-swiotlb-preserve-allocation-virtual-address.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0006-swiotlb-free-dynamic-pools-from-process-context.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0007-sched-smp-batch-wake-q-ipis-in-tdx-guests.patch" \
-      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0008-x86-kvm-runtime-pv-single-target-ipi-in-tdx-guests.patch"
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0008-x86-kvm-runtime-pv-single-target-ipi-in-tdx-guests.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0009-mm-page-alloc-keep-accepted-reserve-before-watermarks.patch"
     key_tools gcc ld make pahole
     key_packages binutils dwarves bc bison flex libssl-dev libelf-dev
 }
