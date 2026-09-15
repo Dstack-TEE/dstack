@@ -117,7 +117,6 @@ jobs:
       - name: Compile contracts with Foundry
         run: |
           cd dstack/kms/auth-eth
-          forge install
           forge build
 
       - name: GitHub Release
