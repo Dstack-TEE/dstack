@@ -12,6 +12,10 @@ install -d "$DEST/usr/bin" "$DEST/usr/lib/systemd/system" \
 for s in dstack-prepare ephemeral-docker app-compose; do
   install -m0755 "$ROOT/os/common/rootfs/$s.sh" "$DEST/usr/bin/$s.sh"
 done
+# Experimental helper, kept out of PATH so it is not mistaken for a stable
+# command; see docs/tdx-guest-scaling.md.
+install -D -m0755 "$ROOT/os/common/rootfs/tdx-guest-tune.sh" \
+  "$DEST/usr/lib/dstack/tdx-guest-tune.sh"
 install -m0644 "$ROOT/os/common/rootfs/"*.service \
   "$ROOT/os/common/rootfs/dstack-guest-agent.socket" "$DEST/usr/lib/systemd/system/"
 install -m0644 "$ROOT/os/common/rootfs/journald.conf" "$DEST/etc/systemd/journald.conf.d/dstack.conf"

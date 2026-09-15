@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 14 Sep 2026 10:11:07 -0700
+Subject: [PATCH 8/8] x86/kvm: allow PV single-target function IPIs in TDX
+ guests at runtime
+
+In a TDX guest a single-target IPI written to the x2APIC ICR is emulated
+through a #VE and a TDVMCALL. The KVM PV IPI hypercall avoids the #VE step,
+but only the mask IPI callbacks use it; CALL_FUNCTION_SINGLE IPIs, which
+carry cross-CPU wakeups, still go through the emulated ICR write.
+
+Add tdx_pv_single_ipi (boot parameter and
+/sys/module/kernel/parameters/tdx_pv_single_ipi) that routes
+smp_ops.send_call_func_single_ipi through the PV mask IPI path. Both
+callbacks are built in and valid at any time, so the pointer is simply
+switched. Reschedule, NMI and shorthand IPIs are unchanged. The option is
+only accepted in a TDX guest and takes effect once PV IPIs are set up. It
+is on by default in TDX guests unless the boot command line sets it.
+
+The benefit depends on how many wakeup IPIs the workload still sends: in
+default 32-vCPU and 248-vCPU TDX guests it improved synchronization-heavy
+benchmarks by about 32% and 10% (geometric mean), but with guest halt
+polling and wake-queue batching it was neutral to slightly negative, so it
+stays a runtime switch that guests which enable halt polling can turn off.
+
+Upstream-Status: Inappropriate [dstack TDX guest tuning, not submitted]
+---
+ arch/x86/kernel/kvm.c | 59 +++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+
+diff --git a/arch/x86/kernel/kvm.c b/arch/x86/kernel/kvm.c
+index b67d7c59d..e3372ee3e 100644
+--- a/arch/x86/kernel/kvm.c
++++ b/arch/x86/kernel/kvm.c
+@@ -561,6 +561,57 @@ static void kvm_send_ipi_mask(const struct cpumask *mask, int vector)
+ 	__send_ipi_mask(mask, vector);
+ }
+ 
++/*
++ * A single-target x2APIC ICR write in a TDX guest is emulated through #VE and
++ * a TDVMCALL.  Optionally send CALL_FUNCTION_SINGLE IPIs, which carry
++ * cross-CPU wakeups, through the PV IPI hypercall instead.  Reschedule, NMI
++ * and shorthand IPIs are unchanged.  On by default in TDX guests; it can be
++ * toggled at runtime through /sys/module/kernel/parameters/tdx_pv_single_ipi.
++ */
++static bool tdx_pv_single_ipi;
++/* Set once the boot command line or sysfs chose a value explicitly. */
++static bool tdx_pv_single_ipi_set;
++static bool kvm_pv_ipi_ready;
++static void (*kvm_native_single_ipi)(int cpu);
++
++static void kvm_send_call_func_single_ipi(int cpu)
++{
++	__send_ipi_mask(cpumask_of(cpu), CALL_FUNCTION_SINGLE_VECTOR);
++}
++
++static void kvm_apply_pv_single_ipi(void)
++{
++	/* Both callbacks are built in and valid at all times. */
++	WRITE_ONCE(smp_ops.send_call_func_single_ipi,
++		   READ_ONCE(tdx_pv_single_ipi) ? kvm_send_call_func_single_ipi :
++						  kvm_native_single_ipi);
++}
++
++static int param_set_tdx_pv_single_ipi(const char *val,
++				       const struct kernel_param *kp)
++{
++	bool enabled;
++	int ret;
++
++	ret = kstrtobool(val ? val : "1", &enabled);
++	if (ret)
++		return ret;
++	if (enabled && !cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
++		return -EOPNOTSUPP;
++	WRITE_ONCE(tdx_pv_single_ipi, enabled);
++	tdx_pv_single_ipi_set = true;
++	if (READ_ONCE(kvm_pv_ipi_ready))
++		kvm_apply_pv_single_ipi();
++	return 0;
++}
++
++static const struct kernel_param_ops tdx_pv_single_ipi_ops = {
++	.flags = KERNEL_PARAM_OPS_FL_NOARG,
++	.set = param_set_tdx_pv_single_ipi,
++	.get = param_get_bool,
++};
++__core_param_cb(tdx_pv_single_ipi, &tdx_pv_single_ipi_ops, &tdx_pv_single_ipi, 0644);
++
+ static void kvm_send_ipi_mask_allbutself(const struct cpumask *mask, int vector)
+ {
+ 	unsigned int this_cpu = smp_processor_id();
+@@ -629,6 +680,14 @@ static __init void kvm_setup_pv_ipi(void)
+ {
+ 	apic_update_callback(send_IPI_mask, kvm_send_ipi_mask);
+ 	apic_update_callback(send_IPI_mask_allbutself, kvm_send_ipi_mask_allbutself);
++	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST)) {
++		kvm_native_single_ipi = smp_ops.send_call_func_single_ipi;
++		/* On by default in TDX guests unless the command line chose. */
++		if (!tdx_pv_single_ipi_set)
++			WRITE_ONCE(tdx_pv_single_ipi, true);
++		WRITE_ONCE(kvm_pv_ipi_ready, true);
++		kvm_apply_pv_single_ipi();
++	}
+ 	pr_info("setup PV IPIs\n");
+ }
+ 
+-- 
+2.43.0
+

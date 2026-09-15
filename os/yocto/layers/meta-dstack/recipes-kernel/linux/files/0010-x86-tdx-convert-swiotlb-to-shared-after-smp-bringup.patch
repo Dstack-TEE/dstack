@@ -1,0 +1,137 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 14 Sep 2026 20:30:52 -0700
+Subject: [PATCH 10/10] x86/tdx: convert the SWIOTLB buffer to shared after SMP
+ bring-up
+
+mem_encrypt_init() converts the default SWIOTLB buffer from private to
+shared before SMP bring-up. The buffer lives in memory the firmware has
+already accepted, so the VMM has to remove every private page backing
+it. For each removed page the VMM forces all vCPUs out of the TD, and at
+this point the not-yet-woken APs busy-wait inside the TD in firmware,
+so every removal waits for a TD exit from every AP. With 248 vCPUs the
+default 1 GiB buffer takes about 68 seconds to convert.
+
+Defer the conversion for TDX guests to fs_initcall_sync. By then the
+APs are online, idle in HLT outside the TD, and have stopped the
+periodic tick because clocksource_done_booting() enabled high
+resolution timers. Converting right after smp_init() is not enough: the
+idle APs still take the jiffies tick and re-enter the TD about 1000
+times per second each, and the conversion took over 200 seconds. No
+device maps the bounce buffer before device probing starts at
+device_initcall. Other memory encryption platforms are unchanged.
+
+A bounce through the still-private default pool would fail silently:
+the device reads a buffer it cannot decrypt. Record in SWIOTLB when
+swiotlb_update_mem_attributes() has run and WARN_ON_ONCE() in
+swiotlb_tbl_map_single() if the default pool is used before that on a
+platform with memory encryption, so a future early DMA user is caught
+instead of corrupting data.
+
+With this change the conversion takes about 6 seconds and the 248-vCPU
+TD reaches init in 39-51 seconds.
+---
+ arch/x86/mm/mem_encrypt.c | 30 ++++++++++++++++++++++++++++--
+ kernel/dma/swiotlb.c      | 25 +++++++++++++++++++++----
+ 2 files changed, 49 insertions(+), 6 deletions(-)
+
+diff --git a/arch/x86/mm/mem_encrypt.c b/arch/x86/mm/mem_encrypt.c
+index 95bae74fd..48618d2dd 100644
+--- a/arch/x86/mm/mem_encrypt.c
++++ b/arch/x86/mm/mem_encrypt.c
+@@ -85,14 +85,40 @@ static void print_mem_encrypt_feature_info(void)
+ 	}
+ }
+ 
++/*
++ * Converting the SWIOTLB buffer to shared makes the VMM remove every private
++ * page it backs. For each page the VMM has to force all vCPUs out of the TD,
++ * and before SMP bring-up the not-yet-woken APs are busy-waiting inside the
++ * TD in firmware, so every removal waits for an exit from every AP. With
++ * hundreds of vCPUs this takes minutes for the default 1 GiB buffer. Once
++ * the APs are online they idle in HLT outside the TD and the removal is
++ * cheap only after they have also stopped the periodic tick, which happens
++ * once clocksource_done_booting() (fs_initcall) enables high resolution
++ * timers and NOHZ. No device uses the bounce buffer before device probing
++ * starts, so do the conversion from fs_initcall_sync. swiotlb_tbl_map_single()
++ * warns if a bounce through the default pool ever happens before that.
++ */
++static int __init tdx_swiotlb_update_mem_attributes(void)
++{
++	if (cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
++		swiotlb_update_mem_attributes();
++	return 0;
++}
++fs_initcall_sync(tdx_swiotlb_update_mem_attributes);
++
+ /* Architecture __weak replacement functions */
+ void __init mem_encrypt_init(void)
+ {
+ 	if (!cc_platform_has(CC_ATTR_MEM_ENCRYPT))
+ 		return;
+ 
+-	/* Call into SWIOTLB to update the SWIOTLB DMA buffers */
+-	swiotlb_update_mem_attributes();
++	/*
++	 * Call into SWIOTLB to update the SWIOTLB DMA buffers. TDX guests
++	 * defer this until secondary CPUs are online, see
++	 * tdx_swiotlb_update_mem_attributes().
++	 */
++	if (!cpu_feature_enabled(X86_FEATURE_TDX_GUEST))
++		swiotlb_update_mem_attributes();
+ 
+ 	snp_secure_tsc_prepare();
+ 
+diff --git a/kernel/dma/swiotlb.c b/kernel/dma/swiotlb.c
+index fa7377b01..bc0900f1d 100644
+--- a/kernel/dma/swiotlb.c
++++ b/kernel/dma/swiotlb.c
+@@ -250,6 +250,13 @@ static inline unsigned long nr_slots(u64 val)
+ 	return DIV_ROUND_UP(val, IO_TLB_SIZE);
+ }
+ 
++/*
++ * Set once swiotlb_update_mem_attributes() has run. On platforms with memory
++ * encryption the default pool is private until then, so a bounce through it
++ * would hand the device a buffer it cannot read and fail silently.
++ */
++static bool swiotlb_default_pool_decrypted __ro_after_init;
++
+ /*
+  * Early SWIOTLB allocation may be too early to allow an architecture to
+  * perform the desired operations.  This function allows the architecture to
+@@ -261,10 +268,12 @@ void __init swiotlb_update_mem_attributes(void)
+ 	struct io_tlb_pool *mem = &io_tlb_default_mem.defpool;
+ 	unsigned long bytes;
+ 
+-	if (!mem->nslabs || mem->late_alloc)
+-		return;
+-	bytes = PAGE_ALIGN(mem->nslabs << IO_TLB_SHIFT);
+-	set_memory_decrypted((unsigned long)mem->vaddr, bytes >> PAGE_SHIFT);
++	if (mem->nslabs && !mem->late_alloc) {
++		bytes = PAGE_ALIGN(mem->nslabs << IO_TLB_SHIFT);
++		set_memory_decrypted((unsigned long)mem->vaddr,
++				     bytes >> PAGE_SHIFT);
++	}
++	swiotlb_default_pool_decrypted = true;
+ }
+ 
+ static void swiotlb_init_io_tlb_pool(struct io_tlb_pool *mem, phys_addr_t start,
+@@ -1435,6 +1444,14 @@ phys_addr_t swiotlb_tbl_map_single(struct device *dev, phys_addr_t orig_addr,
+ 		return (phys_addr_t)DMA_MAPPING_ERROR;
+ 	}
+ 
++	/*
++	 * Catch a bounce through the default pool before it has been made
++	 * shared with the device, see swiotlb_update_mem_attributes().
++	 */
++	WARN_ON_ONCE(pool == &io_tlb_default_mem.defpool &&
++		     !swiotlb_default_pool_decrypted &&
++		     cc_platform_has(CC_ATTR_MEM_ENCRYPT));
++
+ 	/*
+ 	 * If dma_skip_sync was set, reset it on first SWIOTLB buffer
+ 	 * mapping to always sync SWIOTLB buffers.
+-- 
+2.43.0
+

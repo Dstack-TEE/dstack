@@ -1,0 +1,135 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 14 Sep 2026 20:30:52 -0700
+Subject: [PATCH 09/10] mm/page_alloc: keep a small accepted reserve before
+ watermarks are initialized
+
+Until init_per_zone_wmark_min() runs as a postcore initcall, the zone
+watermarks are zero and cond_accept_memory() accepts one MAX_ORDER page
+whenever it is called. get_page_from_freelist() and alloc_pages_bulk()
+call it before every allocation, so each page allocation made during
+early boot, including all of smp_init(), accepts another 4 MiB even
+when the zone has plenty of accepted free memory.
+
+This is expensive for TDX guests on hosts that map private memory at
+4K only. Accepting 4 MiB then takes 1024 TDG.MEM.PAGE.ACCEPT calls, each
+one a TD exit and a TDH.MEM.PAGE.AUG. The number of allocations grows
+with the number of CPUs brought up, and each exit gets slower as more
+idle vCPUs take the periodic tick. On a Granite Rapids host running a
+7.0 kernel, a 248-vCPU, 32 GiB TD accepts about 13 GiB during SMP
+bring-up alone and needs 575-680 seconds to reach init.
+
+Before the watermarks are initialized, skip the proactive accept while
+the zone still has at least two MAX_ORDER pages of accepted free memory.
+Callers that retry after a failed watermark check or a failed allocation
+pass force=true and still accept one MAX_ORDER page, so an allocation
+that cannot be served from accepted memory makes progress as before.
+Nothing changes once the watermarks are initialized.
+
+With this change the same TD brings up all 248 CPUs in about 2 seconds
+and reaches init in 114 seconds.
+---
+ mm/page_alloc.c | 30 +++++++++++++++++++-----------
+ 1 file changed, 19 insertions(+), 11 deletions(-)
+
+diff --git a/mm/page_alloc.c b/mm/page_alloc.c
+index 775e02b79..08d411add 100644
+--- a/mm/page_alloc.c
++++ b/mm/page_alloc.c
+@@ -318,7 +318,7 @@ EXPORT_SYMBOL(nr_online_nodes);
+ 
+ static bool page_contains_unaccepted(struct page *page, unsigned int order);
+ static bool cond_accept_memory(struct zone *zone, unsigned int order,
+-			       int alloc_flags);
++			       int alloc_flags, bool force);
+ static bool __free_unaccepted(struct page *page);
+ 
+ int page_group_by_mobility_disabled __read_mostly;
+@@ -3854,7 +3854,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+ 			continue;
+ 		}
+ 
+-		cond_accept_memory(zone, order, alloc_flags);
++		cond_accept_memory(zone, order, alloc_flags, false);
+ 
+ 		/*
+ 		 * Detect whether the number of free pages is below high
+@@ -3881,7 +3881,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+ 				       gfp_mask)) {
+ 			int ret;
+ 
+-			if (cond_accept_memory(zone, order, alloc_flags))
++			if (cond_accept_memory(zone, order, alloc_flags, true))
+ 				goto try_this_zone;
+ 
+ 			/*
+@@ -3934,7 +3934,7 @@ get_page_from_freelist(gfp_t gfp_mask, unsigned int order, int alloc_flags,
+ 
+ 			return page;
+ 		} else {
+-			if (cond_accept_memory(zone, order, alloc_flags))
++			if (cond_accept_memory(zone, order, alloc_flags, true))
+ 				goto try_this_zone;
+ 
+ 			/* Try again if zone has deferred pages */
+@@ -5118,7 +5118,7 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
+ 			goto failed;
+ 		}
+ 
+-		cond_accept_memory(zone, 0, alloc_flags);
++		cond_accept_memory(zone, 0, alloc_flags, false);
+ retry_this_zone:
+ 		mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK) + nr_pages;
+ 		if (zone_watermark_fast(zone, 0,  mark,
+@@ -5127,7 +5127,7 @@ unsigned long alloc_pages_bulk_noprof(gfp_t gfp, int preferred_nid,
+ 			break;
+ 		}
+ 
+-		if (cond_accept_memory(zone, 0, alloc_flags))
++		if (cond_accept_memory(zone, 0, alloc_flags, true))
+ 			goto retry_this_zone;
+ 
+ 		/* Try again if zone has deferred pages */
+@@ -7522,7 +7522,7 @@ static bool try_to_accept_memory_one(struct zone *zone)
+ }
+ 
+ static bool cond_accept_memory(struct zone *zone, unsigned int order,
+-			       int alloc_flags)
++			       int alloc_flags, bool force)
+ {
+ 	long to_accept, wmark;
+ 	bool ret = false;
+@@ -7539,10 +7539,18 @@ static bool cond_accept_memory(struct zone *zone, unsigned int order,
+ 	/*
+ 	 * Watermarks have not been initialized yet.
+ 	 *
+-	 * Accepting one MAX_ORDER page to ensure progress.
+-	 */
+-	if (!wmark)
++	 * Keep a small reserve of accepted free memory instead of accepting
++	 * one MAX_ORDER page on every allocation. Accept one MAX_ORDER page
++	 * when the allocation could not be satisfied, to ensure progress.
++	 */
++	if (!wmark) {
++		if (!force &&
++		    zone_page_state(zone, NR_FREE_PAGES) -
++		    zone_page_state(zone, NR_UNACCEPTED) >=
++		    2 * MAX_ORDER_NR_PAGES)
++			return false;
+ 		return try_to_accept_memory_one(zone);
++	}
+ 
+ 	/* How much to accept to get to promo watermark? */
+ 	to_accept = wmark -
+@@ -7586,7 +7594,7 @@ static bool page_contains_unaccepted(struct page *page, unsigned int order)
+ }
+ 
+ static bool cond_accept_memory(struct zone *zone, unsigned int order,
+-			       int alloc_flags)
++			       int alloc_flags, bool force)
+ {
+ 	return false;
+ }
+-- 
+2.43.0
+

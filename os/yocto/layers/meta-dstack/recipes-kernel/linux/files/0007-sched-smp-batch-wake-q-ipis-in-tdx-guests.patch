@@ -1,0 +1,387 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 14 Sep 2026 10:11:06 -0700
+Subject: [PATCH 7/8] sched/smp: batch wake_up_q() notification IPIs in TDX
+ guests
+
+Every IPI sent by a TDX guest costs a TD exit and a TD entry. When a
+task wakes many sleeping tasks through wake_up_q() (futex wake,
+condition variable broadcast, OpenMP thread pools), each wakee on a
+halted CPU costs one separate IPI hypercall, and the waker spends most
+of its time in TD transitions instead of issuing wakeups.
+
+Add a runtime switch, tdx_wake_q_batch
+(/sys/module/kernel/parameters/tdx_wake_q_batch), that keeps publishing
+each wakeup immediately but defers the notification: target CPUs are
+collected in a stack-local mask and notified with one mask IPI. A group
+ends after 8 wakeups, after about 50 microseconds of sender time or when
+the sender needs to reschedule, so the first wakee of a group waits at most
+for the rest of that small group to be queued. Wakees that are polling in
+idle still need no IPI at all.
+
+Batched TTWU entries use a separate per-CPU llist so that a synchronous
+call-single callback is never hidden behind a deferred notification. The
+IPI handler and the explicit idle, migration and CPU-down flush paths drain
+both lists. Only task-context wake_up_q() and fair-class wakeups take the
+batched path; RT, deadline, stop and ext tasks, interrupt-context wakeups
+and direct try_to_wake_up() callers keep immediate notification. The switch
+can only be enabled in a TDX guest without PREEMPT_RT. It is on by default
+in TDX guests from a late initcall, so early boot and SMP bring-up keep
+immediate notification; an explicit tdx_wake_q_batch= boot parameter is
+preserved.
+
+With guest halt polling enabled in a 32-vCPU TDX guest, enabling batching
+raised a PyTorch CPU operator with 32 passive OpenMP threads from 257 to
+4440 MiB/s and doubled two many-thread pool synchronization benchmarks.
+
+Upstream-Status: Inappropriate [dstack TDX guest tuning, not submitted]
+---
+ kernel/sched/core.c         | 131 +++++++++++++++++++++++++++++++++---
+ kernel/sched/wake_q_batch.h |  16 +++++
+ kernel/smp.c                |  49 +++++++++++++-
+ 3 files changed, 184 insertions(+), 12 deletions(-)
+ create mode 100644 kernel/sched/wake_q_batch.h
+
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index b5b5897b5..ece2b671b 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -62,6 +62,7 @@
+ #include <linux/rcuwait_api.h>
+ #include <linux/rseq.h>
+ #include <linux/sched/wake_q.h>
++#include "wake_q_batch.h"
+ #include <linux/scs.h>
+ #include <linux/slab.h>
+ #include <linux/syscalls.h>
+@@ -1070,10 +1071,109 @@ void wake_q_add_safe(struct wake_q_head *head, struct task_struct *task)
+ 		put_task_struct(task);
+ }
+ 
++/*
++ * TDX guests pay a full TD exit for every wakeup IPI.  When enabled, wake_up_q()
++ * publishes each queued wakeup immediately but coalesces the notification IPIs
++ * of a small group into one mask IPI.  A group ends after
++ * WAKE_Q_BATCH_TASKS wakeups, WAKE_Q_BATCH_NS of sender time or a pending
++ * reschedule, so the extra delay for the first wakee stays small.
++ */
++#define WAKE_Q_BATCH_TASKS	8
++#define WAKE_Q_BATCH_NS		50000
++static bool tdx_wake_q_batch;
++/* Set once the boot command line or sysfs chose a value explicitly. */
++static bool tdx_wake_q_batch_set;
++
++static bool wake_q_batch_available(void)
++{
++#if defined(CONFIG_X86_64) && defined(CONFIG_SMP) && !defined(CONFIG_PREEMPT_RT)
++	return cpu_feature_enabled(X86_FEATURE_TDX_GUEST);
++#else
++	return false;
++#endif
++}
++
++static int param_set_tdx_wake_q_batch(const char *val,
++				      const struct kernel_param *kp)
++{
++	bool enabled;
++	int ret;
++
++	ret = kstrtobool(val ? val : "1", &enabled);
++	if (ret)
++		return ret;
++	if (enabled && !wake_q_batch_available())
++		return -EOPNOTSUPP;
++	WRITE_ONCE(*(bool *)kp->arg, enabled);
++	tdx_wake_q_batch_set = true;
++	return 0;
++}
++
++static const struct kernel_param_ops tdx_wake_q_batch_ops = {
++	.flags = KERNEL_PARAM_OPS_FL_NOARG,
++	.set = param_set_tdx_wake_q_batch,
++	.get = param_get_bool,
++};
++__core_param_cb(tdx_wake_q_batch, &tdx_wake_q_batch_ops, &tdx_wake_q_batch, 0644);
++
++/*
++ * Enabled by default in TDX guests, but only once boot is complete, so early
++ * boot and SMP bring-up keep immediate notification.
++ */
++static int __init tdx_wake_q_batch_default(void)
++{
++	if (!tdx_wake_q_batch_set && wake_q_batch_available())
++		WRITE_ONCE(tdx_wake_q_batch, true);
++	return 0;
++}
++late_initcall(tdx_wake_q_batch_default);
++
++static int try_to_wake_up_mask(struct task_struct *p, unsigned int state,
++			       int wake_flags, struct cpumask *mask);
++
++static void wake_up_q_batch(struct wake_q_head *head)
++{
++	struct wake_q_node *node = head->first;
++	struct task_struct *refs[WAKE_Q_BATCH_TASKS];
++	cpumask_t mask;
++	unsigned int nr, i;
++	u64 start;
++
++	while (node != WAKE_Q_TAIL) {
++		/* Keep CPU-down exclusion until all published wakeups are kicked. */
++		preempt_disable();
++		cpumask_clear(&mask);
++		nr = 0;
++		start = local_clock();
++		do {
++			struct task_struct *task;
++
++			task = container_of(node, struct task_struct, wake_q);
++			node = node->next;
++			/* Same publication and state barriers as wake_up_q(). */
++			WRITE_ONCE(task->wake_q.next, NULL);
++			try_to_wake_up_mask(task, TASK_NORMAL, 0, &mask);
++			refs[nr++] = task;
++		} while (node != WAKE_Q_TAIL && nr < WAKE_Q_BATCH_TASKS &&
++			 !need_resched() && local_clock() - start < WAKE_Q_BATCH_NS);
++
++		/* No batching state survives preempt_enable() or task release. */
++		sched_ttwu_flush_batch(&mask);
++		preempt_enable();
++		for (i = 0; i < nr; i++)
++			put_task_struct(refs[i]);
++	}
++}
++
+ void wake_up_q(struct wake_q_head *head)
+ {
+ 	struct wake_q_node *node = head->first;
+ 
++	if (READ_ONCE(tdx_wake_q_batch) && in_task()) {
++		wake_up_q_batch(head);
++		return;
++	}
++
+ 	while (node != WAKE_Q_TAIL) {
+ 		struct task_struct *task;
+ 
+@@ -3846,7 +3946,8 @@ bool call_function_single_prep_ipi(int cpu)
+  * via sched_ttwu_wakeup() for activation so the wakee incurs the cost
+  * of the wakeup instead of the waker.
+  */
+-static void __ttwu_queue_wakelist(struct task_struct *p, int cpu, int wake_flags)
++static void __ttwu_queue_wakelist(struct task_struct *p, int cpu, int wake_flags,
++				  struct cpumask *mask)
+ {
+ 	struct rq *rq = cpu_rq(cpu);
+ 
+@@ -3854,7 +3955,11 @@ static void __ttwu_queue_wakelist(struct task_struct *p, int cpu, int wake_flags
+ 
+ 	WRITE_ONCE(rq->ttwu_pending, 1);
+ #ifdef CONFIG_SMP
+-	__smp_call_single_queue(cpu, &p->wake_entry.llist);
++	/* Publish under pi_lock: migration_cpu_stop() must already see this. */
++	if (mask && p->sched_class == &fair_sched_class)
++		sched_ttwu_queue_batch(cpu, &p->wake_entry.llist, mask);
++	else
++		__smp_call_single_queue(cpu, &p->wake_entry.llist);
+ #endif
+ }
+ 
+@@ -3950,23 +4055,25 @@ static inline bool ttwu_queue_cond(struct task_struct *p, int cpu)
+ 	return false;
+ }
+ 
+-static bool ttwu_queue_wakelist(struct task_struct *p, int cpu, int wake_flags)
++static bool ttwu_queue_wakelist(struct task_struct *p, int cpu, int wake_flags,
++				struct cpumask *mask)
+ {
+ 	if (sched_feat(TTWU_QUEUE) && ttwu_queue_cond(p, cpu)) {
+ 		sched_clock_cpu(cpu); /* Sync clocks across CPUs */
+-		__ttwu_queue_wakelist(p, cpu, wake_flags);
++		__ttwu_queue_wakelist(p, cpu, wake_flags, mask);
+ 		return true;
+ 	}
+ 
+ 	return false;
+ }
+ 
+-static void ttwu_queue(struct task_struct *p, int cpu, int wake_flags)
++static void ttwu_queue(struct task_struct *p, int cpu, int wake_flags,
++		       struct cpumask *mask)
+ {
+ 	struct rq *rq = cpu_rq(cpu);
+ 	struct rq_flags rf;
+ 
+-	if (ttwu_queue_wakelist(p, cpu, wake_flags))
++	if (ttwu_queue_wakelist(p, cpu, wake_flags, mask))
+ 		return;
+ 
+ 	rq_lock(rq, &rf);
+@@ -4145,7 +4252,8 @@ bool ttwu_state_match(struct task_struct *p, unsigned int state, int *success)
+  * Return: %true if @p->state changes (an actual wakeup was done),
+  *	   %false otherwise.
+  */
+-int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
++static int try_to_wake_up_mask(struct task_struct *p, unsigned int state,
++			       int wake_flags, struct cpumask *mask)
+ {
+ 	guard(preempt)();
+ 	int cpu, success = 0;
+@@ -4269,7 +4377,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
+ 		 * scheduling.
+ 		 */
+ 		if (smp_load_acquire(&p->on_cpu) &&
+-		    ttwu_queue_wakelist(p, task_cpu(p), wake_flags))
++		    ttwu_queue_wakelist(p, task_cpu(p), wake_flags, mask))
+ 			break;
+ 
+ 		/*
+@@ -4295,7 +4403,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
+ 			set_task_cpu(p, cpu);
+ 		}
+ 
+-		ttwu_queue(p, cpu, wake_flags);
++		ttwu_queue(p, cpu, wake_flags, mask);
+ 	}
+ out:
+ 	if (success)
+@@ -4304,6 +4412,11 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
+ 	return success;
+ }
+ 
++int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
++{
++	return try_to_wake_up_mask(p, state, wake_flags, NULL);
++}
++
+ static bool __task_needs_rq_lock(struct task_struct *p)
+ {
+ 	unsigned int state = READ_ONCE(p->__state);
+diff --git a/kernel/sched/wake_q_batch.h b/kernel/sched/wake_q_batch.h
+new file mode 100644
+index 000000000..73212d061
+--- /dev/null
++++ b/kernel/sched/wake_q_batch.h
+@@ -0,0 +1,16 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _KERNEL_SCHED_WAKE_Q_BATCH_H
++#define _KERNEL_SCHED_WAKE_Q_BATCH_H
++
++struct cpumask;
++struct llist_node;
++
++#ifdef CONFIG_SMP
++void sched_ttwu_queue_batch(int cpu, struct llist_node *node,
++			    struct cpumask *mask);
++void sched_ttwu_flush_batch(struct cpumask *mask);
++#else
++static inline void sched_ttwu_flush_batch(struct cpumask *mask) { }
++#endif
++
++#endif /* _KERNEL_SCHED_WAKE_Q_BATCH_H */
+diff --git a/kernel/smp.c b/kernel/smp.c
+index 02f52291f..50593533e 100644
+--- a/kernel/smp.c
++++ b/kernel/smp.c
+@@ -34,6 +34,7 @@
+ 
+ #include "smpboot.h"
+ #include "sched/smp.h"
++#include "sched/wake_q_batch.h"
+ 
+ #define CSD_TYPE(_csd)	((_csd)->node.u_flags & CSD_FLAG_TYPE_MASK)
+ 
+@@ -46,6 +47,8 @@ struct call_function_data {
+ static DEFINE_PER_CPU_ALIGNED(struct call_function_data, cfd_data);
+ 
+ static DEFINE_PER_CPU_SHARED_ALIGNED(struct llist_head, call_single_queue);
++/* Batched TTWU wakeups; kept apart so no synchronous CSD waits on a deferred kick. */
++static DEFINE_PER_CPU_SHARED_ALIGNED(struct llist_head, wake_q_batch_queue);
+ 
+ static DEFINE_PER_CPU(atomic_t, trigger_backtrace) = ATOMIC_INIT(1);
+ 
+@@ -105,8 +108,10 @@ void __init call_function_init(void)
+ {
+ 	int i;
+ 
+-	for_each_possible_cpu(i)
++	for_each_possible_cpu(i) {
+ 		init_llist_head(&per_cpu(call_single_queue, i));
++		init_llist_head(&per_cpu(wake_q_batch_queue, i));
++	}
+ 
+ 	smpcfd_prepare_cpu(smp_processor_id());
+ }
+@@ -413,6 +418,33 @@ void __smp_call_single_queue(int cpu, struct llist_node *node)
+ 		send_call_function_single_ipi(cpu);
+ }
+ 
++/*
++ * Queue a TTWU entry for a batched wakeup: the entry is published right away,
++ * only the notification is deferred by adding @cpu to @mask.
++ */
++void sched_ttwu_queue_batch(int cpu, struct llist_node *node,
++			    struct cpumask *mask)
++{
++	lockdep_assert_preemption_disabled();
++	if (trace_csd_queue_cpu_enabled()) {
++		call_single_data_t *csd;
++
++		csd = container_of(node, call_single_data_t, node.llist);
++		trace_csd_queue_cpu(cpu, _RET_IP_, sched_ttwu_pending, csd);
++	}
++	if (llist_add(node, &per_cpu(wake_q_batch_queue, cpu)) &&
++	    call_function_single_prep_ipi(cpu))
++		cpumask_set_cpu(cpu, mask);
++}
++
++void sched_ttwu_flush_batch(struct cpumask *mask)
++{
++	lockdep_assert_preemption_disabled();
++	if (!cpumask_empty(mask))
++		send_call_function_ipi_mask(mask);
++	cpumask_clear(mask);
++}
++
+ /*
+  * Insert a previously allocated call_single_data_t element
+  * for execution on the given CPU. data must already have
+@@ -552,7 +584,7 @@ static void __flush_smp_call_function_queue(bool warn_cpu_offline)
+ 	}
+ 
+ 	if (!entry)
+-		return;
++		goto batch_wakes;
+ 
+ 	/*
+ 	 * Second; run all !SYNC callbacks.
+@@ -592,6 +624,16 @@ static void __flush_smp_call_function_queue(bool warn_cpu_offline)
+ 		csd = llist_entry(entry, typeof(*csd), node.llist);
+ 		csd_do_func(sched_ttwu_pending, entry, csd);
+ 	}
++
++batch_wakes:
++	/* Batched wakeups; also reached from idle, migration and CPU-down flushes. */
++	entry = llist_del_all(this_cpu_ptr(&wake_q_batch_queue));
++	entry = llist_reverse_order(entry);
++	if (entry) {
++		WARN_ON_ONCE(warn_cpu_offline && !cpu_online(smp_processor_id()));
++		csd = llist_entry(entry, typeof(*csd), node.llist);
++		csd_do_func(sched_ttwu_pending, entry, csd);
++	}
+ }
+ 
+ 
+@@ -612,7 +654,8 @@ void flush_smp_call_function_queue(void)
+ 	unsigned int was_pending;
+ 	unsigned long flags;
+ 
+-	if (llist_empty(this_cpu_ptr(&call_single_queue)))
++	if (llist_empty(this_cpu_ptr(&call_single_queue)) &&
++	    llist_empty(this_cpu_ptr(&wake_q_batch_queue)))
+ 		return;
+ 
+ 	local_irq_save(flags);
+-- 
+2.43.0
+
