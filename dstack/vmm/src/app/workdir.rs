@@ -143,6 +143,30 @@ impl VmWorkDir {
         self.workdir.join("runtime-networks.json")
     }
 
+    /// The only record that netd may hold host interfaces for this VM.
+    ///
+    /// Written durably before asking netd to create anything, and removed only
+    /// after a successful whole-VM sweep, so it is present whenever netd holds
+    /// something. The reverse need not hold: host interfaces do not survive a
+    /// reboot while this file does, and a marker with nothing behind it costs
+    /// one sweep.
+    pub fn mark_network_cleanup_pending(&self) -> Result<()> {
+        safe_write::safe_write(self.workdir.join(".netd-pending"), b"")
+            .context("failed to persist pending network cleanup")
+    }
+
+    pub fn network_cleanup_pending(&self) -> bool {
+        self.workdir.join(".netd-pending").exists()
+    }
+
+    pub fn clear_network_cleanup_pending(&self) -> Result<()> {
+        match fs::remove_file(self.workdir.join(".netd-pending")) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).context("failed to clear pending network cleanup"),
+        }
+    }
+
     pub fn runtime_networks(&self) -> Vec<Networking> {
         fs::read_to_string(self.runtime_networks_path())
             .ok()
@@ -212,7 +236,48 @@ impl VmWorkDir {
     }
 
     pub fn set_removing(&self) -> Result<()> {
-        fs::write(self.removing_marker(), "").context("failed to write .removing marker")
+        // Durable: this is what makes a removal resume after a crash.
+        safe_write::safe_write(self.removing_marker(), b"")
+            .context("failed to write .removing marker")
+    }
+
+    /// Deletes the directory, `.removing` last.
+    ///
+    /// A deletion interrupted part-way leaves the marker behind, so the next
+    /// VMM start finishes the removal instead of loading what is left as a VM.
+    pub fn remove_all(&self) -> Result<()> {
+        let marker = self.removing_marker();
+        let entries = match fs::read_dir(&self.workdir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path == marker {
+                continue;
+            }
+            if path.symlink_metadata()?.is_dir() {
+                fs::remove_dir_all(&path)?;
+            } else {
+                fs::remove_file(&path)?;
+            }
+        }
+        match fs::remove_file(&marker) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        if let Err(error) = fs::remove_dir(&self.workdir) {
+            // Something wrote into the directory while it was being emptied.
+            // Put the marker back, so what is left is still a removal to the
+            // next reload rather than a VM that fails to load.
+            if self.workdir.exists() {
+                let _ = self.set_removing();
+            }
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
@@ -308,5 +373,19 @@ mod tests {
         assert!(!fs::read_to_string(workdir.runtime_networks_path())?.contains("/dev/tap42"));
         fs::remove_dir_all(temp)?;
         Ok(())
+    }
+
+    /// `.removing` goes last, so an interrupted deletion is still a removal.
+    #[test]
+    fn remove_all_deletes_everything_and_tolerates_a_missing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(dir.path().join("vm"));
+        std::fs::create_dir_all(workdir.path().join("shared")).unwrap();
+        std::fs::write(workdir.path().join("shared/file"), b"x").unwrap();
+        workdir.mark_network_cleanup_pending().unwrap();
+        workdir.set_removing().unwrap();
+        workdir.remove_all().unwrap();
+        assert!(!workdir.path().exists());
+        workdir.remove_all().unwrap();
     }
 }
