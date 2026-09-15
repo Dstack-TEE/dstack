@@ -28,7 +28,7 @@ inherit cargo_bin
 
 do_unpack() {
     install -d "${S}"
-    rsync -a --exclude=".git" --exclude=".worktrees" --exclude="target" \
+    rsync -a --no-group --exclude=".git" --exclude=".worktrees" --exclude="target" \
         "${DSTACK_CORE_SRC}/" "${S}/"
 }
 
