@@ -59,17 +59,17 @@ GIT_REV=HEAD \
 IMAGE_VERSION=0.6.0 \
 IMAGE_SOURCE_URL=https://github.com/Dstack-TEE/dstack \
 OCI_TAR=/tmp/verifier.oci.tar \
-  ./build-image.sh dstacktee/dstack-verifier:0.6.0
+  ./build-image.sh ghcr.io/dstack-tee/dstack-verifier:0.6.0
 
 python3 -c 'import json,tarfile;t=tarfile.open("/tmp/verifier.oci.tar");print(json.load(t.extractfile("index.json"))["manifests"][0]["digest"])'
 ```
 
 `IMAGE_VERSION` is part of the image metadata, so it must match the release for
 the digests to match. The printed digest is what the registry reports for
-`dstacktee/dstack-verifier:0.6.0`; compare it with:
+`ghcr.io/dstack-tee/dstack-verifier:0.6.0`; compare it with:
 
 ```bash
-docker buildx imagetools inspect dstacktee/dstack-verifier:0.6.0 --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect ghcr.io/dstack-tee/dstack-verifier:0.6.0 --format '{{.Manifest.Digest}}'
 ```
 
 Note that the release also publishes a `:latest` tag pointing at the same

@@ -58,17 +58,17 @@ GIT_REV=HEAD \
 IMAGE_VERSION=0.6.0 \
 IMAGE_SOURCE_URL=https://github.com/Dstack-TEE/dstack \
 OCI_TAR=/tmp/kms.oci.tar \
-  ./build-image.sh dstacktee/dstack-kms:0.6.0
+  ./build-image.sh ghcr.io/dstack-tee/dstack-kms:0.6.0
 
 python3 -c 'import json,tarfile;t=tarfile.open("/tmp/kms.oci.tar");print(json.load(t.extractfile("index.json"))["manifests"][0]["digest"])'
 ```
 
 `IMAGE_VERSION` is part of the image metadata, so it must match the release for
 the digests to match. The printed digest is what the registry reports for
-`dstacktee/dstack-kms:0.6.0`; compare it with:
+`ghcr.io/dstack-tee/dstack-kms:0.6.0`; compare it with:
 
 ```bash
-docker buildx imagetools inspect dstacktee/dstack-kms:0.6.0 --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect ghcr.io/dstack-tee/dstack-kms:0.6.0 --format '{{.Manifest.Digest}}'
 ```
 
 This is the digest that `deploy-to-vmm.sh` pins in `KMS_IMAGE`, and that in turn

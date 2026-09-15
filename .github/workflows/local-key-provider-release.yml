@@ -25,52 +25,79 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Parse version from tag
+      - name: Parse and check version
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/local-key-provider-v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/local-key-provider-v}
-          else
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             VERSION=$DISPATCH_VERSION
+          else
+            case "$GITHUB_REF" in
+              refs/tags/local-key-provider-v*) VERSION=${GITHUB_REF#refs/tags/local-key-provider-v} ;;
+              *) echo "Expected a local-key-provider-v* tag" >&2; exit 1 ;;
+            esac
+          fi
+          if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Version must be a valid Docker tag" >&2
+            exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Parsed version: $VERSION"
+          echo "RELEASE_TAG=local-key-provider-v$VERSION" >> "$GITHUB_ENV"
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+      # Manual runs rebuild an existing release tag, not the selected branch.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && env.RELEASE_TAG || github.sha }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Resolve the revision to build
+        run: echo "GIT_REV=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Build and push Docker image
         id: build-and-push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: dstack
           file: dstack/local-key-provider/build/Dockerfile.key-provider
           push: true
-          tags: ${{ vars.DOCKERHUB_ORG }}/local-key-provider:${{ env.VERSION }}
+          tags: ghcr.io/dstack-tee/local-key-provider:${{ env.VERSION }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.GIT_REV }}
+            org.opencontainers.image.version=${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
 
+      - name: Make package public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH \
+            "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/local-key-provider" \
+            -f visibility=public \
+            --jq 'select(.visibility == "public") | .html_url'
+
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
         with:
-          subject-name: "docker.io/${{ vars.DOCKERHUB_ORG }}/local-key-provider"
+          subject-name: "ghcr.io/dstack-tee/local-key-provider"
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
           push-to-registry: true
 
       - name: Export enclave measurements
         env:
           IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
-          IMAGE_NAME: ${{ vars.DOCKERHUB_ORG }}/local-key-provider
+          IMAGE_NAME: ghcr.io/dstack-tee/local-key-provider
         run: |
           docker pull "${IMAGE_NAME}@${IMAGE_DIGEST}"
           docker run --rm \
@@ -86,15 +113,16 @@ jobs:
           echo "MRSIGNER=$MRSIGNER" >> "$GITHUB_ENV"
 
       - name: GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b # v3
         with:
           name: "Local Key Provider Release v${{ env.VERSION }}"
-          tag_name: local-key-provider-v${{ env.VERSION }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ env.GIT_REV }}
           files: local-key-provider.sig.json
           body: |
             ## Docker Image Information
 
-            **Image**: `docker.io/${{ vars.DOCKERHUB_ORG }}/local-key-provider:${{ env.VERSION }}`
+            **Image**: `ghcr.io/dstack-tee/local-key-provider:${{ env.VERSION }}`
 
             **Digest (SHA256)**: `${{ steps.build-and-push.outputs.digest }}`
 

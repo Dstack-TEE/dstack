@@ -99,8 +99,8 @@ the CLI's default `--url`. On both machines used last time it pointed at a live
 deployment with credentials, so any `deploy` that omitted `--url` would have
 landed there. **Pass `--url http://127.0.0.1:<port>` on every single invocation.**
 
-**Component tags publish to Docker Hub.** `kms-v*`, `gateway-v*`, `verifier-v*`
-and friends trigger release workflows that push to `${DOCKERHUB_ORG}` and cut
+**Component tags publish to GHCR.** `kms-v*`, `gateway-v*`, `verifier-v*`
+and friends trigger release workflows that push to `ghcr.io/dstack-tee` and cut
 GitHub releases. If you only want images in a private registry, build locally and
 push by hand — do not push those tags.
 
