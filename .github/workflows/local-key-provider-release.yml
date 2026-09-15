@@ -40,11 +40,12 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "Parsed version: $VERSION"
 
-      - name: Log in to Docker Hub
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -56,21 +57,21 @@ jobs:
           context: dstack
           file: dstack/local-key-provider/build/Dockerfile.key-provider
           push: true
-          tags: ${{ vars.DOCKERHUB_ORG }}/local-key-provider:${{ env.VERSION }}
+          tags: ghcr.io/dstack-tee/local-key-provider:${{ env.VERSION }}
           platforms: linux/amd64
           provenance: false
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v4
         with:
-          subject-name: "docker.io/${{ vars.DOCKERHUB_ORG }}/local-key-provider"
+          subject-name: "ghcr.io/dstack-tee/local-key-provider"
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
           push-to-registry: true
 
       - name: Export enclave measurements
         env:
           IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
-          IMAGE_NAME: ${{ vars.DOCKERHUB_ORG }}/local-key-provider
+          IMAGE_NAME: ghcr.io/dstack-tee/local-key-provider
         run: |
           docker pull "${IMAGE_NAME}@${IMAGE_DIGEST}"
           docker run --rm \
@@ -94,7 +95,7 @@ jobs:
           body: |
             ## Docker Image Information
 
-            **Image**: `docker.io/${{ vars.DOCKERHUB_ORG }}/local-key-provider:${{ env.VERSION }}`
+            **Image**: `ghcr.io/dstack-tee/local-key-provider:${{ env.VERSION }}`
 
             **Digest (SHA256)**: `${{ steps.build-and-push.outputs.digest }}`
 
