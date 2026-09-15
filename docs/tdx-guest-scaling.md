@@ -68,6 +68,22 @@ t=/usr/lib/dstack/tdx-guest-tune.sh
 if [ -x "$t" ]; then "$t" throughput || echo "tdx-guest-tune failed, continuing"; fi
 ```
 
+## Boot time of large guests
+
+Two always-on guest kernel patches keep the boot time of many-vCPU TDs from
+growing with the square of the vCPU count on hosts that map TD private memory
+at 4K only (upstream TDX KVM, 7.0):
+
+- `0009` stops the page allocator from accepting 4 MiB of unaccepted memory on
+  every allocation before the zone watermarks are initialized. Before, SMP
+  bring-up of a 248-vCPU TD accepted about 13 GiB one 4K page at a time.
+- `0010` converts the default SWIOTLB buffer to shared at `fs_initcall_sync`
+  instead of before SMP bring-up. Before, the host had to force every
+  still-spinning AP out of the TD for each of the buffer's 262144 pages.
+
+A 248-vCPU, 32 GiB TD on a Granite Rapids host with a 7.0 kernel reaches init in
+about 40-50 seconds instead of 575-680 seconds. The SWIOTLB size is unchanged.
+
 ## Observed results
 
 Emerald Rapids host, 32-vCPU guest, the same image as TD and as an ordinary VM,
