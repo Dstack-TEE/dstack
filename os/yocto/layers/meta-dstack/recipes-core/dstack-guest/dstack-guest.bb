@@ -38,9 +38,9 @@ inherit cargo_bin
 
 do_unpack() {
     install -d "${S}" "${DSTACK_ROOTFS_FILES}"
-    rsync -a --exclude=".git" --exclude=".worktrees" --exclude="target" \
+    rsync -a --no-group --exclude=".git" --exclude=".worktrees" --exclude="target" \
         "${DSTACK_CORE_SRC}/" "${S}/"
-    rsync -a "${DSTACK_ROOTFS_SRC}/" "${DSTACK_ROOTFS_FILES}/"
+    rsync -a --no-group "${DSTACK_ROOTFS_SRC}/" "${DSTACK_ROOTFS_FILES}/"
 }
 
 do_unpack[cleandirs] = "${UNPACKDIR}/repo"
