@@ -110,9 +110,11 @@ Deploy VMM instances that do not share this trust boundary with dedicated netd
 sockets and distinct filesystem permissions.
 
 `netd` invokes fixed absolute `ip` and `virsh` executables with separate
-arguments. It never accepts a command, executable path, TAP name, or raw XML
-from a client. Filter XML is generated internally with XML escaping and is
-validated by libvirt.
+arguments. It never accepts a command, executable path, or raw XML from a
+client. The only TAP name it accepts is the one `RemoveInterfaceByName` takes,
+and only a name of the form netd itself creates (`dt` and 12 lowercase hex
+digits), on a tun/tap or macvtap device. Filter XML is generated internally with
+XML escaping and is validated by libvirt.
 
 Teardown by identity only reaches the NIC indices its caller still has a record
 of, and that record is written *after* the interface exists — a VMM killed in

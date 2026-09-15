@@ -1112,6 +1112,12 @@ impl VmmRpc for RpcHandler {
             "resize_vm RPC called"
         );
         validate_resize_request(&request)?;
+        // The same guard as `update_vm`, for the same reason: this writes the
+        // manifest, and `put_manifest` recreates a directory a removal has
+        // just deleted. Before the lock, and again under it.
+        self.app.refuse_if_removing(&request.id)?;
+        let _launch = self.app.launch_lock(&request.id).await;
+        self.app.refuse_if_removing(&request.id)?;
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
         self.apply_resource_updates(

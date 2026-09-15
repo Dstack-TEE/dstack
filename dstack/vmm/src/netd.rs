@@ -692,8 +692,13 @@ fn sweep_vm_interfaces(
         // again after it has failed is how a hung `libvirtd` turns a bounded
         // collection into an unbounded one.
         let known_binding = bindings.as_ref().is_some_and(|held| held.contains(&tap));
-        let wanted = present || known_binding;
-        if libvirt && wanted && !is_macvtap(&tap) {
+        if present {
+            take_down(&tap);
+        }
+        // A macvtap never carries a binding of its own, but a name that was a
+        // filtered TAP before can still hold one that is listed.
+        let wanted = known_binding || (present && !is_macvtap(&tap));
+        if libvirt && wanted {
             if let Err(error) = delete_binding(libvirt_uri, &tap) {
                 warn!(%tap, %error, "failed to remove an nwfilter binding");
                 libvirt = false;
@@ -748,36 +753,47 @@ fn remove_interface_by_name(libvirt_uri: &str, tap: &str, requires_binding: bool
         bail!("{tap} is not a name netd could have created");
     }
     let present = Path::new("/sys/class/net").join(tap).exists();
-    if present && !is_macvtap(tap) && !is_tuntap(tap) {
+    let macvtap = present && is_macvtap(tap);
+    if present && !macvtap && !is_tuntap(tap) {
         bail!("refusing to delete {tap}: it is neither a tun/tap nor a macvtap device");
     }
-    let mut binding_error = None;
-    if !(present && is_macvtap(tap)) {
-        let known_binding = existing_bindings(libvirt_uri).map(|held| held.contains(tap));
-        match known_binding {
-            Ok(false) if !present => {}
-            Ok(known) => {
-                if let Err(error) = delete_binding(libvirt_uri, tap) {
-                    if known || requires_binding {
-                        binding_error = Some(error);
-                    } else {
-                        warn!(%tap, "could not clear a possible nwfilter binding: {error:#}");
-                    }
-                }
-            }
-            Err(listing_error) => {
-                if let Err(error) = delete_binding(libvirt_uri, tap) {
-                    if present && !requires_binding {
-                        warn!(%tap, "could not clear a possible nwfilter binding: {error:#}");
-                    } else {
-                        binding_error = Some(error.context(format!(
-                            "cannot confirm the binding is gone: {listing_error:#}"
-                        )));
-                    }
-                }
+    if present {
+        take_down(tap);
+    }
+    let possible = |error: anyhow::Error| {
+        warn!(%tap, "could not clear a possible nwfilter binding: {error:#}");
+        None
+    };
+    let binding_error = match existing_bindings(libvirt_uri).map(|held| held.contains(tap)) {
+        // Nothing listed at the name, and nothing there that could carry one.
+        Ok(false) if !present || macvtap => None,
+        Ok(known) => match delete_binding(libvirt_uri, tap) {
+            Ok(()) => None,
+            Err(error) if known || requires_binding => Some(error),
+            Err(error) => possible(error),
+        },
+        // A macvtap carries no binding of its own, and there is no listing
+        // saying an older one is left.
+        Err(_) if macvtap => None,
+        Err(listing_error) => {
+            // A `libvirtd` that did not answer the listing will not answer a
+            // deletion either, and waiting for it would outlast the request.
+            let attempt = if timed_out(&listing_error) {
+                Err(listing_error.context("cannot confirm the binding is gone"))
+            } else {
+                delete_binding(libvirt_uri, tap).map_err(|error| {
+                    error.context(format!(
+                        "cannot confirm the binding is gone: {listing_error:#}"
+                    ))
+                })
+            };
+            match attempt {
+                Ok(()) => None,
+                Err(error) if present && !requires_binding => possible(error),
+                Err(error) => Some(error),
             }
         }
-    }
+    };
     // The interface goes even when its binding could not: a TAP left on the
     // bridge is worse than a binding with nothing to filter.
     remove_interface(libvirt_uri, tap, BindingCleanup::Skip)?;
@@ -886,6 +902,17 @@ fn remove_interface(libvirt_uri: &str, tap: &str, cleanup: BindingCleanup) -> Re
         info!(%tap, "removed managed network interface");
     }
     Ok(())
+}
+
+/// Sets a device netd created down before anything else about it is torn down.
+///
+/// A stop only signals QEMU, so it may still be sending when its release runs.
+/// Down first, so its traffic does not reach the bridge unfiltered for as long
+/// as deleting the binding takes. Never touches a device netd did not create.
+fn take_down(interface: &str) {
+    if is_macvtap(interface) || is_tuntap(interface) {
+        let _ = ip(&["link", "set", "dev", interface, "down"]);
+    }
 }
 
 /// Records who an interface belongs to, on the interface. See
@@ -1184,14 +1211,23 @@ fn run_command_with_timeout(
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("failed to execute {program}"))?;
+    // Drain both pipes while waiting. A child whose output fills a pipe
+    // blocks until someone reads it, so waiting first and reading afterwards
+    // turns any output larger than the pipe buffer -- a binding listing on a
+    // busy host -- into a timeout.
+    let stdout = drain(child.stdout.take().context("missing command stdout")?);
+    let stderr = drain(child.stderr.take().context("missing command stderr")?);
     if let Some(input) = stdin {
-        child
-            .stdin
-            .take()
-            .context("missing command stdin")?
-            .write_all(input)?;
+        let mut pipe = child.stdin.take().context("missing command stdin")?;
+        let input = input.to_vec();
+        // On its own thread for the same reason: a child that writes before
+        // it has read all of its input must not stall the write past the
+        // timeout. Dropping the pipe afterwards is the child's EOF.
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(&input);
+        });
     }
-    if child.wait_timeout(command_timeout)?.is_none() {
+    let Some(status) = child.wait_timeout(command_timeout)? else {
         let _ = child.kill();
         let _ = child.wait();
         return Err(CommandTimedOut {
@@ -1199,13 +1235,23 @@ fn run_command_with_timeout(
             timeout: command_timeout,
         }
         .into());
-    }
-    let output = child.wait_with_output()?;
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    if !status.success() {
+        let error = String::from_utf8_lossy(&stderr);
         bail!("{} failed: {}", Path::new(program).display(), error.trim());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
+}
+
+/// Reads a pipe to its end on its own thread.
+fn drain(mut pipe: impl io::Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = pipe.read_to_end(&mut buffer);
+        buffer
+    })
 }
 
 fn require_executable(path: &str) -> Result<()> {
@@ -1589,6 +1635,20 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("timed out"));
         assert!(started.elapsed() < Duration::from_secs(2));
+        // Output larger than a pipe buffer is read, not mistaken for a hang.
+        let large = run_command_with_timeout(
+            "/bin/sh",
+            &["-c", "head -c 1000000 /dev/zero | tr '\\0' x"],
+            None,
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(large.len(), 1_000_000);
+        // Input is still delivered, and its EOF still arrives.
+        let echoed =
+            run_command_with_timeout("/bin/cat", &[], Some(b"binding xml"), COMMAND_TIMEOUT)
+                .unwrap();
+        assert_eq!(echoed, "binding xml");
         // Recognised through whatever context a caller adds.
         assert!(timed_out(&error.context("while listing")));
         let refused = run_command_with_timeout("/bin/sh", &["-c", "exit 1"], None, COMMAND_TIMEOUT)

@@ -268,7 +268,15 @@ impl VmWorkDir {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
         }
-        fs::remove_dir(&self.workdir)?;
+        if let Err(error) = fs::remove_dir(&self.workdir) {
+            // Something wrote into the directory while it was being emptied.
+            // Put the marker back, so what is left is still a removal to the
+            // next reload rather than a VM that fails to load.
+            if self.workdir.exists() {
+                let _ = self.set_removing();
+            }
+            return Err(error.into());
+        }
         Ok(())
     }
 
