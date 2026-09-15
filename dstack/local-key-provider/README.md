@@ -24,6 +24,6 @@ provider under Gramine. The container build uses the repository workspace's
 lockfile.
 
 Tagged releases (`local-key-provider-v*`) publish the image as
-`docker.io/dstacktee/local-key-provider:<version>`. The corresponding GitHub
+`ghcr.io/dstack-tee/local-key-provider:<version>`. The corresponding GitHub
 release records the image digest and enclave measurements, attaches the full
 SIGSTRUCT metadata, and links to its Sigstore build-provenance attestation.

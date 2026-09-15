@@ -169,7 +169,7 @@ check with the policy fields emitted by `/verify`: accepted OS image,
 ```yaml
 services:
   dstack-verifier:
-    image: dstacktee/dstack-verifier:latest
+    image: ghcr.io/dstack-tee/dstack-verifier:latest
     ports:
       - "8080:8080"
     restart: unless-stopped
