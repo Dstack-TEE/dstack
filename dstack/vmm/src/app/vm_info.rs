@@ -343,9 +343,7 @@ impl VmState {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        interfaces_to_proto, networking_to_proto, sanitize_optional, vm_runtime_status,
-    };
+    use super::{interfaces_to_proto, networking_to_proto, sanitize_optional, vm_runtime_status};
     use crate::config::{NetworkingMode, NicNetworking};
 
     #[test]
