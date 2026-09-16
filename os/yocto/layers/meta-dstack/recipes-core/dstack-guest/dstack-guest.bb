@@ -36,11 +36,17 @@ EXTRA_CARGO_FLAGS = "-p dstack-guest-agent -p dstack-util -p dstack-volume"
 
 inherit cargo_bin
 
+# The staged source lives outside WORKDIR and carries the host checkout's
+# ownership. WORKDIR staging has no use for it, and applying it fails outright
+# under container / user-namespace builds where the source uid/gid is not
+# settable (rsync aborts with "chown/chgrp ... Invalid argument", exit 23, and
+# leaves the partially-attributed temp file behind). Drop owner and group, keep
+# the rest of archive mode -- permissions still matter for executable bits.
 do_unpack() {
     install -d "${S}" "${DSTACK_ROOTFS_FILES}"
-    rsync -a --exclude=".git" --exclude=".worktrees" --exclude="target" \
+    rsync -a --no-owner --no-group --exclude=".git" --exclude=".worktrees" --exclude="target" \
         "${DSTACK_CORE_SRC}/" "${S}/"
-    rsync -a "${DSTACK_ROOTFS_SRC}/" "${DSTACK_ROOTFS_FILES}/"
+    rsync -a --no-owner --no-group "${DSTACK_ROOTFS_SRC}/" "${DSTACK_ROOTFS_FILES}/"
 }
 
 do_unpack[cleandirs] = "${UNPACKDIR}/repo"
