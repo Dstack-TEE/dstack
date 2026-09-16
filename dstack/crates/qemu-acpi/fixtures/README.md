@@ -10,7 +10,7 @@ The fixtures in this directory were generated from:
 
 - repository: <https://github.com/kvinwang/qemu-tdx>
 - branch: `dstack-qemu-acpi-11.1-compat`
-- revision: `9de6fdfff3a84103b83ca6b2e8c4fb8e05cf9195`
+- revision: `0f3d3f6ed099e4cf0b79f59e8b6ba0083b7c414f`
 - dstack image inputs: `dstack-0.5.5/ovmf.fd` and
   `dstack-0.5.5/bzImage`
 
@@ -19,8 +19,7 @@ Build the reference in a clean build directory:
 ```bash
 git clone https://github.com/kvinwang/qemu-tdx.git qemu-tdx
 cd qemu-tdx
-git checkout 9de6fdfff3a84103b83ca6b2e8c4fb8e05cf9195
-git apply /path/to/qemu-acpi/scripts/qemu-dump-all-blobs.patch
+git checkout 0f3d3f6ed099e4cf0b79f59e8b6ba0083b7c414f
 mkdir build-acpi && cd build-acpi
 CFLAGS='-DDUMP_ACPI_TABLES -Wno-builtin-macro-redefined -D__DATE__="" -D__TIME__="" -D__TIMESTAMP__=""' \
 LDFLAGS='-Wl,--build-id=none' \
@@ -28,6 +27,13 @@ LDFLAGS='-Wl,--build-id=none' \
   --target-list=x86_64-softmmu --disable-werror
 ninja qemu-system-x86_64
 ```
+
+That revision samples the blobs after the PCI bridge `BSEL` properties are
+assigned, which QEMU only does during machine reset. Capturing from a build
+that dumps inside `acpi_setup()` yields tables missing every root-port hotplug
+method, so any fixture taken from a VM with PCIe root ports (GPU or NVSwitch
+passthrough) would be wrong. Fixtures for VMs with no root ports are
+unaffected either way.
 
 Run the complete three-blob differential matrix with:
 
