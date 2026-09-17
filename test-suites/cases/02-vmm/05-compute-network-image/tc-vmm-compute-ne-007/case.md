@@ -68,6 +68,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 Generate ACPI for every supported QEMU profile and version clamp, compare seeded randomized tables against the reference implementation, cover AMD PCI-hole and high-memory relocation, and require deterministic DSDT/SRAT/MCFG output for identical VM shape.
 
+## Post-baseline regression coverage (PR #1204, PR #1145, PR #1214, PR #1065)
+
+- PR #1204: the QEMU version declared in `vm_config` is resolved at every VM start. Without `qemu_version` it is read from the binary at `qemu_path` (so a package upgrade between starts is reflected), a wrapper banner on stdout or stderr does not hide the version line, an explicit `qemu_version` wins over the binary, and a binary whose version cannot be read fails the start with an error that names `qemu_version` instead of booting with an undeclared version.
+- PR #1145 and PR #1214: every bridge NIC uses the netd-built TAP as `-netdev tap,...,ifname=<tap>,script=no,downscript=no` (no `qemu-bridge-helper`), vhost-net is `on`/`off` per the resolved setting, multiqueue bridge and macvtap NICs derive `queues=` and MSI-X vectors from vCPU count capped at 16, macvtap takes one inherited descriptor per queue, user mode keeps its netdev and a single queue whatever vhost says, custom netdevs are passed through unmodified, and a node that never enabled vhost keeps the pre-change device shape.
+- PR #1065: GPU sanitization issues a VFIO PCI hot reset instead of writing Bridge Control through sysfs. The unit rows prove slot normalization, dedicated-upstream-bridge detection, refusal when the bridge is shared with another device, and skipping when passthrough or sanitization is disabled. Two mandatory CPU-only CLI rows run `dstack-vmm sanitize-gpu` with no slot (usage error) and with a PCI slot absent from the host (`failed to resolve PCI device`), and require a non-zero exit before any hot reset is issued. A real hot reset of an attached GPU requires GPU hardware and stays in the hardware-gated `tc-vmm-compute-ne-004`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

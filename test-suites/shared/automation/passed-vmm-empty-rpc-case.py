@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 
 CREATED_VM_ID = "$created_vm_id"
 
@@ -66,6 +66,43 @@ CASES: dict[str, tuple[str, bool, dict[str, Any] | None]] = {
     # every call to succeed. RemoveVm is not idempotent, and the other three
     # need a running VM and its supervisor process, which the prepared stopped
     # VM does not have. They need a harness that models a state transition.
+}
+
+
+def check_get_meta_networking(value: dict[str, Any]) -> dict[str, Any]:
+    """Assert the post-baseline NetworkingCapabilities fields (PR #1145).
+
+    The fixture VMM runs the candidate `vmm.toml` defaults: user-mode
+    networking, `vhost = false`, and `max_net_queues = 16`.
+    """
+    networking = value.get("networking")
+    if not isinstance(networking, dict):
+        raise AssertionError("GetMeta omitted networking capabilities")
+    observed = {
+        "default_mode": networking.get("default_mode"),
+        "supported_modes": networking.get("supported_modes"),
+        "max_queues": networking.get("max_queues"),
+        "default_vhost": networking.get("default_vhost"),
+    }
+    if observed["max_queues"] != 16:
+        raise AssertionError(
+            f"networking.max_queues={observed['max_queues']!r}, expected 16"
+        )
+    if observed["default_vhost"] is not False:
+        raise AssertionError(
+            f"networking.default_vhost={observed['default_vhost']!r}, expected false"
+        )
+    if observed["default_mode"] != "user" or "user" not in (
+        observed["supported_modes"] or []
+    ):
+        raise AssertionError("networking default/supported modes omit user mode")
+    return observed
+
+
+# case_id -> additional assertions over the decoded JSON response, for
+# response fields nested below the top level that the inventory check misses.
+RESPONSE_CHECKS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+    "tc-vmm-vmm-015": check_get_meta_networking,
 }
 
 
@@ -389,6 +426,8 @@ def main() -> int:
         missing = sorted(set(expected_names) - set(json_value))
         if missing:
             raise AssertionError(f"JSON response omitted fields: {missing}")
+        response_check = RESPONSE_CHECKS.get(case_id)
+        nested_observation = response_check(json_value) if response_check else None
         pb_request = encode_request(entry["request_fields"], request_payload)
         pb_code, pb_body, pb_ct = http_call(
             json_url,
@@ -421,6 +460,7 @@ def main() -> int:
             "json_http": json_code,
             "json_content_type": json_ct,
             "json_keys": sorted(json_value),
+            "nested_response_checks": nested_observation,
             "json_sha256": hashlib.sha256(json_body).hexdigest(),
             "protobuf_http": pb_code,
             "protobuf_content_type": pb_ct,

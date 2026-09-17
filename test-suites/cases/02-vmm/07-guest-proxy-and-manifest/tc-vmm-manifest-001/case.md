@@ -54,7 +54,7 @@ Query the effective configuration, service dependencies, listener/device state, 
 <a id="tc-vmm-manifest-001-step-02"></a>
 ### Step 2: Exercise supported and boundary paths
 
-Call Info/SysInfo/NetworkInfo/ListContainers/Shutdown for running, stopped, unknown, and concurrently removed VM IDs through VMM.
+Call Info/SysInfo/GpuInfo/NetworkInfo/ListContainers/Shutdown for running, stopped, unknown, and concurrently removed VM IDs through VMM.
 
 **Expected results:**
 
@@ -77,6 +77,13 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 **Expected results:**
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
+
+## Post-baseline regression coverage (commit f7b9e644b3)
+
+- `ProxiedGuestApi.GpuInfo` is served by the VMM at `/guest/GpuInfo` and forwards to the selected guest agent's `GuestApi.GpuInfo`, alongside the existing proxied methods.
+- For each of the two running, GPU-less fixture guests, the proxied call returns HTTP 200 within 15 seconds with an empty `gpus` list and an empty `error`, which is the guest collector's "no NVIDIA GPUs" answer; a GPU device or NVML error in that response is a failure.
+- An unknown VM ID fails closed for `GpuInfo` exactly like the other proxied methods (neither HTTP 200 nor a timeout).
+- A GPU-attached positive row (non-empty `gpus`, `cc_enabled`/`cc_ready`, per-device telemetry through the proxy) requires GPU hardware and belongs to the hardware-gated GPU cases; its guest-side collection is covered by the guest OS chapter.
 
 ## Postconditions
 

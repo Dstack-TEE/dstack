@@ -74,6 +74,16 @@ def await_vm(
     )
 
 
+def status_filter_ids(
+    base: str, headers: dict[str, str], name: str, status: str
+) -> tuple[int, list[str], Any]:
+    """List run-scoped VMs matching one `StatusRequest.status` value."""
+    code, value = call(base, headers, "Status", {"keyword": name, "status": status})
+    rows = value.get("vms", []) if code == 200 and isinstance(value, dict) else []
+    total = value.get("total") if isinstance(value, dict) else None
+    return code, [str(item.get("id")) for item in rows], total
+
+
 def main() -> int:
     """Run promoted VMM status coverage."""
     case_id = os.environ["DSTACK_TEST_CASE_ID"]
@@ -146,6 +156,23 @@ def main() -> int:
             raise AssertionError("brief status exposed configuration")
         if filter_code != 200 or filtered_ids != [vm_id] or filtered.get("total") != 1:
             raise AssertionError("keyword/page filter failed")
+        # PR #1145: VmInfo.running reports whether a QEMU process exists.
+        if full_vm.get("running", False) is not False:
+            raise AssertionError("stopped VM reported running=true")
+        # PR #1193: StatusRequest.status filters on the same lifecycle
+        # projection as VmInfo.status, before pagination and totals; a value
+        # that names no lifecycle state selects nothing instead of everything.
+        status_rows: dict[str, Any] = {}
+        for label, requested, expected in (
+            ("stopped-matches-stopped", "stopped", [vm_id]),
+            ("stopped-excluded-by-running", "running", []),
+            ("stopped-excluded-by-exited", "exited", []),
+            ("unknown-status-selects-nothing", "no-such-status", []),
+        ):
+            code, ids, total = status_filter_ids(base, headers, name, requested)
+            status_rows[label] = {"http": code, "count": len(ids), "total": total}
+            if code != 200 or ids != expected or total != len(expected):
+                raise AssertionError(f"status filter row {label} failed")
 
         start_code, _ = call(base, headers, "StartVm", {"id": vm_id})
         if start_code != 200:
@@ -163,6 +190,16 @@ def main() -> int:
             for event in events
             if isinstance(event, dict) and isinstance(event.get("timestamp"), int)
         ]
+        for label, requested, expected in (
+            ("running-matches-running", "running", [vm_id]),
+            ("running-excluded-by-stopped", "stopped", []),
+        ):
+            code, ids, total = status_filter_ids(base, headers, name, requested)
+            status_rows[label] = {"http": code, "count": len(ids), "total": total}
+            if code != 200 or ids != expected or total != len(expected):
+                raise AssertionError(f"status filter row {label} failed")
+        if running.get("running") is not True:
+            raise AssertionError("running VM did not report running=true")
         if (
             not isinstance(running.get("uptime"), str)
             or not running.get("uptime")
@@ -181,6 +218,15 @@ def main() -> int:
         stopped = await_vm(
             base, headers, vm_id, lambda vm: vm.get("status") == "stopped"
         )
+        code, ids, total = status_filter_ids(base, headers, name, "stopped")
+        status_rows["stopped-again-matches-stopped"] = {
+            "http": code,
+            "count": len(ids),
+            "total": total,
+        }
+        if code != 200 or ids != [vm_id] or total != 1:
+            raise AssertionError("status filter did not follow the stop")
+        evidence["status_filter"] = status_rows
         evidence["lifecycle"] = {
             "start_http": start_code,
             "running_status": running.get("status"),
@@ -196,7 +242,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-02",
                 "status": "PASS",
-                "observed": "ID, keyword, pagination, brief/full projections, running telemetry, ordered events, and stopped lifecycle state matched.",
+                "observed": "ID, keyword, status-filter, pagination, brief/full projections, running flag and telemetry, ordered events, and stopped lifecycle state matched.",
             }
         )
 

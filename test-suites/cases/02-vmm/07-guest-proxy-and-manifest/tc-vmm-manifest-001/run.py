@@ -17,7 +17,9 @@ import urllib.request
 from typing import Any
 
 CASE_ID = "tc-vmm-manifest-001"
-METHODS = ("Info", "SysInfo", "NetworkInfo", "ListContainers")
+# GpuInfo was added to ProxiedGuestApi after the baseline (f7b9e644b3); the
+# VMM decodes and re-encodes, so it is proxied in lockstep with the guest.
+METHODS = ("Info", "SysInfo", "GpuInfo", "NetworkInfo", "ListContainers")
 
 
 def atomic_json(path: pathlib.Path, value: Any):
@@ -170,12 +172,26 @@ def main():
                 code, body, duration = request(guest[method], x)
                 if code != 200 or duration > 15:
                     raise AssertionError(f"{method} failed for {label}")
+                decoded = json.loads(body)
                 method_meta[f"{label}:{method}"] = {
                     "status": code,
                     "duration_ms": round(duration * 1000),
                     "sha256": hashlib.sha256(body).hexdigest(),
-                    "json_keys": sorted(json.loads(body).keys()),
+                    "json_keys": sorted(decoded.keys()),
                 }
+                if method == "GpuInfo":
+                    # The fixture guests have no GPU attached, so the proxied
+                    # answer must be the collector's "no NVIDIA GPUs" shape:
+                    # an empty inventory and no NVML error.
+                    gpus = decoded.get("gpus") or []
+                    error = decoded.get("error") or ""
+                    method_meta[f"{label}:{method}"].update(
+                        {"gpu_count": len(gpus), "error_present": bool(error)}
+                    )
+                    if gpus or error:
+                        raise AssertionError(
+                            f"GpuInfo for GPU-less guest {label} reported a device or error"
+                        )
                 e["rows"][f"running-{label}-{method.lower()}"] = True
             identities[label] = projected(request(guest["Info"], x)[1])
         if identities["a"].get("instance_id") == identities["b"].get("instance_id"):
@@ -266,7 +282,7 @@ def main():
                 {
                     "id": f"{CASE_ID}-step-02",
                     "status": "PASS",
-                    "observed": "Info, SysInfo, NetworkInfo, ListContainers, and Shutdown reached only their selected running guest; stopped and unknown targets failed closed within 15 seconds.",
+                    "observed": "Info, SysInfo, GpuInfo, NetworkInfo, ListContainers, and Shutdown reached only their selected running guest; stopped and unknown targets failed closed within 15 seconds.",
                 },
                 {
                     "id": f"{CASE_ID}-step-03",

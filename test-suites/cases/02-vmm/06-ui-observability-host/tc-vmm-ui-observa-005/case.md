@@ -78,6 +78,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1193, PR #1145, PR #1213)
+
+- PR #1193: after the browser stops the UI-created VM, selecting `Running` in the `Filter by status` select removes its row from the list, selecting `Stopped` shows it again, and `All statuses` restores the unfiltered list. Changing the filter resets the list to page 1.
+- PR #1145: an added network row still offers the mode select first. While the row follows the node default it also offers the `vhost-net data plane` select and the `virtio-net queue pairs` input (bounded by `GetMeta.networking.max_queues`); selecting `user` hides both, and the `network-selection` row fails otherwise.
+- PR #1213: the port-mapping editor shows a NIC index input only when the VM has more than one NIC; the single-NIC browser deployment sends no `nic_index`, so its mappings keep the unpinned default. The pinned-NIC RPC contract is covered by `tc-vmm-compute-ne-002`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

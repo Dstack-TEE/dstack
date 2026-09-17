@@ -71,6 +71,14 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1145)
+
+`NetworkingConfig` gained optional `vhost` and `queues`. On the fixture node (user-mode default, `cvm.max_net_queues = 16`):
+
+- `networks=[{"mode":"user","vhost":false,"queues":1}]` is accepted, persisted as one user-mode NIC, and removed at cleanup.
+- Each of these is rejected with a structured error and leaves no VM behind: explicit user mode with `vhost=true` (`no vhost data plane`), explicit user mode with `queues=2` (`does not support multiple queues`), an explicit `queues=0` (`must be at least 1`), and `queues=17` above the node ceiling (`must not exceed 16`).
+- The protobuf representation row keeps sending `NetworkingConfig` without fields 5 and 6, proving an old client that omits them still deploys the node default.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
