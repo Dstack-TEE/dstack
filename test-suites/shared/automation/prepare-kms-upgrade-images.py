@@ -290,6 +290,23 @@ def main() -> int:
         )
         docker(f"push {shlex.quote(candidate_gateway_tag)}")
         candidate_gateway_sha256 = sha256(candidate_gateway_binary)
+        # Guests pull the certbot fixtures from this registry, so lab images
+        # built locally (for example from tools/mock-cf-dns) need no public
+        # registry.
+        fixture_images = {}
+        for key, variable in (
+            ("mock_cf_dns_image", "DSTACK_TEST_MOCK_CF_DNS_IMAGE"),
+            ("pebble_image", "DSTACK_TEST_PEBBLE_IMAGE"),
+        ):
+            source_image = os.environ.get(variable, "").strip()
+            if not source_image:
+                continue
+            quoted = shlex.quote(source_image)
+            docker(f"image inspect {quoted} >/dev/null 2>&1 || docker pull {quoted}")
+            mirror_tag = f"127.0.0.1:{port}/fixtures/{key.replace('_', '-')}:mirror"
+            docker(f"tag {quoted} {shlex.quote(mirror_tag)}")
+            docker(f"push {shlex.quote(mirror_tag)}")
+            fixture_images[key] = mirror_tag.replace("127.0.0.1", "10.0.2.2", 1)
     value = {
         "schema_version": "1.0",
         "candidate_commit": candidate_commit,
@@ -314,6 +331,7 @@ def main() -> int:
                     "127.0.0.1", "10.0.2.2", 1
                 ),
                 "candidate_gateway_binary_sha256": candidate_gateway_sha256,
+                **fixture_images,
             }
         )
     args.output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
