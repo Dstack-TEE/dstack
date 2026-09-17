@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -35,6 +36,33 @@ def replace_once(text: str, old: str, new: str) -> str:
     if text.count(old) != 1:
         raise RuntimeError(f"expected one configuration marker: {old}")
     return text.replace(old, new, 1)
+
+
+def replace_listing(text: str, new: str) -> str:
+    """Replace the multi-line `[cvm.gpu].listing` array with one value."""
+    replaced, count = re.subn(
+        r"^listing = \[.*?^\]", new, text, count=0, flags=re.S | re.M
+    )
+    if count != 1:
+        raise RuntimeError("expected one cvm.gpu.listing array")
+    return replaced
+
+
+# PR #1161: the default discovery list names every Hopper and Blackwell SKU
+# a deployment may hold, not only the H200.
+EXPECTED_GPU_LISTING = {
+    "10de:2330",
+    "10de:2331",
+    "10de:2337",
+    "10de:2338",
+    "10de:2339",
+    "10de:2321",
+    "10de:2335",
+    "10de:233b",
+    "10de:2901",
+    "10de:2909",
+    "10de:3182",
+}
 
 
 def inventory_present(config: object, field: str) -> bool:
@@ -94,9 +122,70 @@ def main() -> int:
             False,
         ),
         "invalid-gpu-listing": (
+            replace_listing(base, 'listing = "invalid-listing"'),
+            False,
+        ),
+        # PR #1163: binary unit spellings up to petabytes, and a repeated unit
+        # is rejected instead of silently dropping a letter.
+        "pci-hole64-petabyte-unit": (
             replace_once(
-                base, 'listing = ["10de:2335"]', 'listing = "invalid-listing"'
+                base, "qemu_pci_hole64_size = 0", 'qemu_pci_hole64_size = "1PiB"'
             ),
+            True,
+        ),
+        "pci-hole64-terabyte-two-letter-unit": (
+            replace_once(
+                base, "qemu_pci_hole64_size = 0", 'qemu_pci_hole64_size = "8TB"'
+            ),
+            True,
+        ),
+        "pci-hole64-repeated-unit": (
+            replace_once(
+                base, "qemu_pci_hole64_size = 0", 'qemu_pci_hole64_size = "1GG"'
+            ),
+            False,
+        ),
+        "pci-hole64-unknown-unit": (
+            replace_once(
+                base, "qemu_pci_hole64_size = 0", 'qemu_pci_hole64_size = "1X"'
+            ),
+            False,
+        ),
+        # PR #1145: the deployment queue ceiling is bounded to 1..=64 and queue
+        # pairs are not a node-level networking setting.
+        "max-net-queues-upper-bound": (
+            replace_once(base, "max_net_queues = 16", "max_net_queues = 64"),
+            True,
+        ),
+        "max-net-queues-above-bound": (
+            replace_once(base, "max_net_queues = 16", "max_net_queues = 65"),
+            False,
+        ),
+        "max-net-queues-zero": (
+            replace_once(base, "max_net_queues = 16", "max_net_queues = 0"),
+            False,
+        ),
+        "node-networking-vhost-enabled": (
+            replace_once(base, "\nvhost = false\n", "\nvhost = true\n"),
+            True,
+        ),
+        "node-networking-queues": (
+            replace_once(base, "\nvhost = false\n", "\nvhost = false\nqueues = 4\n"),
+            False,
+        ),
+        # PR #1214: netd may carry its own explicit filter policy, and the
+        # instance namespace netd records on host interfaces may not contain ":".
+        "netd-explicit-filter-policy": (
+            base
+            + '\n[netd.network_filter]\nmode = "none"\nfilter = "clean-traffic"\nparameters = {}\n',
+            True,
+        ),
+        "netd-socket-mode-non-permission-bits": (
+            replace_once(base, "socket_mode = 0o660", "socket_mode = 0o10660"),
+            False,
+        ),
+        "instance-id-with-colon": (
+            replace_once(base, 'instance_id = ""', 'instance_id = "dtest:bad"'),
             False,
         ),
         "invalid-host-listener": (
@@ -119,10 +208,27 @@ def main() -> int:
             observed["matched"] = (observed["returncode"] == 0) == expected_valid
             observations[name] = observed
 
-    passed = all(coverage.values()) and all(
-        bool(value["matched"])
-        for value in observations.values()
-        if isinstance(value, dict)
+    listing = set(parsed.get("cvm", {}).get("gpu", {}).get("listing", []))
+    defaults = {
+        "gpu_listing_missing": sorted(EXPECTED_GPU_LISTING - listing),
+        "max_net_queues": parsed.get("cvm", {}).get("max_net_queues"),
+        "networking_vhost": parsed.get("cvm", {}).get("networking", {}).get("vhost"),
+        "tdx_attestation_variant": parsed.get("cvm", {}).get("tdx_attestation_variant"),
+    }
+    defaults_matched = (
+        not defaults["gpu_listing_missing"]
+        and defaults["max_net_queues"] == 16
+        and defaults["networking_vhost"] is False
+        and defaults["tdx_attestation_variant"] == "auto"
+    )
+    passed = (
+        defaults_matched
+        and all(coverage.values())
+        and all(
+            bool(value["matched"])
+            for value in observations.values()
+            if isinstance(value, dict)
+        )
     )
     evidence = {
         "candidate_commit": runtime["candidate_commit"],
@@ -132,6 +238,8 @@ def main() -> int:
             field for field, present in coverage.items() if not present
         ],
         "management_port_prepared": management_port_prepared,
+        "documented_defaults": defaults,
+        "documented_defaults_matched": defaults_matched,
         "matrix": observations,
         "service_started": False,
         "run_scoped_state_only": True,

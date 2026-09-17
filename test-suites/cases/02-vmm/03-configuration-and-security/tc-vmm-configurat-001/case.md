@@ -67,6 +67,16 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1161, PR #1163, PR #1145, PR #1214)
+
+Each row runs `dstack-vmm --config <row> check-config` against a copy of the candidate `vmm.toml`; no service starts.
+
+- PR #1161: the shipped `[cvm.gpu].listing` default names every Hopper and Blackwell SKU (`10de:2330`, `10de:2331`, `10de:2337`, `10de:2338`, `10de:2339`, `10de:2321`, `10de:2335`, `10de:233b`, `10de:2901`, `10de:2909`, `10de:3182`), and a non-array `listing` still fails before serving.
+- PR #1163: `qemu_pci_hole64_size = "1PiB"` and `"8TB"` are accepted as binary multipliers; `"1GG"` (repeated unit) and `"1X"` (unknown unit) fail validation.
+- PR #1145: `cvm.max_net_queues` defaults to 16, accepts 64, and rejects 0 and 65; `[cvm.networking].vhost` defaults to `false` and accepts `true`; a node-level `[cvm.networking].queues` is rejected because queue pairs are per deployment.
+- PR #1214: an explicit `[netd.network_filter]` policy is accepted; `netd.socket_mode` with non-permission bits and a `cvm.instance_id` containing `:` are rejected before serving.
+- PR #1200: the shipped `tdx_attestation_variant` default remains `auto`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

@@ -80,6 +80,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid routing or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1161)
+
+Hardware-gated like the rest of this case. With the shipped default `[cvm.gpu].listing`, `ListGpus` must return every installed Hopper (H100 SXM5 80/64/96/94 GB, H100 PCIe, H100 NVL, H200 SXM, H200 NVL) and Blackwell (B200, HGX B200, B300 SXM6) card by product ID, and a card whose ID is absent from `listing` must not be offered for passthrough.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

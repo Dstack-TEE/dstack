@@ -72,6 +72,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid routing or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1145)
+
+- `GetMeta.networking` reports `max_queues`, the node's `cvm.max_net_queues` ceiling for deployment queue requests, and `default_vhost`, whether the node's own backend runs vhost-net. On the fixture VMM (candidate defaults: user mode, `vhost = false`, `max_net_queues = 16`) the JSON response carries `max_queues = 16`, `default_vhost = false`, `default_mode = "user"`, and `user` among `supported_modes`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

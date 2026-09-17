@@ -81,9 +81,15 @@ def main() -> int:
     steps = []
     failures = []
 
-    def create(name: str, maps: list[dict[str, Any]]) -> tuple[int, str | None]:
+    def create(
+        name: str,
+        maps: list[dict[str, Any]],
+        networks: list[dict[str, Any]] | None = None,
+    ) -> tuple[int, str | None]:
         cfg = json.loads(json.dumps(template))
         cfg.update({"name": name, "ports": maps, "stopped": True})
+        if networks is not None:
+            cfg["networks"] = networks
         code, raw = call(base, headers, "CreateVm", cfg)
         value = json.loads(raw or b"null") if raw else None
         vm_id = value.get("id") if isinstance(value, dict) else None
@@ -106,9 +112,18 @@ def main() -> int:
             ports.append(vm_id)
         return code, vm_id
 
+    def persisted_ports(vm_id: str) -> list[dict[str, Any]]:
+        code, raw = call(base, headers, "Status", {"ids": [vm_id]})
+        value = json.loads(raw or b"null") if code == 200 else None
+        vms = value.get("vms", []) if isinstance(value, dict) else []
+        if len(vms) != 1:
+            raise AssertionError(f"Status did not return VM {vm_id}")
+        config = vms[0].get("configuration") or {}
+        return list(config.get("ports") or [])
+
     try:
         minimum = int(policy["min"])
-        p1, p2, p3 = (free_port(minimum) for _ in range(3))
+        p1, p2, p3, p4, p5 = (free_port(minimum) for _ in range(5))
         nonce = hashlib.sha256(f"{time.time_ns()}".encode()).hexdigest()[:12]
         tcp = lambda port, to: {
             "protocol": "tcp",
@@ -164,11 +179,70 @@ def main() -> int:
                 "reset_status": reset_code,
             }
         )
+        # PR #1213: a mapping may name the NIC its traffic enters through.
+        # Only a NIC that exists and whose backend can publish a host port
+        # (user mode) is accepted, at deployment and on a port update.
+        pinned = dict(tcp(p4, 8443), nic_index=0)
+        pinned_code, pinned_id = create(f"dtest-{nonce}-nic0", [pinned])
+        if pinned_code != 200 or not pinned_id:
+            raise AssertionError("mapping pinned to the only user-mode NIC was refused")
+        pinned_ports = persisted_ports(pinned_id)
+        if len(pinned_ports) != 1 or pinned_ports[0].get("nic_index") != 0:
+            raise AssertionError("pinned nic_index was not persisted as 0")
+        second_code, second_id = create(
+            f"dtest-{nonce}-nic1",
+            [dict(tcp(p5, 8444), nic_index=1)],
+            networks=[{"mode": "user"}, {"mode": "user"}],
+        )
+        if second_code != 200 or not second_id:
+            raise AssertionError(
+                "mapping pinned to the second user-mode NIC was refused"
+            )
+        if persisted_ports(second_id)[0].get("nic_index") != 1:
+            raise AssertionError("pinned nic_index was not persisted as 1")
+        before = len(ports)
+        missing_code, _ = create(
+            f"dtest-{nonce}-nic-missing", [dict(tcp(p3, 8445), nic_index=1)]
+        )
+        missing_error = observations["operations"][-1]["error"] or ""
+        if (
+            missing_code < 400
+            or len(ports) != before
+            or "names NIC 1, but this VM has 1" not in missing_error
+        ):
+            raise AssertionError("mapping pinned to a missing NIC was not refused")
+        bad_update, bad_update_raw = call(
+            base,
+            headers,
+            "UpdateVm",
+            {
+                "id": primary,
+                "update_ports": True,
+                "ports": [dict(tcp(p3, 8446), nic_index=3)],
+            },
+        )
+        if bad_update < 400 or persisted_ports(primary):
+            raise AssertionError(
+                "UpdateVm accepted or partially applied a mapping to a missing NIC"
+            )
+        observations["operations"].append(
+            {
+                "operation": "nic_index_matrix",
+                "pinned_nic0_status": pinned_code,
+                "pinned_nic1_two_user_nics_status": second_code,
+                "missing_nic_create_status": missing_code,
+                "missing_nic_update_status": bad_update,
+                "missing_nic_update_error": str(
+                    (json.loads(bad_update_raw or b"{}") or {}).get("error", "")
+                )[:300],
+                "update_left_ports_unchanged": True,
+            }
+        )
         steps.append(
             {
                 "id": f"{case_id}-step-02",
                 "status": "PASS",
-                "observed": "Duplicate and existing-VM conflicts were rejected; replacement and reset succeeded.",
+                "observed": "Duplicate and existing-VM conflicts were rejected; replacement and reset succeeded; NIC-pinned mappings persisted and pins to a missing NIC were refused at create and update without mutation.",
             }
         )
         print(f"STEP {case_id}-step-02 END - PASS", flush=True)

@@ -32,6 +32,7 @@ the TEE simulator; it is not evidence for TDX or SNP attestation.
 
 1. The shared plan prerequisites are healthy and the target listener is reachable.
 2. Commands use isolated test data and preserve native request and response output.
+3. The host has the `virbr0` bridge, `/usr/sbin/ip`, `/usr/bin/virsh`, and non-interactive `sudo -n` for starting the case-owned `dstack-vmm netd` as root.
 
 ## Test Data
 
@@ -73,6 +74,15 @@ VMM independently and re-query the persisted launch and process state.
 - Existing guests survive VMM restart, invalid adjacent requests remain isolated,
   and removal cleans all case-owned resources.
 
+## Post-baseline regression coverage (PR #1145, PR #1214, PR #1217, PR #1179)
+
+The case starts its own VMM with `cvm.instance_id = "dtnet-<run key>"`, `[netd].socket` inside its private 0700 runtime directory, and `XDG_RUNTIME_DIR` pointing at a directory outside `/run/user`.
+
+- PR #1145/#1214: bridge NICs are built by netd on every node; `qemu-bridge-helper` is no longer used. Before netd runs, `StartVm` on the stopped two-bridge VM fails with an error containing `run dstack-vmm netd`, starts no QEMU, and leaves no `.netd-pending` marker, while the VMM stays available.
+- After the case-owned `sudo -n dstack-vmm --config <case vmm.toml> netd` serves its socket, the same `StartVm` succeeds. The QEMU command line carries two `-netdev tap,id=netN,ifname=<tap>,...,vhost=off` entries (node default `vhost = false`) and no `bridge,id=net` netdev; both TAPs exist and are enslaved to `virbr0`; `dstack-vmm netd list --instance <instance_id>` (PR #1217 pRPC surface `Netd.ListInterfaces`) reports exactly those two TAPs as kind `tap`, VM `<bridge VM ID>`, NIC `0` and `1`; the VM directory holds `.netd-pending`; and `Status` reports `running=true` with two `tap_bridge` interfaces whose `vhost=false` and `queues=1`.
+- `StopVm` releases the interfaces (`Netd.RemoveVm`): `netd list --instance` becomes empty, both TAPs disappear from the host, and `.netd-pending` is cleared. The two-NIC user-mode VM creates no netd interface, and after every VM is removed netd holds nothing for the instance. netd is stopped only after that removal, because removal waits for netd to confirm the release.
+- PR #1179: with `XDG_RUNTIME_DIR` set to the case directory, `vmm-cli.py vmm ls --json` lists exactly one registration for this case's config file whose `pid` is the VMM process and whose `address` is `127.0.0.1:18481`; the same command without `XDG_RUNTIME_DIR` does not list it; after the VMM restart it lists only the new VMM process.
+
 ## Postconditions
 
-Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
+Remove run-scoped objects and restore changed configuration. Stop the case-owned netd after every VM is removed and verify no TAP it created remains. Preserve logs and responses in the result artifacts.

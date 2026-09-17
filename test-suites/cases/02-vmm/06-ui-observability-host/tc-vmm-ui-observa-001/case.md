@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1193, PR #1145)
+
+- PR #1193: `StatusRequest.status` filters on the same lifecycle projection as `VmInfo.status`. For the run-scoped VM, `status=stopped` returns exactly that VM with `total=1` while it is stopped; `running` and `exited` return no VM and `total=0`. After `StartVm` reaches boot completion, `running` returns it and `stopped` does not; after `StopVm`, `stopped` returns it again. An unrecognized status value returns no VM rather than falling back to the unfiltered list. The filter is applied before pagination, so `total` counts only matching VMs.
+- PR #1145: `VmInfo.running` is `false` (or omitted as the protobuf default) for the stopped VM and `true` while its QEMU process runs.
+
 ## Postconditions
 
 Remove run-scoped objects with `vmm-cli.py remove <vm-id>` (the command is `remove`, not `rm`) and restore changed configuration. Preserve logs and responses in the result artifacts.

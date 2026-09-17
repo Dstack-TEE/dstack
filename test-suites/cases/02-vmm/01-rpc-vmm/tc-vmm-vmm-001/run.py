@@ -312,6 +312,74 @@ def main() -> int:
         statuses = [missing_image, wrong_type, malformed, bad_route]
         if min(statuses) < 400:
             raise AssertionError(f"invalid CreateVm probe was accepted: {statuses}")
+
+        # PR #1145: NetworkingConfig carries optional vhost and queue pairs.
+        # The fixture node runs user-mode networking with the default
+        # max_net_queues=16, so explicit user mode may pin one queue and vhost
+        # off, but may not ask for vhost, multiqueue, zero, or more than 16.
+        tuned_config = json.loads(json.dumps(template))
+        tuned_config["name"] = f"dtest-{nonce}-create-tuned"
+        tuned_config["networks"] = [{"mode": "user", "vhost": False, "queues": 1}]
+        tuned_code, tuned_body = call(
+            base + create_path,
+            json.dumps(tuned_config).encode(),
+            "application/json",
+            headers,
+        )
+        tuned_value = json.loads(tuned_body or b"{}")
+        tuned_id = tuned_value.get("id") if isinstance(tuned_value, dict) else None
+        if tuned_code != 200 or not tuned_id:
+            raise AssertionError(
+                f"single-queue user networking was refused with HTTP {tuned_code}"
+            )
+        created.append(str(tuned_id))
+        tuned_persisted = persisted(str(tuned_id), tuned_config)
+        tuned_networks = tuned_persisted.get("networks") or []
+        if len(tuned_networks) != 1 or tuned_networks[0].get("mode") != "user":
+            raise AssertionError(
+                "tuned user networking was not persisted as one user NIC"
+            )
+        data_plane_rows = {
+            "user-vhost-on": {"mode": "user", "vhost": True},
+            "user-multiqueue": {"mode": "user", "queues": 2},
+            "explicit-zero-queues": {"mode": "user", "queues": 0},
+            "queues-above-node-ceiling": {"queues": 17},
+        }
+        data_plane: dict[str, dict[str, Any]] = {}
+        for label, network in data_plane_rows.items():
+            code, body = call(
+                base + create_path,
+                json.dumps(
+                    {
+                        **template,
+                        "name": f"dtest-{nonce}-{label}",
+                        "networks": [network],
+                    }
+                ).encode(),
+                "application/json",
+                headers,
+            )
+            try:
+                error = str((json.loads(body or b"{}") or {}).get("error", ""))[:300]
+            except (json.JSONDecodeError, AttributeError):
+                error = ""
+            data_plane[label] = {"http": code, "error": error}
+            if code < 400:
+                raise AssertionError(f"data-plane row {label} was accepted")
+        expected_errors = {
+            "user-vhost-on": "no vhost data plane",
+            "user-multiqueue": "does not support multiple queues",
+            "explicit-zero-queues": "must be at least 1",
+            "queues-above-node-ceiling": "must not exceed 16",
+        }
+        for label, fragment in expected_errors.items():
+            if fragment not in data_plane[label]["error"]:
+                raise AssertionError(f"data-plane row {label} lacked '{fragment}'")
+        evidence["data_plane"] = {
+            "tuned_http": tuned_code,
+            "tuned_persisted_modes": [item.get("mode") for item in tuned_networks],
+            "rejections": data_plane,
+        }
         if set(list_ids(manifest)) != baseline | set(created):
             raise AssertionError("rejected CreateVm probe left partial VM state")
         unauthenticated: int | None = None

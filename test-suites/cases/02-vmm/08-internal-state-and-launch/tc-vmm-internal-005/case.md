@@ -80,6 +80,11 @@ Restart the owning service where permitted and inspect state for this and an adj
 - Configure multiple Gateway URLs, start multiple run-scoped VMs, and verify each launch receives a permutation containing every configured URL exactly once.
 - Prove shuffling does not change the persisted configuration, omit endpoints, or make an empty endpoint list bootable.
 
+## Post-baseline regression coverage (PR #1193, PR #1145)
+
+- PR #1193: `vm_runtime_status` maps (removing, started, process running) to exactly one of `removing`, `running`, `exited`, `stopping`, or `stopped`, and `Status.status` filters on that same projection (`runtime_status_covers_lifecycle`).
+- PR #1145: `VmInfo.running` reports whether a QEMU process exists; `NetworkInterfaceStatus` reports effective `vhost`, `queues`, and `macvtap_mode`, omits data-plane state for custom netdevs rather than reporting defaults, and a reported interface can be sent back through `UpdateVm` unchanged.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.

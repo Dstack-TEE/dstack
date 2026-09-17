@@ -126,6 +126,12 @@ identifiers.
   and case-owned sockets are absent.
 - Unrelated host network interfaces, VMs, and services remain unchanged.
 
+## Post-baseline regression coverage (PR #1145, PR #1214, PR #1217)
+
+- Node policy must list `macvtap` in `cvm.allowed_network_modes` and the parent in `cvm.allowed_macvtap_parents`; the deployment request must not set `macvtap_mode`, which stays node-controlled and is reported on `Status` as `interfaces[].macvtap_mode`.
+- Set a case-unique `cvm.instance_id`. While the guest runs, `dstack-vmm --config <case vmm.toml> netd list --instance <instance_id>` reports exactly one interface of kind `macvtap` owned by the VM ID with NIC `0`; `Status` reports `running=true` and the interface's effective `vhost` and `queues` (a single queue keeps the `fd=3` form; more queue pairs use one inherited descriptor per queue).
+- `StopVm` releases the macvtap through netd (the listing for the instance becomes empty and `.netd-pending` is cleared); `RemoveVm` then completes. Stop netd only after removal, because removal waits for netd to confirm the release.
+
 ## Postconditions
 
 Remove all case-owned VM, process, socket, and network resources. Preserve the
