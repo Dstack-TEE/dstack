@@ -20,6 +20,21 @@ from typing import Any
 
 CASE_ID = "tc-gos-observabil-001"
 TIMESTAMP_RE = re.compile(r"^(\S+)\s+(.*)$")
+# Load averages are published divided back from the wire's load x 100.
+LOAD_SERIES_RE = re.compile(
+    r"^(dstack_guest_load(?:1|5|15)|system_load_average_(?:1m|5m|15m)) (\S+)$",
+    re.MULTILINE,
+)
+GPU_PROBE = r"""set -eu
+count=0
+for device in /sys/bus/pci/devices/*; do
+  class=$(cat "$device/class" 2>/dev/null || true)
+  vendor=$(cat "$device/vendor" 2>/dev/null || true)
+  case "$class" in 0x0300*|0x0302*) [ "$vendor" = 0x10de ] && count=$((count + 1));; esac
+done
+printf 'nvidia_display_devices=%s\n' "$count"
+/usr/bin/dstack-util gpu-info 2>/dev/null
+"""
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -180,6 +195,60 @@ def main() -> int:
                 name not in metrics_text for name in required_metrics
             ):
                 raise AssertionError("metrics endpoint omitted required live resources")
+            stage = "gpu-telemetry"
+            load_series = dict(LOAD_SERIES_RE.findall(metrics_text))
+            if len(load_series) != 6 or not all(
+                re.fullmatch(r"\d+\.\d{2}", value) for value in load_series.values()
+            ):
+                raise AssertionError(
+                    f"load averages were not unscaled decimals: {load_series}"
+                )
+            gpu_probe = ssh(ssh_argv, GPU_PROBE, 60)
+            probe_lines = gpu_probe.stdout.splitlines()
+            if (
+                gpu_probe.returncode
+                or len(probe_lines) != 2
+                or not probe_lines[0].startswith("nvidia_display_devices=")
+            ):
+                raise AssertionError(
+                    "in-guest dstack-util gpu-info did not print one document"
+                )
+            nvidia_devices = int(probe_lines[0].split("=", 1)[1])
+            collector = json.loads(probe_lines[1])
+            if set(collector) != {
+                "gpus",
+                "error",
+                "cc_ready",
+                "cc_enabled",
+                "sample_age_ms",
+            }:
+                raise AssertionError("in-guest gpu-info document has unexpected fields")
+            gpu_observation: dict[str, Any] = {
+                "nvidia_display_devices": nvidia_devices,
+                "collector_gpu_count": len(collector["gpus"]),
+                "collector_error_present": bool(collector["error"]),
+                "load_series": sorted(load_series),
+            }
+            if nvidia_devices == 0:
+                # PCI gate: a CPU-only guest reports "no GPUs", never a failure.
+                dashboard_text = dashboard_body.decode(errors="replace")
+                if (
+                    not re.search(r"^dstack_gpu_nvml_up 1$", metrics_text, re.MULTILINE)
+                    or "dstack_gpu_query_errors{" in metrics_text
+                    or "No NVIDIA GPUs" not in dashboard_text
+                ):
+                    raise AssertionError(
+                        "CPU-only guest did not report the no-GPU telemetry state"
+                    )
+                if (
+                    collector["gpus"]
+                    or collector["cc_ready"] is not None
+                    or collector["cc_enabled"] is not None
+                ):
+                    raise AssertionError(
+                        "CPU-only guest collector reported devices or CC state"
+                    )
+            observations["gpu_telemetry"] = gpu_observation
             stage = "container-fixture"
             fixture = ssh(
                 ssh_argv,

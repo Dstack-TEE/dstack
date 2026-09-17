@@ -65,6 +65,18 @@ Render the immutable presentation model concurrently and compare successful comp
 - Concurrent renders complete without panic or shared-state corruption, and the temporary probe is removed automatically.
 
 <a id="tc-gos-entry-003-step-04"></a>
+## Post-baseline regression coverage (commits 7894bb5e25, 85cc6bef92, b6efabe754, 955add3057, and 9f299d3e7e)
+
+The render probe in `shared/automation/dashboard-model-case.py` now passes `gpu_info` to both templates and requires:
+
+- `load_average_unscaled`: `loadavg_*` values 40/100/1234 render as `0.40`/`1.00`/`12.34` in `dstack_guest_load*` and the deprecated `system_load_average_*` series, and the dashboard shows `1min: 0.40, 5min: 1.00, 15min: 12.34` without a `%` suffix.
+- `uptime_units`: uptime 90061 renders `1d 1h 1m 1s` on the dashboard while `dstack_guest_uptime_seconds` keeps the raw `90061`.
+- `gpu_labels_escaped`: a hostile GPU UUID is escaped in `dstack_gpu_*` labels and the full UUID and PCI bus ID are kept in metrics.
+- `gpu_optional_series`: an unset optional GPU field emits no series while `Some(0)` emits `0`; `dstack_gpu_cc_enabled` is emitted only when set, `dstack_gpu_cc_ready` is absent when unset, and a 60 s sample yields `dstack_gpu_sample_age_seconds 60`.
+- `gpu_errors_counted`: `dstack_gpu_query_errors` counts list entries, so an error message containing `; ` still counts once.
+- `gpu_dashboard_rows`: the dashboard renders power as `70.1 W`, drops only a zero PCI domain (`01:00.0`, but `00010000:02:00.0` kept), shows unset CC state as `unknown`, shows the sample age as `60.0 s`, and does not render the UUID.
+- `gpu_absent_and_failed_states`: the no-GPU response renders `No NVIDIA GPUs` and `dstack_gpu_nvml_up 1` with no device series; an error response renders the escaped error instead of the table and `dstack_gpu_nvml_up 0`.
+
 ## Postconditions
 
 The temporary probe is removed and the report retains no raw hostile rendered page or credential material.

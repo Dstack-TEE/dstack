@@ -69,6 +69,10 @@ Restart after accepted/rejected rows, replay applicable v0.5.4/v0.5.8/v0.5.11 in
 - Run compose-hash compatibility inputs with omitted, empty, and byte-valued manifest fields through the candidate guest and supported SDK clients.
 - Confirm nerdctl 2.3.5 starts the same compose workload and rejects a malformed manifest without changing the accepted compose hash.
 
+## Post-baseline regression coverage (PR #1175)
+
+- `storage_discard` is a manifest field (default `true` when omitted) carried by the Go, JavaScript, and Python compose-hash SDK types. Omitting it, and setting it explicitly, must produce the same compose hash in the candidate guest and every SDK as the raw manifest bytes; `storage_discard: false` must hash differently from the omitted default and be honored by the guest.
+
 ## Postconditions
 
 Remove run-scoped VMs/files/devices and verify baseline restoration.

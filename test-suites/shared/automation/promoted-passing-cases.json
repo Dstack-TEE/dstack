@@ -245,6 +245,14 @@
       "environment": "SIMULATION"
     },
     {
+      "case_id": "tc-gos-guestapi-006",
+      "source_run": "local-guest-agent-next-rebase-20260917",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/passed-rpc-case.py",
+      "environment": "SIMULATION",
+      "notes": "local candidate simulator returned the exact no-GPU GpuInfoResponse over JSON and a zero-byte protobuf body, rejected an invalid route, and repeated byte-identically; requires the GuestApi.GpuInfo api-inventory entry"
+    },
+    {
       "case_id": "tc-gos-observabil-001",
       "source_run": "dashboard-log-filtering-001",
       "source_status": "PASS",
@@ -598,6 +606,14 @@
       "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-025/run.py",
       "environment": "CANDIDATE_NATIVE",
       "notes": "Candidate tests cover authenticated streaming round trips, tampering and truncation rejection, legacy fallback, and trusted KMS signer binding without retaining cryptographic material."
+    },
+    {
+      "case_id": "tc-gos-setup-026",
+      "source_run": "local-guest-agent-next-rebase-20260917",
+      "source_status": "PASS",
+      "entrypoint": "cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-026/run.py",
+      "environment": "SIMULATION",
+      "notes": "candidate dstack-util gpu-info on a host without NVML exited 0 with one unavailable-shape JSON line, kept trace logging on stderr, rejected an unknown argument without stdout, and left no collector process"
     },
     {
       "case_id": "tc-gos-storage-an-001",
@@ -2490,6 +2506,14 @@
       "entrypoint": "shared/automation/passed-hostapi-sealing-key-case.py",
       "environment": "HARDWARE",
       "notes": "real-TDX guest local-provider sealing through private vsock Host API with redacted evidence, negative probes, and complete cleanup"
+    },
+    {
+      "case_id": "tc-vmm-install-007",
+      "source_run": "local-vmm-next-rebase-20260917",
+      "source_status": "PASS",
+      "entrypoint": "cases/02-vmm/06-ui-observability-host/tc-vmm-install-007/run.py",
+      "environment": "UNIT",
+      "notes": "hermetic candidate install.sh run over stdin against a local git origin and stub cargo: clone into --src, in-place update, and temporary checkout each built in the resolved checkout with progress on stderr only; non-checkout --src and relative --prefix failed before building; the same rows fail against the pre-#1162 script; temporary-checkout cleanup is recorded but not gated (suspected installer defect)"
     },
     {
       "case_id": "tc-vmm-internal-001",

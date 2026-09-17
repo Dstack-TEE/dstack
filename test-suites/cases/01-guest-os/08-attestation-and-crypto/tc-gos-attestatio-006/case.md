@@ -57,11 +57,11 @@ Query the relevant health, configuration, and baseline state for gpu boot attest
 <a id="tc-gos-attestatio-006-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Boot with and without supported GPUs and query GpuInfo.
+Boot with and without supported GPUs and call `dstack.guest.v1.Attest` with `include_boottime_gpu_evidence=true`, then `dstack.guest.v1.AttestGpu` with a 32-byte nonce.
 
 **Expected results:**
 
-- Collected nvattest JSON is returned unchanged for GPUs; the no-GPU response is empty and does not fail guest startup.
+- Collected boot-time nvattest evidence is returned unchanged in `boottime_gpu_evidence` for GPUs and `AttestGpu` returns a bundle bound to the nonce; the no-GPU evidence is empty and does not fail guest startup.
 
 <a id="tc-gos-attestatio-006-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
@@ -71,6 +71,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 **Expected results:**
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
+
+## Post-baseline regression coverage (GPU telemetry series and PR #1207)
+
+- `GuestApi.GpuInfo` (commit a2dd3c89c8) is NVML telemetry, not attestation, and carries no evidence; do not use it as the GPU attestation surface. The legacy DstackGuest `GpuInfo` attestation route stays removed ([tc-gos-dstackguest-006](../../02-rpc-dstackguest/tc-gos-dstackguest-006/case.md#tc-gos-dstackguest-006)).
+- The CVM attestation returned next to the GPU evidence by v1 `Attest` is always the MessagePack V1 schema, so the verifier used for the positive row must be 0.5.9 or later.
 
 ## Postconditions
 

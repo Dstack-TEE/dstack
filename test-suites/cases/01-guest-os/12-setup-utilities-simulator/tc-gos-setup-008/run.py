@@ -64,11 +64,15 @@ def vm_info(cli: list[str], vm_id: str) -> dict[str, Any]:
 PHASE_ONE = r"""
 set -euo pipefail
 test "$(id -u)" -eq 0
-for tool in zfs zpool mkswap swapon swapoff fallocate losetup mkfs.ext4 mount umount findmnt blockdev; do
+for tool in zfs zpool cryptsetup mkswap swapon swapoff fallocate losetup mkfs.ext4 mount umount findmnt blockdev; do
     command -v "$tool" >/dev/null
  done
 pool=dstack
 zfs list -H "$pool" >/dev/null
+# storage_discard defaults on (PR #1175): a created pool has autotrim=on and
+# its dm-crypt vdev passes discards through.
+test "$(zpool get -H -o value autotrim "$pool")" = on || { echo "product zpool autotrim is not on" >&2; exit 87; }
+cryptsetup status dstack_data_disk | grep -E '^[[:space:]]*flags:.*discards' >/dev/null || { echo "product dm-crypt mapping does not allow discards" >&2; exit 87; }
 mkdir -p "$CASE_DIR/filefs" "$CASE_DIR/mnt"
 chmod 700 "$CASE_DIR"
 image="$CASE_DIR/filefs.img"
@@ -160,8 +164,10 @@ if grep -E '^(/dev/zvol/dstack/swap|/dev/zd[0-9]+)[[:space:]]' /proc/swaps >/dev
     echo "stale zvol swap survived reboot" >&2; exit 86
 fi
 zfs list -H dstack >/dev/null
+# The imported pool is reconfigured on every boot and must keep autotrim.
+test "$(zpool get -H -o value autotrim dstack)" = on || { echo "imported zpool autotrim is not on" >&2; exit 87; }
 rm -rf "$CASE_DIR"
-printf 'phase2_ok disabled_cleanup=1 pool_present=1\n'
+printf 'phase2_ok disabled_cleanup=1 pool_present=1 autotrim=on\n'
 """
 
 CLEANUP = r"""

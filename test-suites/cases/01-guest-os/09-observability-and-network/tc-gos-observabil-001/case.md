@@ -90,6 +90,14 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (GPU telemetry series and commit 9f299d3e7e)
+
+Automated in `run.py` stage `gpu-telemetry` on the CPU-only lease guest:
+
+- All six load-average series (`dstack_guest_load1/5/15`, `system_load_average_1m/5m/15m`) are decimals with two fractional digits, not the wire's load x 100 integers.
+- Inside the guest, `/usr/bin/dstack-util gpu-info` exits 0 and prints exactly one JSON document with the five `GpuInfoResponse` fields.
+- When the guest has no NVIDIA display-class PCI device, `/metrics` carries `dstack_gpu_nvml_up 1` and no `dstack_gpu_query_errors` series, the dashboard shows `No NVIDIA GPUs`, and the collector reports no devices and no CC state. GPU-positive telemetry is owned by the hardware-gated [tc-gos-platform-009](../../10-platform-services/tc-gos-platform-009/case.md#tc-gos-platform-009).
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
