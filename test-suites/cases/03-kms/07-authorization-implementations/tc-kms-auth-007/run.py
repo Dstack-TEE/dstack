@@ -28,11 +28,36 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
     temporary.replace(path)
 
 
+def node20_path() -> str:
+    """Return PATH with a Node 20+ runtime first; vitest 4 requires it."""
+    candidates = []
+    current = shutil.which("node")
+    if current:
+        candidates.append(pathlib.Path(current))
+    candidates.extend(
+        pathlib.Path.home().glob(
+            ".local/share/fnm/node-versions/v*/installation/bin/node"
+        )
+    )
+    for candidate in sorted(candidates, reverse=True):
+        probe = subprocess.run(
+            [str(candidate), "--version"], text=True, capture_output=True, check=False
+        )
+        try:
+            major = int(probe.stdout.strip().lstrip("v").split(".", 1)[0])
+        except (ValueError, IndexError):
+            continue
+        if probe.returncode == 0 and major >= 20:
+            return os.pathsep.join([str(candidate.parent), os.environ.get("PATH", "")])
+    raise RuntimeError("Node 20 or newer is unavailable")
+
+
 def run(command: list[str], cwd: pathlib.Path, timeout: int) -> tuple[int, str]:
     """Run one bounded process and return combined output."""
     completed = subprocess.run(
         command,
         cwd=cwd,
+        env={**os.environ, "PATH": node20_path()},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
