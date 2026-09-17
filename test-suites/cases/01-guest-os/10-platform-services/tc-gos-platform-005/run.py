@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -13,6 +14,39 @@ from pathlib import Path
 from typing import Any
 
 CASE_ID = "tc-gos-platform-005"
+# Post-baseline kernel options observed on the booted guest (PR #1182, #1192).
+KERNEL_CONFIG_PINS = {
+    "CONFIG_NET_SCH_HTB": "y",
+    "CONFIG_NET_SCH_INGRESS": "y",
+    "CONFIG_NET_CLS_U32": "y",
+    "CONFIG_NET_ACT_POLICE": "y",
+    "CONFIG_CHECKPOINT_RESTORE": "y",
+    "CONFIG_MACVLAN": "y",
+    "CONFIG_NETFILTER_XT_MATCH_COMMENT": "m",
+    "CONFIG_SWIOTLB_DYNAMIC": "y",
+}
+# Drivers unreachable in a CVM (PR #1160).
+KERNEL_CONFIG_DISABLED = (
+    "CONFIG_TIGON3",
+    "CONFIG_E1000",
+    "CONFIG_E1000E",
+    "CONFIG_R8169",
+    "CONFIG_PCCARD",
+    "CONFIG_AGP",
+    "CONFIG_PROVIDE_OHCI1394_DMA_INIT",
+    "CONFIG_EARLY_PRINTK_DBGP",
+    "CONFIG_NETCONSOLE",
+)
+LDCONFIG_SONAMES = (
+    "libnvidia-ml.so.1",
+    "libnvidia-container.so.1",
+    "libnvidia-container-go.so.1",
+)
+RUNTIME_LINK_PATHS = (
+    "/usr/bin/nvattest",
+    "/usr/bin/nvidia-smi",
+    "/usr/bin/nvidia-container-cli",
+)
 
 
 def ssh(
@@ -58,6 +92,142 @@ def inspect(argv: list[str], container: str) -> dict[str, Any]:
     if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
         raise AssertionError("docker inspect returned an unexpected shape")
     return value[0]
+
+
+def candidate_nvidia_version() -> str:
+    """Read the NVIDIA driver pin from the candidate mkosi version file."""
+    runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
+    versions = Path(str(runtime["repository"])) / "os/mkosi/versions.env"
+    for line in versions.read_text(encoding="utf-8").splitlines():
+        if line.startswith("NVIDIA_VERSION="):
+            return line.split("=", 1)[1].strip()
+    raise AssertionError("candidate versions.env declares no NVIDIA_VERSION")
+
+
+def audit_image_content(argv: list[str]) -> dict[str, Any]:
+    """Audit post-baseline kernel and GPU userspace content of the booted image."""
+    failures: list[str] = []
+    cmdline = ssh(argv, "cat /proc/cmdline").stdout.split()
+    # PR #1156: MMCONFIG stays enabled so PCIe extended config space is readable.
+    if "pci=nommconf" in cmdline:
+        failures.append("kernel booted with pci=nommconf")
+    if "pci=noearly" not in cmdline:
+        failures.append("kernel booted without pci=noearly")
+    config = {}
+    for line in ssh(argv, "zcat /proc/config.gz").stdout.splitlines():
+        if line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            config[key] = value
+    for key, want in KERNEL_CONFIG_PINS.items():
+        if config.get(key) != want:
+            failures.append(f"{key}={config.get(key)} (wanted {want})")
+    for key in KERNEL_CONFIG_DISABLED:
+        if config.get(key) not in (None, "n"):
+            failures.append(f"{key}={config[key]} (wanted unset)")
+    # PR #1220: TDX wakeup switches default on; halt polling is opt-in.
+    scaling = ssh(
+        argv,
+        "cat /sys/module/kernel/parameters/tdx_wake_q_batch "
+        "/sys/module/kernel/parameters/tdx_pv_single_ipi; "
+        "test ! -e /sys/module/cpuidle_haltpoll && echo haltpoll-unloaded; "
+        "modinfo -F filename cpuidle_haltpoll >/dev/null && echo haltpoll-module",
+    ).stdout.split()
+    # The PV single-IPI switch also depends on the host advertising PV IPIs, so
+    # only its presence is required; wake-queue batching depends on TDX alone.
+    if not (
+        len(scaling) == 4
+        and scaling[0] == "Y"
+        and scaling[1] in ("Y", "N")
+        and scaling[2:] == ["haltpoll-unloaded", "haltpoll-module"]
+    ):
+        failures.append(f"TDX scaling switch state {scaling}")
+
+    # PR #1177: the shipped driver matches the candidate pin.
+    expected_version = candidate_nvidia_version()
+    module_version = ssh(argv, "modinfo -F version nvidia").stdout.strip()
+    if module_version != expected_version:
+        failures.append(f"nvidia module version {module_version!r}")
+    firmware = [
+        name
+        for name in ssh(argv, "ls -1 /usr/lib/firmware/nvidia").stdout.split()
+        if re.fullmatch(r"\d+\.\d+(\.\d+)?", name)
+    ]
+    if firmware != [expected_version]:
+        failures.append(f"nvidia driver firmware versions {firmware}")
+    # PR #1181 and #1191: dlopen()ed container libraries are in the linker cache.
+    cached = {
+        line.split()[0]
+        for line in ssh(argv, "ldconfig -p").stdout.splitlines()
+        if " => " in line
+    }
+    for soname in LDCONFIG_SONAMES:
+        if soname not in cached:
+            failures.append(f"linker cache lacks {soname}")
+    # PR #1173: nvattest and its peers resolve every shared library.
+    unresolved = ssh(
+        argv,
+        "ldd " + " ".join(RUNTIME_LINK_PATHS) + " | grep -F 'not found' || true",
+    ).stdout.strip()
+    if unresolved:
+        failures.append(f"unresolved shared libraries: {unresolved[:300]}")
+    # PR #1157: the driver is kept from udev autoload, and the options are
+    # derived from the topology this guest was given.
+    blacklist = set(ssh(argv, "modprobe --showconfig").stdout.splitlines())
+    for entry in ("blacklist nvidia", "blacklist nvidia_drm"):
+        if entry not in blacklist and entry.replace("_", "-") not in blacklist:
+            failures.append(f"modprobe configuration lacks {entry!r}")
+    unit = ssh(
+        argv,
+        "systemctl show nvidia-module-options.service "
+        "--property=ActiveState,Result,UnitFileState --no-pager",
+    ).stdout
+    for token in ("ActiveState=active", "Result=success", "UnitFileState=enabled"):
+        if token not in unit.split():
+            failures.append(f"nvidia-module-options.service lacks {token}")
+    gpus = int(ssh(argv, "/usr/bin/nvidia-gpu-detect count-gpus").stdout.strip())
+    nvswitch = (
+        ssh(argv, "/usr/bin/nvidia-gpu-detect nvswitch", check=False).returncode == 0
+    )
+    generated = ssh(argv, "cat /run/modprobe.d/nvidia-dstack.conf").stdout
+    options = sorted(
+        line for line in generated.splitlines() if line.startswith("options ")
+    )
+    if nvswitch:
+        wanted = ['options nvidia NVreg_RegistryDwords="RmEnableProtectedPcie=0x1"']
+    elif gpus == 1:
+        wanted = ["options nvidia NVreg_NvLinkDisable=1"]
+    else:
+        wanted = []
+    if options != wanted:
+        failures.append(f"generated module options {options} (wanted {wanted})")
+    if f"gpus={gpus} nvswitch={'yes' if nvswitch else 'no'}" not in generated:
+        failures.append("generated module options do not record the live topology")
+    # The removed modules-load.d entry was an options line that did nothing.
+    # PR #1226: the kernel build tree never enters the measured rootfs.
+    # PR #1220: the experimental TDX tuning helper is installed out of PATH.
+    layout = ssh(
+        argv,
+        "test ! -e /etc/modules-load.d/nvidia.conf && echo no-modules-load-options; "
+        "test ! -e /usr/lib/dstack/kernel-devel && echo no-kernel-devel; "
+        "test -x /usr/lib/dstack/tdx-guest-tune.sh && echo tdx-guest-tune",
+    ).stdout.split()
+    for token in ("no-modules-load-options", "no-kernel-devel", "tdx-guest-tune"):
+        if token not in layout:
+            failures.append(f"rootfs layout check failed: {token}")
+    if failures:
+        raise AssertionError("; ".join(failures))
+    return {
+        "cmdline_mmconfig_enabled": True,
+        "kernel_config_pins": sorted(KERNEL_CONFIG_PINS),
+        "kernel_config_disabled": list(KERNEL_CONFIG_DISABLED),
+        "nvidia_version": expected_version,
+        "linker_cache_sonames": list(LDCONFIG_SONAMES),
+        "runtime_link_paths": list(RUNTIME_LINK_PATHS),
+        "gpu_topology": {"gpus": gpus, "nvswitch": nvswitch},
+        "generated_module_options": options,
+        "kernel_devel_absent": True,
+        "tdx_guest_tune_installed": True,
+    }
 
 
 def main() -> int:
@@ -299,6 +469,18 @@ def main() -> int:
                 }
             )
             emit("step-04", "PASS")
+
+            stage = "shipped-image-content"
+            emit("step-05", "START")
+            observations["image_content"] = audit_image_content(primary_ssh)
+            steps.append(
+                {
+                    "id": f"{CASE_ID}-step-05",
+                    "status": "PASS",
+                    "observed": "The booted kernel ran with MMCONFIG enabled and the declared Incus, SWIOTLB and driver-removal configuration; the NVIDIA userspace matched the candidate driver pin, resolved through the linker cache, and was held back from udev autoload behind topology-derived module options; the kernel build tree was absent from the measured rootfs.",
+                }
+            )
+            emit("step-05", "PASS")
     except Exception as error:
         status = "FAIL"
         summary = (

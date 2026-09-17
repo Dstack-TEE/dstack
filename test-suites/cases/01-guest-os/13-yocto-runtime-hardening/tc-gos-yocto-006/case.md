@@ -66,6 +66,10 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1215)
+
+- The Yocto image no longer ships `docker.service.d/override.conf` with `CPUAffinity=0`. On a Yocto guest with more than one vCPU, `systemctl cat docker.service` shows no `CPUAffinity=` line, `systemctl show docker.service --property=CPUAffinity` is empty, and `taskset -pc "$(systemctl show -p MainPID --value docker.service)"` lists every online CPU, both for the daemon and for a container started without `cpuset`. The mkosi image never pinned Docker and must report the same.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
