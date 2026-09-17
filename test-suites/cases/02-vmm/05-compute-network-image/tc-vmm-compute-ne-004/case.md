@@ -68,6 +68,14 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 Additionally exercise disabled/default/required GPU sanitization, secondary-bus-reset success, readiness polling, timeout, reset failure, driver rebind, and QEMU-attach rollback. Require that a failed reset never exposes the GPU to the guest and that successful cleanup restores host ownership.
 
+## Post-baseline regression coverage (PR #1065, PR #1161)
+
+Hardware-gated: this case stays BLOCKED by its capability probe until the host exposes a confidential-computing NVIDIA GPU.
+
+- PR #1065: with `[cvm.gpu] sanitize_on_attach = true`, starting a VM with an attached GPU as the unprivileged VMM user performs a VFIO PCI hot reset through `/dev/vfio` (no root, no sysfs `config` or `drivers_probe` write), logs the affected device set, waits for the GPU to be continuously VFIO-ready within `sbr_timeout_ms`, and closes every VFIO fd before QEMU opens the group. A GPU whose reset scope includes a device outside its own IOMMU group is refused and the launch fails without attaching it. `dstack-vmm sanitize-gpu <slot>` performs the same reset for operations.
+- PR #1161: with the shipped default `listing`, `ListGpus` offers every installed H100, H100 NVL, H200, H200 NVL, B200, HGX B200, or B300 card, and NVSwitches are attached only through the `all` mode's PCI-class discovery.
+- CPU-only rejection paths for `sanitize-gpu` and the reset topology unit tests are mandatory in `tc-vmm-compute-ne-007`; the default listing is asserted in `tc-vmm-configurat-001`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

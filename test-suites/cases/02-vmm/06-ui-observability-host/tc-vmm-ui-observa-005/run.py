@@ -28,6 +28,7 @@ EXPECTED_ROWS = {
     "ui-lifecycle",
     "ui-update-resize",
     "ui-log-view",
+    "status-filter",
     "cross-session-isolation",
 }
 
@@ -206,7 +207,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-02",
                 "status": "PASS",
-                "observed": "The browser submitted the semantic form by keyboard, recovered from one controlled server error, created one VM, exercised UI stop/start/update/log actions, and public configuration reflected disk 21 plus user config.",
+                "observed": "The browser submitted the semantic form by keyboard, recovered from one controlled server error, created one VM, exercised UI stop/start/update/log actions and the status filter, and public configuration reflected disk 21 plus user config.",
             },
             {
                 "id": f"{CASE_ID}-step-03",
@@ -270,7 +271,7 @@ def main() -> int:
             "case_id": CASE_ID,
             "provisional": False,
             "status": status,
-            "summary": "13/13 browser deployment rows passed."
+            "summary": f"{len(EXPECTED_ROWS)}/{len(EXPECTED_ROWS)} browser deployment rows passed."
             if not failures
             else failures[0],
             "steps": steps,

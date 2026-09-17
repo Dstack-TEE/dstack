@@ -45,7 +45,7 @@ Cross explicit legacy/lite/auto with memory below/equal/above 2 GiB, image lite 
 
 **Expected results:**
 
-- Explicit requirements take documented precedence, auto chooses lite only for supported 2-GiB-compatible rows, otherwise legacy; vm_config/event expectations match, and old-source KMS targets remain forced legacy.
+- Explicit requirements take documented precedence, auto chooses lite whenever the image ships TDX lite measurement material and legacy otherwise, independent of guest memory size; vm_config/event expectations match, and old-source KMS targets remain forced legacy.
 
 <a id="tc-vmm-tdxvariant-005-step-02"></a>
 ### Step 2: Verify the selected state end to end
@@ -64,6 +64,12 @@ Restart after accepted/rejected rows, replay applicable v0.5.4/v0.5.8/v0.5.11 in
 **Expected results:**
 
 - Supported historical defaults remain stable, unsupported combinations fail before secret/device consumption, restart reconstructs the same decision and corrected retry succeeds without stale state.
+
+## Post-baseline regression coverage (PR #1200)
+
+- `tdx_attestation_variant = "auto"` no longer consults guest memory. A 1 GiB VM on a lite-capable image resolves to `lite` and its `vm_config` carries `tdx_attestation_variant = "lite"` plus `tdx_measurement` (`tdx_auto_variant_uses_lite_for_low_non_2g_memory`); a 2 GiB VM stays `lite` and an image without measurement material stays `legacy`.
+- Explicit `legacy`/`lite` node settings and `requirements.tdx_measure_acpi_tables` keep their precedence over `auto`.
+- A pre-normalization image below the old 3 GiB threshold is no longer steered to legacy by the VMM; operators must set `tdx_attestation_variant = "legacy"` for such images, and the verifier-side rejection is covered by the measurement chapter.
 
 ## Postconditions
 

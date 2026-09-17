@@ -67,6 +67,16 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1213)
+
+The fixture node uses the default user-mode networking, so every stopped VM below has user-mode NICs only.
+
+- `PortMapping.nic_index` names the NIC a mapping's traffic enters through. A TCP mapping with `nic_index=0` on the node-default single NIC is accepted and `Status` returns it with `nic_index=0`; on a VM deployed with two user-mode NICs a mapping with `nic_index=1` is accepted and persisted as `1`.
+- `CreateVm` with a mapping pinned to `nic_index=1` on a single-NIC VM fails with an error naming `names NIC 1, but this VM has 1` and creates no VM.
+- `UpdateVm` with `update_ports=true` and a mapping pinned to a NIC the VM does not have is rejected and leaves the persisted port list unchanged.
+- Mappings without `nic_index` keep landing on the first user-mode NIC, so every pre-existing row of this case is unchanged. Pins to bridge, macvtap, or custom NICs are rejected with `cannot publish a host port`; that path needs a bridge-capable node and is covered by the `validate_port_mapping_nics` and `ingress_nic` unit tests (`a_pin_is_checked_against_the_backend_and_not_only_the_count`, `a_pin_to_a_backend_with_no_ingress_resolves_to_nothing`).
+- `vmm-cli.py` accepts a trailing `@<nic>` on `--port` and sends it as `nic_index`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

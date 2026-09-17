@@ -46,7 +46,16 @@ const fs = require('fs');
     await page.getByLabel('No TEE').check();
     await page.getByRole('button', { name: 'Add Network' }).click();
     const networkSelect = page.locator('.network-config-row select').first();
+    // PR #1145: a node-default row offers vhost/queue tuning; user mode has no
+    // vhost-net or multiqueue data plane, so selecting it hides both controls.
+    const vhostSelect = page.locator('.network-config-row').first().getByLabel('vhost-net data plane');
+    const queuesInput = page.locator('.network-config-row').first().getByLabel('virtio-net queue pairs');
+    const tuningOffered = await vhostSelect.count() === 1 && await queuesInput.count() === 1;
     await networkSelect.selectOption('user');
+    const tuningHiddenForUser = await vhostSelect.count() === 0 && await queuesInput.count() === 0;
+    if (!tuningOffered || !tuningHiddenForUser) {
+      throw new Error(`network data-plane controls offered=${tuningOffered} hiddenForUser=${tuningHiddenForUser}`);
+    }
     rows['semantic-form'] = true;
     rows['simulated-platform'] = true;
     rows['network-selection'] = true;
@@ -105,6 +114,17 @@ const fs = require('fs');
     if (!popup.url().includes('/logs?') || !popup.url().includes('ch=serial')) throw new Error('logs action opened wrong URL');
     await popup.close();
     rows['ui-log-view'] = true;
+
+    // PR #1193: the status filter narrows the list to one lifecycle state. The
+    // VM was stopped through the UI above; the list is re-polled every 3s.
+    const statusFilter = page.getByLabel('Filter by status');
+    await statusFilter.selectOption('running');
+    await page.locator('.vm-row').filter({hasText: name}).waitFor({state: 'detached', timeout: 20000});
+    await statusFilter.selectOption('stopped');
+    await page.locator('.vm-row').filter({hasText: name}).waitFor({timeout: 20000});
+    await statusFilter.selectOption('');
+    await page.locator('.vm-row').filter({hasText: name}).waitFor({timeout: 20000});
+    rows['status-filter'] = true;
 
     const second = await browser.newContext();
     const peer = await second.newPage();

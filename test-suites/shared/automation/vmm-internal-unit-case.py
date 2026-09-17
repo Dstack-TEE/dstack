@@ -26,13 +26,15 @@ CASES = {
     "tc-vmm-tdxvariant-005": {
         "filter": "app::tests::tdx_",
         "expected_tests": [
-            "tdx_auto_variant_uses_legacy_for_low_non_2g_memory",
+            # PR #1200: auto no longer consults guest memory, so a 1 GiB VM on
+            # a lite-capable image resolves to lite rather than legacy.
+            "tdx_auto_variant_uses_lite_for_low_non_2g_memory",
             "tdx_auto_variant_uses_lite_for_2g_supported_image",
             "tdx_auto_variant_falls_back_to_legacy_when_image_lacks_lite_support",
             "tdx_requirements_measure_acpi_tables_overrides_lite_to_legacy",
             "tdx_requirements_skip_acpi_tables_overrides_legacy_to_lite",
         ],
-        "subject": "current TDX legacy/lite/auto memory, image-capability, and requirements precedence",
+        "subject": "current TDX legacy/lite/auto image-capability and requirements precedence, independent of guest memory",
     },
     "tc-vmm-internal-001": {
         "filter": "app::host_share::tests",
@@ -62,8 +64,13 @@ CASES = {
         "expected_tests": [
             "sanitize_optional_filters_empty_owned_values",
             "sanitize_optional_filters_empty_borrowed_values",
+            # PR #1193: the status filter shares this lifecycle projection.
+            "runtime_status_covers_lifecycle",
+            # PR #1145: resolved vhost/queue state in NetworkInterfaceStatus.
+            "a_custom_netdev_reports_no_data_plane_rather_than_the_wrong_one",
+            "a_reported_interface_can_be_sent_back_unchanged",
         ],
-        "subject": "current VM-info optional owned and borrowed value sanitization",
+        "subject": "current VM-info sanitization, runtime-status lifecycle projection, and interface data-plane reporting",
     },
     "tc-vmm-internal-008": {
         "filter": "vm_launcher::tests",

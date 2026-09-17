@@ -1,0 +1,81 @@
+<!-- SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network> -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<a id="tc-vmm-install-007"></a>
+# TC-VMM-INSTALL-007: Source installer checkout resolution and failure handling
+
+## Metadata
+
+- Priority: P2
+- Type: Functional, Regression
+- Minimum environment: UNIT
+- Automation: Yes
+- Requirements: [req-vmm-install-007](../../../../catalog/feature-audit.md#req-vmm-install-007)
+- Risks: [risk-vmm-install-007](../../../../catalog/feature-audit.md#risk-vmm-install-007)
+- Source: `dstack/scripts/install.sh`
+
+## Prepared execution knowledge
+
+- Read and obey [`shared/automation/execution-guide.md`](../../../../shared/automation/execution-guide.md) before executing Step 1.
+- Read `DSTACK_TEST_RUNTIME_MANIFEST` once and use its `repository` as the only source of the candidate `dstack/scripts/install.sh`.
+- The case is hermetic. It needs `sh` and `git` only: a local git origin replaces the GitHub repository, and a stub `cargo` first on `PATH` records its working directory and writes an executable `target/release/dstackup` instead of building. Never let the installer reach the network, `sudo`, or `/usr/local`.
+- Feed the script on stdin (`sh -s -- ...`) from a working directory that is not a checkout, the way `curl ... | sh` runs it, so the installer cannot resolve the candidate repository itself as its source.
+
+## Objective
+
+Verify that `dstack/scripts/install.sh` resolves the source checkout it builds `dstackup` from, whether it clones into a new `--src`, updates an existing one, or uses a temporary checkout, and that it refuses an invalid source or prefix before building.
+
+## Preconditions
+
+1. `sh` and `git` are available; no network access is required.
+2. A case-scoped temporary directory holds the local origin, stub `cargo`, `TMPDIR`, working directory, and every `--prefix`.
+
+## Test Data
+
+```json
+{
+  "origin_layout": ["dstack/Cargo.toml", "dstack/crates/dstackup/", "dstack/crates/dstack-cli/", "dstack/vmm/", "dstack/supervisor/"],
+  "ref": "dtest-install",
+  "common_args": ["--repo", "<case origin>", "--ref", "dtest-install", "--no-sudo"]
+}
+```
+
+## Steps
+
+<a id="tc-vmm-install-007-step-01"></a>
+### Step 1: Clone into a new source directory
+
+Run the installer with `--src <case>/src` (absent) and `--prefix <case>/prefix-clone`.
+
+**Expected results:**
+
+- Exit status is 0; the stub `cargo` ran exactly once with working directory `<case>/src/dstack`; `<case>/prefix-clone/bin/dstackup` exists and is executable.
+- `cloning dstack source into` appears on stderr and not on stdout, so the `$(resolve_source)` capture holds only the checkout path.
+
+<a id="tc-vmm-install-007-step-02"></a>
+### Step 2: Update an existing checkout and use a temporary checkout
+
+Run the installer again with the same `--src` and a new prefix, then run it without `--src` and with `TMPDIR` set to the case directory.
+
+**Expected results:**
+
+- The second run exits 0, reports `updating dstack source in` on stderr only, builds in `<case>/src/dstack`, and installs `dstackup`.
+- The run without `--src` exits 0, builds exactly once in `<TMPDIR>/dstack-install.*/source/dstack`, and installs `dstackup`.
+
+<a id="tc-vmm-install-007-step-03"></a>
+### Step 3: Refuse invalid inputs before building
+
+Run the installer with an existing `--src` directory that is not a dstack checkout, then with `--prefix relative/prefix`.
+
+**Expected results:**
+
+- The non-checkout source exits non-zero with `exists but is not a dstack git checkout` on stderr, never invokes `cargo`, and installs nothing.
+- The relative prefix exits non-zero with `--prefix must be an absolute path` on stderr and never invokes `cargo`.
+
+## Post-baseline regression coverage (PR #1162)
+
+- Before PR #1162 the progress messages and git output of `resolve_source` went to stdout, so `checkout=$(resolve_source)` captured them with the path and the build directory was wrong. Against the pre-fix script, the Step 1 row and both Step 2 rows fail; against the candidate they pass.
+- Known candidate issue, recorded but not gated: `tmp_src` is assigned inside the `$(resolve_source)` subshell, so the `EXIT` trap in the parent shell sees it empty and the temporary checkout under `TMPDIR` is not removed. The evidence field `temporary_checkout_removed` records it; gate on it once the installer is fixed.
+
+## Postconditions
+
+The case-scoped temporary directory, including the local origin, checkouts, prefixes, and any leaked temporary checkout under its private `TMPDIR`, is removed when the harness exits. Nothing outside it is modified.
