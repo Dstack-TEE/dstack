@@ -741,10 +741,14 @@ class MatrixRun:
         gateway_dns = ""
         certbot_services = ""
         if version == "candidate":
-            mock_cf_dns_image = os.environ.get(
-                "DSTACK_TEST_MOCK_CF_DNS_IMAGE", ""
-            ).strip()
-            pebble_image = os.environ.get("DSTACK_TEST_PEBBLE_IMAGE", "").strip()
+            mock_cf_dns_image = self.registry.get(
+                "mock_cf_dns_image",
+                os.environ.get("DSTACK_TEST_MOCK_CF_DNS_IMAGE", "").strip(),
+            )
+            pebble_image = self.registry.get(
+                "pebble_image",
+                os.environ.get("DSTACK_TEST_PEBBLE_IMAGE", "").strip(),
+            )
             if not mock_cf_dns_image or not pebble_image:
                 raise RuntimeError(
                     "DSTACK_TEST_MOCK_CF_DNS_IMAGE and DSTACK_TEST_PEBBLE_IMAGE are required"
