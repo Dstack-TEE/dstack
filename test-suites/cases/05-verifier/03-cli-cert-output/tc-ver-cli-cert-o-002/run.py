@@ -23,6 +23,13 @@ REQUIRED_TESTS = (
     "cert::tests::test_csr_v2_scale_encoding_stable_with_tdx_quote",
     "cert::tests::test_invalid_confirm_word",
 )
+# Real TDX RA-TLS leaves from one boot: v1 IssueCert embeds MessagePack V1 and
+# v0 GetTlsKey embeds legacy SCALE (PR #1207). Both must chain, bind the
+# attestation to their own key, and pass the full verifier image check.
+VERIFIER_TESTS = (
+    "verification::tests::verifies_real_v1_issue_cert_chain_and_embedded_attestation",
+    "verification::tests::rejects_a_real_v1_certificate_attestation_bound_to_another_key",
+)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -95,6 +102,42 @@ def main() -> int:
             raise AssertionError(
                 f"{PACKAGE} certificate suite failed with rc={completed.returncode}"
             )
+        verifier = subprocess.run(
+            [
+                find_command(environment, "cargo"),
+                "test",
+                "-p",
+                "dstack-verifier",
+                "--lib",
+                "--",
+                "--exact",
+                *VERIFIER_TESTS,
+            ],
+            cwd=repository / "dstack",
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=600,
+            check=False,
+        )
+        verifier_output = verifier.stdout + verifier.stderr
+        verifier_passed = (
+            f"test result: ok. {len(VERIFIER_TESTS)} passed; 0 failed"
+            in verifier_output
+            and all(f"test {test} ... ok" in verifier_output for test in VERIFIER_TESTS)
+        )
+        row["verifier"] = {
+            "package": "dstack-verifier",
+            "tests": VERIFIER_TESTS,
+            "returncode": verifier.returncode,
+            "passed": verifier_passed,
+            "output_sha256": hashlib.sha256(verifier_output.encode()).hexdigest(),
+        }
+        if verifier.returncode or not verifier_passed:
+            raise AssertionError(
+                f"dstack-verifier real v1 certificate rows failed with rc={verifier.returncode}"
+            )
     except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
         status = "FAIL"
         summary = str(error)
@@ -109,6 +152,9 @@ def main() -> int:
             "missing_attestation_rejection",
             "stable_tdx_quote_csr_encoding",
             "invalid_confirmation_rejection",
+            "real_v1_issue_cert_msgpack_attestation_chain_and_key_binding",
+            "real_v0_get_tls_key_scale_attestation_same_cvm_identity",
+            "v1_certificate_attestation_rejected_against_another_key",
         ],
     }
     artifact = {
@@ -136,7 +182,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "CSR signatures, IP SAN parsing, stable quote encoding, certificate-key binding, missing attestation, and invalid confirmation were exercised.",
+                    "observed": "CSR signatures, IP SAN parsing, stable quote encoding, certificate-key binding, missing attestation, and invalid confirmation were exercised; real same-boot v1 IssueCert (MessagePack V1) and v0 GetTlsKey (SCALE) leaves chained, bound to their own keys, verified to the same CVM, and the v1 attestation was rejected against the other key.",
                 },
                 {
                     "id": f"{case_id}-step-03",

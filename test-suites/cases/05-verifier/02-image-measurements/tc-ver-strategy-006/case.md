@@ -68,6 +68,12 @@ Interrupt the external verifier/auth/image/network dependency, restart after acc
 
 - Uncertainty fails closed, recovery does not reuse stale decisions, accepted state survives only as documented, and cross-identity replay or substitution fails.
 
+## Post-baseline regression coverage (PRs #1189 and #1199)
+
+- TDX lite: `verifies_tdx_lite_fixture_with_normalized_kernel_header` and `verifies_tdx_lite_fixture_with_normalized_kernel_header_on_qemu_10_2` verify one setup-header-normalized image captured on QEMU 8.2.2 and 10.2.1 without an image download, with quote, event log, OS image hash, and ACPI checks all true.
+- TDX lite: `tdx_lite_rejects_a_self_consistent_forged_command_line` rewrites the document command line and rebuilds `sha256sum.txt` and `os_image_hash`; the verdict is invalid with `RTMR2 mismatch`.
+- Every row runs by exact test path, so a renamed or duplicated test fails instead of silently matching another name.
+
 ## Postconditions
 
 Remove run-scoped evidence/state and restore trust, cache, routing and dependency baselines.

@@ -74,6 +74,12 @@ Repeat measurement from an adjacent isolated image copy and compare it byte-for-
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PRs #1189 and #1199)
+
+- `metadata.json` field `kernel_header_normalized` is the image's declaration of which kernel bytes RTMR1 covers; absent means the pre-normalization QEMU-rewrite model. The shared matrix measures the historical image with and without the declaration and a normalized copy across QEMU 8.2.2/9.2.1/10.2.1 and 1-8 GiB (see TC-VER-TOOLS-002).
+- `dstack-mr tdx-measurement-cbor` is deterministic and emits measurement document version 4 whose `image.cmdline` is the bare metadata cmdline, with `kernel_header_normalized` omitted for the historical image and `true` for the normalized copy; the document kernel digest and cmdline replay to the CLI RTMR1 and RTMR2, the firmware (`tdvf`) material is unchanged by kernel normalization, and a cmdline without `dstack.rootfs_hash` is rejected by name.
+- Native vectors `image_info_tests::metadata_declares_whether_the_kernel_header_is_normalized`, `tdx_measurement_cbor_tests::the_kernel_header_flag_round_trips`, `tdx_measurement_cbor_tests::a_pre_normalization_document_does_not_drift`, `tdx_measurement_cbor_tests::unknown_versions_are_rejected`, and `tdx_measurement_cbor_tests::an_oversized_command_line_is_rejected_by_name` in `dstack-types` pass by exact name.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.

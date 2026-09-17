@@ -10,15 +10,71 @@ import json
 import os
 import pathlib
 import shutil
+import struct
 import subprocess
 import tempfile
 from typing import Any
 
 CASE_IDS = {"tc-ver-tools-001", "tc-ver-tools-002"}
 IMAGE_HASH = "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
-MATRIX_VERSION = 1
+MATRIX_VERSION = 2
 BASE_ARGS = ["--cpu", "2", "--memory", "2G", "--qemu-version", "9.2.1"]
 REGISTERS = ("mrtd", "rtmr0", "rtmr1", "rtmr2")
+# OVMF's QemuKernelLoaderFsDxe appends this to the image-provided command line
+# before measuring it into RTMR[2] (PR #1199 made it a named constant).
+OVMF_INITRD_CMDLINE_SUFFIX = " initrd=initrd"
+# The four fixed RTMR[1] events that follow the kernel Authenticode digest.
+RTMR1_TRAILING_EVENTS = (
+    b"Calling EFI Application from Boot Option",
+    b"\x00\x00\x00\x00",
+    b"Exit Boot Services Invocation",
+    b"Exit Boot Services Returned with Success",
+)
+# The TDX measurement document version that carries the command line string
+# instead of its digest (PR #1199).
+TDX_MEASUREMENT_DOCUMENT_VERSION = 4
+# Boot-protocol `write` fields filled in the way QEMU's x86 loader fills them
+# for -kernel: (offset, bytes). The normalized image must measure identically
+# once the candidate normalizer has cleared them again (PR #1189).
+QEMU_LOADER_HEADER_WRITES = (
+    (0x210, bytes([0xB0])),
+    (0x218, (0x7FC00000).to_bytes(4, "little")),
+    (0x21C, (0x0062A954).to_bytes(4, "little")),
+    (0x224, (0xFE00).to_bytes(2, "little")),
+    (0x228, (0x20000).to_bytes(4, "little")),
+)
+LOADFLAGS_OFFSET = 0x211
+CAN_USE_HEAP = 0x80
+NORMALIZED_INDEPENDENCE_ROWS = tuple(
+    (memory, qemu)
+    for memory in ("1G", "2G", "3G", "8G")
+    for qemu in ("8.2.2", "9.2.1", "10.2.1")
+)
+# Native golden vectors that pin the measured byte layout. A change to any of
+# them silently invalidates every deployed os_image_hash.
+NATIVE_TESTS = (
+    (
+        "dstack-mr",
+        (
+            "kernel::tests::the_normalized_flag_selects_which_kernel_bytes_are_measured",
+            "kernel::tests::only_the_patched_digest_moves_with_guest_memory",
+            "tdx::tests::measured_kernel_cmdline_appends_the_ovmf_suffix",
+            "tdx::tests::rtmr2_command_line_event_digest_is_stable",
+            "tdx::tests::rtmr2_replay_is_stable",
+            "tdx::tests::tdx_measurement_document_cbor_is_stable",
+        ),
+    ),
+    (
+        "dstack-types",
+        (
+            "image_info_tests::metadata_declares_whether_the_kernel_header_is_normalized",
+            "tdx_measurement_cbor_tests::the_kernel_header_flag_round_trips",
+            "tdx_measurement_cbor_tests::a_pre_normalization_document_does_not_drift",
+            "tdx_measurement_cbor_tests::unknown_versions_are_rejected",
+            "tdx_measurement_cbor_tests::an_oversized_command_line_is_rejected_by_name",
+        ),
+    ),
+)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -47,6 +103,99 @@ def copy_fixture(source: pathlib.Path, destination: pathlib.Path) -> None:
         stderr=subprocess.PIPE,
         text=True,
     )
+
+
+def sha384(data: bytes) -> bytes:
+    """Return a raw SHA-384 digest."""
+    return hashlib.sha384(data).digest()
+
+
+def replay(events: list[bytes]) -> str:
+    """Replay an RTMR event digest sequence from the all-zero register."""
+    register = bytes(48)
+    for event in events:
+        register = sha384(register + event)
+    return register.hex()
+
+
+def authenticode_sha384(data: bytes) -> bytes:
+    """Independently compute the PE/COFF Authenticode SHA-384 of a kernel.
+
+    Follows the Authenticode layout (checksum and certificate directory
+    excluded, sections in file order, trailing data minus the certificate
+    table) plus the zero padding to an 8-byte boundary that OVMF's measurement
+    applies. It deliberately shares no code with dstack-mr.
+    """
+    (pe_offset,) = struct.unpack_from("<I", data, 0x3C)
+    if data[pe_offset : pe_offset + 4] != b"PE\x00\x00":
+        raise AssertionError("kernel is not a PE/COFF image")
+    coff = pe_offset + 4
+    (sections,) = struct.unpack_from("<H", data, coff + 2)
+    (optional_size,) = struct.unpack_from("<H", data, coff + 16)
+    optional = coff + 20
+    (magic,) = struct.unpack_from("<H", data, optional)
+    checksum = optional + 64
+    certificate_directory = optional + (112 if magic == 0x20B else 96) + 4 * 8
+    (headers_size,) = struct.unpack_from("<I", data, optional + 60)
+    digest = hashlib.sha384()
+    digest.update(data[:checksum])
+    digest.update(data[checksum + 4 : certificate_directory])
+    digest.update(data[certificate_directory + 8 : headers_size])
+    hashed = headers_size
+    raw_sections = []
+    for index in range(sections):
+        entry = optional + optional_size + 40 * index
+        size, pointer = struct.unpack_from("<II", data, entry + 16)
+        if size:
+            raw_sections.append((pointer, size))
+    for pointer, size in sorted(raw_sections):
+        digest.update(data[pointer : pointer + size])
+        hashed += size
+    table, table_size = struct.unpack_from("<II", data, certificate_directory)
+    if table and table_size and len(data) - hashed > table_size:
+        digest.update(data[hashed : len(data) - table_size])
+    if len(data) % 8:
+        digest.update(bytes(8 - len(data) % 8))
+    return digest.digest()
+
+
+def rtmr1_from_kernel_digest(kernel_digest: bytes) -> str:
+    """Replay RTMR[1] from the kernel Authenticode digest OVMF measures."""
+    return replay([kernel_digest, *(sha384(event) for event in RTMR1_TRAILING_EVENTS)])
+
+
+def measured_cmdline_event(cmdline: str) -> bytes:
+    """Return the RTMR[2] command-line event: UTF-16LE with a trailing NUL."""
+    return sha384(cmdline.encode("utf-16-le") + b"\x00\x00")
+
+
+def rtmr2_oracle(base_cmdline: str, initrd_digest: bytes, suffix: str) -> str:
+    """Replay RTMR[2] from a base command line, a suffix, and the initrd digest."""
+    return replay([measured_cmdline_event(base_cmdline + suffix), initrd_digest])
+
+
+def run_tool(
+    command: list[str], workspace: pathlib.Path, name: str, timeout: int = 120
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a helper tool and retain its bounded output for debugging."""
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        check=False,
+    )
+    (workspace / f"{name}.stdout").write_bytes(completed.stdout[-65536:])
+    (workspace / f"{name}.stderr").write_bytes(completed.stderr[-65536:])
+    return completed
+
+
+def set_metadata(directory: pathlib.Path, **fields: Any) -> dict[str, Any]:
+    """Rewrite selected metadata.json fields in an isolated image copy."""
+    value = json.loads((directory / "metadata.json").read_text())
+    value.update(fields)
+    atomic_json(directory / "metadata.json", value)
+    return value
 
 
 def changed_registers(baseline: dict[str, str], output: dict[str, str]) -> list[str]:
@@ -124,7 +273,12 @@ def mutate_last_byte(path: pathlib.Path) -> None:
 
 
 def execute_matrix(
-    binary: pathlib.Path, fixture: pathlib.Path, workspace: pathlib.Path
+    binary: pathlib.Path,
+    image_binary: pathlib.Path,
+    repository: pathlib.Path,
+    cargo_target: str,
+    fixture: pathlib.Path,
+    workspace: pathlib.Path,
 ) -> dict[str, Any]:
     """Execute the complete shared matrix once."""
     rows: list[dict[str, Any]] = []
@@ -169,11 +323,19 @@ def execute_matrix(
         ["--cpu", "4", "--memory", "2G", "--qemu-version", "9.2.1"],
         ["rtmr0"],
     )
-    accepted(
+    high_memory = accepted(
         "memory-size",
         fixture / "metadata.json",
         ["--cpu", "2", "--memory", "4G", "--qemu-version", "9.2.1"],
         ["rtmr0"],
+    )
+    # A pre-normalization image keeps modelling QEMU's setup-header rewrite, so
+    # its kernel digest still moves with guest RAM below the 2 GiB placement.
+    low_memory = accepted(
+        "legacy-kernel-digest-low-memory",
+        fixture / "metadata.json",
+        ["--cpu", "2", "--memory", "1G", "--qemu-version", "9.2.1"],
+        ["rtmr0", "rtmr1"],
     )
     accepted(
         "qemu-8-compatibility",
@@ -271,7 +433,57 @@ def execute_matrix(
     metadata_value = json.loads((cmdline / "metadata.json").read_text())
     metadata_value["cmdline"] += " matrix.boundary=1"
     atomic_json(cmdline / "metadata.json", metadata_value)
-    accepted("cmdline-mutation", cmdline / "metadata.json", [*BASE_ARGS], ["rtmr2"])
+    mutated_cmdline = accepted(
+        "cmdline-mutation", cmdline / "metadata.json", [*BASE_ARGS], ["rtmr2"]
+    )
+
+    fixture_metadata = json.loads((fixture / "metadata.json").read_text())
+    initrd_digest = sha384((fixture / fixture_metadata["initrd"]).read_bytes())
+    for name, cmdline_value, observed in (
+        ("rtmr2-cmdline-suffix-oracle", fixture_metadata["cmdline"], baseline),
+        (
+            "rtmr2-cmdline-suffix-oracle-mutated",
+            metadata_value["cmdline"],
+            mutated_cmdline,
+        ),
+    ):
+        composed = rtmr2_oracle(
+            cmdline_value, initrd_digest, OVMF_INITRD_CMDLINE_SUFFIX
+        )
+        bare = rtmr2_oracle(cmdline_value, initrd_digest, "")
+        doubled = rtmr2_oracle(
+            cmdline_value, initrd_digest, OVMF_INITRD_CMDLINE_SUFFIX * 2
+        )
+        if observed["rtmr2"] != composed:
+            raise AssertionError(
+                f"{name}: RTMR2 is not the image cmdline plus {OVMF_INITRD_CMDLINE_SUFFIX!r}"
+            )
+        if observed["rtmr2"] in (bare, doubled):
+            raise AssertionError(f"{name}: RTMR2 matched a mis-composed command line")
+        rows.append(
+            {
+                "name": name,
+                "composition": "metadata.cmdline + ' initrd=initrd', UTF-16LE, NUL",
+                "bare_cmdline_rejected": True,
+                "doubled_suffix_rejected": True,
+                "passed": True,
+            }
+        )
+
+    rows.extend(
+        normalization_rows(
+            binary,
+            image_binary,
+            repository,
+            fixture,
+            workspace,
+            baseline,
+            high_memory,
+            low_memory,
+            initrd_digest,
+        )
+    )
+    rows.extend(native_rows(repository, cargo_target, workspace))
 
     for name, filename, fragment in (
         ("missing-firmware", "ovmf.fd", "No such file"),
@@ -315,6 +527,315 @@ def execute_matrix(
     }
 
 
+def normalization_rows(
+    binary: pathlib.Path,
+    image_binary: pathlib.Path,
+    repository: pathlib.Path,
+    fixture: pathlib.Path,
+    workspace: pathlib.Path,
+    baseline: dict[str, str],
+    high_memory: dict[str, str],
+    low_memory: dict[str, str],
+    initrd_digest: bytes,
+) -> list[dict[str, Any]]:
+    """Exercise setup-header normalization and the TDX measurement document.
+
+    The image build zeroes the boot-loader-written setup-header fields and
+    declares `kernel_header_normalized`; dstack-mr then measures the kernel
+    file as shipped, independent of QEMU version and guest memory. Images
+    that predate the flag keep the QEMU-rewrite model.
+    """
+    rows: list[dict[str, Any]] = []
+    normalizer = repository / "os/image/normalize-kernel-header.py"
+    metadata = json.loads((fixture / "metadata.json").read_text())
+    kernel_name = metadata["kernel"]
+
+    def measure(name: str, directory: pathlib.Path, args: list[str]) -> dict[str, str]:
+        row, output, _ = run_cli(
+            binary, directory / "metadata.json", args, workspace, name
+        )
+        result = require_success(row, output, None)
+        return result
+
+    def check(name: str, kernel: pathlib.Path) -> int:
+        return run_tool(
+            ["python3", str(normalizer), "--check", str(kernel)], workspace, name
+        ).returncode
+
+    def normalize(name: str, kernel: pathlib.Path) -> None:
+        completed = run_tool(["python3", str(normalizer), str(kernel)], workspace, name)
+        if completed.returncode:
+            raise AssertionError(f"{name}: candidate normalizer failed")
+
+    # The historical image predates normalization: its shipped header still
+    # carries a boot-loader field, and its metadata does not declare the flag.
+    if "kernel_header_normalized" in metadata:
+        raise AssertionError(
+            "the historical fixture unexpectedly declares normalization"
+        )
+    if check("legacy-header-check", fixture / kernel_name) != 1:
+        raise AssertionError(
+            "the historical kernel unexpectedly has a normalized header"
+        )
+    rows.append({"name": "legacy-header-not-normalized", "passed": True})
+
+    # Declaring the flag without normalizing selects the plain digest of the
+    # file exactly as shipped: dstack-mr does not rewrite the kernel itself.
+    declared = workspace / "flag-without-normalization"
+    copy_fixture(fixture, declared)
+    set_metadata(declared, kernel_header_normalized=True)
+    declared_output = measure("flag-without-normalization", declared, [*BASE_ARGS])
+    shipped_digest = authenticode_sha384((declared / kernel_name).read_bytes())
+    if changed_registers(baseline, declared_output) != ["rtmr1"]:
+        raise AssertionError(
+            "the normalization flag changed registers other than RTMR1"
+        )
+    if declared_output["rtmr1"] != rtmr1_from_kernel_digest(shipped_digest):
+        raise AssertionError(
+            "a declared-normalized image did not measure the shipped file"
+        )
+    rows.append({"name": "flag-selects-plain-kernel-digest", "passed": True})
+
+    # A normalized image: the candidate image-build normalizer plus the flag.
+    normalized = workspace / "normalized-image"
+    copy_fixture(fixture, normalized)
+    normalize("normalize-image", normalized / kernel_name)
+    if check("normalized-header-check", normalized / kernel_name) != 0:
+        raise AssertionError("the normalizer left boot-loader fields in the header")
+    set_metadata(normalized, kernel_header_normalized=True)
+    normalized_digest = authenticode_sha384((normalized / kernel_name).read_bytes())
+    normalized_output = measure("normalized-image", normalized, [*BASE_ARGS])
+    if changed_registers(baseline, normalized_output) != ["rtmr1"]:
+        raise AssertionError("normalization changed registers other than RTMR1")
+    if normalized_output["rtmr1"] != rtmr1_from_kernel_digest(normalized_digest):
+        raise AssertionError("normalized RTMR1 is not the plain Authenticode replay")
+    if normalized_output["rtmr1"] == declared_output["rtmr1"]:
+        raise AssertionError(
+            "normalizing the header did not change the shipped file digest"
+        )
+    rows.append({"name": "normalized-image-plain-kernel-digest", "passed": True})
+
+    # QEMU version and guest RAM must not reach RTMR1/RTMR2 of a normalized
+    # image, while MRTD/RTMR0 keep their documented dependencies.
+    observed: dict[str, dict[str, str]] = {}
+    for memory, qemu in NORMALIZED_INDEPENDENCE_ROWS:
+        name = f"normalized-{memory}-qemu-{qemu}"
+        output = measure(
+            name, normalized, ["--cpu", "2", "--memory", memory, "--qemu-version", qemu]
+        )
+        for register in ("rtmr1", "rtmr2"):
+            if output[register] != normalized_output[register]:
+                raise AssertionError(f"{name}: {register} depends on the host")
+        observed[name] = output
+    if (
+        observed["normalized-2G-qemu-8.2.2"]["mrtd"]
+        == observed["normalized-2G-qemu-9.2.1"]["mrtd"]
+    ):
+        raise AssertionError(
+            "QEMU 8.x and 9.x page-add orders no longer differ in MRTD"
+        )
+    if (
+        observed["normalized-1G-qemu-9.2.1"]["rtmr0"]
+        == observed["normalized-8G-qemu-9.2.1"]["rtmr0"]
+    ):
+        raise AssertionError("guest memory no longer reaches RTMR0")
+    if low_memory["rtmr1"] in (baseline["rtmr1"], high_memory["rtmr1"]):
+        raise AssertionError(
+            "the pre-normalization kernel digest stopped moving with RAM"
+        )
+    if high_memory["rtmr1"] != baseline["rtmr1"]:
+        raise AssertionError(
+            "the pre-normalization 2 GiB and high-memory digests diverged"
+        )
+    rows.append(
+        {
+            "name": "normalized-host-independence",
+            "rows": sorted(observed),
+            "stable_registers": ["rtmr1", "rtmr2"],
+            "passed": True,
+        }
+    )
+
+    # Boot-loader-written fields filled in as QEMU does are measured if they
+    # are shipped, and normalizing them away restores the exact measurement.
+    rewritten = workspace / "loader-rewritten-header"
+    copy_fixture(normalized, rewritten)
+    kernel = bytearray((rewritten / kernel_name).read_bytes())
+    for offset, value in QEMU_LOADER_HEADER_WRITES:
+        kernel[offset : offset + len(value)] = value
+    kernel[LOADFLAGS_OFFSET] |= CAN_USE_HEAP
+    (rewritten / kernel_name).write_bytes(bytes(kernel))
+    if check("rewritten-header-check", rewritten / kernel_name) != 1:
+        raise AssertionError("the normalizer check accepted a loader-rewritten header")
+    rewritten_output = measure("loader-rewritten-header", rewritten, [*BASE_ARGS])
+    if changed_registers(normalized_output, rewritten_output) != ["rtmr1"]:
+        raise AssertionError(
+            "shipping loader-written fields did not change exactly RTMR1"
+        )
+    normalize("renormalize-rewritten-header", rewritten / kernel_name)
+    if (rewritten / kernel_name).read_bytes() != (
+        normalized / kernel_name
+    ).read_bytes():
+        raise AssertionError(
+            "normalizing a loader-rewritten header did not restore the image"
+        )
+    if measure("renormalized-header", rewritten, [*BASE_ARGS]) != normalized_output:
+        raise AssertionError(
+            "renormalized image measurement differs from the normalized image"
+        )
+    rows.append(
+        {"name": "loader-fields-normalize-to-identical-measurement", "passed": True}
+    )
+
+    # The no-image-download document carries the base command line and the
+    # normalization flag, and both replay to the CLI registers.
+    documents: dict[str, dict[str, Any]] = {}
+    for name, directory in (("legacy", fixture), ("normalized", normalized)):
+        cbor = workspace / f"measurement-{name}.tdx.cbor"
+        first = run_tool(
+            [str(image_binary), "tdx-measurement-cbor", str(directory)],
+            workspace,
+            f"cbor-{name}",
+        )
+        second = run_tool(
+            [str(image_binary), "tdx-measurement-cbor", str(directory)],
+            workspace,
+            f"cbor-{name}-repeat",
+        )
+        if (
+            first.returncode
+            or second.returncode
+            or first.stdout != second.stdout
+            or not first.stdout
+        ):
+            raise AssertionError(f"{name}: tdx-measurement-cbor was not deterministic")
+        cbor.write_bytes(first.stdout)
+        inspected = run_tool(
+            [str(image_binary), "inspect-measurement", "tdx", str(cbor)],
+            workspace,
+            f"inspect-{name}",
+        )
+        if inspected.returncode:
+            raise AssertionError(
+                f"{name}: inspect-measurement rejected the generated document"
+            )
+        documents[name] = json.loads(inspected.stdout)
+    legacy_doc, normalized_doc = documents["legacy"], documents["normalized"]
+    for name, document, output, flag in (
+        ("legacy", legacy_doc, baseline, None),
+        ("normalized", normalized_doc, normalized_output, True),
+    ):
+        image = document["image"]
+        if document["version"] != TDX_MEASUREMENT_DOCUMENT_VERSION:
+            raise AssertionError(f"{name}: document version is {document['version']}")
+        if "cmdline_sha384" in image or image["cmdline"] != metadata["cmdline"]:
+            raise AssertionError(
+                f"{name}: document does not carry the bare image cmdline"
+            )
+        if image.get("kernel_header_normalized") != flag:
+            raise AssertionError(
+                f"{name}: document normalization flag is {image.get('kernel_header_normalized')!r}"
+            )
+        if image["initrd_sha384"] != initrd_digest.hex():
+            raise AssertionError(f"{name}: document initrd digest differs")
+        kernel_digest = bytes.fromhex(image["kernel_authenticode"])
+        if rtmr1_from_kernel_digest(kernel_digest) != output["rtmr1"]:
+            raise AssertionError(
+                f"{name}: document kernel digest does not replay to RTMR1"
+            )
+        if (
+            rtmr2_oracle(image["cmdline"], initrd_digest, OVMF_INITRD_CMDLINE_SUFFIX)
+            != output["rtmr2"]
+        ):
+            raise AssertionError(f"{name}: document cmdline does not replay to RTMR2")
+    if (
+        bytes.fromhex(normalized_doc["image"]["kernel_authenticode"])
+        != normalized_digest
+    ):
+        raise AssertionError(
+            "normalized document kernel digest is not the file Authenticode"
+        )
+    if (
+        rtmr1_from_kernel_digest(
+            bytes.fromhex(legacy_doc["image"]["kernel_authenticode"])
+        )
+        == low_memory["rtmr1"]
+    ):
+        raise AssertionError("legacy document digest also matched the 1 GiB rewrite")
+    if legacy_doc["tdvf"] != normalized_doc["tdvf"]:
+        raise AssertionError(
+            "normalizing the kernel changed firmware measurement material"
+        )
+    rows.append({"name": "tdx-measurement-document-v4-replay", "passed": True})
+
+    missing = workspace / "document-missing-rootfs-hash"
+    copy_fixture(normalized, missing)
+    set_metadata(
+        missing,
+        cmdline=" ".join(
+            token
+            for token in metadata["cmdline"].split()
+            if not token.startswith("dstack.rootfs_hash=")
+        ),
+    )
+    rejected = run_tool(
+        [str(image_binary), "tdx-measurement-cbor", str(missing)],
+        workspace,
+        "cbor-missing-rootfs-hash",
+    )
+    if rejected.returncode == 0 or b"dstack.rootfs_hash" not in rejected.stderr:
+        raise AssertionError(
+            "a document without dstack.rootfs_hash was not rejected by name"
+        )
+    rows.append(
+        {
+            "name": "tdx-measurement-document-requires-rootfs-hash",
+            "expected_rejection": True,
+            "passed": True,
+        }
+    )
+    return rows
+
+
+def native_rows(
+    repository: pathlib.Path, cargo_target: str, workspace: pathlib.Path
+) -> list[dict[str, Any]]:
+    """Run the exact native golden vectors for the measured byte layout."""
+    rows: list[dict[str, Any]] = []
+    environment = os.environ.copy()
+    environment["CARGO_TARGET_DIR"] = cargo_target
+    cargo = shutil.which("cargo", path=environment.get("PATH")) or str(
+        pathlib.Path.home() / ".cargo/bin/cargo"
+    )
+    for package, tests in NATIVE_TESTS:
+        completed = subprocess.run(
+            [cargo, "test", "-p", package, "--lib", "--", "--exact", *tests],
+            cwd=repository / "dstack",
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=600,
+            check=False,
+        )
+        (workspace / f"native-{package}.log").write_text(completed.stdout[-65536:])
+        expected = f"test result: ok. {len(tests)} passed; 0 failed"
+        missing = [
+            test for test in tests if f"test {test} ... ok" not in completed.stdout
+        ]
+        if completed.returncode or expected not in completed.stdout or missing:
+            raise AssertionError(f"native {package} golden vectors failed: {missing}")
+        rows.append(
+            {
+                "name": f"native-{package}",
+                "tests": list(tests),
+                "output_sha256": hashlib.sha256(completed.stdout.encode()).hexdigest(),
+                "passed": True,
+            }
+        )
+    return rows
+
+
 def main() -> int:
     """Execute or reuse the run-scoped shared matrix and emit case evidence."""
     case_id = os.environ["DSTACK_TEST_CASE_ID"]
@@ -328,6 +849,9 @@ def main() -> int:
         runtime["environment"]["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"]
     )
     binary = prepared_binary(runtime, "dstack_mr_cli")
+    image_binary = prepared_binary(runtime, "dstack_mr_image")
+    repository = pathlib.Path(runtime["repository"])
+    cargo_target = str(runtime["cargo_target_dir"])
     run_id = os.environ["DSTACK_TEST_RUN_ID"]
     commit = runtime["candidate_commit"]
     cache_root = pathlib.Path("/tmp/dstack-mr-shared-matrix") / run_id / commit
@@ -338,7 +862,8 @@ def main() -> int:
     workspace.mkdir(parents=True, exist_ok=True)
     status = "PASS"
     summary = (
-        "Shared dstack-mr configuration, artifact, cmdline, and recovery matrix passed."
+        "Shared dstack-mr configuration, artifact, cmdline, setup-header "
+        "normalization, measurement-document, and recovery matrix passed."
     )
     matrix: dict[str, Any] = {}
     reused = False
@@ -362,7 +887,9 @@ def main() -> int:
                     matrix = cached["matrix"]
                     reused = True
             if not matrix:
-                matrix = execute_matrix(binary, fixture, workspace)
+                matrix = execute_matrix(
+                    binary, image_binary, repository, cargo_target, fixture, workspace
+                )
                 atomic_json(
                     cache_path,
                     {
@@ -377,6 +904,8 @@ def main() -> int:
         AssertionError,
         KeyError,
         OSError,
+        ValueError,
+        struct.error,
         subprocess.SubprocessError,
         json.JSONDecodeError,
     ) as error:
@@ -384,9 +913,11 @@ def main() -> int:
         summary = str(error)
 
     focus = (
-        "supported platform/configuration fields and fail-closed unsupported settings"
+        "supported platform/configuration fields, the kernel_header_normalized image "
+        "declaration, TDX measurement document v4, and fail-closed unsupported settings"
         if case_id == "tc-ver-tools-001"
-        else "firmware, kernel, initrd, cmdline, QEMU, missing-artifact, and recovery boundaries"
+        else "firmware, kernel, setup-header normalization, initrd, cmdline suffix "
+        "composition, QEMU, missing-artifact, and recovery boundaries"
     )
     evidence = {
         "candidate_commit": commit,

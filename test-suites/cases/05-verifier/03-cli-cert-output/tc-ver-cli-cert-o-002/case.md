@@ -74,6 +74,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 - Exercise RA-RPC with a self-signed client certificate carrying valid attestation extensions and with missing, malformed, expired, and mismatched extensions.
 - Assert structured status codes survive JSON and protobuf transports and that authentication failures never collapse into an untyped success response.
 
+## Post-baseline regression coverage (PR #1207)
+
+- Real same-boot TDX RA-TLS leaves: the v1 `IssueCert` leaf embeds MessagePack V1 and the v0 `GetTlsKey` leaf embeds legacy SCALE. Each chains to its CVM CA, passes `ra_tls::attestation::verify_der` with the attestation bound to its own public key, passes the full verifier image check, and both name the same CVM (`verification::tests::verifies_real_v1_issue_cert_chain_and_embedded_attestation`).
+- The v1 leaf's attestation is rejected against the v0 leaf's key with `report data mismatch` (`verification::tests::rejects_a_real_v1_certificate_attestation_bound_to_another_key`).
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
