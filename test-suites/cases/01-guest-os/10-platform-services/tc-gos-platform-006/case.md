@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-gos-platform-006](../../../../catalog/feature-audit.md#req-gos-platform-006)
 - Risks: [risk-gos-platform-006](../../../../catalog/feature-audit.md#risk-gos-platform-006)
-- Source: `os/common/rootfs`
+- Source: `os/common/rootfs`, `os/mkosi/components/dstack-rust/dstack-rust-build.sh`, `os/common/nvidia/nvidia-fabricmanager-nvswitch-condition.conf`
 
 ## Prepared execution knowledge
 
@@ -75,6 +75,7 @@ Query the effective configuration, service dependencies, listener/device state, 
 **Expected results:**
 
 - Required dependencies are healthy, ownership and permissions match policy, and no run-scoped object or sentinel is present before the action.
+- `systemctl show --property=DropInPaths` loads `docker.service.d/dstack-guest-agent.conf`, `docker.service.d/dstack-prepare.conf`, `containerd.service.d/dstack-prepare.conf`, `nvidia-fabricmanager.service.d/10-nvswitch-condition.conf`, and, on an image that ships `/usr/bin/dstack-tee-simulator`, `dstack-prepare.service.d/tee-simulator.conf` from `/usr/lib/systemd/system/`, and none of them from `/etc/systemd/system/`.
 
 <a id="tc-gos-platform-006-step-02"></a>
 ### Step 2: Exercise supported and boundary paths
@@ -102,6 +103,10 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 **Expected results:**
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
+
+## Post-baseline regression coverage (PR #1158)
+
+- Image-shipped systemd drop-ins moved from the operator layer `/etc/systemd/system/<unit>.d/` to the vendor directory `/usr/lib/systemd/system/<unit>.d/`, so `systemctl revert` and operator overrides can no longer remove the Docker and containerd ordering on `dstack-prepare.service`. Step 1 checks the effective `DropInPaths` of the booted guest. The NVSwitch condition drop-in for `nvidia-fabricmanager.service` (PR #1157) follows the same rule.
 
 ## Postconditions
 

@@ -16,6 +16,12 @@ from typing import Any
 
 CASE_ID = "tc-gos-platform-006"
 SERVICE = "dstack-guest-agent.service"
+# Drop-ins the image ships are vendor configuration (PR #1158, PR #1157).
+VENDOR_DROPINS = {
+    "docker.service": ("dstack-guest-agent.conf", "dstack-prepare.conf"),
+    "containerd.service": ("dstack-prepare.conf",),
+    "nvidia-fabricmanager.service": ("10-nvswitch-condition.conf",),
+}
 
 
 def ssh(
@@ -71,6 +77,41 @@ def wait_rpc(url: str) -> dict[str, Any]:
             last = error
             time.sleep(1)
     raise AssertionError(f"Tappd.Info did not recover: {type(last).__name__}")
+
+
+def vendor_dropin_locations(argv: list[str]) -> dict[str, list[str]]:
+    """Require image-shipped drop-ins in the vendor unit directory (PR #1158)."""
+    units = sorted(VENDOR_DROPINS)
+    simulator = (
+        ssh(argv, "test -x /usr/bin/dstack-tee-simulator", check=False).returncode == 0
+    )
+    if simulator:
+        units.append("dstack-prepare.service")
+    shown = ssh(
+        argv,
+        "systemctl show "
+        + " ".join(shlex.quote(unit) for unit in units)
+        + " --property=Id,DropInPaths --no-pager",
+    ).stdout
+    effective: dict[str, list[str]] = {}
+    for block in shown.strip().split("\n\n"):
+        fields = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        effective[fields.get("Id", "")] = fields.get("DropInPaths", "").split()
+    expected = dict(VENDOR_DROPINS)
+    if simulator:
+        expected["dstack-prepare.service"] = ("tee-simulator.conf",)
+    problems = []
+    for unit, names in expected.items():
+        paths = effective.get(unit, [])
+        for name in names:
+            vendor = f"/usr/lib/systemd/system/{unit}.d/{name}"
+            if vendor not in paths:
+                problems.append(f"{unit} does not load {vendor}")
+            if f"/etc/systemd/system/{unit}.d/{name}" in paths:
+                problems.append(f"{unit} loads {name} from the operator /etc layer")
+    if problems:
+        raise AssertionError("; ".join(problems))
+    return {unit: effective.get(unit, []) for unit in expected}
 
 
 def emit(step: str, state: str) -> None:
@@ -134,6 +175,7 @@ def main() -> int:
                 raise AssertionError(
                     f"runtime graph omitted declared tokens: {missing}"
                 )
+            dropins = vendor_dropin_locations(ssh_argv)
             primary_before = wait_rpc(primary_url)
             peer_before = wait_rpc(peer_url)
             peer_state_before = ssh(
@@ -147,6 +189,7 @@ def main() -> int:
                 )
             observations["baseline"] = {
                 "declared_graph_tokens_present": True,
+                "vendor_dropins": dropins,
                 "primary_peer_distinct": True,
                 "peer_system_state": peer_state_before,
                 "graph_sha256": hashlib.sha256(graph.encode()).hexdigest(),
@@ -155,7 +198,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-01",
                     "status": "PASS",
-                    "observed": "Runtime unit properties contained the checked-in prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and gateway-checker node; primary and peer identities were distinct and healthy.",
+                    "observed": "Runtime unit properties contained the checked-in prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and gateway-checker node; image-shipped drop-ins loaded from /usr/lib/systemd/system rather than /etc; primary and peer identities were distinct and healthy.",
                 }
             )
             emit("step-01", "PASS")
