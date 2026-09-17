@@ -57,7 +57,7 @@ def run(command: list[str], cwd: pathlib.Path, timeout: int) -> tuple[int, str]:
     completed = subprocess.run(
         command,
         cwd=cwd,
-        env={**os.environ, "PATH": node20_path()},
+        env={**os.environ, "PATH": node20_path(), "NO_COLOR": "1", "FORCE_COLOR": "0"},
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

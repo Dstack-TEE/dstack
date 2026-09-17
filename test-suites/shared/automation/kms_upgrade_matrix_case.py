@@ -766,6 +766,10 @@ class MatrixRun:
     network_mode: host
     environment:
       - DEBUG=true
+      # tools/mock-cf-dns authenticates record writes; match the case-owned
+      # Gateway DNS credential and keep the fixture zone authoritative.
+      - MOCK_CF_API_TOKEN=case-owned
+      - MOCK_CF_ZONES=test
     restart: unless-stopped
   cloudflare-zone-proxy:
     image: dstacktee/dstack-kms:0.5.8
