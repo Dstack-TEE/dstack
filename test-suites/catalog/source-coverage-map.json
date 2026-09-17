@@ -576,15 +576,6 @@
     },
     {
       "component": "gateway",
-      "source": "dstack/gateway/src/kv/schema.rs",
-      "case_ids": [
-        "tc-gw-kv-009",
-        "tc-int-compatibil-004"
-      ],
-      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
-    },
-    {
-      "component": "gateway",
       "source": "dstack/gateway/src/kv/sync_service.rs",
       "case_ids": [
         "tc-gw-cluster-ad-001",
@@ -794,15 +785,6 @@
         "tc-gw-proxy-prot-004"
       ],
       "rationale": "direct source reference; gateway WireGuard/reverse-proxy templates"
-    },
-    {
-      "component": "gateway",
-      "source": "dstack/gateway/test-run/test_suite.sh",
-      "case_ids": [
-        "tc-gw-cluster-ad-004",
-        "tc-gw-kv-009"
-      ],
-      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
     },
     {
       "component": "guest-os",
@@ -1280,7 +1262,7 @@
     },
     {
       "component": "guest-os",
-      "source": "dstack/guest-agent/shared/fixtures/attestation.bin",
+      "source": "dstack/guest-agent/fixtures/attestation.bin",
       "case_ids": [
         "tc-gos-setup-022",
         "tc-ver-cli-cert-o-006"
@@ -1878,7 +1860,8 @@
       "source": "dstack/size-parser/src/lib.rs",
       "case_ids": [
         "tc-gos-setup-007",
-        "tc-vmm-vm-lifecyc-004"
+        "tc-vmm-vm-lifecyc-004",
+        "tc-vmm-configurat-001"
       ],
       "rationale": "storage/resource size parsing"
     },
@@ -2443,7 +2426,8 @@
       "component": "guest-os",
       "source": "os/spec/artifact-manifest.schema.json",
       "case_ids": [
-        "tc-ver-image-meas-004"
+        "tc-ver-image-meas-004",
+        "tc-gos-build-001"
       ],
       "rationale": "direct source reference"
     },
@@ -2744,18 +2728,6 @@
     {
       "component": "guest-os",
       "source": "os/yocto/layers/meta-dstack/recipes-core/docker/docker-moby%.bbappend",
-      "case_ids": [
-        "tc-gos-yocto-002",
-        "tc-gos-yocto-003",
-        "tc-gos-yocto-004",
-        "tc-gos-yocto-005",
-        "tc-gos-yocto-006"
-      ],
-      "rationale": "direct source reference; Yocto image/runtime/hardening"
-    },
-    {
-      "component": "guest-os",
-      "source": "os/yocto/layers/meta-dstack/recipes-core/docker/files/docker.service.d_override.conf",
       "case_ids": [
         "tc-gos-yocto-002",
         "tc-gos-yocto-003",
@@ -3652,46 +3624,35 @@
     },
     {
       "component": "guest-os",
-      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-fabricmanager-nvswitch-condition.conf",
+      "source": "os/common/nvidia/nvidia-fabricmanager-nvswitch-condition.conf",
       "case_ids": [
         "tc-gos-platform-009",
         "tc-gos-yocto-002",
         "tc-gos-yocto-003",
         "tc-gos-yocto-004",
         "tc-gos-yocto-005",
-        "tc-gos-yocto-006"
+        "tc-gos-yocto-006",
+        "tc-gos-platform-006"
       ],
       "rationale": "direct source reference; Yocto image/runtime/hardening"
     },
     {
       "component": "guest-os",
-      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-gpu-detect",
+      "source": "os/common/nvidia/nvidia-gpu-detect",
       "case_ids": [
         "tc-gos-platform-009",
         "tc-gos-yocto-002",
         "tc-gos-yocto-003",
         "tc-gos-yocto-004",
         "tc-gos-yocto-005",
-        "tc-gos-yocto-006"
+        "tc-gos-yocto-006",
+        "tc-gos-platform-005"
       ],
       "rationale": "direct source reference; Yocto image/runtime/hardening"
     },
     {
       "component": "guest-os",
-      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia-persistenced.service",
-      "case_ids": [
-        "tc-gos-platform-009",
-        "tc-gos-yocto-002",
-        "tc-gos-yocto-003",
-        "tc-gos-yocto-004",
-        "tc-gos-yocto-005",
-        "tc-gos-yocto-006"
-      ],
-      "rationale": "direct source reference; Yocto image/runtime/hardening"
-    },
-    {
-      "component": "guest-os",
-      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/files/nvidia.conf",
+      "source": "os/common/nvidia/nvidia-persistenced.service",
       "case_ids": [
         "tc-gos-platform-009",
         "tc-gos-yocto-002",
@@ -3730,7 +3691,7 @@
     },
     {
       "component": "guest-os",
-      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/libnvidia-nscq_595.58.03.bb",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/libnvidia-nscq_595.91.07.bb",
       "case_ids": [
         "tc-gos-platform-009",
         "tc-gos-yocto-002",
@@ -3782,7 +3743,7 @@
     },
     {
       "component": "guest-os",
-      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-fabricmanager_595.58.03.bb",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia-fabricmanager_595.91.07.bb",
       "case_ids": [
         "tc-gos-platform-009",
         "tc-gos-yocto-002",
@@ -3886,7 +3847,7 @@
     },
     {
       "component": "guest-os",
-      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia_595.58.03.bb",
+      "source": "os/yocto/layers/meta-nvidia/recipes-graphics/nvidia/nvidia_595.91.07.bb",
       "case_ids": [
         "tc-gos-platform-009",
         "tc-gos-yocto-002",
@@ -4151,7 +4112,8 @@
       "source": "dstack/http-client/src/prpc.rs",
       "case_ids": [
         "tc-kms-attestatio-005",
-        "tc-kms-auth-007"
+        "tc-kms-auth-007",
+        "tc-vmm-compute-ne-001"
       ],
       "rationale": "KMS authorization/image HTTP transport"
     },
@@ -5132,15 +5094,6 @@
         "tc-kms-build-001"
       ],
       "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/dstack-app/builder/shared/qemu-pinned-packages.txt",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-004"
-      ],
-      "rationale": "direct source reference; KMS application packaging"
     },
     {
       "component": "kms",
@@ -6282,24 +6235,7 @@
     },
     {
       "component": "vmm",
-      "source": "dstack/crates/qemu-acpi/src/aml_patch.rs",
-      "case_ids": [
-        "tc-vmm-compute-ne-007"
-      ],
-      "rationale": "post-baseline merged-product regression coverage"
-    },
-    {
-      "component": "vmm",
       "source": "dstack/crates/qemu-acpi/src/lib.rs",
-      "case_ids": [
-        "tc-vmm-compute-ne-007",
-        "tc-ver-image-meas-003"
-      ],
-      "rationale": "post-baseline merged-product regression coverage"
-    },
-    {
-      "component": "vmm",
-      "source": "dstack/crates/qemu-acpi/src/tables.rs",
       "case_ids": [
         "tc-vmm-compute-ne-007",
         "tc-ver-image-meas-003"
@@ -6788,7 +6724,8 @@
       "component": "vmm",
       "source": "dstack/vmm/src/app/vm_info.rs",
       "case_ids": [
-        "tc-vmm-internal-005"
+        "tc-vmm-internal-005",
+        "tc-vmm-ui-observa-001"
       ],
       "rationale": "direct source reference"
     },
@@ -6805,7 +6742,8 @@
       "source": "dstack/vmm/src/config.rs",
       "case_ids": [
         "tc-vmm-configurat-001",
-        "tc-vmm-compute-ne-002"
+        "tc-vmm-compute-ne-002",
+        "tc-vmm-compute-ne-007"
       ],
       "rationale": "direct source reference"
     },
@@ -6813,7 +6751,8 @@
       "component": "vmm",
       "source": "dstack/vmm/src/discovery.rs",
       "case_ids": [
-        "tc-vmm-compute-ne-005"
+        "tc-vmm-compute-ne-005",
+        "tc-vmm-compute-ne-001"
       ],
       "rationale": "direct source reference"
     },
@@ -6821,7 +6760,8 @@
       "component": "vmm",
       "source": "dstack/vmm/src/gpu_reset.rs",
       "case_ids": [
-        "tc-vmm-compute-ne-004"
+        "tc-vmm-compute-ne-004",
+        "tc-vmm-compute-ne-007"
       ],
       "rationale": "post-baseline merged-product regression coverage"
     },
@@ -6864,7 +6804,10 @@
         "tc-vmm-configurat-004",
         "tc-vmm-vm-lifecyc-003",
         "tc-vmm-vm-lifecyc-004",
-        "tc-vmm-ui-observa-004"
+        "tc-vmm-ui-observa-004",
+        "tc-vmm-vmm-001",
+        "tc-vmm-compute-ne-002",
+        "tc-vmm-vmm-015"
       ],
       "rationale": "direct source reference"
     },
@@ -7066,6 +7009,609 @@
       "case_ids": [
         "tc-vmm-internal-005",
         "tc-vmm-configurat-003"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/guest-agent/src/gpu_info.rs",
+      "case_ids": [
+        "tc-gos-guestapi-006",
+        "tc-gos-observabil-001",
+        "tc-gos-platform-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-util/src/gpu_info.rs",
+      "case_ids": [
+        "tc-gos-setup-026",
+        "tc-gos-observabil-001",
+        "tc-gos-platform-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/lspci/src/sysfs.rs",
+      "case_ids": [
+        "tc-gos-guestapi-006",
+        "tc-gos-setup-011",
+        "tc-gos-setup-026",
+        "tc-gos-platform-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/nvidia/nvidia-module-options",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-platform-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/nvidia/nvidia-module-options.service",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-platform-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/nvidia/nvidia-blacklist.conf",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-platform-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/tdx-guest-tune.sh",
+      "case_ids": [
+        "tc-gos-platform-005"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/scripts/check-lxc-kernel-config.sh",
+      "case_ids": [
+        "tc-gos-build-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/scripts/lxc-checkconfig",
+      "case_ids": [
+        "tc-gos-build-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/tests/test-nvidia-module-options.sh",
+      "case_ids": [
+        "tc-gos-platform-005"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/image/kernel-builder/Dockerfile",
+      "case_ids": [
+        "tc-gos-build-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/image/kernel-builder/build.sh",
+      "case_ids": [
+        "tc-gos-build-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/tests/test-kernel-header-normalization.sh",
+      "case_ids": [
+        "tc-gos-build-001",
+        "tc-ver-tools-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-core/dstack-ovmf/dstack-ovmf/0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch",
+      "case_ids": [
+        "tc-ver-tools-001",
+        "tc-ver-tools-002",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0003-dma-direct-return-struct-page-from-alloc-from-pool.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0005-swiotlb-preserve-allocation-virtual-address.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0006-swiotlb-free-dynamic-pools-from-process-context.patch",
+      "case_ids": [
+        "tc-gos-platform-009",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0007-sched-smp-batch-wake-q-ipis-in-tdx-guests.patch",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0008-x86-kvm-runtime-pv-single-target-ipi-in-tdx-guests.patch",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0009-mm-page-alloc-keep-accepted-reserve-before-watermarks.patch",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0010-x86-tdx-convert-swiotlb-to-shared-after-smp-bringup.patch",
+      "case_ids": [
+        "tc-gos-platform-005",
+        "tc-gos-yocto-002",
+        "tc-gos-yocto-003",
+        "tc-gos-yocto-004",
+        "tc-gos-yocto-005",
+        "tc-gos-yocto-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "os/image/normalize-kernel-header.py",
+      "case_ids": [
+        "tc-ver-tools-001",
+        "tc-ver-tools-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-normalized-attestation.json",
+      "case_ids": [
+        "tc-ver-input-plat-004",
+        "tc-ver-cli-cert-o-006",
+        "tc-ver-strategy-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-normalized-qemu-10-2-attestation.json",
+      "case_ids": [
+        "tc-ver-input-plat-004",
+        "tc-ver-cli-cert-o-006",
+        "tc-ver-strategy-006"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-v1-attest.json",
+      "case_ids": [
+        "tc-ver-input-plat-004",
+        "tc-ver-cli-cert-o-006",
+        "tc-ver-tools-003"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-v0-attest.json",
+      "case_ids": [
+        "tc-ver-input-plat-004",
+        "tc-ver-cli-cert-o-006",
+        "tc-ver-tools-003"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-v1-issue-cert.pem",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/fixtures/tdx-lite-v0-get-tls-key.pem",
+      "case_ids": [
+        "tc-ver-cli-cert-o-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/src/dns_persist.rs",
+      "case_ids": [
+        "tc-gw-certbot-006",
+        "tc-gw-certificat-004"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/ra-tls/src/test_pki.rs",
+      "case_ids": [
+        "tc-gw-cluster-ad-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "kms",
+      "source": "dstack/build/shared/tests/test_build_lib.py",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "tools/mock-cf-dns/server.py",
+      "case_ids": [
+        "tc-gw-certbot-006",
+        "tc-gw-certificat-004",
+        "tc-gw-certificat-001",
+        "tc-gw-certbot-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "tools/mock-cf-dns/Dockerfile",
+      "case_ids": [
+        "tc-gw-certbot-006",
+        "tc-gw-certificat-004",
+        "tc-gw-certificat-001",
+        "tc-gw-certbot-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/cluster/docker-compose.yml",
+      "case_ids": [
+        "tc-gw-cluster-ad-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/cluster/lib.sh",
+      "case_ids": [
+        "tc-gw-cluster-ad-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/cluster/rpc.sh",
+      "case_ids": [
+        "tc-gw-cluster-ad-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/cluster/run-cluster-tests.sh",
+      "case_ids": [
+        "tc-gw-cluster-ad-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/cluster/tests.sh",
+      "case_ids": [
+        "tc-gw-cluster-ad-002"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/proxy-e2e/Dockerfile",
+      "case_ids": [
+        "tc-gw-proxy-prot-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/proxy-e2e/docker-compose.yml",
+      "case_ids": [
+        "tc-gw-proxy-prot-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/proxy-e2e/notls-seccomp.json",
+      "case_ids": [
+        "tc-gw-proxy-prot-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/proxy-e2e/notls-seccomp.json.license",
+      "case_ids": [
+        "tc-gw-proxy-prot-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/proxy-e2e/run-proxy-tests.sh",
+      "case_ids": [
+        "tc-gw-proxy-prot-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/Dockerfile.gateway",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/build-gateway-image.sh",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/Dockerfile.mock-attestation",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/Dockerfile.mock-attestation.dockerignore",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/Dockerfile.simulator",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/Dockerfile.simulator.dockerignore",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/fixture.yml",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/simulator.toml",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/tee-simulator.json",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/test-run/attestation/tee-simulator.json.license",
+      "case_ids": [
+        "tc-gw-cluster-ad-002",
+        "tc-gw-internal-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/netd-rpc/Cargo.toml",
+      "case_ids": [
+        "tc-vmm-compute-ne-001",
+        "tc-vmm-compute-ne-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/netd-rpc/build.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-001",
+        "tc-vmm-compute-ne-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/netd-rpc/proto/netd_rpc.proto",
+      "case_ids": [
+        "tc-vmm-compute-ne-001",
+        "tc-vmm-compute-ne-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/netd-rpc/src/lib.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-001",
+        "tc-vmm-compute-ne-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/netd-rpc/src/generated/mod.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-001",
+        "tc-vmm-compute-ne-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/netd.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-001",
+        "tc-vmm-compute-ne-009"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/vmm/src/vmm-cli.py",
+      "case_ids": [
+        "tc-vmm-compute-ne-001",
+        "tc-vmm-compute-ne-002",
+        "tc-vmm-vmm-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/scripts/install.sh",
+      "case_ids": [
+        "tc-vmm-install-007"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/scripts/setup-bridge.sh",
+      "case_ids": [
+        "tc-vmm-compute-ne-001"
+      ],
+      "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/dstack-cli-core/src/ports.rs",
+      "case_ids": [
+        "tc-vmm-compute-ne-002"
       ],
       "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
     }
