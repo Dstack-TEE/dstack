@@ -54,6 +54,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gos-guestapi-003"></a><a id="risk-gos-guestapi-003"></a>| `req-gos-guestapi-003` | `risk-gos-guestapi-003` | [tc-gos-guestapi-003](../cases/01-guest-os/04-rpc-guestapi/tc-gos-guestapi-003/case.md#tc-gos-guestapi-003) — GuestApi.NetworkInfo | P1 |
 <a id="req-gos-guestapi-004"></a><a id="risk-gos-guestapi-004"></a>| `req-gos-guestapi-004` | `risk-gos-guestapi-004` | [tc-gos-guestapi-004](../cases/01-guest-os/04-rpc-guestapi/tc-gos-guestapi-004/case.md#tc-gos-guestapi-004) — GuestApi.ListContainers | P1 |
 <a id="req-gos-guestapi-005"></a><a id="risk-gos-guestapi-005"></a>| `req-gos-guestapi-005` | `risk-gos-guestapi-005` | [tc-gos-guestapi-005](../cases/01-guest-os/04-rpc-guestapi/tc-gos-guestapi-005/case.md#tc-gos-guestapi-005) — GuestApi.Shutdown | P1 |
+<a id="req-gos-guestapi-006"></a><a id="risk-gos-guestapi-006"></a>| `req-gos-guestapi-006` | `risk-gos-guestapi-006` | [tc-gos-guestapi-006](../cases/01-guest-os/04-rpc-guestapi/tc-gos-guestapi-006/case.md#tc-gos-guestapi-006) — GuestApi.GpuInfo | P1 |
 
 <a id="audit-section-guest-os-rpc-proxiedguestapi"></a>
 ### ProxiedGuestApi RPC
@@ -168,6 +169,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gos-setup-023"></a><a id="risk-gos-setup-023"></a>| `req-gos-setup-023` | `risk-gos-setup-023` | [tc-gos-setup-023](../cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-023/case.md#tc-gos-setup-023) — Versioned attestation create inspect JSON and strip CLI | P0 |
 <a id="req-gos-setup-024"></a><a id="risk-gos-setup-024"></a>| `req-gos-setup-024` | `risk-gos-setup-024` | [tc-gos-setup-024](../cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-024/case.md#tc-gos-setup-024) — KMS GetKeys CLI transport and output safety | P0 |
 <a id="req-gos-setup-025"></a><a id="risk-gos-setup-025"></a>| `req-gos-setup-025` | `risk-gos-setup-025` | [tc-gos-setup-025](../cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-025/case.md#tc-gos-setup-025) — Streaming environment encryption and decryption | P0 |
+<a id="req-gos-setup-026"></a><a id="risk-gos-setup-026"></a>| `req-gos-setup-026` | `risk-gos-setup-026` | [tc-gos-setup-026](../cases/01-guest-os/12-setup-utilities-simulator/tc-gos-setup-026/case.md#tc-gos-setup-026) — GPU telemetry collector CLI output contract | P1 |
 
 <a id="audit-section-guest-os-yocto-runtime-hardening"></a>
 ### Yocto Image, Runtime, and Hardening
@@ -276,6 +278,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-vmm-ui-observa-003"></a><a id="risk-vmm-ui-observa-003"></a>| `req-vmm-ui-observa-003` | `risk-vmm-ui-observa-003` | [tc-vmm-ui-observa-003](../cases/02-vmm/06-ui-observability-host/tc-vmm-ui-observa-003/case.md#tc-vmm-ui-observa-003) — Host sealing-key provider integration | P0 |
 <a id="req-vmm-ui-observa-004"></a><a id="risk-vmm-ui-observa-004"></a>| `req-vmm-ui-observa-004` | `risk-vmm-ui-observa-004` | [tc-vmm-ui-observa-004](../cases/02-vmm/06-ui-observability-host/tc-vmm-ui-observa-004/case.md#tc-vmm-ui-observa-004) — Supervisor passthrough operations | P1 |
 <a id="req-vmm-ui-observa-005"></a><a id="risk-vmm-ui-observa-005"></a>| `req-vmm-ui-observa-005` | `risk-vmm-ui-observa-005` | [tc-vmm-ui-observa-005](../cases/02-vmm/06-ui-observability-host/tc-vmm-ui-observa-005/case.md#tc-vmm-ui-observa-005) — Web UI deployment workflows | P1 |
+<a id="req-vmm-install-007"></a><a id="risk-vmm-install-007"></a>| `req-vmm-install-007` | `risk-vmm-install-007` | [tc-vmm-install-007](../cases/02-vmm/06-ui-observability-host/tc-vmm-install-007/case.md#tc-vmm-install-007) — Source installer checkout resolution and failure handling | P2 |
 <a id="req-vmm-serial-006"></a><a id="risk-vmm-serial-006"></a>| `req-vmm-serial-006` | `risk-vmm-serial-006` | [tc-vmm-serial-006](../cases/02-vmm/06-ui-observability-host/tc-vmm-serial-006/case.md#tc-vmm-serial-006) — CVM log rotation retention and follow continuity | P0 |
 
 <a id="audit-section-vmm-guest-proxy-and-manifest"></a>

@@ -373,7 +373,7 @@
           "request": "GetTlsKeyArgs",
           "response": "GetTlsKeyResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 41,
+          "line": 61,
           "case_id": "tc-gos-dstackguest-001",
           "request_fields": [
             {
@@ -456,7 +456,7 @@
           "request": "GetKeyArgs",
           "response": "GetKeyResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 44,
+          "line": 64,
           "case_id": "tc-gos-dstackguest-002",
           "request_fields": [
             {
@@ -504,7 +504,7 @@
           "request": "RawQuoteArgs",
           "response": "GetQuoteResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 47,
+          "line": 72,
           "case_id": "tc-gos-dstackguest-003",
           "request_fields": [
             {
@@ -552,7 +552,7 @@
           "request": "RawQuoteArgs",
           "response": "AttestResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 51,
+          "line": 76,
           "case_id": "tc-gos-dstackguest-004",
           "request_fields": [
             {
@@ -579,7 +579,7 @@
           "request": "google.protobuf.Empty",
           "response": "AppInfo",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 54,
+          "line": 89,
           "case_id": "tc-gos-dstackguest-005",
           "request_fields": [],
           "response_fields": [
@@ -682,7 +682,7 @@
           "request": "SignRequest",
           "response": "SignResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 60,
+          "line": 92,
           "case_id": "tc-gos-dstackguest-007",
           "request_fields": [
             {
@@ -738,7 +738,7 @@
           "request": "VerifyRequest",
           "response": "VerifyResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 63,
+          "line": 106,
           "case_id": "tc-gos-dstackguest-008",
           "request_fields": [
             {
@@ -794,7 +794,7 @@
           "request": "google.protobuf.Empty",
           "response": "WorkerVersion",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 66,
+          "line": 109,
           "case_id": "tc-gos-dstackguest-009",
           "request_fields": [],
           "response_fields": [
@@ -820,7 +820,7 @@
           "request": "google.protobuf.Empty",
           "response": "AppInfo",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 255,
+          "line": 324,
           "case_id": "tc-gos-worker-001",
           "request_fields": [],
           "response_fields": [
@@ -923,7 +923,7 @@
           "request": "google.protobuf.Empty",
           "response": "WorkerVersion",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 257,
+          "line": 326,
           "case_id": "tc-gos-worker-002",
           "request_fields": [],
           "response_fields": [
@@ -949,7 +949,7 @@
           "request": "GetAttestationForAppKeyRequest",
           "response": "GetQuoteResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 259,
+          "line": 336,
           "case_id": "tc-gos-worker-003",
           "request_fields": [
             {
@@ -1004,7 +1004,7 @@
           "request": "google.protobuf.Empty",
           "response": "GuestInfo",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 135,
+          "line": 191,
           "case_id": "tc-gos-guestapi-001",
           "request_fields": [],
           "response_fields": [
@@ -1058,7 +1058,7 @@
           "request": "google.protobuf.Empty",
           "response": "SystemInfo",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 137,
+          "line": 193,
           "case_id": "tc-gos-guestapi-002",
           "request_fields": [],
           "response_fields": [
@@ -1189,7 +1189,7 @@
           "request": "google.protobuf.Empty",
           "response": "NetworkInformation",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 139,
+          "line": 197,
           "case_id": "tc-gos-guestapi-003",
           "request_fields": [],
           "response_fields": [
@@ -1229,7 +1229,7 @@
           "request": "google.protobuf.Empty",
           "response": "ListContainersResponse",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 141,
+          "line": 199,
           "case_id": "tc-gos-guestapi-004",
           "request_fields": [],
           "response_fields": [
@@ -1248,10 +1248,57 @@
           "request": "google.protobuf.Empty",
           "response": "google.protobuf.Empty",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 143,
+          "line": 201,
           "case_id": "tc-gos-guestapi-005",
           "request_fields": [],
           "response_fields": []
+        },
+        {
+          "service": "GuestApi",
+          "method": "GpuInfo",
+          "request": "google.protobuf.Empty",
+          "response": "GpuInfoResponse",
+          "source": "dstack/guest-api/proto/guest_api.proto",
+          "line": 195,
+          "case_id": "tc-gos-guestapi-006",
+          "request_fields": [],
+          "response_fields": [
+            {
+              "type": "GpuDevice",
+              "name": "gpus",
+              "number": 1,
+              "optional": false,
+              "repeated": true
+            },
+            {
+              "type": "string",
+              "name": "error",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "cc_ready",
+              "number": 3,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "cc_enabled",
+              "number": 4,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "sample_age_ms",
+              "number": 5,
+              "optional": true,
+              "repeated": false
+            }
+          ]
         },
         {
           "service": "ProxiedGuestApi",
@@ -1259,7 +1306,7 @@
           "request": "Id",
           "response": "GuestInfo",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 148,
+          "line": 206,
           "case_id": "tc-gos-proxiedguestapi-001",
           "request_fields": [
             {
@@ -1321,7 +1368,7 @@
           "request": "Id",
           "response": "SystemInfo",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 149,
+          "line": 207,
           "case_id": "tc-gos-proxiedguestapi-002",
           "request_fields": [
             {
@@ -1460,7 +1507,7 @@
           "request": "Id",
           "response": "NetworkInformation",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 150,
+          "line": 209,
           "case_id": "tc-gos-proxiedguestapi-003",
           "request_fields": [
             {
@@ -1508,7 +1555,7 @@
           "request": "Id",
           "response": "ListContainersResponse",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 151,
+          "line": 210,
           "case_id": "tc-gos-proxiedguestapi-004",
           "request_fields": [
             {
@@ -1535,7 +1582,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/guest-api/proto/guest_api.proto",
-          "line": 152,
+          "line": 211,
           "case_id": "tc-gos-proxiedguestapi-005",
           "request_fields": [
             {
@@ -1547,6 +1594,61 @@
             }
           ],
           "response_fields": []
+        },
+        {
+          "service": "ProxiedGuestApi",
+          "method": "GpuInfo",
+          "request": "Id",
+          "response": "GpuInfoResponse",
+          "source": "dstack/guest-api/proto/guest_api.proto",
+          "line": 208,
+          "case_id": "tc-vmm-manifest-001",
+          "request_fields": [
+            {
+              "type": "string",
+              "name": "id",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ],
+          "response_fields": [
+            {
+              "type": "GpuDevice",
+              "name": "gpus",
+              "number": 1,
+              "optional": false,
+              "repeated": true
+            },
+            {
+              "type": "string",
+              "name": "error",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "cc_ready",
+              "number": 3,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "cc_enabled",
+              "number": 4,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "sample_age_ms",
+              "number": 5,
+              "optional": true,
+              "repeated": false
+            }
+          ]
         }
       ],
       "message_schemas": [
@@ -1843,13 +1945,41 @@
         },
         {
           "name": "GpuInfoResponse",
-          "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
+          "source": "dstack/guest-api/proto/guest_api.proto",
           "fields": [
             {
-              "type": "string",
-              "name": "attestation",
+              "type": "GpuDevice",
+              "name": "gpus",
               "number": 1,
               "optional": false,
+              "repeated": true
+            },
+            {
+              "type": "string",
+              "name": "error",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "cc_ready",
+              "number": 3,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "cc_enabled",
+              "number": 4,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "sample_age_ms",
+              "number": 5,
+              "optional": true,
               "repeated": false
             }
           ]
@@ -1883,13 +2013,6 @@
               "type": "string",
               "name": "vm_config",
               "number": 4,
-              "optional": false,
-              "repeated": false
-            },
-            {
-              "type": "bytes",
-              "name": "attestation",
-              "number": 5,
               "optional": false,
               "repeated": false
             }
@@ -2521,6 +2644,89 @@
               "repeated": false
             }
           ]
+        },
+        {
+          "name": "GpuDevice",
+          "source": "dstack/guest-api/proto/guest_api.proto",
+          "fields": [
+            {
+              "type": "uint32",
+              "name": "index",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "uuid",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "pci_bus_id",
+              "number": 3,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "utilization_gpu",
+              "number": 4,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "utilization_memory",
+              "number": 5,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "memory_total_bytes",
+              "number": 6,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "memory_used_bytes",
+              "number": 7,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "memory_free_bytes",
+              "number": 8,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "temperature_c",
+              "number": 9,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "power_usage_mw",
+              "number": 10,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "errors",
+              "number": 11,
+              "optional": false,
+              "repeated": true
+            }
+          ]
         }
       ]
     },
@@ -2532,7 +2738,7 @@
           "request": "VmConfiguration",
           "response": "Id",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 339,
+          "line": 386,
           "case_id": "tc-vmm-vmm-001",
           "request_fields": [
             {
@@ -2692,7 +2898,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 341,
+          "line": 388,
           "case_id": "tc-vmm-vmm-002",
           "request_fields": [
             {
@@ -2711,7 +2917,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 343,
+          "line": 390,
           "case_id": "tc-vmm-vmm-003",
           "request_fields": [
             {
@@ -2730,7 +2936,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 345,
+          "line": 392,
           "case_id": "tc-vmm-vmm-004",
           "request_fields": [
             {
@@ -2749,7 +2955,7 @@
           "request": "UpdateVmRequest",
           "response": "Id",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 347,
+          "line": 394,
           "case_id": "tc-vmm-vmm-005",
           "request_fields": [
             {
@@ -2895,7 +3101,7 @@
           "request": "UpdateVmRequest",
           "response": "Id",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 349,
+          "line": 396,
           "case_id": "tc-vmm-vmm-006",
           "request_fields": [
             {
@@ -3041,7 +3247,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 351,
+          "line": 398,
           "case_id": "tc-vmm-vmm-007",
           "request_fields": [
             {
@@ -3060,7 +3266,7 @@
           "request": "ResizeVmRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 353,
+          "line": 400,
           "case_id": "tc-vmm-vmm-008",
           "request_fields": [
             {
@@ -3107,7 +3313,7 @@
           "request": "VmConfiguration",
           "response": "ComposeHash",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 355,
+          "line": 402,
           "case_id": "tc-vmm-vmm-009",
           "request_fields": [
             {
@@ -3267,7 +3473,7 @@
           "request": "StatusRequest",
           "response": "StatusResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 358,
+          "line": 405,
           "case_id": "tc-vmm-vmm-010",
           "request_fields": [
             {
@@ -3304,6 +3510,13 @@
               "number": 5,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "status",
+              "number": 6,
+              "optional": false,
+              "repeated": false
             }
           ],
           "response_fields": [
@@ -3336,7 +3549,7 @@
           "request": "google.protobuf.Empty",
           "response": "ImageListResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 360,
+          "line": 407,
           "case_id": "tc-vmm-vmm-011",
           "request_fields": [],
           "response_fields": [
@@ -3355,7 +3568,7 @@
           "request": "AppId",
           "response": "PublicKeyResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 363,
+          "line": 410,
           "case_id": "tc-vmm-vmm-012",
           "request_fields": [
             {
@@ -3403,7 +3616,7 @@
           "request": "Id",
           "response": "GetInfoResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 366,
+          "line": 413,
           "case_id": "tc-vmm-vmm-013",
           "request_fields": [
             {
@@ -3437,7 +3650,7 @@
           "request": "google.protobuf.Empty",
           "response": "VersionResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 369,
+          "line": 416,
           "case_id": "tc-vmm-vmm-014",
           "request_fields": [],
           "response_fields": [
@@ -3463,7 +3676,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetMetaResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 372,
+          "line": 419,
           "case_id": "tc-vmm-vmm-015",
           "request_fields": [],
           "response_fields": [
@@ -3503,7 +3716,7 @@
           "request": "google.protobuf.Empty",
           "response": "ListGpusResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 375,
+          "line": 422,
           "case_id": "tc-vmm-vmm-016",
           "request_fields": [],
           "response_fields": [
@@ -3529,7 +3742,7 @@
           "request": "google.protobuf.Empty",
           "response": "ReloadVmsResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 378,
+          "line": 425,
           "case_id": "tc-vmm-vmm-017",
           "request_fields": [],
           "response_fields": [
@@ -3562,7 +3775,7 @@
           "request": "google.protobuf.Empty",
           "response": "SvListResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 381,
+          "line": 428,
           "case_id": "tc-vmm-vmm-018",
           "request_fields": [],
           "response_fields": [
@@ -3581,7 +3794,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 383,
+          "line": 430,
           "case_id": "tc-vmm-vmm-019",
           "request_fields": [
             {
@@ -3600,7 +3813,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 385,
+          "line": 432,
           "case_id": "tc-vmm-vmm-020",
           "request_fields": [
             {
@@ -3619,7 +3832,7 @@
           "request": "google.protobuf.Empty",
           "response": "RegistryImageListResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 388,
+          "line": 435,
           "case_id": "tc-vmm-vmm-021",
           "request_fields": [],
           "response_fields": [
@@ -3638,7 +3851,7 @@
           "request": "PullRegistryImageRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 390,
+          "line": 437,
           "case_id": "tc-vmm-vmm-022",
           "request_fields": [
             {
@@ -3657,7 +3870,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 392,
+          "line": 439,
           "case_id": "tc-vmm-vmm-023",
           "request_fields": [
             {
@@ -3939,6 +4152,13 @@
               "number": 15,
               "optional": false,
               "repeated": true
+            },
+            {
+              "type": "bool",
+              "name": "running",
+              "number": 16,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -3978,6 +4198,27 @@
               "type": "string",
               "name": "netdev_id",
               "number": 5,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "vhost",
+              "number": 6,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "queues",
+              "number": 7,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "macvtap_mode",
+              "number": 8,
               "optional": true,
               "repeated": false
             }
@@ -4199,6 +4440,34 @@
               "number": 2,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "parent",
+              "number": 3,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "macvtap_mode",
+              "number": 4,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "vhost",
+              "number": 5,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "queues",
+              "number": 6,
+              "optional": true,
+              "repeated": false
             }
           ]
         },
@@ -4265,6 +4534,13 @@
               "name": "host_address",
               "number": 4,
               "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "nic_index",
+              "number": 5,
+              "optional": true,
               "repeated": false
             }
           ]
@@ -4437,6 +4713,13 @@
               "type": "uint32",
               "name": "page_size",
               "number": 5,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "status",
+              "number": 6,
               "optional": false,
               "repeated": false
             }
@@ -4736,6 +5019,20 @@
               "number": 4,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "max_queues",
+              "number": 5,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "default_vhost",
+              "number": 6,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -5005,7 +5302,7 @@
           "request": "GetAppKeyRequest",
           "response": "AppKeyResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 97,
+          "line": 102,
           "case_id": "tc-kms-kms-001",
           "request_fields": [
             {
@@ -5088,7 +5385,7 @@
           "request": "GetKmsKeyRequest",
           "response": "KmsKeyResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 99,
+          "line": 104,
           "case_id": "tc-kms-kms-002",
           "request_fields": [
             {
@@ -5122,7 +5419,7 @@
           "request": "AppId",
           "response": "PublicKeyResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 101,
+          "line": 106,
           "case_id": "tc-kms-kms-003",
           "request_fields": [
             {
@@ -5170,7 +5467,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetMetaResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 103,
+          "line": 108,
           "case_id": "tc-kms-kms-004",
           "request_fields": [],
           "response_fields": [
@@ -5245,7 +5542,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetTempCaCertResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 105,
+          "line": 122,
           "case_id": "tc-kms-kms-005",
           "request_fields": [],
           "response_fields": [
@@ -5278,7 +5575,7 @@
           "request": "SignCertRequest",
           "response": "SignCertResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 107,
+          "line": 124,
           "case_id": "tc-kms-kms-006",
           "request_fields": [
             {
@@ -5326,7 +5623,7 @@
           "request": "ClearImageCacheRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 116,
+          "line": 133,
           "case_id": "tc-kms-admin-001",
           "request_fields": [
             {
@@ -5352,7 +5649,7 @@
           "request": "BootstrapRequest",
           "response": "BootstrapResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 167,
+          "line": 184,
           "case_id": "tc-kms-onboard-001",
           "request_fields": [
             {
@@ -5393,7 +5690,7 @@
           "request": "OnboardRequest",
           "response": "OnboardResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 169,
+          "line": 186,
           "case_id": "tc-kms-onboard-002",
           "request_fields": [
             {
@@ -5427,7 +5724,7 @@
           "request": "google.protobuf.Empty",
           "response": "AttestationInfoResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 171,
+          "line": 188,
           "case_id": "tc-kms-onboard-003",
           "request_fields": [],
           "response_fields": [
@@ -5495,7 +5792,7 @@
           "request": "google.protobuf.Empty",
           "response": "google.protobuf.Empty",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 173,
+          "line": 190,
           "case_id": "tc-kms-onboard-004",
           "request_fields": [],
           "response_fields": []
@@ -5992,13 +6289,20 @@
           "request": "RegisterCvmRequest",
           "response": "RegisterCvmResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 209,
+          "line": 288,
           "case_id": "tc-gw-gateway-001",
           "request_fields": [
             {
               "type": "string",
               "name": "client_public_key",
               "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "health_check",
+              "number": 3,
               "optional": false,
               "repeated": false
             },
@@ -6040,7 +6344,7 @@
           "request": "google.protobuf.Empty",
           "response": "AcmeInfoResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 211,
+          "line": 290,
           "case_id": "tc-gw-gateway-002",
           "request_fields": [],
           "response_fields": [
@@ -6080,7 +6384,7 @@
           "request": "google.protobuf.Empty",
           "response": "InfoResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 213,
+          "line": 292,
           "case_id": "tc-gw-gateway-003",
           "request_fields": [],
           "response_fields": [
@@ -6120,7 +6424,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetPeersResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 215,
+          "line": 294,
           "case_id": "tc-gw-gateway-004",
           "request_fields": [],
           "response_fields": [
@@ -6153,7 +6457,7 @@
           "request": "DebugRegisterCvmRequest",
           "response": "RegisterCvmResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 221,
+          "line": 300,
           "case_id": "tc-gw-debug-001",
           "request_fields": [
             {
@@ -6208,7 +6512,7 @@
           "request": "google.protobuf.Empty",
           "response": "InfoResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 223,
+          "line": 302,
           "case_id": "tc-gw-debug-002",
           "request_fields": [],
           "response_fields": [
@@ -6248,7 +6552,7 @@
           "request": "google.protobuf.Empty",
           "response": "DebugSyncDataResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 225,
+          "line": 304,
           "case_id": "tc-gw-debug-003",
           "request_fields": [],
           "response_fields": [
@@ -6302,7 +6606,7 @@
           "request": "google.protobuf.Empty",
           "response": "DebugProxyStateResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 227,
+          "line": 306,
           "case_id": "tc-gw-debug-004",
           "request_fields": [],
           "response_fields": [
@@ -6328,7 +6632,7 @@
           "request": "google.protobuf.Empty",
           "response": "StatusResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 377,
+          "line": 474,
           "case_id": "tc-gw-admin-001",
           "request_fields": [],
           "response_fields": [
@@ -6380,6 +6684,20 @@
               "number": 7,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "ProxyAccelStatus",
+              "name": "accel",
+              "number": 8,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "health_gating",
+              "number": 9,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -6389,7 +6707,7 @@
           "request": "GetInfoRequest",
           "response": "GetInfoResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 379,
+          "line": 476,
           "case_id": "tc-gw-admin-002",
           "request_fields": [
             {
@@ -6420,12 +6738,20 @@
         {
           "service": "Admin",
           "method": "Exit",
-          "request": "google.protobuf.Empty",
+          "request": "ExitRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 381,
+          "line": 478,
           "case_id": "tc-gw-admin-003",
-          "request_fields": [],
+          "request_fields": [
+            {
+              "type": "bool",
+              "name": "force",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ],
           "response_fields": []
         },
         {
@@ -6434,7 +6760,7 @@
           "request": "google.protobuf.Empty",
           "response": "RenewCertResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 383,
+          "line": 480,
           "case_id": "tc-gw-admin-004",
           "request_fields": [],
           "response_fields": [
@@ -6453,7 +6779,7 @@
           "request": "google.protobuf.Empty",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 385,
+          "line": 482,
           "case_id": "tc-gw-admin-005",
           "request_fields": [],
           "response_fields": []
@@ -6464,7 +6790,7 @@
           "request": "google.protobuf.Empty",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 387,
+          "line": 484,
           "case_id": "tc-gw-admin-006",
           "request_fields": [],
           "response_fields": []
@@ -6475,7 +6801,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetMetaResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 389,
+          "line": 486,
           "case_id": "tc-gw-admin-007",
           "request_fields": [],
           "response_fields": [
@@ -6501,7 +6827,7 @@
           "request": "SetNodeUrlRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 391,
+          "line": 493,
           "case_id": "tc-gw-admin-008",
           "request_fields": [
             {
@@ -6527,7 +6853,7 @@
           "request": "SetNodeStatusRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 393,
+          "line": 495,
           "case_id": "tc-gw-admin-009",
           "request_fields": [
             {
@@ -6553,7 +6879,7 @@
           "request": "google.protobuf.Empty",
           "response": "WaveKvStatusResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 395,
+          "line": 497,
           "case_id": "tc-gw-admin-010",
           "request_fields": [],
           "response_fields": [
@@ -6586,7 +6912,7 @@
           "request": "GetInstanceHandshakesRequest",
           "response": "GetInstanceHandshakesResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 397,
+          "line": 499,
           "case_id": "tc-gw-admin-011",
           "request_fields": [
             {
@@ -6613,7 +6939,7 @@
           "request": "google.protobuf.Empty",
           "response": "GlobalConnectionsStats",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 399,
+          "line": 501,
           "case_id": "tc-gw-admin-012",
           "request_fields": [],
           "response_fields": [
@@ -6621,6 +6947,13 @@
               "type": "uint64",
               "name": "total_connections",
               "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "map<uint32, uint64>",
+              "name": "node_connections",
+              "number": 2,
               "optional": false,
               "repeated": false
             }
@@ -6632,7 +6965,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetNodeStatusesResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 401,
+          "line": 503,
           "case_id": "tc-gw-admin-013",
           "request_fields": [],
           "response_fields": [
@@ -6651,7 +6984,7 @@
           "request": "google.protobuf.Empty",
           "response": "ListDnsCredentialsResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 405,
+          "line": 524,
           "case_id": "tc-gw-admin-014",
           "request_fields": [],
           "response_fields": [
@@ -6677,7 +7010,7 @@
           "request": "GetDnsCredentialRequest",
           "response": "DnsCredentialInfo",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 407,
+          "line": 526,
           "case_id": "tc-gw-admin-015",
           "request_fields": [
             {
@@ -6760,7 +7093,7 @@
           "request": "CreateDnsCredentialRequest",
           "response": "DnsCredentialInfo",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 409,
+          "line": 528,
           "case_id": "tc-gw-admin-016",
           "request_fields": [
             {
@@ -6892,7 +7225,7 @@
           "request": "UpdateDnsCredentialRequest",
           "response": "DnsCredentialInfo",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 411,
+          "line": 530,
           "case_id": "tc-gw-admin-017",
           "request_fields": [
             {
@@ -7003,7 +7336,7 @@
           "request": "DeleteDnsCredentialRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 413,
+          "line": 532,
           "case_id": "tc-gw-admin-018",
           "request_fields": [
             {
@@ -7022,7 +7355,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetDefaultDnsCredentialResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 415,
+          "line": 534,
           "case_id": "tc-gw-admin-019",
           "request_fields": [],
           "response_fields": [
@@ -7048,7 +7381,7 @@
           "request": "SetDefaultDnsCredentialRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 417,
+          "line": 536,
           "case_id": "tc-gw-admin-020",
           "request_fields": [
             {
@@ -7067,7 +7400,7 @@
           "request": "google.protobuf.Empty",
           "response": "ListZtDomainsResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 421,
+          "line": 540,
           "case_id": "tc-gw-admin-021",
           "request_fields": [],
           "response_fields": [
@@ -7086,7 +7419,7 @@
           "request": "GetZtDomainRequest",
           "response": "ZtDomainInfo",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 423,
+          "line": 542,
           "case_id": "tc-gw-admin-022",
           "request_fields": [
             {
@@ -7111,6 +7444,13 @@
               "number": 2,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "required_dns_records",
+              "number": 3,
+              "optional": false,
+              "repeated": true
             }
           ]
         },
@@ -7120,7 +7460,7 @@
           "request": "ZtDomainConfig",
           "response": "ZtDomainInfo",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 425,
+          "line": 544,
           "case_id": "tc-gw-admin-023",
           "request_fields": [
             {
@@ -7157,6 +7497,13 @@
               "number": 5,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "challenge",
+              "number": 6,
+              "optional": true,
+              "repeated": false
             }
           ],
           "response_fields": [
@@ -7173,6 +7520,13 @@
               "number": 2,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "required_dns_records",
+              "number": 3,
+              "optional": false,
+              "repeated": true
             }
           ]
         },
@@ -7182,7 +7536,7 @@
           "request": "ZtDomainConfig",
           "response": "ZtDomainInfo",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 427,
+          "line": 546,
           "case_id": "tc-gw-admin-024",
           "request_fields": [
             {
@@ -7219,6 +7573,13 @@
               "number": 5,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "challenge",
+              "number": 6,
+              "optional": true,
+              "repeated": false
             }
           ],
           "response_fields": [
@@ -7235,6 +7596,13 @@
               "number": 2,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "required_dns_records",
+              "number": 3,
+              "optional": false,
+              "repeated": true
             }
           ]
         },
@@ -7244,7 +7612,7 @@
           "request": "DeleteZtDomainRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 429,
+          "line": 548,
           "case_id": "tc-gw-admin-025",
           "request_fields": [
             {
@@ -7263,7 +7631,7 @@
           "request": "RenewZtDomainCertRequest",
           "response": "RenewZtDomainCertResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 431,
+          "line": 550,
           "case_id": "tc-gw-admin-026",
           "request_fields": [
             {
@@ -7304,7 +7672,7 @@
           "request": "ForceReleaseCertLockRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 433,
+          "line": 552,
           "case_id": "tc-gw-admin-027",
           "request_fields": [
             {
@@ -7323,7 +7691,7 @@
           "request": "ListCertAttestationsRequest",
           "response": "ListCertAttestationsResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 435,
+          "line": 554,
           "case_id": "tc-gw-admin-028",
           "request_fields": [
             {
@@ -7364,7 +7732,7 @@
           "request": "google.protobuf.Empty",
           "response": "CertbotConfigResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 439,
+          "line": 558,
           "case_id": "tc-gw-admin-029",
           "request_fields": [],
           "response_fields": [
@@ -7395,6 +7763,13 @@
               "number": 4,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "issuer_domain_name",
+              "number": 5,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -7404,7 +7779,7 @@
           "request": "SetCertbotConfigRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 441,
+          "line": 560,
           "case_id": "tc-gw-admin-030",
           "request_fields": [
             {
@@ -7434,6 +7809,13 @@
               "number": 4,
               "optional": true,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "issuer_domain_name",
+              "number": 5,
+              "optional": true,
+              "repeated": false
             }
           ],
           "response_fields": []
@@ -7444,7 +7826,7 @@
           "request": "SetInstancePortPolicyRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 447,
+          "line": 583,
           "case_id": "tc-gw-admin-031",
           "request_fields": [
             {
@@ -7470,7 +7852,7 @@
           "request": "ClearInstancePortPolicyRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 450,
+          "line": 586,
           "case_id": "tc-gw-admin-032",
           "request_fields": [
             {
@@ -7489,7 +7871,7 @@
           "request": "GetInstancePortPolicyRequest",
           "response": "GetInstancePortPolicyResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 453,
+          "line": 589,
           "case_id": "tc-gw-admin-033",
           "request_fields": [
             {
@@ -7537,7 +7919,7 @@
           "request": "RemoveCvmRequest",
           "response": "RemoveCvmResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 0,
+          "line": 506,
           "case_id": "tc-gw-admin-034",
           "request_fields": [
             {
@@ -7571,7 +7953,7 @@
           "request": "google.protobuf.Empty",
           "response": "ListRejectedInstancesResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 0,
+          "line": 510,
           "case_id": "tc-gw-admin-035",
           "request_fields": [],
           "response_fields": [
@@ -7590,7 +7972,7 @@
           "request": "RemoveNodeRequest",
           "response": "RemoveNodeResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 0,
+          "line": 520,
           "case_id": "tc-gw-admin-036",
           "request_fields": [
             {
@@ -7628,6 +8010,13 @@
               "type": "string",
               "name": "client_public_key",
               "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "health_check",
+              "number": 3,
               "optional": false,
               "repeated": false
             },
@@ -7867,6 +8256,20 @@
               "number": 7,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "ProxyAccelStatus",
+              "name": "accel",
+              "number": 8,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "health_gating",
+              "number": 9,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -7913,6 +8316,20 @@
               "type": "uint64",
               "name": "num_connections",
               "number": 7,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "ready",
+              "number": 8,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "health",
+              "number": 9,
               "optional": false,
               "repeated": false
             }
@@ -8451,18 +8868,32 @@
               "repeated": false
             },
             {
-              "type": "uint64",
-              "name": "buffered_logs",
+              "type": "LastSeenEntry",
+              "name": "last_seen",
               "number": 4,
+              "optional": false,
+              "repeated": true
+            },
+            {
+              "type": "bool",
+              "name": "heard_from",
+              "number": 5,
               "optional": false,
               "repeated": false
             },
             {
-              "type": "LastSeenEntry",
-              "name": "last_seen",
-              "number": 5,
+              "type": "uint32",
+              "name": "digest_mismatches",
+              "number": 6,
               "optional": false,
-              "repeated": true
+              "repeated": false
+            },
+            {
+              "type": "uint32",
+              "name": "consecutive_failures",
+              "number": 7,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -8538,6 +8969,27 @@
               "number": 7,
               "optional": false,
               "repeated": true
+            },
+            {
+              "type": "string",
+              "name": "digest",
+              "number": 8,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "entries_merged",
+              "number": 9,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "entries_rejected",
+              "number": 10,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -8622,6 +9074,13 @@
               "type": "uint64",
               "name": "total_connections",
               "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "map<uint32, uint64>",
+              "name": "node_connections",
+              "number": 2,
               "optional": false,
               "repeated": false
             }
@@ -8949,6 +9408,13 @@
               "number": 5,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "challenge",
+              "number": 6,
+              "optional": true,
+              "repeated": false
             }
           ]
         },
@@ -8969,6 +9435,13 @@
               "number": 2,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "required_dns_records",
+              "number": 3,
+              "optional": false,
+              "repeated": true
             }
           ]
         },
@@ -9136,6 +9609,13 @@
               "number": 4,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "attestation",
+              "number": 5,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -9210,6 +9690,13 @@
               "number": 4,
               "optional": false,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "issuer_domain_name",
+              "number": 5,
+              "optional": false,
+              "repeated": false
             }
           ]
         },
@@ -9242,6 +9729,13 @@
               "type": "string",
               "name": "acme_url",
               "number": 4,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "issuer_domain_name",
+              "number": 5,
               "optional": true,
               "repeated": false
             }
@@ -9435,6 +9929,60 @@
               "type": "bool",
               "name": "active_locally",
               "number": 4,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "ProxyAccelStatus",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "string",
+              "name": "ktls_mode",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "splice_mode",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "ktls_offloaded",
+              "number": 3,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "ktls_offload_failed",
+              "number": 4,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "uint64",
+              "name": "splice_engaged",
+              "number": 5,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "ExitRequest",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "bool",
+              "name": "force",
+              "number": 1,
               "optional": false,
               "repeated": false
             }
