@@ -3,17 +3,13 @@
 COMPONENT_NAME=kernel
 COMPONENT_CACHE_PATHS=("linux-$KERNEL_VERSION" kernel-build component-stages/kernel
   component-stages/kernel-devel)
-# The exported build tree is staged into the rootfs install tree, not because it
-# ships in the image but because that is the only writable tree a component
-# reaches; mkosi.finalize moves it out before the rootfs is measured, the same
-# way it does for the firmware and the image tools.
+# Staged via the rootfs tree; mkosi.finalize moves it out before measurement.
 COMPONENT_ROOTFS_TREES=(component-stages/kernel-devel)
 COMPONENT_KERNEL_TREES=(component-stages/kernel)
 
 component_cache_key() {
     key_value "$KERNEL_VERSION" "$KERNEL_SHA256"
     key_file "$COMPONENT_PATH/kernel-build.sh" "$COMPONENT_PATH/kernel.config" \
-      "$ROOT/os/common/scripts/export-kernel-devel.sh" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0003-dma-direct-return-struct-page-from-alloc-from-pool.patch" \

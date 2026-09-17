@@ -132,19 +132,13 @@ and records `"is_dev": true` in `metadata.json`.
 
 ## Kernel headers for out-of-tree modules
 
-The guest image ships kernel modules but no build tree, so an application that
-needs its own `.ko` — a custom network or storage driver, a device shim —
-would have to reconstruct the kernel build to obtain a `Module.symvers` and a
-`vermagic` the guest kernel accepts. Every release publishes that build tree
-instead:
+Each release publishes the guest kernel's build tree for building out-of-tree
+modules:
 
-- `dstack-<version>-kernel-devel.tar.gz`, the exported kernel build tree, and
-- `ghcr.io/dstack-tee/dstack-kernel-builder:<version>`, that tree plus a
-  compiler from the same pinned Debian snapshot the guest kernel was built
-  with, with `KDIR` already pointing at it.
-
-Build the module where the application image is built, and ship the `.ko` in
-the container image:
+- `dstack-<version>-kernel-devel.tar.gz`, the exported build tree, and
+- `ghcr.io/dstack-tee/dstack-kernel-builder:<version>`, the same tree plus a
+  compiler from the pinned Debian snapshot the kernel was built with, with
+  `KDIR` set.
 
 ```dockerfile
 FROM ghcr.io/dstack-tee/dstack-kernel-builder:<version> AS kmod
@@ -155,45 +149,14 @@ FROM alpine
 COPY --from=kmod /src/mymod.ko /opt/
 ```
 
-Outside that image, point `KDIR` at the unpacked tree:
+To build the image locally from a release archive, run
+`os/image/kernel-builder/build.sh <kernel-devel.tar.gz> <image-ref>`.
 
-```bash
-tar -xzf dstack-<version>-kernel-devel.tar.gz
-make -C dstack-<version>-kernel-devel/linux-headers-<release> M="$PWD" modules
-```
-
-`kernel-devel.json` in the archive records the kernel release, the compiler,
-and the SHA-256 of `.config` and `Module.symvers`, so a module can be traced
-back to the image it was built for. `os/tests/kmod-hello/` is a two-file module
-that builds against either form and is what CI uses to check a published
-builder image.
-
-Two constraints are worth knowing before debugging a failure:
-
-- **The compiler matters.** A module built with a different toolchain may still
-  load, but anything the config derives from `CONFIG_CC_VERSION_TEXT` and the
-  compiler's own ABI choices is no longer guaranteed to agree. Use the builder
-  image, or a compiler from the snapshot in `os/mkosi/versions.env`.
-- **Modules built this way carry no BTF.** Generating it needs `vmlinux`, which
-  the archive does not carry because its debug info dwarfs everything else in
-  the release. Kbuild prints `Skipping BTF generation ... due to unavailability
-  of vmlinux` and produces a working module.
-
-### What this means for attestation
-
-Neither the archive nor the builder image is part of the OS image identity:
-they are not in `sha256sum.txt`, so `os_image_hash` does not change when they
-do, and a CVM never sees them.
-
-Loading a module is still a privileged operation and the module is kernel code
-the application chose. The container needs `CAP_SYS_MODULE` (in practice,
-`privileged: true`), and what a remote verifier can conclude about that module
-is exactly what it can conclude about the rest of the application: the module
-is part of the container image, the image digest is part of the compose file,
-and the compose hash is measured into RTMR3 and enforced by the KMS. The module
-itself is not measured separately, and dstack does not enforce module
-signatures. Treat a custom module as trusted application code with kernel
-privileges, and pin it by digest like any other part of the application.
+Neither artifact is part of `sha256sum.txt`, so they do not affect
+`os_image_hash`. A module loaded by an application (which needs
+`CAP_SYS_MODULE`) is covered by the container image digest and therefore the
+compose hash, but it is not measured separately and dstack does not enforce
+module signatures.
 
 ## Check reproducibility
 

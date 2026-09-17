@@ -49,16 +49,10 @@ image.
 
 ## Kernel build tree
 
-A backend may export the kernel build tree of the image it built and declare it
-as the optional `artifacts.kernel_devel` manifest entry. The assembler
-publishes it as `<name>-<version>-kernel-devel.tar.gz` beside the image
-archives and deliberately keeps it out of `sha256sum.txt`: nothing in it is
-measured at boot, so folding it into `os_image_hash` would make the OS identity
-depend on a developer artifact. A backend that does not export one omits the
-key, and the release is unchanged.
-
-`kernel-builder/` builds the container image that carries this tree plus a
-matching toolchain; see [`kernel-builder/README.md`](kernel-builder/README.md).
+The optional `artifacts.kernel_devel` manifest entry is published as
+`<name>-<version>-kernel-devel.tar.gz` beside the image archives. It is not in
+`sha256sum.txt`, so it does not affect `os_image_hash`. `kernel-builder/`
+builds the matching module-builder container image.
 
 ## Kernel setup-header normalization
 

@@ -90,13 +90,16 @@ install -Dm0644 "$BUILD_DIR/kernel-build/arch/x86/boot/bzImage" \
     "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/vmlinuz"
 install -Dm0644 "$BUILD_DIR/kernel-build/.config" \
     "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/config"
-# Applications that need their own kernel module get the build tree of this
-# exact kernel as a release artifact. Staged here and moved out of the rootfs
-# by mkosi.finalize before the image is measured: it must not ship in the CVM.
-"$ROOT/os/common/scripts/export-kernel-devel.sh" \
-    --src "$src" --build "$BUILD_DIR/kernel-build" \
-    --out "$DEVEL_STAGING/usr/lib/dstack/kernel-devel" \
-    --backend mkosi --image-version "$DSTACK_VERSION" \
-    --flavor "${DSTACK_BUILD_FLAVOR:-prod}"
+# Export the external-module build tree as a release artifact, using the same
+# upstream helper `make bindeb-pkg` uses for linux-headers. It is staged into
+# the rootfs install tree and moved out by mkosi.finalize before measurement.
+devel="$DEVEL_STAGING/usr/lib/dstack/kernel-devel"
+headers="$devel/linux-headers-$(cat "$BUILD_DIR/kernel-build/include/config/kernel.release")"
+make -C "$src" O="$BUILD_DIR/kernel-build" run-command \
+    KBUILD_RUN_COMMAND="$src/scripts/package/install-extmod-build $headers"
+install -m0644 "$BUILD_DIR/kernel-build/.config" "$headers/.config"
+# A -fverbose-asm intermediate that records the absolute build path, which no
+# prefix map rewrites. Only its generated .h is needed.
+rm -f "$headers/scripts/mod/devicetable-offsets.s"
 find "$STAGING" "$DEVEL_STAGING" -print0 | \
     xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"

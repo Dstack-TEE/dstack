@@ -672,9 +672,5 @@ fi
 # Publish the optional developer artifact beside the images, without adding it
 # to sha256sum.txt or os_image_hash. See docs/building-guest-os.md.
 if [ -n "$KERNEL_DEVEL_ARCHIVE" ]; then
-    echo "Publishing the kernel build tree to ${KERNEL_DEVEL_TAR}"
     cp "$KERNEL_DEVEL_ARCHIVE" "$KERNEL_DEVEL_TAR"
-    KERNEL_DEVEL_SHA256=$(sha256sum "$KERNEL_DEVEL_TAR" | awk '{print $1}')
-    KERNEL_DEVEL_BYTES=$(stat -L -c %s "$KERNEL_DEVEL_TAR")
-    echo "kernel-devel: ${KERNEL_DEVEL_BYTES} bytes, sha256 ${KERNEL_DEVEL_SHA256}"
 fi

@@ -125,10 +125,7 @@ touch -d "@$SOURCE_DATE_EPOCH" "$OUT/files/"*
 is_dev=false; name=dstack
 if [[ $FLAVOR == dev ]]; then is_dev=true; name=dstack-dev; fi
 
-# Archive the tree removed by mkosi.finalize separately from measured payload.
-# Use fixed tar metadata for repro-check; cached iteration builds can skip it.
-kernel_devel="$KERNEL_TREE/kernel-devel"
-[[ -d $kernel_devel ]] || { echo 'kernel build tree was not exported' >&2; exit 1; }
+# The kernel build tree is archived beside, not inside, the measured payload.
 kernel_devel_artifact=
 if [[ ${DSTACK_TAR_RELEASE:-1} == 1 ]]; then
   tar -C "$KERNEL_TREE" --sort=name --mtime="@$SOURCE_DATE_EPOCH" \

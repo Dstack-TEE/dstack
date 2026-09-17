@@ -71,7 +71,6 @@
       }
     },
     "artifacts": {
-      "description": "kernel_devel is optional: a backend that does not export the kernel build tree omits the key, so schema version 1 stays compatible.",
       "type": "object",
       "additionalProperties": false,
       "required": [

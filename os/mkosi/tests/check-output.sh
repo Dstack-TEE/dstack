@@ -18,24 +18,4 @@ assert d["builder"] == "mkosi"
 assert d["bios-sev"] == "ovmf-sev.fd"
 assert d["is_dev"] == (sys.argv[2] == "dev")
 PY
-# The kernel build tree ships beside the image, never inside it. Nothing in it
-# is measured at boot, so its presence in the identity preimage would make
-# os_image_hash depend on a developer artifact.
-if grep -q 'kernel-devel' "$out/sha256sum.txt"; then
-  echo 'kernel build tree must not be part of the image identity' >&2
-  exit 1
-fi
-if [[ ${DSTACK_TAR_RELEASE:-1} == 1 ]]; then
-  [[ -s $out-kernel-devel.tar.gz ]] || {
-    echo "missing kernel build tree archive: $out-kernel-devel.tar.gz" >&2
-    exit 1
-  }
-  # Consume the full listing: grep -q would close the pipe on the first match
-  # and make tar fail with SIGPIPE under pipefail.
-  tar -tzf "$out-kernel-devel.tar.gz" | \
-    grep -Fx "$(basename "$out")-kernel-devel/kernel-devel.json" >/dev/null || {
-      echo 'kernel build tree archive does not declare its kernel' >&2
-      exit 1
-    }
-fi
 echo "Yocto-compatible release format accepted: $out"

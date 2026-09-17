@@ -63,8 +63,7 @@ jobs:
       os_image_hash: ${{ steps.hashes.outputs.os_image_hash }}
       bare_sha256: ${{ steps.hashes.outputs.bare_sha256 }}
       uki_sha256: ${{ steps.hashes.outputs.uki_sha256 }}
-      kernel_release: ${{ steps.kernel_devel.outputs.kernel_release }}
-      kernel_devel_sha256: ${{ steps.kernel_devel.outputs.sha256 }}
+      kernel_devel_sha256: ${{ steps.hashes.outputs.kernel_devel_sha256 }}
 
     steps:
       # GitHub-hosted runners have enough CPU and memory for this build, but
@@ -208,6 +207,7 @@ jobs:
 
           bare_sha256=$(sha256sum "$bare" | awk '{print $1}')
           uki_sha256=$(sha256sum "$uki" | awk '{print $1}')
+          kernel_devel_sha256=$(sha256sum "$DIST_DIR/dstack-$version-kernel-devel.tar.gz" | awk '{print $1}')
           git_revision=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_revision"])' "$img/metadata.json")
           mrtd=$("$DSTACK_MR" inspect-measurement "$img/measurement.tdx.cbor" \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["tdvf"]["mrtd"]["single_pass"])')
@@ -221,6 +221,7 @@ jobs:
             echo "os_image_hash=$os_image_hash"
             echo "bare_sha256=$bare_sha256"
             echo "uki_sha256=$uki_sha256"
+            echo "kernel_devel_sha256=$kernel_devel_sha256"
           } >> "$GITHUB_OUTPUT"
 
           # os_image_hash is the value operators need most, so surface it in the
@@ -238,6 +239,7 @@ jobs:
             echo "| AWS \`boot_pcr_digest\` | \`$aws_pcr\` |"
             echo "| \`dstack-$version.tar.gz\` | \`$bare_sha256\` |"
             echo "| \`dstack-$version-uki.tar.gz\` | \`$uki_sha256\` |"
+            echo "| \`dstack-$version-kernel-devel.tar.gz\` | \`$kernel_devel_sha256\` |"
             echo
             echo '<details><summary>sha256sum.txt (os_image_hash preimage)</summary>'
             echo
@@ -264,51 +266,8 @@ jobs:
             echo "aws_boot_pcr     $aws_pcr"
             echo "$bare_sha256  dstack-$version.tar.gz"
             echo "$uki_sha256  dstack-$version-uki.tar.gz"
+            echo "$kernel_devel_sha256  dstack-$version-kernel-devel.tar.gz"
           } | tee "$DIST_DIR/image-hashes.txt"
-
-      - name: Report the kernel build tree
-        id: kernel_devel
-        env:
-          DIST_DIR: ${{ steps.build.outputs.dist_dir }}
-          VERSION: ${{ steps.hashes.outputs.version }}
-        run: |
-          set -euo pipefail
-          devel="$DIST_DIR/dstack-$VERSION-kernel-devel.tar.gz"
-          test -f "$devel"
-          sha256=$(sha256sum "$devel" | awk '{print $1}')
-          bytes=$(stat -L -c %s "$devel")
-          # Read the identity out of the archive, not out of versions.env: the
-          # archive is what ships, and its metadata is what the builder image
-          # is then built against.
-          work=$(mktemp -d)
-          trap 'rm -rf "$work"' EXIT
-          tar -xzf "$devel" -C "$work" \
-            "dstack-$VERSION-kernel-devel/kernel-devel.json"
-          meta="$work/dstack-$VERSION-kernel-devel/kernel-devel.json"
-          read -r kernel_release files uncompressed < <(
-            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["kernel_release"], d["file_count"], d["uncompressed_bytes"])' \
-              "$meta")
-          compiler=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["compiler"])' "$meta")
-          {
-            echo "kernel_release=$kernel_release"
-            echo "sha256=$sha256"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo
-            echo "### Kernel build tree (out-of-tree modules)"
-            echo
-            echo '| Field | Value |'
-            echo '| --- | --- |'
-            echo "| Kernel release | \`$kernel_release\` |"
-            echo "| Compiler | \`$compiler\` |"
-            echo "| Files | $files |"
-            echo "| Unpacked | $uncompressed bytes |"
-            echo "| \`dstack-$VERSION-kernel-devel.tar.gz\` | $bytes bytes, \`$sha256\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-          {
-            echo "kernel_release   $kernel_release"
-            echo "$sha256  dstack-$VERSION-kernel-devel.tar.gz"
-          } | tee -a "$DIST_DIR/image-hashes.txt"
 
       - name: Upload guest images
         uses: actions/upload-artifact@v4
@@ -322,8 +281,6 @@ jobs:
 
   kernel-builder:
     name: Kernel module builder image
-    # Same gate as the build it consumes. On a dispatch the image is built and
-    # smoke-tested but not published: only the release tag publishes.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       startsWith(github.ref, 'refs/tags/mkosi-os-v')
@@ -345,27 +302,13 @@ jobs:
           path: dist
 
       - name: Build the builder image
-        id: image
         env:
           VERSION: ${{ needs.build.outputs.version }}
-          KERNEL_RELEASE: ${{ needs.build.outputs.kernel_release }}
-          OS_IMAGE_HASH: ${{ needs.build.outputs.os_image_hash }}
         run: |
-          set -euo pipefail
           owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          ref="ghcr.io/$owner/dstack-kernel-builder"
-          IMAGE_VERSION="$VERSION" GIT_REVISION="$GITHUB_SHA" \
-            ./os/image/kernel-builder/build.sh \
-              "dist/dstack-$VERSION-kernel-devel.tar.gz" "$ref:$VERSION" "$KERNEL_RELEASE"
-          docker tag "$ref:$VERSION" "$ref:$KERNEL_RELEASE"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      # Compile a module and check its target release before publishing.
-      - name: Build a module inside the image
-        env:
-          IMAGE: ${{ steps.image.outputs.ref }}:${{ needs.build.outputs.version }}
-          KERNEL_RELEASE: ${{ needs.build.outputs.kernel_release }}
-        run: ./os/tests/test-kernel-builder-image.sh "$IMAGE" "$KERNEL_RELEASE"
+          echo "IMAGE=ghcr.io/$owner/dstack-kernel-builder:$VERSION" >> "$GITHUB_ENV"
+          GIT_REVISION="$GITHUB_SHA" ./os/image/kernel-builder/build.sh \
+            "dist/dstack-$VERSION-kernel-devel.tar.gz" "ghcr.io/$owner/dstack-kernel-builder:$VERSION"
 
       - name: Log in to GitHub Container Registry
         if: startsWith(github.ref, 'refs/tags/mkosi-os-v')
@@ -377,31 +320,12 @@ jobs:
 
       - name: Push the builder image
         if: startsWith(github.ref, 'refs/tags/mkosi-os-v')
-        env:
-          REF: ${{ steps.image.outputs.ref }}
-          VERSION: ${{ needs.build.outputs.version }}
-          KERNEL_RELEASE: ${{ needs.build.outputs.kernel_release }}
-        run: |
-          set -euo pipefail
-          docker push "$REF:$VERSION"
-          docker push "$REF:$KERNEL_RELEASE"
-          digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$REF:$VERSION")
-          echo "::notice title=kernel-builder::$digest"
-          {
-            echo "### Kernel module builder image"
-            echo
-            echo '```'
-            echo "$digest"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+        run: docker push "$IMAGE"
 
   release:
     name: Publish release
     # The tag is the publish decision. Nothing else reaches this job.
     if: startsWith(github.ref, 'refs/tags/mkosi-os-v')
-    # Also needs kernel-builder: the notes point at the builder image, so a
-    # release must not be created when that image failed to build its smoke
-    # test module or failed to publish.
     needs: [build, kernel-builder]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -435,10 +359,8 @@ jobs:
           fi
           bare="dist/dstack-$version.tar.gz"
           uki="dist/dstack-$version-uki.tar.gz"
-          kernel_devel="dist/dstack-$version-kernel-devel.tar.gz"
           test -f "$bare"
           test -f "$uki"
-          test -f "$kernel_devel"
 
           read -r image_version image_revision < <(
             tar -xOf "$bare" "dstack-$version/metadata.json" |
@@ -465,12 +387,9 @@ jobs:
           OS_IMAGE_HASH: ${{ needs.build.outputs.os_image_hash }}
           BARE_SHA256: ${{ needs.build.outputs.bare_sha256 }}
           UKI_SHA256: ${{ needs.build.outputs.uki_sha256 }}
-          KERNEL_RELEASE: ${{ needs.build.outputs.kernel_release }}
           KERNEL_DEVEL_SHA256: ${{ needs.build.outputs.kernel_devel_sha256 }}
         run: |
           set -euo pipefail
-          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          builder="ghcr.io/$owner/dstack-kernel-builder:$VERSION"
           {
             echo "Guest OS image \`$VERSION\`, built by the Debian/mkosi backend."
             echo
@@ -488,21 +407,8 @@ jobs:
             echo "\`image-hashes.txt\` additionally records the TDX \`MRTD\`, the GCP"
             echo "\`uki_auth\` hash and the AWS \`boot_pcr_digest\` for this image."
             echo
-            echo "### Out-of-tree kernel modules"
-            echo
-            echo "This image runs \`$KERNEL_RELEASE\`. To build a module for it, use the"
-            echo "matching toolchain image, which carries the kernel build tree of this"
-            echo "release and a compiler from the same pinned Debian snapshot:"
-            echo
-            echo '```dockerfile'
-            echo "FROM $builder AS kmod"
-            echo "COPY mymod/ /src"
-            echo "RUN make -C \$KDIR M=/src modules"
-            echo '```'
-            echo
-            echo "\`dstack-$VERSION-kernel-devel.tar.gz\` is the same build tree for use"
-            echo "outside that image. Neither is measured: they are not part of"
-            echo "\`os_image_hash\`. See"
+            echo "To build out-of-tree kernel modules, use"
+            echo "\`ghcr.io/dstack-tee/dstack-kernel-builder:$VERSION\`; see"
             echo "[docs/building-guest-os.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/building-guest-os.md#kernel-headers-for-out-of-tree-modules)."
           } > release-notes.md
           # --verify-tag: the tag is the publish trigger, so it must already

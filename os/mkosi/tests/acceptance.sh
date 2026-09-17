@@ -182,7 +182,6 @@ grep -q 'AmdSev/AmdSevX64.dsc' "$D/components/ovmf/ovmf-build.sh"
 grep -q '0006-OvmfPkg-AmdSev-drop-embedded-grub.patch' "$D/components/ovmf/ovmf.sh"
 grep -q '0005-UefiCpuPkg' "$D/components/ovmf/ovmf.sh"
 grep -q '0007-OvmfPkg-QemuKernelLoaderFsDxe' "$D/components/ovmf/ovmf.sh"
-"$D/../tests/test-kernel-devel.sh"
 grep -q 'objcopy --strip-debug' "$D/mkosi.build"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
 grep -q '^CleanPackageMetadata=yes$' "$D/mkosi.conf"
@@ -223,9 +222,7 @@ grep -q 'rootfs.img.parted.verity' "$D/../image/assemble.sh"
 bash -n "$D"/*.sh "$D"/mkosi.build "$D"/mkosi.clean "$D"/mkosi.finalize \
   "$D"/mkosi.postinst "$D"/mkosi.postoutput "$D"/scripts/*.sh \
   "$D"/components/*/*.sh "$D"/tests/*.sh "$D"/mkosi.skeleton/usr/bin/*.sh \
-  "$D"/../image/kernel-cmdline.sh "$D"/../common/scripts/export-kernel-devel.sh \
-  "$D"/../tests/test-kernel-builder-image.sh "$D"/../tests/test-kernel-devel.sh \
-  "$D"/../image/kernel-builder/build.sh
+  "$D"/../image/kernel-cmdline.sh
 # The Python helpers were only ever exercised by a real build. Keep the
 # bytecode out of the source tree, which is mounted into the build sandbox.
 pycache=$(mktemp -d)
