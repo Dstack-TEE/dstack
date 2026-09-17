@@ -26,6 +26,8 @@ CASE_ID = "tc-gw-admin-006"
 CF_IMAGE = os.environ.get("DSTACK_TEST_MOCK_CF_DNS_IMAGE", "")
 PEBBLE_IMAGE = os.environ.get("DSTACK_TEST_PEBBLE_IMAGE", "")
 SENTINEL_TOKEN = "dstack-caa-case-sentinel"
+ACME_LOCK_MARKER = "shared acme lock"
+ACME_LOCK_WAIT_SECONDS = 180
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -495,7 +497,28 @@ def main() -> int:
         )
 
         route = f"{base}/Admin.SetCaa"
-        json_code, json_error_body = http_call(route, b"{}", "application/json", token)
+        # Adding ZT domains starts background certificate work that holds the
+        # shared ACME lock (PR #1138). SetCaa refuses instead of queueing, so
+        # wait a bounded time for that work to release the lock. A lock that
+        # never releases still fails the transport matrix below.
+        lock_deadline = time.monotonic() + ACME_LOCK_WAIT_SECONDS
+        lock_refusals = 0
+        while True:
+            json_code, json_error_body = http_call(
+                route, b"{}", "application/json", token
+            )
+            if (
+                json_code != 400
+                or ACME_LOCK_MARKER
+                not in json_error_body.decode("utf-8", "replace").lower()
+                or time.monotonic() >= lock_deadline
+            ):
+                break
+            lock_refusals += 1
+            time.sleep(2)
+        checks["acme_lock_released"] = ACME_LOCK_MARKER not in (
+            json_error_body.decode("utf-8", "replace").lower()
+        )
         error_text = json_error_body.decode("utf-8", errors="replace").lower()
         error_categories = sorted(
             marker
@@ -550,7 +573,7 @@ def main() -> int:
             )
             raise AssertionError(
                 "initial CAA or transport matrix failed: "
-                f"checks={failed_checks}, statuses={calls}, "
+                f"checks={failed_checks}, statuses={calls}, lock_refusals={lock_refusals}, "
                 f"error_categories={error_categories}, error_len={len(json_error_body)}, "
                 f"error_sha256={hashlib.sha256(json_error_body).hexdigest()}, "
                 f"bounded_error={bounded_error(json_error_body, domains)}, "
@@ -576,7 +599,8 @@ def main() -> int:
             and all(code in {200, 400} for code in concurrent_codes)
             and all(
                 any(
-                    marker in diagnostic for marker in ("busy", "progress", "operation")
+                    marker in diagnostic
+                    for marker in ("busy", "progress", "operation", ACME_LOCK_MARKER)
                 )
                 for diagnostic in contention_diagnostics
             )
