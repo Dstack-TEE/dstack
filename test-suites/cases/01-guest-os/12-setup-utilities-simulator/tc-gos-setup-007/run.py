@@ -80,6 +80,14 @@ esac
 if ! lsblk -nrpo NAME "$persistent_src" -s | grep -Eq '^/dev/vdb([0-9]+)?$'; then
     echo "persistent mapper is not backed by lease data disk" >&2; exit 90
 fi
+# storage_discard defaults on (PR #1175): virtio-blk, dm-crypt and ext4 must
+# all pass discards through for the product data disk.
+check_discard() {
+    test "$(cat /sys/block/vdb/queue/discard_max_bytes)" -gt 0 || { echo "data disk virtio-blk does not advertise discard" >&2; exit 95; }
+    cryptsetup status dstack_data_disk | grep -E '^[[:space:]]*flags:.*discards' >/dev/null || { echo "product dm-crypt mapping does not allow discards" >&2; exit 95; }
+    findmnt -n -o OPTIONS /dstack/persistent | tr ',' '\n' | grep -x discard >/dev/null || { echo "product ext4 data mount lacks the discard option" >&2; exit 95; }
+}
+check_discard
 mkdir -p "$CASE_DIR"
 chmod 700 "$CASE_DIR"
 volume="$CASE_DIR/volume.img"
@@ -136,11 +144,16 @@ umount "$mountpoint"
 cryptsetup luksClose "$MAPPER"
 losetup -d "$loop"
 sync
-printf "phase1_ok fsck_rc=%s capacity_rc=%s\n" "$fsck_rc" "$fill_rc"
+printf "phase1_ok fsck_rc=%s capacity_rc=%s discard=1\n" "$fsck_rc" "$fill_rc"
 """
 
 PHASE_TWO = r"""
 set -euo pipefail
+# The reboot remounts the existing disk through the repair path, which must
+# keep discard end to end as well.
+test "$(cat /sys/block/vdb/queue/discard_max_bytes)" -gt 0 || { echo "data disk virtio-blk lost discard after reboot" >&2; exit 95; }
+cryptsetup status dstack_data_disk | grep -E '^[[:space:]]*flags:.*discards' >/dev/null || { echo "product dm-crypt mapping lost discards after reboot" >&2; exit 95; }
+findmnt -n -o OPTIONS /dstack/persistent | tr ',' '\n' | grep -x discard >/dev/null || { echo "product ext4 data mount lost discard after reboot" >&2; exit 95; }
 mountpoint="$CASE_DIR/mnt"
 volume="$CASE_DIR/volume.img"
 test -f "$volume"
@@ -153,7 +166,7 @@ umount "$mountpoint"
 cryptsetup luksClose "$MAPPER"
 losetup -d "$loop"
 rm -rf "$CASE_DIR"
-printf "phase2_ok continuity=1 cleanup=1\n"
+printf "phase2_ok continuity=1 cleanup=1 discard=1\n"
 """
 
 CLEANUP = r"""

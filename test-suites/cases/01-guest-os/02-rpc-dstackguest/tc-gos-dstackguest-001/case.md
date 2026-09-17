@@ -73,6 +73,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 - For v1, validate byte-valued request and response fields without UTF-8 coercion, structured pRPC status codes, missing-field defaults, malformed protobuf, and unknown fields.
 - Confirm v0 compatibility aliases do not appear in the v1 schema and v1-only routes are not silently served through v0.
 
+## Post-baseline regression coverage (PR #1207)
+
+- On the simulator's legacy (SCALE V0) attestation fixture, the `PHALA_RATLS_ATTESTATION` extension (OID `1.3.6.1.4.1.62397.1.8`) of the v0 `GetTlsKey` leaf certificate is a DER OCTET STRING whose content starts with `0x00` (legacy SCALE form, unchanged).
+- A v1 `IssueCert` request with `usage_ra_tls=true` on the same listener returns a leaf whose attestation extension is a MessagePack map (first byte `0x80`-`0x8f`, `0xde`, or `0xdf`) that decodes completely into `version`, `platform`, and `stack` with a `stack.data` map.
+- Automated in `shared/automation/passed-rpc-case.py` (`check_certificate_attestation_wire`); only structural fields and first bytes are recorded, never the private key.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

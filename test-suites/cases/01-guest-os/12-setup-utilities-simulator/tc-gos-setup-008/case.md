@@ -73,6 +73,13 @@ Restart the VM, re-query all affected state, test the adjacent identity, and per
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1175)
+
+The lease compose selects the default ZFS data disk and omits `storage_discard`, so discard must default on.
+
+- Before the swap matrix, `zpool get -H -o value autotrim dstack` is `on` and `cryptsetup status dstack_data_disk` reports `flags: discards`; after the lease reboot (pool import path, which re-applies autotrim) autotrim is still `on`. Automated in `run.py` (exit 87 on mismatch).
+- Not automated (needs a pool created by a pre-#1175 image): importing a pool whose `autotrim` was `off` with discard enabled sets `autotrim=on` and starts one asynchronous `zpool trim` without delaying boot; with `storage_discard: false` the imported pool is set to `autotrim=off` and no trim starts.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

@@ -84,6 +84,14 @@ def main() -> int:
         "numeric_metrics_exact": observation.get("numeric_metrics_exact") is True,
         "high_cardinality_complete": observation.get("high_cardinality_complete")
         is True,
+        "load_average_unscaled": observation.get("load_average_unscaled") is True,
+        "uptime_units": observation.get("uptime_units") is True,
+        "gpu_labels_escaped": observation.get("gpu_labels_escaped") is True,
+        "gpu_optional_series": observation.get("gpu_optional_series") is True,
+        "gpu_errors_counted": observation.get("gpu_errors_counted") is True,
+        "gpu_dashboard_rows": observation.get("gpu_dashboard_rows") is True,
+        "gpu_absent_and_failed_states": observation.get("gpu_absent_and_failed_states")
+        is True,
         "concurrent_render_stable": observation.get("concurrent_render_stable") is True,
     }
     artifact = {
@@ -139,7 +147,7 @@ def main() -> int:
 
 RUST_PROBE = r"""
 mod models;
-use guest_api::{Container, DiskInfo, SystemInfo};
+use guest_api::{Container, DiskInfo, GpuDevice, GpuInfoResponse, SystemInfo};
 use models::{Dashboard, Metrics};
 use rinja::Template;
 use std::collections::hash_map::DefaultHasher;
@@ -150,18 +158,32 @@ fn system_info(hostile: &str) -> SystemInfo {
     SystemInfo {
         os_name: hostile.into(), os_version: "v<&>".into(), kernel_version: hostile.into(), cpu_model: hostile.into(),
         num_cpus: u32::MAX, total_memory: u64::MAX, available_memory: 1024, used_memory: 1023, free_memory: 0,
-        total_swap: 1024, used_swap: 1023, free_swap: 1, uptime: u64::MAX,
-        loadavg_one: 1, loadavg_five: 100, loadavg_fifteen: u32::MAX,
+        total_swap: 1024, used_swap: 1023, free_swap: 1, uptime: 90_061,
+        loadavg_one: 40, loadavg_five: 100, loadavg_fifteen: 1_234,
         disks: (0..256).map(|i| DiskInfo { name: format!("disk-{i}-{hostile}"), mount_point: format!("/mnt/{i}-{hostile}"), total_size: if i == 0 { 0 } else { u64::MAX }, free_size: if i == 0 { 0 } else { 1024 } }).collect(),
     }
+}
+fn dashboard(hostile: &str, info: SystemInfo, gpu_info: GpuInfoResponse) -> Dashboard {
+    Dashboard { app_name: hostile.into(), app_id: vec![0, 255], instance_id: vec![1, 2], device_id: vec![3, 4], key_provider_info: hostile.into(), tcb_info: hostile.into(), containers: vec![Container { id: "id".into(), names: vec![format!("/{hostile}")], image: String::new(), image_id: String::new(), created: 0, state: String::new(), status: hostile.into() }, Container { names: vec![], ..Default::default() }], system_info: info, public_sysinfo: true, public_logs: true, public_tcbinfo: true, cloud_vendor: hostile.into(), cloud_product: hostile.into(), gpu_info }
+}
+fn quiet(hostile: String) -> Dashboard {
+    Dashboard { app_name: hostile, app_id: vec![0,255], instance_id: vec![1,2], device_id: vec![3,4], key_provider_info: String::new(), tcb_info: String::new(), containers: vec![], system_info: SystemInfo::default(), public_sysinfo: false, public_logs: false, public_tcbinfo: false, cloud_vendor: String::new(), cloud_product: String::new(), gpu_info: GpuInfoResponse::default() }
 }
 fn main() -> anyhow::Result<()> {
     let hostile = "<script>alert(\"x\")</script>&'";
     let label = "label\"\\\nnext";
     let info = system_info(label);
-    let dashboard = Dashboard { app_name: hostile.into(), app_id: vec![0, 255], instance_id: vec![1, 2], device_id: vec![3, 4], key_provider_info: hostile.into(), tcb_info: hostile.into(), containers: vec![Container { id: "id".into(), names: vec![format!("/{hostile}")], image: String::new(), image_id: String::new(), created: 0, state: String::new(), status: hostile.into() }, Container { names: vec![], ..Default::default() }], system_info: info.clone(), public_sysinfo: true, public_logs: true, public_tcbinfo: true, cloud_vendor: hostile.into(), cloud_product: hostile.into() };
-    let html = dashboard.render()?;
-    let metrics = Metrics { system_info: info }.render()?;
+    // Two sampled cards: one fully answered with hostile identifiers, one whose
+    // queries failed, so a missing value must not be rendered as zero.
+    let gpus = GpuInfoResponse {
+        gpus: vec![
+            GpuDevice { index: 0, uuid: format!("GPU-{label}"), pci_bus_id: "00000000:01:00.0".into(), utilization_gpu: Some(0), utilization_memory: Some(7), memory_total_bytes: Some(1024), memory_used_bytes: Some(1023), memory_free_bytes: Some(1), temperature_c: Some(0), power_usage_mw: Some(70_123), errors: vec![hostile.into()] },
+            GpuDevice { index: 1, uuid: String::new(), pci_bus_id: "00010000:02:00.0".into(), errors: vec!["power: not supported".into(), "memory: unknown error; retry advised".into()], ..Default::default() },
+        ],
+        error: String::new(), cc_ready: None, cc_enabled: Some(true), sample_age_ms: Some(60_000),
+    };
+    let html = dashboard(hostile, info.clone(), gpus.clone()).render()?;
+    let metrics = Metrics { system_info: info.clone(), gpu_info: gpus }.render()?;
     let html_text_escaped = !html.contains("<script>");
     let html_attribute_escaped = !html.contains("/logs/<script>") && !html.contains("target=\"_blank\"><script>");
     let hex_and_optional_names = html.contains("00ff") && html.contains("0102") && html.contains("0304");
@@ -169,15 +191,29 @@ fn main() -> anyhow::Result<()> {
     let prometheus_labels_escaped = metrics.contains("label\\\"\\\\\\nnext") && !metrics.contains("label\"\\\nnext");
     let numeric_metrics_exact = metrics.contains("system_memory_total 18446744073709551615") && metrics.contains("system_memory_available 1024");
     let high_cardinality_complete = metrics.matches("disk_total_size{name=").count() == 256;
+    // Load averages travel as load x 100; uptime travels as raw seconds.
+    let load_average_unscaled = metrics.contains("dstack_guest_load1 0.40") && metrics.contains("dstack_guest_load15 12.34") && metrics.contains("system_load_average_5m 1.00")
+        && html.contains("1min: 0.40, 5min: 1.00, 15min: 12.34") && !html.contains("0.4%");
+    let uptime_units = html.contains("1d 1h 1m 1s") && metrics.contains("dstack_guest_uptime_seconds 90061");
+    let gpu_labels_escaped = metrics.contains("uuid=\"GPU-label\\\"\\\\\\nnext\"") && metrics.contains("pci_bus_id=\"00000000:01:00.0\"");
+    let gpu_optional_series = metrics.contains("dstack_gpu_utilization_percent{index=\"0\"") && metrics.matches("dstack_gpu_utilization_percent{").count() == 1
+        && metrics.matches("dstack_gpu_temperature_celsius{").count() == 1 && metrics.contains("dstack_gpu_nvml_up 1")
+        && metrics.contains("dstack_gpu_cc_enabled 1") && !metrics.contains("dstack_gpu_cc_ready ") && metrics.contains("dstack_gpu_sample_age_seconds 60");
+    let gpu_errors_counted = metrics.contains("dstack_gpu_query_errors{index=\"0\", uuid=") && metrics.contains("pci_bus_id=\"00010000:02:00.0\"} 2");
+    let gpu_dashboard_rows = html.contains("70.1 W") && html.contains(">01:00.0<") && html.contains(">00010000:02:00.0<") && html.contains(">unknown<") && html.contains("60.0 s") && !html.contains("GPU-label");
+    let no_gpu_html = dashboard(hostile, info.clone(), GpuInfoResponse::default()).render()?;
+    let no_gpu_metrics = Metrics { system_info: info.clone(), gpu_info: GpuInfoResponse::default() }.render()?;
+    let failed = GpuInfoResponse { error: format!("NVML {hostile}"), ..Default::default() };
+    let failed_html = dashboard(hostile, info.clone(), failed.clone()).render()?;
+    let failed_metrics = Metrics { system_info: info, gpu_info: failed }.render()?;
+    let gpu_absent_and_failed_states = no_gpu_html.contains("No NVIDIA GPUs") && no_gpu_metrics.contains("dstack_gpu_nvml_up 1") && !no_gpu_metrics.contains("dstack_gpu_query_errors{")
+        && failed_metrics.contains("dstack_gpu_nvml_up 0") && !failed_html.contains("No NVIDIA GPUs") && failed_html.contains("NVML ") && !failed_html.contains("<script>");
     let expected = digest(&html);
-    let concurrent_baseline = {
-        let d = Dashboard { app_name: hostile.into(), app_id: vec![0,255], instance_id: vec![1,2], device_id: vec![3,4], key_provider_info: String::new(), tcb_info: String::new(), containers: vec![], system_info: SystemInfo::default(), public_sysinfo: false, public_logs: false, public_tcbinfo: false, cloud_vendor: String::new(), cloud_product: String::new() };
-        digest(&d.render()?)
-    };
+    let concurrent_baseline = digest(&quiet(hostile.to_string()).render()?);
     let mut threads = vec![];
-    for _ in 0..8 { let hostile = hostile.to_string(); threads.push(std::thread::spawn(move || { let d = Dashboard { app_name: hostile, app_id: vec![0,255], instance_id: vec![1,2], device_id: vec![3,4], key_provider_info: String::new(), tcb_info: String::new(), containers: vec![], system_info: SystemInfo::default(), public_sysinfo: false, public_logs: false, public_tcbinfo: false, cloud_vendor: String::new(), cloud_product: String::new() }; digest(&d.render().unwrap()) })); }
+    for _ in 0..8 { let hostile = hostile.to_string(); threads.push(std::thread::spawn(move || digest(&quiet(hostile).render().unwrap()))); }
     let concurrent_render_stable = threads.into_iter().all(|t| t.join().is_ok_and(|hash| hash == concurrent_baseline));
-    println!("{{\"html_text_escaped\":{html_text_escaped},\"html_attribute_escaped\":{html_attribute_escaped},\"hex_and_optional_names\":{hex_and_optional_names},\"boundary_units\":{boundary_units},\"prometheus_labels_escaped\":{prometheus_labels_escaped},\"numeric_metrics_exact\":{numeric_metrics_exact},\"high_cardinality_complete\":{high_cardinality_complete},\"concurrent_render_stable\":{concurrent_render_stable},\"html_hash\":{expected},\"html_len\":{},\"metrics_hash\":{},\"metrics_len\":{}}}", html.len(), digest(&metrics), metrics.len());
+    println!("{{\"html_text_escaped\":{html_text_escaped},\"html_attribute_escaped\":{html_attribute_escaped},\"hex_and_optional_names\":{hex_and_optional_names},\"boundary_units\":{boundary_units},\"prometheus_labels_escaped\":{prometheus_labels_escaped},\"numeric_metrics_exact\":{numeric_metrics_exact},\"high_cardinality_complete\":{high_cardinality_complete},\"load_average_unscaled\":{load_average_unscaled},\"uptime_units\":{uptime_units},\"gpu_labels_escaped\":{gpu_labels_escaped},\"gpu_optional_series\":{gpu_optional_series},\"gpu_errors_counted\":{gpu_errors_counted},\"gpu_dashboard_rows\":{gpu_dashboard_rows},\"gpu_absent_and_failed_states\":{gpu_absent_and_failed_states},\"concurrent_render_stable\":{concurrent_render_stable},\"html_hash\":{expected},\"html_len\":{},\"metrics_hash\":{},\"metrics_len\":{}}}", html.len(), digest(&metrics), metrics.len());
     Ok(())
 }
 """
