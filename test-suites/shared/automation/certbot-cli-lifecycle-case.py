@@ -36,18 +36,30 @@ SUPPORT = load_support()
 
 
 def write_config(
-    path: Path, workdir: Path, acme_url: str, api_url: str, domain: str, hook: str
+    path: Path,
+    workdir: Path,
+    acme_url: str,
+    api_url: str,
+    domain: str,
+    hook: str,
+    *,
+    domains: list[str] | None = None,
+    challenge: str | None = None,
+    cf_api_token: str | None = None,
 ) -> None:
+    names = domains if domains is not None else [domain]
+    token = SUPPORT.SENTINEL_TOKEN if cf_api_token is None else cf_api_token
     path.write_text(
         "\n".join(
             [
                 f'workdir = "{workdir}"',
                 f'acme_url = "{acme_url}"',
-                f'cf_api_token = "{SUPPORT.SENTINEL_TOKEN}"',
+                *([f'challenge = "{challenge}"'] if challenge else []),
+                f'cf_api_token = "{token}"',
                 f'cf_api_url = "{api_url}"',
                 "dns_txt_ttl = 60",
                 "auto_set_caa = false",
-                f'domains = ["{domain}"]',
+                "domains = [" + ", ".join(f'"{name}"' for name in names) + "]",
                 "renew_interval = 1",
                 "renew_days_before = 0",
                 "renew_timeout = 20",
@@ -67,6 +79,37 @@ def run_cli(binary: Path, config: Path, *args: str) -> subprocess.CompletedProce
         timeout=60,
         check=False,
     )
+
+
+def run_subcommand(
+    binary: Path, command: str, config: Path
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(binary), command, "--config", str(config)],
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+
+
+def certificate_names(path: Path) -> set[str]:
+    """Return the DNS subject alternative names of a live certificate."""
+    completed = subprocess.run(
+        ["openssl", "x509", "-in", str(path), "-noout", "-ext", "subjectAltName"],
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    if completed.returncode:
+        return set()
+    return {
+        item.strip()[4:].lower()
+        for line in completed.stdout.splitlines()[1:]
+        for item in line.split(",")
+        if item.strip().startswith("DNS:")
+    }
 
 
 def main() -> int:
@@ -211,9 +254,144 @@ def main() -> int:
             checks["records_and_adjacent_clean"] = all(
                 not records for records in snapshot.values()
             )
+
+            # PR #1137: editing `domains` must reissue once a certificate
+            # exists. PR #1136: a name and its wildcard share one
+            # `_acme-challenge` name, whose TXT records must accumulate rather
+            # than replace each other during one issuance. The pair is a name
+            # the CA has never authorized, so neither authorization is reused
+            # and both challenges are answered in this order.
+            pair = f"pair.{domain}"
+            added_names = [domain, pair, f"*.{pair}"]
+            wildcard_names = [domain, f"*.{domain}"]
+            before_change = cert_path.resolve() if cert_path.exists() else Path()
+            write_config(
+                config,
+                workdir,
+                acme_url,
+                api_url,
+                domain,
+                "true",
+                domains=added_names,
+            )
+            added = run_cli(binary, config, "--once")
+            after_add = cert_path.resolve() if cert_path.exists() else Path()
+            challenge_name = f"_acme-challenge.{pair}"
+            with state.lock:
+                challenge_peak = state.txt_peaks.get(challenge_name, 0)
+            checks["domain_addition_reissued"] = (
+                added.returncode == 0
+                and after_add != before_change
+                and certificate_names(cert_path) == set(added_names)
+            )
+            checks["name_and_wildcard_challenges_coexisted"] = challenge_peak >= 2
+            write_config(config, workdir, acme_url, api_url, domain, "true")
+            removed = run_cli(binary, config, "--once")
+            after_remove = cert_path.resolve() if cert_path.exists() else Path()
+            unchanged = run_cli(binary, config, "--once")
+            checks["domain_removal_reissued_once"] = (
+                removed.returncode == 0
+                and after_remove != after_add
+                and certificate_names(cert_path) == {domain}
+                and unchanged.returncode == 0
+                and (cert_path.resolve() if cert_path.exists() else Path())
+                == after_remove
+            )
+
+            # PR #1198: a SIGTERM that arrives while the daemon is still building
+            # the bot (here: blocked on the DNS provider's zone lookup) must be
+            # handled gracefully instead of hitting the default disposition.
+            with state.lock:
+                state.blocked = True
+                state.block_release.clear()
+                startup_baseline = len(state.operations)
+            startup_daemon = subprocess.Popen(
+                [str(binary), "renew", "--config", str(config)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                start_new_session=True,
+            )
+            daemon = startup_daemon
+            startup_reached_provider = False
+            startup_deadline = time.monotonic() + 15
+            while time.monotonic() < startup_deadline:
+                with state.lock:
+                    startup_reached_provider = len(state.operations) > startup_baseline
+                if startup_reached_provider or startup_daemon.poll() is not None:
+                    break
+                time.sleep(0.05)
+            running_in_startup = startup_daemon.poll() is None
+            os.killpg(startup_daemon.pid, signal.SIGTERM)
+            try:
+                startup_rc = startup_daemon.wait(timeout=10)
+            finally:
+                with state.lock:
+                    state.blocked = False
+                    state.block_release.set()
+            daemon = None
+            checks["sigterm_during_startup_graceful"] = (
+                startup_reached_provider and running_in_startup and startup_rc == 0
+            )
+
+            # PR #1132: dns-persist-01 needs no provider credential and never
+            # writes DNS; `dns-records` prints the one-time records instead.
+            # A dns-01 configuration without a token is refused by name.
+            persist_config = root / "certbot-persist.toml"
+            write_config(
+                persist_config,
+                workdir,
+                acme_url,
+                api_url,
+                domain,
+                "true",
+                domains=wildcard_names,
+                challenge="dns-persist-01",
+                cf_api_token="",
+            )
+            with state.lock:
+                persist_baseline = len(state.operations)
+            persist_records = run_subcommand(binary, "dns-records", persist_config)
+            with state.lock:
+                persist_operations = len(state.operations) - persist_baseline
+            record_lines = persist_records.stdout.splitlines()
+            checks["dns_persist_records_printed"] = (
+                persist_records.returncode == 0
+                and persist_operations == 0
+                and any(
+                    line.startswith(f"_validation-persist.{domain}. IN TXT ")
+                    and "accounturi=" in line
+                    and "policy=wildcard" in line
+                    for line in record_lines
+                )
+                and sum(
+                    line.startswith(f"{domain}. IN CAA ")
+                    and "validationmethods=dns-persist-01" in line
+                    for line in record_lines
+                )
+                == 2
+            )
+            tokenless_config = root / "certbot-tokenless.toml"
+            write_config(
+                tokenless_config,
+                workdir,
+                acme_url,
+                api_url,
+                domain,
+                "true",
+                cf_api_token="",
+            )
+            tokenless = run_subcommand(binary, "dns-records", tokenless_config)
+            checks["dns01_without_token_rejected"] = (
+                tokenless.returncode != 0
+                and "cf_api_token is required" in tokenless.stderr
+            )
+            checks["records_and_adjacent_clean"] = checks[
+                "records_and_adjacent_clean"
+            ] and all(not records for records in state.snapshot().values())
             status = "PASS" if all(checks.values()) else "FAIL"
             summary = (
-                "Certbot CLI once, hook, daemon pacing, graceful SIGTERM, malformed config, persisted restart, outage, recovery, and cleanup passed."
+                "Certbot CLI once, hook, daemon pacing, graceful SIGTERM (steady state and startup), malformed config, persisted restart, outage, recovery, domain-change reissue, name-plus-wildcard challenges, dns-persist-01 records, and cleanup passed."
                 if status == "PASS"
                 else f"Certbot CLI checks failed: {sorted(k for k, v in checks.items() if not v)}"
             )

@@ -64,6 +64,15 @@ Stop daemon mode with SIGTERM, run non-forced once mode after restart, inspect b
 
 - SIGTERM returns zero, restart does not spuriously invoke the hook, both DNS zones are empty, the adjacent zone is unchanged, and no process, listener, container, network, credential, certificate, or path is retained.
 
+## Post-baseline regression coverage (PRs #1132, #1136, #1137, and #1198)
+
+After the existing outage and recovery checks, reuse the same workdir, Pebble, and case-owned Cloudflare API:
+
+- **#1137 and #1136 (domain edits and a name plus its wildcard):** change `domains` from `["<domain>"]` to `["<domain>", "pair.<domain>", "*.pair.<domain>"]` and run `renew --once` without `--force`. `pair.<domain>` has never been authorized, so the CA reuses neither of its authorizations. Expected: exit 0, `live/cert.pem` points at a new issuance whose DNS SANs are exactly those three names, and at least two TXT records coexisted at `_acme-challenge.pair.<domain>` during that issuance (records for the shared challenge name accumulate instead of replacing each other). Change `domains` back to `["<domain>"]` and run `renew --once` twice. Expected: the first run reissues with exactly `<domain>`; the second exits 0 and leaves the live certificate unchanged.
+- **#1198 (signal during startup):** block the Cloudflare API, start `renew` as a daemon, wait until it has sent its first provider request (it is still building the bot), then send SIGTERM. Expected: the process exits with status 0 within 10 seconds rather than being killed by the default signal disposition. Release the block afterwards.
+- **#1132 (`dns-persist-01`):** write a configuration with `challenge = "dns-persist-01"`, an empty `cf_api_token`, and `domains = ["<domain>", "*.<domain>"]`, then run `certbot dns-records`. Expected: exit 0, zero Cloudflare API requests, one `_validation-persist.<domain>. IN TXT` line naming `accounturi=` with `policy=wildcard`, and exactly two `<domain>. IN CAA` lines carrying `validationmethods=dns-persist-01`. With `challenge` left at `dns-01` and an empty token, the same command exits non-zero and names `cf_api_token is required`.
+- Every DNS zone, including the adjacent zone, is empty at the end.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
