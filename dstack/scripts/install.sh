@@ -163,14 +163,16 @@ script_checkout() {
     return 1
 }
 
+# Sets `checkout`. Runs in the calling shell rather than a command
+# substitution so the temporary checkout it may create stays visible to the
+# exit trap that removes it.
 resolve_source() {
     if is_checkout "."; then
-        abs_dir "."
+        checkout=$(abs_dir ".")
         return 0
     fi
 
     if checkout=$(script_checkout); then
-        echo "$checkout"
         return 0
     fi
 
@@ -211,7 +213,7 @@ resolve_source() {
         ) >&2
     fi
 
-    abs_dir "$src"
+    checkout=$(abs_dir "$src")
 }
 
 validate_prefix() {
@@ -246,7 +248,7 @@ fi
 need_cmd cargo
 need_cmd install
 
-checkout=$(resolve_source)
+resolve_source
 core_checkout=$(core_dir "$checkout")
 bin_dir="$prefix/bin"
 
