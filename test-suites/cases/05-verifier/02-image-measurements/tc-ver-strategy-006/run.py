@@ -22,6 +22,13 @@ TESTS = (
     "aws_os_image_check_accepts_bound_measurement",
     "aws_os_image_check_rejects_boot_pcr_digest_mismatch",
     "image_cache_pruning_keeps_checksum_identity",
+    # TDX lite for an image whose OVMF normalizes the setup header, captured on
+    # QEMU 8.2.2 and 10.2.1, verifies without download (PR #1189).
+    "verifies_tdx_lite_fixture_with_normalized_kernel_header",
+    "verifies_tdx_lite_fixture_with_normalized_kernel_header_on_qemu_10_2",
+    # A self-consistent forged command line in the TDX lite document is caught
+    # by RTMR2, not by the image-identity chain (PR #1199).
+    "tdx_lite_rejects_a_self_consistent_forged_command_line",
 )
 
 
@@ -65,7 +72,16 @@ def main() -> int:
         for test in TESTS:
             stage = test
             completed = subprocess.run(
-                [cargo, "test", "-p", "dstack-verifier", test, "--lib"],
+                [
+                    cargo,
+                    "test",
+                    "-p",
+                    "dstack-verifier",
+                    "--lib",
+                    "--",
+                    "--exact",
+                    f"verification::tests::{test}",
+                ],
                 cwd=repository / "dstack",
                 env=environment,
                 text=True,
@@ -107,6 +123,9 @@ def main() -> int:
             "required_measurement_rejection",
             "boot_pcr_digest_mismatch_rejection",
             "cache_identity_pruning",
+            "tdx_lite_normalized_setup_header_without_download",
+            "tdx_lite_rtmr1_independent_of_host_qemu_version",
+            "tdx_lite_forged_document_cmdline_rejected_by_rtmr2",
         ],
     }
     artifact = {

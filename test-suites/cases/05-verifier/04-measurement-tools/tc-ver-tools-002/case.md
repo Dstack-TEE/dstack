@@ -74,6 +74,14 @@ Repeat measurement from an adjacent isolated image copy and compare it byte-for-
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PRs #1189 and #1199)
+
+- Cmdline composition (#1199): for the baseline and the mutated cmdline, RTMR2 equals an independent replay of `metadata.cmdline + " initrd=initrd"` (UTF-16LE with a trailing NUL) followed by `sha384(initrd)`, and matches neither the bare cmdline nor a doubled suffix.
+- Pre-normalization kernels (#1189): the 0.5.4.1 kernel still carries a boot-loader `write` field (`normalize-kernel-header.py --check` exits 1), its metadata omits `kernel_header_normalized`, and its RTMR1 moves with guest RAM: 1 GiB changes exactly `rtmr0` and `rtmr1`, while 2 GiB and 4 GiB keep the same RTMR1.
+- Normalized kernels (#1189): after the candidate `os/image/normalize-kernel-header.py` rewrites an isolated copy and `kernel_header_normalized = true` is declared, only RTMR1 changes and it equals an independent Authenticode SHA-384 replay of the shipped file; RTMR1 and RTMR2 are identical at 1, 2, 3, and 8 GiB on QEMU 8.2.2, 9.2.1, and 10.2.1.
+- Declaring the flag without normalizing measures the file exactly as shipped (dstack-mr does not rewrite the header). Writing the QEMU loader values into `type_of_loader`, `loadflags.CAN_USE_HEAP`, `ramdisk_image`, `ramdisk_size`, `heap_end_ptr`, and `cmd_line_ptr` of a normalized kernel changes exactly RTMR1; renormalizing restores the identical file and all four registers.
+- Native golden vectors `kernel::tests::the_normalized_flag_selects_which_kernel_bytes_are_measured`, `kernel::tests::only_the_patched_digest_moves_with_guest_memory`, `tdx::tests::measured_kernel_cmdline_appends_the_ovmf_suffix`, `tdx::tests::rtmr2_command_line_event_digest_is_stable`, `tdx::tests::rtmr2_replay_is_stable`, and `tdx::tests::tdx_measurement_document_cbor_is_stable` pass by exact name.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.

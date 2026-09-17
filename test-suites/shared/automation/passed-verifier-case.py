@@ -22,10 +22,13 @@ checks afterwards that the candidate checkout was not written to.
 
 from __future__ import annotations
 
+import base64
+import copy
 import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import socket
 import subprocess
@@ -37,13 +40,19 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 # Committed non-production evidence in the candidate checkout. `quote-report`
-# is full TDX and needs the image server; the other three carry authenticated
-# measurement material and verify offline.
+# is full TDX and needs the image server; the others carry authenticated
+# measurement material and verify offline. The normalized pair is one image
+# captured on QEMU 8.2.2 and 10.2.1 (PR #1189); the v1/v0 pair is one boot's
+# MessagePack and legacy SCALE `Attest` results (PR #1207).
 CORPUS = (
     "tdx-lite-attestation.json",
     "tdx-lite-getquote.json",
     "sev-snp-attestation.json",
     "quote-report.json",
+    "tdx-lite-normalized-attestation.json",
+    "tdx-lite-normalized-qemu-10-2-attestation.json",
+    "tdx-lite-v1-attest.json",
+    "tdx-lite-v0-attest.json",
 )
 OFFLINE_VALID = (
     "tdx-lite-attestation.json",
@@ -1385,7 +1394,30 @@ OFFLINE_VERDICTS = {
         "tee_variant": "dstack-tdx",
         "stage": "os_image_hash_verified",
     },
+    "tdx-lite-normalized-attestation.json": {
+        "is_valid": True,
+        "tee_variant": "dstack-tdx",
+        "tcb_status": "UpToDate",
+    },
+    "tdx-lite-normalized-qemu-10-2-attestation.json": {
+        "is_valid": True,
+        "tee_variant": "dstack-tdx",
+        "tcb_status": "UpToDate",
+    },
+    "tdx-lite-v1-attest.json": {
+        "is_valid": True,
+        "tee_variant": "dstack-tdx",
+        "tcb_status": "UpToDate",
+    },
+    "tdx-lite-v0-attest.json": {
+        "is_valid": True,
+        "tee_variant": "dstack-tdx",
+        "tcb_status": "UpToDate",
+    },
 }
+# Same-boot encodings of one attestation that must verify to byte-identical
+# results: (MessagePack V1 fixture, legacy SCALE V0 fixture).
+SAME_BOOT_ENCODINGS = (("tdx-lite-v1-attest.json", "tdx-lite-v0-attest.json"),)
 
 
 def cli006_step01(ctx: Context) -> tuple[str, dict[str, Any]]:
@@ -1464,7 +1496,38 @@ def cli006_step02(ctx: Context) -> tuple[str, dict[str, Any]]:
             "quote_verified": details["quote_verified"],
             "event_log_verified": details["event_log_verified"],
             "os_image_hash_verified": details["os_image_hash_verified"],
+            "acpi_tables_verified": details["acpi_tables_verified"],
+            "os_image_hash": (details.get("app_info") or {}).get("os_image_hash"),
+            "stdout_sha256": row["stdout_sha256"],
             "reason_excerpt": str(document["reason"])[:160],
+        }
+        if expected["is_valid"] and expected["tee_variant"] == "dstack-tdx":
+            require(
+                details["os_image_hash_verified"] is True
+                and details["acpi_tables_verified"] is True,
+                f"{name} verified without the TDX-lite image and ACPI checks",
+            )
+
+    same_boot: dict[str, dict[str, Any]] = {}
+    for msgpack_name, scale_name in SAME_BOOT_ENCODINGS:
+        msgpack = bytes.fromhex(ctx.attestation(msgpack_name))
+        scale = bytes.fromhex(ctx.attestation(scale_name))
+        require(
+            msgpack[:1] != b""
+            and (0x80 <= msgpack[0] <= 0x8F or msgpack[0] in (0xDE, 0xDF)),
+            f"{msgpack_name} is not a MessagePack V1 attestation map",
+        )
+        require(
+            scale[:1] == b"\x00", f"{scale_name} is not a legacy SCALE V0 attestation"
+        )
+        require(
+            known[msgpack_name]["stdout_sha256"] == known[scale_name]["stdout_sha256"],
+            f"{msgpack_name} and {scale_name} from one boot verified to different results",
+        )
+        same_boot[msgpack_name] = {
+            "legacy_counterpart": scale_name,
+            "first_byte": f"0x{msgpack[0]:02x}",
+            "identical_result_sha256": known[msgpack_name]["stdout_sha256"],
         }
 
     mutation_dir = ctx.workdir / "mutations"
@@ -1512,10 +1575,16 @@ def cli006_step02(ctx: Context) -> tuple[str, dict[str, Any]]:
             }
     ctx.known = known  # type: ignore[attr-defined]
     return (
-        "Every committed fixture retained its recorded offline verdict -- TDX-lite and SEV-SNP "
-        "verified, full TDX failed closed at the image stage -- and each one-field mutation failed "
-        "at exactly the verification stage it targets.",
-        {"known_fixtures": known, "mutations": mutations},
+        "Every committed fixture retained its recorded offline verdict -- TDX-lite (legacy, "
+        "setup-header-normalized on QEMU 8.2.2 and 10.2.1, and same-boot MessagePack/SCALE) and "
+        "SEV-SNP verified, full TDX failed closed at the image stage, the same-boot encodings "
+        "verified byte-identically -- and each one-field mutation failed at exactly the "
+        "verification stage it targets.",
+        {
+            "known_fixtures": known,
+            "same_boot_encodings": same_boot,
+            "mutations": mutations,
+        },
     )
 
 
@@ -1568,6 +1637,453 @@ def cli006_step03(ctx: Context) -> tuple[str, dict[str, Any]]:
         "Rerunning the whole suite reproduced every verdict, invalid input was rejected with a "
         "redacted diagnostic, and the committed fixtures in the candidate checkout were unmodified.",
         evidence,
+    )
+
+
+# --------------------------------------------------------------------------
+# Scenario: TDX-lite measurement document matrix (tc-ver-input-plat-004)
+# --------------------------------------------------------------------------
+
+# Intel TDX quote v4 header: version 4, ECDSA-P256 key type, TDX TEE type.
+TDX_QUOTE_V4_HEADER = bytes.fromhex("0400020081000000")
+TDX_QUOTE_HEADER_LEN = 48
+TDX_REPORT_MRTD_OFFSET = 136
+TDX_REPORT_RTMR0_OFFSET = 328
+OVMF_INITRD_CMDLINE_SUFFIX = " initrd=initrd"
+RTMR1_TRAILING_EVENTS = (
+    b"Calling EFI Application from Boot Option",
+    b"\x00\x00\x00\x00",
+    b"Exit Boot Services Invocation",
+    b"Exit Boot Services Returned with Success",
+)
+TDX_MEASUREMENT_DOCUMENT_VERSION = 4
+# x86_64 COMMAND_LINE_SIZE, the document's command-line bound.
+TDX_MAX_CMDLINE_LEN = 2048
+
+
+def cbor_decode(data: bytes, offset: int = 0) -> tuple[Any, int]:
+    """Decode the definite-length CBOR subset the measurement document uses."""
+    initial = data[offset]
+    major, info = initial >> 5, initial & 0x1F
+    offset += 1
+    if major == 7:
+        require(info in (20, 21), f"unsupported CBOR simple value {info}")
+        return info == 21, offset
+    if info < 24:
+        argument = info
+    elif info in (24, 25, 26, 27):
+        size = 1 << (info - 24)
+        argument = int.from_bytes(data[offset : offset + size], "big")
+        offset += size
+    else:
+        raise CaseFailure("indefinite-length CBOR is not expected in the document")
+    if major == 0:
+        return argument, offset
+    if major == 2:
+        return bytes(data[offset : offset + argument]), offset + argument
+    if major == 3:
+        return data[offset : offset + argument].decode(), offset + argument
+    if major == 4:
+        items = []
+        for _ in range(argument):
+            item, offset = cbor_decode(data, offset)
+            items.append(item)
+        return items, offset
+    if major == 5:
+        mapping: dict[Any, Any] = {}
+        for _ in range(argument):
+            key, offset = cbor_decode(data, offset)
+            mapping[key], offset = cbor_decode(data, offset)
+        return mapping, offset
+    raise CaseFailure(f"unsupported CBOR major type {major}")
+
+
+def cbor_head(major: int, argument: int) -> bytes:
+    """Encode a CBOR initial byte with the shortest argument form."""
+    if argument < 24:
+        return bytes([major << 5 | argument])
+    for info, size in ((24, 1), (25, 2), (26, 4), (27, 8)):
+        if argument < 1 << (8 * size):
+            return bytes([major << 5 | info]) + argument.to_bytes(size, "big")
+    raise CaseFailure("CBOR argument is too large")
+
+
+def cbor_encode(value: Any) -> bytes:
+    """Encode a value with the same canonical subset dstack-types emits."""
+    if isinstance(value, bool):
+        return b"\xf5" if value else b"\xf4"
+    if isinstance(value, int):
+        return cbor_head(0, value)
+    if isinstance(value, bytes):
+        return cbor_head(2, len(value)) + value
+    if isinstance(value, str):
+        encoded = value.encode()
+        return cbor_head(3, len(encoded)) + encoded
+    if isinstance(value, list):
+        return cbor_head(4, len(value)) + b"".join(map(cbor_encode, value))
+    if isinstance(value, dict):
+        return cbor_head(5, len(value)) + b"".join(
+            cbor_encode(key) + cbor_encode(item) for key, item in value.items()
+        )
+    raise CaseFailure(f"cannot CBOR-encode {type(value).__name__}")
+
+
+def sha384(data: bytes) -> bytes:
+    """Return a raw SHA-384 digest."""
+    return hashlib.sha384(data).digest()
+
+
+def replay_rtmr(events: list[bytes]) -> str:
+    """Replay an RTMR from the all-zero register."""
+    register = bytes(48)
+    for event in events:
+        register = sha384(register + event)
+    return register.hex()
+
+
+def rtmr1_from_document(image: dict[str, Any]) -> str:
+    """Replay RTMR[1] from the document's kernel Authenticode digest."""
+    return replay_rtmr(
+        [image["kernel_authenticode"], *(sha384(e) for e in RTMR1_TRAILING_EVENTS)]
+    )
+
+
+def rtmr2_from_cmdline(cmdline: str, initrd_digest: bytes) -> str:
+    """Replay RTMR[2] from a measured command line and the initrd digest."""
+    event = sha384(cmdline.encode("utf-16-le") + b"\x00\x00")
+    return replay_rtmr([event, initrd_digest])
+
+
+def tdx_quote_registers(blob: bytes) -> dict[str, str]:
+    """Read MRTD and RTMR0-3 from the single TDX v4 quote inside a blob."""
+    starts = [
+        match.start() for match in re.finditer(re.escape(TDX_QUOTE_V4_HEADER), blob)
+    ]
+    require(len(starts) == 1, f"expected one TDX v4 quote, found {len(starts)}")
+    body = blob[starts[0] + TDX_QUOTE_HEADER_LEN :]
+    registers = {
+        "mrtd": body[TDX_REPORT_MRTD_OFFSET : TDX_REPORT_MRTD_OFFSET + 48].hex()
+    }
+    for index in range(4):
+        start = TDX_REPORT_RTMR0_OFFSET + 48 * index
+        registers[f"rtmr{index}"] = body[start : start + 48].hex()
+    return registers
+
+
+def embedded_vm_config(blob: bytes) -> dict[str, Any]:
+    """Extract the vm_config JSON a legacy SCALE attestation carries."""
+    key = b'{"os_image_hash"'
+    starts = [match.start() for match in re.finditer(re.escape(key), blob)]
+    require(len(starts) == 1, f"expected one embedded vm_config, found {len(starts)}")
+    value, _ = json.JSONDecoder().raw_decode(
+        blob[starts[0] :].decode("utf-8", "replace")
+    )
+    return value
+
+
+def decode_document(vm_config: dict[str, Any]) -> tuple[dict[str, Any], bytes, bytes]:
+    """Decode vm_config.tdx_measurement and check its os_image_hash binding."""
+    document = vm_config["tdx_measurement"]
+    cbor = base64.b64decode(document["measurement"])
+    checksum = base64.b64decode(document["checksum_file"])
+    measurement, end = cbor_decode(cbor)
+    require(end == len(cbor), "the measurement document has trailing bytes")
+    require(
+        cbor_encode(measurement) == cbor,
+        "the CBOR codec does not round-trip the document",
+    )
+    require(
+        hashlib.sha256(checksum).hexdigest() == vm_config["os_image_hash"],
+        "os_image_hash does not commit to the carried sha256sum.txt",
+    )
+    entries = dict(
+        reversed(line.split("  ", 1)) for line in checksum.decode().splitlines() if line
+    )
+    require(
+        entries.get("measurement.tdx.cbor") == hashlib.sha256(cbor).hexdigest(),
+        "sha256sum.txt does not commit to measurement.tdx.cbor",
+    )
+    return measurement, cbor, checksum
+
+
+def rebind_document(
+    vm_config: dict[str, Any], cbor: bytes, checksum: bytes, measurement: dict[str, Any]
+) -> dict[str, Any]:
+    """Re-encode a document and rebuild every hash that commits to it.
+
+    The result is an internally consistent image identity, so only the
+    measurement comparison against the quote can reject it.
+    """
+    encoded = cbor_encode(measurement)
+    old, new = hashlib.sha256(cbor).hexdigest(), hashlib.sha256(encoded).hexdigest()
+    lines = []
+    for line in checksum.decode().splitlines():
+        digest_hex, name = line.split("  ", 1)
+        if name == "measurement.tdx.cbor":
+            require(digest_hex == old, "fixture checksum line is stale")
+            digest_hex = new
+        lines.append(f"{digest_hex}  {name}\n")
+    rebuilt = "".join(lines).encode()
+    value = copy.deepcopy(vm_config)
+    value["tdx_measurement"] = {
+        "checksum_file": base64.b64encode(rebuilt).decode(),
+        "measurement": base64.b64encode(encoded).decode(),
+    }
+    value["os_image_hash"] = hashlib.sha256(rebuilt).hexdigest()
+    return value
+
+
+def input004_step03(ctx: Context) -> tuple[str, dict[str, Any]]:
+    """Replay hardware quotes from the document and reject forged documents."""
+    config = ctx.config  # type: ignore[attr-defined]
+    known = ctx.known  # type: ignore[attr-defined]
+    source = json.loads(ctx.corpus["tdx-lite-getquote.json"].read_text())
+    vm_config = json.loads(source["vm_config"])
+    measurement, cbor, checksum = decode_document(vm_config)
+    image = measurement["image"]
+    quote = tdx_quote_registers(bytes.fromhex(source["quote"]))
+    require(
+        measurement["version"] == TDX_MEASUREMENT_DOCUMENT_VERSION,
+        f"legacy fixture document is version {measurement['version']}",
+    )
+    require(
+        "cmdline" in image and "cmdline_sha384" not in image,
+        "the document does not carry the command line string",
+    )
+    require(
+        "kernel_header_normalized" not in image,
+        "the pre-normalization document declares kernel_header_normalized",
+    )
+    require(
+        rtmr1_from_document(image) == quote["rtmr1"],
+        "the pre-normalization document kernel digest does not replay to the quoted RTMR1",
+    )
+    require(
+        rtmr2_from_cmdline(
+            image["cmdline"] + OVMF_INITRD_CMDLINE_SUFFIX, image["initrd_sha384"]
+        )
+        == quote["rtmr2"],
+        "base cmdline + ' initrd=initrd' does not replay to the quoted RTMR2",
+    )
+    require(
+        rtmr2_from_cmdline(image["cmdline"], image["initrd_sha384"]) != quote["rtmr2"],
+        "the quoted RTMR2 also matched the bare command line",
+    )
+    replay = {"tdx-lite-getquote.json": {"rtmr1": True, "rtmr2": True, "suffix": True}}
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for name, qemu in (
+        ("tdx-lite-normalized-attestation.json", "8.2.2"),
+        ("tdx-lite-normalized-qemu-10-2-attestation.json", "10.2.1"),
+    ):
+        blob = bytes.fromhex(ctx.attestation(name))
+        embedded = embedded_vm_config(blob)
+        document, _, _ = decode_document(embedded)
+        registers = tdx_quote_registers(blob)
+        require(
+            embedded.get("qemu_version") == qemu,
+            f"{name} was not captured on QEMU {qemu}",
+        )
+        require(
+            document["image"].get("kernel_header_normalized") is True,
+            f"{name} does not declare a normalized setup header",
+        )
+        require(
+            rtmr1_from_document(document["image"]) == registers["rtmr1"],
+            f"{name}: the plain kernel digest does not replay to the quoted RTMR1",
+        )
+        require(
+            rtmr2_from_cmdline(
+                document["image"]["cmdline"] + OVMF_INITRD_CMDLINE_SUFFIX,
+                document["image"]["initrd_sha384"],
+            )
+            == registers["rtmr2"],
+            f"{name}: the document command line does not replay to the quoted RTMR2",
+        )
+        require(known[name]["is_valid"] is True, f"{name} did not verify offline")
+        normalized[name] = {
+            "qemu_version": qemu,
+            "os_image_hash": embedded["os_image_hash"],
+            "registers": registers,
+        }
+    first, second = normalized.values()
+    require(
+        first["os_image_hash"] == second["os_image_hash"],
+        "the normalized captures are not the same image",
+    )
+    require(
+        first["registers"]["rtmr1"] == second["registers"]["rtmr1"]
+        and first["registers"]["rtmr2"] == second["registers"]["rtmr2"],
+        "RTMR1/RTMR2 of one normalized image depend on the host QEMU version",
+    )
+    require(
+        first["registers"]["mrtd"] != second["registers"]["mrtd"]
+        and first["registers"]["rtmr0"] != second["registers"]["rtmr0"],
+        "the QEMU 8.2.2 and 10.2.1 captures no longer differ in MRTD/RTMR0",
+    )
+
+    work = ctx.workdir / "document-matrix"
+    work.mkdir(exist_ok=True)
+    initrd_digest = image["initrd_sha384"]
+
+    def verify(label: str, rebound: dict[str, Any]) -> dict[str, Any]:
+        body = dict(source)
+        body["vm_config"] = json.dumps(rebound)
+        path = work / f"{label}.json"
+        path.write_text(json.dumps(body), encoding="utf-8")
+        row = run_oneshot(ctx, config, path)
+        document = row["document"]
+        require(document is not None, f"{label} produced no structured result")
+        require(not row["panicked"], f"{label} panicked the verifier")
+        require(no_secret(row["stderr_tail"]), f"{label} disclosed private material")
+        return row
+
+    def rejected(
+        label: str,
+        mutated: dict[str, Any],
+        fragments: tuple[str, ...],
+        forbidden: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        row = verify(label, rebind_document(vm_config, cbor, checksum, mutated))
+        document = row["document"]
+        reason = str(document["reason"] or "")
+        require(
+            row["returncode"] == 1 and document["is_valid"] is False,
+            f"{label} verified",
+        )
+        require(
+            document["details"]["quote_verified"] is True,
+            f"{label} failed before the quote stage",
+        )
+        require(
+            document["details"]["os_image_hash_verified"] is False,
+            f"{label} verified the image",
+        )
+        for fragment in fragments:
+            require(
+                fragment in reason,
+                f"{label} did not report {fragment!r}: {reason[:300]}",
+            )
+        for fragment in forbidden:
+            require(
+                fragment not in reason, f"{label} unexpectedly reported {fragment!r}"
+            )
+        return {"rejected": True, "reason_excerpt": reason[:240]}
+
+    rows: dict[str, dict[str, Any]] = {}
+    control = verify(
+        "control-reencoded",
+        rebind_document(vm_config, cbor, checksum, copy.deepcopy(measurement)),
+    )
+    require(
+        control["document"]["is_valid"] is True
+        and control["stdout_sha256"]
+        == known["tdx-lite-getquote.json"]["stdout_sha256"],
+        "re-encoding the unmodified document changed the verification result",
+    )
+    rows["control-reencoded"] = {"is_valid": True, "identical_to_committed": True}
+
+    forged = copy.deepcopy(measurement)
+    forged["image"]["cmdline"] += " forged=1"
+    expected = rtmr2_from_cmdline(
+        forged["image"]["cmdline"] + OVMF_INITRD_CMDLINE_SUFFIX, initrd_digest
+    )
+    rows["forged-cmdline"] = rejected(
+        "forged-cmdline",
+        forged,
+        (f"RTMR2 mismatch: expected={expected}, actual={quote['rtmr2']}",),
+    )
+
+    suffixed = copy.deepcopy(measurement)
+    suffixed["image"]["cmdline"] += OVMF_INITRD_CMDLINE_SUFFIX
+    expected = rtmr2_from_cmdline(
+        suffixed["image"]["cmdline"] + OVMF_INITRD_CMDLINE_SUFFIX, initrd_digest
+    )
+    rows["suffix-carried-in-document"] = rejected(
+        "suffix-carried-in-document",
+        suffixed,
+        (f"RTMR2 mismatch: expected={expected}",),
+    )
+
+    at_limit = copy.deepcopy(measurement)
+    at_limit["image"]["cmdline"] += " " + "a" * (
+        TDX_MAX_CMDLINE_LEN - len(image["cmdline"]) - 1
+    )
+    require(
+        len(at_limit["image"]["cmdline"]) == TDX_MAX_CMDLINE_LEN, "limit row length"
+    )
+    rows["cmdline-at-limit"] = rejected(
+        "cmdline-at-limit", at_limit, ("RTMR2 mismatch",), ("COMMAND_LINE_SIZE",)
+    )
+
+    oversized = copy.deepcopy(at_limit)
+    oversized["image"]["cmdline"] += "a"
+    rows["cmdline-over-limit"] = rejected(
+        "cmdline-over-limit",
+        oversized,
+        (f"{TDX_MAX_CMDLINE_LEN + 1} bytes", "COMMAND_LINE_SIZE"),
+        ("RTMR",),
+    )
+
+    no_rootfs = copy.deepcopy(measurement)
+    no_rootfs["image"]["cmdline"] = " ".join(
+        token
+        for token in image["cmdline"].split()
+        if not token.startswith("dstack.rootfs_hash=")
+    )
+    rows["cmdline-without-rootfs-hash"] = rejected(
+        "cmdline-without-rootfs-hash", no_rootfs, ("dstack.rootfs_hash",), ("RTMR",)
+    )
+
+    version3 = copy.deepcopy(measurement)
+    version3["version"] = 3
+    rows["version-3-document"] = rejected(
+        "version-3-document", version3, ("unsupported version 3",), ("RTMR",)
+    )
+
+    digest_form = copy.deepcopy(measurement)
+    digest_form["image"] = {
+        "cmdline_sha384": sha384(image["cmdline"].encode()),
+        **{key: value for key, value in image.items() if key != "cmdline"},
+    }
+    rows["version-3-digest-field"] = rejected(
+        "version-3-digest-field", digest_form, ("cmdline",), ("RTMR",)
+    )
+
+    # The normalization flag is image identity, not a verifier input the
+    # host controls: declaring it moves os_image_hash, and the quoted
+    # registers still decide the verdict.
+    declared = copy.deepcopy(measurement)
+    declared["image"]["kernel_header_normalized"] = True
+    rebound = rebind_document(vm_config, cbor, checksum, declared)
+    declared_row = verify("declared-normalization-flag", rebound)
+    reported = (declared_row["document"]["details"].get("app_info") or {}).get(
+        "os_image_hash"
+    )
+    require(
+        declared_row["document"]["is_valid"] is True,
+        "a declared flag at 2 GiB changed the verdict",
+    )
+    require(
+        reported == rebound["os_image_hash"] != vm_config["os_image_hash"],
+        "declaring kernel_header_normalized did not move the reported os_image_hash",
+    )
+    rows["declared-normalization-flag"] = {
+        "is_valid": True,
+        "os_image_hash_moved": True,
+    }
+
+    return (
+        "The quoted RTMR1/RTMR2 of real TDX-lite captures replayed from the carried measurement "
+        "document (base command line plus ' initrd=initrd'); one normalized image kept identical "
+        "RTMR1/RTMR2 on QEMU 8.2.2 and 10.2.1; self-consistent forged, suffixed, oversized, "
+        "rootfs-hash-less, and version-3 documents were rejected by name; and declaring the "
+        "normalization flag moved os_image_hash.",
+        {
+            "hardware_replay": replay,
+            "normalized_captures": normalized,
+            "document_rows": rows,
+        },
     )
 
 
@@ -2574,12 +3090,16 @@ CASES: dict[str, dict[str, Any]] = {
         "steps": [
             ("prereq", cli006_step01),
             ("measurement-mutation-matrix", cli006_step02),
+            ("measurement-document-matrix", input004_step03),
             ("state-isolation", cli006_step03),
         ],
         "summary": (
             "TDX-lite measurements retained their recorded verdicts and platform labels, quote-body "
-            "and post-quote mutations failed at the exact trust stage they targeted, unsupported "
-            "full-TDX image verification failed closed offline, and repeats remained isolated."
+            "and post-quote mutations failed at the exact trust stage they targeted, quoted "
+            "RTMR1/RTMR2 replayed from the carried measurement document independent of the host "
+            "QEMU for a normalized image, forged or malformed documents were rejected by name, "
+            "unsupported full-TDX image verification failed closed offline, and repeats remained "
+            "isolated."
         ),
         "remarks": (
             "The shared offline corpus also exercises SEV-SNP as an adjacent-platform identity; "

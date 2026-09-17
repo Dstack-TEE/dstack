@@ -73,6 +73,10 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PR #1207)
+
+- v1 `Attest` and `IssueCert` always use the MessagePack V1 schema while v0 keeps the content-dependent SCALE form. `verification::tests::msgpack_and_scale_encodings_verify_identically` re-encodes the legacy TDX-lite, normalized TDX-lite, and SEV-SNP fixtures as V1 and requires identical verification responses; `verification::tests::verifies_real_v1_attest_identically_to_v0_from_the_same_boot` does the same for a real same-boot `/v1/Attest` and `/Attest` capture. Both pass by exact name.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.
