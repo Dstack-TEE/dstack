@@ -47,6 +47,19 @@ the helper lives beside the common assembler.
 OCI registry. It is likewise independent of the backend that produced the
 image.
 
+## Kernel build tree
+
+A backend may export the kernel build tree of the image it built and declare it
+as the optional `artifacts.kernel_devel` manifest entry. The assembler
+publishes it as `<name>-<version>-kernel-devel.tar.gz` beside the image
+archives and deliberately keeps it out of `sha256sum.txt`: nothing in it is
+measured at boot, so folding it into `os_image_hash` would make the OS identity
+depend on a developer artifact. A backend that does not export one omits the
+key, and the release is unchanged.
+
+`kernel-builder/` builds the container image that carries this tree plus a
+matching toolchain; see [`kernel-builder/README.md`](kernel-builder/README.md).
+
 ## Kernel setup-header normalization
 
 `assemble.sh` runs `normalize-kernel-header.py` over `bzImage` before it

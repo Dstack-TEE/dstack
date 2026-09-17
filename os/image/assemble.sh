@@ -109,6 +109,7 @@ exact_keys(
     data["artifacts"],
     "artifacts",
     ("initramfs", "kernel", "firmware", "rootfs_verity", "firmware_sev", "uki"),
+    ("kernel_devel",),
 )
 if "backend_metadata" in data and not isinstance(data["backend_metadata"], dict):
     raise SystemExit("manifest field must be an object: backend_metadata")
@@ -179,6 +180,7 @@ values = [
     artifact("rootfs_verity"),
     artifact("firmware_sev", optional=True),
     artifact("uki", optional=True),
+    artifact("kernel_devel", optional=True),
 ]
 for value in values:
     if not isinstance(value, str):
@@ -187,7 +189,7 @@ for value in values:
 PYMANIFEST
 )
 
-if [ "${#MANIFEST_VALUES[@]}" -ne 15 ]; then
+if [ "${#MANIFEST_VALUES[@]}" -ne 16 ]; then
     echo "Error: failed to read artifact manifest: $MANIFEST" >&2
     exit 1
 fi
@@ -211,6 +213,7 @@ OVMF_FIRMWARE=${MANIFEST_VALUES[11]}
 ROOTFS_IMAGE=${MANIFEST_VALUES[12]}
 OVMF_SEV_FIRMWARE=${MANIFEST_VALUES[13]}
 UKI_IMAGE=${MANIFEST_VALUES[14]}
+KERNEL_DEVEL_ARCHIVE=${MANIFEST_VALUES[15]}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(realpath "$SCRIPT_DIR/../..")
@@ -230,6 +233,7 @@ case "$OUTPUT_DIR" in
 esac
 IMAGE_TAR=${IMAGE_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}.tar.gz"}
 IMAGE_TAR_UKI=${IMAGE_TAR_UKI:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-uki.tar.gz"}
+KERNEL_DEVEL_TAR=${KERNEL_DEVEL_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-kernel-devel.tar.gz"}
 TAR_DIR_NAME=$(basename "$OUTPUT_DIR")
 
 echo "Assembling ${DIST_NAME} ${DSTACK_VERSION} from ${BACKEND} artifacts (${FLAVOR})"
@@ -663,4 +667,18 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
         (cd "$PARENT_DIR" && tar -czvf "$IMAGE_TAR_UKI" "${UKI_TAR_FILES[@]}")
         echo
     fi
+fi
+
+# The exported kernel build tree, when the backend produced one. It ships
+# beside the image tarballs rather than inside them, and it is deliberately
+# absent from sha256sum.txt: nothing in it is measured at boot, so folding it
+# into os_image_hash would make the OS identity depend on a developer artifact.
+# Applications building an out-of-tree module against this image download it;
+# see docs/building-guest-os.md.
+if [ -n "$KERNEL_DEVEL_ARCHIVE" ]; then
+    echo "Publishing the kernel build tree to ${KERNEL_DEVEL_TAR}"
+    cp "$KERNEL_DEVEL_ARCHIVE" "$KERNEL_DEVEL_TAR"
+    KERNEL_DEVEL_SHA256=$(sha256sum "$KERNEL_DEVEL_TAR" | awk '{print $1}')
+    KERNEL_DEVEL_BYTES=$(stat -L -c %s "$KERNEL_DEVEL_TAR")
+    echo "kernel-devel: ${KERNEL_DEVEL_BYTES} bytes, sha256 ${KERNEL_DEVEL_SHA256}"
 fi

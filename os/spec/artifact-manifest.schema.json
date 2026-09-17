@@ -71,6 +71,7 @@
       }
     },
     "artifacts": {
+      "description": "kernel_devel is optional: a backend that does not export the kernel build tree omits the key, so schema version 1 stays compatible.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -90,6 +91,9 @@
           "oneOf": [{"$ref": "#/$defs/artifactPath"}, {"type": "null"}]
         },
         "uki": {
+          "oneOf": [{"$ref": "#/$defs/artifactPath"}, {"type": "null"}]
+        },
+        "kernel_devel": {
           "oneOf": [{"$ref": "#/$defs/artifactPath"}, {"type": "null"}]
         }
       }
