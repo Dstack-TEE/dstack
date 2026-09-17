@@ -1,24 +1,10 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 #
-# Export the minimal kernel build tree an application needs to compile an
-# out-of-tree module (`make -C $KDIR M=$PWD modules`) against the guest kernel.
-#
-# The guest image ships modules but no build tree, so an application that needs
-# its own .ko had to reconstruct a byte-identical kernel build to obtain a
-# matching Module.symvers and vermagic. This exports that tree from the build
-# that produced the shipped kernel instead.
-#
-# The file selection is upstream's: scripts/package/install-extmod-build is
-# what `make bindeb-pkg` uses to produce Debian's linux-headers package, so the
-# set of files carried here tracks Kbuild rather than a list maintained by
-# dstack. It is invoked through `make run-command` because it reads srctree,
-# SRCARCH, CC and HOSTCC out of the Kbuild environment.
-#
-# The result is deliberately NOT installed into the guest rootfs: it is ~100 MB
-# of build inputs no CVM needs at runtime, and adding it would change the
-# rootfs verity hash and therefore the OS image identity. It ships as a
-# separate release artifact.
+# Export an external-module build tree from the kernel build that ships in the
+# guest. Delegate file selection to upstream's Debian headers exporter through
+# make run-command, which supplies its required Kbuild environment.
+# This tree is a separate developer artifact, never guest rootfs payload.
 set -euo pipefail
 
 usage() {
@@ -98,12 +84,9 @@ install -m0644 "$config" "$headers/.config"
 # __FILE__ and debug info, not to -S output; measured, the paths survive).
 # Dropping it costs nothing: it exists only to generate
 # scripts/mod/devicetable-offsets.h, which ships, and so does its .c source.
-find "$headers" -name '*.s' -delete
+rm -f "$headers/scripts/mod/devicetable-offsets.s"
 
-# Written for the consumer, not for the build: an out-of-tree module is only
-# loadable by the image whose kernel produced this tree, so the tree has to say
-# which image that is, and a Module.symvers or .config that differs from the
-# shipped one silently produces a module that fails to load.
+# Record identity and compatibility inputs for consumers of the archive.
 python3 - "$OUT" "$headers" "$release" "$version" "$BACKEND" "$IMAGE_VERSION" \
     "$FLAVOR" <<'PY'
 import hashlib

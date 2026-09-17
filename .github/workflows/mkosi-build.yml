@@ -273,10 +273,6 @@ jobs:
           VERSION: ${{ steps.hashes.outputs.version }}
         run: |
           set -euo pipefail
-          # The kernel build tree is what an application compiles its own
-          # modules against. It is not measured and not part of
-          # os_image_hash -- it is published so an application does not have to
-          # reconstruct the kernel build to obtain a matching Module.symvers.
           devel="$DIST_DIR/dstack-$VERSION-kernel-devel.tar.gz"
           test -f "$devel"
           sha256=$(sha256sum "$devel" | awk '{print $1}')
@@ -285,6 +281,7 @@ jobs:
           # archive is what ships, and its metadata is what the builder image
           # is then built against.
           work=$(mktemp -d)
+          trap 'rm -rf "$work"' EXIT
           tar -xzf "$devel" -C "$work" \
             "dstack-$VERSION-kernel-devel/kernel-devel.json"
           meta="$work/dstack-$VERSION-kernel-devel/kernel-devel.json"
@@ -355,37 +352,15 @@ jobs:
           OS_IMAGE_HASH: ${{ needs.build.outputs.os_image_hash }}
         run: |
           set -euo pipefail
-          # shellcheck source=/dev/null
-          source os/mkosi/versions.env
-          # GHCR path segments must be lowercase and this repository's owner is
-          # not; other release workflows hardcode the lowercase owner, which a
-          # fork cannot publish under.
           owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           ref="ghcr.io/$owner/dstack-kernel-builder"
-          # A build context of its own: dist/ holds the ~1 GiB image tarballs
-          # and all of it would be uploaded to the daemon.
-          mkdir -p ctx
-          cp "dist/dstack-$VERSION-kernel-devel.tar.gz" ctx/
-          # The toolchain comes from the same pinned Debian snapshot that
-          # compiled the guest kernel. A different compiler still builds a
-          # module; what it does not build is one this kernel accepts.
-          docker build \
-            --file os/image/kernel-builder/Dockerfile \
-            --build-arg "BASE_IMAGE=debian:$DEBIAN_RELEASE-slim" \
-            --build-arg "DEBIAN_SNAPSHOT=$DEBIAN_SNAPSHOT" \
-            --build-arg "KERNEL_RELEASE=$KERNEL_RELEASE" \
-            --build-arg "KERNEL_DEVEL_TARBALL=dstack-$VERSION-kernel-devel.tar.gz" \
-            --build-arg "IMAGE_VERSION=$VERSION" \
-            --build-arg "OS_IMAGE_HASH=$OS_IMAGE_HASH" \
-            --build-arg "GIT_REVISION=$GITHUB_SHA" \
-            --tag "$ref:$VERSION" \
-            --tag "$ref:$KERNEL_RELEASE" \
-            ctx
+          IMAGE_VERSION="$VERSION" GIT_REVISION="$GITHUB_SHA" \
+            ./os/image/kernel-builder/build.sh \
+              "dist/dstack-$VERSION-kernel-devel.tar.gz" "$ref:$VERSION" "$KERNEL_RELEASE"
+          docker tag "$ref:$VERSION" "$ref:$KERNEL_RELEASE"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
-      # The image is only useful if what it builds loads in the guest, and the
-      # vermagic is what decides that. Runs before the push, so a mismatched
-      # toolchain or a stale kernel tree is never published.
+      # Compile a module and check its target release before publishing.
       - name: Build a module inside the image
         env:
           IMAGE: ${{ steps.image.outputs.ref }}:${{ needs.build.outputs.version }}

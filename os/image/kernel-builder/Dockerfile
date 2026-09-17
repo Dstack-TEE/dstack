@@ -68,10 +68,8 @@ RUN set -eux; \
     mkdir -p "/lib/modules/${KERNEL_RELEASE}"; \
     ln -s "/usr/src/linux-headers-${KERNEL_RELEASE}" "/lib/modules/${KERNEL_RELEASE}/build"
 
-# KDIR is the variable an out-of-tree Makefile passes to `make -C`. The
-# /lib/modules symlink covers Makefiles that derive it from `uname -r` instead,
-# which inside a container reports the host kernel and would otherwise point at
-# nothing.
+# Pass KDIR explicitly; uname -r inside a container still names the host kernel.
+# The /lib/modules symlink is for consumers using the target KERNEL_RELEASE.
 ENV KDIR="/usr/src/linux-headers-${KERNEL_RELEASE}"
 ENV KERNEL_RELEASE="${KERNEL_RELEASE}"
 

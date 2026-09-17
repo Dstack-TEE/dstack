@@ -125,12 +125,8 @@ touch -d "@$SOURCE_DATE_EPOCH" "$OUT/files/"*
 is_dev=false; name=dstack
 if [[ $FLAVOR == dev ]]; then is_dev=true; name=dstack-dev; fi
 
-# The exported kernel build tree, moved out of the image tree by mkosi.finalize.
-# Archived here rather than shipped in either release tarball: applications
-# download it to build their own modules, operators deploying the image do not
-# need it, and it is not part of the measured OS image identity. Same fixed tar
-# options as the release tarballs, so repro-check can compare it byte for byte,
-# and skipped on a cached iteration build for the same reason those are.
+# Archive the tree removed by mkosi.finalize separately from measured payload.
+# Use fixed tar metadata for repro-check; cached iteration builds can skip it.
 kernel_devel="$KERNEL_TREE/kernel-devel"
 [[ -d $kernel_devel ]] || { echo 'kernel build tree was not exported' >&2; exit 1; }
 kernel_devel_artifact=

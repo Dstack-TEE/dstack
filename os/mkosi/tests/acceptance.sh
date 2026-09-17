@@ -182,33 +182,7 @@ grep -q 'AmdSev/AmdSevX64.dsc' "$D/components/ovmf/ovmf-build.sh"
 grep -q '0006-OvmfPkg-AmdSev-drop-embedded-grub.patch' "$D/components/ovmf/ovmf.sh"
 grep -q '0005-UefiCpuPkg' "$D/components/ovmf/ovmf.sh"
 grep -q '0007-OvmfPkg-QemuKernelLoaderFsDxe' "$D/components/ovmf/ovmf.sh"
-# The exported kernel build tree is a release artifact, never guest payload.
-# Each of these is load-bearing: the component has to export it, finalize has
-# to move it out of the tree before the rootfs is measured, and the identity
-# preimage must not list it.
-grep -q 'export-kernel-devel.sh' "$D/components/kernel/kernel-build.sh"
-grep -q 'export-kernel-devel.sh' "$D/components/kernel/kernel.sh"
-# shellcheck disable=SC2016 # a grep pattern matching the literal script text
-grep -q 'mv "$TREE/usr/lib/dstack/kernel-devel" "$KSTAGE/kernel-devel"' \
-  "$D/mkosi.finalize"
-grep -q '"kernel_devel":kernel_devel or None' "$D/scripts/make-release-artifacts.sh"
-grep -q 'kernel-devel' "$D/tests/check-output.sh"
-grep -q 'usr/lib/dstack/kernel-devel' "$D/parity.json"
-grep -q 'kernel_devel' "$D/../spec/artifact-manifest.schema.json"
-grep -q 'KERNEL_DEVEL_ARCHIVE' "$D/../image/assemble.sh"
-# Host programs and generated intermediates reach a published artifact for the
-# first time through this tree, so repro-check has to cover it.
-grep -q 'kernel-devel.tar.gz' "$D/build.sh"
-test -x "$D/../common/scripts/export-kernel-devel.sh"
-test -x "$D/../tests/test-kernel-builder-image.sh"
-test -f "$D/../image/kernel-builder/Dockerfile"
-# The builder image installs its compiler from the snapshot that built the
-# guest kernel; a hardcoded one here would drift from versions.env.
-grep -q 'ARG DEBIAN_SNAPSHOT' "$D/../image/kernel-builder/Dockerfile"
-if grep -q "$DEBIAN_SNAPSHOT" "$D/../image/kernel-builder/Dockerfile"; then
-  echo 'the builder image must take the Debian snapshot as a build argument' >&2
-  exit 1
-fi
+"$D/../tests/test-kernel-devel.sh"
 grep -q 'objcopy --strip-debug' "$D/mkosi.build"
 grep -q 'depmod -b.*KERNEL_VERSION-dstack' "$D/mkosi.build"
 grep -q '^CleanPackageMetadata=yes$' "$D/mkosi.conf"
@@ -250,7 +224,8 @@ bash -n "$D"/*.sh "$D"/mkosi.build "$D"/mkosi.clean "$D"/mkosi.finalize \
   "$D"/mkosi.postinst "$D"/mkosi.postoutput "$D"/scripts/*.sh \
   "$D"/components/*/*.sh "$D"/tests/*.sh "$D"/mkosi.skeleton/usr/bin/*.sh \
   "$D"/../image/kernel-cmdline.sh "$D"/../common/scripts/export-kernel-devel.sh \
-  "$D"/../tests/test-kernel-builder-image.sh
+  "$D"/../tests/test-kernel-builder-image.sh "$D"/../tests/test-kernel-devel.sh \
+  "$D"/../image/kernel-builder/build.sh
 # The Python helpers were only ever exercised by a real build. Keep the
 # bytecode out of the source tree, which is mounted into the build sandbox.
 pycache=$(mktemp -d)

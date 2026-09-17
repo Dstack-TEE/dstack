@@ -30,8 +30,10 @@ if [[ ${DSTACK_TAR_RELEASE:-1} == 1 ]]; then
     echo "missing kernel build tree archive: $out-kernel-devel.tar.gz" >&2
     exit 1
   }
+  # Consume the full listing: grep -q would close the pipe on the first match
+  # and make tar fail with SIGPIPE under pipefail.
   tar -tzf "$out-kernel-devel.tar.gz" | \
-    grep -qx "$(basename "$out")-kernel-devel/kernel-devel.json" || {
+    grep -Fx "$(basename "$out")-kernel-devel/kernel-devel.json" >/dev/null || {
       echo 'kernel build tree archive does not declare its kernel' >&2
       exit 1
     }

@@ -3,11 +3,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Build the smoke-test module inside a kernel-builder image and assert that the
-# result would load in the guest it claims to serve. A builder image whose
-# headers, Module.symvers or compiler do not match the shipped kernel still
-# produces a .ko; what it does not produce is a matching vermagic, so that is
-# what this checks.
+# Check that the builder compiles a module for the expected kernel release.
+# This is not a load test: vermagic's release field does not validate symbol
+# versions, compiler compatibility, or the rest of the kernel configuration.
 set -euo pipefail
 
 IMAGE=${1:?container image required}

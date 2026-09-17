@@ -669,12 +669,8 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
     fi
 fi
 
-# The exported kernel build tree, when the backend produced one. It ships
-# beside the image tarballs rather than inside them, and it is deliberately
-# absent from sha256sum.txt: nothing in it is measured at boot, so folding it
-# into os_image_hash would make the OS identity depend on a developer artifact.
-# Applications building an out-of-tree module against this image download it;
-# see docs/building-guest-os.md.
+# Publish the optional developer artifact beside the images, without adding it
+# to sha256sum.txt or os_image_hash. See docs/building-guest-os.md.
 if [ -n "$KERNEL_DEVEL_ARCHIVE" ]; then
     echo "Publishing the kernel build tree to ${KERNEL_DEVEL_TAR}"
     cp "$KERNEL_DEVEL_ARCHIVE" "$KERNEL_DEVEL_TAR"
