@@ -65,6 +65,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1189, #1199, and #1207)
+
+- The offline corpus includes the recaptured measurement-document-version-4 `tdx-lite-attestation.json` and `tdx-lite-getquote.json` (#1199), the setup-header-normalized captures `tdx-lite-normalized-attestation.json` (QEMU 8.2.2) and `tdx-lite-normalized-qemu-10-2-attestation.json` (QEMU 10.2.1) (#1189), and the same-boot `tdx-lite-v1-attest.json` / `tdx-lite-v0-attest.json` pair (#1207).
+- Every TDX-lite fixture verifies offline as `dstack-tdx` with `tcb_status = UpToDate`, `os_image_hash_verified = true`, and `acpi_tables_verified = true`.
+- The v1 fixture is a MessagePack map and the v0 fixture starts with `0x00`; their one-shot results are byte-identical.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

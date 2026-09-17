@@ -29,6 +29,13 @@ REQUIRED_TESTS = (
     "verify_nitro_attestation_bin ... ok",
     "verify_sev_snp_attestation_bin ... ok",
 )
+# The v1 guest surface always returns MessagePack V1 while v0 keeps legacy
+# SCALE (PR #1207). The verifier must reach the same verdict and details for
+# both encodings of one attestation, including a real same-boot capture.
+VERIFIER_TESTS = (
+    "verification::tests::msgpack_and_scale_encodings_verify_identically",
+    "verification::tests::verifies_real_v1_attest_identically_to_v0_from_the_same_boot",
+)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -71,6 +78,28 @@ def main() -> int:
         timeout=900,
         check=False,
     )
+    verifier_command = [
+        cargo,
+        "test",
+        "--locked",
+        "-p",
+        "dstack-verifier",
+        "--lib",
+        "--",
+        "--exact",
+        *VERIFIER_TESTS,
+    ]
+    verifier = subprocess.run(
+        verifier_command,
+        cwd=repository / "dstack",
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=900,
+        check=False,
+    )
+    verifier_output = verifier.stdout
     output = completed.stdout
     checks = {
         "command_passed": completed.returncode == 0,
@@ -79,6 +108,10 @@ def main() -> int:
         "sev_snp_count": "9 passed; 0 failed" in output,
         "required_tests": all(name in output for name in REQUIRED_TESTS),
         "no_panic": "panicked at" not in output,
+        "verifier_encoding_equivalence": verifier.returncode == 0
+        and f"test result: ok. {len(VERIFIER_TESTS)} passed; 0 failed"
+        in verifier_output
+        and all(f"test {name} ... ok" in verifier_output for name in VERIFIER_TESTS),
     }
     status = "PASS" if all(checks.values()) else "FAIL"
     evidence = {
@@ -89,6 +122,10 @@ def main() -> int:
         "output_bytes": len(output.encode()),
         "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
         "output_tail": output[-20000:],
+        "verifier_command": verifier_command,
+        "verifier_returncode": verifier.returncode,
+        "verifier_output_sha256": hashlib.sha256(verifier_output.encode()).hexdigest(),
+        "verifier_output_tail": verifier_output[-8000:],
     }
     atomic_json(artifacts / "attestation-versioning.json", evidence)
     step_status = "PASS" if status == "PASS" else "FAIL"
@@ -111,7 +148,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-02",
                 "status": step_status,
-                "observed": "Legacy SCALE and current msgpack round trips, discriminants, version selection, and TDX/SEV-SNP/Nitro fixtures executed.",
+                "observed": "Legacy SCALE and current msgpack round trips, discriminants, version selection, and TDX/SEV-SNP/Nitro fixtures executed; the verifier reached identical results for MessagePack V1 and SCALE V0 encodings, including a real same-boot v1/v0 Attest capture.",
             },
             {
                 "id": f"{case_id}-step-03",
