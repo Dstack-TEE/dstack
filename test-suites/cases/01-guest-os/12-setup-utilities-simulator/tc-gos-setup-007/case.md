@@ -74,6 +74,13 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1175)
+
+The lease compose selects `storage_fs: "ext4"` and omits `storage_discard`, so discard must default on for the product data disk.
+
+- Before the first mutation and again after the lease reboot (existing-disk mount path), `/sys/block/vdb/queue/discard_max_bytes` is greater than 0, `cryptsetup status dstack_data_disk` reports `flags: discards`, and the `/dstack/persistent` mount options include `discard`. Automated in `run.py` (exit 95 on mismatch).
+- Not automated (needs a second lease guest): an app compose with `storage_discard: false` must open the LUKS volume without `--allow-discards`, mount ext4 without `discard`, and change the compose hash relative to the default manifest; the VMM side of the opt-out (`discard=ignore`) is covered in the VMM chapter.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

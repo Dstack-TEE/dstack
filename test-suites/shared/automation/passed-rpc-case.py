@@ -100,7 +100,16 @@ CASES = {
     "tc-gos-guestapi-003": ("GuestApi", "NetworkInfo", {}, False),
     "tc-gos-guestapi-004": ("GuestApi", "ListContainers", {}, False),
     "tc-gos-guestapi-005": ("GuestApi", "Shutdown", {}, False),
+    # The no-GPU answer is constant, but a host with an NVIDIA display device
+    # makes the simulator report a timestamped sampling failure instead, so
+    # stability is asserted by the GpuInfo contract check rather than here.
+    "tc-gos-guestapi-006": ("GuestApi", "GpuInfo", {}, False),
 }
+
+# OID of the RA-TLS extension that carries the versioned attestation.
+RATLS_ATTESTATION_OID = "1.3.6.1.4.1.62397.1.8"
+NVIDIA_VENDOR_ID = "0x10de"
+DISPLAY_CLASS_PREFIXES = ("0x0300", "0x0302")
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -220,6 +229,296 @@ def call(socket: str, route: str, content_type: str, body: bytes) -> tuple[int, 
         raise RuntimeError(process.stderr.decode(errors="replace")[-1000:])
     response, code = process.stdout.rsplit(marker, 1)
     return int(code), response
+
+
+def msgpack_decode(data: bytes, offset: int = 0) -> tuple[Any, int]:
+    """Decode one MessagePack value, enough for rmp_serde attestation maps."""
+    tag = data[offset]
+    offset += 1
+
+    def take(count: int) -> bytes:
+        nonlocal offset
+        if offset + count > len(data):
+            raise ValueError("truncated MessagePack value")
+        chunk = data[offset : offset + count]
+        offset += count
+        return chunk
+
+    def number(count: int, signed: bool = False) -> int:
+        return int.from_bytes(take(count), "big", signed=signed)
+
+    def items(count: int) -> list[Any]:
+        nonlocal offset
+        values = []
+        for _ in range(count):
+            value, offset = msgpack_decode(data, offset)
+            values.append(value)
+        return values
+
+    def mapping(count: int) -> dict[Any, Any]:
+        flat = items(count * 2)
+        return dict(zip(flat[0::2], flat[1::2]))
+
+    if tag <= 0x7F:
+        return tag, offset
+    if 0x80 <= tag <= 0x8F:
+        return mapping(tag & 0x0F), offset
+    if 0x90 <= tag <= 0x9F:
+        return items(tag & 0x0F), offset
+    if 0xA0 <= tag <= 0xBF:
+        return take(tag & 0x1F).decode(), offset
+    if tag >= 0xE0:
+        return tag - 0x100, offset
+    simple = {0xC0: None, 0xC2: False, 0xC3: True}
+    if tag in simple:
+        return simple[tag], offset
+    if tag in (0xC4, 0xC5, 0xC6):
+        return take(number(1 << (tag - 0xC4))), offset
+    if tag in (0xCC, 0xCD, 0xCE, 0xCF):
+        return number(1 << (tag - 0xCC)), offset
+    if tag in (0xD0, 0xD1, 0xD2, 0xD3):
+        return number(1 << (tag - 0xD0), signed=True), offset
+    if tag in (0xD9, 0xDA, 0xDB):
+        return take(number(1 << (tag - 0xD9))).decode(), offset
+    if tag in (0xDC, 0xDD):
+        return items(number(2 << (tag - 0xDC))), offset
+    if tag in (0xDE, 0xDF):
+        return mapping(number(2 << (tag - 0xDE))), offset
+    raise ValueError(f"unsupported MessagePack tag 0x{tag:02x}")
+
+
+def as_bytes(value: Any) -> bytes:
+    """Normalise an rmp_serde byte vector (bin or integer array) to bytes."""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, list) and all(isinstance(item, int) for item in value):
+        return bytes(value)
+    raise AssertionError("attestation byte field was neither bin nor integer array")
+
+
+def msgpack_v1_attestation(raw: bytes) -> dict[str, Any]:
+    """Require the v1 wire form: a MessagePack map carrying the V1 schema."""
+    if not raw or not (0x80 <= raw[0] <= 0x8F or raw[0] in (0xDE, 0xDF)):
+        prefix = f"0x{raw[0]:02x}" if raw else "empty"
+        raise AssertionError(
+            f"v1 attestation is not a MessagePack map (first byte {prefix})"
+        )
+    value, consumed = msgpack_decode(raw)
+    if consumed != len(raw):
+        raise AssertionError("v1 attestation carries trailing bytes after the map")
+    if not isinstance(value, dict) or not {"version", "platform", "stack"} <= set(
+        value
+    ):
+        raise AssertionError("v1 attestation map lacks version/platform/stack")
+    stack = value["stack"]
+    if not isinstance(stack, dict) or not isinstance(stack.get("data"), dict):
+        raise AssertionError("v1 attestation stack evidence is malformed")
+    return value
+
+
+def json_hex_field(body: bytes, name: str) -> bytes:
+    """Read one hex-encoded bytes field from a pRPC JSON response."""
+    value = json.loads(body).get(name)
+    if not isinstance(value, str):
+        raise AssertionError(f"response field {name} was not hex text")
+    return bytes.fromhex(value)
+
+
+def v1_route(route: str, method: str) -> str:
+    """Map a resolved frozen DstackGuest route onto the dstack.guest.v1 mount."""
+    base, separator, _ = route.rpartition("/")
+    if not separator:
+        raise AssertionError(f"unexpected DstackGuest route {route}")
+    return f"{base}/v1/{method}"
+
+
+def check_attest_wire(
+    socket: str, route: str, payload: dict[str, Any], **_: Any
+) -> dict[str, Any]:
+    """PR #1207: v0 Attest stays legacy SCALE while v1 Attest is always MessagePack."""
+    legacy_code, legacy_body = call(
+        socket, route, "application/json", json.dumps(payload).encode()
+    )
+    if legacy_code != 200:
+        raise AssertionError(f"v0 Attest returned HTTP {legacy_code}")
+    legacy = json_hex_field(legacy_body, "attestation")
+    if not legacy or legacy[0] != 0x00:
+        raise AssertionError(
+            "v0 Attest no longer returns the legacy SCALE form for a legacy platform"
+        )
+    v1_code, v1_body = call(
+        socket,
+        v1_route(route, "Attest"),
+        "application/json",
+        json.dumps(payload).encode(),
+    )
+    if v1_code != 200:
+        raise AssertionError(f"v1 Attest returned HTTP {v1_code}")
+    attestation = msgpack_v1_attestation(json_hex_field(v1_body, "attestation"))
+    report_data = as_bytes(attestation["stack"]["data"].get("report_data"))
+    if report_data != bytes.fromhex(payload["report_data"]):
+        raise AssertionError(
+            "v1 Attest MessagePack report_data does not match the request"
+        )
+    return {
+        "v0_first_byte": "0x00",
+        "v1_first_byte": f"0x{json_hex_field(v1_body, 'attestation')[0]:02x}",
+        "v1_version": attestation["version"],
+        "v1_platform_kind": attestation["platform"].get("kind")
+        if isinstance(attestation["platform"], dict)
+        else None,
+        "v1_report_data_bound": True,
+    }
+
+
+def certificate_attestation(chain: list[Any]) -> bytes:
+    """Extract the RA-TLS attestation bytes from the leaf certificate."""
+    from cryptography import x509
+
+    if not chain or not isinstance(chain[0], str):
+        raise AssertionError("certificate chain is empty")
+    leaf = x509.load_pem_x509_certificate(chain[0].encode())
+    for extension in leaf.extensions:
+        if extension.oid.dotted_string != RATLS_ATTESTATION_OID:
+            continue
+        der = extension.value.value
+        if not der or der[0] != 0x04:
+            raise AssertionError(
+                "RA-TLS attestation extension is not a DER OCTET STRING"
+            )
+        length, offset = der[1], 2
+        if length & 0x80:
+            width = length & 0x7F
+            length = int.from_bytes(der[2 : 2 + width], "big")
+            offset = 2 + width
+        content = der[offset : offset + length]
+        if len(content) != length or offset + length != len(der):
+            raise AssertionError("RA-TLS attestation extension length is inconsistent")
+        return content
+    raise AssertionError("RA-TLS certificate omitted the attestation extension")
+
+
+def check_certificate_attestation_wire(
+    socket: str,
+    route: str,
+    payload: dict[str, Any],
+    json_value: dict[str, Any],
+    **_: Any,
+) -> dict[str, Any]:
+    """PR #1207: GetTlsKey embeds legacy SCALE; v1 IssueCert embeds MessagePack V1."""
+    legacy = certificate_attestation(json_value.get("certificate_chain", []))
+    if not legacy or legacy[0] != 0x00:
+        raise AssertionError(
+            "v0 GetTlsKey certificate no longer embeds the legacy SCALE attestation"
+        )
+    request = {
+        "subject": payload["subject"],
+        "alt_names": payload["alt_names"],
+        "usage_ra_tls": True,
+        "usage_server_auth": payload["usage_server_auth"],
+        "usage_client_auth": payload["usage_client_auth"],
+    }
+    code, body = call(
+        socket,
+        v1_route(route, "IssueCert"),
+        "application/json",
+        json.dumps(request).encode(),
+    )
+    if code != 200:
+        raise AssertionError(f"v1 IssueCert returned HTTP {code}")
+    embedded = certificate_attestation(json.loads(body).get("certificate_chain", []))
+    attestation = msgpack_v1_attestation(embedded)
+    return {
+        "v0_certificate_first_byte": "0x00",
+        "v1_certificate_first_byte": f"0x{embedded[0]:02x}",
+        "v1_certificate_version": attestation["version"],
+        "private_key_persisted": False,
+    }
+
+
+def host_nvidia_display_devices() -> int:
+    """Count NVIDIA display-class PCI devices the way lspci::sysfs does."""
+    count = 0
+    for device in pathlib.Path("/sys/bus/pci/devices").glob("*"):
+        try:
+            klass = (device / "class").read_text().strip()
+            vendor = (device / "vendor").read_text().strip()
+        except OSError:
+            continue
+        if klass[:6] in DISPLAY_CLASS_PREFIXES and vendor == NVIDIA_VENDOR_ID:
+            count += 1
+    return count
+
+
+def check_gpu_info_contract(
+    socket: str,
+    route: str,
+    json_value: dict[str, Any],
+    json_body: bytes,
+    protobuf_body: bytes,
+    **_: Any,
+) -> dict[str, Any]:
+    """GuestApi.GpuInfo: the documented no-GPU and unavailable response shapes."""
+    nvidia = host_nvidia_display_devices()
+    gpus = json_value.get("gpus")
+    error = json_value.get("error")
+    if not isinstance(gpus, list) or not isinstance(error, str):
+        raise AssertionError("GpuInfo gpus/error have the wrong JSON types")
+    for name in ("cc_ready", "cc_enabled", "sample_age_ms"):
+        if name not in json_value:
+            raise AssertionError(f"GpuInfo JSON omitted optional field {name}")
+    if nvidia == 0:
+        # PCI gate: no NVIDIA device means the collector never runs and the
+        # answer is "ran, found nothing" -- empty devices, empty error, and no
+        # CC state or sample age at all.
+        expected = {
+            "gpus": [],
+            "error": "",
+            "cc_ready": None,
+            "cc_enabled": None,
+            "sample_age_ms": None,
+        }
+        if json_value != expected:
+            raise AssertionError(f"no-GPU GpuInfo response was {json_value}")
+        if protobuf_body != b"":
+            raise AssertionError(
+                "no-GPU GpuInfo protobuf encoded unset optional fields"
+            )
+        repeat_code, repeat_body = call(socket, route, "application/json", b"{}")
+        if repeat_code != 200 or repeat_body != json_body:
+            raise AssertionError("no-GPU GpuInfo response was not stable")
+        shape = "no-gpu"
+    else:
+        # The simulator host has an NVIDIA card but no in-guest collector, so
+        # the only valid answers are "unavailable" or a real sample.
+        if error:
+            if (
+                gpus
+                or json_value["cc_ready"] is not None
+                or json_value["cc_enabled"] is not None
+            ):
+                raise AssertionError(
+                    "unavailable GpuInfo response carried devices or CC state"
+                )
+            shape = "unavailable"
+        else:
+            if json_value["sample_age_ms"] is None:
+                raise AssertionError("sampled GpuInfo response omitted sample_age_ms")
+            shape = "sampled"
+    return {
+        "host_nvidia_display_devices": nvidia,
+        "shape": shape,
+        "gpu_count": len(gpus),
+        "error_present": bool(error),
+        "protobuf_bytes": len(protobuf_body),
+    }
+
+
+EXTRA_CHECKS = {
+    "tc-gos-dstackguest-001": check_certificate_attestation_wire,
+    "tc-gos-dstackguest-004": check_attest_wire,
+    "tc-gos-guestapi-006": check_gpu_info_contract,
+}
 
 
 def inventory_entry(root: pathlib.Path, service: str, method: str) -> dict[str, Any]:
@@ -384,6 +683,16 @@ def main() -> int:
                 raise AssertionError(f"schema-invalid {first['name']} was accepted")
             if not isinstance(json.loads(invalid_body).get("error"), str):
                 raise AssertionError("schema-invalid response omitted error")
+        extra = EXTRA_CHECKS.get(case_id)
+        if extra is not None:
+            matrix["post_baseline"] = extra(
+                socket=socket,
+                route=route,
+                payload=payload,
+                json_value=json_value,
+                json_body=json_body,
+                protobuf_body=protobuf_body,
+            )
         matrix["contract"] = {
             "json_http": json_code,
             "json_fields": structural_json(json_value),
@@ -413,6 +722,7 @@ def main() -> int:
                     "protobuf_fields": sorted(wire),
                     "invalid_route_http": bad_route_code,
                     "invalid_field_http": invalid_code,
+                    "post_baseline": matrix.get("post_baseline"),
                 },
                 sort_keys=True,
             ),

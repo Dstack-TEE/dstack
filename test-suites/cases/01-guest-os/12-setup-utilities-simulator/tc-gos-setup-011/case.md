@@ -64,6 +64,11 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (commit 38b39be4be)
+
+- The boot GPU gate now reads its inventory through the shared `lspci::sysfs::gpu_inventory` scan. Keep the fail-closed policy observable: an unreadable PCI device `class` or `vendor` entry during setup must stop the GPU trust transition, while the guest-agent telemetry gate reading the same inventory reports no GPUs instead of failing.
+- A mixed NVIDIA and non-NVIDIA display-class inventory must still be rejected rather than attested for the NVIDIA subset only.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

@@ -67,6 +67,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1207)
+
+- On the simulator's legacy (SCALE V0) attestation fixture, v0 `Attest` still returns an attestation whose first byte is `0x00`.
+- `dstack.guest.v1.Attest` (`/v1/Attest`) with the same `report_data` returns a MessagePack map that decodes completely into `version`, `platform`, and `stack`, and `stack.data.report_data` equals the requested 64 bytes.
+- Automated in `shared/automation/passed-rpc-case.py` (`check_attest_wire`). Verifier acceptance of the MessagePack form (0.5.9 or later) is exercised on real attestation by the verifier chapter and by [tc-gos-attestatio-002](../../08-attestation-and-crypto/tc-gos-attestatio-002/case.md#tc-gos-attestatio-002).
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

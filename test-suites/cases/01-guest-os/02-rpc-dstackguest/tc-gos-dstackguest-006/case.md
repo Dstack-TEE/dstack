@@ -35,7 +35,7 @@ Verify that the never-shipped legacy `GpuInfo` route remains absent and is not r
 
 ## Test Data
 
-Probe `/prpc/GpuInfo` using JSON and protobuf framing and probe `/v1/AttestGpu` with a deliberately invalid nonce. The legacy route must be absent while the v1 method must be routed and return a capability or validation status rather than 404.
+Probe `GpuInfo` on every DstackGuest mount of the internal socket (the fixture route, `/v0`, `/prpc`, and `/v1`) using JSON and protobuf framing, probe `/v1/AttestGpu` with a deliberately invalid nonce, and call `GuestApi.GpuInfo` once on the guest API listener. The DstackGuest routes must be absent, the v1 attestation method must be routed and return a capability or validation status rather than 404, and the GuestApi method must return the telemetry schema.
 
 Use a unique run-scoped identifier and non-production credentials.
 
@@ -53,11 +53,12 @@ Query the relevant health, configuration, and baseline state for dstackguest.gpu
 <a id="tc-gos-dstackguest-006-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Probe the removed route with JSON and protobuf framing, then probe the v1 replacement route with an invalid nonce.
+Probe the removed route on each DstackGuest mount with JSON and protobuf framing, then probe the v1 replacement route with an invalid nonce, then call the separate `GuestApi.GpuInfo` telemetry method.
 
 **Expected results:**
 
-- Both legacy probes return HTTP 404 with a diagnostic, while `/v1/AttestGpu` is routed and returns its documented validation or capability error.
+- Every DstackGuest `GpuInfo` probe returns HTTP 404 with a diagnostic, while `/v1/AttestGpu` is routed and returns its documented validation or capability error.
+- `GuestApi.GpuInfo` on the guest API listener returns HTTP 200 with a `gpus` array and no `attestation` field.
 
 <a id="tc-gos-dstackguest-006-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics
@@ -67,6 +68,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 **Expected results:**
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid routing or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
+
+## Post-baseline regression coverage (GPU telemetry series, commits a2dd3c89c8 and 85cc6bef92)
+
+- `GpuInfo` is now a method name again, but on `GuestApi` (telemetry, `guest_api.proto`) rather than on `DstackGuest` (attestation). This case keeps asserting the DstackGuest removal on the unversioned, `/v0`, `/prpc`, and `/v1` mounts, and additionally proves the telemetry method is served only by the guest API listener with the telemetry schema. The telemetry contract itself is owned by [tc-gos-guestapi-006](../../04-rpc-guestapi/tc-gos-guestapi-006/case.md#tc-gos-guestapi-006).
 
 ## Postconditions
 
