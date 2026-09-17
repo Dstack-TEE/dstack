@@ -69,6 +69,12 @@ Introduce one temporary source/test-fixture/schema/config mismatch outside the c
 - Inspect the built KMS application image and verify the pinned runtime package set installs CA certificates.
 - From the running image, establish TLS to a public-test CA chain and reject an untrusted chain; do not inject host CA files into the container.
 
+## Post-baseline regression coverage (PR #1190)
+
+- The shared image build library (`dstack/build/shared/build-lib.sh`), used by the KMS, gateway, and verifier `build-image.sh`, now derives OCI labels, manifest annotations, and `/etc/<title>/build-info` from one `image_metadata` source. It pins `--platform linux/amd64` and `--provenance=false`, accepts several tags, and validates package lists before any export, push, or OCI archive.
+- From the repository root, run `python3 -m unittest discover -s dstack/build/shared/tests -v`. The tests use a mock Docker and need no network. Expected: exit 0 with `OK`, covering all three components. Report a failure as a product `FAIL` of this build gate.
+- PR #1211 (`apt-get update -o APT::Update::Error-Mode=any` in the three builder Dockerfiles) only affects a real image build: a transient index fetch failure now fails the build instead of installing from stale lists. No additional executable assertion is added.
+
 ## Postconditions
 
 Remove temporary build/output trees and verify the candidate checkout remains clean.

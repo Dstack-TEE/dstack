@@ -68,6 +68,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid routing or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1148)
+
+- `Gateway.GetPeers` is guarded by `ensure_from_gateway`, and the `insecure_skip_attestation` bypass no longer exists. Every valid call in Steps 2 and 3 presents the fixture's simulator-issued mTLS client identity (`values.gateway.registration_client`), whose certificate carries the gateway's own app-id extension.
+- Repeat the valid JSON call without a client certificate. Expected: HTTP status 400 or higher and a body naming `Client authentication is required`; the authenticated calls before and after it are unaffected.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

@@ -79,12 +79,36 @@ def main() -> int:
     observations = [run(command, workspace, env) for command in commands]
     positive = all(item["returncode"] == 0 for item in observations[:3])
     negative = observations[3]["returncode"] != 0
+    # PR #1190: the shared image build library that the KMS, gateway, and
+    # verifier release images use now generates OCI metadata and an export
+    # phase. Its checked-in orchestration tests run with a mock Docker and no
+    # network, so they gate the build scripts without building an image.
+    build_lib = run(
+        [
+            shutil.which("python3") or "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "dstack/build/shared/tests",
+            "-v",
+        ],
+        repository,
+        env,
+    )
+    observations.append(build_lib)
+    build_lib_passed = build_lib["returncode"] == 0 and "OK" in build_lib["output_tail"]
+    positive = positive and build_lib_passed
     status = "PASS" if positive and negative else "FAIL"
     evidence = {
         "workspace": "dstack",
         "target_directory": env.get("CARGO_TARGET_DIR", "cargo-default"),
         "observations": observations,
-        "checks": {"locked_build_test_offline": positive, "failure_gate": negative},
+        "checks": {
+            "locked_build_test_offline": positive,
+            "image_build_library_tests": build_lib_passed,
+            "failure_gate": negative,
+        },
     }
     atomic_json(artifacts / "kms-build-regression.json", evidence)
     result = {
@@ -101,9 +125,9 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-01",
                 "status": "PASS" if positive else "FAIL",
-                "observed": "Locked build/test and offline rebuild completed."
+                "observed": "Locked build/test, offline rebuild, and image build library tests completed."
                 if positive
-                else "A locked build/test/offline command failed.",
+                else "A locked build/test/offline command or the image build library tests failed.",
             },
             {
                 "id": f"{case_id}-step-02",

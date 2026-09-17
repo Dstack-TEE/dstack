@@ -352,6 +352,101 @@ def main() -> int:
             and bool(field(cert_status, "loaded_in_memory", "loadedInMemory", False))
         )
 
+        # PR #1132: per-domain ACME challenge selection, the records an operator
+        # must publish, and certbot-config validation. Runs after issuance so
+        # the shared ACME account exists and the records can name it.
+        def domain_update(**overrides: Any) -> tuple[int, dict[str, Any]]:
+            request = {
+                "domain": normalized,
+                "dns_cred_id": credential_ids[1],
+                "port": 8443,
+                "priority": -5,
+                **overrides,
+            }
+            code, body = SUPPORT.rpc(base, admin_token, "Admin.UpdateZtDomain", request)
+            return code, decoded(body)
+
+        def records_of(value: dict[str, Any]) -> list[str]:
+            return [
+                str(line)
+                for line in field(
+                    value, "required_dns_records", "requiredDnsRecords", []
+                )
+            ]
+
+        persist_txt_prefix = f"_validation-persist.{normalized}. IN TXT "
+        caa_prefix = f"{normalized}. IN CAA "
+        dns01_records = records_of(decoded(cert_get_body))
+        checks["dns01_challenge_default_and_records"] = (
+            added_config.get("challenge") == "dns-01"
+            and updated_config.get("challenge") == "dns-01"
+            and sum(
+                line.startswith(caa_prefix)
+                and "validationmethods=dns-01;accounturi=" in line
+                for line in dns01_records
+            )
+            == 2
+            and not any(line.startswith(persist_txt_prefix) for line in dns01_records)
+        )
+        persist_code, persisted = domain_update(challenge="dns-persist-01")
+        persist_records = records_of(persisted)
+        omitted_code, omitted = domain_update(priority=-4)
+        unknown_challenge_code, _ = domain_update(
+            priority=-3, challenge="dns-persist-02"
+        )
+        after_unknown_code, after_unknown_body = SUPPORT.rpc(
+            base, admin_token, "Admin.GetZtDomain", {"domain": normalized}
+        )
+        after_unknown = config_of(decoded(after_unknown_body))
+        revert_code, reverted = domain_update(challenge="dns-01")
+        checks["challenge_selection_preserved_and_validated"] = (
+            persist_code == 200
+            and config_of(persisted).get("challenge") == "dns-persist-01"
+            and any(
+                line.startswith(persist_txt_prefix)
+                and "accounturi=" in line
+                and "policy=wildcard" in line
+                for line in persist_records
+            )
+            and sum(
+                line.startswith(caa_prefix)
+                and "validationmethods=dns-persist-01" in line
+                for line in persist_records
+            )
+            == 2
+            and omitted_code == 200
+            and config_of(omitted).get("challenge") == "dns-persist-01"
+            and int(config_of(omitted).get("priority", 0)) == -4
+            and unknown_challenge_code >= 400
+            and after_unknown_code == 200
+            and after_unknown.get("challenge") == "dns-persist-01"
+            and int(after_unknown.get("priority", 0)) == -4
+            and revert_code == 200
+            and config_of(reverted).get("challenge") == "dns-01"
+        )
+        malformed_issuer_code = SUPPORT.rpc(
+            base,
+            admin_token,
+            "Admin.SetCertbotConfig",
+            {"issuer_domain_name": "lets encrypt.org"},
+        )[0]
+        zero_timeout_code = SUPPORT.rpc(
+            base, admin_token, "Admin.SetCertbotConfig", {"renew_timeout_secs": 0}
+        )[0]
+        config_code, config_body = SUPPORT.rpc(
+            base, admin_token, "Admin.GetCertbotConfig", {}
+        )
+        current_config = decoded(config_body)
+        checks["certbot_config_validation"] = (
+            malformed_issuer_code >= 400
+            and zero_timeout_code >= 400
+            and config_code == 200
+            and current_config.get("acme_url") == pebble_url
+            and int(current_config.get("renew_timeout_secs", 0))
+            == int(replacement["renew_timeout_secs"])
+            and "lets encrypt" not in str(current_config.get("issuer_domain_name", ""))
+        )
+
         concurrent_domain = f"concurrent-{lease}.test"
         concurrent_request = {
             "domain": concurrent_domain,
@@ -411,7 +506,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-03",
                     "status": "PASS",
-                    "observed": "Certificate issuance populated and loaded the domain state, concurrent duplicate add committed once, unauthorized access failed, and adjacent state remained isolated.",
+                    "observed": "Certificate issuance populated and loaded the domain state; dns-01/dns-persist-01 challenge selection, omitted-field preservation, required DNS records, and certbot-config validation matched; concurrent duplicate add committed once, unauthorized access failed, and adjacent state remained isolated.",
                 },
             ]
         )
@@ -429,6 +524,16 @@ def main() -> int:
             "renewed": renewed,
             "not_after_positive": not_after > 0,
             "concurrent_statuses": concurrent_codes,
+            "challenge_statuses": {
+                "persist": persist_code,
+                "omitted": omitted_code,
+                "unknown": unknown_challenge_code,
+                "revert": revert_code,
+            },
+            "certbot_config_rejections": {
+                "malformed_issuer": malformed_issuer_code,
+                "zero_renew_timeout": zero_timeout_code,
+            },
         }
         artifact_path = result_dir / "artifacts/gateway-zt-domain-observation.json"
         atomic_json(artifact_path, observation)

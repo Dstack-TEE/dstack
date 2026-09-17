@@ -90,6 +90,10 @@ class DnsState:
             zone: [] for zone in self.zones
         }
         self.operations: list[tuple[str, str]] = []
+        # Highest number of TXT records that coexisted at one name, so a case
+        # can prove records at a shared challenge name accumulated rather than
+        # replaced each other.
+        self.txt_peaks: dict[str, int] = {}
 
     def snapshot(self) -> dict[str, list[dict[str, str]]]:
         """Return a deep copy without credentials."""
@@ -216,6 +220,14 @@ class CloudflareHandler(http.server.BaseHTTPRequestHandler):
                 "type": request["type"],
             }
             state.records.setdefault(zone, []).append(record)
+            if record["type"] == "TXT":
+                name = record["name"].rstrip(".").lower()
+                coexisting = sum(
+                    1
+                    for row in state.records[zone]
+                    if row["type"] == "TXT" and row["name"].rstrip(".").lower() == name
+                )
+                state.txt_peaks[name] = max(state.txt_peaks.get(name, 0), coexisting)
         self.response(200, {"success": True, "result": {"id": record_id}})
 
     def do_DELETE(self) -> None:  # noqa: N802

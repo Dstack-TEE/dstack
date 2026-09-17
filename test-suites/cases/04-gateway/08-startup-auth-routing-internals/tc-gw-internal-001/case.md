@@ -75,6 +75,11 @@ Restart the owning service where permitted and inspect state for this and an adj
 
 - Persisted and transient state follow policy, adjacent identities are unchanged, and no private material or credential appears in output.
 
+## Post-baseline regression coverage (PR #1148)
+
+- `core.debug.insecure_skip_attestation` was removed. The rendered production configuration must not contain the key, and the executable harness asserts its absence.
+- Start a second gateway from a copy of the production configuration that adds a leftover `insecure_skip_attestation = true` line under `[core.debug]`, clears `rpc_domain` so certificate generation is skipped, and points `DSTACK_AGENT_ADDRESS` at a non-existent socket. Expected: the process exits non-zero with `Failed to get app info` (the switch is ignored, not honored), and the original listener still answers health with HTTP 200. Delete the temporary configuration afterwards.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.
