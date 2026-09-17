@@ -64,6 +64,15 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1132)
+
+Run these steps after the certificate lifecycle step, once the shared ACME account exists:
+
+- A domain added without `challenge` reports `config.challenge = "dns-01"`. `GetZtDomain` returns `required_dns_records` with exactly two `<domain>. IN CAA` lines pinned to `validationmethods=dns-01;accounturi=...`, and no `_validation-persist` line.
+- Call `UpdateZtDomain` with `challenge = "dns-persist-01"`. Expected: HTTP 200, the response echoes `dns-persist-01`, and `required_dns_records` contains one `_validation-persist.<domain>. IN TXT` line naming `accounturi=` with `policy=wildcard`, plus two CAA lines carrying `validationmethods=dns-persist-01`.
+- Call `UpdateZtDomain` again without the `challenge` field, changing only the priority. Expected: the stored challenge stays `dns-persist-01`. An update with `challenge = "dns-persist-02"` is rejected (HTTP status 400 or higher) and leaves the stored record unchanged. An explicit `challenge = "dns-01"` switches the domain back.
+- Call `SetCertbotConfig` with `issuer_domain_name = "lets encrypt.org"`, then with `renew_timeout_secs = 0`. Expected: both are rejected, and `GetCertbotConfig` still returns the case ACME URL and the previous renew timeout.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

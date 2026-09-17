@@ -64,6 +64,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1138)
+
+- Rotation, CAA reconciliation, and first-use ACME account registration now share one cluster-wide lock stored in WaveKV, and first-use registration re-reads the credentials under that lock and adopts an account another node already registered.
+- With the case-owned Cloudflare API blocked, call `Admin.RotateAcmeCredentials` on node 1 and wait until its DNS-provider preflight reaches the API. After 3 seconds, which covers WaveKV replication at the fixture's 1-second sync interval, call `Admin.SetCaa` on node 2. Expected: node 2 answers with HTTP status 400 or higher naming the `shared ACME lock`, and sends no Cloudflare API request. After the block is released, the rotation completes, and the existing rotation expectations hold: every node reports the new account and the CAA records are re-pinned to it.
+- Every node still reports the same `account_uri` after the initial issuance, which shows the cluster registered a single shared account.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

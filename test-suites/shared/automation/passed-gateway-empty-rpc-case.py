@@ -164,6 +164,13 @@ CASES = {
     "tc-gw-debug-004": ("Debug", "GetProxyState", "debug", "GetProxyState", True, None),
 }
 
+# Methods guarded by `ensure_from_gateway`: they answer only a caller whose mTLS
+# certificate carries this gateway's own app id. Since PR #1148 removed
+# `insecure_skip_attestation` there is no configuration that bypasses it, so the
+# harness presents the fixture's simulator-issued identity and separately checks
+# that the same call without a client certificate is refused.
+CLIENT_AUTH_CASES = {"tc-gw-gateway-004": b"Client authentication is required"}
+
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
     """Write JSON atomically."""
@@ -198,11 +205,15 @@ def inventory_entry(root: pathlib.Path, service: str, method: str) -> dict[str, 
     return matches[0]
 
 
-def ssl_context(verify: bool) -> ssl.SSLContext:
-    """Build an SSL context."""
+def ssl_context(verify: bool, identity: dict[str, str] | None = None) -> ssl.SSLContext:
+    """Build an SSL context with an optional client identity."""
     if verify:
-        return ssl.create_default_context()
-    return ssl._create_unverified_context()
+        context = ssl.create_default_context()
+    else:
+        context = ssl._create_unverified_context()
+    if identity is not None:
+        context.load_cert_chain(identity["cert"], identity["key"])
+    return context
 
 
 def http_call(
@@ -213,6 +224,7 @@ def http_call(
     verify_tls: bool,
     headers: dict[str, str] | None = None,
     method: str = "POST",
+    identity: dict[str, str] | None = None,
 ) -> tuple[int, bytes, str | None]:
     """Perform an HTTP request."""
     request = urllib.request.Request(url, data=body, method=method)
@@ -221,7 +233,7 @@ def http_call(
         request.add_header(key, value)
     try:
         with urllib.request.urlopen(
-            request, context=ssl_context(verify_tls), timeout=20
+            request, context=ssl_context(verify_tls, identity), timeout=20
         ) as response:
             return (
                 int(response.status),
@@ -414,6 +426,13 @@ def main() -> int:
     try:
         print(f"STEP {case_id}-step-01 START", flush=True)
         base, verify_tls, headers = resolve_base(manifest, selector)
+        identity: dict[str, str] | None = None
+        if case_id in CLIENT_AUTH_CASES:
+            identity = (manifest["values"].get("gateway") or {}).get(
+                "registration_client"
+            )
+            if not identity:
+                raise RuntimeError("manifest missing gateway client identity")
         route = f"{base}/{route_suffix}"
         entry = inventory_entry(plan_root, service, method)
         prereq = {
@@ -429,6 +448,7 @@ def main() -> int:
             content_type="application/json",
             verify_tls=verify_tls,
             headers=headers,
+            identity=identity,
         )
         prereq["probe"] = {
             "status": code,
@@ -463,6 +483,7 @@ def main() -> int:
             content_type="application/json",
             verify_tls=verify_tls,
             headers=headers,
+            identity=identity,
         )
         if json_code != 200:
             raise AssertionError(f"valid JSON request returned HTTP {json_code}")
@@ -487,6 +508,7 @@ def main() -> int:
             content_type="application/octet-stream",
             verify_tls=verify_tls,
             headers=headers,
+            identity=identity,
         )
         if pb_code != 200:
             raise AssertionError(f"valid protobuf request returned HTTP {pb_code}")
@@ -497,6 +519,7 @@ def main() -> int:
             content_type="application/json",
             verify_tls=verify_tls,
             headers=headers,
+            identity=identity,
         )
         if bad_code < 400:
             raise AssertionError(f"invalid route accepted with HTTP {bad_code}")
@@ -506,11 +529,29 @@ def main() -> int:
             content_type="application/json",
             verify_tls=verify_tls,
             headers=headers,
+            identity=identity,
         )
         if extra_code != 200:
             raise AssertionError(
                 f"extraneous Empty JSON rejected with HTTP {extra_code}"
             )
+        anonymous_code: int | None = None
+        anonymous_refused: bool | None = None
+        if case_id in CLIENT_AUTH_CASES:
+            anonymous_code, anonymous_body, _ = http_call(
+                route,
+                body=request_json,
+                content_type="application/json",
+                verify_tls=verify_tls,
+                headers=headers,
+            )
+            anonymous_refused = (
+                anonymous_code >= 400 and CLIENT_AUTH_CASES[case_id] in anonymous_body
+            )
+            if not anonymous_refused:
+                raise AssertionError(
+                    f"call without a client certificate was not refused: HTTP {anonymous_code}"
+                )
         contract = {
             "json_http": json_code,
             "json_content_type": json_ct,
@@ -523,6 +564,9 @@ def main() -> int:
             "invalid_route_http": bad_code,
             "extraneous_json_http": extra_code,
             "extraneous_json_sha256": hashlib.sha256(extra_body).hexdigest(),
+            "client_identity_presented": identity is not None,
+            "anonymous_http": anonymous_code,
+            "anonymous_refused": anonymous_refused,
         }
         atomic_json(artifacts_dir / "step02-contract.json", contract)
         (artifacts_dir / "step02-json.body").write_bytes(json_body)
@@ -565,6 +609,7 @@ def main() -> int:
             content_type="application/json",
             verify_tls=verify_tls,
             headers=headers,
+            identity=identity,
         )
         if repeat_code != 200:
             raise AssertionError(f"repeat request returned HTTP {repeat_code}")

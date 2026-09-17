@@ -103,7 +103,6 @@ def gateway_config(
         '[core.admin]\nenabled = false\naddress = "127.0.0.1:8011"': f'[core.admin]\nenabled = true\naddress = "127.0.0.1:{admin}"',
         'auth_token = ""': f'auth_token = "{secrets.token_hex(32)}"',
         "insecure_enable_debug_rpc = false": "insecure_enable_debug_rpc = true",
-        "insecure_skip_attestation = false": "insecure_skip_attestation = true",
         'address = "127.0.0.1:8012"': f'address = "127.0.0.1:{debug}"',
         'public_key = ""': f'public_key = "{public}"',
         'private_key = ""': f'private_key = "{private}"',

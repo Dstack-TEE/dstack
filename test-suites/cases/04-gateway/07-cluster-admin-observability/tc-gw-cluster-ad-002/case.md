@@ -68,6 +68,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 Drive the sync route through the authenticated local client and real TLS client: reject wrong peer identity, unknown node zero, disabled sync, oversized bodies, compression bombs, unsafe peer URLs, and non-success HTTP responses while preserving bounded decompression and recovery.
 
+## Post-baseline regression coverage (PRs #1147 and #1148)
+
+- The sync routes accept only the RA-TLS app-id extension (`1.3.6.1.4.1.62397.1.3`); the app-info fallback was removed, and a certificate issued by a guest agent's local CA now carries the attested app id. Before sending any sync request, decode the leaf of the fixture's simulator-issued client identity and compare its app-id extension with `DstackGuest.Info.app_id` from the case-owned simulator. Expected: the extension is present exactly once, is non-empty, and its hex equals the simulator app id.
+- Every gateway node now enforces the peer check (no `insecure_skip_attestation`), so the positive rows in Steps 2 and 3 authenticate solely through that app-id extension.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

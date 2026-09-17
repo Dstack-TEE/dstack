@@ -205,9 +205,6 @@ def write_gateway_config(
         "insecure_localhost_backend = false": (
             f"insecure_localhost_backend = {str(enable_debug).lower()}"
         ),
-        "insecure_skip_attestation = false": (
-            f"insecure_skip_attestation = {str(enable_debug).lower()}"
-        ),
         'address = "127.0.0.1:8012"': f'address = "127.0.0.1:{ports["debug"]}"',
         'listen_addr = "0.0.0.0"': 'listen_addr = "127.0.0.1"',
         "listen_port = 8443": f"listen_port = {ports['proxy']}",
@@ -1501,6 +1498,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 for method in (
                     "Info",
                     "SysInfo",
+                    "GpuInfo",
                     "NetworkInfo",
                     "ListContainers",
                     "Shutdown",

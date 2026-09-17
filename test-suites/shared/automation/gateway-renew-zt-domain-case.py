@@ -521,8 +521,58 @@ def main() -> int:
                 "application/json",
                 None,
             )[0]
-            rotate_code, rotate_body = SUPPORT.rpc(
-                base, token, "Admin.RotateAcmeCredentials", {}
+            # PR #1138: rotation, CAA reconciliation, and first-use account
+            # registration share one lock stored in WaveKV, so a CAA
+            # reconciliation on another node is refused while this node rotates
+            # (the lock used to be per process for reconciliation). Hold the
+            # rotation inside its DNS-provider preflight, give the lock time to
+            # replicate over the 1s sync interval, then ask a peer to reconcile.
+            peer_admin = str(cluster_nodes[1]["admin_url"]).rstrip("/")
+            with state.lock:
+                state.blocked = True
+                state.block_release.clear()
+                rotation_operation_baseline = len(state.operations)
+            rotation_blocked = False
+            peer_caa_code = 0
+            peer_caa_body = b""
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    rotate_future = executor.submit(
+                        SUPPORT.rpc, base, token, "Admin.RotateAcmeCredentials", {}
+                    )
+                    rotation_deadline = time.monotonic() + 10
+                    while time.monotonic() < rotation_deadline:
+                        with state.lock:
+                            rotation_blocked = (
+                                len(state.operations) > rotation_operation_baseline
+                            )
+                        if rotation_blocked or rotate_future.done():
+                            break
+                        time.sleep(0.05)
+                    if rotation_blocked:
+                        time.sleep(3)
+                        with state.lock:
+                            peer_operation_baseline = len(state.operations)
+                        peer_caa_code, peer_caa_body = SUPPORT.rpc(
+                            peer_admin, token, "Admin.SetCaa", {}
+                        )
+                        with state.lock:
+                            peer_caa_operations = (
+                                len(state.operations) - peer_operation_baseline
+                            )
+                    else:
+                        peer_caa_operations = -1
+                    state.block_release.set()
+                    rotate_code, rotate_body = rotate_future.result()
+            finally:
+                with state.lock:
+                    state.blocked = False
+                    state.block_release.set()
+            checks["shared_acme_lock_refuses_peer_caa"] = (
+                rotation_blocked
+                and peer_caa_code >= 400
+                and b"shared ACME lock" in peer_caa_body
+                and peer_caa_operations == 0
             )
             rotate_value = json.loads(rotate_body) if rotate_code == 200 else {}
             rotated_uri = str(
@@ -679,6 +729,9 @@ def main() -> int:
                 ),
                 "cluster_account_agreement": len(set(account_uris)) == 1,
                 "unauthorized_rotation_http": unauthorized_rotate_code,
+                "rotation_reached_dns_provider": rotation_blocked,
+                "peer_caa_during_rotation_http": peer_caa_code,
+                "peer_caa_refused_by_shared_lock": b"shared ACME lock" in peer_caa_body,
                 "rotation_http": rotate_code,
                 "rotation_changed_account": bool(rotated_account_hash)
                 and rotated_account_hash != baseline_account_hash,

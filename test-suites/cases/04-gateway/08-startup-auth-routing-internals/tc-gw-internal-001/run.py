@@ -91,6 +91,19 @@ def start(
     )
 
 
+def start_captured(
+    binary: str, config: pathlib.Path, environment: dict[str, str]
+) -> subprocess.Popen[bytes]:
+    """Start a case-owned candidate whose diagnostics are inspected in memory only."""
+    return subprocess.Popen(
+        [binary, "--config", str(config)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=environment,
+        start_new_session=True,
+    )
+
+
 def stop(process: subprocess.Popen[bytes] | None) -> None:
     """Stop a run-owned process group if it is still alive."""
     if process is None or process.poll() is not None:
@@ -160,7 +173,11 @@ def main() -> int:
             check=False,
         )
         startup_checks = {
-            "production_mode": core["debug"]["insecure_skip_attestation"] is False,
+            # PR #1148 removed `core.debug.insecure_skip_attestation`; the
+            # production template must no longer carry the switch at all.
+            "attestation_switch_absent": "insecure_skip_attestation"
+            not in core["debug"]
+            and "insecure_skip_attestation" not in config_path.read_text(),
             "debug_listener_disabled": core["debug"]["insecure_enable_debug_rpc"]
             is False,
             "production_domain_selected": core["rpc_domain"] == "localhost",
@@ -207,6 +224,41 @@ def main() -> int:
             invalid_code not in {None, 0} and health(health_url, token) == 200
         )
 
+        # A leftover `insecure_skip_attestation = true` is ignored rather than
+        # honored: with no reachable guest agent the gateway must refuse to
+        # start because it cannot learn its own app id (PR #1148). The
+        # production rpc_domain is cleared only so certificate generation does
+        # not fail first and mask the app-identity phase.
+        stale_config = workspace / "config/gateway-stale-skip-attestation.toml"
+        stale_text = config_path.read_text()
+        for old, new in (
+            ("[core.debug]\n", "[core.debug]\ninsecure_skip_attestation = true\n"),
+            ('rpc_domain = "localhost"', 'rpc_domain = ""'),
+        ):
+            if stale_text.count(old) != 1:
+                raise AssertionError("stale attestation config anchor was ambiguous")
+            stale_text = stale_text.replace(old, new, 1)
+        stale_config.write_text(stale_text)
+        stale_config.chmod(0o600)
+        absent_agent = workspace / "run/absent-guest-agent.sock"
+        stale = start_captured(
+            binary,
+            stale_config,
+            {**os.environ, "DSTACK_AGENT_ADDRESS": f"unix:{absent_agent}"},
+        )
+        stale_code = wait_exit(stale)
+        if stale_code is None:
+            stop(stale)
+        stale_output = stale.stdout.read() if stale.stdout is not None else b""
+        if stale.stdout is not None:
+            stale.stdout.close()
+        stale_switch_ignored = (
+            stale_code not in {None, 0}
+            and b"Failed to get app info" in stale_output
+            and health(health_url, token) == 200
+        )
+        stale_config.unlink()
+
         os.kill(original_pid, signal.SIGTERM)
         for _ in range(80):
             if not pathlib.Path(f"/proc/{original_pid}").exists():
@@ -222,6 +274,7 @@ def main() -> int:
             **startup_checks,
             "bind_conflict_rejected": conflict_rejected,
             "invalid_certificate_rejected": invalid_rejected,
+            "stale_attestation_switch_ignored": stale_switch_ignored,
             "original_exited": original_exited,
             "restart_healthy": restart_healthy,
             "restart_ulimit_raised": restart_soft == restart_hard
@@ -242,6 +295,7 @@ def main() -> int:
             "private_file_count": len(private_files),
             "bind_conflict_returncode_nonzero": conflict_code not in {None, 0},
             "invalid_certificate_returncode_nonzero": invalid_code not in {None, 0},
+            "stale_attestation_switch_returncode_nonzero": stale_code not in {None, 0},
         }
         evidence_path = result_dir / "artifacts/gateway-production-startup.json"
         atomic_json(evidence_path, observation)
@@ -257,7 +311,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-01",
                 "status": "PASS",
-                "observed": "The case-owned candidate started in production certificate mode with no debug listener or debug key configuration.",
+                "observed": "The case-owned candidate started in production certificate mode with no debug listener, no debug key configuration, and no attestation bypass switch.",
             },
             {
                 "id": f"{CASE_ID}-step-02",
@@ -267,7 +321,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-03",
                 "status": "PASS",
-                "observed": "Bind conflict and missing static certificate starts failed without disturbing the original healthy listener.",
+                "observed": "Bind conflict, missing static certificate, and a leftover insecure_skip_attestation switch without a guest agent all failed to start without disturbing the original healthy listener; the last failed at the app-identity phase.",
             },
             {
                 "id": f"{CASE_ID}-step-04",
