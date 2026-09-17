@@ -153,6 +153,7 @@
     "CONFIG_NETFILTER_XT_MATCH_COMMENT=m"
   ],
   "prod_forbidden_paths": [
+    "usr/lib/dstack/kernel-devel",
     "usr/bin/dstack-tee-simulator",
     "usr/bin/swtpm",
     "usr/lib/systemd/system/dstack-prepare.service.d/tee-simulator.conf",

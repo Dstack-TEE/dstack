@@ -124,16 +124,31 @@ touch -d "@$SOURCE_DATE_EPOCH" "$OUT/files/"*
 
 is_dev=false; name=dstack
 if [[ $FLAVOR == dev ]]; then is_dev=true; name=dstack-dev; fi
+
+# The kernel build tree is archived beside, not inside, the measured payload.
+kernel_devel_artifact=
+if [[ ${DSTACK_TAR_RELEASE:-1} == 1 ]]; then
+  tar -C "$KERNEL_TREE" --sort=name --mtime="@$SOURCE_DATE_EPOCH" \
+    --owner=0 --group=0 --numeric-owner \
+    --transform="s|^kernel-devel|$name-$DSTACK_VERSION-kernel-devel|" \
+    -czf "$OUT/files/kernel-devel.tar.gz" kernel-devel
+  touch -d "@$SOURCE_DATE_EPOCH" "$OUT/files/kernel-devel.tar.gz"
+  kernel_devel_artifact=files/kernel-devel.tar.gz
+fi
+
 python3 - "$OUT/artifact-manifest.json" "$name" "$FLAVOR" "$is_dev" \
-  "${DSTACK_SOURCE_REVISION:?}" "$root_hash" "$data_size" "$DSTACK_VERSION" "$OVMF_VARIANT" <<'PY'
+  "${DSTACK_SOURCE_REVISION:?}" "$root_hash" "$data_size" "$DSTACK_VERSION" "$OVMF_VARIANT" \
+  "$kernel_devel_artifact" <<'PY'
 import json, sys
-path,name,flavor,is_dev,revision,root_hash,data_size,version,ovmf_variant=sys.argv[1:]
+(path,name,flavor,is_dev,revision,root_hash,data_size,version,ovmf_variant,
+ kernel_devel)=sys.argv[1:]
 data={"schema_version":1,"backend":"mkosi","image":{"name":name,"version":version,
 "flavor":flavor,"is_dev":is_dev=="true"},"source":{"git_revision":revision},
 "boot":{"ovmf_variant":ovmf_variant},"verity":{"root_hash":root_hash,"data_size":data_size},
 "artifacts":{"initramfs":"files/initramfs.cpio.gz","kernel":"files/bzImage",
 "firmware":"files/ovmf.fd","rootfs_verity":"files/rootfs.squashfs.verity",
-"firmware_sev":"files/ovmf-sev.fd","uki":"files/dstack-uki.efi"},
+"firmware_sev":"files/ovmf-sev.fd","uki":"files/dstack-uki.efi",
+"kernel_devel":kernel_devel or None},
 "backend_metadata":{"machine":"dstack","distribution":"debian"}}
 with open(path,"w") as f: json.dump(data,f,indent=2); f.write("\n")
 PY

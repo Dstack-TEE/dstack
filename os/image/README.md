@@ -47,6 +47,13 @@ the helper lives beside the common assembler.
 OCI registry. It is likewise independent of the backend that produced the
 image.
 
+## Kernel build tree
+
+The optional `artifacts.kernel_devel` manifest entry is published as
+`<name>-<version>-kernel-devel.tar.gz` beside the image archives. It is not in
+`sha256sum.txt`, so it does not affect `os_image_hash`. `kernel-builder/`
+builds the matching module-builder container image.
+
 ## Kernel setup-header normalization
 
 `assemble.sh` runs `normalize-kernel-header.py` over `bzImage` before it

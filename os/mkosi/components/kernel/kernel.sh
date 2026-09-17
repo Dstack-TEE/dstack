@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # shellcheck shell=bash disable=SC2034
 COMPONENT_NAME=kernel
-COMPONENT_CACHE_PATHS=("linux-$KERNEL_VERSION" kernel-build component-stages/kernel)
-COMPONENT_ROOTFS_TREES=()
+COMPONENT_CACHE_PATHS=("linux-$KERNEL_VERSION" kernel-build component-stages/kernel
+  component-stages/kernel-devel)
+# Staged via the rootfs tree; mkosi.finalize moves it out before measurement.
+COMPONENT_ROOTFS_TREES=(component-stages/kernel-devel)
 COMPONENT_KERNEL_TREES=(component-stages/kernel)
 
 component_cache_key() {
@@ -23,5 +25,6 @@ component_cache_key() {
 }
 
 component_build() {
-    "$COMPONENT_PATH/kernel-build.sh" "$WORK" "$WORK/component-stages/kernel"
+    "$COMPONENT_PATH/kernel-build.sh" "$WORK" "$WORK/component-stages/kernel" \
+      "$WORK/component-stages/kernel-devel"
 }

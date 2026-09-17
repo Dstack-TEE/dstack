@@ -7,8 +7,10 @@ MKOSI_DIR="$ROOT/os/mkosi"
 source "$MKOSI_DIR/versions.env"
 BUILD_DIR=${1:?build directory required}
 STAGING=${2:?staging tree required}
+DEVEL_STAGING=${3:?kernel-devel staging tree required}
 BUILD_DIR=$(realpath -m "$BUILD_DIR")
 STAGING=$(realpath -m "$STAGING")
+DEVEL_STAGING=$(realpath -m "$DEVEL_STAGING")
 JOBS=${JOBS:-$(nproc)}
 export KBUILD_BUILD_TIMESTAMP="@${SOURCE_DATE_EPOCH:?SOURCE_DATE_EPOCH required}"
 export KBUILD_BUILD_USER=dstack KBUILD_BUILD_HOST=reproducible
@@ -21,7 +23,7 @@ export KCFLAGS="${KCFLAGS:-} $kernel_map"
 export KAFLAGS="${KAFLAGS:-} $kernel_map"
 export KCPPFLAGS="${KCPPFLAGS:-} $kernel_map"
 
-mkdir -p "$BUILD_DIR/downloads" "$BUILD_DIR/kernel-build" "$STAGING"
+mkdir -p "$BUILD_DIR/downloads" "$BUILD_DIR/kernel-build" "$STAGING" "$DEVEL_STAGING"
 # pahole 1.25 produces a different BTF type order when its encoder runs with
 # Kbuild's parallel job count. Keep compilation parallel, but serialize BTF
 # encoding so vmlinux and bzImage are byte-for-byte reproducible.
@@ -48,7 +50,8 @@ echo "$KERNEL_SHA256  $tarball" | sha256sum --check --status || {
     echo "kernel source checksum mismatch" >&2; exit 1;
 }
 src="$BUILD_DIR/linux-$KERNEL_VERSION"
-rm -rf "$src" "$BUILD_DIR/kernel-build" "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack"
+rm -rf "$src" "$BUILD_DIR/kernel-build" "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack" \
+       "$DEVEL_STAGING/usr/lib/dstack/kernel-devel"
 tar -C "$BUILD_DIR" --no-same-owner -xf "$tarball"
 for patch in \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch" \
@@ -87,4 +90,16 @@ install -Dm0644 "$BUILD_DIR/kernel-build/arch/x86/boot/bzImage" \
     "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/vmlinuz"
 install -Dm0644 "$BUILD_DIR/kernel-build/.config" \
     "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/config"
-find "$STAGING" -print0 | xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
+# Export the external-module build tree as a release artifact, using the same
+# upstream helper `make bindeb-pkg` uses for linux-headers. It is staged into
+# the rootfs install tree and moved out by mkosi.finalize before measurement.
+devel="$DEVEL_STAGING/usr/lib/dstack/kernel-devel"
+headers="$devel/linux-headers-$(cat "$BUILD_DIR/kernel-build/include/config/kernel.release")"
+make -C "$src" O="$BUILD_DIR/kernel-build" run-command \
+    KBUILD_RUN_COMMAND="$src/scripts/package/install-extmod-build $headers"
+install -m0644 "$BUILD_DIR/kernel-build/.config" "$headers/.config"
+# A -fverbose-asm intermediate that records the absolute build path, which no
+# prefix map rewrites. Only its generated .h is needed.
+rm -f "$headers/scripts/mod/devicetable-offsets.s"
+find "$STAGING" "$DEVEL_STAGING" -print0 | \
+    xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"

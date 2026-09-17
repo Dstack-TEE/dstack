@@ -208,4 +208,6 @@ build_one "$BUILD_DIR/b" prod "$jobs_b"
 cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION.tar.gz" "$BUILD_DIR/b/dstack-$DSTACK_VERSION.tar.gz"
 cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION-uki.tar.gz" \
   "$BUILD_DIR/b/dstack-$DSTACK_VERSION-uki.tar.gz"
+cmp "$BUILD_DIR/a/dstack-$DSTACK_VERSION-kernel-devel.tar.gz" \
+  "$BUILD_DIR/b/dstack-$DSTACK_VERSION-kernel-devel.tar.gz"
 echo 'reproducibility check passed'

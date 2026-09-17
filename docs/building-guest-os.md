@@ -93,7 +93,8 @@ Release artifacts are written under:
 os/mkosi/repro-build/build/out/prod/
 ├── dstack-<version>/
 ├── dstack-<version>.tar.gz
-└── dstack-<version>-uki.tar.gz
+├── dstack-<version>-uki.tar.gz
+└── dstack-<version>-kernel-devel.tar.gz
 ```
 
 To use a different build directory, run
@@ -103,7 +104,9 @@ prints the `os_image_hash` and the SHA-256 of both archives.
 The bare-metal archive includes the kernel, initramfs, OVMF firmware,
 partitioned dm-verity rootfs, platform measurement CBOR files,
 `sha256sum.txt`, `digest.txt`, and `metadata.json`. The UKI archive
-includes the bootable `disk.raw` plus its identity and measurement files.
+includes the bootable `disk.raw` plus its identity and measurement files. The
+kernel-devel archive is the build tree for out-of-tree modules; it is not part
+of the image identity (see below).
 
 Inspect and verify an archive with:
 
@@ -126,6 +129,34 @@ FLAVORS="prod dev" ./os/mkosi/repro-build/repro-build.sh
 
 The development archive is written to `out/dev/dstack-dev-<version>.tar.gz`
 and records `"is_dev": true` in `metadata.json`.
+
+## Kernel headers for out-of-tree modules
+
+Each release publishes the guest kernel's build tree for building out-of-tree
+modules:
+
+- `dstack-<version>-kernel-devel.tar.gz`, the exported build tree, and
+- `ghcr.io/dstack-tee/dstack-kernel-builder:<version>`, the same tree plus a
+  compiler from the pinned Debian snapshot the kernel was built with, with
+  `KDIR` set.
+
+```dockerfile
+FROM ghcr.io/dstack-tee/dstack-kernel-builder:<version> AS kmod
+COPY mymod/ /src
+RUN make -C $KDIR M=/src modules
+
+FROM alpine
+COPY --from=kmod /src/mymod.ko /opt/
+```
+
+To build the image locally from a release archive, run
+`os/image/kernel-builder/build.sh <kernel-devel.tar.gz> <image-ref>`.
+
+Neither artifact is part of `sha256sum.txt`, so they do not affect
+`os_image_hash`. A module loaded by an application (which needs
+`CAP_SYS_MODULE`) is covered by the container image digest and therefore the
+compose hash, but it is not measured separately and dstack does not enforce
+module signatures.
 
 ## Check reproducibility
 

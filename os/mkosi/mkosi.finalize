@@ -20,6 +20,8 @@ cp -a "$TREE/usr/lib/modules" "$KSTAGE/usr/lib/"
 install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf.fd" "$KSTAGE/ovmf.fd"
 install -m0644 "$TREE/usr/lib/dstack/firmware/ovmf-sev.fd" "$KSTAGE/ovmf-sev.fd"
 install -m0755 "$TREE/usr/lib/dstack/image-tools/"* "$OUTPUTDIR/.image-tools/"
+# The kernel build tree is a release artifact, never part of the measured rootfs.
+mv "$TREE/usr/lib/dstack/kernel-devel" "$KSTAGE/kernel-devel"
 rm -rf "$TREE/usr/lib/dstack/firmware" "$TREE/usr/lib/dstack/image-tools"
 
 rm -f "$TREE/var/cache/ldconfig/aux-cache"

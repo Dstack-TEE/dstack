@@ -91,6 +91,9 @@
         },
         "uki": {
           "oneOf": [{"$ref": "#/$defs/artifactPath"}, {"type": "null"}]
+        },
+        "kernel_devel": {
+          "oneOf": [{"$ref": "#/$defs/artifactPath"}, {"type": "null"}]
         }
       }
     },

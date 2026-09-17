@@ -109,6 +109,7 @@ exact_keys(
     data["artifacts"],
     "artifacts",
     ("initramfs", "kernel", "firmware", "rootfs_verity", "firmware_sev", "uki"),
+    ("kernel_devel",),
 )
 if "backend_metadata" in data and not isinstance(data["backend_metadata"], dict):
     raise SystemExit("manifest field must be an object: backend_metadata")
@@ -179,6 +180,7 @@ values = [
     artifact("rootfs_verity"),
     artifact("firmware_sev", optional=True),
     artifact("uki", optional=True),
+    artifact("kernel_devel", optional=True),
 ]
 for value in values:
     if not isinstance(value, str):
@@ -187,7 +189,7 @@ for value in values:
 PYMANIFEST
 )
 
-if [ "${#MANIFEST_VALUES[@]}" -ne 15 ]; then
+if [ "${#MANIFEST_VALUES[@]}" -ne 16 ]; then
     echo "Error: failed to read artifact manifest: $MANIFEST" >&2
     exit 1
 fi
@@ -211,6 +213,7 @@ OVMF_FIRMWARE=${MANIFEST_VALUES[11]}
 ROOTFS_IMAGE=${MANIFEST_VALUES[12]}
 OVMF_SEV_FIRMWARE=${MANIFEST_VALUES[13]}
 UKI_IMAGE=${MANIFEST_VALUES[14]}
+KERNEL_DEVEL_ARCHIVE=${MANIFEST_VALUES[15]}
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(realpath "$SCRIPT_DIR/../..")
@@ -230,6 +233,7 @@ case "$OUTPUT_DIR" in
 esac
 IMAGE_TAR=${IMAGE_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}.tar.gz"}
 IMAGE_TAR_UKI=${IMAGE_TAR_UKI:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-uki.tar.gz"}
+KERNEL_DEVEL_TAR=${KERNEL_DEVEL_TAR:-"${DIST_DIR}/${DIST_NAME}-${DSTACK_VERSION}-kernel-devel.tar.gz"}
 TAR_DIR_NAME=$(basename "$OUTPUT_DIR")
 
 echo "Assembling ${DIST_NAME} ${DSTACK_VERSION} from ${BACKEND} artifacts (${FLAVOR})"
@@ -663,4 +667,10 @@ if [ "$DSTACK_TAR_RELEASE" = "1" ]; then
         (cd "$PARENT_DIR" && tar -czvf "$IMAGE_TAR_UKI" "${UKI_TAR_FILES[@]}")
         echo
     fi
+fi
+
+# Publish the optional developer artifact beside the images, without adding it
+# to sha256sum.txt or os_image_hash. See docs/building-guest-os.md.
+if [ -n "$KERNEL_DEVEL_ARCHIVE" ]; then
+    cp "$KERNEL_DEVEL_ARCHIVE" "$KERNEL_DEVEL_TAR"
 fi
