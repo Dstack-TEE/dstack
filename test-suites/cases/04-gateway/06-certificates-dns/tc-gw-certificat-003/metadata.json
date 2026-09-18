@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certificat-003",
+  "title": "DNS credential CRUD and default selection",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-certificat-003"
+  ],
+  "risks": [
+    "risk-gw-certificat-003"
+  ],
+  "tags": [
+    "gateway",
+    "certificates-dns"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "DNS credential CRUD and default selection"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-dns-credential-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

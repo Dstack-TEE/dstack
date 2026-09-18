@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-yocto-002",
+  "title": "OpenSSH account and password-auth hardening",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-yocto-002"
+  ],
+  "risks": [
+    "risk-gos-yocto-002"
+  ],
+  "tags": [
+    "gos",
+    "yocto-image-runtime-and-hardening"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "OpenSSH account and password-auth hardening"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

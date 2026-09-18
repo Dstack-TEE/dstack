@@ -1,0 +1,3751 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: D100, D101, D102, D103, D107
+"""Run, validate, package, and render dstack test plans."""
+
+from __future__ import annotations
+
+import argparse
+import collections
+import concurrent.futures
+import hashlib
+import json
+import mimetypes
+import os
+import re
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import tempfile
+import threading
+import time
+import zipfile
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import fixtures
+import render
+import tomllib
+import web
+
+TERMINAL_STATUS = ("PASS", "FAIL", "BLOCKED", "NOT_RUN", "SKIPPED")
+
+
+class DstackTestError(Exception):
+    """A user-facing dstack-test error."""
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def process_start_ticks(pid: int) -> int | None:
+    """Return Linux /proc start ticks so a recycled PID cannot be signalled."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+        return int(fields[21])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def default_run_id() -> str:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"run-{timestamp}-{secrets.token_hex(3)}"
+
+
+def atomic_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as output:
+        json.dump(value, output, ensure_ascii=False, indent=2)
+        output.write("\n")
+        temporary = Path(output.name)
+    temporary.replace(path)
+
+
+def atomic_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, delete=False
+    ) as output:
+        for value in values:
+            output.write(json.dumps(value, ensure_ascii=False) + "\n")
+        temporary = Path(output.name)
+    temporary.replace(path)
+
+
+STEP_EVENT_RE = re.compile(
+    r"(?P<id>tc-[a-z0-9-]+-step-\d+).*?(?P<kind>START|END|开始|结束)(?:\s*[\]】)]?\s*[-—:：]?\s*(?P<status>PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED))?",
+    re.IGNORECASE,
+)
+STEP_EVENT_REVERSE_RE = re.compile(
+    r"(?P<kind>START|END|开始|结束)[^\n]{0,80}?(?P<id>tc-[a-z0-9-]+-step-\d+)(?:[^\n]{0,8}?[-—:：]?\s*(?P<status>PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED))?",
+    re.IGNORECASE,
+)
+EVIDENCE_NOTE_RE = re.compile(
+    r"(?im)^EVIDENCE\s+(?P<id>[a-z0-9][a-z0-9-]*-step-\d+)\s+-\s+(?P<note>\S.*)$"
+)
+
+
+def iter_step_events(text: str) -> list[re.Match[str]]:
+    """Return canonical and legacy localized markers in narrative order."""
+    matches = [*STEP_EVENT_RE.finditer(text), *STEP_EVENT_REVERSE_RE.finditer(text)]
+    return sorted(matches, key=lambda match: match.start())
+
+
+def step_event_starts(kind: str) -> bool:
+    """Accept the fixed English marker and localized Chinese Agent narration."""
+    return kind.upper() == "START" or kind == "开始"
+
+
+def materialize_evidence(
+    case: render.CaseEntry, result_dir: Path, result: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Build a compact, machine-readable evidence stream from native output."""
+    observed_steps = {
+        str(step["id"]): {
+            "status": str(step["status"]),
+            "observed": str(step["observed"]),
+        }
+        for step in result.get("steps", [])
+        if step.get("status") in ("PASS", "FAIL", "BLOCKED")
+    }
+    pass_steps = {
+        step_id: value["observed"]
+        for step_id, value in observed_steps.items()
+        if value["status"] == "PASS"
+    }
+    records: list[dict[str, Any]] = []
+    sequence = 0
+    for step_id, observed in pass_steps.items():
+        sequence += 1
+        records.append(
+            {
+                "schema_version": "1.0",
+                "sequence": sequence,
+                "case_id": case.id,
+                "step_id": step_id,
+                "kind": "pass",
+                "summary": observed,
+            }
+        )
+    current_step: str | None = None
+    evidence_note: str | None = None
+    session_path = result_dir / "session.jsonl"
+    if session_path.is_file():
+        with session_path.open(encoding="utf-8", errors="replace") as source:
+            for line_no, line in enumerate(source, 1):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and event.get("type") in (
+                    "stdout",
+                    "stderr",
+                ):
+                    text = str(event.get("text", ""))
+                    notes = list(EVIDENCE_NOTE_RE.finditer(text))
+                    if notes:
+                        note = notes[-1]
+                        current_step = note.group("id").lower()
+                        evidence_note = note.group("note").strip()
+                    for match in iter_step_events(text):
+                        step_id = match.group("id").lower()
+                        current_step = (
+                            step_id if step_event_starts(match.group("kind")) else None
+                        )
+                        if current_step is None:
+                            evidence_note = None
+                    if current_step in observed_steps and text.strip() and not notes:
+                        sequence += 1
+                        records.append(
+                            {
+                                "schema_version": "1.0",
+                                "sequence": sequence,
+                                "case_id": case.id,
+                                "step_id": current_step,
+                                "kind": str(event["type"]),
+                                "summary": text.strip().splitlines()[0][:240],
+                                "description": evidence_note
+                                or f"Proves the recorded {observed_steps[current_step]['status']} observation for {current_step}: {observed_steps[current_step]['observed']}",
+                                "output_excerpt": text[:4096],
+                                "output_sha256": hashlib.sha256(
+                                    text.encode()
+                                ).hexdigest(),
+                                "session_line": line_no,
+                            }
+                        )
+                    continue
+                item = event.get("item") if isinstance(event, dict) else None
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "agent_message":
+                    notes = list(EVIDENCE_NOTE_RE.finditer(str(item.get("text", ""))))
+                    if notes:
+                        note = notes[-1]
+                        current_step = note.group("id").lower()
+                        evidence_note = note.group("note").strip()
+                    for match in iter_step_events(str(item.get("text", ""))):
+                        step_id = match.group("id").lower()
+                        current_step = (
+                            step_id if step_event_starts(match.group("kind")) else None
+                        )
+                        if current_step is None:
+                            evidence_note = None
+                    continue
+                if (
+                    item.get("type") != "command_execution"
+                    or event.get("type") != "item.completed"
+                    or current_step not in observed_steps
+                ):
+                    continue
+                command = str(item.get("command", ""))
+                output = str(item.get("aggregated_output", ""))
+                sequence += 1
+                records.append(
+                    {
+                        "schema_version": "1.0",
+                        "sequence": sequence,
+                        "case_id": case.id,
+                        "step_id": current_step,
+                        "kind": "command",
+                        "summary": command.splitlines()[0][:240]
+                        if command
+                        else "command",
+                        "description": evidence_note
+                        or f"Proves the recorded {observed_steps[current_step]['status']} observation for {current_step}: {observed_steps[current_step]['observed']}",
+                        "command": command,
+                        "output_excerpt": output[:4096],
+                        "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+                        "session_line": line_no,
+                        "session_item_id": item.get("id"),
+                    }
+                )
+    for artifact in result.get("artifacts", []):
+        relative = str(artifact["path"])
+        path = render.safe_path(result_dir, relative, "evidence attachment")
+        sequence += 1
+        records.append(
+            {
+                "schema_version": "1.0",
+                "sequence": sequence,
+                "case_id": case.id,
+                "kind": "attachment",
+                "summary": str(artifact.get("name") or path.name),
+                "description": str(
+                    artifact.get("description")
+                    or "Attachment referenced by the final case result."
+                ),
+                "step_id": artifact.get("step_id"),
+                "path": relative,
+                "bytes": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "media_type": mimetypes.guess_type(path.name)[0]
+                or "application/octet-stream",
+            }
+        )
+    atomic_jsonl(result_dir / "evidence.jsonl", records)
+    return records
+
+
+def validate_agent_summary_after_exit(
+    case: render.CaseEntry, path: Path, settle_seconds: float = 2.0
+) -> dict[str, Any]:
+    """Allow an exiting agent's last atomic result replacement to become visible."""
+    deadline = time.monotonic() + settle_seconds
+    while True:
+        try:
+            return validate_summary(case, path)
+        except (DstackTestError, render.ReportError) as error:
+            if "provisional result is not a completed case result" not in str(error):
+                raise
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
+def find_case(plan: render.Plan, value: str) -> render.CaseEntry:
+    # The resolved value is only compared with paths from the validated plan.
+    candidate = Path(value).resolve()  # lgtm[py/path-injection]
+    matches = [
+        case for case in plan.cases if case.id == value or case.path == candidate
+    ]
+    if len(matches) != 1:
+        raise DstackTestError(
+            f"expected one indexed case for {value!r}, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def validate_summary(
+    case: render.CaseEntry,
+    path: Path,
+    result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # Callers serving a live run may already have taken an atomic snapshot of
+    # result.json.  Validate that snapshot rather than reopening the path: the
+    # Agent can replace a final/provisional result between those two reads.
+    if result is None:
+        result = render.load_json(path)
+    if result.get("case_id") != case.id:
+        raise DstackTestError(f"result case_id must be {case.id!r}: {path}")
+    status = result.get("status")
+    if status not in TERMINAL_STATUS:
+        raise DstackTestError(f"invalid result status {status!r}: {path}")
+    if not isinstance(result.get("summary"), str) or not result["summary"].strip():
+        raise DstackTestError(f"result summary must be non-empty: {path}")
+    remarks = result.get("remarks", "")
+    if not isinstance(remarks, str):
+        raise DstackTestError(f"result remarks must be a string: {path}")
+    provisional = result.get("provisional", False)
+    if not isinstance(provisional, bool):
+        raise DstackTestError(f"result provisional must be a boolean: {path}")
+    # The schema flag is authoritative.  Final reports may legitimately describe
+    # an earlier provisional observation in their remarks, so text matching here
+    # produces false INCOMPLETE results after an agent has finalized the case.
+    if provisional:
+        raise DstackTestError(
+            f"provisional result is not a completed case result: {path}"
+        )
+    steps = result.get("steps", [])
+    if not isinstance(steps, list):
+        raise DstackTestError(f"result steps must be an array: {path}")
+    seen: set[str] = set()
+    for step in steps:
+        if not isinstance(step, dict):
+            raise DstackTestError(f"invalid step in {path}")
+        step_id = step.get("id")
+        if not isinstance(step_id, str) or not step_id.startswith(case.id + "-step-"):
+            raise DstackTestError(f"invalid step ID {step_id!r} in {path}")
+        if step_id in seen:
+            raise DstackTestError(f"duplicate step ID {step_id!r} in {path}")
+        seen.add(step_id)
+        if step.get("status") not in TERMINAL_STATUS:
+            raise DstackTestError(f"invalid status for {step_id} in {path}")
+        if not isinstance(step.get("observed"), str) or not step["observed"].strip():
+            raise DstackTestError(f"missing observed summary for {step_id} in {path}")
+    if status == "PASS" and (
+        not steps or any(step["status"] != "PASS" for step in steps)
+    ):
+        raise DstackTestError(
+            f"PASS result requires one or more all-PASS steps: {path}"
+        )
+    artifacts = result.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        raise DstackTestError(f"artifacts must be an array: {path}")
+    for artifact in artifacts:
+        if not isinstance(artifact, dict) or not artifact.get("path"):
+            raise DstackTestError(f"invalid artifact in {path}")
+        artifact_path = render.safe_path(
+            path.parent, artifact["path"], "result artifact"
+        )
+        try:
+            artifact_path.relative_to(path.parent.resolve())
+        except ValueError as error:
+            raise DstackTestError(
+                f"artifact escapes result directory: {artifact_path}"
+            ) from error
+        if not artifact_path.is_file():
+            raise DstackTestError(f"missing result artifact: {artifact_path}")
+    return result
+
+
+def validate_completed_case(case: render.CaseEntry, result_dir: Path) -> dict[str, Any]:
+    """Validate a result only after the runner committed completion metadata."""
+    result_path = result_dir / "result.json"
+    runner_path = result_dir / "runner.json"
+    execution_path = result_dir / "execution.json"
+    result = validate_summary(case, result_path)
+    if not runner_path.is_file():
+        raise DstackTestError(f"missing runner.json for completed case: {case.id}")
+    runner = render.load_json(runner_path)
+    if runner.get("result_valid") is not True:
+        raise DstackTestError(f"runner did not validate result.json for {case.id}")
+    if not execution_path.is_file():
+        raise DstackTestError(f"missing execution.json for completed case: {case.id}")
+    execution = render.load_json(execution_path)
+    if execution.get("state") != "COMPLETED":
+        raise DstackTestError(
+            f"case execution is {execution.get('state', 'unknown')}, not COMPLETED: {case.id}"
+        )
+    return result
+
+
+def validate_session(path: Path) -> tuple[int, str | None]:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise DstackTestError(f"missing or empty agent session: {path}")
+    count = 0
+    model: str | None = None
+    with path.open(encoding="utf-8") as source:
+        for line_no, line in enumerate(source, 1):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise DstackTestError(
+                    f"invalid session JSONL at {path}:{line_no}: {error}"
+                ) from error
+            if not isinstance(event, dict):
+                raise DstackTestError(
+                    f"session event is not an object at {path}:{line_no}"
+                )
+            count += 1
+            model = model or extract_model(event)
+    if count == 0:
+        raise DstackTestError(f"agent session contains no events: {path}")
+    return count, model
+
+
+def extract_model(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("model", "model_name"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        for item in value.values():
+            if found := extract_model(item):
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            if found := extract_model(item):
+                return found
+    return None
+
+
+def result_schema_text(case_id: str) -> str:
+    return f'''{{
+  "schema_version": "1.0",
+  "case_id": "{case_id}",
+  "provisional": false,
+  "status": "PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED",
+  "summary": "Concise result summary",
+  "steps": [
+    {{"id": "{case_id}-step-01", "status": "PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED", "observed": "Concise observation"}}
+  ],
+  "artifacts": [{{
+    "name": "Short artifact title",
+    "path": "artifacts/relative-path",
+    "step_id": "{case_id}-step-01",
+    "description": "What was captured and which expected result it proves"
+  }}],
+  "remarks": ""
+}}'''
+
+
+def resolved_executable_inventory(runtime_manifest: Path | None) -> str:
+    """Return direct, already-built executable paths without recursive discovery."""
+    if runtime_manifest is None or not runtime_manifest.is_file():
+        return "Resolved executable inventory: unavailable"
+    try:
+        manifest = render.load_json(runtime_manifest)
+    except (OSError, render.ReportError):
+        return "Resolved executable inventory: unavailable"
+    resolved: dict[str, str] = {}
+    prepared = manifest.get("prepared_binaries", {})
+    if isinstance(prepared, dict):
+        for name, value in prepared.items():
+            if isinstance(name, str) and isinstance(value, str):
+                path = Path(value)
+                if path.is_file() and os.access(path, os.X_OK):
+                    resolved[name] = str(path)
+    target_value = manifest.get("cargo_target_dir")
+    if isinstance(target_value, str):
+        for profile in ("release", "debug"):
+            directory = Path(target_value) / profile
+            if not directory.is_dir():
+                continue
+            for path in directory.iterdir():
+                if (
+                    path.is_file()
+                    and os.access(path, os.X_OK)
+                    and (path.name.startswith("dstack") or path.name == "supervisor")
+                ):
+                    resolved.setdefault(path.name, str(path))
+    if not resolved:
+        return "Resolved executable inventory: unavailable"
+    entries = "\n".join(f"- {name}: {resolved[name]}" for name in sorted(resolved))
+    return f"Resolved executable inventory (use these exact paths; do not rediscover them):\n{entries}"
+
+
+def build_prompt(
+    plan: render.Plan,
+    case: render.CaseEntry,
+    result_dir: Path,
+    user_prompt: str,
+    runtime_manifest: Path | None = None,
+    case_manifest: Path | None = None,
+) -> str:
+    fast_guide = plan.root / "shared" / "automation" / "execution-guide.md"
+    prepared = (
+        f"Prepared runtime manifest: {runtime_manifest}\n"
+        if runtime_manifest and runtime_manifest.is_file()
+        else "Prepared runtime manifest: unavailable (report a missing prerequisite; do not create a private build cache)\n"
+    )
+    executable_inventory = resolved_executable_inventory(runtime_manifest)
+    case_text = case.spec_path.read_text(encoding="utf-8")
+    runtime_text = (
+        runtime_manifest.read_text(encoding="utf-8")
+        if runtime_manifest and runtime_manifest.is_file()
+        else "unavailable"
+    )
+    case_manifest_text = (
+        case_manifest.read_text(encoding="utf-8")
+        if case_manifest and case_manifest.is_file()
+        else "unavailable"
+    )
+    return f"""You are executing a test case under the dstack test specification.
+
+Test plan guide: {plan.guide_path} (already distilled into the rules below; do not reread it)
+Test case: {case.spec_path} (included inline below; do not reread it)
+Fast execution guide: {fast_guide if fast_guide.is_file() else "not provided"} (already distilled below; do not reread it)
+{prepared.rstrip()} (included inline below; do not reread it)
+{executable_inventory}
+Case fixture manifest: {case_manifest if case_manifest and case_manifest.is_file() else "unavailable"} (included inline below; do not reread it)
+Result directory: {result_dir}
+
+Inline test case specification:
+--- BEGIN CASE SPEC ---
+{case_text.rstrip()}
+--- END CASE SPEC ---
+
+Inline runtime manifest:
+--- BEGIN RUNTIME MANIFEST ---
+{runtime_text.rstrip()}
+--- END RUNTIME MANIFEST ---
+
+Inline case fixture manifest:
+--- BEGIN CASE MANIFEST ---
+{case_manifest_text.rstrip()}
+--- END CASE MANIFEST ---
+The external runner saves the complete session; do not manually copy command output.
+
+Execution rules:
+1. The case specification and both manifests are included inline above. Do not reread them or the plan-wide README/execution guide with tools; begin Step 1 immediately.
+2. Do not modify suite metadata, case.md, fixtures, or test scripts.
+3. Write artifacts only to this result directory or a temporary location explicitly allowed by the guide.
+3a. Do not recursively scan parent directories, home directories, mounted build trees, or the whole host. Resolve known files from the printed guide, case, runtime manifest, case manifest, or repository path first and keep discovery bounded to the narrowest explicit path and depth.
+4. Follow case.md step by step. Emit `STEP <step-id> START` on its own line before each step and `STEP <step-id> END - <status>` on its own line afterward, even when the surrounding narrative uses another language. These exact machine markers drive live progress and evidence-to-step indexing. Before a proof-producing command, emit `EVIDENCE <step-id> - <what this command/output proves>` on its own line. Keep the note concrete and tied to an expected result; it applies to following commands in that step until replaced.
+5. Execute actual commands with tools; do not substitute inference or summaries for execution.
+6. If an actual result does not fully satisfy the expected result, mark the step and case FAIL.
+7. Use BLOCKED when an external prerequisite prevents the tested behavior from starting. Never use PARTIAL. The run-wide `DSTACK_TEST_RUNTIME_MANIFEST` contains immutable build metadata and never proves that a case-scoped resource is absent. Always read `DSTACK_TEST_CASE_MANIFEST` before any fixture-sufficiency decision; the exact case manifest path is printed above. Do not search the result directory for it. Its `values`, `resources`, and `initial_state` are authoritative. Only when that case manifest directly proves a required prerequisite is absent may you perform one bounded manifest observation and atomically finalize all affected steps as BLOCKED. Emit the remaining STEP START/END markers as concise Agent messages, but do not run separate gate, cleanup, source-inspection, or metadata-validation commands for behavior that never started; the external runner validates the final result.
+8. Never present simulation results as physical-hardware results.
+9. Do not emit tokens, private keys, key material, or other secrets into the session or attachments.
+10. Write screenshots, logs, and other attachments to {result_dir / "artifacts"}. As soon as a valuable attachment is created, atomically update `{result_dir / "artifacts" / "manifest.json"}` as `{{"artifacts": [...]}}`, where every entry contains `path` (relative to the result directory), `step_id`, `name`, and `description`. The description must state what the file contains and which expected result it proves. Use the same metadata in result.json; do not leave unexplained attachments. Every artifact path must name a regular file, never a directory; if a directory tree is valuable, archive it into one case-scoped file before registration.
+11. You must atomically write the summary to {result_dir / "result.json"} and nowhere else. As soon as any step is conclusively FAIL or BLOCKED, write a valid provisional summary immediately with `"provisional": true` (use NOT_RUN for unfinished steps), then continue diagnostics and cleanup and atomically replace it with the final summary using `"provisional": false`. Do not defer the first result write until after cleanup.
+12. result.json must use this shallow structure and must not embed command output:
+{result_schema_text(case.id)}
+13. In the final response, state the case status and result.json path.
+14. Read and obey the fast execution guide before the case. Use prepared binaries and the shared Cargo target. Unless this is explicitly a clean-build case, do not create or copy CARGO_HOME, do not create a case-specific CARGO_TARGET_DIR, and do not rebuild a binary recorded in the runtime manifest.
+15. The case and inventories are the execution specification. Do not inspect implementation source before the first tested operation merely to learn how to design the test. Source inspection is reserved for a recorded ambiguity or post-failure root-cause investigation.
+16. Prefer checked-in automation helpers. Do not spend the case session designing a new general-purpose harness when a prepared helper covers the operation. Every proof must exercise the candidate component, its checked-in code, or its public interface. Never implement a synthetic model of the expected behavior and test that model: such evidence is invalid. If the declared behavior cannot be reached with the provided fixture and bounded candidate-facing commands, record the missing test capability precisely instead of constructing a replacement implementation.
+17. The execution safety layer rejects `rm -f`-style commands, including cleanup traps. Do not put `rm`, `rm -f`, or a deletion trap in proof commands. Write each artifact/result to a uniquely named temporary file and atomically rename it into place; if a failed command leaves an exact known temporary file, inspect it and use `unlink <exact-path>` separately. Prefer a short Python atomic writer over deeply nested shell/JQ quoting when materializing several JSON files.
+18. Do not scan suite metadata, feature/source coverage maps, unrelated case specifications, or the plan directory tree. The runner has already resolved this case and printed every required control path above; opening plan-wide metadata wastes the case context and does not provide test evidence.
+19. A shell quoting error, unavailable convenience tool, JSON projection failure, or other proof-command defect is test infrastructure, not a product mismatch. Retry with a bounded compatible command and grade only the corrected product observation. Never mark a case FAIL merely because the evidence command was malformed.
+20. Optimize for execution latency: group independent file reads and probes into one tool call, and implement each behavioral step as one compact structured harness whenever practical. Do not run separate mkdir, help, jq, hash, permission, artifact-manifest, or result-validation commands when the same harness can perform and record them atomically. Before the first behavior-producing operation, at most three discovery/source/schema commands are allowed; combine all needed reads in those calls and then execute the test. A normal three-step case has a hard budget of twelve shell tool calls, including corrected infrastructure commands but excluding unavoidable lifecycle polls. If the budget is reached, grade from collected product evidence, perform one bounded cleanup/finalization call, and finish; do not continue source exploration or add redundant validation calls.
+21. Do not narrate plans or restate observations between tool calls. Apart from the required STEP and EVIDENCE markers, proceed directly to the next operation and reserve explanation for the final result.
+22. Use the exact binary and endpoint paths in the runtime and case manifests. Do not probe `--help`, search build trees, or inspect package metadata merely to rediscover an invocation already specified by the case or prepared execution knowledge. If a required path is genuinely absent or ambiguous, perform one bounded lookup, then either execute it or record the fixture/specification defect precisely.
+23. Bound every SSH, container, service, network, and cleanup operation individually; an outer Python or shell timeout is not sufficient. Normal probes get at most 15 seconds, state transitions at most 30 seconds, and a normal step harness shares a 90-second total deadline unless the case explicitly requires a longer measured interval. After a definitive timeout, capture state and perform one bounded cleanup/recovery pass; do not rerun the full matrix or wait through another long deadline. Never call `docker stop`, `docker rm`, service stop/start, or a remote cleanup command without its own timeout.
+
+Additional caller requirements:
+{user_prompt.strip() or "None"}
+"""
+
+
+def agent_command(
+    agent: str, model: str | None, workdir: Path, prompt: str, extra: list[str]
+) -> list[str]:
+    if agent == "codex":
+        command = ["codex", "exec", "--json", "--color", "never", "-C", str(workdir)]
+        if model:
+            command += ["--model", model]
+        command += extra
+        command += [prompt]
+        return command
+    if agent == "claude":
+        command = ["claude", "--print", "--verbose", "--output-format", "stream-json"]
+        if model:
+            command += ["--model", model]
+        command += extra
+        command += [prompt]
+        return command
+    raise DstackTestError(f"unsupported agent: {agent}")
+
+
+def resolve_model(agent: str, model: str | None) -> str | None:
+    if model or agent != "codex":
+        return model
+    config_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    config_path = config_home / "config.toml"
+    if not config_path.is_file():
+        return None
+    try:
+        configured = tomllib.loads(config_path.read_text(encoding="utf-8")).get("model")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return configured if isinstance(configured, str) and configured else None
+
+
+def run_agent_case(
+    plan: render.Plan,
+    case: render.CaseEntry,
+    run_id: str,
+    agent: str,
+    model: str | None,
+    workdir: Path,
+    prompt: str,
+    extra: list[str],
+    overwrite: bool,
+    case_manifest: Path | None = None,
+) -> dict[str, Any]:
+    result_dir = render.case_result_dir(plan, run_id, case)
+    if result_dir.exists() and any(result_dir.iterdir()) and not overwrite:
+        raise DstackTestError(
+            f"result directory is not empty; pass --overwrite to replace it: {result_dir}"
+        )
+    if overwrite and result_dir.exists():
+        shutil.rmtree(result_dir)
+    (result_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+    stop_request_path = result_dir / ".stop-requested"
+    stop_request_path.unlink(missing_ok=True)
+    runtime_manifest = plan.root / "results" / run_id / "runtime-manifest.json"
+    full_prompt = build_prompt(
+        plan,
+        case,
+        result_dir,
+        prompt,
+        runtime_manifest=runtime_manifest,
+        case_manifest=case_manifest,
+    )
+    (result_dir / "prompt.md").write_text(full_prompt, encoding="utf-8")
+    atomic_json(
+        result_dir / "execution.json",
+        {
+            "schema_version": "1.0",
+            "state": "RUNNING",
+            "case_id": case.id,
+            "started_at": utc_now(),
+        },
+    )
+    session_path = result_dir / "session.jsonl"
+    stderr_path = result_dir / "agent-stderr.log"
+    started_at = utc_now()
+    start = time.monotonic_ns()
+    effective_model = resolve_model(agent, model)
+    command = agent_command(agent, effective_model, workdir, full_prompt, extra)
+    binary = shutil.which(command[0])
+    if not binary:
+        raise DstackTestError(f"agent CLI not found: {command[0]}")
+    with session_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
+        environment = os.environ.copy()
+        if case_manifest is not None:
+            environment["DSTACK_TEST_CASE_MANIFEST"] = str(case_manifest)
+            environment["DSTACK_TEST_FIXTURE_LEASE_ID"] = str(
+                render.load_json(case_manifest)["lease_id"]
+            )
+        if runtime_manifest.is_file():
+            runtime = render.load_json(runtime_manifest)
+            environment["DSTACK_TEST_RUNTIME_MANIFEST"] = str(runtime_manifest)
+            if runtime.get("cache_dir"):
+                environment["DSTACK_TEST_CACHE_DIR"] = str(runtime["cache_dir"])
+            if runtime.get("cargo_target_dir"):
+                environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
+                environment["CARGO_INCREMENTAL"] = "1"
+        process = subprocess.Popen(
+            command,
+            cwd=workdir,
+            env=environment,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+        )
+        atomic_json(
+            result_dir / "execution.json",
+            {
+                "schema_version": "1.0",
+                "state": "RUNNING",
+                "case_id": case.id,
+                "started_at": started_at,
+                "agent_pid": process.pid,
+                "agent_pgid": process.pid,
+                "agent_start_ticks": process_start_ticks(process.pid),
+            },
+        )
+        exit_code = process.wait()
+    duration_ms = (time.monotonic_ns() - start) // 1_000_000
+    finished_at = utc_now()
+    event_count, detected_model = validate_session(session_path)
+    result_path = result_dir / "result.json"
+    result_valid = False
+    result_error = None
+    try:
+        result = validate_agent_summary_after_exit(case, result_path)
+        result_valid = True
+    except (DstackTestError, render.ReportError) as error:
+        result = None
+        result_error = str(error)
+    runner = {
+        "schema_version": "1.0",
+        "run_id": run_id,
+        "case_id": case.id,
+        "agent": {
+            "type": agent,
+            "model": detected_model or effective_model or "unknown",
+        },
+        "executor": {
+            "type": "agent",
+            "agent": agent,
+            "model": detected_model or effective_model or "unknown",
+        },
+        "session": {
+            "format": f"{agent}-jsonl",
+            "path": "session.jsonl",
+            "events": event_count,
+        },
+        "prompt_path": "prompt.md",
+        "result_path": "result.json",
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+        "result_valid": result_valid,
+        "result_error": result_error,
+    }
+    atomic_json(result_dir / "runner.json", runner)
+    if not result_valid:
+        atomic_json(
+            result_dir / "execution.json",
+            {
+                "schema_version": "1.0",
+                "state": "TERMINATED" if stop_request_path.is_file() else "INCOMPLETE",
+                "case_id": case.id,
+                "finished_at": finished_at,
+                "exit_code": exit_code,
+                "reason": result_error,
+            },
+        )
+        write_sha256s(result_dir)
+        exit_detail = f"; {agent} exited with {exit_code}" if exit_code != 0 else ""
+        raise DstackTestError(
+            f"agent completed without a valid result.json: {result_error}{exit_detail}"
+        )
+    materialize_evidence(case, result_dir, result)
+    atomic_json(
+        result_dir / "execution.json",
+        {
+            "schema_version": "1.0",
+            "state": "COMPLETED",
+            "case_id": case.id,
+            "finished_at": finished_at,
+            "exit_code": exit_code,
+            "result_status": result["status"],
+        },
+    )
+    write_sha256s(result_dir)
+    return {"case": case.id, "status": result["status"], "result_dir": str(result_dir)}
+
+
+def run_script_case(
+    plan: render.Plan,
+    case: render.CaseEntry,
+    run_id: str,
+    overwrite: bool,
+    case_manifest: Path | None = None,
+) -> dict[str, Any]:
+    """Execute a checked-in case entrypoint and preserve its process stream."""
+    assert case.execution is not None
+    result_dir = render.case_result_dir(plan, run_id, case)
+    if result_dir.exists() and any(result_dir.iterdir()) and not overwrite:
+        raise DstackTestError(
+            f"result directory is not empty; pass --overwrite to replace it: {result_dir}"
+        )
+    if overwrite and result_dir.exists():
+        shutil.rmtree(result_dir)
+    (result_dir / "artifacts").mkdir(parents=True, exist_ok=True)
+    stop_request_path = result_dir / ".stop-requested"
+    stop_request_path.unlink(missing_ok=True)
+    runtime_manifest = plan.root / "results" / run_id / "runtime-manifest.json"
+    entrypoint = render.safe_path(
+        plan.root, case.execution["entrypoint"], f"{case.id}.execution.entrypoint"
+    )
+    command = [str(entrypoint), *case.execution["args"]]
+    timeout = int(case.execution["timeout_seconds"])
+    session_path = result_dir / "session.jsonl"
+    started_at = utc_now()
+    start = time.monotonic_ns()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "DSTACK_TEST_RUN_ID": run_id,
+            "DSTACK_TEST_CASE_ID": case.id,
+            "DSTACK_TEST_PLAN_DIR": str(plan.root),
+            "DSTACK_TEST_CASE_DIR": str(case.path),
+            "DSTACK_TEST_RESULT_DIR": str(result_dir),
+            "DSTACK_TEST_WORKDIR": str(case.path),
+        }
+    )
+    if runtime_manifest.is_file():
+        environment["DSTACK_TEST_RUNTIME_MANIFEST"] = str(runtime_manifest)
+    if case_manifest is not None:
+        environment["DSTACK_TEST_CASE_MANIFEST"] = str(case_manifest)
+        environment["DSTACK_TEST_FIXTURE_LEASE_ID"] = str(
+            render.load_json(case_manifest)["lease_id"]
+        )
+    write_lock = threading.Lock()
+    event_count = 0
+
+    with session_path.open("w", encoding="utf-8") as session:
+
+        def emit(event: dict[str, Any]) -> None:
+            nonlocal event_count
+            with write_lock:
+                session.write(json.dumps(event, ensure_ascii=False) + "\n")
+                session.flush()
+                event_count += 1
+
+        process = subprocess.Popen(
+            command,
+            cwd=case.path,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        start_ticks = process_start_ticks(process.pid)
+        emit(
+            {
+                "type": "process.started",
+                "at": started_at,
+                "pid": process.pid,
+                "entrypoint": case.execution["entrypoint"],
+                "args": case.execution["args"],
+            }
+        )
+        atomic_json(
+            result_dir / "execution.json",
+            {
+                "schema_version": "1.0",
+                "state": "RUNNING",
+                "case_id": case.id,
+                "started_at": started_at,
+                "executor_pid": process.pid,
+                "executor_pgid": process.pid,
+                "executor_start_ticks": start_ticks,
+                # Backward-compatible names used by the current controller.
+                "agent_pid": process.pid,
+                "agent_pgid": process.pid,
+                "agent_start_ticks": start_ticks,
+            },
+        )
+
+        def pump(stream: Any, kind: str) -> None:
+            assert stream is not None
+            for raw in iter(stream.readline, b""):
+                emit(
+                    {
+                        "type": kind,
+                        "at": utc_now(),
+                        "text": raw.decode("utf-8", errors="replace"),
+                    }
+                )
+            stream.close()
+
+        threads = [
+            threading.Thread(target=pump, args=(process.stdout, "stdout"), daemon=True),
+            threading.Thread(target=pump, args=(process.stderr, "stderr"), daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+        timed_out = False
+        try:
+            exit_code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                exit_code = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                exit_code = process.wait()
+        for thread in threads:
+            thread.join(timeout=2)
+        duration_ms = (time.monotonic_ns() - start) // 1_000_000
+        emit(
+            {
+                "type": "process.exited",
+                "at": utc_now(),
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "timed_out": timed_out,
+            }
+        )
+
+    finished_at = utc_now()
+    result_path = result_dir / "result.json"
+    try:
+        result = validate_summary(case, result_path)
+        result_valid, result_error = True, None
+    except (DstackTestError, render.ReportError) as error:
+        result, result_valid, result_error = None, False, str(error)
+    runner = {
+        "schema_version": "1.0",
+        "run_id": run_id,
+        "case_id": case.id,
+        "executor": {
+            "type": "script",
+            "entrypoint": case.execution["entrypoint"],
+            "entrypoint_sha256": hashlib.sha256(entrypoint.read_bytes()).hexdigest(),
+            "args": case.execution["args"],
+        },
+        "session": {
+            "format": "process-jsonl",
+            "path": "session.jsonl",
+            "events": event_count,
+        },
+        "result_path": "result.json",
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "duration_ms": duration_ms,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "result_valid": result_valid,
+        "result_error": result_error,
+    }
+    atomic_json(result_dir / "runner.json", runner)
+    if not result_valid:
+        state = "TERMINATED" if stop_request_path.is_file() else "INCOMPLETE"
+        atomic_json(
+            result_dir / "execution.json",
+            {
+                "schema_version": "1.0",
+                "state": state,
+                "case_id": case.id,
+                "finished_at": finished_at,
+                "exit_code": exit_code,
+                "reason": "script timed out" if timed_out else result_error,
+            },
+        )
+        write_sha256s(result_dir)
+        raise DstackTestError(
+            f"script completed without a valid result.json: {result_error}"
+        )
+    materialize_evidence(case, result_dir, result)
+    atomic_json(
+        result_dir / "execution.json",
+        {
+            "schema_version": "1.0",
+            "state": "COMPLETED",
+            "case_id": case.id,
+            "finished_at": finished_at,
+            "exit_code": exit_code,
+            "result_status": result["status"],
+        },
+    )
+    write_sha256s(result_dir)
+    return {"case": case.id, "status": result["status"], "result_dir": str(result_dir)}
+
+
+def apply_runtime_environment(plan: render.Plan, run_id: str) -> dict[str, str]:
+    """Export lab settings the run's prepared substrate declares.
+
+    Fixture providers read lab-specific locations (a protected candidate image
+    store, for example) from the environment.  Recording them in the runtime
+    manifest keeps a run reproducible from its own artifacts instead of from
+    whatever the launching shell happened to export; an unset variable used to
+    surface as a fixture INFRA_ERROR that looked like a product defect.
+    Existing values win so an operator can still override a single setting.
+    """
+    manifest_path = plan.root / "results" / run_id / "runtime-manifest.json"
+    if not manifest_path.is_file():
+        return {}
+    declared = render.load_json(manifest_path).get("environment") or {}
+    if not isinstance(declared, dict):
+        raise DstackTestError(
+            f"runtime manifest environment must be an object: {manifest_path}"
+        )
+    applied: dict[str, str] = {}
+    for key, value in declared.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise DstackTestError(
+                f"runtime manifest environment must map strings: {manifest_path}"
+            )
+        if not os.environ.get(key):
+            os.environ[key] = value
+            applied[key] = value
+    # PATH cannot use the "set when unset" rule, because it is always set.  A
+    # harness that shells out to a toolchain installed outside the system path
+    # (cargo, for one) otherwise fails with FileNotFoundError that reads as a
+    # product defect.
+    prepend = render.load_json(manifest_path).get("environment_path_prepend") or []
+    if not isinstance(prepend, list) or any(
+        not isinstance(entry, str) for entry in prepend
+    ):
+        raise DstackTestError(
+            f"environment_path_prepend must be an array of strings: {manifest_path}"
+        )
+    current = os.environ.get("PATH", "").split(os.pathsep)
+    missing = [entry for entry in prepend if entry and entry not in current]
+    if missing:
+        os.environ["PATH"] = os.pathsep.join([*missing, *current])
+        applied["PATH"] = os.environ["PATH"]
+    return applied
+
+
+def run_case(
+    plan: render.Plan,
+    case: render.CaseEntry,
+    run_id: str,
+    agent: str,
+    model: str | None,
+    workdir: Path,
+    prompt: str,
+    extra: list[str],
+    overwrite: bool,
+    retain_on_failure: bool = False,
+) -> dict[str, Any]:
+    lifecycle_path = (
+        plan.root / "results" / run_id / "case-lifecycle" / f"{case.id}.json"
+    )
+
+    def lifecycle(state: str, **values: Any) -> None:
+        atomic_json(
+            lifecycle_path,
+            {
+                "schema_version": "1.0",
+                "case_id": case.id,
+                "state": state,
+                "updated_at": utc_now(),
+                **values,
+            },
+        )
+
+    manager: fixtures.FixtureManager | None = None
+    lease: Any = None
+    manifest_path: Path | None = None
+    cleanup_error: Exception | None = None
+    result_status: str | None = None
+    apply_runtime_environment(plan, run_id)
+    if case.fixture is not None:
+        lifecycle("PROVISIONING")
+        manager = fixtures.FixtureManager(
+            plan.root / "results" / run_id, plan.fixture_profiles, plan.root
+        )
+        fixture_request = dict(case.fixture)
+        fixture_request["actions_under_test"] = list(case.actions_under_test)
+        fixture_request.update(
+            {
+                "_plan_root": str(plan.root),
+                "_runtime_manifest": str(
+                    plan.root / "results" / run_id / "runtime-manifest.json"
+                ),
+            }
+        )
+        try:
+            lease, manifest = manager.provision(run_id, case.id, fixture_request)
+        except fixtures.FixtureUnavailable as error:
+            lifecycle("BLOCKED", reason=str(error))
+            result_dir = render.case_result_dir(plan, run_id, case)
+            if result_dir.exists() and any(result_dir.iterdir()) and not overwrite:
+                raise DstackTestError(f"result directory is not empty: {result_dir}")
+            if overwrite and result_dir.exists():
+                shutil.rmtree(result_dir)
+            result_dir.mkdir(parents=True, exist_ok=True)
+            event = {
+                "type": "fixture.unavailable",
+                "at": utc_now(),
+                "provider": case.fixture.get("provider")
+                or plan.fixture_profiles.get(
+                    str(case.fixture.get("profile", "noop")), {}
+                ).get("provider", "noop"),
+                "reason": str(error),
+            }
+            (result_dir / "session.jsonl").write_text(
+                json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            result = {
+                "schema_version": "1.0",
+                "case_id": case.id,
+                "status": "BLOCKED",
+                "summary": str(error),
+                "steps": [],
+                "artifacts": [],
+                "remarks": "The requested isolated fixture capability was unavailable.",
+            }
+            atomic_json(result_dir / "result.json", result)
+            atomic_json(
+                result_dir / "runner.json",
+                {
+                    "schema_version": "1.0",
+                    "run_id": run_id,
+                    "case_id": case.id,
+                    "executor": {"type": "fixture"},
+                    "session": {
+                        "format": "fixture-jsonl",
+                        "path": "session.jsonl",
+                        "events": 1,
+                    },
+                    "exit_code": 0,
+                    "result_valid": True,
+                },
+            )
+            atomic_json(
+                result_dir / "execution.json",
+                {
+                    "schema_version": "1.0",
+                    "state": "COMPLETED",
+                    "case_id": case.id,
+                    "result_status": "BLOCKED",
+                    "finished_at": utc_now(),
+                },
+            )
+            materialize_evidence(case, result_dir, result)
+            write_sha256s(result_dir)
+            return {
+                "case": case.id,
+                "status": "BLOCKED",
+                "result_dir": str(result_dir),
+            }
+        except Exception as error:
+            lifecycle("INFRA_ERROR", reason=str(error))
+            raise DstackTestError(f"fixture provisioning failed: {error}") from error
+        manifest_path = (
+            plan.root / "results" / run_id / "case-manifests" / f"{case.id}.json"
+        )
+        atomic_json(manifest_path, manifest)
+        lifecycle("READY", lease_id=lease.lease_id)
+    try:
+        round_stop_path = plan.root / "results" / run_id / ".round-stop-requested"
+        if round_stop_path.is_file():
+            raise DstackTestError(
+                "test round was stopped after fixture provisioning; case execution was not started"
+            )
+        lifecycle("RUNNING", lease_id=lease.lease_id if lease else None)
+        if case.execution is not None:
+            value = run_script_case(plan, case, run_id, overwrite, manifest_path)
+        else:
+            value = run_agent_case(
+                plan,
+                case,
+                run_id,
+                agent,
+                model,
+                workdir,
+                prompt,
+                extra,
+                overwrite,
+                manifest_path,
+            )
+        result_status = str(value["status"])
+        lifecycle("COLLECTING", result_status=result_status)
+        return value
+    finally:
+        if manager is not None and lease is not None:
+            retain = retain_on_failure and (
+                sys.exc_info()[0] is not None or result_status not in (None, "PASS")
+            )
+            lifecycle(
+                "RETAINED" if retain else "CLEANING",
+                lease_id=lease.lease_id,
+                result_status=result_status,
+            )
+            if not retain:
+                try:
+                    manager.cleanup(lease)
+                except Exception as error:
+                    cleanup_error = error
+            result_dir = render.case_result_dir(plan, run_id, case)
+            if result_dir.is_dir():
+                fixture_dir = result_dir / "fixture"
+                fixture_dir.mkdir(exist_ok=True)
+                if manifest_path is not None and manifest_path.is_file():
+                    shutil.copy2(manifest_path, fixture_dir / "runtime-manifest.json")
+                shutil.copy2(
+                    manager.journal.path(lease.lease_id), fixture_dir / "lease.json"
+                )
+                atomic_json(
+                    fixture_dir / "cleanup.json",
+                    {
+                        "schema_version": "1.0",
+                        "status": (
+                            "RETAINED"
+                            if retain
+                            else ("FAIL" if cleanup_error else "PASS")
+                        ),
+                        "error": str(cleanup_error) if cleanup_error else None,
+                        "finished_at": utc_now(),
+                    },
+                )
+                write_sha256s(result_dir)
+            if cleanup_error is not None:
+                lifecycle("INFRA_ERROR", reason=str(cleanup_error))
+                if sys.exc_info()[0] is None:
+                    raise DstackTestError(f"fixture cleanup failed: {cleanup_error}")
+        execution = render.case_result_dir(plan, run_id, case) / "execution.json"
+        if (
+            execution.is_file()
+            and cleanup_error is None
+            and not (manager is not None and lease is not None and retain)
+        ):
+            execution_value = render.load_json(execution)
+            lifecycle(
+                str(
+                    execution_value.get("result_status") or execution_value.get("state")
+                ),
+                lease_id=lease.lease_id if lease else None,
+            )
+
+
+def skip_case(
+    plan: render.Plan,
+    case: render.CaseEntry,
+    run_id: str,
+    reason: str,
+    blocked_by: list[str],
+    model: str | None = None,
+) -> dict[str, Any]:
+    result_dir = render.case_result_dir(plan, run_id, case)
+    if result_dir.exists() and any(result_dir.iterdir()):
+        raise DstackTestError(f"result directory is not empty: {result_dir}")
+    result_dir.mkdir(parents=True, exist_ok=True)
+    now = utc_now()
+    event = {
+        "type": "orchestrator.skip",
+        "case_id": case.id,
+        "reason": reason,
+        "blocked_by": blocked_by,
+    }
+    (result_dir / "session.jsonl").write_text(
+        json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    result = {
+        "schema_version": "1.0",
+        "case_id": case.id,
+        "status": "SKIPPED",
+        "summary": reason,
+        "steps": [],
+        "artifacts": [],
+        "remarks": "Skipped by the run-plan orchestrator after evaluating prior results.",
+    }
+    atomic_json(result_dir / "result.json", result)
+    atomic_jsonl(result_dir / "evidence.jsonl", [])
+    atomic_json(
+        result_dir / "execution.json",
+        {
+            "schema_version": "1.0",
+            "state": "COMPLETED",
+            "case_id": case.id,
+            "finished_at": now,
+            "result_status": "SKIPPED",
+        },
+    )
+    atomic_json(
+        result_dir / "runner.json",
+        {
+            "schema_version": "1.0",
+            "run_id": run_id,
+            "case_id": case.id,
+            "agent": {
+                "type": "run-plan-scheduler",
+                "model": model or "unknown",
+            },
+            "session": {
+                "format": "orchestrator-decision-jsonl",
+                "path": "session.jsonl",
+                "events": 1,
+            },
+            "result_path": "result.json",
+            "started_at": now,
+            "finished_at": now,
+            "duration_ms": 0,
+            "exit_code": 0,
+            "result_valid": True,
+            "result_error": None,
+        },
+    )
+    write_sha256s(result_dir)
+    return {"case": case.id, "status": "SKIPPED", "result_dir": str(result_dir)}
+
+
+class ProgrammaticOrchestrator:
+    """Deterministic run-plan driver.
+
+    Replaces the LLM orchestrator with the loop it was already constrained to:
+    ask the control server for the current case, then either execute it or
+    record SKIPPED when a declared ``depends_on`` prerequisite did not pass.
+    Every decision goes through the same ``ControlState`` handler the agent
+    used, so traversal, ``blocked_by`` validation, and result writing are
+    unchanged.
+    """
+
+    def __init__(
+        self, state: "ControlState", run_dir: Path, require_script: bool = False
+    ) -> None:
+        self.require_script = require_script
+        self.state = state
+        self.plan = state.plan
+        self.run_dir = run_dir
+        self.journal_path = run_dir / "driver.jsonl"
+        self.counts: collections.Counter[str] = collections.Counter()
+
+    def _journal(self, kind: str, **values: Any) -> None:
+        with self.journal_path.open("a", encoding="utf-8") as journal:
+            journal.write(
+                json.dumps(
+                    {"schema_version": "1.0", "at": utc_now(), "type": kind, **values},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    def _blocked_by(self, case: render.CaseEntry) -> list[str]:
+        """Prerequisites of ``case`` that did not pass."""
+        if not case.depends_on:
+            return []
+        prior = {item["case_id"]: item for item in self.state.prior()}
+        return [
+            ref
+            for ref in case.depends_on
+            if ref in prior and prior[ref]["status"] != "PASS"
+        ]
+
+    def run(self) -> int:
+        self._journal("driver.started", driver="program", total=len(self.plan.cases))
+        previous_case: str | None = None
+        while True:
+            current = self.state.handle({"action": "next-case"})
+            status = current["status"]
+            if status == "COMPLETE":
+                self._journal(
+                    "driver.complete",
+                    completed=current.get("completed"),
+                    total=current.get("total"),
+                    stopped=bool(current.get("stopped")),
+                    counts=dict(self.counts),
+                )
+                break
+            if status == "INCOMPLETE":
+                # Mirrors the agent contract: an unrecognized partial directory
+                # is a hard stop, never a silent rerun.
+                self._journal(
+                    "driver.halted",
+                    case_id=current["case"]["id"],
+                    reason=current.get("reason"),
+                    result_dir=current.get("result_dir"),
+                )
+                print(
+                    f"halted on incomplete case {current['case']['id']}: "
+                    f"{current.get('reason')}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 1
+            case_id = current["case"]["id"]
+            if case_id == previous_case:
+                # The cursor did not advance; refuse to spin forever.
+                self._journal("driver.stalled", case_id=case_id)
+                print(
+                    f"driver stalled: {case_id} stayed unresolved after an action",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 1
+            previous_case = case_id
+            case = find_case(self.plan, case_id)
+            blocked_by = self._blocked_by(case)
+            try:
+                if blocked_by:
+                    reason = "declared prerequisite did not pass: " + ", ".join(
+                        blocked_by
+                    )
+                    value = self.state.handle(
+                        {
+                            "action": "complete-case",
+                            "case": case_id,
+                            "result": "SKIPPED",
+                            "blocked_by": blocked_by,
+                            "reason": reason,
+                        }
+                    )
+                else:
+                    if self.require_script and case.execution is None:
+                        # Falling back to an agent here is what makes the
+                        # no-AI property conventional rather than enforced, so
+                        # refuse instead of silently spawning one.
+                        self._journal("driver.unscripted", case_id=case_id)
+                        print(
+                            f"{case_id} has no execution entrypoint and "
+                            "--require-script is set",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        return 1
+                    value = self.state.handle({"action": "run-case", "case": case_id})
+            except (DstackTestError, render.ReportError) as error:
+                self._journal("case.errored", case_id=case_id, error=str(error))
+                print(f"{case_id}: {error}", file=sys.stderr, flush=True)
+                return 1
+            self.counts[value["status"]] += 1
+            self._journal(
+                "case.resolved",
+                case_id=case_id,
+                status=value["status"],
+                executor="script" if case.execution else "agent",
+                blocked_by=blocked_by,
+            )
+        return 0
+
+
+def scripted_sweep(
+    plan: render.Plan,
+    run_id: str,
+    case_ids: list[str] | None,
+    workers: int,
+    runtime_manifest: Path | None = None,
+    retain_on_failure: bool = False,
+    preflight_case_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Re-execute every case that owns a checked-in entrypoint, in parallel.
+
+    Fixtures are leased per case, so scripted cases carry no shared mutable
+    state and can run concurrently.  This is the fast regression path used to
+    prove the driver and to re-verify promoted cases after a product fix.
+    """
+    selected = [case for case in plan.cases if case.execution is not None]
+    if case_ids is not None:
+        wanted = set(case_ids)
+        unknown = wanted.difference({case.id for case in plan.cases})
+        if unknown:
+            raise DstackTestError(f"unknown case IDs: {sorted(unknown)}")
+        without_script = wanted.difference({case.id for case in selected})
+        if without_script:
+            raise DstackTestError(
+                "selected cases have no execution entrypoint: "
+                + ", ".join(sorted(without_script))
+            )
+        selected = [case for case in selected if case.id in wanted]
+    if not selected:
+        raise DstackTestError("no case in this plan has an execution entrypoint")
+    preflight_case_ids = preflight_case_ids or []
+    selected_by_id = {case.id: case for case in selected}
+    invalid_preflight = set(preflight_case_ids).difference(selected_by_id)
+    if invalid_preflight:
+        raise DstackTestError(
+            "preflight cases must be selected scripted cases: "
+            + ", ".join(sorted(invalid_preflight))
+        )
+    preflight = [selected_by_id[case_id] for case_id in preflight_case_ids]
+    remaining = [case for case in selected if case.id not in set(preflight_case_ids)]
+    run_dir = plan.root / "results" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    # Scripted cases resolve prepared binaries through the run's runtime
+    # manifest; seed it so a sweep can reuse an already prepared substrate
+    # instead of rebuilding.
+    target_manifest = run_dir / "runtime-manifest.json"
+    if runtime_manifest is not None:
+        if not runtime_manifest.is_file():
+            raise DstackTestError(f"runtime manifest not found: {runtime_manifest}")
+        if runtime_manifest.resolve() != target_manifest.resolve():
+            shutil.copyfile(runtime_manifest, target_manifest)
+    elif not target_manifest.is_file():
+        raise DstackTestError(
+            "run has no runtime-manifest.json; pass --runtime-manifest PATH"
+        )
+    results: dict[str, dict[str, Any]] = {}
+    lock = threading.Lock()
+    started = time.monotonic()
+
+    def execute(case: render.CaseEntry) -> None:
+        try:
+            arguments = (plan, case, run_id, "codex", None, plan.root, "", [], True)
+            value = (
+                run_case(*arguments, True)
+                if retain_on_failure
+                else run_case(*arguments)
+            )
+            status = value["status"]
+        except (DstackTestError, render.ReportError, OSError) as error:
+            status = "ERROR"
+            value = {"case": case.id, "status": status, "error": str(error)}
+        with lock:
+            results[case.id] = value
+            print(
+                f"[{len(results)}/{len(selected)}] {case.id}: {status}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    for case in preflight:
+        execute(case)
+        if results[case.id]["status"] != "PASS":
+            break
+    preflight_passed = all(
+        results.get(case.id, {}).get("status") == "PASS" for case in preflight
+    )
+    if preflight_passed:
+        if workers <= 1:
+            for case in remaining:
+                execute(case)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(execute, remaining))
+
+    postflight_findings = []
+    leases_dir = run_dir / "leases"
+    for path in sorted(leases_dir.glob("*.json")) if leases_dir.is_dir() else []:
+        try:
+            lease_value = render.load_json(path)
+        except (OSError, render.ReportError) as error:
+            postflight_findings.append(
+                {"lease": path.stem, "reason": f"invalid lease journal: {error}"}
+            )
+            continue
+        state = str(lease_value.get("state", ""))
+        case_id = str(lease_value.get("case_id", ""))
+        retained = (
+            retain_on_failure
+            and state == "READY"
+            and results.get(case_id, {}).get("status") not in (None, "PASS")
+        )
+        if state != "RELEASED" and not retained:
+            postflight_findings.append(
+                {
+                    "lease": path.stem,
+                    "case_id": case_id,
+                    "reason": f"lease state is {state!r}",
+                }
+            )
+        if state == "RELEASED":
+            unreleased = [
+                str(resource.get("type", "unknown"))
+                for resource in lease_value.get("resources", [])
+                if resource.get("state") != "RELEASED"
+            ]
+            if unreleased:
+                postflight_findings.append(
+                    {
+                        "lease": path.stem,
+                        "case_id": case_id,
+                        "reason": "released lease owns unreleased resources: "
+                        + ", ".join(unreleased),
+                    }
+                )
+    counts = collections.Counter(value["status"] for value in results.values())
+    summary = {
+        "schema_version": "1.0",
+        "run_id": run_id,
+        "finished_at": utc_now(),
+        "workers": workers,
+        "duration_ms": int((time.monotonic() - started) * 1000),
+        "total": len(results),
+        "scheduled_total": len(selected),
+        # A sweep only covers cases that own a harness. Reporting the scripted
+        # count alone reads as though the whole plan passed.
+        "plan_total": len(plan.cases),
+        "unscripted": len(plan.cases)
+        - sum(1 for case in plan.cases if case.execution is not None),
+        "by_status": dict(counts),
+        # BLOCKED is a legitimate terminal outcome when a capability probe
+        # showed the host cannot run the case, so it is not a failure. It stays
+        # visible in by_status, and the probe itself fails if the capability
+        # ever appears.
+        "failed": sorted(
+            case_id
+            for case_id, value in results.items()
+            if value["status"] not in ("PASS", "SKIPPED", "BLOCKED")
+        )
+        + (["<postflight>"] if postflight_findings else []),
+        "preflight": {
+            "cases": preflight_case_ids,
+            "status": "PASS" if preflight_passed else "FAIL",
+            "completed": sum(case.id in results for case in preflight),
+        },
+        "postflight": {
+            "status": "PASS" if not postflight_findings else "FAIL",
+            "findings": postflight_findings,
+        },
+        # Preserve bounded failure diagnostics. Previously fixture exceptions
+        # were reduced to a bare ERROR count, which made an individual rerun
+        # impossible to diagnose after the worker returned.
+        "outcomes": {
+            case_id: {
+                key: value[key]
+                for key in ("status", "summary", "error")
+                if key in value
+            }
+            for case_id, value in sorted(results.items())
+            if value["status"] != "PASS"
+        },
+    }
+    atomic_json(run_dir / "scripted-sweep.json", summary)
+    return summary
+
+
+CASE_ID_RE = re.compile(r"tc-[a-z0-9-]+")
+
+
+def verify_registry(plan: render.Plan) -> dict[str, Any]:
+    """Check that promoted cases are really backed by an executable harness.
+
+    A promotion claims a case is reproducible without an agent.  That claim is
+    only true when the index points at an entrypoint, the promotion agrees with
+    the index, and the harness actually handles the case.  Nine gateway and
+    verifier cases were promoted against a harness whose table never listed
+    them, so every rerun died with a KeyError while the registry still reported
+    them as deterministic passes.
+    """
+    cases = {case.id: case for case in plan.cases}
+    findings: list[dict[str, str]] = []
+
+    def report(kind: str, case_id: str, detail: str) -> None:
+        findings.append({"check": kind, "case_id": case_id, "detail": detail})
+
+    handled: dict[str, set[str]] = {}
+    for case in plan.cases:
+        if case.execution is None:
+            continue
+        entrypoint = case.execution["entrypoint"]
+        if entrypoint not in handled:
+            try:
+                source = (plan.root / entrypoint).read_text(encoding="utf-8")
+            except OSError as error:
+                report("harness-unreadable", case.id, f"{entrypoint}: {error}")
+                handled[entrypoint] = set()
+                continue
+            handled[entrypoint] = set(CASE_ID_RE.findall(source))
+        # A harness either names its cases in a table, or is generic and
+        # dispatches on a per-case spec file. Both are declarations of
+        # coverage; only a case with neither is unbacked.
+        if case.id in handled[entrypoint]:
+            continue
+        # Only the harness's own spec directory counts. A stray spec left
+        # beside an unrelated harness must not be read as coverage.
+        spec = (
+            plan.root
+            / "shared"
+            / "automation"
+            / Path(entrypoint).stem.replace("-case", "")
+            / f"{case.id}.json"
+        )
+        if spec.is_file():
+            continue
+        report(
+            "harness-missing-case",
+            case.id,
+            f"{entrypoint} neither names this case nor ships a spec for it",
+        )
+
+    # A harness can name a case yet belong to a different component entirely.
+    # Requiring it to also name the method under test catches a case registered
+    # against a harness that cannot exercise it.
+    for case in plan.cases:
+        if case.execution is None or not case.actions_under_test:
+            continue
+        action = case.actions_under_test[0]
+        if "." not in action:
+            continue
+        method = action.split(".", 1)[1]
+        entrypoint = case.execution["entrypoint"]
+        try:
+            source = (plan.root / entrypoint).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        spec = (
+            plan.root
+            / "shared"
+            / "automation"
+            / Path(entrypoint).stem.replace("-case", "")
+            / f"{case.id}.json"
+        )
+        if spec.is_file():
+            declared = spec.read_text(encoding="utf-8")
+            # A capability probe deliberately does not call the method: the
+            # point is that the host cannot run it. Its spec says so
+            # explicitly, and the probe fails if the capability appears.
+            if '"capability"' in declared:
+                continue
+            source += declared
+        if method not in source:
+            report(
+                "harness-missing-action",
+                case.id,
+                f"{entrypoint} never names {action}",
+            )
+
+    promoted_path = plan.root / "shared" / "automation" / "promoted-passing-cases.json"
+    promoted: list[dict[str, Any]] = []
+    if promoted_path.is_file():
+        document = render.load_json(promoted_path)
+        entries = document.get("cases")
+        if not isinstance(entries, list):
+            raise DstackTestError(f"cases must be an array in {promoted_path}")
+        promoted = [entry for entry in entries if isinstance(entry, dict)]
+    seen: set[str] = set()
+    for entry in promoted:
+        case_id = str(entry.get("case_id", ""))
+        if case_id in seen:
+            report("promotion-duplicate", case_id, "promoted more than once")
+        seen.add(case_id)
+        case = cases.get(case_id)
+        if case is None:
+            report("promotion-unknown-case", case_id, "not present in suite metadata")
+            continue
+        if case.execution is None:
+            report(
+                "promotion-without-entrypoint",
+                case_id,
+                "promoted but case metadata declares no execution entrypoint",
+            )
+            continue
+        declared = str(entry.get("entrypoint", ""))
+        if declared and declared != case.execution["entrypoint"]:
+            report(
+                "promotion-entrypoint-mismatch",
+                case_id,
+                f"promotion says {declared}, index says {case.execution['entrypoint']}",
+            )
+    for case in plan.cases:
+        if case.execution is not None and case.id not in seen:
+            report(
+                "scripted-not-promoted",
+                case.id,
+                "case metadata declares an entrypoint but the case is not promoted",
+            )
+    # The checks read the working tree. A defect already committed would pass
+    # here while a fresh checkout fails, so say whether this verdict describes
+    # committed state.
+    registry_files = [
+        "metadata.json",
+        "cases",
+        "shared/automation/promoted-passing-cases.json",
+    ]
+    try:
+        dirty = subprocess.run(
+            ["git", "diff", "--quiet", "HEAD", "--", *registry_files],
+            cwd=plan.root,
+            capture_output=True,
+            check=False,
+        ).returncode
+    except OSError:
+        dirty = -1
+    return {
+        "schema_version": "1.0",
+        "reflects_committed_state": dirty == 0,
+        "scripted_cases": sum(1 for case in plan.cases if case.execution is not None),
+        "promoted_cases": len(promoted),
+        "total_cases": len(plan.cases),
+        "findings": findings,
+        "by_check": dict(collections.Counter(finding["check"] for finding in findings)),
+    }
+
+
+def orchestration_prompt(plan: render.Plan, extra_prompt: str) -> str:
+    return f"""You are the dstack test-plan orchestrator. You drive the entire loop.
+
+Read {plan.guide_path} once, then immediately call `{Path(__file__).resolve()} next-case`. The control server owns metadata discovery; do not preload, scan, summarize, or build a digest of all case specifications. `next-case` returns the complete specification for the one current case plus prior results; read and decide that case just in time. For each READY case, choose exactly one action:
+
+- Run it with `{Path(__file__).resolve()} run-case --case <case-id>`.
+- Only when a prior non-PASS result demonstrably invalidates an explicit prerequisite, record it with `{Path(__file__).resolve()} complete-case --case <case-id> --result SKIPPED --blocked-by <prior-id> --reason <reason>`.
+
+After either action, call next-case again. You may issue the action and next-case as two commands in one shell tool call. Continue until next-case returns COMPLETE. A case that started but was interrupted is retained in prior results as INCOMPLETE and is not returned again during this orchestration round; use that prior status only for dependency decisions and continue to the next unresolved case. If next-case itself returns INCOMPLETE for an unrecognized partial directory, stop and report its diagnostic: never rerun it, never pass --overwrite, never unset DSTACK_TEST_CONTROL_DIR, and never bypass the control server. Do not skip for cost, similarity, likely failure, or independently checkable prerequisites. Do not edit plan or result files yourself. Do not call run-plan, finalize, validate, package, or render.
+
+Additional caller constraints:
+{extra_prompt or "None"}
+"""
+
+
+class ControlState:
+    def __init__(self, plan: render.Plan, args: argparse.Namespace, model: str | None):
+        self.plan, self.args, self.model = plan, args, model
+        self.lock = threading.Lock()
+
+    def prior(self) -> list[dict[str, Any]]:
+        values = []
+        for case in self.plan.cases:
+            result_dir = render.case_result_dir(self.plan, self.args.run_id, case)
+            path = result_dir / "result.json"
+            result = None
+            result_error = None
+            lifecycle_path = (
+                self.plan.root
+                / "results"
+                / self.args.run_id
+                / "case-lifecycle"
+                / f"{case.id}.json"
+            )
+            if lifecycle_path.is_file():
+                lifecycle_value = render.load_json(lifecycle_path)
+                if lifecycle_value.get("state") == "INFRA_ERROR":
+                    values.append(
+                        {
+                            "case_id": case.id,
+                            "status": "INFRA_ERROR",
+                            "summary": lifecycle_value.get("reason")
+                            or "fixture execution failed",
+                        }
+                    )
+                    continue
+            if path.is_file():
+                try:
+                    result = validate_completed_case(case, result_dir)
+                except (DstackTestError, render.ReportError) as error:
+                    result_error = str(error)
+            if result is not None:
+                values.append(
+                    {
+                        "case_id": case.id,
+                        "status": result["status"],
+                        "summary": result["summary"],
+                    }
+                )
+                continue
+            execution_path = result_dir / "execution.json"
+            runner_path = result_dir / "runner.json"
+            session_path = result_dir / "session.jsonl"
+            if (
+                execution_path.is_file()
+                or runner_path.is_file()
+                or session_path.is_file()
+            ):
+                reason = result_error
+                if not reason and runner_path.is_file():
+                    try:
+                        runner = render.load_json(runner_path)
+                        reason = runner.get("result_error")
+                    except (OSError, render.ReportError):
+                        reason = "runner metadata is unreadable"
+                values.append(
+                    {
+                        "case_id": case.id,
+                        "status": "INCOMPLETE",
+                        "summary": reason
+                        or "execution was interrupted before a complete result",
+                    }
+                )
+        return values
+
+    def next_case(self, *, announce: bool = True) -> dict[str, Any]:
+        stop_path = (
+            self.plan.root / "results" / self.args.run_id / ".round-stop-requested"
+        )
+        if stop_path.is_file():
+            return {
+                "status": "COMPLETE",
+                "stopped": True,
+                "completed": len(self.prior()),
+                "total": len(self.plan.cases),
+            }
+        prior = self.prior()
+        done = {item["case_id"] for item in prior}
+        for number, case in enumerate(self.plan.cases, 1):
+            if case.id not in done:
+                result_dir = render.case_result_dir(self.plan, self.args.run_id, case)
+                if result_dir.is_dir() and any(result_dir.iterdir()):
+                    runner_path = result_dir / "runner.json"
+                    runner_error = None
+                    if runner_path.is_file():
+                        try:
+                            runner = json.loads(runner_path.read_text(encoding="utf-8"))
+                            runner_error = runner.get("result_error")
+                            if not runner_error and runner.get("exit_code") not in (
+                                None,
+                                0,
+                            ):
+                                runner_error = (
+                                    f"agent exited with {runner.get('exit_code')}"
+                                )
+                        except (OSError, json.JSONDecodeError):
+                            runner_error = "runner.json is unreadable"
+                    reason = (
+                        runner_error
+                        or "partial result directory has no valid result.json"
+                    )
+                    if announce:
+                        print(
+                            f"[{number}/{len(self.plan.cases)}] incomplete case: "
+                            f"{case.id}: {reason}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    return {
+                        "status": "INCOMPLETE",
+                        "position": {"index": number, "total": len(self.plan.cases)},
+                        "case": {"id": case.id, "title": case.title},
+                        "result_dir": str(result_dir),
+                        "reason": reason,
+                    }
+                if announce:
+                    print(
+                        f"[{number}/{len(self.plan.cases)}] next case: {case.id}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                return {
+                    "status": "READY",
+                    "position": {"index": number, "total": len(self.plan.cases)},
+                    "case": {
+                        "id": case.id,
+                        "title": case.title,
+                        "spec_path": str(case.spec_path),
+                        "specification": case.spec_path.read_text(encoding="utf-8"),
+                    },
+                    "prior_results": prior,
+                }
+        return {
+            "status": "COMPLETE",
+            "completed": len(done),
+            "total": len(self.plan.cases),
+        }
+
+    def current(self, case_id: str) -> tuple[render.CaseEntry, int]:
+        next_value = self.next_case(announce=False)
+        if next_value["status"] != "READY" or next_value["case"]["id"] != case_id:
+            raise DstackTestError(f"{case_id} is not the current unresolved case")
+        return find_case(self.plan, case_id), next_value["position"]["index"]
+
+    def handle(self, request: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            action = request.get("action")
+            if action == "next-case":
+                return self.next_case()
+            case, number = self.current(str(request.get("case")))
+            if action == "run-case":
+                print(
+                    f"[{number}/{len(self.plan.cases)}] executing {case.id}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                value = run_case(
+                    self.plan,
+                    case,
+                    self.args.run_id,
+                    self.args.agent,
+                    self.model,
+                    self.args.workdir.resolve(),
+                    prompt_text(self.args),
+                    self.args.agent_arg,
+                    False,
+                )
+                print(
+                    f"[{number}/{len(self.plan.cases)}] finished {case.id}: {value['status']}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return value
+            if action == "complete-case":
+                if request.get("result") != "SKIPPED":
+                    raise DstackTestError(
+                        "complete-case currently accepts only SKIPPED"
+                    )
+                blocked_by = request.get("blocked_by", [])
+                prior = {item["case_id"]: item for item in self.prior()}
+                if not blocked_by or any(
+                    ref not in prior or prior[ref]["status"] == "PASS"
+                    for ref in blocked_by
+                ):
+                    raise DstackTestError(
+                        "blocked_by must reference prior non-PASS cases"
+                    )
+                value = skip_case(
+                    self.plan,
+                    case,
+                    self.args.run_id,
+                    str(request.get("reason", "")),
+                    blocked_by,
+                    self.model,
+                )
+                print(
+                    f"[{number}/{len(self.plan.cases)}] skipped {case.id}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return value
+            raise DstackTestError(f"unsupported control action: {action}")
+
+
+def control_request(request: dict[str, Any]) -> dict[str, Any]:
+    control_dir = os.environ.get("DSTACK_TEST_CONTROL_DIR")
+    if not control_dir:
+        raise DstackTestError("command requires an active run-plan control server")
+    root = Path(control_dir)
+    request_id = secrets.token_hex(12)
+    request_path = root / f"{request_id}.request.json"
+    response_path = root / f"{request_id}.response.json"
+    atomic_json(request_path, request)
+    deadline = time.monotonic() + 86400
+    while not response_path.is_file():
+        if time.monotonic() > deadline:
+            raise DstackTestError("control request timed out")
+        time.sleep(0.1)
+    response = render.load_json(response_path)
+    request_path.unlink(missing_ok=True)
+    response_path.unlink(missing_ok=True)
+    if not response.get("ok"):
+        raise DstackTestError(response.get("error", "control request failed"))
+    return response["value"]
+
+
+class FileControlServer:
+    def __init__(self, state: ControlState, root: Path):
+        self.state, self.root = state, root
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+
+    def start(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.thread.start()
+
+    def serve(self) -> None:
+        while not self.stop_event.is_set():
+            for request_path in sorted(self.root.glob("*.request.json")):
+                response_path = request_path.with_name(
+                    request_path.name.replace(".request.json", ".response.json")
+                )
+                if response_path.exists():
+                    continue
+                try:
+                    value = self.state.handle(render.load_json(request_path))
+                    response = {"ok": True, "value": value}
+                except Exception as error:
+                    response = {"ok": False, "error": str(error)}
+                atomic_json(response_path, response)
+            self.stop_event.wait(0.05)
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.thread.join()
+
+
+def dashboard_state(
+    plan: render.Plan,
+    run_id: str,
+    control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    run_path = plan.root / "results" / run_id / "run.json"
+    run = render.load_json(run_path) if run_path.is_file() else {}
+    lifecycle_states = (
+        "WAITING_FOR_RESOURCE",
+        "PROVISIONING",
+        "VERIFYING_FIXTURE",
+        "READY",
+        "COLLECTING",
+        "CLEANING",
+        "INFRA_ERROR",
+    )
+    counts = {
+        status: 0
+        for status in (
+            *TERMINAL_STATUS,
+            "INCOMPLETE",
+            "RUNNING",
+            "PENDING",
+            *lifecycle_states,
+        )
+    }
+
+    cases = []
+    chapters: list[dict[str, Any]] = []
+    chapter_by_id: dict[str, dict[str, Any]] = {}
+    section_by_id: dict[str, dict[str, Any]] = {}
+    for case in plan.cases:
+        result_path = render.case_result_dir(plan, run_id, case) / "result.json"
+        session_path = render.case_result_dir(plan, run_id, case) / "session.jsonl"
+        execution_path = render.case_result_dir(plan, run_id, case) / "execution.json"
+        lifecycle_path = (
+            plan.root / "results" / run_id / "case-lifecycle" / f"{case.id}.json"
+        )
+        lifecycle_state = (
+            str(render.load_json(lifecycle_path).get("state", "PENDING"))
+            if lifecycle_path.is_file()
+            else None
+        )
+        if lifecycle_state in lifecycle_states:
+            status = lifecycle_state
+        elif execution_path.is_file():
+            execution_state = str(
+                render.load_json(execution_path).get("state", "INCOMPLETE")
+            )
+            if execution_state == "RUNNING":
+                status = "RUNNING"
+            elif execution_state == "COMPLETED" and result_path.is_file():
+                status = str(render.load_json(result_path).get("status", "INCOMPLETE"))
+            else:
+                status = "INCOMPLETE"
+        elif result_path.is_file():
+            status = str(render.load_json(result_path).get("status", "PENDING"))
+        elif lifecycle_state is not None:
+            status = lifecycle_state
+        else:
+            status = "INCOMPLETE" if session_path.is_file() else "PENDING"
+        counts[status] = counts.get(status, 0) + 1
+        case_value = {"id": case.id, "title": case.title, "status": status}
+        cases.append(case_value)
+        chapter = chapter_by_id.get(case.chapter_id)
+        if chapter is None:
+            chapter = {
+                "id": case.chapter_id,
+                "title": case.chapter_title,
+                "sections": [],
+            }
+            chapter_by_id[case.chapter_id] = chapter
+            chapters.append(chapter)
+        section = section_by_id.get(case.section_id)
+        if section is None:
+            section = {
+                "id": case.section_id,
+                "title": case.section_title,
+                "cases": [],
+            }
+            section_by_id[case.section_id] = section
+            chapter["sections"].append(section)
+        section["cases"].append(case_value)
+    orchestrator = plan.root / "results" / run_id / "orchestrator.jsonl"
+    control_value = control or {"enabled": False}
+    run_status = run.get("status", "RUNNING")
+    # A dashboard-selected execution round can continue after a run-plan Agent
+    # exits or is stopped.  In that state run.json is intentionally a stale
+    # snapshot, so the live controller is authoritative for the header status.
+    if control_value.get("running"):
+        run_status = "RUNNING"
+    if control_value.get("running"):
+        orchestrator_status = "RUNNING"
+    elif control_value.get("stop_requested"):
+        orchestrator_status = "INCOMPLETE"
+    elif run_path.is_file():
+        orchestrator_status = str(run.get("status", "INCOMPLETE"))
+    else:
+        orchestrator_status = "RUNNING" if orchestrator.is_file() else "PENDING"
+    current_case = control_value.get("current_case")
+    log_agent = f"case:{current_case}" if current_case else "orchestrator"
+    return {
+        "title": plan.index.get("title", plan.index["id"]),
+        "run_id": run_id,
+        "run_status": run_status,
+        "orchestrator_status": orchestrator_status,
+        "log_agent": log_agent,
+        "execution_source": "controlled-case" if current_case else "orchestrator",
+        "counts": counts,
+        "cases": cases,
+        "chapters": chapters,
+        "control": control_value,
+    }
+
+
+def dashboard_runs(plan: render.Plan, active_run_id: str) -> list[dict[str, Any]]:
+    """List centrally stored runs newest first for dashboard selection."""
+    root = plan.root / "results"
+    values = []
+    if not root.is_dir():
+        return values
+    for path in root.iterdir():
+        if not path.is_dir() or path.name.startswith("."):
+            continue
+        run_path = path / "run.json"
+        run = render.load_json(run_path) if run_path.is_file() else {}
+        timestamp = path.stat().st_mtime
+        values.append(
+            {
+                "id": path.name,
+                "status": str(
+                    run.get(
+                        "status",
+                        "RUNNING" if path.name == active_run_id else "INCOMPLETE",
+                    )
+                ),
+                "started_at": run.get("started_at"),
+                "finished_at": run.get("finished_at"),
+                "summary": run.get("summary", {}),
+                "active": path.name == active_run_id,
+                "mtime": timestamp,
+            }
+        )
+    values.sort(key=lambda item: (not item["active"], -float(item["mtime"])))
+    return values
+
+
+def selected_run_id(plan: render.Plan, requested: str | None, active: str) -> str:
+    if not requested:
+        return active
+    available = {item["id"] for item in dashboard_runs(plan, active)}
+    if requested not in available:
+        raise DstackTestError(f"unknown run ID: {requested}")
+    return requested
+
+
+def dashboard_case(plan: render.Plan, run_id: str, case_id: str) -> dict[str, Any]:
+    """Return a rendered test-case specification for the live dashboard."""
+    case = find_case(plan, case_id)
+    result_dir = render.case_result_dir(plan, run_id, case)
+    result_path = result_dir / "result.json"
+    result = render.load_json(result_path) if result_path.is_file() else None
+    evidence = []
+    evidence_path = result_dir / "evidence.jsonl"
+    # A running agent is required to write a provisional result immediately on
+    # a conclusive mismatch.  It must remain visible in the dashboard, but it is
+    # not eligible for final validation or evidence materialization yet.
+    provisional = result is not None and result.get("provisional") is True
+    if result is not None and not provisional and not evidence_path.is_file():
+        validate_summary(case, result_path, result)
+        materialize_evidence(case, result_dir, result)
+        write_sha256s(result_dir)
+    if evidence_path.is_file():
+        for line in evidence_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                evidence.append(json.loads(line))
+    elif result_dir.is_dir():
+        evidence = live_case_evidence(case, result_dir)
+    if result is None and result_dir.is_dir():
+        result = live_case_result(case, result_dir)
+    fixture_values: dict[str, Any] | None = None
+    fixture_dir = result_dir / "fixture"
+    manifest_path = fixture_dir / "runtime-manifest.json"
+    lease_path = fixture_dir / "lease.json"
+    cleanup_path = fixture_dir / "cleanup.json"
+    if manifest_path.is_file() or lease_path.is_file() or cleanup_path.is_file():
+        fixture_values = {
+            "manifest": render.load_json(manifest_path)
+            if manifest_path.is_file()
+            else None,
+            "lease": render.load_json(lease_path) if lease_path.is_file() else None,
+            "cleanup": render.load_json(cleanup_path)
+            if cleanup_path.is_file()
+            else None,
+        }
+    runner_path = result_dir / "runner.json"
+    runner = render.load_json(runner_path) if runner_path.is_file() else None
+    return {
+        "id": case.id,
+        "title": case.title,
+        "chapter": case.chapter_title,
+        "section": case.section_title,
+        "html": render.markdown_to_html(case.spec_path.read_text(encoding="utf-8")),
+        "result": result,
+        "evidence": evidence,
+        "fixture": fixture_values,
+        "executor": case.execution or {"type": "agent"},
+        "metadata": {
+            "case_id": case.id,
+            "priority": case.priority,
+            "tags": case.tags,
+            "requirements": case.requirements,
+            "fixture_profile": (case.fixture or {}).get("profile"),
+            "actions_under_test": case.actions_under_test,
+            "executor": (
+                (runner or {}).get("executor")
+                or (runner or {}).get("agent")
+                or (
+                    {"type": "script", **case.execution}
+                    if case.execution
+                    else {"type": "agent"}
+                )
+            ),
+        },
+    }
+
+
+def live_case_evidence(
+    case: render.CaseEntry, result_dir: Path
+) -> list[dict[str, Any]]:
+    """Expose completed commands and current artifacts before case finalization."""
+    records: list[dict[str, Any]] = []
+    current_step: str | None = None
+    evidence_note: str | None = None
+    session_path = result_dir / "session.jsonl"
+    if session_path.is_file():
+        with session_path.open(encoding="utf-8", errors="replace") as source:
+            for line_no, line in enumerate(source, 1):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(event, dict) and event.get("type") in (
+                    "stdout",
+                    "stderr",
+                ):
+                    text = str(event.get("text", ""))
+                    notes = list(EVIDENCE_NOTE_RE.finditer(text))
+                    if notes:
+                        note = notes[-1]
+                        current_step = note.group("id").lower()
+                        evidence_note = note.group("note").strip()
+                    for match in iter_step_events(text):
+                        current_step = (
+                            match.group("id").lower()
+                            if step_event_starts(match.group("kind"))
+                            else None
+                        )
+                        if current_step is None:
+                            evidence_note = None
+                    if text.strip() and not notes:
+                        records.append(
+                            {
+                                "schema_version": "1.0",
+                                "sequence": len(records) + 1,
+                                "case_id": case.id,
+                                "step_id": current_step,
+                                "kind": str(event["type"]),
+                                "summary": text.strip().splitlines()[0][:240],
+                                "description": evidence_note
+                                or (
+                                    f"Live process output associated with {current_step}."
+                                    if current_step
+                                    else "Live process output emitted before an explicit step marker."
+                                ),
+                                "output_excerpt": text[:4096],
+                                "output_sha256": hashlib.sha256(
+                                    text.encode()
+                                ).hexdigest(),
+                                "session_line": line_no,
+                            }
+                        )
+                    continue
+                item = event.get("item") if isinstance(event, dict) else None
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "agent_message":
+                    notes = list(EVIDENCE_NOTE_RE.finditer(str(item.get("text", ""))))
+                    if notes:
+                        note = notes[-1]
+                        current_step = note.group("id").lower()
+                        evidence_note = note.group("note").strip()
+                    for match in iter_step_events(str(item.get("text", ""))):
+                        current_step = (
+                            match.group("id").lower()
+                            if step_event_starts(match.group("kind"))
+                            else None
+                        )
+                        if current_step is None:
+                            evidence_note = None
+                    continue
+                if (
+                    event.get("type") != "item.completed"
+                    or item.get("type") != "command_execution"
+                ):
+                    continue
+                command = str(item.get("command", ""))
+                output = str(item.get("aggregated_output", ""))
+                records.append(
+                    {
+                        "schema_version": "1.0",
+                        "sequence": len(records) + 1,
+                        "case_id": case.id,
+                        "step_id": current_step,
+                        "kind": "command",
+                        "summary": command.splitlines()[0][:240]
+                        if command
+                        else "command",
+                        "description": evidence_note
+                        or (
+                            f"Live command and observed output associated with {current_step}."
+                            if current_step
+                            else "Live command observation emitted before an explicit step marker."
+                        ),
+                        "command": command,
+                        "output_excerpt": output[:4096],
+                        "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+                        "session_line": line_no,
+                        "session_item_id": item.get("id"),
+                        "exit_code": item.get("exit_code"),
+                    }
+                )
+    artifacts = result_dir / "artifacts"
+    annotations: dict[str, dict[str, Any]] = {}
+    manifest_path = artifacts / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            entries = (
+                manifest
+                if isinstance(manifest, list)
+                else manifest.get("artifacts", [])
+            )
+            for entry in entries:
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                    annotations[str(entry["path"])] = entry
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            pass
+    if artifacts.is_dir():
+        for path in sorted(
+            item
+            for item in artifacts.rglob("*")
+            if item.is_file() and not item.is_symlink() and item != manifest_path
+        ):
+            relative = path.relative_to(result_dir).as_posix()
+            annotation = annotations.get(relative, {})
+            records.append(
+                {
+                    "schema_version": "1.0",
+                    "sequence": len(records) + 1,
+                    "case_id": case.id,
+                    "step_id": annotation.get("step_id"),
+                    "kind": "attachment",
+                    "summary": annotation.get("name") or path.name,
+                    "description": annotation.get("description")
+                    or "Live artifact; the Agent has not annotated what this file proves yet.",
+                    "path": relative,
+                    "bytes": path.stat().st_size,
+                    "sha256": "pending",
+                    "media_type": mimetypes.guess_type(path.name)[0]
+                    or "application/octet-stream",
+                    "live": True,
+                }
+            )
+    return records
+
+
+def live_case_result(case: render.CaseEntry, result_dir: Path) -> dict[str, Any]:
+    """Derive non-terminal step progress from the native streaming session."""
+    specification = case.spec_path.read_text(encoding="utf-8")
+    step_ids = list(
+        dict.fromkeys(
+            re.findall(r'<a id="(' + re.escape(case.id) + r'-step-\d+)"', specification)
+        )
+    )
+    statuses = {step_id: "PENDING" for step_id in step_ids}
+    observations = {step_id: "Not started." for step_id in step_ids}
+    session_path = result_dir / "session.jsonl"
+    if session_path.is_file():
+        with session_path.open(encoding="utf-8", errors="replace") as source:
+            for line in source:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                item = event.get("item") if isinstance(event, dict) else None
+                if not isinstance(item, dict) or item.get("type") != "agent_message":
+                    continue
+                text = str(item.get("text", ""))
+                for match in iter_step_events(text):
+                    step_id = match.group("id").lower()
+                    if step_id not in statuses:
+                        continue
+                    if step_event_starts(match.group("kind")):
+                        statuses[step_id] = "RUNNING"
+                        observations[step_id] = text[:500]
+                    else:
+                        statuses[step_id] = (
+                            match.group("status") or "COMPLETED"
+                        ).upper()
+                        observations[step_id] = text[:500]
+    execution_path = result_dir / "execution.json"
+    execution_state = "PENDING"
+    if execution_path.is_file():
+        execution_state = str(render.load_json(execution_path).get("state", "PENDING"))
+    return {
+        "schema_version": "1.0",
+        "case_id": case.id,
+        "status": "RUNNING" if execution_state == "RUNNING" else "INCOMPLETE",
+        "summary": "Live progress derived from the active Agent session.",
+        "steps": [
+            {
+                "id": step_id,
+                "status": statuses[step_id],
+                "observed": observations[step_id],
+            }
+            for step_id in step_ids
+        ],
+        "artifacts": [],
+        "remarks": "Live, non-final view.",
+    }
+
+
+def dashboard_attachment(
+    plan: render.Plan, run_id: str, case_id: str, relative: str
+) -> tuple[bytes, str, str]:
+    case = find_case(plan, case_id)
+    result_dir = (render.case_result_dir(plan, run_id, case)).resolve()
+    path = render.safe_path(result_dir, relative, "dashboard attachment")
+    try:
+        path.relative_to(result_dir)
+    except ValueError as error:
+        raise DstackTestError("attachment escapes result directory") from error
+    result_path = result_dir / "result.json"
+    execution_path = result_dir / "execution.json"
+    execution = render.load_json(execution_path) if execution_path.is_file() else {}
+    if execution.get("state") == "RUNNING":
+        artifacts_dir = (result_dir / "artifacts").resolve()
+        try:
+            path.relative_to(artifacts_dir)
+        except ValueError as error:
+            raise DstackTestError("live attachment is outside artifacts") from error
+        if not path.is_file() or path.is_symlink():
+            raise DstackTestError("live attachment is unavailable")
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return path.read_bytes(), media_type, path.name
+    if not result_path.is_file():
+        if execution.get("state") not in ("RUNNING", "TERMINATED", "INCOMPLETE"):
+            raise DstackTestError("case has no result")
+        artifacts_dir = (result_dir / "artifacts").resolve()
+        try:
+            path.relative_to(artifacts_dir)
+        except ValueError as error:
+            raise DstackTestError("live attachment is outside artifacts") from error
+        if not path.is_file() or path.is_symlink():
+            raise DstackTestError("live attachment is unavailable")
+        media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return path.read_bytes(), media_type, path.name
+    result = validate_summary(case, result_path)
+    allowed = {str(item["path"]) for item in result.get("artifacts", [])}
+    if relative not in allowed or not path.is_file():
+        raise DstackTestError("attachment is not referenced by result.json")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return path.read_bytes(), media_type, path.name
+
+
+def dashboard_log(
+    plan: render.Plan, run_id: str, agent: str, offset: int
+) -> dict[str, Any]:
+    if agent == "orchestrator":
+        path = plan.root / "results" / run_id / "orchestrator.jsonl"
+    elif agent.startswith("case:"):
+        case = find_case(plan, agent.removeprefix("case:"))
+        path = render.case_result_dir(plan, run_id, case) / "session.jsonl"
+    else:
+        raise DstackTestError("unknown agent session")
+    if not path.is_file():
+        return {"text": "", "next_offset": 0, "reset": offset > 0}
+    size = path.stat().st_size
+    reset = offset > size
+    with path.open("rb") as source:
+        source.seek(0 if reset else offset)
+        data = source.read(1024 * 1024)
+        next_offset = source.tell()
+    return {
+        "text": data.decode("utf-8", errors="replace"),
+        "next_offset": next_offset,
+        "reset": reset,
+        "eof": next_offset >= size,
+    }
+
+
+def write_sha256s(root: Path) -> None:
+    entries: list[str] = []
+    for path in sorted(
+        p for p in root.rglob("*") if p.is_file() and p.name != "SHA256SUMS"
+    ):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        entries.append(f"{digest}  {path.relative_to(root).as_posix()}")
+    (root / "SHA256SUMS").write_text(
+        "\n".join(entries) + ("\n" if entries else ""), encoding="utf-8"
+    )
+
+
+def verify_sha256s(root: Path) -> None:
+    sums = root / "SHA256SUMS"
+    if not sums.is_file():
+        raise DstackTestError(f"missing SHA256SUMS: {sums}")
+    expected_files: set[Path] = set()
+    for line_no, line in enumerate(sums.read_text(encoding="utf-8").splitlines(), 1):
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if not match:
+            raise DstackTestError(f"invalid SHA256SUMS line at {sums}:{line_no}")
+        path = render.safe_path(root, match.group(2), "SHA256SUMS")
+        try:
+            path.relative_to(root.resolve())
+        except ValueError as error:
+            raise DstackTestError(
+                f"SHA256SUMS path escapes result directory: {path}"
+            ) from error
+        if not path.is_file():
+            raise DstackTestError(f"SHA256SUMS references missing file: {path}")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != match.group(1):
+            raise DstackTestError(f"SHA-256 mismatch: {path}")
+        expected_files.add(path)
+    actual_files = {
+        path.resolve()
+        for path in root.rglob("*")
+        if path.is_file() and path.name != "SHA256SUMS"
+    }
+    if expected_files != actual_files:
+        missing = sorted(
+            str(path.relative_to(root)) for path in actual_files - expected_files
+        )
+        raise DstackTestError(f"files missing from SHA256SUMS in {root}: {missing}")
+
+
+def context_value(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    value = render.load_json(path)
+    return value
+
+
+def finalize_run(
+    plan: render.Plan, run_id: str, context: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    case_results: list[dict[str, Any]] = []
+    by_status = {status: {"count": 0, "case_refs": []} for status in TERMINAL_STATUS}
+    started: list[str] = []
+    finished: list[str] = []
+    executors: list[dict[str, Any]] = []
+    incomplete = False
+    for case in plan.cases:
+        result_dir = render.case_result_dir(plan, run_id, case)
+        result_path = result_dir / "result.json"
+        runner_path = result_dir / "runner.json"
+        if not result_path.is_file() or not runner_path.is_file():
+            incomplete = True
+            continue
+        result = validate_summary(case, result_path)
+        runner = render.load_json(runner_path)
+        validate_session(result_dir / "session.jsonl")
+        cleanup_path = result_dir / "fixture" / "cleanup.json"
+        execution_status = "COMPLETED"
+        if (
+            cleanup_path.is_file()
+            and render.load_json(cleanup_path).get("status") != "PASS"
+        ):
+            execution_status = "INFRA_ERROR"
+            incomplete = True
+        status = result["status"]
+        by_status[status]["count"] += 1
+        by_status[status]["case_refs"].append(f"#result-{case.id}")
+        case_results.append(
+            {
+                "id": case.id,
+                "anchor": f"result-{case.id}",
+                "status": status,
+                "execution_status": execution_status,
+                "result_path": os.path.relpath(
+                    result_path, plan.root / "results" / run_id
+                ),
+            }
+        )
+        if runner.get("started_at"):
+            started.append(runner["started_at"])
+        if runner.get("finished_at"):
+            finished.append(runner["finished_at"])
+        if runner.get("agent") and runner["agent"] not in executors:
+            executors.append(runner["agent"])
+    run_dir = plan.root / "results" / run_id
+    total = len(plan.cases)
+    run = {
+        "schema_version": "1.0",
+        "id": run_id,
+        "anchor": run_id,
+        "plan_id": plan.index["id"],
+        "status": "INCOMPLETE"
+        if incomplete or len(case_results) != total
+        else "COMPLETED",
+        "started_at": min(started) if started else None,
+        "finished_at": max(finished) if finished else None,
+        "executors": executors,
+        "software_under_test": (context or {}).get("software_under_test", {}),
+        "environment": (context or {}).get("environment", {}),
+        "summary": {
+            "total": total,
+            "completed": len(case_results),
+            "by_status": by_status,
+        },
+        "case_results": case_results,
+    }
+    atomic_json(run_dir / "run.json", run)
+    if context:
+        atomic_json(run_dir / "context.json", context)
+    write_sha256s(run_dir)
+    return run
+
+
+def validate_run(plan: render.Plan, run_id: str) -> dict[str, Any]:
+    run_path = plan.root / "results" / run_id / "run.json"
+    run = render.load_json(run_path)
+    if run.get("plan_id") != plan.index["id"] or run.get("id") != run_id:
+        raise DstackTestError("run/plan ID mismatch")
+    actual = {status: [] for status in TERMINAL_STATUS}
+    for item in run.get("case_results", []):
+        case = find_case(plan, str(item.get("id")))
+        result_path = (run_path.parent / str(item.get("result_path", ""))).resolve()
+        try:
+            result_path.relative_to(plan.root)
+        except ValueError as error:
+            raise DstackTestError(
+                f"case result escapes plan root: {result_path}"
+            ) from error
+        result = validate_summary(case, result_path)
+        result_dir = result_path.parent
+        validate_session(result_dir / "session.jsonl")
+        runner = render.load_json(result_dir / "runner.json")
+        if not runner.get("result_valid"):
+            raise DstackTestError(f"runner marks invalid result for {case.id}")
+        cleanup_path = result_dir / "fixture" / "cleanup.json"
+        if (
+            cleanup_path.is_file()
+            and render.load_json(cleanup_path).get("status") != "PASS"
+        ):
+            raise DstackTestError(f"fixture cleanup failed for {case.id}")
+        verify_sha256s(result_dir)
+        actual[result["status"]].append(f"#result-{case.id}")
+    summary = run.get("summary", {})
+    if summary.get("total") != len(plan.cases):
+        raise DstackTestError("summary total does not match plan")
+    for status in TERMINAL_STATUS:
+        item = summary.get("by_status", {}).get(status, {})
+        if (
+            item.get("count") != len(actual[status])
+            or item.get("case_refs") != actual[status]
+        ):
+            raise DstackTestError(f"summary mismatch for {status}")
+    verify_sha256s(run_path.parent)
+    if run.get("status") != "COMPLETED":
+        raise DstackTestError("run is not complete")
+    return {
+        "status": "valid",
+        "plan_id": plan.index["id"],
+        "run_id": run_id,
+        "cases": len(run.get("case_results", [])),
+    }
+
+
+def package_plan(plan: render.Plan, run_id: str, output: Path) -> None:
+    validate_run(plan, run_id)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    files = []
+    for path in sorted(item for item in plan.root.rglob("*") if item.is_file()):
+        relative = path.relative_to(plan.root)
+        parts = relative.parts
+        # A package is one immutable execution report, not an archive of all
+        # historical executions that happen to live beside the plan.
+        if "results" in parts:
+            index = parts.index("results")
+            if len(parts) > index + 1 and parts[index + 1] != run_id:
+                continue
+        files.append((path, Path("plan") / relative))
+    suffix = output.name.lower()
+    if suffix.endswith(".tar.gz") or suffix.endswith(".tgz"):
+        with tarfile.open(output, "w:gz") as archive:
+            for path, archive_path in files:
+                archive.add(path, arcname=archive_path, recursive=False)
+    elif suffix.endswith(".tar"):
+        with tarfile.open(output, "w") as archive:
+            for path, archive_path in files:
+                archive.add(path, arcname=archive_path, recursive=False)
+    elif suffix.endswith(".zip"):
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path, archive_path in files:
+                archive.write(path, archive_path)
+    else:
+        raise DstackTestError("package output must end in .tar.gz, .tgz, .tar, or .zip")
+
+
+def add_common_plan(
+    parser: argparse.ArgumentParser,
+    *,
+    run_id_required: bool = True,
+    plan_required: bool = True,
+) -> None:
+    parser.add_argument(
+        "--plan", type=Path, required=plan_required, help="test-plan directory"
+    )
+    parser.add_argument(
+        "--run-id",
+        required=run_id_required,
+        default=None if run_id_required else default_run_id(),
+        help="shared run identifier"
+        + ("" if run_id_required else " (default: generated automatically)"),
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="dstack-test", description=__doc__)
+    sub = parser.add_subparsers(dest="subcommand", required=True)
+    run_case_parser = sub.add_parser(
+        "run-case", help="run one indexed case in a fresh AI session"
+    )
+    add_common_plan(run_case_parser, run_id_required=False, plan_required=False)
+    run_case_parser.add_argument(
+        "--case", required=True, help="case ID or indexed case directory"
+    )
+    run_case_parser.add_argument(
+        "--agent", choices=("codex", "claude"), default="codex"
+    )
+    run_case_parser.add_argument("--model")
+    run_case_parser.add_argument("--workdir", type=Path, default=Path.cwd())
+    run_case_parser.add_argument("--prompt-file", type=Path)
+    run_case_parser.add_argument("--agent-arg", action="append", default=[])
+    run_case_parser.add_argument("--overwrite", action="store_true")
+    run_case_parser.add_argument(
+        "--retain-on-failure",
+        action="store_true",
+        help="retain a provisioned fixture and lease when the case does not pass",
+    )
+    run_case_parser.add_argument("prompt", nargs=argparse.REMAINDER)
+
+    run_plan = sub.add_parser(
+        "run-plan", help="run every indexed case in its own AI session"
+    )
+    add_common_plan(run_plan, run_id_required=False)
+    run_plan.add_argument(
+        "--driver",
+        choices=("program", "agent"),
+        default="program",
+        help=(
+            "who drives the case loop: 'program' runs a deterministic "
+            "next-case/run-case loop in this process (default); 'agent' spawns "
+            "an LLM orchestrator against the same control server"
+        ),
+    )
+    run_plan.add_argument(
+        "--require-script",
+        action="store_true",
+        help=(
+            "refuse a case that has no execution entrypoint instead of "
+            "falling back to an agent, so a run is guaranteed model-free"
+        ),
+    )
+    run_plan.add_argument("--agent", choices=("codex", "claude"), default="codex")
+    run_plan.add_argument("--model")
+    run_plan.add_argument("--workdir", type=Path, default=Path.cwd())
+    run_plan.add_argument("--prompt-file", type=Path)
+    run_plan.add_argument(
+        "--context",
+        type=Path,
+        help="run-level JSON with software_under_test/environment",
+    )
+    run_plan.add_argument("--agent-arg", action="append", default=[])
+    run_plan.add_argument("--overwrite", action="store_true")
+    run_plan.add_argument("--resume", action="store_true")
+    run_plan.add_argument(
+        "--skip",
+        action="append",
+        choices=(*TERMINAL_STATUS, "INCOMPLETE", "INFRA_ERROR"),
+        default=[],
+        metavar="STATUS",
+        help=(
+            "with --resume, retain cases in this status and archive/rerun all "
+            "other existing cases; repeat for multiple statuses"
+        ),
+    )
+    run_plan.add_argument("--web", action="store_true", help="serve a live dashboard")
+    run_plan.add_argument("--web-host", default="127.0.0.1")
+    run_plan.add_argument("--web-port", type=int, default=0)
+    run_plan.add_argument(
+        "--control-token",
+        default=None,
+        help="token required by the web control API (default: generated)",
+    )
+    run_plan.add_argument("prompt", nargs=argparse.REMAINDER)
+
+    sweep = sub.add_parser(
+        "sweep",
+        help="re-run every case that owns an execution entrypoint, in parallel",
+    )
+    add_common_plan(sweep, run_id_required=False)
+    sweep.add_argument(
+        "--case",
+        action="append",
+        default=None,
+        help="restrict the sweep to this case ID; repeat for multiple cases",
+    )
+    sweep.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="concurrent scripted cases (fixtures are leased per case)",
+    )
+    sweep.add_argument(
+        "--runtime-manifest",
+        type=Path,
+        default=None,
+        help="prepared-substrate manifest to seed into the sweep run directory",
+    )
+    sweep.add_argument(
+        "--retain-on-failure",
+        action="store_true",
+        help="retain failed case fixtures and leases for interactive debugging",
+    )
+    sweep.add_argument(
+        "--preflight-case",
+        action="append",
+        default=[],
+        help=(
+            "run this selected scripted case serially before the parallel round; "
+            "stop the round when a preflight case fails"
+        ),
+    )
+
+    verify_registry_parser = sub.add_parser(
+        "verify-registry",
+        help="check that promoted cases are backed by an executable harness",
+    )
+    verify_registry_parser.add_argument(
+        "--plan", type=Path, required=True, help="test-plan directory"
+    )
+
+    sub.add_parser("next-case", help="return the next unresolved controlled case")
+    complete = sub.add_parser(
+        "complete-case", help="complete a controlled case without execution"
+    )
+    complete.add_argument("--case", required=True)
+    complete.add_argument("--result", choices=("SKIPPED",), required=True)
+    complete.add_argument("--blocked-by", action="append", default=[])
+    complete.add_argument("--reason", required=True)
+
+    finalize = sub.add_parser("finalize", help="materialize run.json from case results")
+    add_common_plan(finalize)
+    finalize.add_argument("--context", type=Path)
+
+    validate = sub.add_parser("validate", help="validate a finalized test run")
+    add_common_plan(validate)
+
+    package = sub.add_parser(
+        "package", help="validate and package a test plan and its results"
+    )
+    add_common_plan(package)
+    package.add_argument("--output", type=Path, required=True)
+
+    render_parser = sub.add_parser(
+        "render", help="render a validated run to one offline HTML file"
+    )
+    add_common_plan(render_parser)
+    render_parser.add_argument("--output", type=Path, required=True)
+
+    serve = sub.add_parser("serve", help="serve a live or historical run dashboard")
+    add_common_plan(serve)
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--agent", choices=("codex", "claude"), default="codex")
+    serve.add_argument("--model")
+    serve.add_argument("--workdir", type=Path, default=Path.cwd())
+    serve.add_argument("--prompt-file", type=Path)
+    serve.add_argument("--agent-arg", action="append", default=[])
+    serve.add_argument(
+        "--control-token",
+        default=None,
+        help="token required by control API (default: generated)",
+    )
+    serve.add_argument("prompt", nargs=argparse.REMAINDER)
+    return parser
+
+
+def prompt_text(args: argparse.Namespace) -> str:
+    values = list(args.prompt)
+    if values and values[0] == "--":
+        values = values[1:]
+    text = " ".join(values)
+    if args.prompt_file:
+        file_text = args.prompt_file.read_text(encoding="utf-8")
+        text = f"{file_text}\n\n{text}" if text else file_text
+    return text
+
+
+def session_log_mode(path: Path, resume: bool) -> str:
+    """Preserve earlier AI sessions when a run is resumed."""
+    return "ab" if resume and path.is_file() else "wb"
+
+
+def case_resume_status(
+    plan: render.Plan, run_id: str, case: render.CaseEntry
+) -> str | None:
+    """Return the status used by selective resume, or None for a fresh case."""
+    result_dir = render.case_result_dir(plan, run_id, case)
+    result_path = result_dir / "result.json"
+    if result_path.is_file():
+        try:
+            return str(validate_completed_case(case, result_dir)["status"])
+        except (DstackTestError, render.ReportError):
+            return "INCOMPLETE"
+    lifecycle_path = (
+        plan.root / "results" / run_id / "case-lifecycle" / f"{case.id}.json"
+    )
+    if lifecycle_path.is_file():
+        lifecycle = render.load_json(lifecycle_path)
+        if lifecycle.get("state") == "INFRA_ERROR":
+            return "INFRA_ERROR"
+        return "INCOMPLETE"
+    if result_dir.is_dir() and any(result_dir.iterdir()):
+        return "INCOMPLETE"
+    return None
+
+
+def prepare_selective_resume(
+    plan: render.Plan, run_id: str, skip_statuses: set[str]
+) -> list[tuple[str, str]]:
+    """Archive existing cases not selected for skipping and make them runnable."""
+    rerun: list[tuple[str, str]] = []
+    run_dir = plan.root / "results" / run_id
+    for case in plan.cases:
+        status = case_resume_status(plan, run_id, case)
+        if status is None or status in skip_statuses:
+            continue
+        result_dir = render.case_result_dir(plan, run_id, case)
+        if result_dir.exists() and any(result_dir.iterdir()):
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+            archive = run_dir / "attempts" / case.path.relative_to(plan.root) / stamp
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            result_dir.replace(archive)
+        lifecycle_path = run_dir / "case-lifecycle" / f"{case.id}.json"
+        lifecycle_path.unlink(missing_ok=True)
+        rerun.append((case.id, status))
+    return rerun
+
+
+INVESTIGATION_PROMPT = """When a test reveals a mismatch, failure, or documentation defect, use at most one additional bounded tool call to locate the most likely root cause. Correlate the live observation with the narrowest relevant source, configuration, protocol, or version evidence and classify the cause as product, documentation, test probe, runner, or environment. Preserve one concise diagnostic artifact without changing expected results or forcing a pass. Do not restart or reconstruct a failed fixture merely to investigate it; after preserving the diagnostic, perform only the cleanup required by the case and finalize. A required positive input, matrix row, lifecycle target, fault injector, peer, or other prerequisite may be established by case.md expected results or by the execution guide even if the generic Preconditions section omits it. When the case manifest directly confirms that prerequisite is absent, preserve one bounded manifest observation, finalize BLOCKED, and do not browse implementation source or probe unrelated targets to rediscover it."""
+
+
+class ServeController:
+    """Run selected cases sequentially under a long-lived dashboard server."""
+
+    def __init__(self, plan: render.Plan, args: argparse.Namespace):
+        self.plan, self.args = plan, args
+        self.lock = threading.Lock()
+        self.process: subprocess.Popen[bytes] | None = None
+        self.current_case: str | None = None
+        self.queue: list[str] = []
+        self.worker: threading.Thread | None = None
+        self.stop_requested = False
+        self.last_event: dict[str, Any] | None = None
+        self.run_dir = plan.root / "results" / args.run_id
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.events_path = self.run_dir / "serve-control.jsonl"
+        self.subprocess_log = self.run_dir / "serve-subprocess.log"
+        self.fixture_manager = fixtures.FixtureManager(
+            self.run_dir, plan.fixture_profiles, plan.root
+        )
+        reconciled = self.fixture_manager.reconcile()
+        if reconciled:
+            self._event("fixtures.reconciled", lease_ids=reconciled)
+
+    def _event(self, kind: str, **values: Any) -> None:
+        event = {"schema_version": "1.0", "at": utc_now(), "type": kind, **values}
+        with self.events_path.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self.last_event = event
+
+    def _external_execution(self) -> dict[str, Any] | None:
+        """Find a live run-case agent started by the plan orchestrator."""
+        for case in self.plan.cases:
+            result_dir = render.case_result_dir(self.plan, self.args.run_id, case)
+            execution_path = result_dir / "execution.json"
+            if not execution_path.is_file():
+                continue
+            try:
+                execution = render.load_json(execution_path)
+                if execution.get("state") != "RUNNING":
+                    continue
+                pid = int(execution["agent_pid"])
+                pgid = int(execution["agent_pgid"])
+                start_ticks = int(execution["agent_start_ticks"])
+            except (KeyError, TypeError, ValueError, render.ReportError):
+                continue
+            if process_start_ticks(pid) != start_ticks:
+                continue
+            try:
+                if os.getpgid(pid) != pgid:
+                    continue
+            except ProcessLookupError:
+                continue
+            return {
+                "case_id": case.id,
+                "pid": pid,
+                "pgid": pgid,
+                "start_ticks": start_ticks,
+                "result_dir": result_dir,
+            }
+        return None
+
+    def _external_orchestrator(self) -> dict[str, Any] | None:
+        path = self.run_dir / "orchestrator-execution.json"
+        if not path.is_file():
+            return None
+        try:
+            execution = render.load_json(path)
+            if execution.get("state") != "RUNNING":
+                return None
+            pid = int(execution["agent_pid"])
+            pgid = int(execution["agent_pgid"])
+            start_ticks = int(execution["agent_start_ticks"])
+        except (KeyError, TypeError, ValueError, render.ReportError):
+            return None
+        if process_start_ticks(pid) != start_ticks:
+            return None
+        try:
+            if os.getpgid(pid) != pgid:
+                return None
+        except ProcessLookupError:
+            return None
+        return {"pid": pid, "pgid": pgid, "start_ticks": start_ticks, "path": path}
+
+    @staticmethod
+    def _signal_verified(execution: dict[str, Any], sig: signal.Signals) -> bool:
+        pid = int(execution["pid"])
+        if process_start_ticks(pid) != int(execution["start_ticks"]):
+            return False
+        try:
+            if os.getpgid(pid) != int(execution["pgid"]):
+                return False
+            os.killpg(int(execution["pgid"]), sig)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def status(self) -> dict[str, Any]:
+        with self.lock:
+            internal_running = self.process is not None and self.process.poll() is None
+            external = None if internal_running else self._external_execution()
+            external_orchestrator = self._external_orchestrator()
+            running = (
+                internal_running
+                or external is not None
+                or external_orchestrator is not None
+            )
+            return {
+                "enabled": True,
+                "running": running,
+                "current_case": self.current_case
+                or (external["case_id"] if external else None),
+                "queue": list(self.queue),
+                "stop_requested": self.stop_requested,
+                "last_event": self.last_event,
+                "investigation_available": True,
+                "log_agent": (
+                    f"case:{self.current_case or external['case_id']}"
+                    if (self.current_case or external)
+                    else "orchestrator"
+                ),
+                "execution_source": (
+                    "controlled-case"
+                    if (self.current_case or external)
+                    else "orchestrator"
+                ),
+                "settings": {
+                    "agent": self.args.agent,
+                    "model": self.args.model or "default",
+                    "workdir": str(self.args.workdir.resolve()),
+                    "run_id": self.args.run_id,
+                    "plan": str(self.plan.root),
+                },
+            }
+
+    def start(self, request: dict[str, Any]) -> dict[str, Any]:
+        requested = request.get("case_ids")
+        if not isinstance(requested, list) or not requested:
+            raise DstackTestError("case_ids must be a non-empty array")
+        requested_ids = {str(value) for value in requested}
+        unknown = requested_ids - {case.id for case in self.plan.cases}
+        if unknown:
+            raise DstackTestError(f"unknown case IDs: {sorted(unknown)}")
+        ordered = [case.id for case in self.plan.cases if case.id in requested_ids]
+        prompt = str(request.get("prompt", "")).strip()
+        investigate = bool(request.get("investigate_failures", False))
+        overwrite = bool(request.get("overwrite", False))
+        with self.lock:
+            if self.worker and self.worker.is_alive():
+                raise DstackTestError("a controlled test queue is already running")
+            occupied = []
+            interrupted = []
+            for case_id in ordered:
+                case = find_case(self.plan, case_id)
+                result_dir = render.case_result_dir(self.plan, self.args.run_id, case)
+                if result_dir.exists() and any(result_dir.iterdir()):
+                    occupied.append(case_id)
+                    execution_path = result_dir / "execution.json"
+                    if (
+                        execution_path.is_file()
+                        and str(
+                            render.load_json(execution_path).get("state", "INCOMPLETE")
+                        )
+                        != "COMPLETED"
+                    ):
+                        interrupted.append(case_id)
+            completed_occupied = [
+                case_id for case_id in occupied if case_id not in interrupted
+            ]
+            if completed_occupied and not overwrite:
+                raise DstackTestError(
+                    "existing results require the explicit overwrite/archive option: "
+                    + ", ".join(completed_occupied)
+                )
+            archive_ids = set(interrupted)
+            if overwrite:
+                archive_ids.update(occupied)
+            self.queue = list(ordered)
+            (self.run_dir / ".round-stop-requested").unlink(missing_ok=True)
+            self.current_case = None
+            self.stop_requested = False
+            self.worker = threading.Thread(
+                target=self._run_queue,
+                args=(prompt, investigate, archive_ids),
+                daemon=True,
+            )
+            self._event(
+                "queue.started",
+                case_ids=ordered,
+                investigate_failures=investigate,
+                overwrite=overwrite,
+            )
+            self.worker.start()
+        return self.status()
+
+    def _archive_existing(self, case: render.CaseEntry) -> None:
+        result_dir = render.case_result_dir(self.plan, self.args.run_id, case)
+        if not result_dir.exists() or not any(result_dir.iterdir()):
+            return
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        archive = (
+            self.run_dir / "attempts" / case.path.relative_to(self.plan.root) / stamp
+        )
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        result_dir.replace(archive)
+        self._event(
+            "case.archived",
+            case_id=case.id,
+            archive=str(archive.relative_to(self.plan.root)),
+        )
+
+    def _case_command(self, case_id: str, prompt: str, investigate: bool) -> list[str]:
+        command = [
+            str(Path(__file__).resolve()),
+            "run-case",
+            "--plan",
+            str(self.plan.root),
+            "--run-id",
+            self.args.run_id,
+            "--case",
+            case_id,
+            "--agent",
+            self.args.agent,
+            "--workdir",
+            str(self.args.workdir.resolve()),
+        ]
+        if self.args.model:
+            command += ["--model", self.args.model]
+        for value in self.args.agent_arg:
+            command.append(f"--agent-arg={value}")
+        parts = [prompt_text(self.args), prompt]
+        if investigate:
+            parts.append(INVESTIGATION_PROMPT)
+        combined = "\n\n".join(part for part in parts if part)
+        if combined:
+            command += ["--", combined]
+        return command
+
+    def _run_queue(self, prompt: str, investigate: bool, archive_ids: set[str]) -> None:
+        while True:
+            with self.lock:
+                if self.stop_requested or not self.queue:
+                    self.current_case = None
+                    self.process = None
+                    break
+                case_id = self.queue.pop(0)
+                self.current_case = case_id
+            case = find_case(self.plan, case_id)
+            if case_id in archive_ids:
+                self._archive_existing(case)
+            command = self._case_command(case_id, prompt, investigate)
+            environment = os.environ.copy()
+            environment.pop("DSTACK_TEST_CONTROL_DIR", None)
+            self._event("case.started", case_id=case_id)
+            with self.subprocess_log.open("ab") as output:
+                process = subprocess.Popen(
+                    command,
+                    cwd=self.args.workdir,
+                    env=environment,
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                with self.lock:
+                    self.process = process
+                exit_code = process.wait()
+            with self.lock:
+                stopped = self.stop_requested
+                self.process = None
+            result_dir = render.case_result_dir(self.plan, self.args.run_id, case)
+            if stopped:
+                atomic_json(
+                    result_dir / "execution.json",
+                    {
+                        "schema_version": "1.0",
+                        "state": "TERMINATED",
+                        "case_id": case_id,
+                        "finished_at": utc_now(),
+                        "exit_code": exit_code,
+                    },
+                )
+                self._event("case.terminated", case_id=case_id, exit_code=exit_code)
+                break
+            self._event("case.finished", case_id=case_id, exit_code=exit_code)
+            if exit_code != 0:
+                with self.lock:
+                    self.queue.clear()
+                self._event(
+                    "queue.failed",
+                    case_id=case_id,
+                    exit_code=exit_code,
+                    reason="case runner exited without a usable completion",
+                )
+                break
+        with self.lock:
+            self.current_case = None
+            self.queue.clear()
+            self.process = None
+        self._event("queue.finished", stopped=self.stop_requested)
+
+    def stop(self) -> dict[str, Any]:
+        atomic_json(
+            self.run_dir / ".round-stop-requested",
+            {"at": utc_now(), "source": "dashboard"},
+        )
+        with self.lock:
+            self.stop_requested = True
+            self.queue.clear()
+            process = self.process
+            case_id = self.current_case
+        execution = self._external_execution()
+        orchestrator = self._external_orchestrator()
+        signalled: list[dict[str, Any]] = []
+        if execution is not None:
+            case_id = execution["case_id"]
+            atomic_json(
+                execution["result_dir"] / ".stop-requested",
+                {"at": utc_now(), "source": "dashboard"},
+            )
+            if self._signal_verified(execution, signal.SIGTERM):
+                signalled.append(execution)
+                atomic_json(
+                    execution["result_dir"] / "execution.json",
+                    {
+                        "schema_version": "1.0",
+                        "state": "TERMINATED",
+                        "case_id": case_id,
+                        "finished_at": utc_now(),
+                        "reason": "stopped from dashboard",
+                    },
+                )
+        elif process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        if orchestrator is not None:
+            if self._signal_verified(orchestrator, signal.SIGTERM):
+                signalled.append(orchestrator)
+                atomic_json(
+                    orchestrator["path"],
+                    {
+                        "schema_version": "1.0",
+                        "state": "TERMINATED",
+                        "finished_at": utc_now(),
+                        "reason": "stopped from dashboard",
+                    },
+                )
+
+        if signalled:
+
+            def escalate() -> None:
+                time.sleep(10)
+                for item in signalled:
+                    self._signal_verified(item, signal.SIGKILL)
+
+            threading.Thread(target=escalate, daemon=True).start()
+        self._event("queue.stop-requested", case_id=case_id)
+        return self.status()
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if os.environ.get("DSTACK_TEST_CONTROL_DIR") and args.subcommand in (
+        "next-case",
+        "run-case",
+        "complete-case",
+    ):
+        if args.subcommand == "next-case":
+            value = control_request({"action": "next-case"})
+        elif args.subcommand == "run-case":
+            value = control_request({"action": "run-case", "case": args.case})
+        else:
+            value = control_request(
+                {
+                    "action": "complete-case",
+                    "case": args.case,
+                    "result": args.result,
+                    "blocked_by": args.blocked_by,
+                    "reason": args.reason,
+                }
+            )
+        print(json.dumps(value, ensure_ascii=False, indent=2))
+        return 0
+    if not getattr(args, "plan", None):
+        raise DstackTestError(
+            "--plan is required outside a controlled run-plan session"
+        )
+    plan = render.load_plan(args.plan)
+    if args.subcommand == "run-case":
+        value = run_case(
+            plan,
+            find_case(plan, args.case),
+            args.run_id,
+            args.agent,
+            args.model,
+            args.workdir.resolve(),
+            prompt_text(args),
+            args.agent_arg,
+            args.overwrite,
+            args.retain_on_failure,
+        )
+    elif args.subcommand == "run-plan":
+        if args.skip and not args.resume:
+            raise DstackTestError("--skip requires --resume")
+        if args.skip and args.overwrite:
+            raise DstackTestError("--skip cannot be combined with --overwrite")
+        run_dir = plan.root / "results" / args.run_id
+        existing = run_dir.exists() or any(
+            (render.case_result_dir(plan, args.run_id, case)).exists()
+            for case in plan.cases
+        )
+        if existing and not (args.overwrite or args.resume):
+            raise DstackTestError(
+                f"run {args.run_id!r} already exists; pass --resume or --overwrite"
+            )
+        if args.overwrite:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            for case in plan.cases:
+                shutil.rmtree(
+                    render.case_result_dir(plan, args.run_id, case), ignore_errors=True
+                )
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / ".round-stop-requested").unlink(missing_ok=True)
+        if args.resume and args.skip:
+            rerun = prepare_selective_resume(plan, args.run_id, set(args.skip))
+            print(
+                "selective resume: retained statuses "
+                + ", ".join(args.skip)
+                + f"; archived {len(rerun)} case(s) for rerun",
+                file=sys.stderr,
+                flush=True,
+            )
+        effective_model = resolve_model(args.agent, args.model)
+        state = ControlState(plan, args, effective_model)
+        control_dir = run_dir / "control"
+        server = FileControlServer(state, control_dir)
+        server.start()
+        dashboard = None
+        dashboard_controller = None
+        if args.web:
+            dashboard_controller = ServeController(plan, args)
+            token = args.control_token or secrets.token_urlsafe(24)
+
+            def run_plan_control(
+                action: str, request: dict[str, Any]
+            ) -> dict[str, Any]:
+                if action == "start":
+                    return dashboard_controller.start(request)
+                if action == "stop":
+                    return dashboard_controller.stop()
+                raise DstackTestError(f"unsupported dashboard action: {action}")
+
+            dashboard = web.Dashboard(
+                lambda requested: dashboard_state(
+                    plan,
+                    selected_run_id(plan, requested, args.run_id),
+                    dashboard_controller.status()
+                    if selected_run_id(plan, requested, args.run_id) == args.run_id
+                    else {"enabled": False, "running": False},
+                ),
+                lambda selected, agent, offset: dashboard_log(
+                    plan, selected_run_id(plan, selected, args.run_id), agent, offset
+                ),
+                lambda selected, case_id: dashboard_case(
+                    plan, selected_run_id(plan, selected, args.run_id), case_id
+                ),
+                lambda: dashboard_runs(plan, args.run_id),
+                args.web_host,
+                args.web_port,
+                control=run_plan_control,
+                control_token=token,
+                attachment=lambda selected, case_id, relative: dashboard_attachment(
+                    plan,
+                    selected_run_id(plan, selected, args.run_id),
+                    case_id,
+                    relative,
+                ),
+            )
+            dashboard.start()
+            web_host, web_port = dashboard.address
+            print(
+                f"dashboard: http://{web_host}:{web_port}/#token={token}",
+                file=sys.stderr,
+                flush=True,
+            )
+        if args.driver == "program":
+            orchestrator_execution = run_dir / "orchestrator-execution.json"
+            atomic_json(
+                orchestrator_execution,
+                {
+                    "schema_version": "1.0",
+                    "state": "RUNNING",
+                    "driver": "program",
+                    "agent_pid": os.getpid(),
+                    "agent_pgid": os.getpgid(0),
+                    "agent_start_ticks": process_start_ticks(os.getpid()),
+                    "started_at": utc_now(),
+                },
+            )
+            try:
+                orchestrator_exit_code = ProgrammaticOrchestrator(
+                    state, run_dir, require_script=args.require_script
+                ).run()
+            except BaseException:
+                atomic_json(
+                    orchestrator_execution,
+                    {
+                        "schema_version": "1.0",
+                        "state": "TERMINATED",
+                        "driver": "program",
+                        "finished_at": utc_now(),
+                        "reason": "run-plan interrupted",
+                    },
+                )
+                raise
+            finally:
+                server.close()
+                shutil.rmtree(control_dir, ignore_errors=True)
+            atomic_json(
+                orchestrator_execution,
+                {
+                    "schema_version": "1.0",
+                    "state": "COMPLETED"
+                    if orchestrator_exit_code == 0
+                    else "TERMINATED",
+                    "driver": "program",
+                    "exit_code": orchestrator_exit_code,
+                    "finished_at": utc_now(),
+                },
+            )
+            atomic_json(
+                run_dir / "orchestrator-runner.json",
+                {
+                    "schema_version": "1.0",
+                    "agent": {"type": "program", "model": "none"},
+                    "events": sum(1 for _ in (run_dir / "driver.jsonl").open())
+                    if (run_dir / "driver.jsonl").is_file()
+                    else 0,
+                    "exit_code": orchestrator_exit_code,
+                },
+            )
+            if dashboard:
+                print(
+                    "automatic plan execution ended; dashboard control remains "
+                    "available",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                try:
+                    dashboard.thread.join()
+                except KeyboardInterrupt:
+                    dashboard.close()
+            run = finalize_run(plan, args.run_id, context_value(args.context))
+            value = {"orchestrator_exit_code": orchestrator_exit_code, "run": run}
+            print(json.dumps(value, ensure_ascii=False, indent=2))
+            return 0 if orchestrator_exit_code == 0 else 1
+        prompt = orchestration_prompt(plan, prompt_text(args))
+        (run_dir / "orchestrator-prompt.md").write_text(prompt, encoding="utf-8")
+        environment = os.environ.copy()
+        environment["DSTACK_TEST_CONTROL_DIR"] = str(control_dir)
+        command = agent_command(
+            args.agent, effective_model, args.workdir.resolve(), prompt, args.agent_arg
+        )
+        orchestrator_session = run_dir / "orchestrator.jsonl"
+        orchestrator_stderr = run_dir / "orchestrator-stderr.log"
+        try:
+            with (
+                orchestrator_session.open(
+                    session_log_mode(orchestrator_session, args.resume)
+                ) as stdout,
+                orchestrator_stderr.open(
+                    session_log_mode(orchestrator_stderr, args.resume)
+                ) as stderr,
+            ):
+                orchestrator = subprocess.Popen(
+                    command,
+                    cwd=args.workdir,
+                    env=environment,
+                    stdout=stdout,
+                    stderr=stderr,
+                    start_new_session=True,
+                )
+                orchestrator_execution = run_dir / "orchestrator-execution.json"
+                atomic_json(
+                    orchestrator_execution,
+                    {
+                        "schema_version": "1.0",
+                        "state": "RUNNING",
+                        "agent_pid": orchestrator.pid,
+                        "agent_pgid": orchestrator.pid,
+                        "agent_start_ticks": process_start_ticks(orchestrator.pid),
+                        "started_at": utc_now(),
+                    },
+                )
+                try:
+                    orchestrator_exit_code = orchestrator.wait()
+                except BaseException:
+                    # The orchestrator runs in its own process group.  Waiting in
+                    # the parent does not forward Ctrl-C (or another shutdown
+                    # exception) to that group, so explicitly terminate it before
+                    # tearing down the control server.  Otherwise an orphaned
+                    # agent can attach to a later server for the same run and
+                    # advance the case cursor concurrently.
+                    if orchestrator.poll() is None:
+                        os.killpg(orchestrator.pid, signal.SIGTERM)
+                        try:
+                            orchestrator.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(orchestrator.pid, signal.SIGKILL)
+                            orchestrator.wait()
+                    atomic_json(
+                        orchestrator_execution,
+                        {
+                            "schema_version": "1.0",
+                            "state": "TERMINATED",
+                            "exit_code": orchestrator.returncode,
+                            "finished_at": utc_now(),
+                            "reason": "run-plan parent interrupted",
+                        },
+                    )
+                    raise
+                atomic_json(
+                    orchestrator_execution,
+                    {
+                        "schema_version": "1.0",
+                        "state": "COMPLETED"
+                        if orchestrator_exit_code == 0
+                        else "TERMINATED",
+                        "exit_code": orchestrator_exit_code,
+                        "finished_at": utc_now(),
+                    },
+                )
+        finally:
+            server.close()
+            shutil.rmtree(control_dir, ignore_errors=True)
+        if dashboard:
+            print(
+                "automatic plan execution ended; dashboard control remains available",
+                file=sys.stderr,
+                flush=True,
+            )
+            try:
+                dashboard.thread.join()
+            except KeyboardInterrupt:
+                dashboard.close()
+        events, detected_model = validate_session(run_dir / "orchestrator.jsonl")
+        atomic_json(
+            run_dir / "orchestrator-runner.json",
+            {
+                "schema_version": "1.0",
+                "agent": {
+                    "type": args.agent,
+                    "model": detected_model or effective_model or "unknown",
+                },
+                "events": events,
+                "exit_code": orchestrator_exit_code,
+            },
+        )
+        run = finalize_run(plan, args.run_id, context_value(args.context))
+        value = {"orchestrator_exit_code": orchestrator_exit_code, "run": run}
+    elif args.subcommand == "verify-registry":
+        value = verify_registry(plan)
+        print(json.dumps(value, ensure_ascii=False, indent=2))
+        return 0 if not value["findings"] else 1
+    elif args.subcommand == "sweep":
+        value = scripted_sweep(
+            plan,
+            args.run_id,
+            args.case,
+            args.workers,
+            args.runtime_manifest,
+            args.retain_on_failure,
+            args.preflight_case,
+        )
+    elif args.subcommand == "finalize":
+        value = finalize_run(plan, args.run_id, context_value(args.context))
+    elif args.subcommand == "validate":
+        value = validate_run(plan, args.run_id)
+    elif args.subcommand == "package":
+        package_plan(plan, args.run_id, args.output)
+        value = {
+            "status": "packaged",
+            "output": str(args.output),
+            "sha256": hashlib.sha256(args.output.read_bytes()).hexdigest(),
+        }
+    elif args.subcommand == "render":
+        validate_run(plan, args.run_id)
+        run, results = render.load_session_results(plan, args.run_id)
+        rendered = render.render_report(plan, run, results)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(rendered, encoding="utf-8")
+        value = {
+            "status": "rendered",
+            "output": str(args.output),
+            "bytes": args.output.stat().st_size,
+        }
+    elif args.subcommand == "serve":
+        controller = ServeController(plan, args)
+        token = args.control_token or secrets.token_urlsafe(24)
+
+        def serve_control(action: str, request: dict[str, Any]) -> dict[str, Any]:
+            if action == "start":
+                return controller.start(request)
+            if action == "stop":
+                return controller.stop()
+            raise DstackTestError(f"unsupported dashboard action: {action}")
+
+        dashboard = web.Dashboard(
+            lambda requested: dashboard_state(
+                plan,
+                selected_run_id(plan, requested, args.run_id),
+                controller.status()
+                if selected_run_id(plan, requested, args.run_id) == args.run_id
+                else {"enabled": False, "running": False},
+            ),
+            lambda selected, agent, offset: dashboard_log(
+                plan, selected_run_id(plan, selected, args.run_id), agent, offset
+            ),
+            lambda selected, case_id: dashboard_case(
+                plan, selected_run_id(plan, selected, args.run_id), case_id
+            ),
+            lambda: dashboard_runs(plan, args.run_id),
+            args.host,
+            args.port,
+            control=serve_control,
+            control_token=token,
+            attachment=lambda selected, case_id, relative: dashboard_attachment(
+                plan,
+                selected_run_id(plan, selected, args.run_id),
+                case_id,
+                relative,
+            ),
+        )
+        dashboard.start()
+        host, port = dashboard.address
+        print(
+            f"dashboard: http://{host}:{port}/#token={token}",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            dashboard.thread.join()
+        except KeyboardInterrupt:
+            dashboard.close()
+        return 0
+    else:
+        raise AssertionError(args.subcommand)
+    print(json.dumps(value, ensure_ascii=False, indent=2))
+    if args.subcommand == "sweep" and value["failed"]:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (DstackTestError, render.ReportError) as error:
+        print(
+            json.dumps({"status": "error", "message": str(error)}, ensure_ascii=False),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)

@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-compatibil-002",
+  "title": "Rolling VMM upgrade with running mixed guests",
+  "priority": "P0",
+  "requirements": [
+    "req-int-compatibil-002"
+  ],
+  "risks": [
+    "risk-int-compatibil-002"
+  ],
+  "tags": [
+    "integration",
+    "compatibility-upgrade"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Rolling VMM upgrade with running mixed guests"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-vmm-rolling-upgrade-case.py",
+    "args": [],
+    "timeout_seconds": 2400
+  }
+}

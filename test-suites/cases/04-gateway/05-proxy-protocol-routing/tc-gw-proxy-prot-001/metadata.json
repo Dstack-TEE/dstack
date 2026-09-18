@@ -1,0 +1,32 @@
+{
+  "id": "tc-gw-proxy-prot-001",
+  "title": "Inbound Proxy Protocol v1/v2 parsing",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-proxy-prot-001"
+  ],
+  "risks": [
+    "risk-gw-proxy-prot-001"
+  ],
+  "tags": [
+    "gateway",
+    "proxy-protocol-routing"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "gateway": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Inbound Proxy Protocol v1/v2 parsing"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

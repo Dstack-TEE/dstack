@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-compute-ne-006",
+  "title": "Registry authentication pull and extraction",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-compute-ne-006"
+  ],
+  "risks": [
+    "risk-vmm-compute-ne-006"
+  ],
+  "tags": [
+    "vmm",
+    "compute-network-image"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Registry authentication pull and extraction"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

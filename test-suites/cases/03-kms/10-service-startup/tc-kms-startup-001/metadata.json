@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-startup-001",
+  "title": "Onboard, main, admin, metrics, and health listener startup",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-startup-001"
+  ],
+  "risks": [
+    "risk-kms-startup-001"
+  ],
+  "tags": [
+    "kms",
+    "startup"
+  ],
+  "fixture": {
+    "profile": "kms-onboard",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Onboard, main, admin, metrics, and health listener startup"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}
