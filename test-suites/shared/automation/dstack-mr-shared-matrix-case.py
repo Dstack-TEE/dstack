@@ -17,7 +17,7 @@ from typing import Any
 
 CASE_IDS = {"tc-ver-tools-001", "tc-ver-tools-002"}
 IMAGE_HASH = "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
-MATRIX_VERSION = 2
+MATRIX_VERSION = 3
 BASE_ARGS = ["--cpu", "2", "--memory", "2G", "--qemu-version", "9.2.1"]
 REGISTERS = ("mrtd", "rtmr0", "rtmr1", "rtmr2")
 # OVMF's QemuKernelLoaderFsDxe appends this to the image-provided command line
@@ -34,8 +34,9 @@ RTMR1_TRAILING_EVENTS = (
 # instead of its digest (PR #1199).
 TDX_MEASUREMENT_DOCUMENT_VERSION = 4
 # Boot-protocol `write` fields filled in the way QEMU's x86 loader fills them
-# for -kernel: (offset, bytes). The normalized image must measure identically
-# once the candidate normalizer has cleared them again (PR #1189).
+# for -kernel: (offset, bytes). An image whose metadata declares
+# `kernel_header_normalized` must measure identically once they are cleared
+# again (PR #1189).
 QEMU_LOADER_HEADER_WRITES = (
     (0x210, bytes([0xB0])),
     (0x218, (0x7FC00000).to_bytes(4, "little")),
@@ -44,7 +45,35 @@ QEMU_LOADER_HEADER_WRITES = (
     (0x228, (0x20000).to_bytes(4, "little")),
 )
 LOADFLAGS_OFFSET = 0x211
+LOADED_HIGH = 0x01
 CAN_USE_HEAP = 0x80
+# Every boot-protocol `write` field, which is what an image built while dstack
+# normalized the header ships zeroed: (offset, size).
+NORMALIZED_ZERO_FIELDS = (
+    (0x210, 1),
+    (0x218, 4),
+    (0x21C, 4),
+    (0x224, 2),
+    (0x226, 1),
+    (0x227, 1),
+    (0x228, 4),
+    (0x23C, 4),
+    (0x240, 8),
+    (0x250, 8),
+)
+# The canonical boot-loader layout dstack's OVMF writes on every QEMU version,
+# and dstack-mr predicts: QEMU's values for a guest with 2 GiB or more of RAM
+# below 4G. See os/image/README.md and
+# 0007-OvmfPkg-QemuKernelLoaderFsDxe-canonicalize-setup-head.patch.
+CANONICAL_REAL_ADDR_HIGH = 0x10000
+CANONICAL_CMDLINE_ADDR_HIGH = 0x20000
+CANONICAL_REAL_ADDR_LOW = 0x90000
+CANONICAL_CMDLINE_ADDR_LOW = 0x9A000
+CANONICAL_SETUP_HEAP_GAP = 0x200
+CANONICAL_LOW_MEMORY_SPLIT = 0x80000000
+CANONICAL_ACPI_DATA_SIZE = 0x28000
+CANONICAL_INITRD_ADDR_MAX_DEFAULT = 0x37FFFFFF
+CANONICAL_INITRD_ALIGNMENT = 0x1000
 NORMALIZED_INDEPENDENCE_ROWS = tuple(
     (memory, qemu)
     for memory in ("1G", "2G", "3G", "8G")
@@ -58,6 +87,7 @@ NATIVE_TESTS = (
         (
             "kernel::tests::the_normalized_flag_selects_which_kernel_bytes_are_measured",
             "kernel::tests::only_the_patched_digest_moves_with_guest_memory",
+            "kernel::tests::canonical_setup_header_matches_golden_vectors",
             "tdx::tests::measured_kernel_cmdline_appends_the_ovmf_suffix",
             "tdx::tests::rtmr2_command_line_event_digest_is_stable",
             "tdx::tests::rtmr2_replay_is_stable",
@@ -157,6 +187,67 @@ def authenticode_sha384(data: bytes) -> bytes:
     if len(data) % 8:
         digest.update(bytes(8 - len(data) % 8))
     return digest.digest()
+
+
+def zeroed_setup_header(kernel: bytes) -> bytes:
+    """Return the kernel with every boot-loader-written field zeroed.
+
+    What an image built while dstack normalized the header ships, reproduced
+    here because the build-side normalizer no longer exists: OVMF writes the
+    canonical layout instead (see `canonical_setup_header`).
+    """
+    out = bytearray(kernel)
+    for offset, size in NORMALIZED_ZERO_FIELDS:
+        out[offset : offset + size] = bytes(size)
+    out[LOADFLAGS_OFFSET] &= ~CAN_USE_HEAP & 0xFF
+    return bytes(out)
+
+
+def setup_header_is_zeroed(kernel: bytes) -> bool:
+    """Whether every boot-loader-written field is already zero."""
+    return kernel == zeroed_setup_header(kernel)
+
+
+def canonical_setup_header(kernel: bytes, initrd_size: int) -> bytes:
+    """Return the kernel in the canonical boot-loader layout.
+
+    An independent implementation of what dstack's OVMF writes before the
+    kernel blob is measured, and therefore of what `dstack-mr` must predict
+    for an image that does not declare `kernel_header_normalized`.
+    """
+    out = bytearray(kernel)
+    protocol = int.from_bytes(out[0x206:0x208], "little")
+    if protocol < 0x0202:
+        raise AssertionError(f"boot protocol {protocol:#06x} predates the layout")
+    if out[LOADFLAGS_OFFSET] & LOADED_HIGH:
+        real_addr = CANONICAL_REAL_ADDR_HIGH
+        cmdline_addr = CANONICAL_CMDLINE_ADDR_HIGH
+    else:
+        real_addr = CANONICAL_REAL_ADDR_LOW
+        cmdline_addr = CANONICAL_CMDLINE_ADDR_LOW
+    out[0x210] = 0xB0
+    out[LOADFLAGS_OFFSET] |= CAN_USE_HEAP
+    heap_end = cmdline_addr - real_addr - CANONICAL_SETUP_HEAP_GAP
+    out[0x224:0x228] = heap_end.to_bytes(4, "little")
+    out[0x228:0x22C] = cmdline_addr.to_bytes(4, "little")
+    if initrd_size:
+        if protocol >= 0x020C:
+            xlf = int.from_bytes(out[0x236:0x238], "little")
+            initrd_max = 0xFFFFFFFF if xlf & 0x40 else CANONICAL_INITRD_ADDR_MAX_DEFAULT
+        elif protocol >= 0x0203:
+            declared = int.from_bytes(out[0x22C:0x230], "little")
+            initrd_max = declared or CANONICAL_INITRD_ADDR_MAX_DEFAULT
+        else:
+            initrd_max = CANONICAL_INITRD_ADDR_MAX_DEFAULT
+        available = CANONICAL_LOW_MEMORY_SPLIT - CANONICAL_ACPI_DATA_SIZE
+        if initrd_max >= available:
+            initrd_max = available - 1
+        if initrd_size >= initrd_max:
+            raise AssertionError("initrd does not fit below the canonical ceiling")
+        initrd_addr = (initrd_max - initrd_size) & ~(CANONICAL_INITRD_ALIGNMENT - 1)
+        out[0x218:0x21C] = initrd_addr.to_bytes(4, "little")
+        out[0x21C:0x220] = initrd_size.to_bytes(4, "little")
+    return bytes(out)
 
 
 def rtmr1_from_kernel_digest(kernel_digest: bytes) -> str:
@@ -474,7 +565,6 @@ def execute_matrix(
         normalization_rows(
             binary,
             image_binary,
-            repository,
             fixture,
             workspace,
             baseline,
@@ -530,7 +620,6 @@ def execute_matrix(
 def normalization_rows(
     binary: pathlib.Path,
     image_binary: pathlib.Path,
-    repository: pathlib.Path,
     fixture: pathlib.Path,
     workspace: pathlib.Path,
     baseline: dict[str, str],
@@ -538,17 +627,19 @@ def normalization_rows(
     low_memory: dict[str, str],
     initrd_digest: bytes,
 ) -> list[dict[str, Any]]:
-    """Exercise setup-header normalization and the TDX measurement document.
+    """Exercise both measured setup-header forms and the TDX measurement document.
 
-    The image build zeroes the boot-loader-written setup-header fields and
-    declares `kernel_header_normalized`; dstack-mr then measures the kernel
-    file as shipped, independent of QEMU version and guest memory. Images
-    that predate the flag keep the QEMU-rewrite model.
+    An image that does not declare `kernel_header_normalized` is measured in
+    the canonical boot-loader layout, which dstack's OVMF writes before the
+    kernel blob is measured on every QEMU version. An image that declares the
+    flag -- built while dstack normalized the header to zeros instead -- is
+    measured as the plain Authenticode hash of the kernel file. dstack-mr
+    keeps both, so both are exercised here against independent replays.
     """
     rows: list[dict[str, Any]] = []
-    normalizer = repository / "os/image/normalize-kernel-header.py"
     metadata = json.loads((fixture / "metadata.json").read_text())
     kernel_name = metadata["kernel"]
+    initrd_size = (fixture / metadata["initrd"]).stat().st_size
 
     def measure(name: str, directory: pathlib.Path, args: list[str]) -> dict[str, str]:
         row, output, _ = run_cli(
@@ -557,27 +648,47 @@ def normalization_rows(
         result = require_success(row, output, None)
         return result
 
-    def check(name: str, kernel: pathlib.Path) -> int:
-        return run_tool(
-            ["python3", str(normalizer), "--check", str(kernel)], workspace, name
-        ).returncode
-
     def normalize(name: str, kernel: pathlib.Path) -> None:
-        completed = run_tool(["python3", str(normalizer), str(kernel)], workspace, name)
-        if completed.returncode:
-            raise AssertionError(f"{name}: candidate normalizer failed")
+        zeroed = zeroed_setup_header(kernel.read_bytes())
+        kernel.write_bytes(zeroed)
+        (workspace / f"{name}.stdout").write_bytes(zeroed[0x200:0x258])
 
-    # The historical image predates normalization: its shipped header still
-    # carries a boot-loader field, and its metadata does not declare the flag.
+    # The historical image declares no flag, so it is measured in the canonical
+    # boot-loader layout, and its shipped header still carries a
+    # boot-loader-written field.
     if "kernel_header_normalized" in metadata:
         raise AssertionError(
             "the historical fixture unexpectedly declares normalization"
         )
-    if check("legacy-header-check", fixture / kernel_name) != 1:
+    if setup_header_is_zeroed((fixture / kernel_name).read_bytes()):
         raise AssertionError(
-            "the historical kernel unexpectedly has a normalized header"
+            "the historical kernel unexpectedly has a zeroed setup header"
         )
     rows.append({"name": "legacy-header-not-normalized", "passed": True})
+
+    # What dstack's OVMF writes is what dstack-mr predicts: RTMR[1] of an
+    # image without the flag replays from the canonical layout, computed here
+    # without dstack-mr. This is the pairing that lets a verifier or KMS from
+    # any release measure a guest booted on any QEMU version.
+    canonical_kernel = canonical_setup_header(
+        (fixture / kernel_name).read_bytes(), initrd_size
+    )
+    canonical_rtmr1 = rtmr1_from_kernel_digest(authenticode_sha384(canonical_kernel))
+    if baseline["rtmr1"] != canonical_rtmr1:
+        raise AssertionError(
+            "RTMR[1] without the flag is not the canonical boot-loader layout"
+        )
+    if canonical_setup_header(canonical_kernel, initrd_size) != canonical_kernel:
+        raise AssertionError("the canonical layout is not idempotent")
+    if canonical_kernel == (fixture / kernel_name).read_bytes():
+        raise AssertionError("the canonical layout left the shipped header unchanged")
+    rows.append(
+        {
+            "name": "canonical-layout-replays-rtmr1",
+            "initrd_size": initrd_size,
+            "passed": True,
+        }
+    )
 
     # Declaring the flag without normalizing selects the plain digest of the
     # file exactly as shipped: dstack-mr does not rewrite the kernel itself.
@@ -596,12 +707,12 @@ def normalization_rows(
         )
     rows.append({"name": "flag-selects-plain-kernel-digest", "passed": True})
 
-    # A normalized image: the candidate image-build normalizer plus the flag.
+    # An image that declares the flag: zeroed header plus the declaration.
     normalized = workspace / "normalized-image"
     copy_fixture(fixture, normalized)
     normalize("normalize-image", normalized / kernel_name)
-    if check("normalized-header-check", normalized / kernel_name) != 0:
-        raise AssertionError("the normalizer left boot-loader fields in the header")
+    if not setup_header_is_zeroed((normalized / kernel_name).read_bytes()):
+        raise AssertionError("zeroing left boot-loader fields in the header")
     set_metadata(normalized, kernel_header_normalized=True)
     normalized_digest = authenticode_sha384((normalized / kernel_name).read_bytes())
     normalized_output = measure("normalized-image", normalized, [*BASE_ARGS])
@@ -665,8 +776,8 @@ def normalization_rows(
         kernel[offset : offset + len(value)] = value
     kernel[LOADFLAGS_OFFSET] |= CAN_USE_HEAP
     (rewritten / kernel_name).write_bytes(bytes(kernel))
-    if check("rewritten-header-check", rewritten / kernel_name) != 1:
-        raise AssertionError("the normalizer check accepted a loader-rewritten header")
+    if setup_header_is_zeroed((rewritten / kernel_name).read_bytes()):
+        raise AssertionError("a loader-rewritten header was read as zeroed")
     rewritten_output = measure("loader-rewritten-header", rewritten, [*BASE_ARGS])
     if changed_registers(normalized_output, rewritten_output) != ["rtmr1"]:
         raise AssertionError(
