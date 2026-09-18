@@ -420,7 +420,8 @@ verbose cp "$KERNEL_IMAGE" "${OUTPUT_DIR}/bzImage"
 # result into RTMR[1]. QEMU >= 10.2 stopped doing that for confidential guests,
 # so leaving the header as built would make the same image measure differently
 # per QEMU version. Normalizing here, and again in OVMF before it measures,
-# makes RTMR[1] the plain Authenticode hash of this file. Runs before
+# makes RTMR[1] the plain Authenticode hash of this file. The initrd size is an
+# input, so this runs once both files are in place, and before
 # tdx-measurement-cbor and sha256sum.txt below, so both cover the normalized
 # kernel. The matching half is in OVMF: metadata.json declares
 # kernel_header_normalized below, and what makes that declaration true is
@@ -428,7 +429,7 @@ verbose cp "$KERNEL_IMAGE" "${OUTPUT_DIR}/bzImage"
 # same build applies -- ovmf-build.sh and the bitbake recipe both fail if it
 # does not apply. See os/image/README.md.
 verbose "$(dirname "${BASH_SOURCE[0]}")/normalize-kernel-header.py" \
-    "${OUTPUT_DIR}/bzImage"
+    "${OUTPUT_DIR}/bzImage" "${OUTPUT_DIR}/initramfs.cpio.gz"
 verbose cp "$OVMF_FIRMWARE" "${OUTPUT_DIR}/ovmf.fd"
 
 # AMD SEV firmware (additive). Shipped alongside the TDX firmware so a SEV-SNP

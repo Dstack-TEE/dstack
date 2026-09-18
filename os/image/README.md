@@ -71,13 +71,24 @@ host's QEMU version — and the host is the one that declares that version.
 
 The fix has two halves that must stay in sync:
 
-- this script zeroes those fields in the kernel we ship;
-- `0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch` zeroes them
-  again in OVMF, before the kernel blob is measured and loaded.
+- this script writes those fields in the kernel we ship, with the values
+  QEMU <= 10.1 writes;
+- `0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch` writes the
+  same values in OVMF, before the kernel blob is measured and loaded.
 
 The result is that RTMR[1] is the plain Authenticode hash of `bzImage` as
 listed in `sha256sum.txt`, on every QEMU version and at every guest memory
 size.
+
+Normalizing to QEMU's layout rather than to zeros is what keeps an earlier
+release able to verify these images: `dstack-mr` already computes that layout
+(`patch_kernel`) for an image that does not declare the flag, so a 0.5.x KMS
+can still onboard a 0.6.0 root with image verification on. Recomputing it needs
+the guest RAM size, which limits such a verifier to guests with exactly 2 GiB
+or at least 2816 MiB -- the one range QEMU places the initrd differently in,
+and the range the no-image-download path already excludes. The values are the
+ones QEMU writes above that threshold, and the shipped initrd's size is an
+input, since it decides `ramdisk_image`.
 
 `assemble.sh` records this in `metadata.json` as `"kernel_header_normalized":
 true`, and re-runs the script with `--check` first so the build fails rather
@@ -91,16 +102,14 @@ fills in and the kernel supplies no value for. Fields typed `modify` carry real
 kernel-supplied values — `code32_start` is the protected-mode entry point — and
 are deliberately left alone.
 
-In practice this rewrites **two bytes**: `heap_end_ptr` (0x224) is the only
-`write` field a built kernel leaves non-zero. That is safe for every boot path:
-the boot protocol types it `write (obligatory)`, `init_heap()` reads it only
-when the boot loader has set `CAN_USE_HEAP` (which the kernel builds clear and
-this script also clears), and on the EFI-stub path the real-mode setup code
-never runs at all. The PE headers sit at 0x40..0x170, so no setup-header field
-overlaps them and the EFI entry point is untouched.
+That is safe for every boot path: these are the values QEMU itself wrote for
+every release before 10.2, and on the EFI-stub path the real-mode setup code
+never runs at all -- the stub takes the initrd through LoadFile2 and the
+command line through its load options. The PE headers sit at 0x40..0x170, so no
+setup-header field overlaps them and the EFI entry point is untouched.
 
 To check an image without modifying it:
 
 ```bash
-./normalize-kernel-header.py --check /path/to/bzImage
+./normalize-kernel-header.py --check /path/to/bzImage /path/to/initramfs.cpio.gz
 ```
