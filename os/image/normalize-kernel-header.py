@@ -13,8 +13,8 @@ Writing those fields in the shipped kernel, and having OVMF write them again
 before measuring, makes RTMR[1] the plain Authenticode hash of the file we
 ship, on every QEMU version.
 
-The values are the ones QEMU <= 10.1 writes, for a guest with 2 GiB or more of
-RAM below 4G -- the only guest memory layout modelled, and the one `dstack-mr`
+The values are the ones QEMU <= 10.1 writes, for a kernel loaded high in a
+guest with 2 GiB or more of RAM below 4G -- the only guest memory layout modelled, and the one `dstack-mr`
 computes (`patch_kernel` in dstack/dstack-mr/src/kernel.rs) for an image that
 does not declare `kernel_header_normalized`. Normalizing to QEMU's layout
 rather than to zeros is what keeps a verifier or KMS from an earlier release
@@ -46,18 +46,18 @@ XLOADFLAGS_OFFSET = 0x236
 LOADFLAGS_OFFSET = 0x211
 LOADED_HIGH = 0x01
 CAN_USE_HEAP = 0x80
-XLF_CAN_BE_LOADED_ABOVE_4G = 0x40
+# xloadflags bit 1. Bit 6, 0x40, is XLF_5LEVEL_ENABLED, not this flag.
+XLF_CAN_BE_LOADED_ABOVE_4G = 0x02
 
 # What QEMU writes: "Qemu" version 0, the real-mode block and command line it
-# loads a kernel at, the 0x200-byte gap it leaves below the command line for
+# loads a kernel loaded high at, the 0x200-byte gap it leaves below the command
+# line for
 # the setup heap, the below-4G window it reserves for ACPI tables with RAM
 # split at 2 GiB, the initrd ceiling a kernel that declares none gets, and the
 # alignment it rounds the initrd address down to.
 TYPE_OF_LOADER_QEMU = 0xB0
-REAL_ADDR_HIGH = 0x10000
-CMDLINE_ADDR_HIGH = 0x20000
-REAL_ADDR_LOW = 0x90000
-CMDLINE_ADDR_LOW = 0x9A000
+REAL_ADDR = 0x10000
+CMDLINE_ADDR = 0x20000
 SETUP_HEAP_GAP = 0x200
 LOW_MEMORY_SPLIT = 0x80000000
 ACPI_DATA_SIZE = 0x28000
@@ -95,10 +95,16 @@ def target_fields(image: bytes, initrd_size: int) -> list:
             "script normalizes is not guaranteed"
         )
 
-    if image[LOADFLAGS_OFFSET] & LOADED_HIGH:
-        real_addr, cmdline_addr = REAL_ADDR_HIGH, CMDLINE_ADDR_HIGH
-    else:
-        real_addr, cmdline_addr = REAL_ADDR_LOW, CMDLINE_ADDR_LOW
+    if not image[LOADFLAGS_OFFSET] & LOADED_HIGH:
+        # For a kernel loaded low, QEMU's command line sits at
+        # 0x9a000 - cmdline_size, which depends on the command line the host
+        # passes: there is no single value to normalize to. Every kernel this
+        # build ships is loaded high, so refuse rather than write a value QEMU
+        # never writes. The OVMF side leaves such a header as served.
+        raise ValueError(
+            "the kernel is not loaded high; its cmd_line_ptr depends on the "
+            "command line and cannot be normalized"
+        )
 
     fields = [
         (TYPE_OF_LOADER_OFFSET, bytes([TYPE_OF_LOADER_QEMU]), "type_of_loader"),
@@ -113,10 +119,10 @@ def target_fields(image: bytes, initrd_size: int) -> list:
         # zero-extended to 32 bits is what OVMF and dstack-mr also write.
         (
             HEAP_END_PTR_OFFSET,
-            (cmdline_addr - real_addr - SETUP_HEAP_GAP).to_bytes(4, "little"),
+            (CMDLINE_ADDR - REAL_ADDR - SETUP_HEAP_GAP).to_bytes(4, "little"),
             "heap_end_ptr",
         ),
-        (CMD_LINE_PTR_OFFSET, cmdline_addr.to_bytes(4, "little"), "cmd_line_ptr"),
+        (CMD_LINE_PTR_OFFSET, CMDLINE_ADDR.to_bytes(4, "little"), "cmd_line_ptr"),
     ]
     if initrd_size <= 0:
         return fields

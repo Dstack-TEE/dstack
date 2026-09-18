@@ -88,7 +88,17 @@ the guest RAM size, which limits such a verifier to guests with exactly 2 GiB
 or at least 2816 MiB -- the one range QEMU places the initrd differently in,
 and the range the no-image-download path already excludes. The values are the
 ones QEMU writes above that threshold, and the shipped initrd's size is an
-input, since it decides `ramdisk_image`.
+input, since it decides `ramdisk_image`: QEMU packs the initrd against a
+ceiling, which is 4G for a kernel that sets `XLF_CAN_BE_LOADED_ABOVE_4G`
+(bit 1 of `xloadflags` — bit 6, `0x40`, is `XLF_5LEVEL_ENABLED`, a different
+flag) and `0x37ffffff` for one that does not, then clamped to the below-4G
+window QEMU leaves free of ACPI tables.
+
+The kernel must be loaded high, which every kernel this build ships is. QEMU
+puts a low-loaded kernel's command line at `0x9a000 - cmdline_size`, a value
+that depends on the command line the host passes, so there is nothing to
+normalize to: the script refuses such a kernel and OVMF leaves its header as
+served.
 
 `assemble.sh` records this in `metadata.json` as `"kernel_header_normalized":
 true`. What makes that declaration true is the OVMF half, which the same build
