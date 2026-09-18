@@ -1,0 +1,15 @@
+[Unit]
+Description=Confidential Containers Confidential Data Hub (ttRPC)
+Documentation=https://github.com/confidential-containers/guest-components
+After=local-fs.target network.target coco-attestation-agent.service
+Wants=coco-attestation-agent.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/confidential-containers
+ExecStart=/usr/bin/ttrpc-cdh -c /etc/confidential-data-hub.conf
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
