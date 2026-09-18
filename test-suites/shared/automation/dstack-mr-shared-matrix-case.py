@@ -64,7 +64,7 @@ NORMALIZED_ZERO_FIELDS = (
 # The canonical boot-loader layout dstack's OVMF writes on every QEMU version,
 # and dstack-mr predicts: QEMU's values for a guest with 2 GiB or more of RAM
 # below 4G. See os/image/README.md and
-# 0007-OvmfPkg-QemuKernelLoaderFsDxe-canonicalize-setup-head.patch.
+# 0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch.
 CANONICAL_REAL_ADDR_HIGH = 0x10000
 CANONICAL_CMDLINE_ADDR_HIGH = 0x20000
 CANONICAL_REAL_ADDR_LOW = 0x90000
@@ -87,7 +87,7 @@ NATIVE_TESTS = (
         (
             "kernel::tests::the_normalized_flag_selects_which_kernel_bytes_are_measured",
             "kernel::tests::only_the_patched_digest_moves_with_guest_memory",
-            "kernel::tests::canonical_setup_header_matches_golden_vectors",
+            "kernel::tests::tdx_kernel_patch_uses_precomputed_digest_at_2g_and_high_memory",
             "tdx::tests::measured_kernel_cmdline_appends_the_ovmf_suffix",
             "tdx::tests::rtmr2_command_line_event_digest_is_stable",
             "tdx::tests::rtmr2_replay_is_stable",
@@ -632,8 +632,9 @@ def normalization_rows(
     An image that does not declare `kernel_header_normalized` is measured in
     the canonical boot-loader layout, which dstack's OVMF writes before the
     kernel blob is measured on every QEMU version. An image that declares the
-    flag -- built while dstack normalized the header to zeros instead -- is
-    measured as the plain Authenticode hash of the kernel file. dstack-mr
+    flag is measured as the plain Authenticode hash of the kernel file it
+    ships, whichever layout that header holds -- zeros for the images built
+    before the follow-up, QEMU's layout after it. dstack-mr
     keeps both, so both are exercised here against independent replays.
     """
     rows: list[dict[str, Any]] = []
@@ -686,6 +687,45 @@ def normalization_rows(
         {
             "name": "canonical-layout-replays-rtmr1",
             "initrd_size": initrd_size,
+            "passed": True,
+        }
+    )
+
+    # The image build writes the canonical layout into the kernel it ships and
+    # declares the flag, so the declared digest of that file must equal the
+    # digest a verifier recomputes for the same image without the flag. This is
+    # what lets a release that predates the declaration verify these images, and
+    # what makes the declared path independent of guest RAM.
+    shipped_canonical = workspace / "shipped-canonical-kernel"
+    copy_fixture(fixture, shipped_canonical)
+    (shipped_canonical / kernel_name).write_bytes(canonical_kernel)
+    set_metadata(shipped_canonical, kernel_header_normalized=True)
+    shipped_output = measure(
+        "shipped-canonical-kernel", shipped_canonical, [*BASE_ARGS]
+    )
+    if shipped_output["rtmr1"] != baseline["rtmr1"]:
+        raise AssertionError(
+            "a shipped canonical kernel declared normalized did not measure the "
+            "same RTMR1 as the recomputed canonical layout"
+        )
+    if changed_registers(baseline, shipped_output):
+        raise AssertionError(
+            "shipping the canonical layout changed a register other than none"
+        )
+    for memory in ("2G", "3G", "8G"):
+        varied = measure(
+            f"shipped-canonical-{memory}",
+            shipped_canonical,
+            ["--cpu", "2", "--memory", memory, "--qemu-version", "9.2.1"],
+        )
+        if varied["rtmr1"] != shipped_output["rtmr1"]:
+            raise AssertionError(
+                f"a shipped canonical kernel's RTMR1 moved with {memory} of RAM"
+            )
+    rows.append(
+        {
+            "name": "shipped-canonical-kernel-matches-recomputed-layout",
+            "memory_sizes": ["2G", "3G", "8G"],
             "passed": True,
         }
     )
