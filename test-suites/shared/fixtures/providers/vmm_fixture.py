@@ -219,6 +219,14 @@ def write_vmm_config(
         'pccs_url = ""': f'pccs_url = "{pccs_url}"',
         'volumes_dir = ""': f'volumes_dir = "{volumes_dir}"',
     }
+    # An operator-selected QEMU, so a run can pin the version that decides
+    # whether the host patches the Linux setup header. Left empty, the VMM
+    # resolves qemu-system-x86_64 from PATH as it does in production.
+    qemu_path = os.environ.get("DSTACK_TEST_QEMU_PATH", "").strip()
+    if qemu_path:
+        if not Path(qemu_path).is_file():
+            fail(f"DSTACK_TEST_QEMU_PATH is not a file: {qemu_path}")
+        replacements['qemu_path = ""'] = f'qemu_path = "{qemu_path}"'
     for old, new in replacements.items():
         if old not in text:
             fail(f"candidate VMM config is missing expected field: {old}")

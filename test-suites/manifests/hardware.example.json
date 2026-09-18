@@ -9,6 +9,7 @@
     "DSTACK_TEST_OPENSSH_INSTALLER_IMAGE": "registry.example.test/dstack-openssh-installer:tag",
     "DSTACK_TEST_MOCK_CF_DNS_IMAGE": "registry.example.test/mock-cf-dns-api:tag",
     "DSTACK_TEST_PEBBLE_IMAGE": "registry.example.test/pebble:tag",
+    "DSTACK_TEST_QEMU_PATH": "/path/to/qemu-system-x86_64",
     "DSTACK_TEST_DOCKER_TMP": "/path/to/docker-tmp"
   },
   "environment_path_prepend": [
