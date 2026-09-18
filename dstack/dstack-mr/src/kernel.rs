@@ -240,8 +240,8 @@ pub(crate) fn patched_kernel_authenticode_sha384(
 /// Compute the first RTMR[1] event digest for an image whose OVMF normalizes
 /// the Linux setup header: the Authenticode SHA-384 of the kernel file itself.
 ///
-/// Both sides zero the boot-loader-written fields --
-/// `os/image/normalize-kernel-header.py` in the image build and
+/// Both sides fill in the boot-loader-owned fields with the values QEMU <= 10.1
+/// writes -- `os/image/normalize-kernel-header.py` in the image build and
 /// `0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch` in the
 /// firmware -- so what OVMF measures is the file, on every QEMU version and at
 /// every guest memory size.

@@ -326,9 +326,9 @@ kernel header for CoCo VMs", first released in 10.2.0) stopped rewriting the
 header for confidential guests, so the same kernel would otherwise measure
 differently depending on which QEMU the host chose to run.
 
-dstack removes that dependency instead of modelling it. The image build writes
-the boot-loader-written fields in the kernel it ships, with the values QEMU
-<= 10.1 writes, and dstack's OVMF writes the same values again before the
+dstack removes that dependency instead of modelling it. The image build fills
+in the boot-loader-owned fields of the kernel it ships with the values QEMU
+<= 10.1 would write, and dstack's OVMF writes the same values again before the
 kernel blob is measured and loaded. RTMR[1] is therefore the plain Authenticode
 hash of the `bzImage` listed in `sha256sum.txt`, and the verifier needs nothing
 from the host to predict it -- not a QEMU version, not a memory size.

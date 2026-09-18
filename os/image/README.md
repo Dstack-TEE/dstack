@@ -71,8 +71,8 @@ host's QEMU version — and the host is the one that declares that version.
 
 The fix has two halves that must stay in sync:
 
-- this script writes those fields in the kernel we ship, with the values
-  QEMU <= 10.1 writes;
+- this script fills in those fields in the kernel we ship, with the values
+  QEMU <= 10.1 would write;
 - `0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch` writes the
   same values in OVMF, before the kernel blob is measured and loaded.
 
@@ -91,8 +91,10 @@ ones QEMU writes above that threshold, and the shipped initrd's size is an
 input, since it decides `ramdisk_image`.
 
 `assemble.sh` records this in `metadata.json` as `"kernel_header_normalized":
-true`, and re-runs the script with `--check` first so the build fails rather
-than shipping a kernel that disagrees with what the image declares. Images
+true`. What makes that declaration true is the OVMF half, which the same build
+applies -- `ovmf-build.sh` and the bitbake recipe both fail if the patch does
+not apply, so an image cannot ship the flag with firmware that ignores it.
+Images
 without the field are the ones built before this existed; `dstack-mr` measures
 those the old way, against QEMU's rewritten header.
 
