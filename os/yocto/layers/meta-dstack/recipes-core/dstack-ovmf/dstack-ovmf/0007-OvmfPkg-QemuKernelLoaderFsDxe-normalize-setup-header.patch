@@ -12,75 +12,129 @@ guests, so from 10.2 on the same kernel measures differently than it does on
 10.1 and earlier. Attestation has to know the host's QEMU version to predict
 its own RTMR[1], and the host declares that version.
 
-Zero the fields the boot protocol says a boot loader owns, which makes the
-published bytes independent of what QEMU did. The dstack image build applies
-the same normalization to the kernel it ships, so the measurement is the plain
-Authenticode hash of that file on every QEMU version.
+Write the fields the boot protocol says a boot loader owns, with the values
+QEMU <= 10.1 writes, which makes the published bytes independent of what QEMU
+did. The dstack image build writes the same values into the kernel it ships, so
+the measurement is the plain Authenticode hash of that file on every QEMU
+version.
 
-The field set is taken from Documentation/arch/x86/boot.rst rather than from
-QEMU's behavior: fields typed `write` are ones the boot loader fills in and the
-kernel supplies no value for. Fields typed `modify` are left alone because they
-carry real kernel-supplied values.
+The values follow from the kernel file and the initrd size -- never from the
+QEMU version, and never from guest RAM: the initrd address QEMU derives from
+RAM is fixed at the value it resolves to for a guest with 2 GiB or more below
+4G. A kernel loaded low is left alone, because QEMU's command-line address on
+that path depends on the command line the host passes.
+
+This writes one fixed header, not a reimplementation of QEMU's loader. Zeros
+would serve the measurement goal equally well; these particular values are
+chosen because dstack-mr already computes them (patch_kernel in
+dstack/dstack-mr/src/kernel.rs) for an image that does not declare
+kernel_header_normalized, so a verifier or KMS from an earlier dstack release
+can still measure these images.
+
+Every field written is one QEMU fills in as boot loader. All but one are typed
+`write` in Documentation/arch/x86/boot.rst: the boot loader supplies them and
+the kernel has no value there. The exception is loadflags, typed `modify
+(obligatory)`, of which only CAN_USE_HEAP is set -- a bit the protocol assigns
+to the boot loader. Fields carrying real kernel-supplied values are left alone,
+and so are the `write` fields QEMU never touches.
 
 Booting is unaffected. On the EFI-stub path the real-mode setup code never
-runs, and heap_end_ptr -- the only one of these fields a built kernel leaves
-non-zero -- is read only when the boot loader has set CAN_USE_HEAP, which this
-also clears.
+runs, the stub takes the initrd through LoadFile2 and the command line through
+its load options, and these are the values QEMU itself wrote for every release
+before 10.2.
 
 Signed-off-by: dstack <dstack@dstack.dev>
 ---
 --- a/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c
 +++ b/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c
-@@ -49,6 +49,111 @@
+@@ -49,6 +49,221 @@ struct KERNEL_BLOB {
    KERNEL_BLOB    *Next;
  };
  
 +//
-+// Offsets into the Linux x86 setup header, from
++// Linux x86 setup-header offsets and flags, from
 +// Documentation/arch/x86/boot.rst.
 +//
-+#define LINUX_HDR_MAGIC_OFFSET      0x202
-+#define LINUX_HDR_VERSION_OFFSET    0x206
-+#define LINUX_HDR_LOADFLAGS_OFFSET  0x211
-+#define LINUX_HDR_END_OFFSET        0x258
++#define LINUX_HDR_MAGIC_OFFSET            0x202
++#define LINUX_HDR_VERSION_OFFSET          0x206
++#define LINUX_HDR_TYPE_OF_LOADER_OFFSET   0x210
++#define LINUX_HDR_LOADFLAGS_OFFSET        0x211
++#define LINUX_HDR_RAMDISK_IMAGE_OFFSET    0x218
++#define LINUX_HDR_RAMDISK_SIZE_OFFSET     0x21C
++#define LINUX_HDR_HEAP_END_PTR_OFFSET     0x224
++#define LINUX_HDR_CMD_LINE_PTR_OFFSET     0x228
++#define LINUX_HDR_INITRD_ADDR_MAX_OFFSET  0x22C
++#define LINUX_HDR_XLOADFLAGS_OFFSET       0x236
++#define LINUX_HDR_END_OFFSET              0x258
++//
++// xloadflags bit 1. Bit 6, 0x40, is XLF_5LEVEL_ENABLED, not this flag.
++//
++#define LINUX_LOADFLAGS_LOADED_HIGH       0x01
++#define LINUX_LOADFLAGS_CAN_USE_HEAP      0x80
++#define LINUX_XLF_CAN_BE_LOADED_ABOVE_4G  0x02
 +
 +//
-+// CAN_USE_HEAP in loadflags. The kernel builds it clear; a boot loader sets it
-+// when it has also filled in heap_end_ptr.
++// cmd_line_ptr moved into the setup header in boot protocol 2.02,
++// initrd_addr_max arrived in 2.03 and xloadflags in 2.12.
 +//
-+#define LINUX_LOADFLAGS_CAN_USE_HEAP  0x80
++#define LINUX_HDR_MIN_PROTOCOL  0x0202
++#define LINUX_HDR_IAM_PROTOCOL  0x0203
++#define LINUX_HDR_XLF_PROTOCOL  0x020C
 +
 +//
-+// setup_data (0x250) arrived in boot protocol 2.09. Below that the field
-+// layout normalized here is not guaranteed, so the image is left alone.
++// What QEMU writes as boot loader: "Qemu" version 0, the real-mode block and
++// command line it loads a kernel at, the 0x200-byte gap it leaves below the
++// command line for the setup heap, the below-4G window it reserves for ACPI
++// tables with RAM split at 2 GiB, the initrd ceiling a kernel that declares
++// none gets, and the alignment it rounds the initrd address down to. Same
++// values as os/image/normalize-kernel-header.py and dstack-mr's patch_kernel.
 +//
-+#define LINUX_HDR_MIN_PROTOCOL  0x0209
++#define QEMU_LINUX_TYPE_OF_LOADER      0xB0
++#define QEMU_LINUX_REAL_ADDR           0x10000
++#define QEMU_LINUX_CMDLINE_ADDR        0x20000
++#define QEMU_LINUX_SETUP_HEAP_GAP      0x200
++#define QEMU_LOW_MEMORY_SPLIT          0x80000000
++#define QEMU_ACPI_DATA_SIZE            0x28000
++#define LINUX_INITRD_ADDR_MAX_DEFAULT  0x37FFFFFF
++#define QEMU_INITRD_ALIGNMENT          0x1000
 +
-+//
-+// Every setup-header field boot.rst types as `write`: the boot loader fills it
-+// in and the kernel supplies no value, so zeroing it discards nothing. Fields
-+// typed `modify` carry real kernel-supplied values -- code32_start (0x214) is
-+// the protected-mode entry point -- and are deliberately absent.
-+//
-+STATIC CONST struct {
-+  UINT16    Offset;
-+  UINT16    Size;
-+} mLinuxBootLoaderWrittenFields[] = {
-+  { 0x210, 1 }, // type_of_loader
-+  { 0x218, 4 }, // ramdisk_image
-+  { 0x21C, 4 }, // ramdisk_size
-+  { 0x224, 2 }, // heap_end_ptr
-+  { 0x226, 1 }, // ext_loader_ver
-+  { 0x227, 1 }, // ext_loader_type
-+  { 0x228, 4 }, // cmd_line_ptr
-+  { 0x23C, 4 }, // hardware_subarch
-+  { 0x240, 8 }, // hardware_subarch_data
-+  { 0x250, 8 }, // setup_data
-+};
++STATIC
++UINT32
++LinuxHdrRead (
++  IN CONST UINT8  *Data,
++  IN UINTN        Offset,
++  IN UINTN        Size
++  )
++{
++  UINT32  Value;
++  UINTN   Index;
++
++  Value = 0;
++  for (Index = 0; Index < Size; Index++) {
++    Value |= (UINT32)Data[Offset + Index] << (8 * Index);
++  }
++
++  return Value;
++}
++
++STATIC
++VOID
++LinuxHdrWrite32 (
++  IN OUT UINT8   *Data,
++  IN     UINTN   Offset,
++  IN     UINT32  Value
++  )
++{
++  UINTN  Index;
++
++  for (Index = 0; Index < 4; Index++) {
++    Data[Offset + Index] = (UINT8)(Value >> (8 * Index));
++  }
++}
 +
 +/**
-+  Clear the setup-header fields a boot loader owns, so the measured kernel does
-+  not depend on what QEMU wrote there.
++  Normalize the setup-header fields a boot loader owns, so the measured kernel
++  does not depend on what QEMU wrote there.
 +
 +  QEMU acts as the boot loader for -kernel and fills these fields in before
 +  serving the image over fw_cfg, which changes the bytes this driver publishes
@@ -88,9 +142,13 @@ Signed-off-by: dstack <dstack@dstack.dev>
 +  doing that for confidential guests (commit a7542a38f399), so without this the
 +  same kernel measures differently depending on the host's QEMU.
 +
-+  Zeroing is idempotent and matches what the image build already writes into
-+  the shipped kernel, so the measurement equals the Authenticode hash of the
-+  file on disk on every QEMU version.
++  The values written are the ones QEMU <= 10.1 writes, for a kernel loaded
++  high in a guest with 2 GiB or more of RAM below 4G: they follow from the kernel file and the initrd
++  size, never from the QEMU version or from guest RAM. The dstack image build
++  writes the same values into the kernel it ships, so the measurement is the
++  Authenticode hash of that file on every QEMU version, and dstack-mr computes
++  them when it predicts RTMR[1] for an image that does not declare
++  kernel_header_normalized. Writing them is idempotent.
 +
 +  @param[in,out] Data  The kernel blob, starting at the setup header.
 +  @param[in]     Size  Size of the blob in bytes.
@@ -102,8 +160,10 @@ Signed-off-by: dstack <dstack@dstack.dev>
 +  IN     UINT32  Size
 +  )
 +{
-+  UINTN   Idx;
-+  UINT16  Protocol;
++  UINT32  Protocol;
++  UINT32  InitrdSize;
++  UINT32  InitrdMax;
++  UINT32  AvailableMem;
 +
 +  if (Size < LINUX_HDR_END_OFFSET) {
 +    return;
@@ -117,8 +177,7 @@ Signed-off-by: dstack <dstack@dstack.dev>
 +    return;
 +  }
 +
-+  Protocol = (UINT16)(Data[LINUX_HDR_VERSION_OFFSET] |
-+                      (Data[LINUX_HDR_VERSION_OFFSET + 1] << 8));
++  Protocol = LinuxHdrRead (Data, LINUX_HDR_VERSION_OFFSET, 2);
 +  if (Protocol < LINUX_HDR_MIN_PROTOCOL) {
 +    DEBUG ((
 +      DEBUG_WARN,
@@ -130,20 +189,87 @@ Signed-off-by: dstack <dstack@dstack.dev>
 +    return;
 +  }
 +
-+  for (Idx = 0; Idx < ARRAY_SIZE (mLinuxBootLoaderWrittenFields); Idx++) {
-+    ZeroMem (
-+      Data + mLinuxBootLoaderWrittenFields[Idx].Offset,
-+      mLinuxBootLoaderWrittenFields[Idx].Size
-+      );
++  if ((Data[LINUX_HDR_LOADFLAGS_OFFSET] & LINUX_LOADFLAGS_LOADED_HIGH) == 0) {
++    //
++    // A kernel loaded low takes QEMU's other command-line address,
++    // 0x9a000 - cmdline_size, which depends on the command line the host
++    // passes. There is no single value to normalize to, so leave the header
++    // alone. The dstack image build refuses to ship such a kernel.
++    //
++    DEBUG ((
++      DEBUG_WARN,
++      "%a: kernel is not loaded high; setup header left as served\n",
++      __func__
++      ));
++    return;
 +  }
 +
-+  Data[LINUX_HDR_LOADFLAGS_OFFSET] &= (UINT8)~LINUX_LOADFLAGS_CAN_USE_HEAP;
++  Data[LINUX_HDR_TYPE_OF_LOADER_OFFSET]  = QEMU_LINUX_TYPE_OF_LOADER;
++  Data[LINUX_HDR_LOADFLAGS_OFFSET]      |= LINUX_LOADFLAGS_CAN_USE_HEAP;
++  //
++  // heap_end_ptr is two bytes, but the value never exceeds 16 bits and the two
++  // bytes above it (ext_loader_ver, ext_loader_type) are zero in a built kernel
++  // and untouched by QEMU, so writing the word zero-extended to 32 bits is what
++  // the image build and dstack-mr also write.
++  //
++  LinuxHdrWrite32 (
++    Data,
++    LINUX_HDR_HEAP_END_PTR_OFFSET,
++    QEMU_LINUX_CMDLINE_ADDR - QEMU_LINUX_REAL_ADDR - QEMU_LINUX_SETUP_HEAP_GAP
++    );
++  LinuxHdrWrite32 (Data, LINUX_HDR_CMD_LINE_PTR_OFFSET, QEMU_LINUX_CMDLINE_ADDR);
++
++  QemuFwCfgSelectItem (QemuFwCfgItemInitrdSize);
++  InitrdSize = QemuFwCfgRead32 ();
++  if (InitrdSize == 0) {
++    //
++    // No initrd: QEMU leaves ramdisk_image and ramdisk_size alone, and a built
++    // kernel ships them zero.
++    //
++    return;
++  }
++
++  if (Protocol >= LINUX_HDR_XLF_PROTOCOL) {
++    InitrdMax = (LinuxHdrRead (Data, LINUX_HDR_XLOADFLAGS_OFFSET, 2) &
++                 LINUX_XLF_CAN_BE_LOADED_ABOVE_4G) != 0 ?
++                MAX_UINT32 : LINUX_INITRD_ADDR_MAX_DEFAULT;
++  } else if (Protocol >= LINUX_HDR_IAM_PROTOCOL) {
++    InitrdMax = LinuxHdrRead (Data, LINUX_HDR_INITRD_ADDR_MAX_OFFSET, 4);
++    if (InitrdMax == 0) {
++      InitrdMax = LINUX_INITRD_ADDR_MAX_DEFAULT;
++    }
++  } else {
++    InitrdMax = LINUX_INITRD_ADDR_MAX_DEFAULT;
++  }
++
++  AvailableMem = QEMU_LOW_MEMORY_SPLIT - QEMU_ACPI_DATA_SIZE;
++  if (InitrdMax >= AvailableMem) {
++    InitrdMax = AvailableMem - 1;
++  }
++
++  if (InitrdSize >= InitrdMax) {
++    DEBUG ((
++      DEBUG_WARN,
++      "%a: an initrd of 0x%x bytes does not fit below 0x%x\n",
++      __func__,
++      InitrdSize,
++      InitrdMax
++      ));
++    return;
++  }
++
++  LinuxHdrWrite32 (
++    Data,
++    LINUX_HDR_RAMDISK_IMAGE_OFFSET,
++    (InitrdMax - InitrdSize) & ~(UINT32)(QEMU_INITRD_ALIGNMENT - 1)
++    );
++  LinuxHdrWrite32 (Data, LINUX_HDR_RAMDISK_SIZE_OFFSET, InitrdSize);
 +}
 +
  STATIC KERNEL_BLOB_ITEMS  mKernelBlobItems[] = {
    {
      L"kernel",
-@@ -1063,6 +1168,10 @@
+@@ -1063,6 +1278,10 @@ QemuKernelFetchBlob (
      ChunkData += BlobItems->FwCfgItem[Idx].Size;
    }
  

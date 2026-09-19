@@ -173,7 +173,10 @@ fn patch_kernel(
         let mut initrd_max = if protocol >= 0x20c {
             let xlf =
                 u16::from_le_bytes(kd[0x236..0x238].try_into().context("impossible failure")?);
-            if (xlf & 0x40) != 0 {
+            // XLF_CAN_BE_LOADED_ABOVE_4G is bit 1. Bit 6, 0x40, is
+            // XLF_5LEVEL_ENABLED; a kernel built without 5-level paging sets
+            // one and not the other, and QEMU tests bit 1.
+            if (xlf & 0x02) != 0 {
                 u32::MAX
             } else {
                 0x37ffffff
@@ -240,8 +243,8 @@ pub(crate) fn patched_kernel_authenticode_sha384(
 /// Compute the first RTMR[1] event digest for an image whose OVMF normalizes
 /// the Linux setup header: the Authenticode SHA-384 of the kernel file itself.
 ///
-/// Both sides zero the boot-loader-written fields --
-/// `os/image/normalize-kernel-header.py` in the image build and
+/// Both sides fill in the boot-loader-owned fields with the values QEMU <= 10.1
+/// writes -- `os/image/normalize-kernel-header.py` in the image build and
 /// `0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch` in the
 /// firmware -- so what OVMF measures is the file, on every QEMU version and at
 /// every guest memory size.
@@ -308,7 +311,7 @@ mod tests {
         kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
         // XLF_CAN_BE_LOADED_ABOVE_4G, so QEMU derives the initrd address from
         // available low memory and the patched digest moves with guest RAM.
-        kernel[0x236..0x238].copy_from_slice(&0x0040u16.to_le_bytes());
+        kernel[0x236..0x238].copy_from_slice(&0x0002u16.to_le_bytes());
         kernel[0x224..0x226].copy_from_slice(&0x50a0u16.to_le_bytes());
         kernel
     }
@@ -340,13 +343,37 @@ mod tests {
         assert_ne!(patched_at(0x8000_0000), patched_at(0xA000_0000));
     }
 
+    /// QEMU derives the initrd ceiling from XLF_CAN_BE_LOADED_ABOVE_4G,
+    /// which is bit 1; bit 6 is XLF_5LEVEL_ENABLED and must not be read as it.
+    #[test]
+    fn only_xlf_bit_1_raises_the_initrd_ceiling() {
+        let mut kernel = vec![0u8; 0x1000];
+        kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
+
+        // The initrd the 0.6.0 image ships, so these are the addresses QEMU
+        // puts it at and the image build writes into the shipped kernel.
+        let initrd_size = 6_454_798;
+        let with_xlf = |xlf: u16| {
+            let mut k = kernel.clone();
+            k[0x236..0x238].copy_from_slice(&xlf.to_le_bytes());
+            initrd_addr(&patch_kernel(&k, initrd_size, 0x8000_0000, 0x28000).unwrap())
+        };
+
+        // 0x37ffffff is the ceiling for a kernel that cannot be loaded above
+        // 4G; the raised ceiling is the below-4G window minus the ACPI area.
+        assert_eq!(with_xlf(0x0000), 0x379D_8000);
+        assert_eq!(with_xlf(0x0040), 0x379D_8000, "the 5-level flag raised it");
+        assert_eq!(with_xlf(0x0002), 0x7F9B_0000, "the above-4G flag did not");
+        assert_eq!(with_xlf(0x0042), 0x7F9B_0000);
+    }
+
     #[test]
     fn tdx_kernel_patch_uses_precomputed_digest_at_2g_and_high_memory() {
         let mut kernel = vec![0u8; 0x1000];
         // Linux boot protocol >= 2.12 with XLF_CAN_BE_LOADED_ABOVE_4G makes
         // QEMU derive the initrd address from available low memory.
         kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
-        kernel[0x236..0x238].copy_from_slice(&0x0040u16.to_le_bytes());
+        kernel[0x236..0x238].copy_from_slice(&0x0002u16.to_le_bytes());
 
         let below_2g = patch_kernel(&kernel, 0x100000, 0x80000000 - 0x1000, 0x28000).unwrap();
         let at_2g = patch_kernel(&kernel, 0x100000, 0x80000000, 0x28000).unwrap();
