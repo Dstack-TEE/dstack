@@ -376,9 +376,9 @@ fn validate_disk_prealloc_against_compose(
         return Ok(());
     }
     bail!(
-        "disk preallocation ({}) reserves host blocks and requires storage_discard = false \
-         in app-compose; either disable discard in the compose file or deploy with \
-         disk_prealloc = \"off\" or \"metadata\"",
+        "disk preallocation ({}) reserves host blocks, so app-compose must set \
+         storage_discard = false; either turn discard off in the compose file, or redeploy \
+         with disk_prealloc = \"off\" or \"metadata\" -- the mode is fixed at deployment",
         prealloc.as_str()
     )
 }
@@ -1622,8 +1622,7 @@ mod tests {
                 .unwrap();
         assert_eq!(manifest.disk_prealloc, DiskPrealloc::Falloc);
 
-        // `metadata` reserves no data blocks, so it coexists with discard.
-        let mut request = test_vm_configuration();
+        let mut request = test_vm_configuration_without_discard();
         request.disk_prealloc = Some("metadata".to_string());
         let manifest = create_manifest_from_vm_config(request, &cvm_config).unwrap();
         assert_eq!(manifest.disk_prealloc, DiskPrealloc::Metadata);
@@ -1699,8 +1698,12 @@ mod tests {
         let mut request = test_vm_configuration();
         request.compose_file = "{not json".to_string();
         request.disk_prealloc = Some("falloc".to_string());
-        let err = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err();
-        assert!(!err.to_string().contains("storage_discard"), "{err}");
+        let err = format!(
+            "{:#}",
+            create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err()
+        );
+        assert!(err.contains("compose"), "{err}");
+        assert!(!err.contains("storage_discard"), "{err}");
     }
 
     #[test]
