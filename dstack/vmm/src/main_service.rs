@@ -880,10 +880,15 @@ impl RpcHandler {
                     }
                     args.push(hda_path.display().to_string());
                     args.push(new_size_str);
-                    let output = std::process::Command::new("qemu-img")
-                        .args(&args)
-                        .output()
-                        .context("Failed to resize disk")?;
+                    // Off the async executor, for the same reason the launch
+                    // path does it: growing a preallocated disk reserves the
+                    // added space before it returns, and `full` writes it.
+                    let output = tokio::task::spawn_blocking(move || {
+                        std::process::Command::new("qemu-img").args(&args).output()
+                    })
+                    .await
+                    .context("disk resize task failed")?
+                    .context("Failed to resize disk")?;
                     if !output.status.success() {
                         bail!(
                             "Failed to resize disk: {}",

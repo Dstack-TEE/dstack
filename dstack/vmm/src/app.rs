@@ -488,7 +488,7 @@ impl App {
         self.refuse_if_removing(id)?;
         // Everything below reads whether this VM is running and acts on the
         // answer for as long as the launch takes. See [`App::launch_lock`].
-        let _launch = self.launch_lock(id).await;
+        let launch = self.launch_lock(id).await;
         self.refuse_if_removing(id)?;
         // A restart decided before a stop must not outlive it. The decision
         // read `started` from disk; `stop_vm` writes it false under this lock,
@@ -549,22 +549,37 @@ impl App {
             // when the VM preallocates, creates the data disk. `full` on a
             // large disk writes the whole thing, which is minutes of blocking
             // work, and even `falloc` is not instant.
+            //
+            // The launch lock travels into the task and back out. A dropped
+            // request -- a client that gave up, a proxy timeout -- cancels
+            // this future but not the blocking work, and the disk is only
+            // published when that work finishes. Leaving the lock with the
+            // future would let the next attempt run qemu-img against the same
+            // paths while the abandoned one is still writing them.
             let qemu_config = vm_config.clone();
             let app_config = self.config.clone();
             let qemu_workdir = work_dir.path().to_path_buf();
             let qemu_devices = devices.clone();
             let qemu_networks = runtime_networks.clone();
-            let configured = tokio::task::spawn_blocking(move || {
-                qemu_config.config_qemu(
+            let (launch, configured) = match tokio::task::spawn_blocking(move || {
+                let result = qemu_config.config_qemu(
                     &qemu_workdir,
                     &app_config.cvm,
                     &qemu_devices,
                     &qemu_networks,
-                )
+                );
+                (launch, result)
             })
             .await
-            .context("QEMU configuration task failed")
-            .and_then(|result| result);
+            {
+                Ok(configured) => configured,
+                Err(join_error) => {
+                    self.release_vm_interfaces(&vm_config.manifest.id).await;
+                    return Err(join_error).context("QEMU configuration task failed");
+                }
+            };
+            // Back in this future's hands, and held until the launch is done.
+            let _launch = launch;
             let processes = match configured {
                 Ok(processes) => processes,
                 Err(error) => {
