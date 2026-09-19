@@ -80,15 +80,16 @@ The result is that RTMR[1] is the plain Authenticode hash of `bzImage` as
 listed in `sha256sum.txt`, on every QEMU version and at every guest memory
 size.
 
-Normalizing to QEMU's layout rather than to zeros is what keeps an earlier
-release able to verify these images: `dstack-mr` already computes that layout
-(`patch_kernel`) for an image that does not declare the flag, so a 0.5.x KMS
-can still onboard a 0.6.0 root with image verification on. Recomputing it needs
-the guest RAM size, which limits such a verifier to guests with exactly 2 GiB
-or at least 2816 MiB -- the one range QEMU places the initrd differently in,
-and the range the no-image-download path already excludes. The values are the
-ones QEMU writes above that threshold, and the shipped initrd's size is an
-input, since it decides `ramdisk_image`: QEMU packs the initrd against a
+Normalizing to a header QEMU once wrote, rather than to zeros, is what keeps an
+earlier release able to verify these images: `dstack-mr` already computes that
+header (`patch_kernel`) for an image that does not declare the flag, so a 0.5.x
+KMS can still onboard a 0.6.0 root with image verification on. That
+recomputation takes the guest RAM size as an input, so it reproduces the
+normalized bytes only for guests of exactly 2 GiB or at least 2816 MiB. Below
+2 GiB, and between 2 GiB and 2816 MiB, QEMU placed the initrd somewhere else,
+so such a verifier computes a different RTMR[1]; the no-image-download path
+refuses that same range for the same reason. The shipped initrd's size is an
+input too, since it decides `ramdisk_image`: QEMU packs the initrd against a
 ceiling, which is 4G for a kernel that sets `XLF_CAN_BE_LOADED_ABOVE_4G`
 (bit 1 of `xloadflags` — bit 6, `0x40`, is `XLF_5LEVEL_ENABLED`, a different
 flag) and `0x37ffffff` for one that does not, then clamped to the below-4G
@@ -104,15 +105,18 @@ served.
 true`. What makes that declaration true is the OVMF half, which the same build
 applies -- `ovmf-build.sh` and the bitbake recipe both fail if the patch does
 not apply, so an image cannot ship the flag with firmware that ignores it.
-Images
-without the field are the ones built before this existed; `dstack-mr` measures
-those the old way, against QEMU's rewritten header.
+Images without the field are the ones built before this existed; `dstack-mr`
+measures those the old way, against QEMU's rewritten header.
 
-The field set comes from the boot protocol, not from QEMU's behavior: every
-field `Documentation/arch/x86/boot.rst` types as `write` is one the boot loader
-fills in and the kernel supplies no value for. Fields typed `modify` carry real
-kernel-supplied values — `code32_start` is the protected-mode entry point — and
-are deliberately left alone.
+What gets written is one fixed header, not a reimplementation of QEMU's loader:
+every field written is one QEMU fills in as boot loader, and the script refuses
+any kernel outside the shape it reproduces. All but one of those fields are
+typed `write` in `Documentation/arch/x86/boot.rst`, meaning the boot loader
+supplies them and the kernel has no value there. The exception is `loadflags`,
+typed `modify (obligatory)`, of which only the `CAN_USE_HEAP` bit is set — a
+bit the protocol assigns to the boot loader. Fields that carry real
+kernel-supplied values, such as `code32_start`, the protected-mode entry point,
+are deliberately left alone, and so are the `write` fields QEMU never touches.
 
 That is safe for every boot path: these are the values QEMU itself wrote for
 every release before 10.2, and on the EFI-stub path the real-mode setup code

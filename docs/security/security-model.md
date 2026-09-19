@@ -358,11 +358,14 @@ here there is no knob. It also removes a class of correct-but-rejected
 deployments, since the previous QEMU-patched digest varied with guest RAM and
 was only reproducible at specific memory sizes.
 
-The normalized field set comes from the boot protocol rather than from QEMU's
-behavior: every field written is one `Documentation/arch/x86/boot.rst` types as
-`write`, which the boot loader fills in and the kernel supplies no value for.
-Fields typed `modify` carry real kernel-supplied values and are left as the
-kernel built them.
+What is written is one fixed header -- the one QEMU <= 10.1 in fact wrote for
+these kernels -- and not a reimplementation of QEMU's loader. Every field
+written is one QEMU fills in as boot loader; all but one are typed `write` in
+`Documentation/arch/x86/boot.rst`, which the boot loader supplies and the
+kernel has no value for. The exception is `loadflags`, typed
+`modify (obligatory)`, of which only the `CAN_USE_HEAP` bit is set, a bit the
+protocol assigns to the boot loader. Fields that carry real kernel-supplied
+values are left as the kernel built them.
 
 ### TCB status is surfaced, not gated, during verification
 

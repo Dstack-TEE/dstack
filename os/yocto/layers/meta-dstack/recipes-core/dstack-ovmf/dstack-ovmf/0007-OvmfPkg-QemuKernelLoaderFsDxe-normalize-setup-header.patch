@@ -22,15 +22,21 @@ The values follow from the kernel file and the initrd size -- never from the
 QEMU version, and never from guest RAM: the initrd address QEMU derives from
 RAM is fixed at the value it resolves to for a guest with 2 GiB or more below
 4G. A kernel loaded low is left alone, because QEMU's command-line address on
-that path depends on the command line the host passes. Normalizing to QEMU's layout rather than to zeros is what keeps a verifier
-or KMS from an earlier release able to measure these images: dstack-mr already
-computes this layout (patch_kernel in dstack/dstack-mr/src/kernel.rs) for an
-image that does not declare kernel_header_normalized.
+that path depends on the command line the host passes.
 
-The field set is taken from Documentation/arch/x86/boot.rst rather than from
-QEMU's behavior: fields typed `write` are ones the boot loader fills in and the
-kernel supplies no value for. Fields typed `modify` are left alone because they
-carry real kernel-supplied values. Fields QEMU leaves alone are left alone too.
+This writes one fixed header, not a reimplementation of QEMU's loader. Zeros
+would serve the measurement goal equally well; these particular values are
+chosen because dstack-mr already computes them (patch_kernel in
+dstack/dstack-mr/src/kernel.rs) for an image that does not declare
+kernel_header_normalized, so a verifier or KMS from an earlier dstack release
+can still measure these images.
+
+Every field written is one QEMU fills in as boot loader. All but one are typed
+`write` in Documentation/arch/x86/boot.rst: the boot loader supplies them and
+the kernel has no value there. The exception is loadflags, typed `modify
+(obligatory)`, of which only CAN_USE_HEAP is set -- a bit the protocol assigns
+to the boot loader. Fields carrying real kernel-supplied values are left alone,
+and so are the `write` fields QEMU never touches.
 
 Booting is unaffected. On the EFI-stub path the real-mode setup code never
 runs, the stub takes the initrd through LoadFile2 and the command line through

@@ -13,19 +13,26 @@ Writing those fields in the shipped kernel, and having OVMF write them again
 before measuring, makes RTMR[1] the plain Authenticode hash of the file we
 ship, on every QEMU version.
 
-The values are the ones QEMU <= 10.1 writes, for a kernel loaded high in a
-guest with 2 GiB or more of RAM below 4G -- the only guest memory layout modelled, and the one `dstack-mr`
-computes (`patch_kernel` in dstack/dstack-mr/src/kernel.rs) for an image that
-does not declare `kernel_header_normalized`. Normalizing to QEMU's layout
-rather than to zeros is what keeps a verifier or KMS from an earlier release
-able to measure these images.
+The values are the ones QEMU <= 10.1 wrote for a kernel loaded high in a guest
+with 2 GiB or more of RAM below 4G. Zeros would serve the measurement goal
+equally well; these particular values are chosen because `dstack-mr` already
+computes them (`patch_kernel` in dstack/dstack-mr/src/kernel.rs) for an image
+that does not declare `kernel_header_normalized`, so a verifier or KMS from an
+earlier dstack release can still measure these images.
 
-The field set comes from the boot protocol, not from QEMU: every field written
-is one `Documentation/arch/x86/boot.rst` types as `write`, which the boot
-loader fills in and the kernel supplies no value for. Fields typed `modify`
-carry real kernel-supplied values (`code32_start` is the protected-mode entry
-point) and are left alone. Fields QEMU leaves alone are left alone too: a built
-kernel ships them zero, so writing them would only add a way to disagree.
+This writes one fixed header. It is not a reimplementation of QEMU's loader:
+the branches below reproduce the header QEMU in fact wrote for the kernels
+dstack ships, and a kernel outside that shape is refused rather than guessed
+at.
+
+Every field written is one QEMU fills in as boot loader. All but one are typed
+`write` in `Documentation/arch/x86/boot.rst`: the boot loader supplies them and
+the kernel has no value there. The exception is `loadflags`, typed
+`modify (obligatory)`, of which only `CAN_USE_HEAP` is set -- a bit the
+protocol assigns to the boot loader. Fields carrying real kernel-supplied
+values, such as `code32_start`, are left alone, and so are the `write` fields
+QEMU never touches: a built kernel ships them zero, so writing them would only
+add a way to disagree.
 
 The initrd size decides `ramdisk_image`, so the initrd the image ships is an
 input.
@@ -51,10 +58,9 @@ XLF_CAN_BE_LOADED_ABOVE_4G = 0x02
 
 # What QEMU writes: "Qemu" version 0, the real-mode block and command line it
 # loads a kernel loaded high at, the 0x200-byte gap it leaves below the command
-# line for
-# the setup heap, the below-4G window it reserves for ACPI tables with RAM
-# split at 2 GiB, the initrd ceiling a kernel that declares none gets, and the
-# alignment it rounds the initrd address down to.
+# line for the setup heap, the below-4G window it reserves for ACPI tables with
+# RAM split at 2 GiB, the initrd ceiling a kernel that declares none gets, and
+# the alignment it rounds the initrd address down to.
 TYPE_OF_LOADER_QEMU = 0xB0
 REAL_ADDR = 0x10000
 CMDLINE_ADDR = 0x20000
@@ -67,9 +73,11 @@ INITRD_ALIGNMENT = 0x1000
 HEADER_MAGIC_OFFSET = 0x202
 HEADER_MAGIC = b"HdrS"
 VERSION_OFFSET = 0x206
-# One past the last field this touches. Anything shorter cannot carry a setup
-# header, and slicing past the end would silently grow the image instead of
-# failing. The OVMF side applies the same bound.
+# Minimum length for an image to be treated as carrying a setup header. The
+# fields below all sit under 0x238; 0x258 is the end of the protocol 2.09
+# header, kept as the bound so a truncated image is rejected outright instead
+# of being sliced past its end, which would silently grow it. The OVMF side
+# applies the same bound.
 HEADER_END_OFFSET = 0x258
 # `cmd_line_ptr` moved into the setup header in 2.02, `initrd_addr_max`
 # arrived in 2.03 and `xloadflags` in 2.12.
