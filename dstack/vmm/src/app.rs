@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    config::{Config, Networking, NetworkingMode, NicNetworking, ProcessAnnotation, Protocol},
+    config::{
+        Config, DiskPrealloc, Networking, NetworkingMode, NicNetworking, ProcessAnnotation,
+        Protocol,
+    },
     logrotate,
     netd::{self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest},
 };
@@ -136,6 +139,11 @@ pub struct Manifest {
     pub networks: Vec<NicNetworking>,
     #[serde(default)]
     pub volumes: Vec<VmVolume>,
+    /// Host-side preallocation used when the data disk is created. Resolved
+    /// once at deployment from the request and the node default, so a later
+    /// change to `cvm.disk_prealloc` leaves existing VMs alone.
+    #[serde(default)]
+    pub disk_prealloc: DiskPrealloc,
 }
 
 impl Manifest {
@@ -537,12 +545,27 @@ impl App {
             .context("GPU sanitization task failed")??;
             self.prepare_netd_networks(&vm_config, &mut runtime_networks)
                 .await?;
-            let processes = match vm_config.config_qemu(
-                &work_dir,
-                &self.config.cvm,
-                &devices,
-                &runtime_networks,
-            ) {
+            // Off the async executor: this writes the guest config files and,
+            // when the VM preallocates, creates the data disk. `full` on a
+            // large disk writes the whole thing, which is minutes of blocking
+            // work, and even `falloc` is not instant.
+            let qemu_config = vm_config.clone();
+            let app_config = self.config.clone();
+            let qemu_workdir = work_dir.path().to_path_buf();
+            let qemu_devices = devices.clone();
+            let qemu_networks = runtime_networks.clone();
+            let configured = tokio::task::spawn_blocking(move || {
+                qemu_config.config_qemu(
+                    &qemu_workdir,
+                    &app_config.cvm,
+                    &qemu_devices,
+                    &qemu_networks,
+                )
+            })
+            .await
+            .context("QEMU configuration task failed")
+            .and_then(|result| result);
+            let processes = match configured {
                 Ok(processes) => processes,
                 Err(error) => {
                     self.release_vm_interfaces(&vm_config.manifest.id).await;
@@ -3012,6 +3035,8 @@ mod tests {
         assert_eq!(manifest.networks.len(), 1);
         assert_eq!(manifest.networks[0].mode, NetworkingMode::Bridge);
         assert_eq!(manifest.networks[0].bridge, "dstack-br0");
+        // A manifest written before the option existed keeps thin disks.
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Off);
     }
 
     fn write_u16_le_at(buf: &mut [u8], off: usize, value: u16) {
@@ -3108,6 +3133,7 @@ mod tests {
             swtpm: false,
             networks: vec![],
             volumes: vec![],
+            disk_prealloc: DiskPrealloc::Off,
         }
     }
 
@@ -3462,6 +3488,7 @@ mod tests {
             swtpm: false,
             networks: vec![],
             volumes: vec![],
+            disk_prealloc: DiskPrealloc::Off,
         };
 
         let mr_config = MrConfigV3::new(
