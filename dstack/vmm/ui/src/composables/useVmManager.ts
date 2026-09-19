@@ -1122,6 +1122,10 @@ type CreateVmPayloadSource = {
     // -- invisibly, since the operator never opened the Networking section.
     vmForm.value.networks = [];
     vmForm.value.app_id = null;
+    // Same reasoning for the disk: a clone leaves the source VM's mode here,
+    // and inheriting "full" unannounced costs the next deploy a full write of
+    // its disk before the VM boots.
+    vmForm.value.disk_prealloc = '';
     vmForm.value.swapValue = 0;
     vmForm.value.swapUnit = 'GB';
     vmForm.value.swap_size = 0;

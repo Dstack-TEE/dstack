@@ -124,9 +124,10 @@ host_share_mode = "9p"
 # nothing and needs no compose change.
 # Preallocation on top of a base image needs qcow2 subcluster allocation, so
 # the VMM creates such disks with extended_l2=on (QEMU 5.2+).
-# This value applies to disks created from here on. A VM that already has a
-# data disk keeps the mode it was created with; there is no migration path
-# short of editing its vm-manifest.json.
+# This value applies to disks created from here on, and a VM's mode is fixed
+# at deployment. An existing data disk is never converted -- editing the VM's
+# vm-manifest.json only changes what a later resize does -- so the way to
+# preallocate an existing VM is to redeploy it.
 disk_prealloc = "off"
 
 # QGS (Quote Generation Service) vsock port for kernel-level TSM support.
