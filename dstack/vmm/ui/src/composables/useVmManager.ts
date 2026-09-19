@@ -164,6 +164,7 @@ type VmFormState = {
   simulated_tee: string;
   pin_numa: boolean;
   hugepages: boolean;
+  disk_prealloc: string;
   networks: NetworkFormEntry[];
   user_config: string;
   kms_urls: string[];
@@ -215,6 +216,7 @@ type CloneConfigDialogState = {
   networks?: NetworkFormEntry[];
   hugepages: boolean;
   pin_numa: boolean;
+  disk_prealloc: string;
   no_tee: boolean;
   simulated_tee: string;
   encrypted_env?: Uint8Array;
@@ -254,6 +256,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     simulated_tee: '',
     pin_numa: false,
     hugepages: false,
+    disk_prealloc: '',
     networks: [],
     user_config: '',
     kms_urls: [],
@@ -309,6 +312,7 @@ function createCloneConfigDialogState(): CloneConfigDialogState {
     networks: undefined,
     hugepages: false,
     pin_numa: false,
+    disk_prealloc: '',
     no_tee: false,
     simulated_tee: '',
     encrypted_env: undefined,
@@ -618,6 +622,7 @@ type CreateVmPayloadSource = {
     user_config?: string;
   hugepages?: boolean;
   pin_numa?: boolean;
+  disk_prealloc?: string;
   no_tee?: boolean;
   simulated_tee?: string;
   networks?: NetworkFormEntry[];
@@ -643,6 +648,8 @@ type CreateVmPayloadSource = {
       user_config: source.user_config || '',
       hugepages: !!source.hugepages,
       pin_numa: !!source.pin_numa,
+      // Empty means "use the VMM's own default" -- the host decides.
+      disk_prealloc: source.disk_prealloc?.trim() || undefined,
       no_tee: source.no_tee ?? false,
       simulated_tee: source.simulated_tee || undefined,
       networks: normalizedNetworks,
@@ -1246,6 +1253,7 @@ type CreateVmPayloadSource = {
         user_config: vmForm.value.user_config,
         hugepages: vmForm.value.hugepages,
         pin_numa: vmForm.value.pin_numa,
+        disk_prealloc: vmForm.value.disk_prealloc,
         no_tee: vmForm.value.no_tee,
         simulated_tee: vmForm.value.simulated_tee,
         networks: vmForm.value.networks,
@@ -1404,6 +1412,7 @@ type CreateVmPayloadSource = {
       public_tcbinfo: !!theVm.appCompose?.public_tcbinfo,
       pin_numa: !!config.pin_numa,
       hugepages: !!config.hugepages,
+      disk_prealloc: config.disk_prealloc || '',
       no_tee: !!config.no_tee,
       simulated_tee: config.simulated_tee || '',
       user_config: config.user_config || '',
@@ -1435,6 +1444,7 @@ type CreateVmPayloadSource = {
         user_config: source.user_config,
         hugepages: source.hugepages,
         pin_numa: source.pin_numa,
+        disk_prealloc: source.disk_prealloc,
         no_tee: source.no_tee,
         simulated_tee: source.simulated_tee,
         networks: source.networks,
