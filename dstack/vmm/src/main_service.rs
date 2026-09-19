@@ -29,7 +29,7 @@ use crate::app::{
     validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
     VmWorkDir,
 };
-use crate::config::{CvmConfig, Networking, NetworkingMode, NicNetworking};
+use crate::config::{CvmConfig, DiskPrealloc, Networking, NetworkingMode, NicNetworking};
 
 fn hex_sha256(data: &str) -> String {
     use sha2::Digest;
@@ -312,6 +312,8 @@ pub fn create_manifest_from_vm_config(
     }
     let key_provider = key_provider_from_compose(&request.compose_file)?;
     let swtpm = needs_swtpm(key_provider, simulated_tee);
+    let disk_prealloc = disk_prealloc_from_vm_config(&request, cvm_config)?;
+    validate_disk_prealloc_against_compose(disk_prealloc, &request.compose_file)?;
 
     Ok(Manifest {
         id,
@@ -333,7 +335,64 @@ pub fn create_manifest_from_vm_config(
         swtpm,
         networks,
         volumes,
+        disk_prealloc,
     })
+}
+
+/// Resolve the data disk preallocation for a deployment. This is a host
+/// storage decision, so it comes from the request or the node default and
+/// never from app-compose.
+fn disk_prealloc_from_vm_config(
+    request: &VmConfiguration,
+    cvm_config: &CvmConfig,
+) -> Result<DiskPrealloc> {
+    let Some(mode) = request
+        .disk_prealloc
+        .as_deref()
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+    else {
+        return Ok(cvm_config.disk_prealloc);
+    };
+    mode.parse()
+        .context("invalid disk_prealloc, expected off, metadata, falloc or full")
+}
+
+/// Reserving data blocks and discarding them pull in opposite directions: the
+/// host reserves the space up front, then the guest hands it straight back on
+/// the first fstrim, leaving a disk that is neither reserved nor thin. Reject
+/// the pair at deployment instead of letting the operator find out from `du`
+/// later.
+///
+/// `metadata` is deliberately not covered. It reserves no data blocks, so
+/// discard costs it nothing, and rejecting it would force a compose change --
+/// a new compose hash, a new app id, another on-chain whitelist entry -- for a
+/// combination that is not actually contradictory.
+fn validate_disk_prealloc_against_compose(
+    prealloc: DiskPrealloc,
+    compose_file: &str,
+) -> Result<()> {
+    if !prealloc.reserves_data_blocks() || !storage_discard_from_compose(compose_file)? {
+        return Ok(());
+    }
+    bail!(
+        "disk preallocation ({}) reserves host blocks and requires storage_discard = false \
+         in app-compose; either disable discard in the compose file or deploy with \
+         disk_prealloc = \"off\" or \"metadata\"",
+        prealloc.as_str()
+    )
+}
+
+/// Read `storage_discard` out of app-compose. Everything else in the document
+/// stays opaque, and a missing field means the app-compose default, which is
+/// discard enabled.
+fn storage_discard_from_compose(compose_file: &str) -> Result<bool> {
+    let compose: serde_json::Value =
+        serde_json::from_str(compose_file).context("invalid app compose JSON")?;
+    Ok(compose
+        .get("storage_discard")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true))
 }
 
 /// Extract only the field understood by this VMM. Keep every other app-compose
@@ -810,8 +869,19 @@ impl RpcHandler {
                 if hda_path.exists() {
                     info!("Resizing disk to {}GB", disk_size);
                     let new_size_str = format!("{}G", disk_size);
+                    // Grow the disk the same way it was created, so a VM
+                    // deployed with preallocation keeps its space reserved.
+                    let mut args = vec!["resize".to_string()];
+                    if !manifest.disk_prealloc.is_off() {
+                        args.push(format!(
+                            "--preallocation={}",
+                            manifest.disk_prealloc.as_str()
+                        ));
+                    }
+                    args.push(hda_path.display().to_string());
+                    args.push(new_size_str);
                     let output = std::process::Command::new("qemu-img")
-                        .args(["resize", &hda_path.display().to_string(), &new_size_str])
+                        .args(&args)
                         .output()
                         .context("Failed to resize disk")?;
                     if !output.status.success() {
@@ -953,6 +1023,14 @@ impl VmmRpc for RpcHandler {
             if !compose_file_path.exists() {
                 bail!("The instance {} not found", request.id);
             }
+            // Read the manifest here rather than reusing the one below, so a
+            // rejected update leaves the stored compose file untouched.
+            let manifest = self
+                .app
+                .work_dir(&request.id)?
+                .manifest()
+                .context("Failed to read manifest")?;
+            validate_disk_prealloc_against_compose(manifest.disk_prealloc, &request.compose_file)?;
             fs::write(compose_file_path, &request.compose_file)
                 .context("Failed to write compose file")?;
 
@@ -1442,6 +1520,7 @@ mod tests {
             simulated_tee: None,
             networking: None,
             networks: vec![],
+            disk_prealloc: None,
         }
     }
 
@@ -1512,6 +1591,111 @@ mod tests {
             create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
 
         assert!(manifest.networks.is_empty());
+    }
+
+    /// Preallocation is only accepted together with discard disabled, so a
+    /// preallocating request needs a compose file that says so.
+    fn test_vm_configuration_without_discard() -> VmConfiguration {
+        VmConfiguration {
+            compose_file: r#"{"storage_discard": false}"#.to_string(),
+            ..test_vm_configuration()
+        }
+    }
+
+    #[test]
+    fn disk_prealloc_defaults_to_node_config_and_accepts_request_override() {
+        let mut cvm_config = test_cvm_config();
+        assert_eq!(cvm_config.disk_prealloc, DiskPrealloc::Off);
+
+        let manifest =
+            create_manifest_from_vm_config(test_vm_configuration(), &cvm_config).unwrap();
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Off);
+
+        cvm_config.disk_prealloc = DiskPrealloc::Falloc;
+        let manifest =
+            create_manifest_from_vm_config(test_vm_configuration_without_discard(), &cvm_config)
+                .unwrap();
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Falloc);
+
+        // `metadata` reserves no data blocks, so it coexists with discard.
+        let mut request = test_vm_configuration();
+        request.disk_prealloc = Some("metadata".to_string());
+        let manifest = create_manifest_from_vm_config(request, &cvm_config).unwrap();
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Metadata);
+
+        // An empty string is the same as an unset field, as older clients and
+        // JSON round-trips produce it.
+        let mut request = test_vm_configuration_without_discard();
+        request.disk_prealloc = Some(String::new());
+        let manifest = create_manifest_from_vm_config(request, &cvm_config).unwrap();
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Falloc);
+
+        // Opting one VM out of a preallocating node default needs no compose
+        // change, so the app identity stays put.
+        let mut request = test_vm_configuration();
+        request.disk_prealloc = Some("off".to_string());
+        let manifest = create_manifest_from_vm_config(request, &cvm_config).unwrap();
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Off);
+    }
+
+    #[test]
+    fn create_rejects_unknown_disk_prealloc_mode() {
+        let mut request = test_vm_configuration();
+        request.disk_prealloc = Some("sparse".to_string());
+        let err = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err();
+        assert!(err.to_string().contains("disk_prealloc"), "{err}");
+    }
+
+    #[test]
+    fn preallocation_is_rejected_while_the_guest_may_discard() {
+        let cvm_config = test_cvm_config();
+
+        // storage_discard defaults to true in app-compose, so an unset field
+        // conflicts just as an explicit `true` does.
+        for compose in ["{}", r#"{"storage_discard": true}"#] {
+            let request = VmConfiguration {
+                compose_file: compose.to_string(),
+                disk_prealloc: Some("falloc".to_string()),
+                ..test_vm_configuration()
+            };
+            let err = create_manifest_from_vm_config(request, &cvm_config).unwrap_err();
+            assert!(
+                err.to_string().contains("storage_discard"),
+                "{compose}: {err}"
+            );
+        }
+
+        // The same conflict, reached through the node default instead of the
+        // request.
+        let preallocating_node = CvmConfig {
+            disk_prealloc: DiskPrealloc::Full,
+            ..cvm_config
+        };
+        let err = create_manifest_from_vm_config(test_vm_configuration(), &preallocating_node)
+            .unwrap_err();
+        assert!(err.to_string().contains("storage_discard"), "{err}");
+    }
+
+    #[test]
+    fn metadata_preallocation_coexists_with_discard() {
+        // Rejecting it would cost a compose change -- and with it a new app id
+        // -- to avoid a conflict that does not exist: no data block is
+        // reserved, so there is none for the guest to hand back.
+        let mut request = test_vm_configuration();
+        request.disk_prealloc = Some("metadata".to_string());
+        let manifest = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap();
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Metadata);
+    }
+
+    #[test]
+    fn a_malformed_compose_is_reported_as_such() {
+        // Not reachable today (the callers parse the compose first), but the
+        // discard lookup must not turn "broken JSON" into "turn discard off".
+        let mut request = test_vm_configuration();
+        request.compose_file = "{not json".to_string();
+        request.disk_prealloc = Some("falloc".to_string());
+        let err = create_manifest_from_vm_config(request, &test_cvm_config()).unwrap_err();
+        assert!(!err.to_string().contains("storage_discard"), "{err}");
     }
 
     #[test]
