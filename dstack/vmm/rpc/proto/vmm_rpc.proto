@@ -137,6 +137,12 @@ message VmConfiguration {
   // Development-only TEE ABI to simulate for this VM. When set, the VMM
   // launches a non-TEE VM and provides an instance-specific simulator config.
   optional string simulated_tee = 21;
+  // Host-side preallocation for the VM data disk: "off", "metadata",
+  // "falloc" or "full", matching qemu-img's preallocation modes. Unset uses
+  // the node default (cvm.disk_prealloc). The field itself never enters the
+  // app identity, but "falloc" and "full" reserve host blocks and are only
+  // accepted with storage_discard=false in compose_file.
+  optional string disk_prealloc = 22;
 }
 
 // Per-VM networking configuration.

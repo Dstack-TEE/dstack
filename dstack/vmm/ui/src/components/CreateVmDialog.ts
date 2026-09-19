@@ -61,6 +61,13 @@ const CreateVmDialogComponent = {
       return `queues: auto${cap}`;
     },
   },
+  computed: {
+    // Only falloc and full reserve host blocks; metadata does not, so it does
+    // not conflict with discard and the VMM accepts it either way.
+    reservesDiskBlocks(): boolean {
+      return ['falloc', 'full'].includes((this as any).form.disk_prealloc);
+    },
+  },
   emits: ['close', 'submit', 'load-compose'],
   template: /* html */ `
     <div v-if="visible" class="dialog-overlay" @click.self="$emit('close')">
@@ -114,6 +121,20 @@ const CreateVmDialogComponent = {
             <div class="form-group">
               <label for="diskSize">Storage (GB)</label>
               <input id="diskSize" v-model.number="form.disk_size" type="number" placeholder="Storage size in GB" required>
+            </div>
+
+            <div class="form-group">
+              <label for="diskPrealloc">Disk Preallocation
+                <span class="help-icon" title="Host-side setting applied when the disk is created: falloc reserves the space (fast), full reserves and zeroes it (slow for large disks), metadata allocates qcow2 metadata only. falloc and full need Storage Discard off, which changes the compose file and so the app ID.">?</span>
+              </label>
+              <select id="diskPrealloc" v-model="form.disk_prealloc">
+                <option value="">Default (host setting)</option>
+                <option value="off">Off (thin)</option>
+                <option value="metadata">Metadata only</option>
+                <option value="falloc">Reserve space (falloc)</option>
+                <option value="full">Reserve and zero (full)</option>
+              </select>
+              <small class="hint" v-if="reservesDiskBlocks && form.storage_discard">Turn Storage Discard off, or this deployment is rejected: the guest would return the reserved blocks to the host on its first trim.</small>
             </div>
 
             <div class="form-group">

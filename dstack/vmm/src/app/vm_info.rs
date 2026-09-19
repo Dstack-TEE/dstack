@@ -219,6 +219,7 @@ impl VmInfo {
                         })
                         .collect(),
                     app_id: Some(self.manifest.app_id.clone()),
+                    disk_prealloc: Some(self.manifest.disk_prealloc.as_str().to_string()),
                     hugepages: self.manifest.hugepages,
                     pin_numa: self.manifest.pin_numa,
                     gpus: self.manifest.gpus.as_ref().map(|config| pb::GpuConfig {
