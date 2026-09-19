@@ -270,7 +270,6 @@ impl PreparedQemuLaunch {
         networks: &[Networking],
     ) -> Result<Self> {
         let workdir = VmWorkDir::new(workdir);
-        prepare_data_disk(vm, &workdir)?;
         prepare_shared_dir(&workdir)?;
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
@@ -319,6 +318,10 @@ impl PreparedQemuLaunch {
             (None, None)
         };
         prepare_shared_disk(&workdir, cfg)?;
+        // Last, because it is the one expensive step: a preallocating VM
+        // writes its whole disk here, and there is no point doing that only to
+        // fail on a missing swtpm binary or an unusable network.
+        prepare_data_disk(vm, &workdir)?;
 
         let tee_enabled = !vm.manifest.no_tee;
         let tdx_mr_config_id = if tee_enabled
@@ -364,22 +367,37 @@ impl PreparedQemuLaunch {
 
 fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir) -> Result<()> {
     let hda_path = workdir.hda_path();
-    if !hda_path.exists() {
-        let prealloc = vm.manifest.disk_prealloc;
-        if !prealloc.is_off() {
-            tracing::info!(
-                "creating {}GB data disk with preallocation={}",
-                vm.manifest.disk_size,
-                prealloc.as_str()
-            );
-        }
-        create_hd(
-            &hda_path,
-            vm.image.hda.as_ref(),
-            &format!("{}G", vm.manifest.disk_size),
-            prealloc,
-        )?;
+    if hda_path.exists() {
+        return Ok(());
     }
+    let prealloc = vm.manifest.disk_prealloc;
+    // Build the disk under a temporary name and rename it into place. An
+    // existing hda.img is taken as a finished disk, and preallocation makes
+    // creation slow enough -- minutes for a large `full` disk -- that a VMM
+    // killed midway would otherwise leave a half-written image that the next
+    // start would boot from.
+    let partial_path = hda_path.with_extension("img.partial");
+    if partial_path.exists() {
+        tracing::warn!(
+            "removing a leftover partial data disk: {}",
+            partial_path.display()
+        );
+        fs::remove_file(&partial_path).context("failed to remove the partial data disk")?;
+    }
+    if !prealloc.is_off() {
+        tracing::info!(
+            "creating {}GB data disk with preallocation={}",
+            vm.manifest.disk_size,
+            prealloc.as_str()
+        );
+    }
+    create_hd(
+        &partial_path,
+        vm.image.hda.as_ref(),
+        &format!("{}G", vm.manifest.disk_size),
+        prealloc,
+    )?;
+    fs::rename(&partial_path, &hda_path).context("failed to publish the data disk")?;
     Ok(())
 }
 
@@ -1139,8 +1157,9 @@ mod tests {
 
     use super::{
         amd_sev_snp_memory_backend_arg, create_hd, fs, macvtap_fd_layout,
-        parse_amd_sev_snp_qmp_capabilities, qemu_img_create_args, virtio_pci_device, Command, Path,
-        PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        parse_amd_sev_snp_qmp_capabilities, prepare_data_disk, qemu_img_create_args,
+        virtio_pci_device, Command, Path, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder,
+        VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, GpuSpec, Manifest, PortMapping, VmVolume, VmWorkDir};
@@ -1292,6 +1311,40 @@ mod tests {
             allocated < 8 * 1024 * 1024,
             "expected a thin disk, got {allocated} bytes"
         );
+    }
+
+    #[test]
+    fn a_half_written_data_disk_is_never_taken_for_a_finished_one() {
+        if Command::new("qemu-img").arg("--version").output().is_err() {
+            eprintln!("qemu-img not installed, skipping");
+            return;
+        }
+
+        let root = tempfile::TempDir::new().unwrap();
+        let workdir = VmWorkDir::new(root.path());
+        let (_config, mut vm, _prepared) = test_launch_fixture();
+        vm.manifest.disk_size = 1;
+
+        // What a VMM killed during a slow preallocating create leaves behind.
+        let partial = workdir.hda_path().with_extension("img.partial");
+        fs::write(&partial, b"half a qcow2").unwrap();
+
+        prepare_data_disk(&vm, &workdir).unwrap();
+        assert!(workdir.hda_path().exists());
+        assert!(!partial.exists(), "the stale partial disk was kept");
+        let info = Command::new("qemu-img")
+            .args(["info", &workdir.hda_path().display().to_string()])
+            .output()
+            .unwrap();
+        assert!(
+            info.status.success(),
+            "the published disk is not a valid image"
+        );
+
+        // A finished disk is left exactly as it is.
+        let before = fs::metadata(workdir.hda_path()).unwrap().len();
+        prepare_data_disk(&vm, &workdir).unwrap();
+        assert_eq!(fs::metadata(workdir.hda_path()).unwrap().len(), before);
     }
 
     /// Minimal launch fixture. Nothing it points at has to exist on disk; every
