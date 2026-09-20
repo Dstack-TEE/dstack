@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
+use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -161,15 +162,7 @@ impl CertBot {
             return Ok(true);
         };
         info!("running renewed hook");
-        match std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(hook)
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            Ok(status) => error!("renewed hook failed with status: {status}"),
-            Err(error) => error!("failed to run renewed hook: {error:?}"),
-        }
+        run_hook(hook, self.config.renew_timeout).await;
         Ok(true)
     }
 
@@ -262,6 +255,28 @@ impl CertBot {
     pub fn required_dns_records(&self) -> Vec<RequiredRecord> {
         self.acme_client
             .required_dns_records(&self.config.cert_subject_alt_names)
+    }
+}
+
+/// Run the post-renewal hook, bounded by `timeout`.
+///
+/// Waited on through tokio rather than `std::process::Command::status`, which
+/// waits on the calling thread: `CertBot::run` is a daemon loop on the same
+/// runtime, so a hook that never returns parked a worker and took every later
+/// renewal with it. The bound is `renew_timeout` because the hook is the last
+/// step of the renewal run rather than a thing with a budget of its own, and
+/// `kill_on_drop` means the bound ends the hook instead of leaving it behind.
+async fn run_hook(hook: &str, timeout: Duration) {
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(hook)
+        .kill_on_drop(true)
+        .status();
+    match tokio::time::timeout(timeout, status).await {
+        Ok(Ok(status)) if status.success() => {}
+        Ok(Ok(status)) => error!("renewed hook failed with status: {status}"),
+        Ok(Err(error)) => error!("failed to run renewed hook: {error:?}"),
+        Err(_) => error!("renewed hook did not finish within {timeout:?}"),
     }
 }
 
@@ -382,6 +397,42 @@ pub fn list_cert_public_keys(workdir: impl AsRef<Path>) -> Result<BTreeSet<Vec<u
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hook_tests {
+    use super::run_hook;
+    use std::time::{Duration, Instant};
+    use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn a_hook_that_never_returns_gives_the_renewal_loop_back() {
+        let ticking = tokio::spawn(async {
+            sleep(Duration::from_millis(50)).await;
+            "ticked"
+        });
+
+        let started = Instant::now();
+        run_hook("sleep 30", Duration::from_millis(200)).await;
+
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the hook held the renewal loop for {elapsed:?}"
+        );
+        assert_eq!(
+            ticking.await.unwrap(),
+            "ticked",
+            "the hook parked the runtime it was waited on from"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hook_that_finishes_is_waited_for() {
+        let started = Instant::now();
+        run_hook("sleep 0.2", Duration::from_secs(30)).await;
+        assert!(started.elapsed() >= Duration::from_millis(200));
+    }
+}
 
 #[cfg(test)]
 mod credential_tests {
