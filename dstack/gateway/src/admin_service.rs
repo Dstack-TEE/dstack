@@ -52,8 +52,9 @@ impl AdminRpcHandler {
             .kv_store()
             .get_best_zt_domain()
             .unwrap_or_default();
-        let mut state = self.state.lock();
-        state.refresh_state()?;
+        // Off the routing lock: it writes to the KV store once per instance.
+        self.state.refresh_state()?;
+        let state = self.state.lock();
         let hosts = state
             .state
             .instances

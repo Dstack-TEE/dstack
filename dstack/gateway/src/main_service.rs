@@ -304,6 +304,48 @@ impl ProxyInner {
         self.handshake_cache.latest(stale_timeout)
     }
 
+    /// Publish this node's WireGuard observations to the KV store.
+    ///
+    /// The routing lock is taken only to copy the public-key-to-instance-id
+    /// map, never to write. Each write takes the KV store's own write lock,
+    /// which a sync round holds for as long as it takes to merge an inbound
+    /// envelope; composing the two would let one peer's merge stall every
+    /// proxied connection for the length of it. `Admin.Status` calls this, and
+    /// `web_routes::route_index` calls `Admin.Status`, so the composition is
+    /// reachable from a dashboard page load.
+    pub(crate) fn refresh_state(&self) -> Result<()> {
+        let handshakes = self.latest_handshakes(None)?;
+        let instance_ids: Vec<(String, u64)> = {
+            let state = self.lock();
+            state
+                .state
+                .instances
+                .iter()
+                .filter_map(|(id, info)| {
+                    let (timestamp, _) = handshakes.get(&info.public_key)?;
+                    Some((id.clone(), *timestamp))
+                })
+                .collect()
+        };
+
+        for (instance_id, timestamp) in &instance_ids {
+            if let Err(err) = self
+                .kv_store
+                .sync_instance_handshake(instance_id, *timestamp)
+            {
+                debug!("failed to sync instance handshake: {err:?}");
+            }
+        }
+
+        if let Err(err) = self
+            .kv_store
+            .sync_node_last_seen(self.config.sync.node_id, now_secs())
+        {
+            debug!("failed to sync node last_seen: {err:?}");
+        }
+        Ok(())
+    }
+
     pub async fn new(
         options: ProxyOptions,
         port_policy_tx: UnboundedSender<String>,
@@ -963,6 +1005,9 @@ fn start_recycle_thread(proxy: Proxy) {
     }
     std::thread::spawn(move || loop {
         std::thread::sleep(proxy.config.recycle.interval);
+        if let Err(err) = proxy.refresh_state() {
+            warn!("failed to refresh state: {err:?}");
+        }
         if let Err(err) = proxy.lock().recycle() {
             error!("failed to run recycle: {err:?}");
         };
@@ -2514,12 +2559,12 @@ impl ProxyState {
         Ok(())
     }
 
+    /// Drop instances the cluster has stopped seeing.
+    ///
+    /// Reads the handshake observations `ProxyInner::refresh_state` publishes,
+    /// so the caller refreshes first -- off this lock, because the refresh
+    /// writes to the KV store.
     fn recycle(&mut self) -> Result<()> {
-        // Refresh state: sync local handshakes to KvStore, update local last_seen from global
-        if let Err(err) = self.refresh_state() {
-            warn!("failed to refresh state: {err:?}");
-        }
-
         // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
 
         // Recycle stale CVM instances based on global last_seen (max across all nodes)
@@ -2578,38 +2623,6 @@ impl ProxyState {
             .as_ref()
             .context("admin server shutdown handle is not initialized")?;
         shutdown.notify();
-        Ok(())
-    }
-
-    pub(crate) fn refresh_state(&mut self) -> Result<()> {
-        // Get local WG handshakes and sync to KvStore
-        let handshakes = self.latest_handshakes(None)?;
-
-        // Build a map from public_key to instance_id for lookup
-        let pk_to_id: BTreeMap<&str, &str> = self
-            .state
-            .instances
-            .iter()
-            .map(|(id, info)| (info.public_key.as_str(), id.as_str()))
-            .collect();
-
-        // Sync local handshake observations to KvStore
-        for (pk, (ts, _)) in &handshakes {
-            if let Some(&instance_id) = pk_to_id.get(pk.as_str()) {
-                if let Err(err) = self.kv_store.sync_instance_handshake(instance_id, *ts) {
-                    debug!("failed to sync instance handshake: {err:?}");
-                }
-            }
-        }
-
-        // Update this node's last_seen in KvStore
-        let now = now_secs();
-        if let Err(err) = self
-            .kv_store
-            .sync_node_last_seen(self.config.sync.node_id, now)
-        {
-            debug!("failed to sync node last_seen: {err:?}");
-        }
         Ok(())
     }
 

@@ -2679,3 +2679,41 @@ fn tombstone_collection_triggers_on_write_count_boundaries_not_on_time() {
     // until it crosses the next boundary again.
     assert!(!tombstone_collection_due(Some(w(100, 0)), w(90, 0), 100));
 }
+
+/// `Admin.Status` must not park the data plane on the KV store's write lock.
+///
+/// `refresh_state` publishes this node's handshake observations: one ephemeral
+/// write per instance plus one for the node itself. Those take the KV store's
+/// own write lock, which a sync round holds for as long as it takes to merge
+/// an inbound envelope -- megabytes, from a peer. Running the writes under
+/// `ProxyState` composes the two locks, so one slow merge stalls every proxied
+/// connection, and `web_routes::route_index` reaches this on a dashboard page
+/// load.
+#[tokio::test]
+async fn refreshing_state_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store() {
+    use std::sync::atomic::AtomicBool;
+
+    let state = create_test_state().await;
+
+    // Stand in for a sync round holding the store: every write in
+    // `refresh_state` now blocks.
+    let _store_held = state.kv_store().ephemeral().write();
+
+    let finished = std::sync::Arc::new(AtomicBool::new(false));
+    let proxy = state.proxy.clone();
+    let done = finished.clone();
+    std::thread::spawn(move || {
+        let _ = proxy.refresh_state();
+        done.store(true, Ordering::SeqCst);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert!(
+        !finished.load(Ordering::SeqCst),
+        "test is vacuous: the refresh never reached a KV write"
+    );
+    assert!(
+        state.proxy.state.try_lock().is_ok(),
+        "the routing lock is held while the refresh waits on the KV store"
+    );
+}
