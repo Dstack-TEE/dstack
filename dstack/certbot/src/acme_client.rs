@@ -1374,21 +1374,74 @@ fn store_cert_at(
         .context("failed to write the certificate key")?;
     debug!("stored new cert in {}", cert_dir.display());
 
-    // symlink live_cert_pem_path to the new cert
-    ln_force(cert_path, live_cert_pem_path)?;
-    ln_force(key_path, live_key_pem_path)?;
+    publish_generation(&backup_path, live_cert_pem_path, live_key_pem_path)
+}
+
+/// The name the live paths resolve the current generation through.
+const CURRENT_LINK: &str = ".current";
+
+/// Point the live certificate and key at the generation in `cert_dir`.
+///
+/// Publishing is one rename per link rather than a remove followed by a
+/// symlink: between those two the live path does not exist at all, and a
+/// process that dies in between leaves it that way for good.
+///
+/// The pair is the same problem one level up -- a reader that catches a renewal
+/// between the two links gets a certificate and a key that do not go together,
+/// and the key does change on renewal. So when both live paths sit in one
+/// directory, which every certbot configuration has them do, they resolve
+/// through a single `.current` link and renaming that publishes the whole
+/// generation in one step. The live names themselves are then written once and
+/// never touched again.
+fn publish_generation(cert_dir: &Path, live_cert: &Path, live_key: &Path) -> Result<()> {
+    let live_dir = parent_dir(live_cert);
+    if live_dir != parent_dir(live_key) {
+        // Nothing to publish the pair through; each link still lands atomically.
+        ln_atomic(&cert_dir.join("cert.pem"), live_cert)?;
+        ln_atomic(&cert_dir.join("key.pem"), live_key)?;
+        return Ok(());
+    }
+    ln_atomic(cert_dir, &live_dir.join(CURRENT_LINK))?;
+    let current = Path::new(CURRENT_LINK);
+    ln_atomic_if_changed(&current.join("cert.pem"), live_cert)?;
+    ln_atomic_if_changed(&current.join("key.pem"), live_key)?;
     Ok(())
 }
 
-fn ln_force(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
-    // Check if the symlink exists without following it
-    if dst.as_ref().symlink_metadata().is_ok() {
-        fs::remove_file(dst.as_ref())?;
-    } else if let Some(dst_parent) = dst.as_ref().parent() {
-        fs::create_dir_all(dst_parent)?;
+/// The directory `path` names a file in, as a path that can be joined onto.
+fn parent_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
     }
-    fs::os::unix::fs::symlink(src.as_ref(), dst.as_ref())?;
+}
+
+/// Point `dst` at `src`, replacing whatever `dst` is now in a single step.
+fn ln_atomic(src: &Path, dst: &Path) -> Result<()> {
+    let dir = parent_dir(dst);
+    fs::create_dir_all(dir)?;
+    let name = dst.file_name().context("cannot link a path with no name")?;
+    // Named after the target so a leftover is attributable, and after the
+    // process so two certbots cannot stage over each other.
+    let staging = dir.join(format!(
+        ".{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    if staging.symlink_metadata().is_ok() {
+        fs::remove_file(&staging)?;
+    }
+    fs::os::unix::fs::symlink(src, &staging)?;
+    fs::rename(&staging, dst)?;
     Ok(())
+}
+
+/// [`ln_atomic`], skipped when `dst` already points at `src`.
+fn ln_atomic_if_changed(src: &Path, dst: &Path) -> Result<()> {
+    if fs::read_link(dst).is_ok_and(|target| target == src) {
+        return Ok(());
+    }
+    ln_atomic(src, dst)
 }
 
 #[cfg(test)]
@@ -1980,6 +2033,9 @@ mod dns_wait_tests {
 #[cfg(test)]
 mod publish_tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     /// Store generation `generation`, using its name as both cert and key so a
     /// reader can tell in one comparison whether it got a matching pair.
     fn publish(root: &Path, generation: u32) {
@@ -2012,6 +2068,68 @@ mod publish_tests {
         assert_eq!(
             fs::read_to_string(root.path().join("live/key.pem")).unwrap(),
             "generation-1"
+        );
+    }
+
+    #[test]
+    fn a_reader_never_catches_the_live_pair_half_published() {
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), 0);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let reading = stop.clone();
+        let cert_path = root.path().join("live/cert.pem");
+        let key_path = root.path().join("live/key.pem");
+        let reader = std::thread::spawn(move || {
+            while !reading.load(Ordering::Relaxed) {
+                // The cert is read on either side of the key so a straddle of
+                // the reader's own two `open` calls -- which no layout can
+                // prevent -- is told apart from a live pair that really was
+                // half published.
+                let before = fs::read_to_string(&cert_path);
+                let key = fs::read_to_string(&key_path);
+                let after = fs::read_to_string(&cert_path);
+                let (Ok(before), Ok(key), Ok(after)) = (&before, &key, &after) else {
+                    return Some(format!("cert {before:?}, key {key:?}, cert {after:?}"));
+                };
+                if before == after && before != key {
+                    return Some(format!("cert {before:?} published with key {key:?}"));
+                }
+            }
+            None
+        });
+
+        for generation in 1..=500 {
+            publish(root.path(), generation);
+        }
+        stop.store(true, Ordering::Relaxed);
+
+        assert_eq!(
+            reader.join().unwrap(),
+            None,
+            "the live pair was observed half published"
+        );
+    }
+
+    #[test]
+    fn a_renewal_moves_the_live_pair_with_one_rename() {
+        let root = tempfile::tempdir().unwrap();
+        let cert_path = root.path().join("live/cert.pem");
+        let key_path = root.path().join("live/key.pem");
+        publish(root.path(), 1);
+        let cert_link = fs::read_link(&cert_path).unwrap();
+        let key_link = fs::read_link(&key_path).unwrap();
+
+        publish(root.path(), 2);
+
+        assert_eq!(fs::read_link(&cert_path).unwrap(), cert_link);
+        assert_eq!(fs::read_link(&key_path).unwrap(), key_link);
+        assert_eq!(fs::read_to_string(&cert_path).unwrap(), "generation-2");
+        assert_eq!(fs::read_to_string(&key_path).unwrap(), "generation-2");
+        assert_eq!(
+            fs::read_link(root.path().join("live").join(CURRENT_LINK)).unwrap(),
+            root.path().join("backup/generation-2"),
+            "the whole generation has to be published by renaming one link"
         );
     }
 }
