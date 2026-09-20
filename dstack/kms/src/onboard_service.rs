@@ -430,6 +430,55 @@ mod tests {
             .into_bytes()
     }
 
+    fn auto_bootstrap_config(cert_dir: &std::path::Path) -> KmsConfig {
+        use rocket::figment::{
+            providers::{Format, Toml},
+            Figment,
+        };
+        let overrides = format!(
+            r#"
+            [core]
+            cert_dir = "{}"
+            attest_rpc_cert = false
+            enforce_self_authorization = false
+
+            [core.onboard]
+            auto_bootstrap_domain = "kms.example.com"
+            "#,
+            cert_dir.display()
+        );
+        Figment::from(rocket::Config::default())
+            .merge(Toml::string(crate::config::DEFAULT_CONFIG))
+            .merge(Toml::string(&overrides))
+            .focus("core")
+            .extract()
+            .unwrap()
+    }
+
+    #[rocket::async_test]
+    async fn auto_bootstrap_refuses_to_replace_existing_root_keys() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let verifier = AttestationVerifier::load(&cfg.attestation).unwrap();
+
+        bootstrap_keys(&cfg, &verifier).await.unwrap();
+        let root_ca_key = fs::read(cfg.root_ca_key()).unwrap();
+        let k256_key = fs::read(cfg.k256_key()).unwrap();
+
+        // A single missing certificate is enough to make `keys_exists()` false,
+        // which is what sends the KMS back into onboarding on the next start.
+        fs::remove_file(cfg.rpc_cert()).unwrap();
+        assert!(!cfg.keys_exists());
+
+        let err = bootstrap_keys(&cfg, &verifier).await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("already been bootstrapped"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(fs::read(cfg.root_ca_key()).unwrap(), root_ca_key);
+        assert_eq!(fs::read(cfg.k256_key()).unwrap(), k256_key);
+    }
+
     #[test]
     fn ca_certificate_is_renewed_only_within_the_renewal_window() {
         let now = UNIX_EPOCH + Duration::from_secs(2_000_000_000);
@@ -717,6 +766,15 @@ fn ca_cert_expires_within(cert_pem: &[u8], now: SystemTime, window: Duration) ->
 
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
     validate_onboarding_domain(&cfg.onboard.auto_bootstrap_domain)?;
+    // `keys_exists()` wants every key *and* certificate, so losing one derived
+    // certificate - a crash between `store_keys` and `store_certs`, a restored
+    // disk image - sends the KMS back here. Generating new root keys then would
+    // silently change every app key and orphan every encrypted disk, so refuse
+    // and let the operator recover the missing file instead. Same guard as the
+    // `Onboard.Bootstrap` RPC.
+    if cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+        bail!("KMS has already been bootstrapped");
+    }
     ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;
