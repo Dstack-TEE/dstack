@@ -159,6 +159,14 @@ impl KmsState {
             );
         }
         upgrade_authority::warn_on_unauthenticated_auth_api(&config.auth_api);
+        if config.aws_nitro_tpm_key_release {
+            warn!(
+                "aws nitro-tpm key release is enabled; the platform has no TCB surface, so the \
+                 verifier reports a synthesized tcb_status of UpToDate and DstackApp's \
+                 requireTcbUpToDate passes vacuously for every app on it - IAppAuth.AppBootInfo \
+                 carries no tee_variant, so an app owner cannot gate this themselves"
+            );
+        }
         if !config.image.verify {
             warn!(
                 "os image verification is disabled; BootInfo.os_image_hash is taken from the \
@@ -1249,6 +1257,59 @@ mod tests {
     }
 
     const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    /// AWS NitroTPM has no TDX/SNP-style TCB surface, so the verifier
+    /// normalizes a verified attestation to `"UpToDate"`. That string is what
+    /// every backend's TCB gate then compares, and none of them can tell it
+    /// apart from a measured one: `IAppAuth.AppBootInfo` has no `teeVariant`
+    /// field, both Ethereum backends build their tuple from the named fields
+    /// only, and auth-simple parses `teeVariant` but never reads it. So a
+    /// contract owner setting `requireTcbUpToDate = true` gets a check that
+    /// passes vacuously on this platform.
+    ///
+    /// Making it non-vacuous means carrying `teeVariant` into `AppBootInfo`,
+    /// which is a contract ABI change and therefore a deployment event, not a
+    /// code change. Until then the only gate that still sees the platform is
+    /// the KMS-local `aws_nitro_tpm_key_release`, which is asserted here so
+    /// that it cannot be removed without this test going red.
+    #[test]
+    fn aws_nitro_tpm_tcb_status_is_synthesized_and_no_backend_can_tell() {
+        let (attestation, vm_config, _, _) =
+            verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x44);
+        let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap();
+
+        assert_eq!(boot_info.tee_variant, TeeVariant::DstackAwsNitroTpm);
+        assert_eq!(
+            boot_info.tcb_status, "UpToDate",
+            "synthesized, not derived from any TCB surface"
+        );
+        assert!(boot_info.advisory_ids.is_empty());
+
+        // The variant does reach the backend...
+        let payload = serde_json::to_value(&boot_info).unwrap();
+        assert_eq!(payload["teeVariant"], "dstack-aws-nitro-tpm");
+        assert_eq!(payload["tcbStatus"], "UpToDate");
+        // ...and stops there: this is the field list `IAppAuth.AppBootInfo`
+        // and both Ethereum backends' ABI tuples are built from.
+        for field in [
+            "appId",
+            "composeHash",
+            "instanceId",
+            "deviceId",
+            "mrAggregated",
+            "mrSystem",
+            "osImageHash",
+            "tcbStatus",
+            "advisoryIds",
+        ] {
+            assert!(payload.get(field).is_some(), "{field} must reach the ABI");
+        }
+
+        // The platform gate that is left, and it is the KMS operator's, not
+        // the app owner's.
+        assert!(ensure_key_release_allowed(&boot_info, false, false).is_err());
+        assert!(ensure_key_release_allowed(&boot_info, false, true).is_ok());
+    }
 
     /// `image.verify = false` means `BootInfo.os_image_hash` is whatever the
     /// caller put in `vm_config`, so an `allowedOsImages` allowlist is gating

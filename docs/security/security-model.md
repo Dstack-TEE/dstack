@@ -387,6 +387,12 @@ This argument has a limit, and it is worth stating because it is what keeps the 
 
 Production verifiers should reject deployments that use these development settings. Operators should treat them the same way they treat debug-mode TEE quotes: useful for testing, invalid for production trust.
 
+### `requireTcbUpToDate` is vacuous on AWS NitroTPM
+
+AWS NitroTPM has no TDX/SNP-style TCB surface, so `policy_tcb_fields` normalizes a verified attestation to `tcb_status = "UpToDate"` -- otherwise the shared `"UpToDate"` gate every backend applies would reject the platform outright. `tee_variant` is in the `bootAuth` payload, but it is not in `IAppAuth.AppBootInfo`, both Ethereum backends build their ABI tuple from the named fields only, and `auth-simple` parses `teeVariant` without reading it. So a contract owner who sets `requireTcbUpToDate = true` is comparing a synthesized string, and the check passes for every app on that platform.
+
+Making it non-vacuous means carrying `tee_variant` into `AppBootInfo`, which is a contract ABI change -- a deployment event across every already-registered app, not a code change. Until then the only gate that still sees the platform is the KMS-local `aws_nitro_tpm_key_release`, which is off by default and warns when enabled. An operator who turns it on is deciding on behalf of every app owner behind that KMS, because no app owner can express the restriction on-chain.
+
 ### The auth API channel is not attested, and the topology decides whether that matters
 
 `auth_api.type = "webhook"` makes an external HTTP service the authorization decision: `bootAuth/app` returns `isAllowed` and `gatewayAppId`, and the KMS releases app keys on that answer. The KMS uses a bare HTTP client for it -- no CA pinning, no shared secret, and no signature over the response -- so the channel carries exactly the trust the network under it carries.

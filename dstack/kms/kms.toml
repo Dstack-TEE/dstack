@@ -46,6 +46,13 @@ sev_snp_key_release = false
 # is explicitly enabled. NitroTPM is a new, non-confidential-compute attestation
 # mode (the AWS hypervisor is in the TCB), so it is opt-in like SEV-SNP. External
 # auth policy must still allow the verified BootInfo.
+#
+# This switch is the only gate that sees the platform. NitroTPM has no TCB
+# surface, so the verifier reports a synthesized tcb_status of "UpToDate", and
+# IAppAuth.AppBootInfo has no tee_variant field - so DstackApp's
+# requireTcbUpToDate passes vacuously for every app running on it and an app
+# owner has no way to opt out on-chain. Enabling this decides that on their
+# behalf; the KMS warns at startup when it is on.
 aws_nitro_tpm_key_release = false
 
 # Optional attestation trust-anchor files. Omitted entries use vendor roots.

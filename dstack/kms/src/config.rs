@@ -52,6 +52,12 @@ pub(crate) struct KmsConfig {
     /// mode (the AWS hypervisor is in the TCB), so production deployments need an
     /// explicit KMS opt-in as well as a successful external policy decision —
     /// mirroring `sev_snp_key_release`.
+    ///
+    /// It is also the *only* gate that sees the platform: NitroTPM has no TCB
+    /// surface, so the verifier reports a synthesized `tcb_status` of
+    /// `"UpToDate"` and `IAppAuth.AppBootInfo` carries no `tee_variant`, which
+    /// makes `DstackApp.requireTcbUpToDate` vacuous for every app on it. See
+    /// `aws_nitro_tpm_tcb_status_is_synthesized_and_no_backend_can_tell`.
     #[serde(default)]
     pub aws_nitro_tpm_key_release: bool,
     #[serde(default)]
