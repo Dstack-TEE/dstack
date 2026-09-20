@@ -238,29 +238,77 @@ fn an_impossible_cbor_length_is_rejected_rather_than_allocated() {
     case("cbor byte string of u64::MAX", move || decode_all(&blob));
 }
 
-/// Every `(hash, name)` pair the text contains, however it is laid out: a
-/// 64-character hex token followed by `filename` as the next whitespace-
-/// delimited token.
+/// A manifest that names `filename` twice must never quietly answer with one
+/// of the two digests, whatever separates the entries.
 ///
-/// This is deliberately not line-based, because the question is what a *reader*
-/// of the manifest would see authorized. `str::lines` splits only on `\n`,
-/// while `split_whitespace` also splits on form feed, vertical tab and the
-/// Unicode separators, so a line-based model cannot see an entry hidden behind
-/// one of those.
-fn digests_authorized_for(text: &str, filename: &str) -> Vec<String> {
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    let mut out = vec![];
-    for window in tokens.windows(2) {
-        let (candidate, name) = (window[0], window[1]);
-        if name != filename || candidate.len() != 64 {
-            continue;
-        }
-        if let Ok(digest) = hex::decode(candidate) {
-            out.push(hex::encode(digest));
-        }
-    }
-    out.dedup();
-    out
+/// The separator decides how the text reads, and every reading is a refusal.
+/// A newline makes two entries, which is a duplicate. A space, a tab, a form
+/// feed or a vertical tab makes one line, which `sha256sum -c` reads as a
+/// single entry whose filename runs to the end of it. Either way the text
+/// names two digests for one file and no single answer is right.
+///
+/// Stated this way rather than as a second reading of a line, so that it is
+/// not the parser's own logic checking the parser: taking only the second
+/// whitespace token as the filename returned the first digest for every
+/// separator here but the newline.
+#[test]
+fn a_manifest_naming_one_file_twice_is_rejected() {
+    let digest = prop::collection::vec(any::<u8>(), 32).prop_map(hex::encode);
+    let separator = prop_oneof![
+        Just("\n".to_string()),
+        Just("\r\n".to_string()),
+        Just(" ".to_string()),
+        Just("  ".to_string()),
+        Just("\t".to_string()),
+        Just("\x0c".to_string()),
+        Just("\x0b".to_string()),
+    ];
+    check(
+        "sha256sum_entry_hash ambiguity",
+        SEED,
+        (
+            digest.clone(),
+            digest,
+            separator,
+            prop_oneof![Just("measurement.tdx.cbor"), Just("initrd")],
+        ),
+        |(first, second, separator, filename)| {
+            prop_assume!(first != second);
+            let text = format!("{first}  {filename}{separator}{second}  {filename}\n");
+            let found = sha256sum_entry_hash(text.as_bytes(), filename);
+            prop_assert!(
+                found.is_err(),
+                "manifest {:?} names {filename} twice but answered {:?}",
+                text,
+                found.map(hex::encode)
+            );
+            Ok(())
+        },
+    );
+}
+
+/// Whatever the parser answers with has to be in the text it was given.
+#[test]
+fn a_returned_digest_comes_from_the_manifest() {
+    check(
+        "sha256sum_entry_hash provenance",
+        SEED,
+        (
+            manifest_text(),
+            prop_oneof![Just("measurement.tdx.cbor"), Just("initrd")],
+        ),
+        |(text, filename)| {
+            let Ok(found) = sha256sum_entry_hash(text.as_bytes(), filename) else {
+                return Ok(());
+            };
+            prop_assert!(
+                text.contains(&hex::encode(found)),
+                "manifest {:?} does not contain the digest returned for {filename}",
+                text
+            );
+            Ok(())
+        },
+    );
 }
 
 fn manifest_text() -> impl Strategy<Value = String> {
@@ -300,31 +348,6 @@ fn sha256sum_entry_hash_never_panics_on_arbitrary_text() {
         (bytes(512), "[a-z.]{0,20}"),
         |(blob, filename)| {
             let _ = sha256sum_entry_hash(&blob, &filename);
-            Ok(())
-        },
-    );
-}
-
-/// One manifest text never authorizes two different digests for the same
-/// filename: if the parser returns a digest, no other digest in the text is
-/// paired with that name.
-#[test]
-fn a_manifest_authorizes_at_most_one_digest_per_filename() {
-    check(
-        "sha256sum_entry_hash determinism",
-        SEED,
-        (manifest_text(), "measurement.tdx.cbor|initrd"),
-        |(text, filename)| {
-            let Ok(found) = sha256sum_entry_hash(text.as_bytes(), &filename) else {
-                return Ok(());
-            };
-            let authorized = digests_authorized_for(&text, &filename);
-            prop_assert_eq!(
-                vec![hex::encode(found)],
-                authorized,
-                "manifest {:?} authorizes more than the one digest the parser returned",
-                text
-            );
             Ok(())
         },
     );
