@@ -569,8 +569,10 @@ def resolve_target(manifest: dict[str, Any], selector: str, service: str) -> Tar
         base = kms.get("rpc_url") or kms.get("url")
         route = "/prpc/<Method>"
     elif selector == "kms-onboard":
+        # The fixture publishes the onboarding listener with its `/prpc` mount
+        # already in the URL, unlike the KMS rpc url.
         base = values["services"]["onboard"]["url"]
-        route = "/prpc/<Method>"
+        route = "/<Method>"
     else:
         raise RuntimeError(f"unsupported fixture selector: {selector}")
     if not base:
