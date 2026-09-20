@@ -184,10 +184,25 @@ pub(crate) struct Dev {
     pub gateway_app_id: String,
 }
 
+/// Onboarding listener + authentication. The listen `address`/`port` are read
+/// from the same `[core.onboard]` section by Rocket.
+///
+/// The credential is optional: leaving it unset keeps the documented
+/// plain-`curl` bring-up working, and `onboard_auth` warns at startup. See
+/// `onboard_auth` for why RA-TLS cannot be the gate here.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct OnboardConfig {
     pub enabled: bool,
     pub auto_bootstrap_domain: String,
+    /// Shared token required by every onboarding route. Can also be supplied
+    /// via `DSTACK_KMS_ONBOARD_TOKEN`. Clients send it as
+    /// `Authorization: Bearer <token>`, `X-Onboard-Token: <token>`, or
+    /// `?token=<token>` on a GET so the web UI can be opened from a link.
+    #[serde(default)]
+    pub auth_token: String,
+    /// Optional Apache bcrypt htpasswd file, accepted in addition to the token.
+    #[serde(default)]
+    pub htpasswd_file: PathBuf,
 }
 
 #[cfg(test)]

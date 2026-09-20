@@ -6,6 +6,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use config::KmsConfig;
 use main_service::{KmsState, RpcHandler};
+use onboard_service::{OnboardHandler, OnboardState};
 use ra_rpc::ratls_client_verifier::RaTlsClientAuth;
 use ra_rpc::rocket_helper::QuoteVerifier;
 use ra_tls::attestation::AttestationVerifier;
@@ -23,6 +24,7 @@ mod admin_service;
 mod config;
 mod crypto;
 mod main_service;
+mod onboard_auth;
 mod onboard_service;
 
 fn app_version() -> String {
@@ -37,9 +39,11 @@ struct Args {
     config: Option<String>,
 }
 
-async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<()> {
-    use onboard_service::{OnboardHandler, OnboardState};
-
+fn build_onboard_rocket(
+    kms_config: &KmsConfig,
+    figment: Figment,
+    state: OnboardState,
+) -> Result<rocket::Rocket<rocket::Build>> {
     #[rocket::get("/")]
     async fn index() -> RawHtml<&'static str> {
         RawHtml(include_str!("www/onboard.html"))
@@ -50,6 +54,28 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
         "OK"
     }
 
+    let figment = figment
+        .clone()
+        .merge(Serialized::defaults(figment.find_value("core.onboard")?));
+
+    // No `tls` section is merged here: the KMS has no certificate to serve until
+    // bootstrap has produced one. Callers are operators rather than attested
+    // peers, so this listener is guarded by a shared credential - see
+    // `onboard_auth`.
+    Ok(rocket::custom(figment)
+        .attach(onboard_auth::OnboardAuthFairing::from_config(
+            &kms_config.onboard,
+        )?)
+        .mount("/", rocket::routes![index, finish, health])
+        .mount("/", onboard_auth::routes())
+        .mount(
+            "/prpc",
+            ra_rpc::prpc_routes!(OnboardState, OnboardHandler, trim: "Onboard."),
+        )
+        .manage(state))
+}
+
+async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<()> {
     if !kms_config.onboard.auto_bootstrap_domain.is_empty() {
         let verifier = AttestationVerifier::load(&kms_config.attestation)
             .context("failed to load attestation verifier")?;
@@ -57,20 +83,8 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
         return Ok(());
     }
 
-    let state = OnboardState::new(kms_config)?;
-    let figment = figment
-        .clone()
-        .merge(Serialized::defaults(figment.find_value("core.onboard")?));
-
-    // Remove section tls
-
-    let rocket = rocket::custom(figment)
-        .mount("/", rocket::routes![index, finish, health])
-        .mount(
-            "/prpc",
-            ra_rpc::prpc_routes!(OnboardState, OnboardHandler, trim: "Onboard."),
-        )
-        .manage(state.clone())
+    let state = OnboardState::new(kms_config.clone())?;
+    let rocket = build_onboard_rocket(&kms_config, figment, state.clone())?
         .ignite()
         .await
         .map_err(|err| anyhow!(err.to_string()))?;
@@ -240,4 +254,78 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocket::figment::providers::{Format, Toml};
+    use rocket::http::{Header, Status};
+    use rocket::local::asynchronous::Client;
+
+    async fn onboard_client(auth_token: &str) -> Client {
+        // Nothing in these tests reads or writes the cert dir; the onboarding
+        // listener only needs a config that parses.
+        let cert_dir = std::env::temp_dir().join("dstack-kms-onboard-auth-test");
+        let overrides = format!(
+            r#"
+            [core]
+            cert_dir = "{}"
+            attest_rpc_cert = false
+            enforce_self_authorization = false
+
+            [core.onboard]
+            address = "127.0.0.1"
+            port = 0
+            auth_token = "{auth_token}"
+            "#,
+            cert_dir.display()
+        );
+        let figment = Figment::from(rocket::Config::default())
+            .merge(Toml::string(config::DEFAULT_CONFIG))
+            .merge(Toml::string(&overrides));
+        let kms_config: KmsConfig = figment.focus("core").extract().unwrap();
+        let state = OnboardState::new(kms_config.clone()).unwrap();
+        let rocket = build_onboard_rocket(&kms_config, figment, state).unwrap();
+        Client::tracked(rocket).await.unwrap()
+    }
+
+    #[rocket::async_test]
+    async fn onboarding_listener_rejects_anonymous_callers_when_a_token_is_set() {
+        let client = onboard_client("onboard-secret").await;
+
+        for anonymous in [
+            client.get("/").dispatch().await.status(),
+            client.get("/finish").dispatch().await.status(),
+            client
+                .post("/prpc/Onboard.Bootstrap?json")
+                .body(r#"{"domain":"kms.example.com"}"#)
+                .dispatch()
+                .await
+                .status(),
+            client
+                .post("/prpc/Onboard.Onboard?json")
+                .body(r#"{"domain":"kms.example.com","source_url":"https://attacker.example"}"#)
+                .dispatch()
+                .await
+                .status(),
+        ] {
+            assert_eq!(anonymous, Status::Unauthorized);
+        }
+
+        let authorized = client
+            .get("/finish")
+            .header(Header::new("Authorization", "Bearer onboard-secret"))
+            .dispatch()
+            .await;
+        assert_eq!(authorized.status(), Status::Ok);
+    }
+
+    /// The documented bring-up drives this listener with plain `curl`, so an
+    /// unset token has to keep working. It is warned about at startup instead.
+    #[rocket::async_test]
+    async fn onboarding_listener_stays_open_when_no_token_is_configured() {
+        let client = onboard_client("").await;
+        assert_eq!(client.get("/finish").dispatch().await.status(), Status::Ok);
+    }
 }

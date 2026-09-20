@@ -222,6 +222,8 @@ This docker-compose uses a Docker `configs` section to inject a complete `kms.to
 
 > **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. This ensures `bootstrap-info.json` (containing the TDX attestation quote and public keys) is written to disk. You'll need this file later to register the KMS on-chain.
 
+> **Protect the onboard port.** Onboard mode has no TLS and no attestation, so whoever reaches port 9100 first can bootstrap this KMS with their own domain or stop it from starting. Either keep the port reachable only from the operator (an SSH tunnel), or set `auth_token` under `[core.onboard]` and add `-H "Authorization: Bearer <token>"` to each `curl` below. KMS warns at startup when no token is configured.
+
 **Environment variables explained:**
 
 | Variable | Required | Description |

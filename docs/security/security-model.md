@@ -395,6 +395,12 @@ App key release and KMS key handover require verified caller attestation from th
 
 The unauthenticated or non-client-certificate surface includes bootstrap and temp-CA bootstrap material retrieval, env-encryption public-key retrieval, metadata, health, and metrics behavior documented for operators. `GetTempCaCert` returns temp CA private material and remains in use by guests and by KMS-to-KMS onboarding, which mint their client certificates from that CA; operators must treat it as bootstrap-sensitive rather than harmless public metadata.
 
+### The onboarding listener is operator-authenticated, not attested
+
+A KMS that has no keys yet serves `[core.onboard]` on plain HTTP until onboarding finishes. Attestation cannot gate it: there is no certificate to serve and no quote to demand, because the caller is an operator driving bring-up rather than an attested peer. The gate is therefore a shared operator credential, `core.onboard.auth_token` / `core.onboard.htpasswd_file` / `DSTACK_KMS_ONBOARD_TOKEN`, the same mechanism the admin API and the VMM use.
+
+That credential is optional so the documented `curl` bring-up keeps working, and the KMS warns at startup when it is unset. Set it whenever `core.onboard` binds anything the operator does not solely control — the default is `0.0.0.0` and the shipped compose file publishes the port. An anonymous caller that reaches the listener first can fix the KMS RPC domain through `Onboard.Bootstrap`, name the KMS to take root keys from through `Onboard.Onboard` (which also makes the CVM issue a request to any URL it is given), or end the bring-up through `Onboard.Finish`. None of these release key material — `Onboard.Bootstrap` still requires this KMS to be allowlisted by its own auth API, and `Onboard.Onboard` still requires the source KMS to present an allowlisted attestation — but all of them deny or divert the bring-up.
+
 ## Limitations
 
 ### Attestation proves identity, not correctness

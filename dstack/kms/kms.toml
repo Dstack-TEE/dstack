@@ -110,3 +110,15 @@ enabled = true
 auto_bootstrap_domain = ""
 address = "0.0.0.0"
 port = 8000
+# Shared token required by the onboarding routes (the web UI, /finish and every
+# Onboard.* RPC). Can also be supplied via the `DSTACK_KMS_ONBOARD_TOKEN` env
+# var. Clients send it as `Authorization: Bearer <token>`, `X-Onboard-Token:
+# <token>`, or `?token=<token>` on a GET. Generate with: openssl rand -hex 32
+#
+# Empty means the listener is served without authentication, which is what the
+# documented bring-up expects. Until onboarding finishes that listener answers
+# on the address above with no TLS and no attestation, so set a token whenever
+# the port is reachable from anything but the operator.
+auth_token = ""
+# Optional Apache bcrypt htpasswd file (create with `htpasswd -B -c file admin`).
+htpasswd_file = ""
