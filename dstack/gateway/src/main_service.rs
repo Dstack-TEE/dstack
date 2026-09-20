@@ -383,6 +383,10 @@ impl ProxyInner {
                 key_path: tls.key.clone(),
                 ca_cert_path: tls.mutual.ca_certs.clone(),
                 cert_validator,
+                // The same bound `SyncManager` puts on a sync round, applied
+                // one layer down so it also covers the bootnode fetch, which
+                // does not go through `SyncManager`.
+                timeout: config.sync.timeout,
             }
         };
 

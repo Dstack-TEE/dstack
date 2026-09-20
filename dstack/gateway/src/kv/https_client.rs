@@ -5,8 +5,10 @@
 //! HTTPS client with mTLS and custom certificate verification during TLS handshake.
 
 use std::fmt::Debug;
+use std::future::Future;
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use flate2::{write::GzEncoder, Compression};
@@ -66,6 +68,15 @@ pub struct HttpsClientConfig {
     /// cluster from any other holder of a certificate the shared CA signed, and CA-path
     /// validation alone does not make that distinction.
     pub cert_validator: Arc<dyn CertValidator>,
+    /// How long one exchange -- connect, request, response body -- may take.
+    ///
+    /// Neither hyper's client nor its connector has a timeout of any kind, so
+    /// without this a peer that completes the TLS handshake and then answers
+    /// nothing holds the caller for as long as it cares to keep the socket
+    /// open. `SyncManager` wraps its own calls in `sync.timeout`, which covers
+    /// the periodic sync but not `fetch_peers_from_bootnode` -- and that one
+    /// runs inside `ProxyInner::new`, before the proxy binds its listeners.
+    pub timeout: Duration,
 }
 
 /// Wrapper that adapts a CertValidator to rustls ServerCertVerifier
@@ -159,6 +170,7 @@ type HyperClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Byte
 #[derive(Clone)]
 pub struct HttpsClient {
     client: HyperClient,
+    timeout: Duration,
 }
 
 /// A non-success HTTP status, kept as a typed error in the chain so a caller
@@ -245,11 +257,40 @@ impl HttpsClient {
             .build();
 
         let client = Client::builder(TokioExecutor::new()).build(https);
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            timeout: tls.timeout,
+        })
+    }
+
+    /// Bound one whole exchange, response body included.
+    ///
+    /// The bound covers the body read as well as the request: a peer that
+    /// answers with headers and then stalls mid-body is the same hang with an
+    /// extra step, and `read_body_bounded` limits how much may arrive, not how
+    /// long it may take to arrive.
+    async fn within_timeout<T>(
+        &self,
+        url: &str,
+        work: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        match tokio::time::timeout(self.timeout, work).await {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!("request to {url} timed out after {:?}", self.timeout),
+        }
     }
 
     /// Send a POST request with JSON body and receive JSON response
     pub async fn post_json<T: Serialize, R: DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &T,
+    ) -> Result<R> {
+        self.within_timeout(url, self.post_json_inner(url, body))
+            .await
+    }
+
+    async fn post_json_inner<T: Serialize, R: DeserializeOwned>(
         &self,
         url: &str,
         body: &T,
@@ -282,6 +323,11 @@ impl HttpsClient {
 
     /// Send an already-encoded body and return the decompressed response bytes.
     pub async fn post_bytes_response(&self, url: &str, body: Vec<u8>) -> Result<Vec<u8>> {
+        self.within_timeout(url, self.post_bytes_response_inner(url, body))
+            .await
+    }
+
+    async fn post_bytes_response_inner(&self, url: &str, body: Vec<u8>) -> Result<Vec<u8>> {
         let response = self.post_gzipped(url, body).await?;
 
         let status = response.status();
@@ -295,6 +341,11 @@ impl HttpsClient {
 
     /// Send an already-encoded body to an endpoint whose successful response has no body.
     pub async fn post_bytes_no_response(&self, url: &str, body: Vec<u8>) -> Result<()> {
+        self.within_timeout(url, self.post_bytes_no_response_inner(url, body))
+            .await
+    }
+
+    async fn post_bytes_no_response_inner(&self, url: &str, body: Vec<u8>) -> Result<()> {
         let response = self.post_gzipped(url, body).await?;
         if !response.status().is_success() {
             return Err(HttpStatusError(response.status().as_u16()).into());
@@ -430,6 +481,7 @@ mod transport_tests {
     use hyper::{Response, StatusCode};
     use hyper_util::rt::TokioIo;
     use std::convert::Infallible;
+    use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio_rustls::TlsAcceptor;
 
@@ -484,6 +536,55 @@ mod transport_tests {
         });
 
         format!("https://127.0.0.1:{}/wavekv/sync/persistent", addr.port())
+    }
+
+    /// Accept the TLS handshake and then answer nothing, ever.
+    async fn serve_silently(cert: Vec<u8>, key: Vec<u8>) -> String {
+        let certs = vec![rustls::pki_types::CertificateDer::from(cert)];
+        let key = rustls::pki_types::PrivateKeyDer::try_from(key).expect("server key");
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .expect("server config");
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let Ok(tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    // Hold the connection open with the request unanswered.
+                    std::future::pending::<()>().await;
+                    drop(tls);
+                });
+            }
+        });
+        format!("https://127.0.0.1:{}/prpc/GetPeers", addr.port())
+    }
+
+    /// A peer that accepts the connection and then says nothing must not hold
+    /// the caller forever.
+    ///
+    /// `fetch_peers_from_bootnode` runs inside `ProxyInner::new`, before the
+    /// proxy binds its listeners, and the bootnode is not assumed honest -- so
+    /// an unanswered request there is a gateway that never serves and never
+    /// logs a reason.
+    #[tokio::test]
+    async fn a_peer_that_never_answers_does_not_hang_the_client() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (config, cert, key) = tls_material(dir.path());
+        let url = serve_silently(cert, key).await;
+        let client = HttpsClient::new(&config).expect("client");
+
+        let out: Result<Result<Option<u32>>, _> =
+            tokio::time::timeout(Duration::from_secs(10), client.post_json(&url, &())).await;
+        let out = out.expect("the client must give up on its own, not wait for the test");
+        assert!(out.is_err(), "a silent peer must not read as a response");
     }
 
     fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -590,6 +691,7 @@ mod transport_tests {
                 key_path: pki.key_path.to_string_lossy().into_owned(),
                 ca_cert_path: pki.ca_cert_path.to_string_lossy().into_owned(),
                 cert_validator: Arc::new(AppIdValidator::new(app_id.to_vec())),
+                timeout: Duration::from_secs(5),
             },
             pki.leaf.cert_der(),
             pki.leaf.key_der(),
