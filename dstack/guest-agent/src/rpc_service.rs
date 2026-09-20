@@ -138,6 +138,31 @@ pub(crate) struct AppIdentity {
     pub(crate) key_provider_info: String,
 }
 
+/// Run one blocking platform attestation off the async executor.
+///
+/// `get_quote` in `dstack/tdx-attest/src/linux.rs` takes a process-global
+/// `std::sync::Mutex` and then blocks -- on configfs/TSM, or on a vsock
+/// connection to the host's QGS opened with no connect, read or write timeout.
+/// Called straight from an `async fn` that parks a runtime worker thread for
+/// the whole quote, and the runtime `#[rocket::main]` builds has one worker per
+/// vCPU rather than the `workers` this crate's `dstack.toml` asks for.
+///
+/// Measured on TDX hardware, one quote costs about a second, so concurrent
+/// callers on a 2-vCPU CVM stall every other connection the agent serves.
+/// `/var/run/dstack.sock` is bind-mounted into application containers by
+/// design, which makes that reachable by any container in the CVM; and the
+/// stall reaches the agent's own systemd watchdog, whose heartbeat is a
+/// `Worker.Version` request to the external listener, so the service is
+/// SIGABRTed and restarted at `WatchdogSec=30s`.
+async fn attest_off_executor<T: Send + 'static>(
+    platform: Arc<dyn PlatformBackend>,
+    work: impl FnOnce(&dyn PlatformBackend) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(move || work(platform.as_ref()))
+        .await
+        .context("the attestation task panicked")?
+}
+
 impl AppStateInner {
     fn info_attestation(&self) -> Result<VersionedAttestation> {
         self.platform.attestation_for_info()
@@ -150,10 +175,13 @@ impl AppStateInner {
         wire: AttestationWire,
     ) -> Result<Vec<String>> {
         let pubkey = key.public_key_der();
+        let attested = pubkey.clone();
         let attestation = wire.apply(
-            self.platform
-                .certificate_attestation(&pubkey)
-                .context("Failed to get certificate attestation")?,
+            attest_off_executor(self.platform.clone(), move |platform| {
+                platform.certificate_attestation(&attested)
+            })
+            .await
+            .context("Failed to get certificate attestation")?,
         );
         let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),
@@ -299,21 +327,25 @@ impl AppState {
         self.inner.health.as_deref()
     }
 
-    pub(crate) fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
-        self.inner
-            .platform
-            .quote_response(report_data, &self.inner.vm_config)
+    pub(crate) async fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
+        let vm_config = self.inner.vm_config.clone();
+        attest_off_executor(self.inner.platform.clone(), move |platform| {
+            platform.quote_response(report_data, &vm_config)
+        })
+        .await
     }
 
     /// Encoded attestation bytes for `Attest`, in the wire form the calling
     /// surface commits to.
-    pub(crate) fn attest_cvm(
+    pub(crate) async fn attest_cvm(
         &self,
         report_data: [u8; 64],
         wire: AttestationWire,
     ) -> Result<Vec<u8>> {
-        wire.apply(self.inner.platform.attest_cvm(report_data)?)
-            .to_bytes()
+        attest_off_executor(self.inner.platform.clone(), move |platform| {
+            wire.apply(platform.attest_cvm(report_data)?).to_bytes()
+        })
+        .await
     }
 
     /// The application's root secp256k1 key, the root of every derived key and
@@ -535,7 +567,9 @@ impl InternalRpcHandler {
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let hide_tcb_info = external && !state.config().app_compose.public_tcbinfo;
-    let versioned_attestation = state.inner.info_attestation()?;
+    let platform = state.inner.platform.clone();
+    let versioned_attestation =
+        attest_off_executor(platform, |platform| platform.attestation_for_info()).await?;
     let attestation = versioned_attestation.into_v1();
     let app_info = attestation
         .decode_app_info(false)
@@ -678,7 +712,7 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
-        self.state.quote_response(report_data)
+        self.state.quote_response(report_data).await
     }
 
     /// Always fails. See the RPC's doc comment in agent_rpc.proto: the method
@@ -805,7 +839,8 @@ impl DstackGuestRpc for InternalRpcHandler {
         Ok(AttestResponse {
             attestation: self
                 .state
-                .attest_cvm(report_data, AttestationWire::Legacy)?,
+                .attest_cvm(report_data, AttestationWire::Legacy)
+                .await?,
         })
     }
 
@@ -912,7 +947,7 @@ impl TappdRpc for InternalRpcHandlerV0 {
         };
         let report_data =
             content_type.to_report_data_with_hash(&request.report_data, &request.hash_algorithm)?;
-        let response = self.state.quote_response(report_data)?;
+        let response = self.state.quote_response(report_data).await?;
         Ok(TdxQuoteResponse {
             quote: response.quote,
             event_log: response.event_log,
@@ -992,7 +1027,7 @@ impl WorkerRpc for ExternalRpcHandler {
         request: GetAttestationForAppKeyRequest,
     ) -> Result<GetQuoteResponse> {
         let report_data = self.app_key_report_data(&request.algorithm).await?;
-        self.state.quote_response(report_data)
+        self.state.quote_response(report_data).await
     }
 }
 
@@ -1092,6 +1127,67 @@ pub(crate) mod tests {
     use std::convert::TryFrom;
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// A platform whose quote blocks the calling thread, as the real one does.
+    struct BlockingPlatform;
+
+    impl PlatformBackend for BlockingPlatform {
+        fn attestation_for_info(&self) -> Result<VersionedAttestation> {
+            unimplemented!("only the quote path blocks in this fixture")
+        }
+
+        fn certificate_attestation(&self, _pubkey: &[u8]) -> Result<VersionedAttestation> {
+            unimplemented!("only the quote path blocks in this fixture")
+        }
+
+        fn quote_response(
+            &self,
+            _report_data: [u8; 64],
+            _vm_config: &str,
+        ) -> Result<GetQuoteResponse> {
+            std::thread::sleep(Duration::from_millis(50));
+            Ok(GetQuoteResponse::default())
+        }
+
+        fn attest_cvm(&self, _report_data: [u8; 64]) -> Result<VersionedAttestation> {
+            unimplemented!("only the quote path blocks in this fixture")
+        }
+    }
+
+    /// The whole point of the hop: a quote must not park the runtime.
+    ///
+    /// A single-threaded runtime is the sharpest form of the production
+    /// arrangement, where the runtime has one worker per vCPU. If the platform
+    /// call ran on the executor the ticker below could never be polled while
+    /// the quote was in flight, which is how 24 concurrent callers used to
+    /// stall every other connection -- including the `Worker.Version` request
+    /// the systemd watchdog uses as its heartbeat, so the agent was SIGABRTed
+    /// and restarted at `WatchdogSec=30s`.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocking_quote_does_not_park_the_runtime() {
+        let platform: Arc<dyn PlatformBackend> = Arc::new(BlockingPlatform);
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let counter = ticks.clone();
+        let quote =
+            attest_off_executor(platform, |platform| platform.quote_response([0u8; 64], ""));
+        tokio::pin!(quote);
+        tokio::select! {
+            result = &mut quote => {
+                result.expect("the quote must be answered");
+            }
+            _ = async move {
+                loop {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            } => unreachable!("the ticker runs until the quote completes"),
+        }
+        assert!(
+            ticks.load(Ordering::Relaxed) > 1,
+            "the runtime was parked for the whole quote: the executor ran {} times",
+            ticks.load(Ordering::Relaxed)
+        );
+    }
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
