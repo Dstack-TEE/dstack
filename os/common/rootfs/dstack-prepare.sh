@@ -336,6 +336,10 @@ docker-compose|nerdctl-compose)
 	if [[ ! -f docker-compose.yaml ]]; then
 		jq -r '.docker_compose_file' app-compose.json >docker-compose.yaml
 	fi
+	# Failures are tolerated on purpose: this is a cleanup pass, and the
+	# command refuses to act on a compose file whose service list it cannot
+	# enumerate (`include:`) rather than mistake a live service for an orphan.
+	# The error still reaches the journal.
 	dstack-util remove-orphans --no-dockerd -f docker-compose.yaml || true
 	;;
 esac
