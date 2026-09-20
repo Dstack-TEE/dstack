@@ -1849,6 +1849,60 @@
       "notes": "candidate regression verifies the deleted unused certificate-log module, configuration hook, and sole dependency remain absent while current KMS library tests pass"
     },
     {
+      "case_id": "tc-kms-keyhier-001",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
+      "environment": "INTEGRATION",
+      "notes": "byte-identical disk, environment and k256 material plus an unchanged public identity across a lease-owned KMS restart. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-kms-keyhier-002",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
+      "environment": "INTEGRATION",
+      "notes": "nine application IDs, 36 pairwise-distinct environment keys, the attested identity bound to its own app_id namespace, and app_id length enforcement. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-kms-keyhier-003",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
+      "environment": "INTEGRATION",
+      "notes": "the issued k256 signature recovered to GetMeta.k256_pubkey over the documented preimage, six mutated chains failed, and protobuf matched JSON byte for byte. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-kms-keyhier-004",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
+      "environment": "INTEGRATION",
+      "notes": "signature_v1 and the legacy signature both recovered, four substituted claims failed, and the timestamp advanced while the published key stayed fixed. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-kms-keyhier-005",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
+      "environment": "INTEGRATION",
+      "notes": "eight concurrent GetAppKey calls for one attested identity hashed to a single response. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-kms-keyhier-006",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
+      "environment": "INTEGRATION",
+      "notes": "eight concurrent GetAppKey calls with distinct uncached image hashes each echoed their own hash with identical derived material. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
       "case_id": "tc-kms-keys-certs-001",
       "source_run": "kms-keys-retained-002",
       "source_status": "PASS",
@@ -2891,60 +2945,6 @@
       "promoted_at": "2026-07-28T04:57:08Z",
       "notes": "the complete current five-test source matrix covers verity volume parsing, path confinement, duplicate-root resolution, and measurement binding",
       "environment": "UNIT"
-    },
-    {
-      "case_id": "tc-kms-keyhier-001",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "byte-identical disk, environment and k256 material plus an unchanged public identity across a lease-owned KMS restart. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
-    },
-    {
-      "case_id": "tc-kms-keyhier-002",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "nine application IDs, 36 pairwise-distinct environment keys, the attested identity bound to its own app_id namespace, and app_id length enforcement. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
-    },
-    {
-      "case_id": "tc-kms-keyhier-003",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "the issued k256 signature recovered to GetMeta.k256_pubkey over the documented preimage, six mutated chains failed, and protobuf matched JSON byte for byte. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
-    },
-    {
-      "case_id": "tc-kms-keyhier-004",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "signature_v1 and the legacy signature both recovered, four substituted claims failed, and the timestamp advanced while the published key stayed fixed. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
-    },
-    {
-      "case_id": "tc-kms-keyhier-005",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "eight concurrent GetAppKey calls for one attested identity hashed to a single response. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
-    },
-    {
-      "case_id": "tc-kms-keyhier-006",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "eight concurrent GetAppKey calls with distinct uncached image hashes each echoed their own hash with identical derived material. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
     }
   ]
 }
