@@ -13,6 +13,7 @@ use or_panic::ResultOrPanic;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
 /// canonical struct shared by the producer (KMS) and the policy input the
@@ -335,6 +336,34 @@ pub(crate) async fn ensure_self_kms_allowed(
     Ok(())
 }
 
+/// Whether the source KMS's empty `os_image_hash` is the legacy-format case the
+/// substitution in [`ensure_kms_allowed`] exists for.
+///
+/// Old source KMS instances present the legacy certificate format (separate
+/// TDX_QUOTE + EVENT_LOG OIDs), which carries no `vm_config` at all, so their
+/// `os_image_hash` decodes empty through no fault of their own. Substituting
+/// the local KMS's own hash keeps them onboardable.
+///
+/// What that costs: the substituted value is by construction one this KMS's
+/// `allowedOsImages` accepts, so on this path `allowedOsImages` decides
+/// nothing about the *source*. The whole image binding rests on
+/// `kmsAllowedAggregatedMrs`, and that does hold - `mr_aggregated` is
+/// `sha256(mr_td || rtmr0 || rtmr1 || rtmr2 || rtmr3)`, measurements of the
+/// image actually booted, which is strictly finer than `os_image_hash`. The
+/// operational consequence is that **retiring a KMS image means removing its
+/// `mrAggregated` too**: removing it from `allowedOsImages` alone does not stop
+/// a source KMS on that image from handing over the root keys.
+///
+/// So the fallback is scoped to attestations that carry no config at all. A
+/// source that does present a config but leaves `os_image_hash` out keeps an
+/// empty hash and is denied - `allowedOsImages[bytes32(0)]` is false.
+///
+/// TODO: remove once all source KMS instances use the unified
+/// PHALA_RATLS_ATTESTATION format.
+fn uses_legacy_os_image_hash_fallback(source_config: &str, os_image_hash: &[u8]) -> bool {
+    os_image_hash.is_empty() && source_config.is_empty()
+}
+
 pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
@@ -342,12 +371,12 @@ pub(crate) async fn ensure_kms_allowed(
 ) -> Result<()> {
     let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
-    // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
-    // EVENT_LOG OIDs) which lacks vm_config, resulting in an empty os_image_hash.
-    // Fill it from the local KMS's own value. This is safe because mrAggregated already
-    // validates OS image integrity transitively through the RTMR measurement chain.
-    // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
-    if boot_info.os_image_hash.is_empty() {
+    if uses_legacy_os_image_hash_fallback(&attestation.config, &boot_info.os_image_hash) {
+        warn!(
+            "source KMS presented the legacy certificate format, so its os_image_hash is \
+             unknown and this KMS substitutes its own; allowedOsImages cannot gate this \
+             onboarding - kmsAllowedAggregatedMrs is what does"
+        );
         let local_info = local_kms_boot_info(verifier)
             .await
             .context("failed to get local KMS boot info for os_image_hash fallback")?;
@@ -466,6 +495,34 @@ mod tests {
             Ok(()) => panic!("19-byte app_id must reject"),
             Err(err) => assert!(err.to_string().contains("app_id must be 20 bytes")),
         }
+    }
+
+    /// The `os_image_hash` substitution on the onboarding path is for source
+    /// KMS instances whose certificate predates `vm_config`, and it costs
+    /// `allowedOsImages` its say over the source. Keep it scoped to exactly
+    /// that case: a source that does present a config and still reports no
+    /// image keeps an empty hash and is denied on-chain, because
+    /// `allowedOsImages[bytes32(0)]` is false.
+    #[test]
+    fn the_os_image_hash_fallback_only_covers_the_legacy_certificate_format() {
+        let hash = vec![0xaa; 32];
+
+        // Legacy format: no config at all, nothing to report an image with.
+        assert!(uses_legacy_os_image_hash_fallback("", &[]));
+
+        // A source that presents a config has had its chance to report one.
+        assert!(!uses_legacy_os_image_hash_fallback(
+            r#"{"os_image_hash":""}"#,
+            &[]
+        ));
+        assert!(!uses_legacy_os_image_hash_fallback("{}", &[]));
+
+        // Whatever the format, a reported hash is never overwritten.
+        assert!(!uses_legacy_os_image_hash_fallback("", &hash));
+        assert!(!uses_legacy_os_image_hash_fallback(
+            r#"{"os_image_hash":"aa"}"#,
+            &hash
+        ));
     }
 
     /// Both Ethereum backends left-pad a short value to the full width, so a
