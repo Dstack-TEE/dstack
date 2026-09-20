@@ -7,12 +7,19 @@ dstack repository.
 
 For each request it:
 
-1. verifies the guest's TDX quote with DCAP;
+1. verifies the guest's TDX quote with DCAP and refuses a TD that is in debug
+   mode or was launched by a non-production TDX module;
 2. checks that the SGX and TDX quotes carry the same quoting-enclave ID;
 3. derives a 32-byte key as `SHA-256(SGX sealing key || MRTD || RTMR0..3)`;
 4. encrypts the key using the libsodium sealed-box format and the X25519 public
    key in the TDX report data; and
 5. returns the ciphertext with an SGX quote binding its SHA-256 digest.
+
+The derivation covers MRTD and the RTMRs but not `TD_ATTRIBUTES`, so a debug
+TD running the same image would derive the same key as the production TD. The
+derivation is compatible with the external provider and with every disk sealed
+by it, so it cannot be extended without invalidating that data; step 1 is what
+keeps a debug TD -- whose memory the host can read -- from reaching the key.
 
 The wire protocol remains a four-byte big-endian JSON length followed by a
 `{"quote":[...]}` request. The response contains `encrypted_key` and

@@ -66,6 +66,7 @@ impl KeyProvider {
         let tdx_report = report.report.as_td10().copied().ok_or_else(|| {
             ProviderError::QuoteVerification("verified quote is not a TDX quote".into())
         })?;
+        require_production_td(&tdx_report)?;
         debug!(
             tcb_status = %report.status,
             advisories = ?report.advisory_ids,
@@ -73,6 +74,32 @@ impl KeyProvider {
         );
         Ok(tdx_report)
     }
+}
+
+/// Refuse a TD the host launched in a state that does not protect it.
+///
+/// A debug TD lets the host read and write its memory through the TDX debug
+/// interface, so handing one the sealing key hands the key to the host. The
+/// key does not distinguish the two either: `measurements()` covers MRTD and
+/// the RTMRs but not `td_attributes`, and that derivation is frozen -- it is
+/// what every existing local-key-provider deployment sealed its disk with --
+/// so a debug TD booting the same image derives exactly the production TD's
+/// key. This gate is the only thing standing between the two.
+///
+/// This is the TD-side counterpart of the check the guest already applies to
+/// this provider's SGX quote (`ra_tls::attestation::validate_tcb`). It is
+/// spelled out again instead of depending on `dstack-attest` so the enclave
+/// keeps its small dependency footprint.
+fn require_production_td(report: &TDReport10) -> Result<(), ProviderError> {
+    if report.td_attributes[0] & 0x01 != 0 {
+        return Err(ProviderError::DebugTd);
+    }
+    if report.mr_signer_seam != [0_u8; 48] {
+        return Err(ProviderError::QuoteVerification(
+            "TD was launched by a non-production TDX module".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn parse_quote(kind: &'static str, raw_quote: &[u8]) -> Result<Quote, ProviderError> {
@@ -114,9 +141,75 @@ fn measurements(report: &TDReport10) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    const TDX_QUOTE: &[u8] = include_bytes!("../../ra-tls/assets/tdx_quote");
+    /// `td_attributes` starts 120 bytes into the TD report body, which itself
+    /// starts 48 bytes into the quote. `td_attributes_offset_is_the_recorded_one`
+    /// pins this against the parsed report.
+    const TD_ATTRIBUTES_OFFSET: usize = 48 + 120;
+
+    fn report(quote: &[u8]) -> TDReport10 {
+        Quote::parse(quote)
+            .unwrap()
+            .report
+            .as_td10()
+            .copied()
+            .unwrap()
+    }
+
+    /// The recorded quote with the TD debug bit set, as a host gets by asking
+    /// the VMM to launch the same image with debug enabled.
+    fn debug_quote() -> Vec<u8> {
+        let mut quote = TDX_QUOTE.to_vec();
+        quote[TD_ATTRIBUTES_OFFSET] |= 0x01;
+        quote
+    }
+
+    #[test]
+    fn td_attributes_offset_is_the_recorded_one() {
+        assert_eq!(
+            report(TDX_QUOTE).td_attributes,
+            TDX_QUOTE[TD_ATTRIBUTES_OFFSET..TD_ATTRIBUTES_OFFSET + 8]
+        );
+        assert_eq!(report(&debug_quote()).td_attributes[0] & 0x01, 0x01);
+    }
+
+    #[test]
+    fn accepts_the_recorded_production_td() {
+        assert!(require_production_td(&report(TDX_QUOTE)).is_ok());
+    }
+
+    #[test]
+    fn refuses_to_provision_a_debug_mode_td() {
+        assert!(matches!(
+            require_production_td(&report(&debug_quote())),
+            Err(ProviderError::DebugTd)
+        ));
+    }
+
+    #[test]
+    fn refuses_a_td_from_a_non_production_tdx_module() {
+        let mut report = report(TDX_QUOTE);
+        report.mr_signer_seam[0] = 0x01;
+        assert!(matches!(
+            require_production_td(&report),
+            Err(ProviderError::QuoteVerification(_))
+        ));
+    }
+
+    /// Why `refuses_to_provision_a_debug_mode_td` is load-bearing rather than
+    /// defence in depth: the derivation cannot tell a debug TD apart, and it
+    /// cannot be changed without invalidating every sealed disk in the field.
+    #[test]
+    fn a_debug_td_derives_the_production_key_so_only_the_gate_separates_them() {
+        assert_eq!(
+            measurements(&report(TDX_QUOTE)),
+            measurements(&report(&debug_quote()))
+        );
+    }
+
     #[test]
     fn extracts_all_key_derivation_measurements_in_wire_order() {
-        let quote = Quote::parse(include_bytes!("../../ra-tls/assets/tdx_quote")).unwrap();
+        let quote = Quote::parse(TDX_QUOTE).unwrap();
         let report = quote.report.as_td10().unwrap();
         let output = measurements(report);
 
