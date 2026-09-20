@@ -2110,6 +2110,7 @@ dependencies = [
  "http-client",
  "k256",
  "load_config",
+ "or-panic",
  "parity-scale-codec",
  "ra-rpc",
  "ra-tls",
