@@ -18,7 +18,7 @@ use cc_eventlog::{
     TdxEvent,
 };
 use dstack_mr::{tdx::TdxRtmr0AcpiHashes, TdxMeasurements};
-use dstack_types::{TdxAttestationVariant, VmConfig};
+use dstack_types::{sha256sum, TdxAttestationVariant, VmConfig};
 use hex_literal::hex;
 use ra_tls::attestation::{
     AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
@@ -26,7 +26,7 @@ use ra_tls::attestation::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::io::AsyncWriteExt;
 use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 use tracing::{debug, info, warn};
 
@@ -331,39 +331,25 @@ impl CvmVerifier {
             .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
     }
 
-    /// A manifest name must be literally a file name, because
-    /// `prune_unlisted_image_files` matches manifest entries against the
-    /// `file_name()` of each top-level directory entry, and `sha256sum -c`
-    /// resolves them relative to the extraction root.
-    fn is_flat_manifest_name(name: &str) -> bool {
-        Path::new(name)
-            .file_name()
-            .is_some_and(|file_name| file_name == OsStr::new(name))
-    }
-
-    fn validate_image_manifest_paths(files_doc: &str) -> Result<()> {
-        for (line_index, line) in files_doc.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let mut fields = line.split_whitespace();
-            let _digest = fields
-                .next()
-                .context("image manifest entry is missing a digest")?;
-            let name = fields
-                .next()
-                .context("image manifest entry is missing a path")?;
-            if fields.next().is_some() {
-                bail!("image manifest line {} has extra fields", line_index + 1);
-            }
-            if !Self::is_flat_manifest_name(name) {
-                bail!("image manifest line {} has an unsafe path", line_index + 1);
-            }
-            if name == "sha256sum.txt" {
-                bail!("image manifest must not recursively list sha256sum.txt");
+    /// Check every file the image manifest lists against the digest it binds.
+    /// This is the only content check on `bzImage`, `ovmf.fd` and the initrd
+    /// before they are measured.
+    fn verify_image_manifest(
+        extracted_dir: &Path,
+        files_doc: &str,
+    ) -> Result<Vec<sha256sum::Entry>> {
+        let entries = sha256sum::parse(files_doc.as_bytes()).map_err(anyhow::Error::msg)?;
+        for entry in &entries {
+            let mut file = fs_err::File::open(extracted_dir.join(&entry.name))
+                .with_context(|| format!("image is missing manifest entry {}", entry.name))?;
+            let mut hasher = Sha256::new();
+            std::io::copy(&mut file, &mut hasher)
+                .with_context(|| format!("failed to read manifest entry {}", entry.name))?;
+            if hasher.finalize().as_slice() != entry.hash {
+                bail!("{} does not match its digest in sha256sum.txt", entry.name);
             }
         }
-        Ok(())
+        Ok(entries)
     }
 
     fn extract_image_archive(tarball_path: &Path, extracted_dir: &Path) -> Result<()> {
@@ -398,12 +384,11 @@ impl CvmVerifier {
         Ok(())
     }
 
-    fn prune_unlisted_image_files(extracted_dir: &Path, files_doc: &str) -> Result<()> {
-        let listed_files: Vec<&OsStr> = files_doc
-            .lines()
-            .flat_map(|line| line.split_whitespace().nth(1))
-            .map(|s| s.as_ref())
-            .collect();
+    fn prune_unlisted_image_files(
+        extracted_dir: &Path,
+        manifest: &[sha256sum::Entry],
+    ) -> Result<()> {
+        let listed_files: Vec<&OsStr> = manifest.iter().map(|entry| entry.name.as_ref()).collect();
         let files = fs_err::read_dir(extracted_dir).context("Failed to read directory")?;
         for file in files {
             let file = file.context("Failed to read directory entry")?;
@@ -1037,26 +1022,10 @@ impl CvmVerifier {
         let sha256sum_path = extracted_dir.join("sha256sum.txt");
         let files_doc =
             fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        Self::validate_image_manifest_paths(&files_doc)?;
-
-        // Verify checksum
-        let output = Command::new("sha256sum")
-            .arg("-c")
-            .arg("sha256sum.txt")
-            .current_dir(&extracted_dir)
-            .output()
-            .await
-            .context("Failed to verify checksum")?;
-
-        if !output.status.success() {
-            bail!(
-                "Checksum verification failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        let manifest = Self::verify_image_manifest(&extracted_dir, &files_doc)?;
 
         // Remove the files that are not listed in sha256sum.txt
-        Self::prune_unlisted_image_files(&extracted_dir, &files_doc)?;
+        Self::prune_unlisted_image_files(&extracted_dir, &manifest)?;
 
         // All image modes are addressed by sha256(sha256sum.txt). Extra
         // measurement CBOR files are ordinary sha256sum.txt entries and do not
@@ -1705,6 +1674,17 @@ mod tests {
         assert_eq!(entries.len(), 1, "temporary cache files must not survive");
     }
 
+    /// Lay out an extracted image whose manifest is `files_doc`, with each
+    /// named file holding the payload given for it.
+    fn image_dir_with_manifest(files_doc: &str, files: &[(&str, &[u8])]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp image directory");
+        fs_err::write(dir.path().join("sha256sum.txt"), files_doc).unwrap();
+        for (name, payload) in files {
+            fs_err::write(dir.path().join(name), payload).unwrap();
+        }
+        dir
+    }
+
     #[test]
     fn measurement_cache_key_ignores_unmeasured_fields() {
         let base: VmConfig = serde_json::from_value(serde_json::json!({
@@ -1739,13 +1719,14 @@ mod tests {
 
     #[test]
     fn image_cache_pruning_keeps_checksum_identity() {
-        let dir = tempfile::tempdir().expect("temp image directory");
-        let files_doc = "00  metadata.json\n";
-        fs_err::write(dir.path().join("sha256sum.txt"), files_doc).unwrap();
-        fs_err::write(dir.path().join("metadata.json"), "{}").unwrap();
-        fs_err::write(dir.path().join("unmeasured"), "remove me").unwrap();
+        let files_doc = format!("{}  metadata.json\n", hex::encode(Sha256::digest(b"{}")));
+        let dir = image_dir_with_manifest(
+            &files_doc,
+            &[("metadata.json", b"{}"), ("unmeasured", b"remove me")],
+        );
 
-        CvmVerifier::prune_unlisted_image_files(dir.path(), files_doc).unwrap();
+        let manifest = CvmVerifier::verify_image_manifest(dir.path(), &files_doc).unwrap();
+        CvmVerifier::prune_unlisted_image_files(dir.path(), &manifest).unwrap();
 
         assert!(dir.path().join("sha256sum.txt").exists());
         assert!(dir.path().join("metadata.json").exists());
@@ -1753,7 +1734,37 @@ mod tests {
     }
 
     #[test]
-    fn image_paths_must_be_confined_and_manifest_paths_must_be_flat() {
+    fn every_manifest_entry_is_checked_before_the_image_is_accepted() {
+        let good = hex::encode(Sha256::digest(b"{}"));
+        let zero = "00".repeat(32);
+        let files: &[(&str, &[u8])] = &[("metadata.json", b"{}"), ("bzImage", b"kernel")];
+
+        for files_doc in [
+            format!("{good}  metadata.json\n{zero}  bzImage\n"),
+            format!("{good}  metadata.json\n{zero}  missing\n"),
+        ] {
+            let dir = image_dir_with_manifest(&files_doc, files);
+            assert!(
+                CvmVerifier::verify_image_manifest(dir.path(), &files_doc).is_err(),
+                "accepted {files_doc:?}"
+            );
+        }
+
+        let good_doc = format!(
+            "{good}  metadata.json\n{}  bzImage\n",
+            hex::encode(Sha256::digest(b"kernel"))
+        );
+        let dir = image_dir_with_manifest(&good_doc, files);
+        assert_eq!(
+            CvmVerifier::verify_image_manifest(dir.path(), &good_doc)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn image_archive_paths_must_be_confined() {
         for path in ["../escape", "/absolute", "nested/../escape"] {
             assert!(
                 !CvmVerifier::is_confined_archive_path(Path::new(path)),
@@ -1766,25 +1777,6 @@ mod tests {
         for path in ["nested/artifact", "./metadata.json", ".", "./", ""] {
             assert!(
                 CvmVerifier::is_confined_archive_path(Path::new(path)),
-                "{path}"
-            );
-        }
-
-        let digest = "00".repeat(32);
-        assert!(
-            CvmVerifier::validate_image_manifest_paths(&format!("{digest}  metadata.json\n"))
-                .is_ok()
-        );
-        for path in [
-            "../escape",
-            "/absolute",
-            "nested/artifact",
-            "./metadata.json",
-            ".",
-            "sha256sum.txt",
-        ] {
-            assert!(
-                CvmVerifier::validate_image_manifest_paths(&format!("{digest}  {path}\n")).is_err(),
                 "{path}"
             );
         }
