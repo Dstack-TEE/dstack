@@ -177,6 +177,20 @@ impl AuthApi {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Webhook {
     pub url: String,
+    /// How long one auth API call may take.
+    ///
+    /// Defaulted rather than required: an existing `[core.auth_api.webhook]`
+    /// section names only `url`, and a config that stops parsing on upgrade is
+    /// worse than one that keeps the old default. `serde` fills this in for
+    /// them.
+    #[serde(default = "default_webhook_timeout", with = "serde_duration")]
+    pub timeout: Duration,
+}
+
+/// Matches the RPC client's request timeout (`ra_rpc::client`), so a KMS
+/// waiting on its auth API gives up no later than the guest waiting on the KMS.
+fn default_webhook_timeout() -> Duration {
+    Duration::from_secs(60)
 }
 
 #[derive(Debug, Clone, Deserialize)]

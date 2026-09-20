@@ -12,6 +12,8 @@ use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 /// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
 /// canonical struct shared by the producer (KMS) and the policy input the
@@ -94,12 +96,43 @@ pub(crate) struct GetInfoResponse {
     pub app_implementation: Option<String>,
 }
 
-async fn http_get<R: DeserializeOwned>(url: &str) -> Result<R> {
-    send_request(reqwest::Client::new().get(url), url).await
+/// How long the auth API has to accept a connection.
+///
+/// Separate from the configured request timeout and not configurable: a TCP
+/// connect that has not completed in this long is a backend that is down, not
+/// one that is slow, and no deployment needs to tune that apart from the rest.
+const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The one client every auth API call goes through.
+///
+/// A `reqwest::Client` owns the connection pool and the TLS configuration, so
+/// building one per call threw both away and paid a fresh connect -- and, over
+/// HTTPS, a fresh handshake -- for every authorization decision. There is
+/// deliberately no decision cache above this (pinned by a test), which is what
+/// makes the pool worth keeping.
+fn auth_api_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(AUTH_API_CONNECT_TIMEOUT)
+            .build()
+            // A builder that cannot produce a client means no TLS backend; the
+            // default client is the same thing without our connect timeout, and
+            // failing every call from here would be worse than losing it.
+            .unwrap_or_default()
+    })
 }
 
-async fn http_post<R: DeserializeOwned>(url: &str, body: &impl Serialize) -> Result<R> {
-    send_request(reqwest::Client::new().post(url).json(body), url).await
+async fn http_get<R: DeserializeOwned>(url: &str, timeout: Duration) -> Result<R> {
+    send_request(auth_api_client().get(url).timeout(timeout), url).await
+}
+
+async fn http_post<R: DeserializeOwned>(
+    url: &str,
+    body: &impl Serialize,
+    timeout: Duration,
+) -> Result<R> {
+    send_request(auth_api_client().post(url).json(body).timeout(timeout), url).await
 }
 
 async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &str) -> Result<R> {
@@ -131,7 +164,7 @@ impl AuthApi {
                     "bootAuth/app"
                 };
                 let url = url_join(&webhook.url, path);
-                http_post(&url, &boot_info).await
+                http_post(&url, &boot_info, webhook.timeout).await
             }
         }
     }
@@ -147,7 +180,7 @@ impl AuthApi {
                 app_implementation: None,
             }),
             AuthApi::Webhook { webhook } => {
-                let info: AuthApiInfoResponse = http_get(&webhook.url).await?;
+                let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
                 let eth_rpc_url = if info.eth_rpc_url.is_empty() {
                     None
                 } else {
@@ -328,8 +361,44 @@ mod tests {
 
     fn webhook(url: String) -> AuthApi {
         AuthApi::Webhook {
-            webhook: Webhook { url },
+            webhook: Webhook {
+                url,
+                timeout: std::time::Duration::from_millis(500),
+            },
         }
+    }
+
+    /// `KMS.GetMeta` needs no client certificate (`ra_rpc::ratls_client_verifier`
+    /// makes client auth optional and the handler checks nothing), and it calls
+    /// the auth API on every request with no decision cache. So an anonymous
+    /// caller on the public RPC listener decides how many of these are in
+    /// flight. A backend that accepts the connection and never answers must not
+    /// keep each one open for the life of the process.
+    #[rocket::async_test]
+    async fn a_backend_that_never_answers_does_not_hold_the_request_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let _blackhole = thread::spawn(move || {
+            // Accept, then hold the socket open without ever writing a byte.
+            let held: Vec<_> = listener.incoming().take(1).collect();
+            thread::sleep(std::time::Duration::from_secs(30));
+            drop(held);
+        });
+
+        let auth = webhook(format!("http://{address}"));
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(10), auth.get_info()).await;
+
+        assert!(
+            outcome.is_ok(),
+            "the auth API call carried no timeout of its own and was still \
+             running after 10s; an anonymous GetMeta flood accumulates these"
+        );
+        let error = outcome.unwrap().expect_err("a silent backend must fail");
+        assert!(
+            format!("{error:#}").contains("timed out") || format!("{error:#}").contains("timeout"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
