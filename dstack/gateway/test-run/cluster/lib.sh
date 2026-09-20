@@ -140,8 +140,6 @@ cert_key = "/etc/gateway/proxy.key"
 base_domain = "cluster.test"
 listen_addr = "0.0.0.0"
 listen_port = 9014
-tappd_port = 8090
-external_port = 9014
 EOF
     # The proxy listener wants its certificate beside the config, and each test
     # has a config directory of its own now -- so generating it separately, once,

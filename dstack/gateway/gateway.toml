@@ -89,7 +89,6 @@ workers = 32
 thread_per_core = true
 # Hand new connections to a less loaded core when SO_REUSEPORT skews them.
 connection_rebalance = true
-external_port = 443
 # Maximum concurrent connections per app. 0 means unlimited.
 max_connections_per_app = 2000
 # Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
