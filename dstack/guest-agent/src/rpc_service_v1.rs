@@ -206,15 +206,12 @@ impl DstackGuestRpc for V1RpcHandler {
 
     async fn attest(self, request: AttestRequest) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("report data is too long")?;
-        // Generating a quote takes a global mutex and then blocks in an ioctl.
-        // On the async executor that parks a worker thread for the duration and
-        // stalls every other connection this agent is serving.
-        let state = self.state.clone();
-        let attestation = tokio::task::spawn_blocking(move || {
-            state.attest_cvm(report_data, AttestationWire::MsgpackV1)
-        })
-        .await
-        .context("the attestation task panicked")??;
+        // `attest_cvm` takes the blocking hop itself, for every caller. See
+        // `attest_off_executor` in `rpc_service.rs`.
+        let attestation = self
+            .state
+            .attest_cvm(report_data, AttestationWire::MsgpackV1)
+            .await?;
         Ok(AttestResponse {
             attestation,
             boottime_gpu_evidence: boottime_gpu_evidence(
@@ -637,6 +634,7 @@ mod tests {
         let (state, _guard) = state().await;
         let legacy = state
             .attest_cvm([0u8; 64], AttestationWire::Legacy)
+            .await
             .unwrap();
         assert_eq!(
             legacy.first(),
