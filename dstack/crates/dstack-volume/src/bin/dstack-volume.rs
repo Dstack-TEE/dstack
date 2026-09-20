@@ -431,15 +431,7 @@ fn unescape_mountinfo(value: &[u8]) -> Vec<u8> {
 
 fn mapping_root(mapper_name: &str) -> Result<String> {
     let status = run_fun!(veritysetup status $mapper_name)?;
-    status
-        .lines()
-        .find_map(|line| {
-            let line = line.trim();
-            line.strip_prefix("root hash:")
-                .or_else(|| line.strip_prefix("Root hash:"))
-        })
-        .map(|root| root.trim().to_string())
-        .context("verity mapping status has no root hash")
+    dstack_volume::parse_verity_root_hash(&status).context("verity mapping status has no root hash")
 }
 
 #[cfg(test)]
