@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-keyhier-001",
+  "title": "Derived key determinism across a KMS restart",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-keyhier-001"
+  ],
+  "risks": [
+    "risk-kms-keyhier-001"
+  ],
+  "tags": [
+    "kms",
+    "key-hierarchy"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS.GetAppKey",
+    "KMS.GetMeta"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}
