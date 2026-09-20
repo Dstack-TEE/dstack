@@ -105,6 +105,32 @@
       "notes": "mined from central-fixtures-20260724T032131Z and verified by replay"
     },
     {
+      "case_id": "tc-gos-concurrency-001",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
+      "environment": "INTEGRATION",
+      "notes": "24 concurrent identical GetKey, DeriveK256Key and DeriveKey calls agreed on one key digest each against a lease-owned simulator, a second derivation path and 24 random-seed derivations proved the comparison distinguishes keys, and 24 concurrent GetQuote calls each echoed and embedded their own report data at bytes 568..632 Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-gos-concurrency-002",
+      "source_run": "guest-agent-robustness-concurrency-002",
+      "source_status": "BLOCKED",
+      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
+      "environment": "SIMULATOR",
+      "notes": "head-of-line blocking is a hardware claim; against the simulator one GetQuote cost 0.6ms, below the 50ms floor, so the harness reported BLOCKED rather than passing on a load that does not load anything. Awaiting a physical TDX run with a reachable host QGS"
+    },
+    {
+      "case_id": "tc-gos-concurrency-003",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
+      "environment": "INTEGRATION",
+      "notes": "66 concurrent calls over eleven methods across the internal, legacy, external and guest-api listeners were all answered 200, the post-load probe was answered, the agent's (pid, start time) pair was unchanged, and its open descriptors returned to the pre-load count Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
       "case_id": "tc-gos-dstackguest-001",
       "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
@@ -293,6 +319,15 @@
       "entrypoint": "cases/01-guest-os/09-observability-and-network/tc-gos-observabil-005/run.py",
       "environment": "HARDWARE",
       "notes": "a lease-owned hardware guest proved a positive systemd watchdog interval and healthy guest-local Worker.Version baseline, frozen-main-process heartbeat loss, automatic replacement with a different active MainPID, stable version after recovery, no further replacement over an additional watchdog interval, external rejection of an internal DstackGuest route, bounded journal observation, and cleanup"
+    },
+    {
+      "case_id": "tc-gos-observability-slow-consumer",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
+      "environment": "INTEGRATION",
+      "notes": "a reader that stopped draining a follow stream left the agent's resident memory unchanged over 30s and recovered 256KB on resume, ten stalled readers against workers = 8 did not stop a Version call, and an idle follow stream ended after exactly 600s Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-platform-001",
@@ -2891,38 +2926,6 @@
       "promoted_at": "2026-07-28T04:57:08Z",
       "notes": "the complete current five-test source matrix covers verity volume parsing, path confinement, duplicate-root resolution, and measurement binding",
       "environment": "UNIT"
-    },
-    {
-      "case_id": "tc-gos-concurrency-001",
-      "source_run": "guest-agent-robustness-concurrency-001",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
-      "environment": "SIMULATOR",
-      "notes": "24 concurrent identical GetKey, DeriveK256Key and DeriveKey calls agreed on one key digest each against a lease-owned simulator, a second derivation path and 24 random-seed derivations proved the comparison distinguishes keys, and 24 concurrent GetQuote calls each echoed and embedded their own report data at bytes 568..632"
-    },
-    {
-      "case_id": "tc-gos-concurrency-002",
-      "source_run": "guest-agent-robustness-concurrency-002",
-      "source_status": "BLOCKED",
-      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
-      "environment": "SIMULATOR",
-      "notes": "head-of-line blocking is a hardware claim; against the simulator one GetQuote cost 0.6ms, below the 50ms floor, so the harness reported BLOCKED rather than passing on a load that does not load anything. Awaiting a physical TDX run with a reachable host QGS"
-    },
-    {
-      "case_id": "tc-gos-concurrency-003",
-      "source_run": "guest-agent-robustness-concurrency-003",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
-      "environment": "SIMULATOR",
-      "notes": "66 concurrent calls over eleven methods across the internal, legacy, external and guest-api listeners were all answered 200, the post-load probe was answered, the agent's (pid, start time) pair was unchanged, and its open descriptors returned to the pre-load count"
-    },
-    {
-      "case_id": "tc-gos-observability-slow-consumer",
-      "source_run": "guest-agent-robustness-slow-consumer",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/guest-agent-robustness-case.py",
-      "environment": "SIMULATOR",
-      "notes": "a reader that stopped draining a follow stream left the agent's resident memory unchanged over 30s and recovered 256KB on resume, ten stalled readers against workers = 8 did not stop a Version call, and an idle follow stream ended after exactly 600s"
     }
   ]
 }
