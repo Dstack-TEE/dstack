@@ -6,8 +6,8 @@
 
 set -euo pipefail
 
-HOST_SHARED_DIR="/dstack/.host-shared"
-SYS_CONFIG_FILE="$HOST_SHARED_DIR/.sys-config.json"
+HOST_SHARED_DIR="${HOST_SHARED_DIR:-/dstack/.host-shared}"
+SYS_CONFIG_FILE="${SYS_CONFIG_FILE:-$HOST_SHARED_DIR/.sys-config.json}"
 APP_COMPOSE_FILE="${APP_COMPOSE_FILE:-app-compose.json}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml}"
 NERDCTL_NAMESPACE="${NERDCTL_NAMESPACE:-dstack}"
@@ -16,7 +16,19 @@ NERDCTL_NAMESPACE="${NERDCTL_NAMESPACE:-dstack}"
 COMPOSE_RUNTIME_FILE="${COMPOSE_RUNTIME_FILE:-/run/dstack/app-compose-runtime.json}"
 ACTION="${1:-start}"
 
-CFG_PCCS_URL=$([ -f "$SYS_CONFIG_FILE" ] && jq -r '.pccs_url//""' "$SYS_CONFIG_FILE" || echo "")
+# An absent sys-config is normal: the host need not configure a PCCS, and the
+# collateral clients fall back to their defaults. A sys-config that is there
+# but does not parse is not the same thing -- it means the host wrote something
+# this guest cannot read, and silently continuing with an empty PCCS_URL hides
+# that until an app's quote generation fails with an unrelated error.
+CFG_PCCS_URL=""
+if [ -f "$SYS_CONFIG_FILE" ]; then
+    if ! CFG_PCCS_URL=$(jq -r '.pccs_url // ""' "$SYS_CONFIG_FILE" 2>&1); then
+        echo "WARNING: cannot read pccs_url from $SYS_CONFIG_FILE: $CFG_PCCS_URL" >&2
+        echo "WARNING: continuing with no PCCS_URL" >&2
+        CFG_PCCS_URL=""
+    fi
+fi
 export PCCS_URL=${PCCS_URL:-$CFG_PCCS_URL}
 
 runner=$(jq -r '.runner' "$APP_COMPOSE_FILE")
