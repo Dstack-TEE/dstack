@@ -27,7 +27,8 @@
 ## Objective
 
 Verify that a method which does no work stays answerable while the agent's
-slowest attestation method saturates its runtime.
+slowest attestation method saturates its runtime, and that the agent is still
+the process it started as when the load ends.
 
 `get_quote` in `dstack/tdx-attest/src/linux.rs` takes a process-global
 `std::sync::Mutex` and then blocks — on configfs/TSM, or on a vsock connection
@@ -43,9 +44,25 @@ Every other path into the same function runs it directly on the executor:
 `Tappd.RawQuote`, `Worker.GetAttestationForAppKey`, `issue_cert`, and
 `get_info` — which is the body of `DstackGuest.Info`, `Tappd.Info`, the
 external `Worker.Info`, the `/` dashboard and the vsock `GuestApi.Info`, and
-which calls `info_attestation()` on every call. The agent is configured with
-`workers = 8` (`dstack/guest-agent/dstack.toml`), so eight concurrent callers on
-any of those paths is the whole runtime.
+which calls `info_attestation()` on every call.
+
+`dstack/guest-agent/dstack.toml` asks for `workers = 8`, but that figure never
+reaches the runtime: `#[rocket::main]` in `guest-agent/src/main.rs` builds the
+tokio runtime before `load_config_figment` is called, so the agent gets one
+worker per vCPU. A lease-owned 2-vCPU guest was measured with two
+`rocket-worker-t` threads, which is the whole runtime. Saturating above the
+configured eight therefore saturates the real width on any CVM this plan
+provisions.
+
+The stall does not stop at the caller. The agent's own systemd watchdog
+heartbeat is an HTTP `Worker.Version` request to its external listener
+(`run_watchdog` in `guest-agent/src/server.rs`), and the unit declares
+`WatchdogSec=30s` with `Restart=always`. A runtime parked on the quote mutex
+cannot answer its own health probe, so systemd SIGABRTs the agent and restarts
+it, resetting every connection that was open. That is why this case records the
+agent's process identity rather than only its replies: a dropped connection
+reads as a transport problem until you know the agent it was talking to was
+killed.
 
 The v1 identity cache (`AppIdentity` and `IDENTITY_RETRY_INTERVAL` in
 `rpc_service.rs`) exists to stop exactly this, and its own comment says the
@@ -67,11 +84,18 @@ not. This case measures the consequence rather than restating the code.
 
 - 20 unloaded `Version` samples, as the baseline.
 - 3 `GetQuote` calls, as the measured cost of one unit of blocking work.
-- 24 saturating threads — three times `workers = 8` — issuing `GetQuote` with
-  fresh random `report_data` for 20 s.
+- 24 saturating threads — three times the configured `workers = 8`, and more
+  than ten times the runtime's real width on a 2-vCPU guest — issuing
+  `GetQuote` with fresh random `report_data` for 20 s.
 - `Version` sampled every 100 ms on a fresh connection throughout, after a 1 s
   settle so the first sample does not measure an agent that is not yet loaded.
 - Stated bound: `Version` p95 under load must stay at or below **1.0 s**.
+- The in-guest agent's PID and field 22 of `/proc/<pid>/stat` — its start time
+  in clock ticks since boot — read over the fixture's `ssh_argv` before and
+  after the load. A PID alone is not identity: systemd can restart the agent
+  onto the same number, and only the start time says it is a different process.
+  A fixture that publishes no guest access leaves this unrecorded rather than
+  blocking the case; everything else it asserts is measured over RPC.
 
 ## Steps
 
@@ -95,6 +119,10 @@ then hold 24 concurrent `GetQuote` calls in flight for 20 s while sampling
 
 - One `GetQuote` costs at least 50 ms. Below that the load is not a load, the
   behavior under test cannot occur, and the result is BLOCKED — never PASS.
+- The agent is the same process after the load as before it. This is checked
+  first, because it explains the rest: an agent killed by its own watchdog
+  resets every connection it was serving, and those resets are otherwise
+  indistinguishable from a transport fault.
 - Every saturating `GetQuote` is answered with HTTP 200, so the load was real
   work and not a queue of rejections.
 - Every `Version` probe is answered.
@@ -111,7 +139,8 @@ Call `Version` once more after every saturating call has returned.
 **Expected results:**
 
 - The listener answers. An agent that stopped answering did not merely slow
-  down; it wedged.
+  down; it wedged. An agent that answers because it was killed and restarted
+  is already a failure of Step 2, not a pass here.
 
 ## Why a simulator run cannot confirm this
 
@@ -137,6 +166,11 @@ never as a pass.
   has its own reachability and its own anonymous-caller exposure.
 - It does not prove a bound under an adversarial caller. 24 threads is a load,
   not an attack; a caller that can route to the CVM is not limited to 24.
+- It does not measure the transport. The listener it drives is whichever one
+  the fixture publishes, which on the physical-TDX provider is a forwarded host
+  port into the guest. A drop seen there is only evidence about the agent
+  because the process-identity check says the agent died; without that check
+  the same observation would be equally consistent with the forwarder.
 - It does not distinguish *why* a probe was slow. A p95 breach says the trivial
   method waited; the artifact's quote cost and worker count are what turn that
   into a diagnosis.
