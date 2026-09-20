@@ -134,7 +134,7 @@ pub struct Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use guest_api::GpuDevice;
+    use guest_api::{Container, GpuDevice};
     use rinja::Template;
 
     fn render(gpu_info: GpuInfoResponse) -> String {
@@ -395,6 +395,15 @@ mod tests {
     }
 
     fn dashboard_with(gpu_info: GpuInfoResponse) -> String {
+        dashboard(gpu_info, vec![], true, false)
+    }
+
+    fn dashboard(
+        gpu_info: GpuInfoResponse,
+        containers: Vec<Container>,
+        public_sysinfo: bool,
+        public_logs: bool,
+    ) -> String {
         Dashboard {
             app_name: String::new(),
             app_id: vec![],
@@ -402,10 +411,10 @@ mod tests {
             device_id: vec![],
             key_provider_info: String::new(),
             tcb_info: String::new(),
-            containers: vec![],
+            containers,
             system_info: Default::default(),
-            public_sysinfo: true,
-            public_logs: false,
+            public_sysinfo,
+            public_logs,
             public_tcbinfo: false,
             cloud_vendor: String::new(),
             cloud_product: String::new(),
@@ -413,5 +422,48 @@ mod tests {
         }
         .render()
         .expect("render")
+    }
+
+    fn container(name: &str) -> Container {
+        Container {
+            names: vec![format!("/{name}")],
+            image: format!("registry.example/{name}:1"),
+            status: "Up 3 hours".into(),
+            ..Default::default()
+        }
+    }
+
+    /// The dashboard is served on 8090, which `docs/security/cvm-boundaries.md`
+    /// describes as publicly reachable. An app that turned every `public_*`
+    /// flag off must not still publish its service names and uptimes there.
+    #[test]
+    fn a_private_dashboard_lists_no_containers() {
+        let body = dashboard(
+            Default::default(),
+            vec![container("payments")],
+            false,
+            false,
+        );
+        assert!(!body.contains("payments"), "{body}");
+        assert!(!body.contains("Up 3 hours"), "{body}");
+    }
+
+    /// `public_sysinfo` is documented as covering the guest dashboard, so it is
+    /// what opens the container table.
+    #[test]
+    fn a_public_sysinfo_dashboard_lists_containers() {
+        let body = dashboard(Default::default(), vec![container("payments")], true, false);
+        assert!(body.contains("payments"), "{body}");
+        assert!(body.contains("Up 3 hours"), "{body}");
+    }
+
+    /// `public_logs` alone already publishes the containers' output, and the
+    /// log links are addressed by container name, so the table stays visible
+    /// rather than leaving the log reader with nothing to click.
+    #[test]
+    fn a_public_logs_dashboard_lists_containers() {
+        let body = dashboard(Default::default(), vec![container("payments")], false, true);
+        assert!(body.contains("payments"), "{body}");
+        assert!(body.contains("/logs/payments"), "{body}");
     }
 }

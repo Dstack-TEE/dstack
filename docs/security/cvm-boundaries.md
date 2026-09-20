@@ -223,8 +223,11 @@ what it costs and in what it says:
   rule failed. That last part is a narrow oracle for whether a path exists and
   what shape its first two lines have; the path itself is already public, since
   it is measured into the compose hash. The file's *contents* are never quoted
-  back. Container names and statuses were already public through the dashboard
-  below.
+  back. It also names the unhealthy containers, unconditionally: an app that
+  opted into health gating asked the gateway to route on this answer, and the
+  gateway has to be able to say which container held the instance out of
+  rotation. The dashboard below publishes the *full* container list only when
+  `public_sysinfo` or `public_logs` is set.
 - `GetAttestationForAppKey` (frozen) generates a fresh platform attestation per
   call. With the frozen `Info` below, it is one of the two methods here that
   let an anonymous caller drive quote generation. It has no v1 counterpart
@@ -247,6 +250,11 @@ what it costs and in what it says:
   a quote vouches for them. Identity and the measurement hashes are always
   visible on both surfaces.
 
-The service also provides a web dashboard at the root URL (`/`) showing basic CVM information. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
+The service also provides a web dashboard at the root URL (`/`) showing basic
+CVM information. The page itself is always served, but each section honours the
+app's flags: system and GPU details need `public_sysinfo`, the TCB blob needs
+`public_tcbinfo`, and the deployed-container table -- service names, image-derived
+names and statuses -- needs `public_sysinfo` or `public_logs`, since a log link is
+addressed by container name. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
 
 Full specifications: [agent_rpc.proto](../../dstack/guest-agent/rpc/proto/agent_rpc.proto) for the frozen surface, [agent_rpc_v1.proto](../../dstack/guest-agent/rpc/proto/agent_rpc_v1.proto) for v1.
