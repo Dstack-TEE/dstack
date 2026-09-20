@@ -29,6 +29,14 @@ pub(crate) const MAX_TDVF_SECTIONS: usize = 64;
 /// Size of each `TdvfSection` record in the section table.
 const TDVF_SECTION_SIZE: usize = 32;
 
+/// Largest number of guest pages the whole section table may ask to be
+/// measured. Real TDVF metadata measures 0x41a000 bytes across its six
+/// sections -- 1050 pages, 4.10 MiB -- so 256 MiB of pages is about sixty
+/// times the headroom any firmware needs. Without it a page-aligned
+/// `memory_data_size` of 0x1000_0000_0000 is 2^36 SHA-384 updates, with
+/// nothing between the file and the hash loop to stop it.
+const MAX_MEASURED_PAGES: u64 = 0x1_0000;
+
 pub enum PageAddOrder {
     TwoPass,
     SinglePass,
@@ -243,6 +251,7 @@ impl<'a> Tdvf<'a> {
         };
 
         // Decode all sections using scale codec
+        let mut total_pages = 0u64;
         for i in 0..num_sections {
             // `num_sections` is a raw `u32` from the file, so the table it
             // describes need not be inside the image. Slice with `get` rather
@@ -295,6 +304,23 @@ impl<'a> Tdvf<'a> {
                     fw.len()
                 );
             }
+            // The guest address of a measured page is `memory_address + page *
+            // PAGE_SIZE`, and both halves come from the file. In a release
+            // build that addition wraps silently and measures the wrong
+            // addresses; in a debug build it panics.
+            if s.memory_address.checked_add(s.memory_data_size).is_none() {
+                bail!(
+                    "TDVF section {i} guest address range wraps past the end of the address space"
+                );
+            }
+            // `memory_data_size` alone decides how many pages get hashed, so
+            // an unconstrained one is an unbounded amount of work.
+            total_pages = total_pages
+                .checked_add(s.memory_data_size / PAGE_SIZE)
+                .with_context(|| format!("TDVF section {i} page count overflows"))?;
+            if total_pages > MAX_MEASURED_PAGES {
+                bail!("TDVF metadata asks to measure {total_pages} pages, more than the {MAX_MEASURED_PAGES} supported");
+            }
 
             meta.sections.push(s);
         }
@@ -305,14 +331,18 @@ impl<'a> Tdvf<'a> {
     fn compute_mrtd(&self, variant: PageAddOrder) -> Result<Vec<u8>> {
         let mut h = Sha384::new();
 
-        let mem_page_add = |h: &mut Sha384, s: &TdvfSection, page: u64| {
+        let mem_page_add = |h: &mut Sha384, s: &TdvfSection, page: u64| -> Result<()> {
             if s.attributes & ATTRIBUTE_PAGE_AUG == 0 {
                 let mut buf = [0u8; 128];
                 buf[..12].copy_from_slice(b"MEM.PAGE.ADD");
-                let gpa = s.memory_address + page * PAGE_SIZE;
+                let gpa = page
+                    .checked_mul(PAGE_SIZE)
+                    .and_then(|offset| s.memory_address.checked_add(offset))
+                    .context("TDVF section guest address wraps")?;
                 buf[16..24].copy_from_slice(&gpa.to_le_bytes());
                 h.update(buf);
             }
+            Ok(())
         };
 
         let mr_extend = |h: &mut Sha384, s: &TdvfSection, page: u64| -> Result<()> {
@@ -320,8 +350,11 @@ impl<'a> Tdvf<'a> {
                 for i in 0..(PAGE_SIZE as usize / MR_EXTEND_GRANULARITY) {
                     let mut buf = [0u8; 128];
                     buf[..9].copy_from_slice(b"MR.EXTEND");
-                    let gpa =
-                        s.memory_address + page * PAGE_SIZE + (i * MR_EXTEND_GRANULARITY) as u64;
+                    let gpa = page
+                        .checked_mul(PAGE_SIZE)
+                        .and_then(|offset| offset.checked_add((i * MR_EXTEND_GRANULARITY) as u64))
+                        .and_then(|offset| s.memory_address.checked_add(offset))
+                        .context("TDVF section guest address wraps")?;
                     buf[16..24].copy_from_slice(&gpa.to_le_bytes());
                     h.update(buf);
 
@@ -343,7 +376,7 @@ impl<'a> Tdvf<'a> {
             match variant {
                 PageAddOrder::TwoPass => {
                     for page in 0..num_pages {
-                        mem_page_add(&mut h, s, page);
+                        mem_page_add(&mut h, s, page)?;
                     }
                     for page in 0..num_pages {
                         mr_extend(&mut h, s, page)?;
@@ -351,7 +384,7 @@ impl<'a> Tdvf<'a> {
                 }
                 PageAddOrder::SinglePass => {
                     for page in 0..num_pages {
-                        mem_page_add(&mut h, s, page);
+                        mem_page_add(&mut h, s, page)?;
                         mr_extend(&mut h, s, page)?;
                     }
                 }
@@ -500,7 +533,11 @@ impl<'a> Tdvf<'a> {
         let mut td_hob_base_addr = 0x809000u64;
         for s in &self.sections {
             if let TDVF_SECTION_TD_HOB | TDVF_SECTION_TEMP_MEM = s.sec_type {
-                memory_acceptor.accept(s.memory_address, s.memory_address + s.memory_data_size);
+                let end = s
+                    .memory_address
+                    .checked_add(s.memory_data_size)
+                    .context("TDVF section guest address wraps")?;
+                memory_acceptor.accept(s.memory_address, end);
             }
             if s.sec_type == TDVF_SECTION_TD_HOB {
                 td_hob_base_addr = s.memory_address;
@@ -558,7 +595,9 @@ impl<'a> Tdvf<'a> {
             add_memory_resource_hob(0x07, last_start, last_end - last_start);
         }
 
-        let end_of_hob_list = td_hob_base_addr + td_hob.len() as u64 + 8;
+        let end_of_hob_list = td_hob_base_addr
+            .checked_add(td_hob.len() as u64 + 8)
+            .context("TD HOB end-of-list address overflows")?;
         td_hob[48..56].copy_from_slice(&end_of_hob_list.to_le_bytes());
 
         Ok(measure_sha384(&td_hob))
@@ -797,5 +836,34 @@ mod tests {
 
         let err = mrtd_within_deadline(fw).expect_err("an out-of-range section must be rejected");
         assert!(err.contains("firmware"), "unexpected error: {err}");
+    }
+
+    /// `memory_data_size` is a page-aligned `u64` from the file, and it alone
+    /// decides how many pages get hashed.
+    #[test]
+    fn parse_rejects_a_section_larger_than_any_real_firmware_measures() {
+        let section = section_record(0, 0, 0x800000, 0x1000_0000_0000, TDVF_SECTION_TEMP_MEM, 0);
+        let fw = tdvf_fw(0x40, &section, 1);
+
+        let err = mrtd_within_deadline(fw).expect_err("an oversized section must be rejected");
+        assert!(err.contains("pages"), "unexpected error: {err}");
+    }
+
+    /// The measured guest address is `memory_address + page * PAGE_SIZE`, and
+    /// both halves come from the file.
+    #[test]
+    fn parse_rejects_a_section_whose_guest_address_wraps() {
+        let section = section_record(
+            0,
+            0,
+            0xffff_ffff_ffff_f000,
+            0x2000,
+            TDVF_SECTION_TEMP_MEM,
+            0,
+        );
+        let fw = tdvf_fw(0x40, &section, 1);
+
+        let err = mrtd_within_deadline(fw).expect_err("a wrapping section must be rejected");
+        assert!(err.contains("wraps"), "unexpected error: {err}");
     }
 }
