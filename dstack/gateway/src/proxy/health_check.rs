@@ -35,14 +35,11 @@ use dstack_guest_agent_rpc::v1::worker_client::WorkerClient as WorkerV1Client;
 use futures::StreamExt;
 use http_client::ConnectionReuse;
 use tokio::time::MissedTickBehavior;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::config::HealthCheckConfig;
 use crate::main_service::Proxy;
 use crate::models::HealthState;
-
-/// How long to wait before restarting the poll loop after it dies.
-const RESTART_DELAY: Duration = Duration::from_secs(5);
 
 /// One poll's verdict, plus why, for the line logged when the verdict changes.
 pub(crate) struct Observation {
@@ -111,21 +108,19 @@ pub(crate) fn spawn_poller(state: Proxy) {
         "polling application health every {:?} (timeout {:?})",
         config.interval, config.timeout
     );
-    tokio::spawn(async move {
-        // Supervised rather than a bare spawn. If the loop ever dies -- a
-        // poisoned `ProxyState` mutex is enough, since locking it panics --
-        // polling would otherwise stop for the life of the process with nothing
-        // logged, and every instance registered after that point would sit at
-        // `Unknown` forever while the stale verdicts around it kept serving.
-        loop {
-            let task = tokio::spawn(poll_forever(state.clone(), config.clone()));
-            match task.await {
-                Ok(()) => error!("health poller returned unexpectedly; restarting"),
-                Err(err) => error!("health poller died: {err}; restarting"),
-            }
-            tokio::time::sleep(RESTART_DELAY).await;
-        }
-    });
+    // Deliberately unsupervised. This was a `loop` around a nested spawn,
+    // restarting the poller if its `JoinHandle` came back -- but neither arm
+    // could ever run. `poll_forever` does not return, and the release profile
+    // sets `panic = "abort"` (`dstack/Cargo.toml`), so a panic inside the task
+    // -- a poisoned `ProxyState` mutex being the likeliest -- takes the process
+    // down before any handle observes it. The restart is the deployment's: the
+    // shipped app runs the gateway under `restart: always`
+    // (`gateway/dstack-app/docker-compose.yaml`).
+    //
+    // The same reasoning covers every `or_panic` in this crate, `lock()` on the
+    // `ProxyState` mutex included: under `abort` none of them are recoverable
+    // in-process, so none of them should be written as if they were.
+    tokio::spawn(poll_forever(state, config));
 }
 
 async fn poll_forever(state: Proxy, config: HealthCheckConfig) {
@@ -418,6 +413,34 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    /// `spawn_poller` says a panic in the poller ends the process rather than
+    /// the task, and every `or_panic` in this crate says the same thing by
+    /// omission. That is only true while the release profile aborts.
+    ///
+    /// Switching it to unwind would not break a build or a test -- it would
+    /// quietly turn nine `or_panic` sites, `ProxyInner::lock` among them, into
+    /// half-dead tasks inside a process that stays up and keeps serving, which
+    /// is the state the removed supervision loop was written to handle and
+    /// never could.
+    #[test]
+    fn the_release_profile_aborts_on_panic() {
+        let manifest =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"))
+                .expect("the workspace manifest is two directories up from this crate");
+        let profile = manifest
+            .split("[profile.release]")
+            .nth(1)
+            .expect("the workspace declares a release profile");
+        assert!(
+            profile
+                .lines()
+                .take_while(|line| !line.trim_start().starts_with('['))
+                .any(|line| line.replace(' ', "") == "panic=\"abort\""),
+            "the release profile no longer aborts on panic: \
+             re-read the comment on `spawn_poller` before relying on it"
+        );
+    }
 
     /// The bound is a per-call-site opt-in now, not a property of the
     /// transport, so nothing but a test stops a refactor from dropping it --
