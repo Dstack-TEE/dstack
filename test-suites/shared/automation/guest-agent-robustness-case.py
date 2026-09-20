@@ -13,11 +13,14 @@ commits to are asserted nowhere:
       key material, and N concurrent ``GetQuote`` calls each bind their own
       ``report_data`` rather than another caller's;
   C2  a trivial method stays answerable while the slowest attestation method
-      saturates the runtime. ``dstack/tdx-attest/src/linux.rs`` ``get_quote``
-      takes a global ``std::sync::Mutex`` and then blocks with no connect,
-      read or write timeout; only ``rpc_service_v1.rs`` ``attest`` wraps that
-      in ``spawn_blocking``. Every other quote call site runs it straight on
-      the executor, which serves the whole agent with ``workers = 8``;
+      saturates the runtime, and the agent is still the process it started as
+      afterwards. ``dstack/tdx-attest/src/linux.rs`` ``get_quote`` takes a
+      global ``std::sync::Mutex`` and then blocks with no connect, read or
+      write timeout; only ``rpc_service_v1.rs`` ``attest`` wraps that in
+      ``spawn_blocking``. Every other quote call site runs it straight on the
+      executor that serves the whole agent, and the stall reaches the agent's
+      own systemd watchdog, whose heartbeat is a ``Worker.Version`` request to
+      its external listener;
   C3  the agent answers a valid request after the load, in the same process it
       started as -- a restart must not be able to hide a wedge or an abort;
   C4  a log reader that stops draining does not make the agent buffer without
@@ -54,9 +57,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
-# Rocket serves the agent with `workers = 8` (dstack/guest-agent/dstack.toml).
-# Every saturation figure below is a multiple of that: a load smaller than the
-# worker count cannot demonstrate a parked runtime.
+# The worker count `dstack/guest-agent/dstack.toml` asks for. It is an upper
+# bound, not the runtime's actual width: `#[rocket::main]` in
+# `guest-agent/src/main.rs` builds the tokio runtime before that configuration
+# is read, so `workers` never reaches it and the agent gets one worker per
+# vCPU. A lease-owned 2-vCPU guest was measured with two `rocket-worker-t`
+# threads. Saturating above the configured figure therefore saturates the real
+# one on any CVM this plan provisions.
 AGENT_WORKERS = 8
 CONCURRENCY = 3 * AGENT_WORKERS
 
@@ -239,6 +246,98 @@ def process_stats(pid: int) -> dict[str, int]:
     return stats
 
 
+def guest_command(values: dict[str, Any], command: str) -> str | None:
+    """Run one command in the lease-owned guest, or return None.
+
+    Best-effort by construction. Everything this reads is corroboration for a
+    measurement taken over the RPC surface; a fixture that publishes no guest
+    access, or a guest that has already been SIGABRTed, must leave the case
+    reporting what it measured rather than erroring on the corroboration.
+    """
+    argv = values.get("ssh_argv")
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or any(not isinstance(item, str) for item in argv)
+    ):
+        return None
+    try:
+        process = subprocess.run(
+            [*argv, command],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return process.stdout if process.returncode == 0 else None
+
+
+AGENT_UNIT = "dstack-guest-agent.service"
+AGENT_STATE_COMMAND = (
+    f'p=$(systemctl show -p MainPID --value {AGENT_UNIT}); echo "pid $p"; '
+    f'echo "restarts $(systemctl show -p NRestarts --value {AGENT_UNIT})"; '
+    'echo "stat $(cat /proc/$p/stat)"; '
+    "grep -E '^Threads:|^VmRSS:' /proc/$p/status"
+)
+
+
+def guest_agent_state(values: dict[str, Any]) -> dict[str, Any] | None:
+    """The in-guest agent's identity, size and restart count.
+
+    On hardware the agent runs inside the CVM, so `/proc` on the control host
+    says nothing about it and `resolve_pid` has nothing to resolve. The pair
+    that identifies the process is its PID and field 22 of `/proc/<pid>/stat`,
+    its start time in clock ticks since boot, exactly as `process_identity`
+    uses on the control host: a supervisor can restart the agent onto the same
+    PID, and only the start time says it is a different process.
+    """
+    output = guest_command(values, AGENT_STATE_COMMAND)
+    if output is None:
+        return None
+    state: dict[str, Any] = {}
+    for line in output.splitlines():
+        name, _, rest = line.partition(" ")
+        if name == "pid":
+            state["pid"] = int(rest) if rest.strip().isdigit() else None
+        elif name == "restarts":
+            state["restarts"] = int(rest) if rest.strip().isdigit() else None
+        elif name == "stat":
+            # `comm` is parenthesised and may contain spaces, so the fields
+            # after it are found from the last ") " rather than by splitting.
+            fields = rest.rsplit(") ", 1)[-1].split()
+            state["starttime_ticks"] = int(fields[19]) if len(fields) > 19 else None
+        elif name.startswith("Threads:"):
+            state["threads"] = int(line.split()[1])
+        elif name.startswith("VmRSS:"):
+            state["vmrss_kb"] = int(line.split()[1])
+    if state.get("pid") is None or state.get("starttime_ticks") is None:
+        return None
+    return state
+
+
+def guest_agent_journal(values: dict[str, Any]) -> list[str]:
+    """The last few lines the agent's unit logged, for a run that lost it."""
+    output = guest_command(
+        values, f"journalctl -u {AGENT_UNIT} --no-pager -n 12 -o short-unix"
+    )
+    return output.strip().splitlines() if output else []
+
+
+def guest_agent_restarted(
+    before: dict[str, Any] | None, after: dict[str, Any] | None
+) -> bool:
+    """Whether the agent is a different process than it was before the load."""
+    if before is None or after is None:
+        return False
+    return (before["pid"], before["starttime_ticks"]) != (
+        after["pid"],
+        after["starttime_ticks"],
+    )
+
+
 def process_identity(pid: int) -> dict[str, Any]:
     """The agent's identity, in a form a restart cannot reproduce.
 
@@ -401,9 +500,10 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
-def head_of_line(targets: dict[str, Target]) -> dict[str, Any]:
+def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str, Any]:
     """Saturate the attestation path and watch a trivial method."""
     guest = targets["DstackGuest"]
+    agent_before = guest_agent_state(values)
     baseline = latency_samples(guest, 20)
 
     def quote(_: int) -> Reply:
@@ -444,9 +544,9 @@ def head_of_line(targets: dict[str, Target]) -> dict[str, Any]:
         for loader in loaders:
             loader.result()
 
-    require_all_ok(load_replies, "DstackGuest.GetQuote under load")
+    agent_after = guest_agent_state(values)
+    restarted = guest_agent_restarted(agent_before, agent_after)
     observations = {
-        "agent_workers": AGENT_WORKERS,
         "load_concurrency": CONCURRENCY,
         "load_seconds": LOAD_SECONDS,
         "load_calls": len(load_replies),
@@ -458,7 +558,25 @@ def head_of_line(targets: dict[str, Target]) -> dict[str, Any]:
         "loaded_max_seconds": round(max(probe, default=0.0), 4),
         "bound_seconds": TRIVIAL_LATENCY_BOUND_SECONDS,
         "probe_failures": failures[:5],
+        "agent_before": agent_before,
+        "agent_after": agent_after,
+        "agent_restarted": restarted,
+        "agent_journal": guest_agent_journal(values) if restarted else [],
     }
+    # Checked before the per-call outcomes, because it explains them. A dropped
+    # connection reads as a transport problem until you know the agent it was
+    # talking to was killed: the systemd watchdog's own heartbeat is a
+    # `Worker.Version` request to the agent (`run_watchdog` in `server.rs`), so
+    # a stalled runtime stops the heartbeat and systemd SIGABRTs the unit at
+    # `WatchdogSec`. Every connection open at that moment is reset.
+    if restarted:
+        raise AssertionError(
+            f"the agent did not survive the load: {agent_before} became {agent_after}. "
+            f"{sum(1 for reply in load_replies if not reply.ok)} of {len(load_replies)} "
+            f"saturating calls and {len(failures)} of {len(probe)} probes were dropped "
+            f"with it. Agent journal: {observations['agent_journal'][-6:]}"
+        )
+    require_all_ok(load_replies, "DstackGuest.GetQuote under load")
     if failures:
         raise AssertionError(
             f"{len(failures)} of {len(probe)} Version probes were not answered while "
@@ -508,7 +626,9 @@ MIXED_LOAD: list[tuple[str, str, dict[str, Any]]] = [
 ]
 
 
-def survives_load(targets: dict[str, Target], pid: int) -> dict[str, Any]:
+def survives_load(
+    targets: dict[str, Target], pid: int, _values: dict[str, Any]
+) -> dict[str, Any]:
     """Mixed concurrent load across every listener the agent serves."""
     identity = process_identity(pid)
     before = process_stats(pid)
@@ -638,7 +758,9 @@ def open_log_stream(target: Target, container: str) -> tuple[socket.socket, byte
     return stream, head
 
 
-def slow_consumer(targets: dict[str, Target], pid: int) -> dict[str, Any]:
+def slow_consumer(
+    targets: dict[str, Target], pid: int, _values: dict[str, Any]
+) -> dict[str, Any]:
     """A reader that stops draining must not become the agent's problem."""
     worker = targets["Worker"]
     chatty = f"{LOG_SOURCE_PREFIX}-chatty-{os.getpid()}"
@@ -775,7 +897,7 @@ class Step:
 
     observation: str
     evidence: str
-    run: Callable[[dict[str, Target], int], dict[str, Any]]
+    run: Callable[[dict[str, Target], int, dict[str, Any]], dict[str, Any]]
 
 
 @dataclass
@@ -791,12 +913,19 @@ class Case:
     artifact_description: str
 
 
-def _reachable_with_log_source(targets: dict[str, Target], pid: int) -> dict[str, Any]:
+def _reachable_with_log_source(
+    targets: dict[str, Target], pid: int, values: dict[str, Any]
+) -> dict[str, Any]:
     """Confirm the listeners and that a container runtime can host a log source."""
-    return {**_reachable(targets, pid), "container_runtime": container_runtime()}
+    return {
+        **_reachable(targets, pid, values),
+        "container_runtime": container_runtime(),
+    }
 
 
-def _reachable(targets: dict[str, Target], _pid: int) -> dict[str, Any]:
+def _reachable(
+    targets: dict[str, Target], _pid: int, _values: dict[str, Any]
+) -> dict[str, Any]:
     """Confirm every listener this case needs answers before it is loaded."""
     observed = {}
     for service, target in targets.items():
@@ -833,12 +962,12 @@ CASES: dict[str, Case] = {
                 "different path returned a different key, and random-seed derivations "
                 "were all distinct.",
                 "Proves derivation is a pure function of its arguments under concurrency.",
-                lambda targets, _pid: derivation_identical(targets),
+                lambda targets, _pid, _values: derivation_identical(targets),
             ),
             Step(
                 "Every concurrent quote echoed and embedded its own report data.",
                 "Proves concurrent quote requests do not cross-bind report data.",
-                lambda targets, _pid: quote_binding_concurrent(targets),
+                lambda targets, _pid, _values: quote_binding_concurrent(targets),
             ),
         ],
     ),
@@ -846,14 +975,16 @@ CASES: dict[str, Case] = {
         services=["DstackGuest"],
         needs_pid=False,
         summary="A trivial method stayed within its latency bound while the attestation "
-        "path was saturated.",
+        "path was saturated, in the agent process the case started with.",
         remarks="This is a hardware claim. The blocking operation is the global quote "
         "mutex plus the vsock round trip to the host's QGS; a fixture-backed simulator "
         "takes the mutex and returns, so a simulated run cannot confirm it and this "
         "harness reports BLOCKED rather than PASS when the load turns out to be free.",
         artifact="head-of-line-blocking.json",
         artifact_description="Unloaded and loaded latency distributions for the trivial "
-        "method, the measured cost of one attestation call, and the saturation parameters.",
+        "method, the measured cost of one attestation call, the saturation parameters, and "
+        "the in-guest agent's process identity, thread count and resident size before and "
+        "after the load.",
         steps=[
             Step(
                 "The listener answered before the load.",
@@ -862,13 +993,16 @@ CASES: dict[str, Case] = {
             ),
             Step(
                 "The attestation path was saturated above the agent's worker count while "
-                "a trivial method was polled on its own connection.",
-                "Proves whether quote generation stalls the connections the agent serves.",
-                lambda targets, _pid: head_of_line(targets),
+                "a trivial method was polled on its own connection, and the agent was the "
+                "same process afterwards.",
+                "Proves whether quote generation stalls the connections the agent serves, "
+                "and whether it survives the load at all.",
+                lambda targets, _pid, values: head_of_line(targets, values),
             ),
             Step(
                 "The listener answered a valid request after the load.",
-                "Proves the saturation did not wedge the listener.",
+                "Proves the saturation did not wedge the listener. A listener that answers "
+                "because the agent was killed and restarted is caught in step 2, not here.",
                 _reachable,
             ),
         ],
@@ -932,7 +1066,7 @@ CASES: dict[str, Case] = {
             Step(
                 "An idle follow stream ended at the per-chunk timeout.",
                 "Proves a silent log source does not hold a connection open forever.",
-                lambda targets, _pid: log_chunk_timeout(targets),
+                lambda targets, _pid, _values: log_chunk_timeout(targets),
             ),
             Step(
                 "The agent answered after every stream closed.",
@@ -1012,7 +1146,7 @@ def execute(case_id: str, case: Case, values: dict[str, Any]) -> dict[str, Any]:
             if number == 1:
                 targets = resolve_targets(values, case.services)
                 pid = resolve_pid(values) if case.needs_pid else 0
-            observed = step.run(targets, pid)
+            observed = step.run(targets, pid, values)
         except Blocked as error:
             status, failure = "BLOCKED", f"{error}"
             print(f"EVIDENCE {step_id} - {step.evidence}", flush=True)
