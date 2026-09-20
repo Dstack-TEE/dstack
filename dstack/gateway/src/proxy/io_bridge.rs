@@ -56,10 +56,20 @@ where
                 Ok(false)
             }
             NextStep::Write => {
-                self.writer
+                let n = self
+                    .writer
                     .write_buf(&mut self.buf)
                     .await
                     .context("write error")?;
+                // A writer that takes nothing while reporting success can no
+                // longer accept bytes. Without this the state stays `Write`
+                // with a non-empty buffer, the loop re-enters at once, and the
+                // zero-length write counts as progress -- so the watchdog sees
+                // a busy connection and the bridge spins hot on a core until
+                // `timeouts.total`. The relay paths bail the same way.
+                if n == 0 && !self.buf.is_empty() {
+                    bail!("write accepted no bytes");
+                }
                 self.progress += 1;
                 if self.buf.is_empty() {
                     self.next_step = NextStep::Flush;
@@ -243,5 +253,94 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context as TaskContext, Poll};
+    use std::time::Duration;
+
+    /// A writer that reports success while accepting nothing -- what the
+    /// `AsyncWrite` contract calls "can no longer accept bytes".
+    struct AcceptsNothing;
+
+    impl AsyncWrite for AcceptsNothing {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(0))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn test_config() -> ProxyConfig {
+        crate::config::load_config_figment(None)
+            .focus("core.proxy")
+            .extract()
+            .expect("the shipped default config should parse")
+    }
+
+    /// A zero-length write leaves the direction in `Write` with a non-empty
+    /// buffer, so the loop re-enters immediately -- and it used to count as
+    /// progress, which kept the idle watchdog quiet while the bridge span hot
+    /// on a core until `timeouts.total`.
+    ///
+    /// The bridge gets a thread and a runtime of its own because that spin
+    /// never yields: a timeout sharing its runtime would never be polled, and
+    /// dropping a runtime whose task never returns hangs the test.
+    #[test]
+    fn a_writer_that_accepts_no_bytes_is_an_error_not_a_spin() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let outcome = rt.block_on(async {
+                let config = test_config();
+                let mut client_rx: &[u8] = b"request";
+                let mut client_tx = tokio::io::sink();
+                // The app never answers, so only the direction facing the
+                // writer that takes nothing can make progress.
+                let mut app_rx = tokio::io::empty();
+                let mut app_tx = AcceptsNothing;
+                match relay(
+                    &mut client_rx,
+                    &mut client_tx,
+                    &mut app_rx,
+                    &mut app_tx,
+                    &config,
+                )
+                .await
+                {
+                    Ok(()) => "the bridge returned success".to_string(),
+                    Err(err) => format!("{err:#}"),
+                }
+            });
+            tx.send(outcome).ok();
+        });
+
+        let outcome = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the bridge never came back from a zero-length write");
+        assert!(outcome.contains("write accepted no bytes"), "{outcome}");
     }
 }
