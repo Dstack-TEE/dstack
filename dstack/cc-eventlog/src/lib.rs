@@ -9,6 +9,8 @@ pub use runtime_events::{
 pub use tdx::TdxEvent;
 
 mod codecs;
+#[cfg(test)]
+mod proptests;
 mod runtime_events;
 mod tcg;
 pub mod tdx;
