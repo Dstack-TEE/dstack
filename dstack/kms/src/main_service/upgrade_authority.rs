@@ -102,12 +102,32 @@ async fn http_post<R: DeserializeOwned>(url: &str, body: &impl Serialize) -> Res
     send_request(reqwest::Client::new().post(url).json(body), url).await
 }
 
+/// Cap a response body at [`MAX_BODY_CONTEXT`] bytes for error context.
+///
+/// The auth API - or any proxy in front of it - decides these bytes, so the cut
+/// has to step back to a character boundary: slicing a `String` at an offset
+/// inside a multi-byte character panics.
+fn short_body(body: &str) -> &str {
+    if body.len() <= MAX_BODY_CONTEXT {
+        return body;
+    }
+    let mut end = MAX_BODY_CONTEXT;
+    while !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    &body[..end]
+}
+
+/// How much of an auth API response body is kept in an error message, so an
+/// HTML error page cannot blow up the logs.
+const MAX_BODY_CONTEXT: usize = 512;
+
 async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &str) -> Result<R> {
     static USER_AGENT: &str = concat!("dstack-kms/", env!("CARGO_PKG_VERSION"));
     let response = req.header("User-Agent", USER_AGENT).send().await?;
     let status = response.status();
     let body = response.text().await?;
-    let short_body = &body[..body.len().min(512)];
+    let short_body = short_body(&body);
     if !status.is_success() {
         bail!("auth api {url} returned {status}: {short_body}");
     }
@@ -332,6 +352,53 @@ mod tests {
         }
     }
 
+    /// Serve one response with a caller-supplied body, so a test can control the
+    /// exact byte layout the auth API returns.
+    fn serve_raw(status_line: &'static str, body: String) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                assert_ne!(read, 0, "request ended before headers");
+                if chunk[..read].windows(4).any(|part| part == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            write!(
+                stream,
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    /// A body whose 2-byte character straddles byte offset 512, which is where
+    /// the response body gets truncated for the error context.
+    fn body_with_multibyte_char_across_offset_512(head: &str) -> String {
+        let padding = "a".repeat(511 - head.len());
+        format!("{head}{padding}\u{e9}\"}}")
+    }
+
+    #[test]
+    fn short_body_keeps_whole_characters_within_the_cap() {
+        assert_eq!(short_body("short"), "short");
+
+        let exactly_at_cap = "a".repeat(MAX_BODY_CONTEXT);
+        assert_eq!(short_body(&exactly_at_cap), exactly_at_cap);
+
+        let split = body_with_multibyte_char_across_offset_512(r#"{"error":""#);
+        assert_eq!(short_body(&split), &split[..MAX_BODY_CONTEXT - 1]);
+        assert!(!short_body(&split).ends_with('\u{e9}'));
+
+        let all_multibyte = "\u{e9}".repeat(MAX_BODY_CONTEXT);
+        assert_eq!(short_body(&all_multibyte).len(), MAX_BODY_CONTEXT);
+    }
+
     #[test]
     fn app_id_len_must_be_20_bytes() {
         assert!(ensure_app_id_len(&[0u8; 20]).is_ok());
@@ -403,5 +470,34 @@ mod tests {
         assert!(recovered.is_allowed);
         assert_eq!(recovered.reason, "recovered");
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[rocket::async_test]
+    async fn oversized_auth_api_response_does_not_split_a_character() {
+        let body = body_with_multibyte_char_across_offset_512(
+            r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,"appImplementation":"impl","padding":""#,
+        );
+        assert!(body.len() > 512, "body must be long enough to truncate");
+        let (url, server) = serve_raw("HTTP/1.1 200 OK", body);
+
+        let info = webhook(url).get_info().await.unwrap();
+        assert_eq!(info.chain_id, Some(1));
+
+        server.join().unwrap();
+    }
+
+    #[rocket::async_test]
+    async fn oversized_auth_api_error_does_not_split_a_character() {
+        let body = body_with_multibyte_char_across_offset_512(r#"{"error":""#);
+        assert!(body.len() > 512, "body must be long enough to truncate");
+        let (url, server) = serve_raw("HTTP/1.1 500 Internal Server Error", body);
+
+        let err = webhook(url).get_info().await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("returned 500"),
+            "unexpected error: {err:#}"
+        );
+
+        server.join().unwrap();
     }
 }
