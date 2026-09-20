@@ -527,12 +527,16 @@ impl App {
             // live logs for this boot. QEMU runs with logappend=on and no
             // longer truncates serial.log on open, so a boot is simply another
             // rotation trigger and boot boundaries land on segment boundaries.
-            for path in rotatable_logs(&work_dir, true) {
-                rotate_log(&path, self.config.cvm.log.max_backups);
-                // The logs are opened in append mode, so this marks the start
-                // of the new boot rather than replacing anything.
-                append_boot_separator(&path);
-            }
+            let rotation_workdir = VmWorkDir::new(work_dir.path());
+            let max_backups = self.config.cvm.log.max_backups;
+            let launch = run_log_rotation(launch, move || {
+                for path in rotatable_logs(&rotation_workdir, true) {
+                    rotate_log(&path, max_backups);
+                    // Append rather than replace the live log's boot boundary.
+                    append_boot_separator(&path);
+                }
+            })
+            .await?;
 
             let mut runtime_networks = self.runtime_networks(&vm_config.manifest);
             let devices = self.try_allocate_gpus(&vm_config.manifest)?;
@@ -1677,7 +1681,6 @@ impl App {
         if max_bytes == 0 {
             return Ok(());
         }
-        let max_backups = self.config.cvm.log.max_backups;
         let running = self
             .supervisor
             .list()
@@ -1686,23 +1689,43 @@ impl App {
             .into_iter()
             .filter(|process| process.state.status.is_running());
         for process in running {
-            let Ok(work_dir) = self.work_dir(&process.config.id) else {
-                continue;
-            };
-            let serial = serial_log_is_rotatable(&process.config.note);
+            self.rotate_vm_logs(&process.config.id, &process.config.note)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn rotate_vm_logs(&self, id: &str, note: &str) -> Result<()> {
+        // Do not let one long launch/teardown delay rotation for every VM.
+        let Ok(launch) = self.launch_lock_handle(id).try_lock_owned() else {
+            return Ok(());
+        };
+        {
+            let state = self.lock();
+            if state.is_removing(id) || state.get(id).is_none() {
+                return Ok(());
+            }
+        }
+        let work_dir = self.work_dir(id)?;
+        let serial = serial_log_is_rotatable(note);
+        let max_bytes = self.config.cvm.log.max_bytes;
+        let max_backups = self.config.cvm.log.max_backups;
+        let id = id.to_string();
+        let _launch = run_log_rotation(launch, move || {
             for path in rotatable_logs(&work_dir, serial) {
                 if let Some(rotated) = logrotate::rotate_if_oversized(&path, max_bytes, max_backups)
                 {
                     logrotate::append_rotation_note(&path, &rotated);
                     info!(
-                        id = process.config.id,
+                        id,
                         log = %path.display(),
                         bytes = rotated.bytes,
                         "rotated oversized log"
                     );
                 }
             }
-        }
+        })
+        .await?;
         Ok(())
     }
 
@@ -1872,6 +1895,20 @@ impl App {
 /// Written to stdout, stderr and the serial log at each boot so a log read in
 /// isolation still shows where a boot began.
 const BOOT_SEPARATOR_PREFIX: &str = "\n===== boot @ ";
+
+/// Keep rotation off async workers and keep lifecycle exclusion even if the
+/// caller disappears while a blocking copy is still running.
+async fn run_log_rotation(
+    launch: tokio::sync::OwnedMutexGuard<()>,
+    rotate: impl FnOnce() + Send + 'static,
+) -> Result<tokio::sync::OwnedMutexGuard<()>> {
+    tokio::task::spawn_blocking(move || {
+        rotate();
+        launch
+    })
+    .await
+    .context("log rotation task failed")
+}
 
 /// Append a boot separator line with timestamp to an append-mode log file.
 fn append_boot_separator(path: &std::path::Path) {
@@ -2773,6 +2810,90 @@ mod tests {
             max_backoff: 5,
             reset_window: 10,
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rotation_keeps_executor_live_and_holds_lock_after_cancellation() {
+        let app = test_app();
+        let launch = app.launch_lock("vm-1").await;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let rotation = tokio::spawn(run_log_rotation(launch, move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }));
+        tokio::time::timeout(Duration::from_secs(2), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(app.state.try_lock().is_ok());
+        let _other_vm = app.launch_lock("vm-2").await;
+        rotation.abort();
+        assert!(rotation.await.unwrap_err().is_cancelled());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), app.launch_lock("vm-1"))
+                .await
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        let _launch = tokio::time::timeout(Duration::from_secs(2), app.launch_lock("vm-1"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rotation_returns_the_lifecycle_guard_for_startup() {
+        let app = test_app();
+        let launch = app.launch_lock("vm-1").await;
+        let launch = run_log_rotation(launch, || {}).await.unwrap();
+        assert!(app.launch_lock_handle("vm-1").try_lock_owned().is_err());
+        drop(launch);
+        assert!(app.launch_lock_handle("vm-1").try_lock_owned().is_ok());
+    }
+
+    #[tokio::test]
+    async fn periodic_rotation_skips_busy_removed_and_legacy_serial_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(&dir.path().join("netd.sock"), dir.path());
+        config.cvm.log.max_bytes = 4;
+        config.cvm.log.max_backups = 2;
+        let app = App::new(config, SupervisorClient::new("http://127.0.0.1:0"));
+        let (vm, _) = bridge_vm(&app, "vm-1");
+        fs::create_dir_all(&vm.workdir).unwrap();
+        app.lock().add(VmState::new(vm));
+        let workdir = app.work_dir("vm-1").unwrap();
+        for path in rotatable_logs(&workdir, true) {
+            fs::write(path, b"original log").unwrap();
+        }
+        let held = app.launch_lock("vm-1").await;
+        tokio::time::timeout(Duration::from_secs(2), app.rotate_vm_logs("vm-1", ""))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!logrotate::segment_path(&workdir.stdout_file(), 1).exists());
+        drop(held);
+        app.rotate_vm_logs("vm-1", "").await.unwrap();
+        assert_eq!(
+            fs::read(logrotate::segment_path(&workdir.stdout_file(), 1)).unwrap(),
+            b"original log"
+        );
+        assert_eq!(fs::read(workdir.serial_file()).unwrap(), b"original log");
+        assert!(!logrotate::segment_path(&workdir.serial_file(), 1).exists());
+        app.rotate_vm_logs("vm-1", r#"{"serial_logappend":true,"kind":"cvm"}"#)
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(logrotate::segment_path(&workdir.serial_file(), 1)).unwrap(),
+            b"original log"
+        );
+        app.lock().start_removing("vm-1");
+        fs::write(workdir.stdout_file(), b"do not rotate").unwrap();
+        app.rotate_vm_logs("vm-1", "").await.unwrap();
+        assert_eq!(fs::read(workdir.stdout_file()).unwrap(), b"do not rotate");
+        app.lock().remove("vm-1");
+        fs::remove_dir_all(workdir.path()).unwrap();
+        app.rotate_vm_logs("vm-1", "").await.unwrap();
+        assert!(!workdir.path().exists());
     }
 
     #[test]
