@@ -6,7 +6,10 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     net::Ipv4Addr,
     ops::Deref,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
     time::{Duration, Instant, SystemTime},
 };
 
@@ -71,6 +74,13 @@ pub struct ProxyInner {
     pub(crate) certbot: Arc<DistributedCertBot>,
     my_app_id: Vec<u8>,
     state: Mutex<ProxyState>,
+    /// Serializes WireGuard applies so concurrent `reconfigure_wg` callers
+    /// cannot interleave the `wg.conf` write and the `wg syncconf` run.
+    wg_apply_lock: Mutex<()>,
+    /// Set before taking `wg_apply_lock`: an apply already in progress sees
+    /// the flag and re-renders once more, so a burst of requests collapses
+    /// into at most one extra apply instead of one full apply per request.
+    wg_dirty: AtomicBool,
     pub(crate) notify_state_updated: Notify,
     auth_client: AuthClient,
     pub(crate) acceptor: TlsAcceptor,
@@ -199,18 +209,22 @@ impl Proxy {
     /// would abort the routing cleanup an operator reached for this call to
     /// get.
     pub fn remove_cvm(&self, instance_id: &str) -> Result<CvmRemoval> {
-        let mut state = self.lock();
-        let record_existed = state
-            .kv_store
-            .sync_delete_instance(instance_id)
-            .with_context(|| format!("failed to delete CVM {instance_id} from WaveKV"))?;
+        let (record_existed, removed_locally) = {
+            let mut state = self.lock();
+            let record_existed = state
+                .kv_store
+                .sync_delete_instance(instance_id)
+                .with_context(|| format!("failed to delete CVM {instance_id} from WaveKV"))?;
 
-        let removed_locally = state.forget_instance(instance_id).is_some();
+            let removed_locally = state.forget_instance(instance_id).is_some();
+            (record_existed, removed_locally)
+        };
         // Reconfigure unconditionally: the tombstone write and the in-memory
         // removal are not repeated on a retry, so gating this on them would
         // leave a failed reconfigure with no retry path and the removed CVM's
-        // WireGuard peer stuck on the interface.
-        state.reconfigure()?;
+        // WireGuard peer stuck on the interface. Applied outside the routing
+        // lock; see reconfigure_wg.
+        self.reconfigure_wg()?;
         Ok(CvmRemoval {
             record_existed,
             removed_locally,
@@ -289,6 +303,41 @@ impl Proxy {
 impl ProxyInner {
     pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
         self.state.lock().or_panic("Failed to lock AppState")
+    }
+
+    /// Reconfigure the WireGuard interface without holding the routing lock
+    /// across the blocking apply.
+    ///
+    /// Rendering needs a consistent view of the instance table, so it happens
+    /// under `self.state`; writing `wg.conf` and forking `wg syncconf`
+    /// happens after that guard is dropped. Holding the routing lock across
+    /// those blocking OS calls let a burst of registrations stall every
+    /// proxied connection and every lock-taking RPC behind the apply.
+    ///
+    /// Applies are serialized, and requests arriving mid-apply coalesce into
+    /// a single re-render pass. Callers must not hold the `self.state` guard:
+    /// this re-locks it to render.
+    pub(crate) fn reconfigure_wg(&self) -> Result<()> {
+        self.wg_dirty.store(true, Ordering::SeqCst);
+        let _apply = self
+            .wg_apply_lock
+            .lock()
+            .or_panic("Failed to lock wg_apply_lock");
+        while self.wg_dirty.swap(false, Ordering::SeqCst) {
+            let result = self
+                .lock()
+                .generate_wg_config()
+                .and_then(|rendered| apply_wg_config(&self.config, &rendered));
+            if result.is_err() {
+                crate::metrics::record_wg_reconfigure(false);
+                // This pass may have absorbed another caller's dirty flag;
+                // restore it so the next caller retries the failed apply
+                // instead of reporting success for work that never landed.
+                self.wg_dirty.store(true, Ordering::SeqCst);
+            }
+            result?;
+        }
+        Ok(())
     }
 
     /// WireGuard handshake ages, without taking the routing lock.
@@ -536,6 +585,8 @@ impl ProxyInner {
             config,
             state,
             notify_state_updated: Notify::new(),
+            wg_apply_lock: Mutex::new(()),
+            wg_dirty: AtomicBool::new(false),
             my_app_id,
             auth_client,
             acceptor,
@@ -722,9 +773,6 @@ impl Proxy {
                 reported,
             )
             .context("failed to allocate IP address for client")?;
-        if let Err(err) = state.reconfigure() {
-            error!("failed to reconfigure: {err:?}");
-        }
         // Capture the prewarm decision before continuing under the lock.
         // If the instance arrived without port_policy (legacy CVM, or
         // compose_hash mismatch invalidated the cache), enqueue a
@@ -755,6 +803,11 @@ impl Proxy {
             gateways,
         };
         drop(state);
+        // Apply WireGuard only after the routing lock is released; see
+        // reconfigure_wg for why the apply must not run under it.
+        if let Err(err) = self.reconfigure_wg() {
+            error!("failed to reconfigure: {err:?}");
+        }
         if needs_prewarm {
             let _ = self.port_policy_tx.send(instance_id.to_string());
         }
@@ -963,9 +1016,18 @@ fn start_recycle_thread(proxy: Proxy) {
     }
     std::thread::spawn(move || loop {
         std::thread::sleep(proxy.config.recycle.interval);
-        if let Err(err) = proxy.lock().recycle() {
-            error!("failed to run recycle: {err:?}");
+        let wg_changed = match proxy.lock().recycle() {
+            Ok(wg_changed) => wg_changed,
+            Err(err) => {
+                error!("failed to run recycle: {err:?}");
+                continue;
+            }
         };
+        if wg_changed {
+            if let Err(err) = proxy.reconfigure_wg() {
+                error!("failed to reconfigure WireGuard after recycle: {err:?}");
+            }
+        }
     });
 }
 
@@ -1324,7 +1386,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     });
 
     // Initial WireGuard configuration
-    proxy.lock().reconfigure()?;
+    proxy.reconfigure_wg()?;
 
     // Watch for node changes and reconfigure WireGuard
     let mut rx = kv_store.watch_nodes();
@@ -1335,7 +1397,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 break;
             }
             info!("WaveKV: detected remote node changes, reconfiguring WireGuard...");
-            if let Err(err) = proxy_for_nodes.lock().reconfigure() {
+            if let Err(err) = proxy_for_nodes.reconfigure_wg() {
                 error!("Failed to reconfigure WireGuard: {err:?}");
             }
         }
@@ -1608,7 +1670,44 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     report_unreadable_overrides(&mut state.reported_bad_overrides, unreadable_overrides);
 
     if wg_changed {
-        state.reconfigure()?;
+        // The apply blocks on file I/O and `wg syncconf`; the routing lock
+        // must not be held across it (see reconfigure_wg).
+        drop(state);
+        proxy.reconfigure_wg()?;
+    }
+    Ok(())
+}
+
+/// Write the rendered WireGuard config and apply it with `wg syncconf`.
+///
+/// Blocking OS work (write + rename + fsync, fork/exec/wait); never call this
+/// with the routing lock held. Every way out that is not a clean apply leaves
+/// the data plane on the routing table it already had, so they all feed one
+/// counter -- the early returns included. A config that cannot be written
+/// never reaches `wg` at all, and callers of a failed apply only log the
+/// `Err`, so a full disk would otherwise look exactly like having nothing to
+/// apply.
+fn apply_wg_config(config: &Config, wg_config: &str) -> Result<()> {
+    // the rendered config carries the interface's WireGuard private key.
+    safe_write_with_mode(&config.wg.config_path, wg_config, 0o600)
+        .context("failed to write wg config")?;
+    // wg setconf <interface_name> <config_path>
+    let ifname = &config.wg.interface;
+    let config_path = &config.wg.config_path;
+
+    match cmd!(wg syncconf $ifname $config_path) {
+        Ok(_) => {
+            crate::metrics::record_wg_reconfigure(true);
+            info!("wg config updated");
+        }
+        Err(err) => {
+            // `wg syncconf` rejects the whole file when one peer stanza is
+            // bad, and this stays `Ok` for the caller as it always has, so
+            // the counter is the only signal that routing updates stopped
+            // reaching the data plane.
+            crate::metrics::record_wg_reconfigure(false);
+            error!("failed to set wg config: {err:?}");
+        }
     }
     Ok(())
 }
@@ -2304,45 +2403,6 @@ impl ProxyState {
         Ok(model.render()?)
     }
 
-    pub(crate) fn reconfigure(&mut self) -> Result<()> {
-        // Every way out of here that is not a clean apply leaves the data plane
-        // on the routing table it already had, so they all feed one counter --
-        // the early returns included. A config that cannot be rendered or
-        // written never reaches `wg` at all, and both call sites of this
-        // function only log the `Err`, so a full disk would otherwise look
-        // exactly like having nothing to apply.
-        let result = self.reconfigure_inner();
-        if result.is_err() {
-            crate::metrics::record_wg_reconfigure(false);
-        }
-        result
-    }
-
-    fn reconfigure_inner(&mut self) -> Result<()> {
-        let wg_config = self.generate_wg_config()?;
-        // the rendered config carries the interface's WireGuard private key.
-        safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
-            .context("failed to write wg config")?;
-        // wg setconf <interface_name> <config_path>
-        let ifname = &self.config.wg.interface;
-        let config_path = &self.config.wg.config_path;
-
-        match cmd!(wg syncconf $ifname $config_path) {
-            Ok(_) => {
-                crate::metrics::record_wg_reconfigure(true);
-                info!("wg config updated");
-            }
-            Err(err) => {
-                // `wg syncconf` rejects the whole file when one peer stanza is
-                // bad, and this stays `Ok` for the caller as it always has, so
-                // the counter is the only signal that routing updates stopped
-                // reaching the data plane.
-                crate::metrics::record_wg_reconfigure(false);
-                error!("failed to set wg config: {err:?}");
-            }
-        }
-        Ok(())
-    }
 
     /// Whether health observations are allowed to affect routing at all.
     ///
@@ -2514,7 +2574,7 @@ impl ProxyState {
         Ok(())
     }
 
-    fn recycle(&mut self) -> Result<()> {
+    fn recycle(&mut self) -> Result<bool> {
         // Refresh state: sync local handshakes to KvStore, update local last_seen from global
         if let Err(err) = self.refresh_state() {
             warn!("failed to refresh state: {err:?}");
@@ -2559,9 +2619,8 @@ impl ProxyState {
 
         if num_recycled > 0 {
             info!("recycled {num_recycled} stale instances");
-            self.reconfigure()?;
         }
-        Ok(())
+        Ok(num_recycled > 0)
     }
 
     pub(crate) fn set_admin_shutdown(&mut self, shutdown: rocket::Shutdown) {

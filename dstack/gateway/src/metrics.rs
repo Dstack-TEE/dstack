@@ -105,7 +105,7 @@ pub(crate) fn record_decode_failure(key: &str) {
 
 /// Record the outcome of pushing a new WireGuard config.
 ///
-/// Covers the whole of `reconfigure()`, not just `wg syncconf`: rendering and
+/// Covers the whole of `reconfigure_wg()`, not just `wg syncconf`: rendering and
 /// writing the config can fail too, and all three leave the data plane on its
 /// previous routing table while the gateway keeps answering. `wg syncconf`
 /// additionally rejects the *whole* file when one peer stanza is bad, and its
