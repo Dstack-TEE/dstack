@@ -3268,6 +3268,14 @@ mod tests {
         Ok(config)
     }
 
+    /// `configure_hugepage_memory` divides by this count. Nothing else stops
+    /// the divisor being zero, so the "at least node 0" fallback is the whole
+    /// guard -- pin it rather than reason about it.
+    #[test]
+    fn the_hugepage_numa_split_always_has_at_least_one_node() {
+        assert_eq!(hugepage_numa_nodes(&GpuConfig::default()).unwrap().len(), 1);
+    }
+
     #[test]
     fn effective_vcpu_count_clamps_zero_to_one() {
         assert_eq!(effective_vcpu_count(0, None), 1);

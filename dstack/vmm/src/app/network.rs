@@ -527,6 +527,27 @@ mod tests {
         );
     }
 
+    /// `mac_prefix` is operator config, so the only thing standing between it
+    /// and a `[u8; 6]` is the `.min(3)`. Pin every prefix length it admits,
+    /// including one longer than the cap, against a later refactor that drops
+    /// the clamp and reads six bytes out of a three-byte prefix.
+    #[test]
+    fn a_mac_prefix_never_reaches_past_the_address_it_fills() {
+        for prefix in [
+            &[][..],
+            &[0x52][..],
+            &[0x52, 0x54][..],
+            &[0x52, 0x54, 0x00][..],
+            &[0x52, 0x54, 0x00, 0x99, 0x99, 0x99, 0x99][..],
+        ] {
+            let mac = mac_address_for_vm_index("vm-123", prefix, 0);
+            assert_eq!(mac.split(':').count(), 6, "{prefix:?} -> {mac}");
+            for (index, byte) in prefix.iter().take(3).enumerate().skip(1) {
+                assert_eq!(mac.split(':').nth(index).unwrap(), format!("{byte:02x}"));
+            }
+        }
+    }
+
     fn nic(mode: NetworkingMode) -> Networking {
         Networking {
             nic: NicNetworking {
