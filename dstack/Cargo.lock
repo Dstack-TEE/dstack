@@ -862,6 +862,7 @@ dependencies = [
  "rand 0.8.6",
  "rcgen 0.13.2",
  "reqwest",
+ "safe-write",
  "serde",
  "serde_json",
  "tempfile",

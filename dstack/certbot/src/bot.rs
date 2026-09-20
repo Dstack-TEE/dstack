@@ -83,11 +83,19 @@ async fn create_new_account(
             .set_caa_records(&config.cert_subject_alt_names)
             .await?;
     }
-    if let Some(credential_dir) = config.credentials_file.parent() {
-        fs::create_dir_all(credential_dir).context("failed to create credential directory")?;
-    }
-    fs::write(&config.credentials_file, credentials).context("failed to write credentials")?;
+    store_credentials(&config.credentials_file, &credentials)?;
     Ok(client)
+}
+
+/// Write the ACME account credentials.
+///
+/// The account key is what answers challenges for every domain the account has
+/// ever authorized, so a copy of this file reissues all of them.
+/// `docs/security/security-best-practices.md` names ACME credentials among the
+/// files that have to be owner-only; this one was not.
+fn store_credentials(path: &Path, credentials: &str) -> Result<()> {
+    safe_write::safe_write_with_mode(path, credentials, 0o600)
+        .context("failed to write credentials")
 }
 
 impl CertBot {
@@ -374,6 +382,28 @@ pub fn list_cert_public_keys(workdir: impl AsRef<Path>) -> Result<BTreeSet<Vec<u
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod credential_tests {
+    use super::store_credentials;
+    use fs_err as fs;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn stored_account_credentials_are_owner_only() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("acme/credentials.json");
+
+        store_credentials(&path, "{}").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "the ACME account key is readable by anyone on the host"
+        );
+    }
+}
 
 #[cfg(test)]
 mod listing_tests {

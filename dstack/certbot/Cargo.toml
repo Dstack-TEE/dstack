@@ -22,6 +22,7 @@ instant-acme.workspace = true
 path-absolutize.workspace = true
 rcgen.workspace = true
 reqwest.workspace = true
+safe-write.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
