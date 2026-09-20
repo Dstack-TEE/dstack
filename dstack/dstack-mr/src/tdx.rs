@@ -684,6 +684,9 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
 }
 
 #[cfg(test)]
+mod proptests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::kernel::measure_cmdline;

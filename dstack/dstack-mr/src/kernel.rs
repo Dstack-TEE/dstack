@@ -303,6 +303,9 @@ pub(crate) fn measure_cmdline(cmdline: &str) -> Vec<u8> {
 }
 
 #[cfg(test)]
+mod proptests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

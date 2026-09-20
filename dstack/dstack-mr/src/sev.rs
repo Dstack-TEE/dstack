@@ -1117,6 +1117,9 @@ pub fn verify_sev_launch(
 }
 
 #[cfg(test)]
+mod proptests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

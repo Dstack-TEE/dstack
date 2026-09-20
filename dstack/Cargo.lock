@@ -2162,6 +2162,8 @@ dependencies = [
  "log",
  "object",
  "parity-scale-codec",
+ "prop-harness",
+ "proptest",
  "qemu-acpi",
  "reqwest",
  "serde",
