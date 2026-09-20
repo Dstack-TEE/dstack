@@ -26,8 +26,10 @@ else
 # Required: The URL of the dstack-vmm RPC service
 # VMM_RPC=unix:../../../build/vmm.sock
 
-# Required: External auth-simple webhook URL (running on operator infrastructure)
-# AUTH_WEBHOOK_URL=http://your-auth-server:3001
+# Required: External auth-simple webhook URL (running on operator infrastructure).
+# Must be https://: the KMS releases app keys on this backend's answer, and
+# nothing authenticates that answer on the wire.
+# AUTH_WEBHOOK_URL=https://your-auth-server:3001
 
 # Required: The address of the KMS service listening on Host machine
 # KMS_RPC_ADDR=0.0.0.0:9201
@@ -70,6 +72,22 @@ for var in "${required_env_vars[@]}"; do
     exit 1
   fi
 done
+
+# auth-simple runs outside the CVM in this topology, so its answer - which is
+# the whole authorization decision - crosses a network the KMS does not
+# control. Nothing pins, signs or authenticates it, so refuse plain HTTP here
+# rather than shipping a deployment that trusts the path.
+case "$AUTH_WEBHOOK_URL" in
+  https://*) ;;
+  http://localhost* | http://127.0.0.1*)
+    echo "Error: AUTH_WEBHOOK_URL points at loopback, but auth-simple runs outside the CVM in this topology."
+    exit 1
+    ;;
+  *)
+    echo "Error: AUTH_WEBHOOK_URL must be https://; the KMS releases app keys on this backend's answer and nothing authenticates it over plain HTTP."
+    exit 1
+    ;;
+esac
 
 CLI=(../../vmm/src/vmm-cli.py --url "$VMM_RPC")
 

@@ -387,6 +387,14 @@ This argument has a limit, and it is worth stating because it is what keeps the 
 
 Production verifiers should reject deployments that use these development settings. Operators should treat them the same way they treat debug-mode TEE quotes: useful for testing, invalid for production trust.
 
+### The auth API channel is not attested, and the topology decides whether that matters
+
+`auth_api.type = "webhook"` makes an external HTTP service the authorization decision: `bootAuth/app` returns `isAllowed` and `gatewayAppId`, and the KMS releases app keys on that answer. The KMS uses a bare HTTP client for it -- no CA pinning, no shared secret, and no signature over the response -- so the channel carries exactly the trust the network under it carries.
+
+That is sound in the topology the shipped `dstack-app/docker-compose.yaml` uses, where the backend runs in the same compose network inside the CVM: one trust domain, no network in between. It is not sound in `dstack-app/compose-simple.yaml`, whose own header documents the backend as running outside the CVM on operator infrastructure -- there, anything on the path between the KMS and the backend can turn a deny into an allow for a `BootInfo` the app owner never authorized.
+
+The KMS cannot tell the two apart with certainty from a URL, so it warns at startup rather than refusing: loopback and a single-label host (a compose service name, which cannot be a public DNS name) are taken as in-CVM, and anything else over `http://` is warned about. `deploy-simple.sh` -- which knows it is the external topology -- refuses anything but `https://`. TLS here authenticates the backend's name, not an attestation; a response signed by a key the KMS pins would be the stronger fix and would need all three backends to implement it.
+
 ### KMS mTLS is route-enforced for sensitive operations
 
 The KMS Rocket TLS listener permits connections without a client certificate because some bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. A certificate that is presented must carry an attestation, but the issuer that signed it is not checked and is not the authorization boundary for key material.

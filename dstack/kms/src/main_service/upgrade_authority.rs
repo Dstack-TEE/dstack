@@ -12,6 +12,7 @@ use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
 /// canonical struct shared by the producer (KMS) and the policy input the
@@ -181,6 +182,62 @@ impl AuthApi {
                 })
             }
         }
+    }
+}
+
+/// Whether the auth API is reached over a channel that nothing authenticates.
+///
+/// The auth API *is* the authorization decision: `is_app_allowed` returns
+/// `isAllowed` and `gatewayAppId`, and the KMS releases app keys on that
+/// answer. `send_request` uses a bare `reqwest::Client`, so a plain-HTTP
+/// webhook URL means anything on the path between the KMS and the backend can
+/// turn a deny into an allow for a `BootInfo` the app owner never authorized.
+/// There is no CA pinning, no shared secret and no signature over the response
+/// to fall back on, and TLS alone would only authenticate the backend's name -
+/// but that is still the difference between "an on-path attacker" and "whoever
+/// holds the backend's certificate".
+///
+/// Two host shapes are exempt because they cannot reach off the machine, and
+/// they are exactly the two in-CVM topologies dstack ships. Loopback is
+/// `auth-simple`'s documented `http://localhost:3000`. A single-label host is
+/// the shipped default `http://auth-api:8000` - a compose service name, which
+/// resolves through the container's own resolver and is not a public DNS name.
+/// In both the backend runs inside the CVM, which is one trust domain.
+///
+/// Anything else is a name that can resolve to another machine, which is the
+/// `dstack-app/compose-simple.yaml` topology - its own header says the backend
+/// runs outside the CVM. This only warns rather than refusing, because the
+/// exemption above is a heuristic and the shipped default depends on it;
+/// `deploy-simple.sh`, which knows it is the external topology, refuses.
+fn webhook_channel_is_unauthenticated(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    if matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        return false;
+    }
+    host.contains('.')
+}
+
+/// Warn once at startup when the authorization decision travels over a channel
+/// nothing authenticates. See [`webhook_channel_is_unauthenticated`].
+pub(crate) fn warn_on_unauthenticated_auth_api(auth_api: &AuthApi) {
+    let AuthApi::Webhook { webhook } = auth_api else {
+        return;
+    };
+    if webhook_channel_is_unauthenticated(&webhook.url) {
+        warn!(
+            "auth api {} is reached over plain HTTP; the KMS releases app keys on this \
+             backend's answer, and nothing authenticates it - use https:// whenever the \
+             backend does not run inside this CVM",
+            webhook.url
+        );
     }
 }
 
@@ -360,6 +417,38 @@ mod tests {
         match ensure_app_id_len(&[0u8; 19]) {
             Ok(()) => panic!("19-byte app_id must reject"),
             Err(err) => assert!(err.to_string().contains("app_id must be 20 bytes")),
+        }
+    }
+
+    /// The `os_image_hash` substitution on the onboarding path is for source
+    /// KMS instances whose certificate predates `vm_config`, and it costs
+    /// `allowedOsImages` its say over the source. Keep it scoped to exactly
+    /// that case: a source that does present a config and still reports no
+    /// image keeps an empty hash and is denied on-chain, because
+    /// `allowedOsImages[bytes32(0)]` is false.
+    /// The authorization decision must not travel over a channel nothing
+    /// authenticates once the backend leaves the CVM. Loopback and the
+    /// compose-network name stay quiet because those are the in-CVM
+    /// topologies the shipped compose files use.
+    #[test]
+    fn a_plain_http_auth_api_outside_the_cvm_is_flagged() {
+        for quiet in [
+            "https://auth.example.com",
+            "https://auth.example.com:3001/",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000/bootAuth",
+            "http://[::1]:3000",
+            // the shipped default: a compose service name, in-CVM
+            "http://auth-api:8000",
+        ] {
+            assert!(!webhook_channel_is_unauthenticated(quiet), "{quiet}");
+        }
+        for flagged in [
+            "http://auth.example.com",
+            "http://auth.example.com:3001/",
+            "http://10.0.0.5:3001",
+        ] {
+            assert!(webhook_channel_is_unauthenticated(flagged), "{flagged}");
         }
     }
 

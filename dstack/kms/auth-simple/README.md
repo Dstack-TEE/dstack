@@ -232,6 +232,9 @@ Configure KMS to use webhook auth pointing to this server:
 type = "webhook"
 
 [core.auth_api.webhook]
+# Plain HTTP is only appropriate when auth-simple runs inside the CVM, as here.
+# Serve it over https:// whenever it does not - the KMS releases app keys on
+# this backend's answer and nothing authenticates that answer on the wire.
 url = "http://localhost:3000"
 ```
 
