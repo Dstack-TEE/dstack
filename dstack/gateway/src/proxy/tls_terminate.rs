@@ -114,6 +114,10 @@ pub(crate) fn create_acceptor_with_cert_resolver(
     // in-memory session-ID cache, but TLS 1.3 resumption requires a ticketer;
     // without one, every reconnect pays a full handshake (a large RSA signing
     // cost on the server). Installing a ticketer restores resumption for 1.3.
+    //
+    // Installed unconditionally even though the shipped `tls_versions` is
+    // 1.2-only: it costs one key at startup, and it is what makes enabling 1.3
+    // a supported choice rather than a cliff.
     let ticketer = match proxy_config.tls_crypto_provider {
         CryptoProvider::AwsLcRs => rustls::crypto::aws_lc_rs::Ticketer::new(),
         CryptoProvider::Ring => rustls::crypto::ring::Ticketer::new(),

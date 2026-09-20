@@ -75,6 +75,19 @@ endpoint = "10.0.2.2:51820"
 
 [core.proxy]
 tls_crypto_provider = "aws-lc-rs"
+# Protocol versions offered on the TLS-terminate path. Add "1.3" to offer both.
+#
+# 1.2-only is a connection-rate decision, not an oversight. Measured on a 4-core
+# gateway (see the commit that installed the TLS 1.3 session ticketer): TLS 1.2
+# sustains ~20k connections/s, TLS 1.3 ~9.6k even with the ticketer that gives
+# it resumption at all -- 1.2 resumes from rustls' in-memory session-ID cache,
+# which 1.3 cannot use. A gateway fronting many short connections pays for the
+# switch; one fronting long-lived streams does not, and gains 1.3's encrypted
+# handshake and single round trip.
+#
+# rustls' 1.2 is already a narrow profile -- ECDHE only, AEAD only, no
+# renegotiation, no compression -- so what 1.3 adds here is handshake privacy
+# and latency, not data confidentiality.
 tls_versions = ["1.2"]
 listen_addr = "0.0.0.0"
 listen_port = 8443
