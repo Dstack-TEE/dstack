@@ -20,6 +20,15 @@ const ATTRIBUTE_PAGE_AUG: u32 = 0x00000002;
 const TDVF_SECTION_TD_HOB: u32 = 0x02;
 const TDVF_SECTION_TEMP_MEM: u32 = 0x03;
 
+/// Largest section count accepted from a firmware image. Real TDVF metadata
+/// describes six sections -- BFV, CFV, TD_HOB and three TEMP_MEM ranges -- so
+/// this is an order of magnitude of headroom, and it matches the limit the
+/// OVMF/SEV metadata parser already applies (`sev::MAX_OVMF_SECTIONS`).
+pub(crate) const MAX_TDVF_SECTIONS: usize = 64;
+
+/// Size of each `TdvfSection` record in the section table.
+const TDVF_SECTION_SIZE: usize = 32;
+
 pub enum PageAddOrder {
     TwoPass,
     SinglePass,
@@ -224,6 +233,9 @@ impl<'a> Tdvf<'a> {
             bail!("Failed to parse TDVF metadata: Unsupported TDVF version");
         }
         let num_sections = descriptor.num_sections as usize;
+        if num_sections > MAX_TDVF_SECTIONS {
+            bail!("TDVF metadata declares {num_sections} sections, more than the {MAX_TDVF_SECTIONS} supported");
+        }
 
         let mut meta = Tdvf {
             fw,
@@ -232,8 +244,21 @@ impl<'a> Tdvf<'a> {
 
         // Decode all sections using scale codec
         for i in 0..num_sections {
-            let sec_offset = tdvf_meta_offset + 16 + 32 * i;
-            let s = TdvfSection::decode(&mut &fw[sec_offset..])
+            // `num_sections` is a raw `u32` from the file, so the table it
+            // describes need not be inside the image. Slice with `get` rather
+            // than indexing: release builds abort on panic, so an out-of-range
+            // start would take down the whole measuring process instead of
+            // failing this one image.
+            let sec_offset = tdvf_meta_offset + 16 + TDVF_SECTION_SIZE * i;
+            let record = fw
+                .get(sec_offset..sec_offset + TDVF_SECTION_SIZE)
+                .with_context(|| {
+                    format!(
+                        "TDVF section {i} at offset {sec_offset} is outside the {}-byte firmware",
+                        fw.len()
+                    )
+                })?;
+            let s = TdvfSection::decode(&mut &record[..])
                 .with_context(|| format!("failed to decode TDVF section {}", i))?;
 
             if s.memory_address % PAGE_SIZE != 0 {
@@ -249,6 +274,26 @@ impl<'a> Tdvf<'a> {
                 && s.raw_data_size as u64 > s.memory_data_size
             {
                 bail!("Failed to parse TDVF metadata: Section raw data size less than memory");
+            }
+            // MR.EXTEND hashes one page of firmware bytes per measured page,
+            // so it reads `memory_data_size` bytes from `data_offset` -- not
+            // `raw_data_size`. Nothing above ties either to the image, and the
+            // read is what panics, so check the declared range here, before
+            // any of it is measured.
+            let measured_size = if s.attributes & ATTRIBUTE_MR_EXTEND != 0 {
+                s.memory_data_size
+            } else {
+                s.raw_data_size as u64
+            };
+            let data_end = (s.data_offset as u64)
+                .checked_add(measured_size)
+                .with_context(|| format!("TDVF section {i} data range overflows"))?;
+            if data_end > fw.len() as u64 {
+                bail!(
+                    "TDVF section {i} data range {}..{data_end} is outside the {}-byte firmware",
+                    s.data_offset,
+                    fw.len()
+                );
             }
 
             meta.sections.push(s);
@@ -270,7 +315,7 @@ impl<'a> Tdvf<'a> {
             }
         };
 
-        let mr_extend = |h: &mut Sha384, s: &TdvfSection, page: u64| {
+        let mr_extend = |h: &mut Sha384, s: &TdvfSection, page: u64| -> Result<()> {
             if s.attributes & ATTRIBUTE_MR_EXTEND != 0 {
                 for i in 0..(PAGE_SIZE as usize / MR_EXTEND_GRANULARITY) {
                     let mut buf = [0u8; 128];
@@ -283,9 +328,14 @@ impl<'a> Tdvf<'a> {
                     let chunk_offset = s.data_offset as usize
                         + (page * PAGE_SIZE) as usize
                         + i * MR_EXTEND_GRANULARITY;
-                    h.update(&self.fw[chunk_offset..chunk_offset + MR_EXTEND_GRANULARITY]);
+                    let chunk = self
+                        .fw
+                        .get(chunk_offset..chunk_offset + MR_EXTEND_GRANULARITY)
+                        .context("TDVF section data is outside the firmware")?;
+                    h.update(chunk);
                 }
             }
+            Ok(())
         };
 
         for s in &self.sections {
@@ -296,13 +346,13 @@ impl<'a> Tdvf<'a> {
                         mem_page_add(&mut h, s, page);
                     }
                     for page in 0..num_pages {
-                        mr_extend(&mut h, s, page);
+                        mr_extend(&mut h, s, page)?;
                     }
                 }
                 PageAddOrder::SinglePass => {
                     for page in 0..num_pages {
                         mem_page_add(&mut h, s, page);
-                        mr_extend(&mut h, s, page);
+                        mr_extend(&mut h, s, page)?;
                     }
                 }
             }
@@ -602,6 +652,7 @@ mod tests {
         Ok(())
     }
 
+    const TDX_METADATA_OFFSET_GUID: &str = "e47a6535-984a-4798-865e-4685a7bf8ec2";
     const TABLE_FOOTER_GUID: &str = "96b582de-1fb2-45f7-baea-a366c55a082d";
     const BYTES_AFTER_TABLE_FOOTER: usize = 32;
     const GUID_TABLE_HEADER_SIZE: usize = 18;
@@ -672,5 +723,79 @@ mod tests {
             err.contains("Missing TDVF metadata"),
             "unexpected error: {err}"
         );
+    }
+
+    fn mrtd_within_deadline(fw: Vec<u8>) -> Result<(), String> {
+        within_deadline("Tdvf::parse + mrtd", move || {
+            let tdvf = Tdvf::parse(&fw).map_err(|err| format!("{err:#}"))?;
+            tdvf.mrtd_two_pass()
+                .map(|_| ())
+                .map_err(|err| format!("{err:#}"))
+        })
+    }
+
+    fn section_record(
+        data_offset: u32,
+        raw_data_size: u32,
+        memory_address: u64,
+        memory_data_size: u64,
+        sec_type: u32,
+        attributes: u32,
+    ) -> Vec<u8> {
+        let mut out = Vec::with_capacity(TDVF_SECTION_SIZE);
+        out.extend_from_slice(&data_offset.to_le_bytes());
+        out.extend_from_slice(&raw_data_size.to_le_bytes());
+        out.extend_from_slice(&memory_address.to_le_bytes());
+        out.extend_from_slice(&memory_data_size.to_le_bytes());
+        out.extend_from_slice(&sec_type.to_le_bytes());
+        out.extend_from_slice(&attributes.to_le_bytes());
+        out
+    }
+
+    /// Builds a blob the parser accepts: `payload_len` bytes of section data, a
+    /// TDVF descriptor declaring `declared_sections`, the raw `sections`
+    /// records, and a GUIDed table pointing back at the descriptor.
+    fn tdvf_fw(payload_len: usize, sections: &[u8], declared_sections: u32) -> Vec<u8> {
+        let mut payload = vec![0u8; payload_len];
+        let meta_offset = payload.len();
+        payload.extend_from_slice(b"TDVF");
+        payload.extend_from_slice(&(16 + sections.len() as u32).to_le_bytes());
+        payload.extend_from_slice(&1u32.to_le_bytes()); // version
+        payload.extend_from_slice(&declared_sections.to_le_bytes());
+        payload.extend_from_slice(sections);
+
+        let offset_field = payload.len();
+        let mut table = vec![0u8; 4]; // the descriptor's offset from the end
+        table.extend_from_slice(&((4 + GUID_TABLE_HEADER_SIZE) as u16).to_le_bytes());
+        table.extend_from_slice(&encode_guid(TDX_METADATA_OFFSET_GUID).unwrap());
+
+        let mut fw = fw_with_guid_table(&payload, &table);
+        let offset_from_end = (fw.len() - meta_offset) as u32;
+        fw[offset_field..offset_field + 4].copy_from_slice(&offset_from_end.to_le_bytes());
+        fw
+    }
+
+    /// `num_sections` is a raw `u32` from the file, so it can claim far more
+    /// sections than the blob holds. The records here are all-zero ones, which
+    /// pass every per-section check, so nothing but the table limit stops the
+    /// walk early.
+    #[test]
+    fn parse_rejects_more_sections_than_the_blob_holds() {
+        let fw = tdvf_fw(0x40, &vec![0u8; TDVF_SECTION_SIZE * 200], u32::MAX);
+
+        let err =
+            parse_within_deadline(fw).expect_err("an impossible section count must be rejected");
+        assert!(err.contains("sections"), "unexpected error: {err}");
+    }
+
+    /// MR.EXTEND hashes `memory_data_size` bytes from `data_offset`, which only
+    /// `memory_data_size >= raw_data_size` used to constrain.
+    #[test]
+    fn parse_rejects_a_section_whose_data_runs_past_the_blob() {
+        let section = section_record(0, 0x1000, 0x1000, 0x100000, 0, ATTRIBUTE_MR_EXTEND);
+        let fw = tdvf_fw(0x1000, &section, 1);
+
+        let err = mrtd_within_deadline(fw).expect_err("an out-of-range section must be rejected");
+        assert!(err.contains("firmware"), "unexpected error: {err}");
     }
 }
