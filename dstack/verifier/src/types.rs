@@ -79,13 +79,21 @@ impl PolicyBootInfo {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
-    /// Indicates that the event log was verified against the quote.
+    /// Indicates that the runtime event log was replayed against the quote and
+    /// the app identity was decoded from it.
     ///
-    /// For RTMR3 (runtime measurements), both the digest and payload integrity are verified
-    /// by replaying the event log and comparing against the quote. For RTMR 0-2 (boot-time
-    /// measurements), only the digests are verified through replay comparison with the quote;
-    /// the payload content is not validated. dstack does not define semantics for RTMR 0-2
-    /// event log payloads.
+    /// That is RTMR3 on TDX, and the corresponding launch PCR on SEV-SNP and
+    /// AWS NitroTPM: both the digests and the payloads are verified, because
+    /// `app_id`, `compose_hash` and the rest are read out of those payloads.
+    ///
+    /// It says nothing about the boot-time event log. Nothing replays the
+    /// RTMR 0-2 entries a TDX quote carries, and that is deliberate: those
+    /// registers are verified by comparing the quoted values against
+    /// measurements recomputed from the OS image (see `os_image_hash_verified`
+    /// and `acpi_tables_verified`), which does not depend on the host's event
+    /// log at all. The boot event log is carried for diagnostics -- the
+    /// `--debug` RTMR diff and the three named ACPI digests the TDX lite path
+    /// cross-checks -- and dstack defines no semantics for its payloads.
     pub event_log_verified: bool,
     pub os_image_hash_verified: bool,
     /// Indicates that TDX ACPI table contents were verified.
