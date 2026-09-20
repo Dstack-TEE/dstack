@@ -240,6 +240,28 @@ describe('auth-simple', () => {
       expect(json.isAllowed).toBe(false);
       expect(json.reason).toContain('MR');
     });
+    it('rejects KMS boot with an empty device allowlist', async () => {
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        kms: {
+          mrAggregated: ['0xabc123'],
+          devices: [],
+          allowAnyDevice: false
+        }
+      });
+
+      const res = await app.fetch(new Request('http://localhost/bootAuth/kms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(baseBootInfo)
+      }));
+      const json = await res.json();
+
+      expect(json.isAllowed).toBe(false);
+      expect(json.reason).toContain('device');
+    });
+
     it('allows KMS boot with allowAnyDevice', async () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',
@@ -336,6 +358,30 @@ describe('auth-simple', () => {
           '0xapp123': {
             composeHashes: ['0xcompose456'],
             devices: ['0xotherdevice'],
+            allowAnyDevice: false
+          }
+        }
+      });
+
+      const res = await app.fetch(new Request('http://localhost/bootAuth/app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(baseBootInfo)
+      }));
+      const json = await res.json();
+
+      expect(json.isAllowed).toBe(false);
+      expect(json.reason).toContain('device');
+    });
+
+    it('rejects app boot with an empty device allowlist', async () => {
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        apps: {
+          '0xapp123': {
+            composeHashes: ['0xcompose456'],
+            devices: [],
             allowAnyDevice: false
           }
         }
