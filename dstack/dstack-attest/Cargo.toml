@@ -63,6 +63,8 @@ quote = [
 
 [dev-dependencies]
 futures = { workspace = true }
+prop-harness.workspace = true
+proptest.workspace = true
 tokio = { workspace = true, features = ["full"] }
 dstack-mr = { workspace = true }
 rcgen = { workspace = true }
