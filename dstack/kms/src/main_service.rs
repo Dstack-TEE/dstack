@@ -601,6 +601,7 @@ mod tests {
     };
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
+    use std::time::Duration;
 
     const SNP_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
         snp: true,
@@ -1193,5 +1194,161 @@ mod tests {
             ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
                 .expect("TDX key release has no local opt-in gate");
         }
+    }
+
+    /// An auth API that counts requests and answers them all at once, so a
+    /// test can tell how many upstream calls a burst of concurrent RPCs cost.
+    fn serve_concurrent_auth_api(
+        body: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                counter.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut chunk = [0u8; 4096];
+                    let _ = stream.read(&mut chunk);
+                    // Hold the response long enough that a burst of callers is
+                    // genuinely in flight together rather than serialized.
+                    std::thread::sleep(Duration::from_millis(200));
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                });
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    /// A `KmsState` backed by freshly generated root material in `cert_dir`,
+    /// with its auth API pointed at `webhook_url`.
+    fn kms_state(cert_dir: &Path, webhook_url: &str) -> KmsState {
+        use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
+        use rocket::figment::{
+            providers::{Format, Toml},
+            Figment,
+        };
+
+        let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let ca_cert = CertRequest::builder()
+            .org_name("Dstack")
+            .subject("Dstack KMS CA")
+            .ca_level(1)
+            .key(&ca_key)
+            .build()
+            .self_signed()
+            .unwrap();
+        let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let tmp_ca_cert = CertRequest::builder()
+            .org_name("Dstack")
+            .subject("Dstack Client Temp CA")
+            .ca_level(0)
+            .key(&tmp_ca_key)
+            .build()
+            .self_signed()
+            .unwrap();
+        fs::write(cert_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
+        fs::write(cert_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
+        fs::write(cert_dir.join("tmp-ca.key"), tmp_ca_key.serialize_pem()).unwrap();
+        fs::write(cert_dir.join("tmp-ca.crt"), tmp_ca_cert.pem()).unwrap();
+        fs::write(
+            cert_dir.join("root-k256.key"),
+            SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
+        )
+        .unwrap();
+
+        let overrides = format!(
+            r#"
+            [core]
+            cert_dir = "{}"
+            attest_rpc_cert = false
+            enforce_self_authorization = false
+
+            [core.image]
+            cache_dir = "{}"
+
+            [core.auth_api]
+            type = "webhook"
+
+            [core.auth_api.webhook]
+            url = "{webhook_url}"
+            "#,
+            cert_dir.display(),
+            cert_dir.display(),
+        );
+        let config: KmsConfig = Figment::from(rocket::Config::default())
+            .merge(Toml::string(crate::config::DEFAULT_CONFIG))
+            .merge(Toml::string(&overrides))
+            .focus("core")
+            .extract()
+            .unwrap();
+        KmsState::new(config).unwrap()
+    }
+
+    const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    /// `GetMeta` needs no client certificate and each call drives two or three
+    /// `readContract` calls on the operator's chain RPC. A burst of anonymous
+    /// callers therefore used to multiply straight through to that RPC, and
+    /// since the backend answers `isAllowed: false` when it cannot reach the
+    /// chain, burning the quota denies key release for every app.
+    #[rocket::async_test]
+    async fn concurrent_unauthenticated_get_meta_calls_do_not_amplify_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, upstream_requests) = serve_concurrent_auth_api(AUTH_API_INFO);
+        let state = kms_state(dir.path(), &url);
+
+        const CALLERS: usize = 24;
+        let burst: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let state = state.clone();
+                // No attestation: this is exactly what an anonymous caller
+                // gets, because `client_auth_mandatory()` is false.
+                rocket::tokio::spawn(async move {
+                    RpcHandler {
+                        state,
+                        attestation: None,
+                    }
+                    .get_meta()
+                    .await
+                })
+            })
+            .collect();
+        for handle in burst {
+            let meta = handle.await.unwrap().unwrap();
+            assert_eq!(meta.chain_id, Some(1));
+            assert_eq!(meta.gateway_app_id.as_deref(), Some("0xgateway"));
+        }
+        let amplification = upstream_requests.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            amplification <= 2,
+            "{CALLERS} concurrent anonymous GetMeta calls cost {amplification} upstream calls"
+        );
+
+        // Coalescing is not caching: a call issued after the burst finished
+        // goes upstream again.
+        RpcHandler {
+            state,
+            attestation: None,
+        }
+        .get_meta()
+        .await
+        .unwrap();
+        assert_eq!(
+            upstream_requests.load(std::sync::atomic::Ordering::SeqCst),
+            amplification + 1,
+            "a later call must not be served from a retained result"
+        );
     }
 }
