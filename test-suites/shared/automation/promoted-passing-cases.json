@@ -105,6 +105,42 @@
       "notes": "mined from central-fixtures-20260724T032131Z and verified by replay"
     },
     {
+      "case_id": "tc-gos-contract-001",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Tappd method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
+      "case_id": "tc-gos-contract-002",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every DstackGuest method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
+      "case_id": "tc-gos-contract-003",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Worker method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
+      "case_id": "tc-gos-contract-004",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every GuestApi method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
       "case_id": "tc-gos-dstackguest-001",
       "source_run": "physical-tdx-optimized-20260723T182727Z",
       "source_status": "PASS",
@@ -1207,6 +1243,33 @@
       "environment": "INTEGRATION"
     },
     {
+      "case_id": "tc-gw-contract-001",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Gateway method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
+      "case_id": "tc-gw-contract-002",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Debug method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
+      "case_id": "tc-gw-contract-003",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Admin method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
       "case_id": "tc-gw-debug-001",
       "source_run": "debug-register-001",
       "source_status": "PASS",
@@ -1839,6 +1902,24 @@
       "source_status": "PASS",
       "entrypoint": "cases/03-kms/12-kms-build/tc-kms-build-001/run.py",
       "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-kms-contract-001",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every KMS method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
+    },
+    {
+      "case_id": "tc-kms-contract-002",
+      "source_run": "request-contract-matrix-2026-09-19",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Onboard method the inventory declares, under the policy in api-contract-matrix-policy.json.",
+      "promoted_at": "2026-09-19T00:00:00Z"
     },
     {
       "case_id": "tc-kms-ct-001",
