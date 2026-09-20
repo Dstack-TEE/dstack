@@ -50,6 +50,23 @@ fn authenticode_sha384_hash(data: &[u8]) -> Result<Vec<u8>> {
     let size_of_headers_offset = optional_header_offset + 60;
     let size_of_headers = read_le::<u32>(data, size_of_headers_offset, "size_of_headers")? as usize;
 
+    // The data directory offsets and `size_of_headers` are derived from
+    // file-supplied fields, so nothing so far constrains them to the image.
+    // Check them before they are used as slice bounds, the way the section
+    // walk below already checks `end <= data.len()`.
+    if cert_dir_end > data.len() {
+        bail!(
+            "malformed PE: certificate directory ends at {cert_dir_end}, past the {}-byte image",
+            data.len()
+        );
+    }
+    if size_of_headers < cert_dir_end || size_of_headers > data.len() {
+        bail!(
+            "malformed PE: size_of_headers {size_of_headers} is outside [{cert_dir_end}, {}]",
+            data.len()
+        );
+    }
+
     let mut hasher = Sha384::new();
     hasher.update(&data[0..checksum_offset]);
     hasher.update(&data[checksum_end..cert_dir_offset]);
@@ -314,6 +331,36 @@ mod tests {
         kernel[0x236..0x238].copy_from_slice(&0x0002u16.to_le_bytes());
         kernel[0x224..0x226].copy_from_slice(&0x50a0u16.to_le_bytes());
         kernel
+    }
+
+    /// A file-supplied header field must come back as an error, not as a
+    /// panic: release builds are `panic = "abort"`, so an unchecked slice bound
+    /// here takes down the whole measuring process instead of failing the one
+    /// measurement that was handed a malformed image.
+    #[test]
+    fn a_malformed_pe_header_is_rejected_instead_of_panicking() {
+        // Where `pe_kernel` puts the optional header: lfanew, PE signature,
+        // then the 20-byte COFF header.
+        let optional_header_offset = 0x40 + 4 + 20;
+        let with_size_of_headers = |size_of_headers: u32| {
+            let mut kernel = pe_kernel();
+            kernel[optional_header_offset + 60..optional_header_offset + 64]
+                .copy_from_slice(&size_of_headers.to_le_bytes());
+            kernel
+        };
+
+        // Ends past the image.
+        let too_large = with_size_of_headers(0xffff_fff0);
+        assert!(kernel_authenticode_sha384(&too_large).is_err());
+        // Ends before the certificate directory the header region contains, so
+        // the slice would start after it ends.
+        let too_small = with_size_of_headers(0);
+        assert!(kernel_authenticode_sha384(&too_small).is_err());
+        // Long enough to read `SizeOfHeaders`, too short to hold the
+        // certificate directory that is hashed before it.
+        let mut truncated = pe_kernel();
+        truncated.truncate(optional_header_offset + 70);
+        assert!(kernel_authenticode_sha384(&truncated).is_err());
     }
 
     /// The flag has to reach the digest, not just the struct: an image whose
