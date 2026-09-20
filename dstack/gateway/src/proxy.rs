@@ -675,7 +675,7 @@ mod tests {
     /// A TLS 1.3 ClientHello whose `server_name` sits behind `filler` bytes of
     /// key share, which is where a post-quantum client puts it: extension
     /// order is the client's to choose.
-    fn client_hello(sni: &str, filler: usize) -> Vec<u8> {
+    pub(crate) fn client_hello(sni: &str, filler: usize) -> Vec<u8> {
         fn u16_prefixed(body: &[u8]) -> Vec<u8> {
             let mut out = (body.len() as u16).to_be_bytes().to_vec();
             out.extend_from_slice(body);

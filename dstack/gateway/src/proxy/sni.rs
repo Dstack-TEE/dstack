@@ -2,6 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//! ClientHello SNI sniffing.
+//!
+//! Records are not reassembled: the handshake is parsed as one contiguous
+//! block starting at the first record's payload, so a ClientHello fragmented
+//! across TLS records reads differently here than in rustls, which does
+//! reassemble. That divergence decides routing, never trust -- on the
+//! terminate path rustls parses the hello again and picks the certificate from
+//! the SNI *it* read, and on the passthrough path the app terminates the TLS
+//! itself against the bytes forwarded verbatim. Both SNIs are the client's to
+//! choose either way, and routing to an app is not an authorization decision,
+//! so the cost of a fragmented hello is a refused connection, not a misrouted
+//! one.
+
 use parcelona::parser_combinators::{Msg, PErr};
 use parcelona::u8::*;
 use tracing::trace;
@@ -11,6 +24,7 @@ pub fn extract_sni(b: &[u8]) -> Option<&[u8]> {
 }
 
 fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
+    const CONTENT_TYPE_HANDSHAKE: u8 = 0x16;
     const HANDSHAKE_TYPE_CLIENT_HELLO: usize = 1;
     const EXTENSION_TYPE_SNI: usize = 0;
     const NAME_TYPE_HOST_NAME: usize = 0;
@@ -20,6 +34,13 @@ fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
         return Err(PErr::new(b));
     }
 
+    // Record header: content type, legacy version, fragment length. Only a
+    // handshake record can carry a ClientHello; without this check any
+    // protocol whose sixth byte happens to be 1 is parsed as one.
+    if b[0] != CONTENT_TYPE_HANDSHAKE {
+        let err = PErr::new(b).user_msg_push(Msg::Str("not a handshake record"));
+        return Err(err);
+    }
     let b = &b[5..];
     // Handshake message type.
     let (b, c) = take_len_be_u8(b)?;
@@ -80,5 +101,26 @@ fn extract_sni_inner(b: &[u8]) -> Result<(usize, &[u8]), PErr<'_, u8>> {
             );
             return Ok((sni_point, sni));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy::tests::client_hello;
+
+    #[test]
+    fn a_handshake_record_gives_up_its_sni() {
+        let hello = client_hello("app.example.com", 0);
+        assert_eq!(extract_sni(&hello), Some(&b"app.example.com"[..]));
+    }
+
+    /// The record header is skipped, not read, so without a content-type check
+    /// anything shaped like a hello from its sixth byte on is parsed as one.
+    #[test]
+    fn a_record_that_is_not_a_handshake_has_no_sni() {
+        let mut hello = client_hello("app.example.com", 0);
+        hello[0] = 0x17; // application_data
+        assert_eq!(extract_sni(&hello), None);
     }
 }
