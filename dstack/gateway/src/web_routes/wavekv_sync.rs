@@ -158,10 +158,7 @@ pub(crate) fn handle_sync(
     };
 
     let env = decode_envelope(body)?;
-    if env.sender_id == 0 {
-        warn!("rejected sync from invalid node_id 0");
-        return Err(Status::BadRequest);
-    }
+    ensure_plausible_sender(state, env.sender_id)?;
     refuse_removed_sender(state, env.sender_id)?;
 
     let Some(result) = wavekv_sync.handle_envelope(store, env) else {
@@ -180,6 +177,26 @@ pub(crate) fn handle_sync(
         ContentType::new("application", "x-msgpack-gz"),
         gzip(&encoded)?,
     ))
+}
+
+/// Refuse an envelope claiming an id no peer can legitimately present.
+///
+/// 0 is not a node id. Neither is this node's own: nothing syncs to itself, so
+/// an envelope carrying our id is either a peer misconfigured onto it or a
+/// caller reaching for the ack bookkeeping we keep about ourselves -- which we
+/// report to every peer, and which their tombstone watermarks are a minimum
+/// over. `sender_id` is self-asserted either way; this only rules out the two
+/// values that can never be honest.
+fn ensure_plausible_sender(state: &Proxy, sender_id: u32) -> Result<(), Status> {
+    if sender_id == 0 {
+        warn!("rejected an envelope from invalid node_id 0");
+        return Err(Status::BadRequest);
+    }
+    if sender_id == state.config.sync.node_id {
+        warn!("rejected an envelope claiming this node's own id {sender_id}");
+        return Err(Status::BadRequest);
+    }
+    Ok(())
 }
 
 /// Refuse an envelope from a node an operator has removed.
@@ -223,10 +240,7 @@ pub(crate) fn handle_push(state: &Proxy, store: &str, body: &[u8]) -> Result<Sta
     };
 
     let env = decode_envelope(body)?;
-    if env.sender_id == 0 {
-        warn!("rejected push from invalid node_id 0");
-        return Err(Status::BadRequest);
-    }
+    ensure_plausible_sender(state, env.sender_id)?;
     refuse_removed_sender(state, env.sender_id)?;
 
     let Some(result) = wavekv_sync.handle_push(store, env) else {
@@ -864,6 +878,35 @@ mod tests {
 
         let one_over = gzip(&vec![7u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]).expect("gzip");
         assert!(gunzip_bounded(&one_over, MAX_DECOMPRESSED_SYNC_BYTES).is_err());
+    }
+
+    /// Nothing syncs to itself.
+    ///
+    /// An envelope carrying this node's own id is either a peer misconfigured
+    /// onto our id or a caller reaching for the ack bookkeeping we keep about
+    /// ourselves -- which we report to every peer and which feeds their
+    /// tombstone watermarks. Neither is a sync, so it stops at the door
+    /// alongside node id 0.
+    #[tokio::test]
+    async fn an_envelope_claiming_this_nodes_own_id_is_refused() {
+        let (proxy, _tmp) = serving_gateway(true).await;
+
+        let mut env = SyncEnvelope::new(ME, proxy.kv_store().get_peer_uuid(ME).unwrap_or_default());
+        env.acks.insert(ME, 999);
+        let (sync_status, _) = post_sync(&proxy, "persistent", body(&env));
+        assert_eq!(
+            sync_status,
+            Status::BadRequest,
+            "sync must refuse a sender claiming our own id"
+        );
+
+        let mut push = push_envelope(peer_uuid(), "node/9");
+        push.sender_id = ME;
+        assert_eq!(
+            post_push(&proxy, "persistent", body(&push)),
+            Status::BadRequest,
+            "push must refuse a sender claiming our own id"
+        );
     }
 
     #[tokio::test]
