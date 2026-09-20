@@ -111,7 +111,55 @@ fn default_true() -> bool {
     true
 }
 
+/// What the two irreplaceable root secrets look like on disk.
+///
+/// `root-ca.key` and `root-k256.key` are the only material a KMS cannot
+/// regenerate: every app key, every encrypted disk and every issued
+/// certificate in the deployment hangs off them. So "has this KMS been
+/// bootstrapped?" is a question about these two files and nothing else, and
+/// every path that can mint new root keys - the `Onboard.Bootstrap` RPC, the
+/// `Onboard.Onboard` RPC, `bootstrap_keys` - asks it the same way.
+///
+/// [`KmsConfig::keys_exists`] answers a different question: whether the
+/// *derived* material is complete. The two used to be compared as if they were
+/// the same question, which is what made a partial write unrecoverable - an
+/// incomplete cert dir sent the KMS into onboarding, where every RPC then
+/// refused because a root key existed. The gap between them is a repair
+/// ([`crate::onboard_service::update_certs`]), not a rebootstrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootKeys {
+    /// Neither key exists. Nothing has been published, so generating a fresh
+    /// set or onboarding from another KMS is safe.
+    Absent,
+    /// Exactly one key exists, which only a crash between the two writes in
+    /// `Keys::store` can produce. Terminal: the surviving half cannot be
+    /// paired again, and minting a partner for it would silently rekey the
+    /// deployment.
+    Partial {
+        present: &'static str,
+        missing: &'static str,
+    },
+    /// Both keys exist. This KMS is bootstrapped.
+    Present,
+}
+
 impl KmsConfig {
+    /// See [`RootKeys`]. This is the one definition of "already bootstrapped".
+    pub(crate) fn root_keys(&self) -> RootKeys {
+        match (self.root_ca_key().exists(), self.k256_key().exists()) {
+            (true, true) => RootKeys::Present,
+            (false, false) => RootKeys::Absent,
+            (true, false) => RootKeys::Partial {
+                present: ROOT_CA_KEY,
+                missing: K256_KEY,
+            },
+            (false, true) => RootKeys::Partial {
+                present: K256_KEY,
+                missing: ROOT_CA_KEY,
+            },
+        }
+    }
+
     pub fn keys_exists(&self) -> bool {
         self.tmp_ca_cert().exists()
             && self.tmp_ca_key().exists()

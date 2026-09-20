@@ -135,12 +135,25 @@ async fn main() -> Result<()> {
         );
     }
 
-    if config.onboard.enabled && !config.keys_exists() {
-        info!("Onboarding");
-        run_onboard_service(config.clone(), figment.clone()).await?;
-        if !config.keys_exists() {
-            bail!("Failed to onboard");
+    // Onboarding is gated on the root keys, not on `keys_exists()`. The two
+    // used to disagree: a cert dir missing only a derived certificate made
+    // `keys_exists()` false, so the KMS entered onboarding, where every RPC
+    // then refused because a root key already existed. The derived material is
+    // repaired by `update_certs` below instead.
+    match config.root_keys() {
+        config::RootKeys::Partial { present, missing } => bail!(
+            "cert_dir holds {present} but not {missing}: a bootstrap was interrupted between the \
+             two root keys. Restore {missing} from a backup of this cert_dir - generating a new \
+             one would re-key every app"
+        ),
+        config::RootKeys::Absent if config.onboard.enabled => {
+            info!("Onboarding");
+            run_onboard_service(config.clone(), figment.clone()).await?;
+            if !config.keys_exists() {
+                bail!("Failed to onboard");
+            }
         }
+        config::RootKeys::Absent | config::RootKeys::Present => {}
     }
 
     info!("Updating certs");

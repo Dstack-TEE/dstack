@@ -34,7 +34,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::info;
 
 use crate::{
-    config::KmsConfig,
+    config::{KmsConfig, RootKeys},
     main_service::{
         build_boot_info_for_attestation,
         upgrade_authority::{
@@ -107,13 +107,77 @@ fn validate_onboarding_domain(domain: &str) -> Result<()> {
     Ok(())
 }
 
+/// The one on-disk state onboarding cannot repair, reported so the operator can
+/// act on it.
+///
+/// Half a root key pair is terminal by construction: the survivor cannot be
+/// paired again, and minting a partner would re-key every app and orphan every
+/// encrypted disk in the deployment. The old message for this state was "KMS
+/// has already been bootstrapped", which sent the operator looking for a
+/// bootstrap that never finished.
+fn partial_root_keys_error(present: &str, missing: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "cert_dir holds {present} but not {missing}, so a bootstrap was interrupted between the \
+         two root keys. The surviving key cannot be paired again and generating a new one would \
+         re-key every app. Restore {missing} from a backup of this cert_dir, or - only if no app \
+         key was ever released - remove both keys and bootstrap again"
+    )
+}
+
+/// Answer `Onboard.Bootstrap` for a KMS whose root keys are already on disk.
+///
+/// `bootstrap-info.json` is a *record* of the stored keys, not a second source
+/// of truth, so it can be re-derived from them. That is the recovery for a
+/// crash after the keys were written: the operator repeats the same bootstrap
+/// call and gets the same public keys back instead of a permanent refusal.
+///
+/// Re-keying is still refused - the domain has to be the one the stored RPC
+/// certificate was issued for.
+async fn republish_bootstrap_info(cfg: &KmsConfig, domain: &str) -> Result<BootstrapResponse> {
+    let stored_domain = fs::read_to_string(cfg.rpc_domain())
+        .context("KMS is bootstrapped but rpc-domain is missing; restore it from a backup")?;
+    let stored_domain = stored_domain.trim();
+    if stored_domain != domain {
+        bail!("KMS is already bootstrapped for {stored_domain}, not for {domain}");
+    }
+    if let Ok(recorded) = fs::read(cfg.bootstrap_info()) {
+        if let Ok(response) = serde_json::from_slice(&recorded) {
+            return Ok(response);
+        }
+        info!("bootstrap-info.json is unreadable; regenerating it from the stored root keys");
+    }
+    let ca_key = KeyPair::from_pem(&fs::read_to_string(cfg.root_ca_key())?)
+        .context("Failed to parse the stored root CA key")?;
+    let k256_key = SigningKey::from_slice(&fs::read(cfg.k256_key())?)
+        .context("Failed to parse the stored root k256 key")?;
+    let ca_pubkey = ca_key.public_key_der();
+    let k256_pubkey = k256_key.verifying_key().to_sec1_bytes().to_vec();
+    let attestation = attest_keys(&ca_pubkey, &k256_pubkey).await?;
+    let response = BootstrapResponse {
+        ca_pubkey,
+        k256_pubkey,
+        attestation,
+    };
+    safe_write(cfg.bootstrap_info(), serde_json::to_vec(&response)?)?;
+    Ok(response)
+}
+
 impl OnboardRpc for OnboardHandler {
     async fn bootstrap(self, request: BootstrapRequest) -> Result<BootstrapResponse> {
         validate_onboarding_domain(&request.domain)?;
         let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
         let cfg = &self.state.config;
-        if cfg.bootstrap_info().exists() || cfg.root_ca_key().exists() || cfg.k256_key().exists() {
-            bail!("KMS has already been bootstrapped");
+        match cfg.root_keys() {
+            // The root keys are durable, so the published record is derivable
+            // from them. Refusing here used to be permanent: the operator was
+            // told "already bootstrapped" while `bootstrap-info.json` - the
+            // file they register on chain - was missing or stale, and no path
+            // could reproduce it without rekeying.
+            RootKeys::Present => return republish_bootstrap_info(cfg, &request.domain).await,
+            RootKeys::Partial { present, missing } => {
+                return Err(partial_root_keys_error(present, missing))
+            }
+            RootKeys::Absent => {}
         }
         ensure_self_kms_allowed(cfg, &self.state.attestation_verifier)
             .await
@@ -131,9 +195,12 @@ impl OnboardRpc for OnboardHandler {
             k256_pubkey,
             attestation,
         };
-        // Store the bootstrap info
-        safe_write(cfg.bootstrap_info(), serde_json::to_vec(&response)?)?;
+        // Keys first, published record second. The other order returns pubkeys
+        // for on-chain registration that a crash can leave with no private key
+        // behind them, and nothing on disk then distinguishes that from a
+        // finished bootstrap.
         keys.store(cfg)?;
+        safe_write(cfg.bootstrap_info(), serde_json::to_vec(&response)?)?;
         Ok(response)
     }
 
@@ -141,8 +208,12 @@ impl OnboardRpc for OnboardHandler {
         validate_onboarding_domain(&request.domain)?;
         let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
         let cfg = &self.state.config;
-        if cfg.root_ca_key().exists() || cfg.k256_key().exists() {
-            bail!("KMS has already been onboarded");
+        match cfg.root_keys() {
+            RootKeys::Present => bail!("KMS has already been onboarded"),
+            RootKeys::Partial { present, missing } => {
+                return Err(partial_root_keys_error(present, missing))
+            }
+            RootKeys::Absent => {}
         }
         let source_url = request.source_url.trim_end_matches('/').to_string();
         let source_url = if source_url.ends_with("/prpc") {
@@ -439,6 +510,221 @@ mod tests {
         assert!(ca_cert_expires_within(&inside_window, now, CA_RENEWAL_WINDOW).unwrap());
         assert!(!ca_cert_expires_within(&outside_window, now, CA_RENEWAL_WINDOW).unwrap());
     }
+
+    /// A KMS config pointing at `cert_dir` that needs neither a TEE nor a
+    /// guest agent: nothing in these tests attests anything.
+    fn onboard_test_config(cert_dir: &std::path::Path) -> KmsConfig {
+        use rocket::figment::{
+            providers::{Format, Toml},
+            Figment,
+        };
+        let overrides = format!(
+            r#"
+            [core]
+            cert_dir = "{}"
+            attest_rpc_cert = false
+            enforce_self_authorization = false
+            "#,
+            cert_dir.display()
+        );
+        Figment::from(rocket::Config::default())
+            .merge(Toml::string(crate::config::DEFAULT_CONFIG))
+            .merge(Toml::string(&overrides))
+            .focus("core")
+            .extract()
+            .unwrap()
+    }
+
+    /// Fault injection: apply the first `writes` artifacts of a real
+    /// `Keys::store` and stop, which is exactly what a crash after that many
+    /// writes leaves on disk.
+    async fn crash_after(cfg: &KmsConfig, writes: usize) -> Keys {
+        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        for artifact in keys.artifacts(cfg).into_iter().take(writes) {
+            artifact.write().unwrap();
+        }
+        keys
+    }
+
+    /// Every crash window in `Keys::store` has to leave a cert dir that is
+    /// either safe to bootstrap from scratch or repairable into a working KMS.
+    /// Exactly one window - the one that splits the two root keys - is
+    /// terminal, and it has to say so.
+    #[rocket::async_test]
+    async fn every_crash_window_in_store_is_restartable_repairable_or_named() {
+        let template = tempfile::tempdir().unwrap();
+        let artifact_count = Keys::generate("kms.example.com", false)
+            .await
+            .unwrap()
+            .artifacts(&onboard_test_config(template.path()))
+            .len();
+
+        let mut terminal = Vec::new();
+        for writes in 0..=artifact_count {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = onboard_test_config(dir.path());
+            crash_after(&cfg, writes).await;
+
+            match cfg.root_keys() {
+                // Nothing irreplaceable was written, so a fresh bootstrap is
+                // safe - and nothing was published that it would contradict.
+                RootKeys::Absent => {
+                    assert!(
+                        !cfg.bootstrap_info().exists(),
+                        "{writes} writes published pubkeys with no root key behind them"
+                    );
+                }
+                // The root keys survived, so the certificates are rebuilt from
+                // them rather than being grounds for a rebootstrap.
+                RootKeys::Present => {
+                    update_certs(&cfg).await.unwrap_or_else(|err| {
+                        panic!("{writes} writes left an unrepairable cert dir: {err:#}")
+                    });
+                    assert!(cfg.keys_exists(), "{writes} writes were not repaired");
+                }
+                RootKeys::Partial { present, missing } => {
+                    let err = partial_root_keys_error(present, missing).to_string();
+                    assert!(err.contains(present) && err.contains(missing), "{err}");
+                    terminal.push(writes);
+                }
+            }
+        }
+
+        assert_eq!(
+            terminal.len(),
+            1,
+            "only the window between the two root keys may be terminal, got {terminal:?}"
+        );
+    }
+
+    /// The recovery for a crash after the root keys were stored: repeating the
+    /// same bootstrap call returns the same published record. Refusing it
+    /// forever left the operator with keys they could not register on chain.
+    #[rocket::async_test]
+    async fn bootstrap_replays_its_published_record_instead_of_refusing_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = onboard_test_config(dir.path());
+        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        keys.store(&cfg).unwrap();
+        let published = BootstrapResponse {
+            ca_pubkey: keys.ca_key.public_key_der(),
+            k256_pubkey: keys.k256_key.verifying_key().to_sec1_bytes().to_vec(),
+            attestation: b"recorded-attestation".to_vec(),
+        };
+        safe_write(
+            cfg.bootstrap_info(),
+            serde_json::to_vec(&published).unwrap(),
+        )
+        .unwrap();
+
+        let replayed = OnboardHandler {
+            state: OnboardState::new(cfg.clone()).unwrap(),
+        }
+        .bootstrap(BootstrapRequest {
+            domain: "kms.example.com".to_string(),
+        })
+        .await
+        .expect("a bootstrapped KMS must be able to re-read its own published record");
+        assert_eq!(replayed.ca_pubkey, published.ca_pubkey);
+        assert_eq!(replayed.k256_pubkey, published.k256_pubkey);
+        assert_eq!(replayed.attestation, published.attestation);
+
+        // Replaying the record is not a licence to re-key under a new domain.
+        let err = OnboardHandler {
+            state: OnboardState::new(cfg).unwrap(),
+        }
+        .bootstrap(BootstrapRequest {
+            domain: "other.example.com".to_string(),
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("already bootstrapped for kms.example.com"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// Half a root key pair is the one state onboarding cannot fix, so both
+    /// RPCs have to name it rather than reporting a finished bootstrap.
+    #[rocket::async_test]
+    async fn half_a_root_key_pair_is_reported_as_an_interrupted_bootstrap() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = onboard_test_config(dir.path());
+        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        let artifacts = keys.artifacts(&cfg);
+        let up_to_root_ca_key = artifacts
+            .iter()
+            .position(|artifact| artifact.path == cfg.root_ca_key())
+            .unwrap()
+            + 1;
+        crash_after(&cfg, up_to_root_ca_key).await;
+        assert!(matches!(cfg.root_keys(), RootKeys::Partial { .. }));
+
+        let bootstrap_err = OnboardHandler {
+            state: OnboardState::new(cfg.clone()).unwrap(),
+        }
+        .bootstrap(BootstrapRequest {
+            domain: "kms.example.com".to_string(),
+        })
+        .await
+        .unwrap_err();
+        let onboard_err = OnboardHandler {
+            state: OnboardState::new(cfg).unwrap(),
+        }
+        .onboard(OnboardRequest {
+            domain: "kms.example.com".to_string(),
+            source_url: "https://source.example.com".to_string(),
+        })
+        .await
+        .unwrap_err();
+
+        for err in [bootstrap_err, onboard_err] {
+            let err = format!("{err:#}");
+            assert!(
+                err.contains("root-ca.key") && err.contains("root-k256.key"),
+                "{err}"
+            );
+            assert!(
+                err.contains("interrupted between the two root keys"),
+                "{err}"
+            );
+        }
+    }
+}
+
+/// One file [`Keys::store`] writes.
+struct Artifact {
+    path: std::path::PathBuf,
+    content: Vec<u8>,
+    /// Private keys are written 0600; everything else is public material.
+    secret: bool,
+}
+
+impl Artifact {
+    fn public(path: std::path::PathBuf, content: impl Into<Vec<u8>>) -> Self {
+        Self {
+            path,
+            content: content.into(),
+            secret: false,
+        }
+    }
+
+    fn secret(path: std::path::PathBuf, content: impl Into<Vec<u8>>) -> Self {
+        Self {
+            path,
+            content: content.into(),
+            secret: true,
+        }
+    }
+
+    fn write(self) -> Result<()> {
+        if self.secret {
+            safe_write_with_mode(self.path, self.content, 0o600)?;
+        } else {
+            safe_write(self.path, self.content)?;
+        }
+        Ok(())
+    }
 }
 
 struct Keys {
@@ -613,25 +899,35 @@ impl Keys {
         .await
     }
 
+    /// Every file `store` writes, in the order it writes them.
+    ///
+    /// The order is what a crash between two writes leaves behind, so it is
+    /// chosen to make each prefix either restartable or repairable:
+    ///
+    /// 1. `rpc-domain` first - it is operator input, and losing it is the one
+    ///    thing no later step can reconstruct.
+    /// 2. the regenerable private keys, then the two root keys *adjacent* to
+    ///    each other. Only one crash window now yields
+    ///    [`RootKeys::Partial`], which is the single terminal state.
+    /// 3. the certificates last - they are deterministic functions of the keys
+    ///    above, so `update_certs` rebuilds any that are missing.
+    fn artifacts(&self, cfg: &KmsConfig) -> Vec<Artifact> {
+        vec![
+            Artifact::public(cfg.rpc_domain(), self.rpc_domain.clone()),
+            Artifact::secret(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem()),
+            Artifact::secret(cfg.rpc_key(), self.rpc_key.serialize_pem()),
+            Artifact::secret(cfg.root_ca_key(), self.ca_key.serialize_pem()),
+            Artifact::secret(cfg.k256_key(), self.k256_key.to_bytes().to_vec()),
+            Artifact::public(cfg.tmp_ca_cert(), self.tmp_ca_cert.pem()),
+            Artifact::public(cfg.root_ca_cert(), self.ca_cert.pem()),
+            Artifact::public(cfg.rpc_cert(), self.rpc_cert.pem()),
+        ]
+    }
+
     fn store(&self, cfg: &KmsConfig) -> Result<()> {
-        self.store_keys(cfg)?;
-        self.store_certs(cfg)?;
-        safe_write(cfg.rpc_domain(), self.rpc_domain.as_bytes())?;
-        Ok(())
-    }
-
-    fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write_with_mode(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem(), 0o600)?;
-        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
-        safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
-        safe_write_with_mode(cfg.k256_key(), self.k256_key.to_bytes(), 0o600)?;
-        Ok(())
-    }
-
-    fn store_certs(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write(cfg.tmp_ca_cert(), self.tmp_ca_cert.pem())?;
-        safe_write(cfg.root_ca_cert(), self.ca_cert.pem())?;
-        safe_write(cfg.rpc_cert(), self.rpc_cert.pem())?;
+        for artifact in self.artifacts(cfg) {
+            artifact.write()?;
+        }
         Ok(())
     }
 }
@@ -692,6 +988,17 @@ fn renew_ca_cert_if_expiring(
     description: &str,
 ) -> Result<()> {
     let path = path.as_ref();
+    // A crash between the key writes and the certificate writes in
+    // `Keys::store`, or a restore that lost a certificate, leaves the root keys
+    // on disk with no certificate beside them. The certificate is a
+    // deterministic function of the key, so rebuild it. The alternative - the
+    // KMS falling back into onboarding because `keys_exists()` is false - ends
+    // in every onboarding RPC refusing, because a root key does exist.
+    if !path.exists() {
+        safe_write(path, renewed_pem)?;
+        info!("Restored the missing {description}");
+        return Ok(());
+    }
     let current_pem = fs::read(path)
         .with_context(|| format!("Failed to read {description} from {}", path.display()))?;
     if !ca_cert_expires_within(&current_pem, SystemTime::now(), CA_RENEWAL_WINDOW)? {
