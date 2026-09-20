@@ -30,7 +30,19 @@ pub const MAX_VCPUS: u32 = 512;
 /// Maximum number of OVMF metadata sections accepted in a measurement input.
 pub const MAX_OVMF_SECTIONS: usize = 64;
 /// 64 GiB worth of 4 KiB pages — upper bound on measured OVMF metadata pages.
-pub const MAX_OVMF_METADATA_PAGES: u64 = 16_777_216;
+/// The most pages an OVMF metadata table may ask to have measured.
+///
+/// Every page costs one SHA-384 over a `PAGE_INFO`, and the recomputation runs
+/// to completion before the result is compared with the hardware
+/// `MEASUREMENT`, so this bound is what stands between a caller-authored
+/// `measurement.snp.cbor` and unbounded CPU. Measured on an EPYC-class host at
+/// 0.68 us per page.
+///
+/// The shipped `dstack-0.6.0` image declares 7 sections totalling **31 pages**,
+/// so 65536 leaves over 2000x headroom and costs about 44 ms at the ceiling.
+/// It is deliberately the same number as `tdvf::MAX_MEASURED_PAGES`: the two
+/// measurement paths have the same shape and should have the same bound.
+pub const MAX_OVMF_METADATA_PAGES: u64 = 0x1_0000;
 // VMSA page GPA: (u64)(-1) page-aligned, bits >51 cleared.
 const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 
@@ -1207,6 +1219,86 @@ mod tests {
             "7c0f80f0a8d0ab1ee23fe763b255b8b210bb71113febcda60d76c00e84512f0cc141ffaa61be7bd22164736e85ec52d3",
             "synthetic OVMF launch digest vector should not drift"
         );
+    }
+
+    /// A caller-authored measurement document must not be able to buy an
+    /// unbounded amount of hashing before its result is compared with
+    /// anything.
+    ///
+    /// `verify_sev_launch` recomputes the measurement *and then* compares it,
+    /// so the whole budget is spent on input the requester chose. The document
+    /// is bound only to `vm_config.os_image_hash`, which the requester also
+    /// chose, so no allowlist can reject it first. At the old ceiling of
+    /// 16777216 pages this call took 11.3 s of one core, measured, from a
+    /// ~200-byte document.
+    #[test]
+    fn a_metadata_table_cannot_buy_unbounded_hashing() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        // The largest table the previous ceiling of 16777216 pages accepted:
+        // one section filling the budget the other sections do not claim.
+        const OLD_CEILING_PAGES: u64 = 16_777_216;
+        let mut input = valid_input();
+        let claimed: u64 = input
+            .ovmf_sections
+            .iter()
+            .map(|section| section.size.div_ceil(4096))
+            .sum();
+        input.ovmf_sections.push(OvmfSectionParam {
+            gpa: 0x1000_0000,
+            size: (OLD_CEILING_PAGES - claimed) * 4096,
+            section_type: 1,
+        });
+
+        assert!(
+            validate_measurement_input(&input).is_err(),
+            "a table asking for {OLD_CEILING_PAGES} pages must be refused"
+        );
+
+        // And refused before any hashing happens, not after.
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = validate_measurement_input(&input)
+                .and_then(|()| compute_expected_measurement(&input));
+            let _ = sender.send(outcome.is_err());
+        });
+        match receiver.recv_timeout(Duration::from_secs(5)) {
+            Ok(refused) => assert!(refused, "the oversized section must be refused"),
+            Err(_) => panic!("the measurement did not finish within 5s"),
+        }
+    }
+
+    /// The bound must not reject a real image. The shipped dstack-0.6.0
+    /// metadata is 7 sections totalling 31 pages.
+    #[test]
+    fn the_page_budget_admits_a_real_metadata_table() {
+        let shipped = [
+            (0x800000u64, 0x9000u64, 1u32),
+            (0x80a000, 0x3000, 1),
+            (0x80d000, 0x1000, 2),
+            (0x80e000, 0x1000, 3),
+            (0x80f000, 0x1000, 4),
+            (0x811000, 0xf000, 1),
+            (0x810000, 0x1000, 0x10),
+        ];
+        let pages: u64 = shipped.iter().map(|(_, size, _)| size.div_ceil(4096)).sum();
+        assert_eq!(pages, 31, "the shipped metadata is 31 pages");
+        assert!(
+            pages * 2000 < MAX_OVMF_METADATA_PAGES,
+            "the budget must leave a real image three orders of magnitude of headroom"
+        );
+
+        let mut input = valid_input();
+        input.ovmf_sections = shipped
+            .iter()
+            .map(|&(gpa, size, section_type)| OvmfSectionParam {
+                gpa,
+                size,
+                section_type,
+            })
+            .collect();
+        validate_measurement_input(&input).expect("the shipped metadata must be accepted");
     }
 
     fn valid_input() -> MeasurementInput {
