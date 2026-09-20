@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 // SPDX-License-Identifier: Apache-2.0
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -60,6 +61,35 @@ fn find_disk_by_label(label: &str) -> Option<PathBuf> {
     None
 }
 
+/// Mount options for the host share, on both the disk and the 9p path.
+///
+/// The share is a filesystem the host composes, and in dstack's threat model
+/// the host is the adversary. Nothing on it is ever executed and nothing on it
+/// is a device node: the guest copies five regular files off it as root and
+/// unmounts it. So denying set-user-ID bits, device nodes and execution costs
+/// nothing and removes the corresponding paths entirely.
+const HOST_SHARED_MOUNT_OPTIONS: &str = "ro,nosuid,nodev,noexec";
+
+fn disk_mount_args(device: &Path, mount_point: &Path) -> Vec<OsString> {
+    vec![
+        "-o".into(),
+        HOST_SHARED_MOUNT_OPTIONS.into(),
+        device.into(),
+        mount_point.into(),
+    ]
+}
+
+fn p9_mount_args(mount_point: &Path) -> Vec<OsString> {
+    vec![
+        "-t".into(),
+        "9p".into(),
+        "-o".into(),
+        format!("trans=virtio,version=9p2000.L,{HOST_SHARED_MOUNT_OPTIONS}").into(),
+        "host-shared".into(),
+        mount_point.into(),
+    ]
+}
+
 pub fn mount_host_shared(mount_point: &Path) -> Result<()> {
     fs::create_dir_all(mount_point)
         .with_context(|| format!("failed to create {}", mount_point.display()))?;
@@ -67,9 +97,7 @@ pub fn mount_host_shared(mount_point: &Path) -> Result<()> {
     if let Some(device) = find_disk_by_label(HOST_SHARED_DISK_LABEL) {
         info!(device = %device.display(), "found host-shared disk");
         let status = Command::new("mount")
-            .args(["-o", "ro"])
-            .arg(&device)
-            .arg(mount_point)
+            .args(disk_mount_args(&device, mount_point))
             .status()
             .with_context(|| format!("failed to run mount for {}", device.display()))?;
         if status.success() {
@@ -86,14 +114,7 @@ pub fn mount_host_shared(mount_point: &Path) -> Result<()> {
     }
 
     let status = Command::new("mount")
-        .args([
-            "-t",
-            "9p",
-            "-o",
-            "trans=virtio,version=9p2000.L,ro",
-            "host-shared",
-        ])
-        .arg(mount_point)
+        .args(p9_mount_args(mount_point))
         .status()
         .context("failed to run 9p mount")?;
     anyhow::ensure!(
@@ -128,6 +149,35 @@ pub fn cmd_host_shared(args: HostSharedArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The host composes this filesystem. Neither path may let it ship a
+    /// set-user-ID binary, a device node or anything executable into the guest.
+    #[test]
+    fn both_mount_paths_refuse_suid_devices_and_execution() {
+        let disk = disk_mount_args(Path::new("/dev/vdb"), Path::new("/dstack/.host-shared"));
+        assert_eq!(
+            disk,
+            [
+                "-o",
+                "ro,nosuid,nodev,noexec",
+                "/dev/vdb",
+                "/dstack/.host-shared"
+            ]
+        );
+
+        let p9 = p9_mount_args(Path::new("/dstack/.host-shared"));
+        assert_eq!(
+            p9,
+            [
+                "-t",
+                "9p",
+                "-o",
+                "trans=virtio,version=9p2000.L,ro,nosuid,nodev,noexec",
+                "host-shared",
+                "/dstack/.host-shared",
+            ]
+        );
+    }
 
     #[test]
     fn parses_mount_command() {
