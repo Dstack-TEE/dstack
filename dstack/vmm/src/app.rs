@@ -1889,8 +1889,10 @@ fn append_boot_separator(path: &std::path::Path) {
 /// Logs a CVM writes into its work directory, subject to retention.
 ///
 /// stdout and stderr are written by the supervisor, which always opens them
-/// with `append(true)` and reopens them when they change, so they satisfy
-/// [`crate::logrotate`]'s contract no matter which VMM launched the VM.
+/// with `append(true)`, so they satisfy [`crate::logrotate`]'s contract no
+/// matter which VMM launched the VM. That is the whole requirement: the
+/// truncation below lands at the writer's next append either way, and the
+/// supervisor reopens only when the path stops naming the file it holds.
 /// serial.log is written by QEMU, whose fd only appends when *we* passed
 /// `logappend=on`, so it is included only when `serial` says so.
 fn rotatable_logs(work_dir: &VmWorkDir, serial: bool) -> Vec<PathBuf> {
