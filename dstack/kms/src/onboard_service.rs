@@ -396,6 +396,43 @@ mod tests {
         assert_eq!(response.kms_contract_address, "0x1234");
     }
 
+    /// The device id an operator registers is the one `GetAttestationInfo`
+    /// reports, so the id `GetAppKey` presents for authorization has to be the
+    /// same bytes — otherwise an SNP device allowlist can never match.
+    #[test]
+    fn snp_attestation_info_device_id_matches_the_authorization_device_id() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let attestation = verified_snp_attestation(measurement, [0xab; 64]);
+        let snp_document = snp_measurement_document(&input);
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&snp_document.checksum_file);
+        let vm_config = serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+            "sev_snp_measurement": serde_json::to_string(&snp_document).unwrap(),
+            "mr_config": mr_config.to_canonical_json(),
+        })
+        .to_string();
+
+        let reported = build_attestation_info_response(
+            &attestation,
+            "dstack-amd-sev-snp".to_string(),
+            &vm_config,
+            "test-site".to_string(),
+            "https://rpc.example".to_string(),
+            "0x1234".to_string(),
+        )
+        .expect("snp attestation info should be derived from snp boot info");
+        let presented = build_boot_info_for_attestation(&attestation, false, &vm_config)
+            .expect("snp attestation should build boot info");
+
+        assert_eq!(
+            reported.device_id, presented.device_id,
+            "registered and presented SNP device ids must be identical"
+        );
+        assert_eq!(presented.device_id.len(), 32, "device id must fit bytes32");
+    }
+
     #[test]
     fn onboarding_domain_accepts_dns_name() {
         validate_onboarding_domain("kms.example.com").unwrap();
