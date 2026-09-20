@@ -708,3 +708,17 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-int-mixed-005"></a><a id="risk-int-mixed-005"></a>| `req-int-mixed-005` | `risk-int-mixed-005` | [tc-int-mixed-005](../cases/06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-005/case.md#tc-int-mixed-005) — Verifier evidence compatibility for pinned releases | P0 |
 <a id="req-int-mixed-006"></a><a id="risk-int-mixed-006"></a>| `req-int-mixed-006` | `risk-int-mixed-006` | [tc-int-mixed-006](../cases/06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-006/case.md#tc-int-mixed-006) — Rolling restart under four-version online mix | P0 |
 <a id="req-int-mixed-007"></a><a id="risk-int-mixed-007"></a>| `req-int-mixed-007` | `risk-int-mixed-007` | [tc-int-mixed-007](../cases/06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-007/case.md#tc-int-mixed-007) — Optional and unknown protobuf fields across pinned versions | P0 |
+
+## Request contract matrix
+
+| Requirement | Risk | Case | Priority |
+|---|---|---|---|
+<a id="req-gos-contract-001"></a><a id="risk-gos-contract-001"></a>| `req-gos-contract-001` | `risk-gos-contract-001` | [tc-gos-contract-001](../cases/01-guest-os/15-request-contract/tc-gos-contract-001/case.md#tc-gos-contract-001) — Tappd request-contract matrix | P0 |
+<a id="req-gos-contract-002"></a><a id="risk-gos-contract-002"></a>| `req-gos-contract-002` | `risk-gos-contract-002` | [tc-gos-contract-002](../cases/01-guest-os/15-request-contract/tc-gos-contract-002/case.md#tc-gos-contract-002) — DstackGuest request-contract matrix | P0 |
+<a id="req-gos-contract-003"></a><a id="risk-gos-contract-003"></a>| `req-gos-contract-003` | `risk-gos-contract-003` | [tc-gos-contract-003](../cases/01-guest-os/15-request-contract/tc-gos-contract-003/case.md#tc-gos-contract-003) — Worker request-contract matrix | P0 |
+<a id="req-gos-contract-004"></a><a id="risk-gos-contract-004"></a>| `req-gos-contract-004` | `risk-gos-contract-004` | [tc-gos-contract-004](../cases/01-guest-os/15-request-contract/tc-gos-contract-004/case.md#tc-gos-contract-004) — GuestApi request-contract matrix | P0 |
+<a id="req-kms-contract-001"></a><a id="risk-kms-contract-001"></a>| `req-kms-contract-001` | `risk-kms-contract-001` | [tc-kms-contract-001](../cases/03-kms/13-request-contract/tc-kms-contract-001/case.md#tc-kms-contract-001) — KMS request-contract matrix | P0 |
+<a id="req-kms-contract-002"></a><a id="risk-kms-contract-002"></a>| `req-kms-contract-002` | `risk-kms-contract-002` | [tc-kms-contract-002](../cases/03-kms/13-request-contract/tc-kms-contract-002/case.md#tc-kms-contract-002) — Onboard request-contract matrix | P0 |
+<a id="req-gw-contract-001"></a><a id="risk-gw-contract-001"></a>| `req-gw-contract-001` | `risk-gw-contract-001` | [tc-gw-contract-001](../cases/04-gateway/11-request-contract/tc-gw-contract-001/case.md#tc-gw-contract-001) — Gateway request-contract matrix | P0 |
+<a id="req-gw-contract-002"></a><a id="risk-gw-contract-002"></a>| `req-gw-contract-002` | `risk-gw-contract-002` | [tc-gw-contract-002](../cases/04-gateway/11-request-contract/tc-gw-contract-002/case.md#tc-gw-contract-002) — Debug request-contract matrix | P0 |
+<a id="req-gw-contract-003"></a><a id="risk-gw-contract-003"></a>| `req-gw-contract-003` | `risk-gw-contract-003` | [tc-gw-contract-003](../cases/04-gateway/11-request-contract/tc-gw-contract-003/case.md#tc-gw-contract-003) — Admin request-contract matrix | P0 |
