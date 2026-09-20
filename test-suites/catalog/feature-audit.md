@@ -722,3 +722,12 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gw-contract-001"></a><a id="risk-gw-contract-001"></a>| `req-gw-contract-001` | `risk-gw-contract-001` | [tc-gw-contract-001](../cases/04-gateway/11-request-contract/tc-gw-contract-001/case.md#tc-gw-contract-001) — Gateway request-contract matrix | P0 |
 <a id="req-gw-contract-002"></a><a id="risk-gw-contract-002"></a>| `req-gw-contract-002` | `risk-gw-contract-002` | [tc-gw-contract-002](../cases/04-gateway/11-request-contract/tc-gw-contract-002/case.md#tc-gw-contract-002) — Debug request-contract matrix | P0 |
 <a id="req-gw-contract-003"></a><a id="risk-gw-contract-003"></a>| `req-gw-contract-003` | `risk-gw-contract-003` | [tc-gw-contract-003](../cases/04-gateway/11-request-contract/tc-gw-contract-003/case.md#tc-gw-contract-003) — Admin request-contract matrix | P0 |
+
+## Guest-agent concurrency and robustness
+
+| Requirement | Risk | Case | Priority |
+|---|---|---|---|
+<a id="req-gos-concurrency-001"></a><a id="risk-gos-concurrency-001"></a>| `req-gos-concurrency-001` | `risk-gos-concurrency-001` | [tc-gos-concurrency-001](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-001/case.md#tc-gos-concurrency-001) — Concurrent derivation determinism and per-call quote binding | P0 |
+<a id="req-gos-concurrency-002"></a><a id="risk-gos-concurrency-002"></a>| `req-gos-concurrency-002` | `risk-gos-concurrency-002` | [tc-gos-concurrency-002](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-002/case.md#tc-gos-concurrency-002) — Head-of-line blocking on the quote path | P0 |
+<a id="req-gos-concurrency-003"></a><a id="risk-gos-concurrency-003"></a>| `req-gos-concurrency-003` | `risk-gos-concurrency-003` | [tc-gos-concurrency-003](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-003/case.md#tc-gos-concurrency-003) — Agent survival and process identity after concurrent load | P0 |
+<a id="req-gos-observability-slow-consumer"></a><a id="risk-gos-observability-slow-consumer"></a>| `req-gos-observability-slow-consumer` | `risk-gos-observability-slow-consumer` | [tc-gos-observability-slow-consumer](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-observability-slow-consumer/case.md#tc-gos-observability-slow-consumer) — Log streaming backpressure with a stalled consumer | P1 |
