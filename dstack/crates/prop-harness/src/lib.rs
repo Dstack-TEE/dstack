@@ -26,6 +26,8 @@
 //! - [`corpus_files`] loads the checked-in byte patterns that actually broke a
 //!   parser, so each one stays a regression test whether or not the random
 //!   search rediscovers it.
+//!
+//! Set [`CASES_ENV`] to soak a parser by hand with the same strategies.
 
 use std::path::Path;
 use std::sync::mpsc::{channel, RecvTimeoutError};
@@ -36,21 +38,41 @@ pub use proptest;
 use proptest::strategy::Strategy;
 use proptest::test_runner::{Config, FailurePersistence, RngAlgorithm, TestRng, TestRunner};
 
-/// Case count for a parser property.
+/// Case count for a parser property in the ordinary `cargo test` gate.
 ///
 /// Large enough to reach the interesting shapes of a length-prefixed format,
-/// small enough that the whole robustness suite stays a few seconds. Raise it
-/// locally when hunting, not in the committed test.
+/// small enough that the whole robustness suite stays a few seconds.
 pub const CASES: u32 = 256;
 
-/// Wall-clock budget for one property's whole search.
+/// Wall-clock budget for one property's whole search at [`CASES`].
 ///
-/// A parser that terminates does thousands of [`CASES`] a second on bounded
-/// input, so anything near this is a termination bug, not a slow machine.
+/// A parser that terminates does thousands of cases a second on bounded
+/// input, so anything near this is a termination bug, not a slow machine. A
+/// soak run scales it with the case count.
 pub const BUDGET: Duration = Duration::from_secs(30);
 
 /// Budget for a single call on one concrete input.
 pub const CASE_BUDGET: Duration = Duration::from_secs(5);
+
+/// Environment override for the case count, for soaking a parser by hand.
+///
+/// `DSTACK_PROPTEST_CASES=1000000 cargo test -p dstack-mr proptests` is this
+/// crate's answer to `cargo-fuzz`: the toolchain is pinned stable
+/// (`rust-toolchain.toml`), so a coverage-guided fuzzer cannot be part of the
+/// test gate, and exposing these parsers to a separate fuzz crate would mean
+/// making crate-private parsing functions public. Same code, same strategies,
+/// more cases.
+pub const CASES_ENV: &str = "DSTACK_PROPTEST_CASES";
+
+fn configured_cases() -> u32 {
+    let Some(value) = std::env::var_os(CASES_ENV) else {
+        return CASES;
+    };
+    match value.to_string_lossy().trim().parse::<u32>() {
+        Ok(cases) if cases > 0 => cases,
+        _ => panic!("{CASES_ENV} must be a positive integer, got {value:?}"),
+    }
+}
 
 /// Run `body` on a worker thread, failing if it does not finish within
 /// `budget`.
@@ -76,8 +98,8 @@ where
     }
 }
 
-/// Drive `property` over `CASES` values drawn from `strategy`, seeded by
-/// `seed`, under a [`BUDGET`] deadline.
+/// Drive `property` over [`CASES`] values drawn from `strategy`, seeded by
+/// `seed`, under a [`BUDGET`] deadline. [`CASES_ENV`] overrides the count.
 ///
 /// `seed` is the whole reproduction recipe: the same seed, case count and
 /// strategy replay the same inputs in the same order on any machine. Failure
@@ -91,9 +113,11 @@ where
     F: Fn(S::Value) -> Result<(), proptest::test_runner::TestCaseError> + Send + 'static,
 {
     let label = what.to_string();
-    let outcome = within_deadline(what, BUDGET, move || {
+    let cases = configured_cases();
+    let budget = BUDGET.saturating_mul(cases.div_ceil(CASES));
+    let outcome = within_deadline(what, budget, move || {
         let config = Config {
-            cases: CASES,
+            cases,
             failure_persistence: None::<Box<dyn FailurePersistence>>,
             ..Config::default()
         };
