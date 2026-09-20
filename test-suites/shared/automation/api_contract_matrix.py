@@ -16,7 +16,8 @@ invariants that hold for every method whatever its semantics:
       ``error`` string, and a rejection of a protobuf request carries a
       decodable ``ProtoError``;
   L3  the listener still answers a valid request after the whole matrix;
-  L4  a rejection does not echo an unbounded amount of attacker-supplied text;
+  L4  a rejection neither echoes an unbounded amount of attacker-supplied
+      text nor grows with the size of the field it refused;
   L5  no request exceeds the per-call deadline;
   L6  the rejection's ``Content-Type`` matches the request's representation,
       so a client that sent JSON can parse the error it gets back.
@@ -35,7 +36,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CALL_TIMEOUT = 20
-MAX_ECHO = 2048
+# A rejection is allowed to quote the value it refused, but not to scale with
+# it. The product bounds its error text and then wraps it in a JSON envelope,
+# so the ceiling is a little above that bound; what actually matters is the
+# second check below, that two requests differing only in the size of one field
+# do not produce rejections that differ in size.
+MAX_ECHO = 8192
+MAX_ECHO_SCALING = 256
 
 
 @dataclass
@@ -445,4 +452,41 @@ def check_invariants(calls: list[Call], echoed_markers: dict[str, str]) -> list[
             violations.append(
                 {**base, "invariant": "L5", "detail": "call exceeded the deadline"}
             )
+    violations.extend(check_echo_scaling(calls))
+    return violations
+
+
+# Vector labels that differ only in how large one field is. A rejection that
+# grows with the request is an amplifier whatever its absolute size.
+SCALING_PAIRS = (("=long-64k|", "=long-1m|"), ("=short-31|", "=long-64k|"))
+
+
+def check_echo_scaling(calls: list[Call]) -> list[dict[str, Any]]:
+    """Return a violation per rejection pair whose size tracks its input."""
+    by_label = {call.label: call for call in calls}
+    violations: list[dict[str, Any]] = []
+    for small_tag, large_tag in SCALING_PAIRS:
+        for label, small in by_label.items():
+            if small_tag not in label:
+                continue
+            large = by_label.get(label.replace(small_tag, large_tag))
+            if large is None or small.http is None or large.http is None:
+                continue
+            if small.http < 400 or large.http < 400:
+                continue
+            growth = len(large.body) - len(small.body)
+            if growth > MAX_ECHO_SCALING:
+                violations.append(
+                    {
+                        "label": large.label,
+                        "method": large.method,
+                        "representation": large.representation,
+                        "http": large.http,
+                        "seconds": round(large.seconds, 3),
+                        "invariant": "L4",
+                        "detail": "the rejection grew by "
+                        f"{growth} bytes when the request field grew: "
+                        f"{len(small.body)} -> {len(large.body)}",
+                    }
+                )
     return violations
