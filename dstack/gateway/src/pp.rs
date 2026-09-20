@@ -95,6 +95,27 @@ fn create_inbound_pp_header(inbound: &TcpStream) -> ProxyHeader {
     }
 }
 
+/// Read a PROXY protocol header and parse it.
+///
+/// The buffer handed to `proxy_protocol::parse` is load-bearing, not incidental.
+/// `version2::parse` checks `buf.remaining()` against the *fixed* size of the
+/// address family and then does `buf.advance(length - that)` using the
+/// attacker-declared `length` -- an unchecked advance that panics inside
+/// `bytes`, which with `panic = "abort"` would be the whole gateway. Handing it
+/// a 228-byte AF_UNIX header declaring `length = 65535` produces
+/// `advance out of bounds: the len is 0 but advancing by 65319`. Two properties
+/// keep that out of reach here, and both have to hold together:
+///
+/// 1. the oversize path allocates exactly `full_length` bytes, so `remaining()`
+///    after the 16-byte header is exactly `length`; and
+/// 2. the in-buffer path caps `full_length` at [`READ_BUFFER_LEN`] and passes
+///    the whole zero-padded array, so `remaining()` is 496 while `length` is at
+///    most 496.
+///
+/// Handing `parse` a slice shorter than the declared length -- the obvious
+/// "tidy up" of passing `&buffer[..full_length]` from a *partially* filled
+/// buffer -- reintroduces the panic. `a_v2_header_of_any_declared_length_does_not_abort`
+/// pins this.
 async fn read_proxy_header<I>(mut stream: I) -> Result<(I, ProxyHeader)>
 where
     I: AsyncRead + Unpin,
@@ -201,6 +222,39 @@ mod tests {
                 ..
             } => (source, destination),
             other => panic!("expected ipv4 header, got {other:?}"),
+        }
+    }
+
+    /// Every declared v2 length against every address family, with the body
+    /// absent, truncated and complete. The reader must return -- `Ok` or `Err`
+    /// -- and never reach the unchecked `advance` in `version2::parse`.
+    #[tokio::test]
+    async fn a_v2_header_of_any_declared_length_does_not_abort() {
+        for family_proto in [0x00u8, 0x11, 0x21, 0x31, 0x12, 0x99] {
+            for length in [
+                0u16, 1, 12, 15, 16, 36, 215, 216, 217, 495, 496, 497, 2032, 2047, 65535,
+            ] {
+                for supplied in [0usize, 8, 216, usize::from(length)] {
+                    let mut header = V2_PROTOCOL_PREFIX.to_vec();
+                    header.extend_from_slice(&[0x21, family_proto]);
+                    header.extend_from_slice(&length.to_be_bytes());
+                    header.extend(std::iter::repeat_n(0x41u8, supplied));
+                    // Returning at all is the property under test.
+                    let _ = read_proxy_header(&header[..]).await;
+                }
+            }
+        }
+    }
+
+    /// The v1 reader stops at the first CRLF, and the parser is then handed the
+    /// whole zero-padded array rather than the bytes actually read -- which is
+    /// what keeps `version1::parse`'s two unguarded `get_u8` calls at the end of
+    /// the header in bounds.
+    #[tokio::test]
+    async fn a_v1_header_ending_on_a_bare_cr_does_not_abort() {
+        for tail in ["", " ", " 1", " 1 ", " 1 65535"] {
+            let header = format!("PROXY TCP4 1.2.3.4 5.6.7.8{tail}\r\n");
+            let _ = read_proxy_header(header.as_bytes()).await;
         }
     }
 
