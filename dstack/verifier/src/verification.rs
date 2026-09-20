@@ -28,8 +28,11 @@ use ra_tls::attestation::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::io::AsyncWriteExt;
+
+mod work;
 use tracing::{debug, info, warn};
+use work::{blocking, WorkLocks};
 
 use crate::types::{
     AcpiTables, PolicyBootInfo, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
@@ -207,11 +210,15 @@ struct ImagePaths {
     kernel_header_normalized: bool,
 }
 
+#[derive(Clone)]
 pub struct CvmVerifier {
     pub image_cache_dir: String,
     pub download_url: String,
     pub download_timeout: Duration,
     pub attestation_verifier: Arc<AttestationVerifier>,
+    image_work: WorkLocks,
+    measurement_work: WorkLocks,
+    work_limit: Arc<tokio::sync::Semaphore>,
 }
 
 impl CvmVerifier {
@@ -226,7 +233,30 @@ impl CvmVerifier {
             download_url,
             download_timeout,
             attestation_verifier,
+            image_work: WorkLocks::default(),
+            measurement_work: WorkLocks::default(),
+            // Each full-image job retains firmware, kernel and initrd buffers.
+            // Do not turn a burst into hundreds of resident image copies on
+            // Tokio's much larger blocking pool.
+            work_limit: Arc::new(tokio::sync::Semaphore::new(2)),
         }
+    }
+
+    async fn blocking<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let permit = self
+            .work_limit
+            .clone()
+            .acquire_owned()
+            .await
+            .context("verifier work limiter closed")?;
+        blocking(move || {
+            let _permit = permit;
+            work()
+        })
+        .await
     }
 
     fn measurement_cache_dir(&self) -> PathBuf {
@@ -628,38 +658,36 @@ impl CvmVerifier {
             .join("images")
             .join(&hex_os_image_hash);
 
-        let metadata_path = image_dir.join("metadata.json");
-        if !metadata_path.exists() {
-            info!("Image {hex_os_image_hash} not found, downloading");
-            tokio::time::timeout(
-                self.download_timeout,
-                self.download_image(&hex_os_image_hash, &image_dir),
-            )
-            .await
-            .context("Download image timeout")?
-            .with_context(|| format!("Failed to download image {hex_os_image_hash}"))?;
-        }
+        tokio::time::timeout(
+            self.download_timeout,
+            self.download_image(&hex_os_image_hash, &image_dir),
+        )
+        .await
+        .context("download image timeout")??;
+        self.blocking(move || {
+            let metadata_path = image_dir.join("metadata.json");
+            let image_info =
+                fs_err::read_to_string(metadata_path).context("Failed to read image metadata")?;
+            let image_info: dstack_types::ImageInfo =
+                serde_json::from_str(&image_info).context("Failed to parse image metadata")?;
 
-        let image_info =
-            fs_err::read_to_string(metadata_path).context("Failed to read image metadata")?;
-        let image_info: dstack_types::ImageInfo =
-            serde_json::from_str(&image_info).context("Failed to parse image metadata")?;
+            let fw_path = image_dir.join(&image_info.bios);
+            let kernel_path = image_dir.join(&image_info.kernel);
+            let initrd_path = image_dir.join(&image_info.initrd);
+            let kernel_cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
-        let fw_path = image_dir.join(&image_info.bios);
-        let kernel_path = image_dir.join(&image_info.kernel);
-        let initrd_path = image_dir.join(&image_info.initrd);
-        let kernel_cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
-
-        Ok(ImagePaths {
-            image_dir,
-            fw_path,
-            kernel_path,
-            initrd_path,
-            kernel_cmdline,
-            is_dev: image_info.is_dev,
-            version: image_info.version,
-            kernel_header_normalized: image_info.kernel_header_normalized,
+            Ok(ImagePaths {
+                image_dir,
+                fw_path,
+                kernel_path,
+                initrd_path,
+                kernel_cmdline,
+                is_dev: image_info.is_dev,
+                version: image_info.version,
+                kernel_header_normalized: image_info.kernel_header_normalized,
+            })
         })
+        .await
     }
 
     /// Compute expected TDX measurements for a given VM configuration.
@@ -673,17 +701,28 @@ impl CvmVerifier {
     ) -> Result<TdxMeasurements> {
         let image_paths = self.ensure_image_downloaded(vm_config).await?;
 
-        self.load_or_compute_measurements(
-            vm_config,
-            &image_paths.fw_path,
-            &image_paths.kernel_path,
-            &image_paths.initrd_path,
-            &image_paths.kernel_cmdline,
-            image_paths.kernel_header_normalized,
-        )
+        let guard = self
+            .measurement_work
+            .lock(Self::vm_config_cache_key(vm_config)?)
+            .await;
+        let verifier = self.clone();
+        let vm_config = vm_config.clone();
+        self.blocking(move || {
+            let _guard = guard;
+            verifier.load_or_compute_measurements(
+                &vm_config,
+                &image_paths.fw_path,
+                &image_paths.kernel_path,
+                &image_paths.initrd_path,
+                &image_paths.kernel_cmdline,
+                image_paths.kernel_header_normalized,
+            )
+        })
+        .await
     }
 
     pub async fn verify(&self, request: VerificationRequest) -> Result<VerificationResponse> {
+        let (attestation, request_vm_config, debug) = self.blocking(move || {
         // Keep the two verifier input modes disjoint:
         // - `attestation` is self-contained and its embedded config is used.
         // - raw TDX input uses top-level `quote` + `event_log` + `vm_config`.
@@ -717,10 +756,12 @@ impl CvmVerifier {
         } else {
             bail!("Quote is required");
         };
-        let mut details = VerificationDetails::default();
 
         let debug = request.debug.unwrap_or(false);
         let attestation = attestation.into_v1();
+            Ok((attestation, request_vm_config, debug))
+        }).await?;
+        let mut details = VerificationDetails::default();
         let verified = attestation.verify(&self.attestation_verifier).await;
         let verified_attestation = match verified {
             Ok(att) => {
@@ -763,31 +804,34 @@ impl CvmVerifier {
             }
         };
         details.os_image_hash_verified = true;
-        match verified_attestation.decode_app_info_ex(false, &request_vm_config) {
-            Ok(mut info) => {
-                info.os_image_hash = vm_config.os_image_hash;
-                details.boot_info = Some(policy_boot_info_from_verified_app_info(
-                    &verified_attestation,
-                    &info,
-                ));
-                details.event_log_verified = true;
-                details.key_provider = decode_key_provider_info(&info.key_provider_info);
-                details.app_info = Some(info);
-            }
-            Err(e) => {
-                return Ok(VerificationResponse {
-                    is_valid: false,
-                    details,
-                    reason: Some(format!("Event log verification failed: {}", e)),
-                });
-            }
-        };
+        self.blocking(move || {
+            match verified_attestation.decode_app_info_ex(false, &request_vm_config) {
+                Ok(mut info) => {
+                    info.os_image_hash = vm_config.os_image_hash;
+                    details.boot_info = Some(policy_boot_info_from_verified_app_info(
+                        &verified_attestation,
+                        &info,
+                    ));
+                    details.event_log_verified = true;
+                    details.key_provider = decode_key_provider_info(&info.key_provider_info);
+                    details.app_info = Some(info);
+                }
+                Err(e) => {
+                    return Ok(VerificationResponse {
+                        is_valid: false,
+                        details,
+                        reason: Some(format!("Event log verification failed: {}", e)),
+                    });
+                }
+            };
 
-        Ok(VerificationResponse {
-            is_valid: true,
-            details,
-            reason: None,
+            Ok(VerificationResponse {
+                is_valid: true,
+                details,
+                reason: None,
+            })
         })
+        .await
     }
 
     pub async fn verify_os_image_hash(
@@ -797,17 +841,69 @@ impl CvmVerifier {
         debug: bool,
         details: &mut VerificationDetails,
     ) -> Result<VmConfig> {
-        // The raw config string used for platform-specific binding: the explicit
-        // request `vm_config` when supplied, otherwise the one embedded in the
-        // attestation (mirroring `decode_vm_config`'s own fallback).
-        let raw_config = if vm_config.is_empty() {
-            attestation.config.clone()
+        let attestation = attestation.clone();
+        let (raw_config, vm_config, attestation) = self
+            .blocking(move || {
+                // The raw config string used for platform-specific binding: the explicit
+                // request `vm_config` when supplied, otherwise the one embedded in the
+                // attestation (mirroring `decode_vm_config`'s own fallback).
+                let raw_config = if vm_config.is_empty() {
+                    attestation.config.clone()
+                } else {
+                    vm_config.clone()
+                };
+                let vm_config = attestation
+                    .decode_vm_config(&vm_config)
+                    .context("Failed to decode VM config")?;
+
+                Ok((raw_config, vm_config, attestation))
+            })
+            .await?;
+        let legacy = matches!(attestation.quote, AttestationQuote::DstackTdx(_))
+            && vm_config.tdx_attestation_variant == TdxAttestationVariant::Legacy;
+        let image_paths = if legacy {
+            Some(self.ensure_image_downloaded(&vm_config).await?)
         } else {
-            vm_config.clone()
+            None
         };
-        let mut vm_config = attestation
-            .decode_vm_config(&vm_config)
-            .context("Failed to decode VM config")?;
+        let guard = if legacy {
+            Some(
+                self.measurement_work
+                    .lock(Self::vm_config_cache_key(&vm_config)?)
+                    .await,
+            )
+        } else {
+            None
+        };
+        let verifier = self.clone();
+        let mut owned_details = details.clone();
+        let (result, updated_details) = self
+            .blocking(move || {
+                let _guard = guard;
+                let result = verifier.verify_os_image_hash_inner(
+                    raw_config,
+                    vm_config,
+                    &attestation,
+                    debug,
+                    &mut owned_details,
+                    image_paths,
+                );
+                Ok((result, owned_details))
+            })
+            .await?;
+        *details = updated_details;
+        result
+    }
+
+    fn verify_os_image_hash_inner(
+        &self,
+        raw_config: String,
+        mut vm_config: VmConfig,
+        attestation: &VerifiedAttestation,
+        debug: bool,
+        details: &mut VerificationDetails,
+        image_paths: Option<ImagePaths>,
+    ) -> Result<VmConfig> {
         match &attestation.quote {
             AttestationQuote::DstackGcpTdx(quote) => {
                 self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
@@ -834,8 +930,8 @@ impl CvmVerifier {
                         attestation,
                         debug,
                         details,
-                    )
-                    .await?;
+                        image_paths.as_ref().context("missing legacy image paths")?,
+                    )?;
                 }
                 TdxAttestationVariant::Lite => {
                     self.verify_os_image_hash_for_dstack_tdx_lite(
@@ -843,8 +939,7 @@ impl CvmVerifier {
                         attestation,
                         debug,
                         details,
-                    )
-                    .await?;
+                    )?;
                 }
             },
             AttestationQuote::DstackNitroEnclave(_) => {
@@ -905,12 +1000,13 @@ impl CvmVerifier {
         Ok(())
     }
 
-    async fn verify_os_image_hash_for_dstack_tdx(
+    fn verify_os_image_hash_for_dstack_tdx(
         &self,
         vm_config: &VmConfig,
         attestation: &VerifiedAttestation,
         debug: bool,
         details: &mut VerificationDetails,
+        image_paths: &ImagePaths,
     ) -> Result<()> {
         let Some(report) = &attestation.report.tdx_report() else {
             bail!("No TDX report");
@@ -935,7 +1031,6 @@ impl CvmVerifier {
         // os_image_hash must be the image digest (digest.txt =
         // sha256(sha256sum.txt)), and expected MRs are recomputed through the
         // existing full-image path.
-        let image_paths = self.ensure_image_downloaded(vm_config).await?;
         if !Self::image_hash_matches_legacy_digest(&image_paths.image_dir, &vm_config.os_image_hash)
             .context("Failed to check legacy image digest")?
         {
@@ -1001,7 +1096,7 @@ impl CvmVerifier {
         Ok(())
     }
 
-    async fn verify_os_image_hash_for_dstack_tdx_lite(
+    fn verify_os_image_hash_for_dstack_tdx_lite(
         &self,
         vm_config: &VmConfig,
         attestation: &VerifiedAttestation,
@@ -1278,17 +1373,28 @@ impl CvmVerifier {
     }
 
     pub async fn download_image(&self, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
+        let guard = self
+            .image_work
+            .lock(dst_dir.to_string_lossy().into_owned())
+            .await;
+        if tokio::fs::try_exists(dst_dir.join("metadata.json")).await? {
+            return Ok(());
+        }
         let url = self
             .download_url
             .replace("{OS_IMAGE_HASH}", hex_os_image_hash);
 
         // Create a temporary directory for extraction within the cache directory
         let cache_dir = Path::new(&self.image_cache_dir).join("images").join("tmp");
-        fs_err::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
-        let auto_delete_temp_dir = tempfile::Builder::new()
-            .prefix("tmp-download-")
-            .tempdir_in(&cache_dir)
-            .context("Failed to create temporary directory")?;
+        let auto_delete_temp_dir = self
+            .blocking(move || {
+                fs_err::create_dir_all(&cache_dir).context("failed to create cache directory")?;
+                tempfile::Builder::new()
+                    .prefix("tmp-download-")
+                    .tempdir_in(&cache_dir)
+                    .context("failed to create temporary directory")
+            })
+            .await?;
         let tmp_dir = auto_delete_temp_dir.path();
 
         info!("Downloading image from {}", url);
@@ -1319,61 +1425,71 @@ impl CvmVerifier {
         }
 
         let extracted_dir = tmp_dir.join("extracted");
-        fs_err::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
 
         file.flush()
             .await
             .context("Failed to flush image archive")?;
         drop(file);
-        Self::extract_image_archive(&tarball_path, &extracted_dir)?;
+        let dst_dir = dst_dir.to_path_buf();
+        let hex_os_image_hash = hex_os_image_hash.to_string();
+        self.blocking(move || {
+            let _guard = guard;
+            let _temp_dir = auto_delete_temp_dir;
+            fs_err::create_dir_all(&extracted_dir)
+                .context("failed to create extraction directory")?;
+            Self::extract_image_archive(&tarball_path, &extracted_dir)?;
 
-        let sha256sum_path = extracted_dir.join("sha256sum.txt");
-        let files_doc =
-            fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        Self::validate_image_manifest_paths(&files_doc)?;
+            let sha256sum_path = extracted_dir.join("sha256sum.txt");
+            let files_doc =
+                fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
+            Self::validate_image_manifest_paths(&files_doc)?;
 
-        // Verify checksum
-        let output = Command::new("sha256sum")
-            .arg("-c")
-            .arg("sha256sum.txt")
-            .current_dir(&extracted_dir)
-            .output()
-            .await
-            .context("Failed to verify checksum")?;
+            // Verify checksum
+            let output = std::process::Command::new("sha256sum")
+                .arg("-c")
+                .arg("sha256sum.txt")
+                .current_dir(&extracted_dir)
+                .output()
+                .context("Failed to verify checksum")?;
 
-        if !output.status.success() {
-            bail!(
-                "Checksum verification failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+            if !output.status.success() {
+                bail!(
+                    "Checksum verification failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
 
-        // Remove the files that are not listed in sha256sum.txt
-        Self::prune_unlisted_image_files(&extracted_dir, &files_doc)?;
+            // Remove the files that are not listed in sha256sum.txt
+            Self::prune_unlisted_image_files(&extracted_dir, &files_doc)?;
 
-        // All image modes are addressed by sha256(sha256sum.txt). Extra
-        // measurement CBOR files are ordinary sha256sum.txt entries and do not
-        // define alternate image hashes.
-        let legacy_os_image_hash = Sha256::new_with_prefix(files_doc.as_bytes()).finalize();
-        if hex::encode(legacy_os_image_hash) != hex_os_image_hash {
-            bail!("os_image_hash does not match sha256(sha256sum.txt)");
-        }
+            // All image modes are addressed by sha256(sha256sum.txt). Extra
+            // measurement CBOR files are ordinary sha256sum.txt entries and do not
+            // define alternate image hashes.
+            let legacy_os_image_hash = Sha256::new_with_prefix(files_doc.as_bytes()).finalize();
+            if hex::encode(legacy_os_image_hash) != hex_os_image_hash {
+                bail!("os_image_hash does not match sha256(sha256sum.txt)");
+            }
 
-        // Move the extracted files to the destination directory
-        let metadata_path = extracted_dir.join("metadata.json");
-        if !metadata_path.exists() {
-            bail!("metadata.json not found in the extracted archive");
-        }
+            // Move the extracted files to the destination directory
+            let metadata_path = extracted_dir.join("metadata.json");
+            if !metadata_path.exists() {
+                bail!("metadata.json not found in the extracted archive");
+            }
 
-        if dst_dir.exists() {
-            fs_err::remove_dir_all(dst_dir).context("Failed to remove destination directory")?;
-        }
-        let dst_dir_parent = dst_dir.parent().context("Failed to get parent directory")?;
-        fs_err::create_dir_all(dst_dir_parent).context("Failed to create parent directory")?;
-        // Move the extracted files to the destination directory
-        fs_err::rename(extracted_dir, dst_dir)
-            .context("Failed to move extracted files to destination directory")?;
-        Ok(())
+            // Never delete an already published image: another reader may have
+            // opened its metadata. Normal callers coalesce above; a publisher in
+            // another process may also have completed while this job was running.
+            if dst_dir.join("metadata.json").exists() {
+                return Ok(());
+            }
+            let dst_dir_parent = dst_dir.parent().context("Failed to get parent directory")?;
+            fs_err::create_dir_all(dst_dir_parent).context("Failed to create parent directory")?;
+            // Move the extracted files to the destination directory
+            fs_err::rename(extracted_dir, &dst_dir)
+                .context("Failed to move extracted files to destination directory")?;
+            Ok(())
+        })
+        .await
     }
 }
 
@@ -1465,6 +1581,207 @@ mod tests {
             ),
         }))
         .expect("valid AWS vm_config")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn concurrent_cold_downloads_publish_once_and_keep_warm_readers_safe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let metadata = br#"{"cmdline":"","bios":"bios","kernel":"kernel","initrd":"initrd"}"#;
+        let manifest = format!(
+            "{}  metadata.json
+",
+            hex::encode(Sha256::digest(metadata))
+        );
+        let hash = hex::encode(Sha256::digest(manifest.as_bytes()));
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut archive = tar::Builder::new(encoder);
+        for (name, bytes) in [
+            ("metadata.json", metadata.as_slice()),
+            ("sha256sum.txt", manifest.as_bytes()),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, name, bytes).unwrap();
+        }
+        let archive = Arc::new(archive.into_inner().unwrap().finish().unwrap());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let archive = archive.clone();
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut reader = BufReader::new(&mut stream);
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).await.unwrap() == 0 {
+                            return;
+                        }
+                        if line.trim().is_empty() {
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    stream
+                        .write_all(
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                archive.len()
+                            )
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                    stream.write_all(&archive).await.unwrap();
+                });
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let verifier = Arc::new(CvmVerifier::new(
+            dir.path().display().to_string(),
+            format!("http://{address}/image"),
+            Duration::from_secs(10),
+            test_attestation_verifier(),
+        ));
+        let config: VmConfig =
+            serde_json::from_value(serde_json::json!({"os_image_hash": hash})).unwrap();
+        let mut jobs = Vec::new();
+        for _ in 0..16 {
+            let verifier = verifier.clone();
+            let config = config.clone();
+            jobs.push(tokio::spawn(async move {
+                verifier.ensure_image_downloaded(&config).await
+            }));
+        }
+        let mut successes = 0;
+        for job in jobs {
+            match job.await.unwrap() {
+                Ok(_) => successes += 1,
+                Err(err) => println!("cold reader failed: {err:#}"),
+            }
+        }
+        server.abort();
+        let downloads = requests.load(Ordering::SeqCst);
+        println!("cold requests=16, downloads={downloads}, successful readers={successes}");
+        assert_eq!(successes, 16);
+        assert_eq!(downloads, 1);
+
+        let image = verifier.ensure_image_downloaded(&config).await.unwrap();
+        let before = fs_err::read(image.image_dir.join("metadata.json")).unwrap();
+        verifier
+            .download_image(&hash, &image.image_dir)
+            .await
+            .unwrap();
+        assert_eq!(
+            fs_err::read(image.image_dir.join("metadata.json")).unwrap(),
+            before
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn measurement_waiters_recheck_the_cache_after_publication() {
+        let dir = tempfile::tempdir().unwrap();
+        let verifier = CvmVerifier::new(
+            dir.path().display().to_string(),
+            "http://127.0.0.1:0/unused".into(),
+            Duration::from_secs(2),
+            test_attestation_verifier(),
+        );
+        let config: VmConfig =
+            serde_json::from_value(serde_json::json!({"os_image_hash": "00".repeat(32)})).unwrap();
+        let image = dir.path().join("images").join("00".repeat(32));
+        fs_err::create_dir_all(&image).unwrap();
+        fs_err::write(
+            image.join("metadata.json"),
+            br#"{"cmdline":"","bios":"missing","kernel":"missing","initrd":"missing"}"#,
+        )
+        .unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let publisher = verifier.measurement_work.lock(key.clone()).await;
+        let mut waiters = Vec::new();
+        for _ in 0..16 {
+            let verifier = verifier.clone();
+            let config = config.clone();
+            waiters.push(tokio::spawn(async move {
+                verifier.compute_measurements_for_config(&config).await
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(waiters.iter().all(|waiter| !waiter.is_finished()));
+        // The first worker publishes its result before relinquishing the key.
+        // Followers must re-read that result, not compute from absent firmware.
+        verifier
+            .store_measurements_in_cache(&key, &sample_measurements(7))
+            .unwrap();
+        drop(publisher);
+        for waiter in waiters {
+            let result = tokio::time::timeout(Duration::from_secs(2), waiter)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(result.mrtd, sample_measurements(7).mrtd);
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_verifier_work_retains_its_admission_permit() {
+        let verifier = test_verifier();
+        let held = verifier.work_limit.clone().acquire_owned().await.unwrap();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = verifier.clone();
+        let task = tokio::spawn(async move {
+            worker
+                .blocking(move || {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    Ok(())
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), verifier.blocking(|| Ok(())))
+                .await
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), verifier.blocking(|| Ok(())))
+            .await
+            .unwrap()
+            .unwrap();
+        drop(held);
+    }
+
+    #[tokio::test]
+    async fn failed_download_can_retry_without_publishing_a_partial_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let verifier = CvmVerifier::new(
+            dir.path().display().to_string(),
+            "http://127.0.0.1:0/unavailable".into(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+        let destination = dir.path().join("images/example");
+        for _ in 0..2 {
+            assert!(tokio::time::timeout(
+                Duration::from_secs(2),
+                verifier.download_image("example", &destination)
+            )
+            .await
+            .unwrap()
+            .is_err());
+            assert!(!destination.exists());
+        }
     }
 
     fn test_verifier() -> CvmVerifier {
