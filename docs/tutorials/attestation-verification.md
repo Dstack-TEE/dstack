@@ -492,6 +492,7 @@ These are the standard events you'll see in the log:
 | `os-image-hash` | Guest OS image hash | Should match `tcb_info.os_image_hash` |
 | `key-provider` | Key provider type | e.g., `kms` |
 | `storage-fs` | Storage filesystem type | Storage configuration |
+| `storage-encrypted` | `1` when the data disk is LUKS-encrypted, `0` when it is not | `0` means the host can read the application's data at rest |
 | `system-ready` | System ready marker | Always present at end |
 
 For a successful GPU launch, the relevant order is `compose-hash`, any
