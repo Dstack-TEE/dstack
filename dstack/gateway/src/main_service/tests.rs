@@ -2679,3 +2679,69 @@ fn tombstone_collection_triggers_on_write_count_boundaries_not_on_time() {
     // until it crosses the next boundary again.
     assert!(!tombstone_collection_due(Some(w(100, 0)), w(90, 0), 100));
 }
+
+/// `AcmeInfo` is served unauthenticated on the public proxy port, so its cost
+/// must not grow with the attestation history.
+///
+/// `save_cert_attestation` writes one history key per renewal and never prunes,
+/// while `acme_info` walked every one of them and cloned its quote and
+/// attestation JSON into a single response. `Admin.ListCertAttestations` has a
+/// `limit` for exactly this; the public endpoint had none, so a stranger could
+/// make the gateway serialize the deployment's whole renewal history on every
+/// request.
+#[tokio::test]
+async fn acme_info_is_bounded_by_the_attestation_history_it_will_serve() {
+    use crate::kv::{CertAttestation, ZtDomainConfig};
+
+    let state = create_test_state().await;
+    let kv = state.kv_store();
+    kv.save_zt_domain_config(&ZtDomainConfig {
+        domain: "app.example.com".to_string(),
+        dns_cred_id: None,
+        port: 443,
+        node: None,
+        priority: 0,
+        challenge: Default::default(),
+    })
+    .expect("save domain config");
+
+    const RENEWALS: u64 = 10_000;
+    for generated_at in 1..=RENEWALS {
+        kv.save_cert_attestation(
+            "app.example.com",
+            &CertAttestation {
+                public_key: vec![0xab; 32],
+                quote: "q".repeat(1024),
+                attestation: "a".repeat(1024),
+                generated_by: 1,
+                generated_at,
+            },
+        )
+        .expect("save attestation");
+    }
+
+    let info = state.acme_info(None).expect("acme info");
+
+    assert!(
+        info.quoted_hist_keys.len() <= MAX_ACME_HIST_KEYS_PER_DOMAIN,
+        "an unauthenticated request drew {} history entries",
+        info.quoted_hist_keys.len()
+    );
+    assert_eq!(
+        info.quoted_hist_keys.len(),
+        MAX_ACME_HIST_KEYS_PER_DOMAIN,
+        "the bound must keep the newest entries, not drop the domain"
+    );
+
+    // The count is only a proxy for what the endpoint actually costs: every
+    // entry carries a quote and an attestation document.
+    let served: usize = info
+        .quoted_hist_keys
+        .iter()
+        .map(|key| key.public_key.len() + key.quote.len() + key.attestation.len())
+        .sum();
+    assert!(
+        served < 256 * 1024,
+        "an unauthenticated request drew {served} bytes of attestation history"
+    );
+}
