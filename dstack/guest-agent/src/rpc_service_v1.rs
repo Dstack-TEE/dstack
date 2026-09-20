@@ -116,8 +116,8 @@ fn boottime_gpu_evidence(include: bool, path: &Path) -> Vec<GpuEvidenceBundle> {
 /// `key_provider_info`; v1 blanks `key_provider_info` too, because it names the
 /// component that holds the app's keys and an external caller has no need for
 /// it. The frozen behaviour is unchanged on its own surface.
-fn info_response(state: &AppState, hide_documents: bool) -> Result<InfoResponse> {
-    let identity = state.identity()?;
+async fn info_response(state: &AppState, hide_documents: bool) -> Result<InfoResponse> {
+    let identity = state.identity().await?;
     let document = |value: &dyn Fn() -> String| {
         if hide_documents {
             String::new()
@@ -243,7 +243,7 @@ impl DstackGuestRpc for V1RpcHandler {
     /// itself, so there is nobody to hide from. The external surface applies
     /// `public_tcbinfo`; see [`ExternalV1RpcHandler::info`].
     async fn info(self, _request: InfoRequest) -> Result<InfoResponse> {
-        info_response(&self.state, false)
+        info_response(&self.state, false).await
     }
 
     async fn version(self, _request: VersionRequest) -> Result<VersionResponse> {
@@ -279,7 +279,7 @@ impl ExternalV1RpcHandler {
 impl WorkerRpc for ExternalV1RpcHandler {
     async fn info(self, _request: InfoRequest) -> Result<InfoResponse> {
         let hide = !self.state.config().app_compose.public_tcbinfo;
-        info_response(&self.state, hide)
+        info_response(&self.state, hide).await
     }
 
     async fn version(self, _request: VersionRequest) -> Result<VersionResponse> {
@@ -500,7 +500,7 @@ mod tests {
     async fn info_decodes_identity_at_most_once() {
         let (state, _guard) = state().await;
 
-        let first = state.identity().unwrap();
+        let first = state.identity().await.unwrap();
         for _ in 0..8 {
             V1RpcHandler::new(state.clone())
                 .info(InfoRequest {})
@@ -511,7 +511,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let last = state.identity().unwrap();
+        let last = state.identity().await.unwrap();
 
         assert!(
             std::sync::Arc::ptr_eq(&first, &last),

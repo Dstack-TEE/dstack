@@ -113,6 +113,7 @@ struct AppStateInner {
     /// it is written only on the degraded path, and read only when the cache
     /// is empty.
     identity_last_failure: Mutex<Option<Instant>>,
+    identity_refresh: Arc<tokio::sync::Mutex<()>>,
     /// `sys_vendor` and `product_name`, read once. Neither changes while the
     /// VM is running.
     cloud_vendor: String,
@@ -299,6 +300,7 @@ impl AppState {
                 app_root_signing_key,
                 identity: RwLock::new(None),
                 identity_last_failure: Mutex::new(None),
+                identity_refresh: Arc::default(),
                 cloud_vendor: read_dmi_file("sys_vendor"),
                 cloud_product: read_dmi_file("product_name"),
             }),
@@ -308,7 +310,7 @@ impl AppState {
         // down, and `identity()` retries on demand. A failure here counts as
         // the first attempt and arms the retry throttle, so the boot attempt
         // and a request-driven one are on the same budget.
-        if let Err(err) = me.identity() {
+        if let Err(err) = me.identity().await {
             error!("failed to decode app identity at startup: {err:?}");
         }
         me.maybe_request_demo_cert();
@@ -386,7 +388,7 @@ impl AppState {
     /// include anonymous ones. Within the window the caller is told the
     /// identity is unavailable and when the next attempt is, and the platform
     /// is not touched at all.
-    pub(crate) fn identity(&self) -> Result<Arc<AppIdentity>> {
+    pub(crate) async fn identity(&self) -> Result<Arc<AppIdentity>> {
         if let Some(identity) = self
             .inner
             .identity
@@ -396,9 +398,28 @@ impl AppState {
         {
             return Ok(identity.clone());
         }
-        // Two callers arriving together on a cold cache may both attempt once.
-        // That is the same race the cache has always had, and one extra quote
-        // is not worth holding a lock across the decode for.
+        let refresh = self.inner.identity_refresh.clone().lock_owned().await;
+        let state = self.clone();
+        tokio::task::spawn_blocking(move || {
+            // The task owns exclusion through cache publication, even if its
+            // requester disconnects while the platform is still quoting.
+            let _refresh = refresh;
+            state.identity_blocking()
+        })
+        .await
+        .context("identity refresh task failed")?
+    }
+
+    fn identity_blocking(&self) -> Result<Arc<AppIdentity>> {
+        if let Some(identity) = self
+            .inner
+            .identity
+            .read()
+            .or_panic("lock should never fail")
+            .as_ref()
+        {
+            return Ok(identity.clone());
+        }
         if let Some(failed_at) = *self
             .inner
             .identity_last_failure
@@ -413,10 +434,6 @@ impl AppState {
                 );
             }
         }
-        // Blocking, and deliberately left on the executor: the throttle above
-        // caps this at one quote per interval for the whole process, which is
-        // far short of what would justify a `spawn_blocking` hop and making
-        // every caller of `identity()` async to reach it.
         let identity = match decode_identity(&self.inner) {
             Ok(identity) => Arc::new(identity),
             Err(err) => {
@@ -1231,6 +1248,12 @@ pub(crate) mod tests {
     struct InfoAttestationProbe {
         calls: AtomicUsize,
         failing: AtomicBool,
+        gate: Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                std::sync::mpsc::Receiver<()>,
+            )>,
+        >,
     }
 
     impl InfoAttestationProbe {
@@ -1238,6 +1261,7 @@ pub(crate) mod tests {
             Self {
                 calls: AtomicUsize::new(0),
                 failing: AtomicBool::new(true),
+                gate: Mutex::new(None),
             }
         }
 
@@ -1424,6 +1448,10 @@ pNs85uhOZE8z2jr8Pg==
         impl PlatformBackend for TestSimulatorPlatform {
             fn attestation_for_info(&self) -> Result<VersionedAttestation> {
                 self.probe.calls.fetch_add(1, Ordering::Relaxed);
+                if let Some((entered, release)) = self.probe.gate.lock().unwrap().take() {
+                    entered.send(()).unwrap();
+                    release.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
                 if self.probe.failing.load(Ordering::Relaxed) {
                     anyhow::bail!("the platform cannot attest right now");
                 }
@@ -1508,6 +1536,7 @@ pNs85uhOZE8z2jr8Pg==
             app_root_signing_key: SigningKey::from_slice(&DUMMY_K256_KEY).ok(),
             identity: RwLock::new(None),
             identity_last_failure: Mutex::new(None),
+            identity_refresh: Arc::default(),
             // Read the same way production does, so a test comparing v1 `Info`
             // against v0 `get_info` compares like with like.
             cloud_vendor: read_dmi_file("sys_vendor"),
@@ -2108,6 +2137,46 @@ pNs85uhOZE8z2jr8Pg==
         assert!(err.contains("removed in dstack 0.6.0"), "{err}");
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn identity_retry_is_off_executor_singleflight_and_cancellation_safe() {
+        let probe = Arc::new(InfoAttestationProbe::failing());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        state.identity().await.unwrap_err();
+        *state.inner.identity_last_failure.lock().unwrap() =
+            Some(Instant::now() - IDENTITY_RETRY_INTERVAL);
+        probe.set_failing(false);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        *probe.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        let first_state = state.clone();
+        let first = tokio::spawn(async move { first_state.identity().await });
+        tokio::time::timeout(Duration::from_secs(2), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let mut followers = Vec::new();
+        for _ in 0..16 {
+            let state = state.clone();
+            followers.push(tokio::spawn(async move { state.identity().await }));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(probe.calls(), 2, "only one retry may enter the platform");
+        assert!(followers.iter().all(|task| !task.is_finished()));
+        release_tx.send(()).unwrap();
+        let identity = state.identity().await.unwrap();
+        for task in followers {
+            let other = tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(Arc::ptr_eq(&identity, &other));
+        }
+        assert_eq!(probe.calls(), 2);
+    }
+
     /// A failed decode must be as cheap to repeat as a cached success is.
     /// `identity()` is reached from the anonymous `/prpc/v1/Info`, and each
     /// attempt is a hardware quote plus an RTMR replay under the global quote
@@ -2120,12 +2189,13 @@ pNs85uhOZE8z2jr8Pg==
 
         let err = state
             .identity()
+            .await
             .expect_err("the platform refuses to attest");
         assert!(err.to_string().contains("cannot attest"), "{err}");
         assert_eq!(probe.calls(), 1);
 
         for _ in 0..8 {
-            let err = state.identity().expect_err("still throttled");
+            let err = state.identity().await.expect_err("still throttled");
             assert!(
                 err.to_string().contains("the app identity is unavailable"),
                 "{err}"
@@ -2147,6 +2217,7 @@ pNs85uhOZE8z2jr8Pg==
         let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
         state
             .identity()
+            .await
             .expect_err("the platform refuses to attest");
 
         // Age the recorded failure rather than sleeping out the interval.
@@ -2161,10 +2232,13 @@ pNs85uhOZE8z2jr8Pg==
         );
         probe.set_failing(false);
 
-        let identity = state.identity().expect("the platform recovered");
+        let identity = state.identity().await.expect("the platform recovered");
         assert_eq!(probe.calls(), 2);
 
-        let again = state.identity().expect("a decoded identity is cached");
+        let again = state
+            .identity()
+            .await
+            .expect("a decoded identity is cached");
         assert!(Arc::ptr_eq(&identity, &again));
         assert_eq!(
             probe.calls(),
