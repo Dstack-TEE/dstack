@@ -346,6 +346,17 @@ pub struct PrpcHandler<'s, 'r, S> {
     data: Option<Data<'r>>,
 }
 
+impl RpcRequest<'_> {
+    /// Whether the caller's request was in the JSON representation.
+    ///
+    /// A `GET` and an explicit `?json` both say so directly; a `POST` says so
+    /// with its content type. Both the success and the failure path must use
+    /// this, or a client is answered in a representation it did not ask for.
+    fn wants_json(&self) -> bool {
+        self.json || self.content_type.map(|t| t.is_json()).unwrap_or(false)
+    }
+}
+
 pub struct RpcRequest<'r> {
     remote_addr: Option<&'r Endpoint>,
     certificate: Option<Certificate<'r>>,
@@ -377,12 +388,21 @@ impl<'r> FromRequest<'r> for RpcRequest<'r> {
 
 impl<S> PrpcHandler<'_, '_, S> {
     pub async fn handle<Call: RpcCall<S>>(self) -> RpcResponse {
-        let json = self.request.json;
+        // An error raised before the dispatcher runs -- an oversized body, a
+        // certificate that will not parse, a quote that does not verify -- is
+        // encoded here rather than by the dispatcher, so it has to reach the
+        // same answer about the caller's representation. Reading only
+        // `request.json` would encode a protobuf error for a request that
+        // arrived as JSON, which no JSON client can read.
+        let json = self.request.wants_json();
         let result = handle_prpc_impl::<S, Call>(self).await;
         match result {
             Ok(output) => output,
             Err(err) => {
-                warn!("error handling prpc: {err:?}");
+                warn!(
+                    "error handling prpc: {}",
+                    crate::bound_error_text(&format_args!("{err:?}"))
+                );
                 let body = encode_error(json, &err);
                 let status = crate::code_of(&err)
                     .and_then(Status::from_code)
@@ -516,6 +536,10 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         data,
     } = args;
     let method = method.trim_start_matches(method_trim_prefix.unwrap_or_default());
+    // Resolved before anything moves out of `request`, and shared with the
+    // pre-dispatch error path in `handle`, so a failure is encoded in the
+    // representation the caller used.
+    let is_json = request.wants_json();
     let info = request
         .certificate
         .as_ref()
@@ -564,7 +588,6 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
             .query()
             .map_or(vec![], |q| q.as_bytes().to_vec()),
     };
-    let is_json = request.json || request.content_type.map(|t| t.is_json()).unwrap_or(false);
     let context = CallContext {
         state,
         attestation,
