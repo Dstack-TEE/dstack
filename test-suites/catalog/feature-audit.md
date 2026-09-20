@@ -722,3 +722,15 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gw-contract-001"></a><a id="risk-gw-contract-001"></a>| `req-gw-contract-001` | `risk-gw-contract-001` | [tc-gw-contract-001](../cases/04-gateway/11-request-contract/tc-gw-contract-001/case.md#tc-gw-contract-001) — Gateway request-contract matrix | P0 |
 <a id="req-gw-contract-002"></a><a id="risk-gw-contract-002"></a>| `req-gw-contract-002` | `risk-gw-contract-002` | [tc-gw-contract-002](../cases/04-gateway/11-request-contract/tc-gw-contract-002/case.md#tc-gw-contract-002) — Debug request-contract matrix | P0 |
 <a id="req-gw-contract-003"></a><a id="risk-gw-contract-003"></a>| `req-gw-contract-003` | `risk-gw-contract-003` | [tc-gw-contract-003](../cases/04-gateway/11-request-contract/tc-gw-contract-003/case.md#tc-gw-contract-003) — Admin request-contract matrix | P0 |
+
+<a id="audit-section-kms-key-hierarchy"></a>
+## KMS key hierarchy
+
+| Requirement | Risk | Case | Priority |
+|---|---|---|---|
+<a id="req-kms-keyhier-001"></a><a id="risk-kms-keyhier-001"></a>| `req-kms-keyhier-001` | `risk-kms-keyhier-001` | [tc-kms-keyhier-001](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-001/case.md#tc-kms-keyhier-001) — Derived key determinism across a KMS restart | P0 |
+<a id="req-kms-keyhier-002"></a><a id="risk-kms-keyhier-002"></a>| `req-kms-keyhier-002` | `risk-kms-keyhier-002` | [tc-kms-keyhier-002](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-002/case.md#tc-kms-keyhier-002) — Application-scoped environment key separation | P0 |
+<a id="req-kms-keyhier-003"></a><a id="risk-kms-keyhier-003"></a>| `req-kms-keyhier-003` | `risk-kms-keyhier-003` | [tc-kms-keyhier-003](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-003/case.md#tc-kms-keyhier-003) — Issued k256 signature chain recovery | P0 |
+<a id="req-kms-keyhier-004"></a><a id="risk-kms-keyhier-004"></a>| `req-kms-keyhier-004` | `risk-kms-keyhier-004` | [tc-kms-keyhier-004](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-004/case.md#tc-kms-keyhier-004) — Environment public key signature_v1 freshness | P0 |
+<a id="req-kms-keyhier-005"></a><a id="risk-kms-keyhier-005"></a>| `req-kms-keyhier-005` | `risk-kms-keyhier-005` | [tc-kms-keyhier-005](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-005/case.md#tc-kms-keyhier-005) — Concurrent GetAppKey for one attested identity | P0 |
+<a id="req-kms-keyhier-006"></a><a id="risk-kms-keyhier-006"></a>| `req-kms-keyhier-006` | `risk-kms-keyhier-006` | [tc-kms-keyhier-006](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-006/case.md#tc-kms-keyhier-006) — Concurrent GetAppKey across distinct image hashes | P0 |
