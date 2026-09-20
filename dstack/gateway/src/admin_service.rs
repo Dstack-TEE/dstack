@@ -647,16 +647,17 @@ impl AdminRpc for AdminRpcHandler {
         self,
         request: RenewZtDomainCertRequest,
     ) -> Result<RenewZtDomainCertResponse> {
+        let domain = normalize_zt_domain(&request.domain)?;
         let certbot = &self.state.certbot;
         let renewed = certbot
-            .try_renew(&request.domain, request.force)
+            .try_renew(&domain, request.force)
             .await
             .context("certificate renewal failed")?;
 
         if renewed {
             // Get the new certificate data for response
             let kv_store = self.state.kv_store();
-            let cert_data = kv_store.get_cert_data(&request.domain);
+            let cert_data = kv_store.get_cert_data(&domain);
             let not_after = cert_data.map(|d| d.not_after).unwrap_or(0);
             Ok(RenewZtDomainCertResponse { renewed, not_after })
         } else {
@@ -668,12 +669,8 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn force_release_cert_lock(self, request: ForceReleaseCertLockRequest) -> Result<()> {
-        let kv_store = self.state.kv_store();
-        kv_store.release_cert_lock(&request.domain)?;
-        info!(
-            "Force released certificate lock for domain: {}",
-            request.domain
-        );
+        let domain = force_release_zt_domain_cert_lock(self.state.kv_store(), &request.domain)?;
+        info!("force released certificate lock for domain: {domain}");
         Ok(())
     }
 
@@ -682,9 +679,10 @@ impl AdminRpc for AdminRpcHandler {
         request: ListCertAttestationsRequest,
     ) -> Result<ListCertAttestationsResponse> {
         let kv_store = self.state.kv_store();
+        let domain = normalize_zt_domain(&request.domain)?;
 
         let latest = kv_store
-            .get_cert_attestation_latest(&request.domain)
+            .get_cert_attestation_latest(&domain)
             .map(|att| CertAttestationInfo {
                 public_key: att.public_key,
                 quote: att.quote,
@@ -694,7 +692,7 @@ impl AdminRpc for AdminRpcHandler {
             });
 
         let mut history: Vec<CertAttestationInfo> = kv_store
-            .list_cert_attestations(&request.domain)
+            .list_cert_attestations(&domain)
             .into_iter()
             .map(|att| CertAttestationInfo {
                 public_key: att.public_key,
@@ -946,6 +944,22 @@ fn redact_token(token: &str) -> String {
     let head: String = token.chars().take(4).collect();
     let tail: String = token.chars().skip(count - 4).collect();
     format!("{head}...{tail}")
+}
+
+/// Force-release the certificate renew lock for one ZT domain, returning the
+/// key it was released under.
+///
+/// Normalized first, like every other record lookup on this surface: the lock
+/// lives under the normalized domain, so releasing whatever key the caller's
+/// spelling produces would delete nothing, log a release that did not happen,
+/// and leave the operator's escape hatch out of a wedged renewal closed.
+fn force_release_zt_domain_cert_lock(
+    kv_store: &crate::kv::KvStore,
+    domain: &str,
+) -> Result<String> {
+    let domain = normalize_zt_domain(domain)?;
+    kv_store.release_cert_lock(&domain)?;
+    Ok(domain)
 }
 
 fn normalize_zt_domain(domain: &str) -> Result<String> {
@@ -1509,5 +1523,46 @@ mod redact_token_tests {
     fn redacts_a_token_containing_multi_byte_characters() {
         assert_eq!(redact_token("abcé12345"), "abcé...2345");
         assert_eq!(redact_token("é123456789é"), "é123...789é");
+    }
+}
+
+#[cfg(test)]
+mod cert_lock_admin_tests {
+    use super::force_release_zt_domain_cert_lock;
+    use crate::kv::KvStore;
+
+    fn test_kv(data_dir: &std::path::Path) -> KvStore {
+        KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
+    }
+
+    /// ZT-Domain records are keyed by the normalized domain, so the lock for
+    /// `app.example.com` is what a renewal takes however the operator spelled
+    /// it. Force-release is the escape hatch out of a wedged renewal: deleting
+    /// whatever key the caller's spelling happens to produce would report
+    /// success and leave the domain locked until the timeout.
+    #[test]
+    fn force_release_uses_the_key_the_lock_was_taken_under() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+
+        assert!(kv.try_acquire_cert_lock("app.example.com", 600));
+
+        force_release_zt_domain_cert_lock(&kv, "APP.example.com.")
+            .expect("force release should succeed");
+
+        assert!(
+            kv.get_cert_lock("app.example.com").is_none(),
+            "the lock must be gone, not merely reported gone"
+        );
+    }
+
+    /// Reporting success for a name that can never have held a lock hides a
+    /// typo behind the same message a real release prints.
+    #[test]
+    fn force_release_refuses_a_malformed_domain() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        force_release_zt_domain_cert_lock(&kv, "not a domain")
+            .expect_err("a malformed domain must be refused");
     }
 }
