@@ -958,7 +958,7 @@ fn force_release_zt_domain_cert_lock(
     domain: &str,
 ) -> Result<String> {
     let domain = normalize_zt_domain(domain)?;
-    kv_store.release_cert_lock(&domain)?;
+    kv_store.force_release_cert_lock(&domain)?;
     Ok(domain)
 }
 
@@ -1545,14 +1545,14 @@ mod cert_lock_admin_tests {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
         let kv = test_kv(dir.path());
 
-        assert!(kv.try_acquire_cert_lock("app.example.com", 600));
+        assert!(kv.try_acquire_cert_lock("app.example.com", 600).is_some());
 
         force_release_zt_domain_cert_lock(&kv, "APP.example.com.")
             .expect("force release should succeed");
 
         assert!(
-            kv.get_cert_lock("app.example.com").is_none(),
-            "the lock must be gone, not merely reported gone"
+            kv.try_acquire_cert_lock("app.example.com", 600).is_some(),
+            "the lock must actually be released, not merely reported released"
         );
     }
 

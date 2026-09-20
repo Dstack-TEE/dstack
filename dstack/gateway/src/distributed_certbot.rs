@@ -165,18 +165,16 @@ impl DistributedCertBot {
         Ok(())
     }
 
-    fn try_acquire_cert_lock(&self, domain: &str) -> bool {
+    fn try_acquire_cert_lock(&self, domain: &str) -> Option<crate::kv::CertRenewLock> {
         let acquired = self
             .kv_store
-            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS);
-        if acquired {
-            self.notify_lock_write();
-        }
-        acquired
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)?;
+        self.notify_lock_write();
+        Some(acquired)
     }
 
-    fn release_cert_lock(&self, domain: &str) -> Result<()> {
-        self.kv_store.release_cert_lock(domain)?;
+    fn release_cert_lock(&self, domain: &str, lock: &crate::kv::CertRenewLock) -> Result<()> {
+        self.kv_store.release_cert_lock(domain, lock)?;
         self.notify_lock_write();
         Ok(())
     }
@@ -664,10 +662,10 @@ impl DistributedCertBot {
         }
 
         // Try to acquire lock
-        if !self.try_acquire_cert_lock(domain) {
+        let Some(lock) = self.try_acquire_cert_lock(domain) else {
             info!("another node is renewing, skipping");
             return Ok(false);
-        }
+        };
 
         info!("acquired renew lock, starting renewal");
 
@@ -681,7 +679,7 @@ impl DistributedCertBot {
         };
 
         // Release lock regardless of result
-        if let Err(err) = self.release_cert_lock(domain) {
+        if let Err(err) = self.release_cert_lock(domain, &lock) {
             error!("failed to release lock: {err:?}");
         }
 
@@ -697,7 +695,7 @@ impl DistributedCertBot {
             .context("ZT-Domain config not found")?;
 
         // Try to acquire lock first
-        if !self.try_acquire_cert_lock(domain) {
+        let Some(lock) = self.try_acquire_cert_lock(domain) else {
             // Another node is requesting, wait for it
             info!("another node is requesting, waiting...");
             tokio::time::sleep(Duration::from_secs(30)).await;
@@ -706,11 +704,11 @@ impl DistributedCertBot {
                 return Ok(());
             }
             bail!("failed to get certificate from KvStore after waiting");
-        }
+        };
 
         let result = self.do_request_new(domain, &config).await;
 
-        if let Err(err) = self.release_cert_lock(domain) {
+        if let Err(err) = self.release_cert_lock(domain, &lock) {
             error!("failed to release lock: {err:?}");
         }
 
@@ -1208,16 +1206,18 @@ mod tests {
             .expect("rotation lock release should succeed");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 2);
 
-        assert!(certbot.try_acquire_cert_lock("example.com"));
+        let renewal = certbot
+            .try_acquire_cert_lock("example.com")
+            .expect("renewal lock should be free");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 3);
-        assert!(!certbot.try_acquire_cert_lock("example.com"));
+        assert!(certbot.try_acquire_cert_lock("example.com").is_none());
         assert_eq!(
             notifier.0.load(Ordering::Relaxed),
             3,
             "a rejected acquisition did not write and must not wake push"
         );
         certbot
-            .release_cert_lock("example.com")
+            .release_cert_lock("example.com", &renewal)
             .expect("renewal lock release should succeed");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 4);
     }
