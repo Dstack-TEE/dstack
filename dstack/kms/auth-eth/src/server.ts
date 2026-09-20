@@ -13,6 +13,14 @@ declare module 'fastify' {
   }
 }
 
+const parseNonNegativeInteger = (name: string, value: string | undefined): number | undefined => {
+  if (value === undefined || value === '') return undefined;
+  if (!/^(?:0|[1-9][0-9]*)$/.test(value)) throw new Error(`${name} must be a non-negative integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${name} exceeds the safe integer range`);
+  return parsed;
+};
+
 export async function build(): Promise<FastifyInstance> {
   const server = fastify({
     logger: true
@@ -56,8 +64,17 @@ export async function build(): Promise<FastifyInstance> {
   // Initialize backend
   const rpcUrl = process.env.ETH_RPC_URL || 'http://localhost:8545';
   const kmsContractAddr = process.env.KMS_CONTRACT_ADDR || '0x0000000000000000000000000000000000000000';
+  // Same names and same parsing as auth-eth-bun, so an operator can move
+  // between the two backends without changing the environment.
+  const expectedChainId = parseNonNegativeInteger('ETH_CHAIN_ID', process.env.ETH_CHAIN_ID);
+  const finalityConfirmations = BigInt(
+    parseNonNegativeInteger('ETH_FINALITY_CONFIRMATIONS', process.env.ETH_FINALITY_CONFIRMATIONS) ?? 0,
+  );
   const provider = new ethers.JsonRpcProvider(rpcUrl);
-  server.decorate('ethereum', new EthereumBackend(provider, kmsContractAddr));
+  server.decorate(
+    'ethereum',
+    new EthereumBackend(provider, kmsContractAddr, expectedChainId, finalityConfirmations),
+  );
 
   const publicRpcEndpoint = (value: string): string => {
     try {

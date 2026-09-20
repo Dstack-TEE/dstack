@@ -16,14 +16,44 @@ const DSTACK_KMS_ABI = [
 export class EthereumBackend {
   private provider: ethers.JsonRpcProvider;
   private kmsContract: ethers.Contract;
+  private expectedChainId?: number;
+  private finalityConfirmations: bigint;
 
-  constructor(provider: ethers.JsonRpcProvider, kmsContractAddr: string) {
+  constructor(
+    provider: ethers.JsonRpcProvider,
+    kmsContractAddr: string,
+    expectedChainId?: number,
+    finalityConfirmations: bigint = 0n,
+  ) {
     this.provider = provider;
     this.kmsContract = new ethers.Contract(
       ethers.getAddress(kmsContractAddr),
       DSTACK_KMS_ABI,
       provider
     );
+    this.expectedChainId = expectedChainId;
+    this.finalityConfirmations = finalityConfirmations;
+  }
+
+  // Resolve the one block every read in a single authorization decision is
+  // answered from, and refuse to answer at all if the RPC is not the chain the
+  // operator configured.
+  //
+  // Without this the backend read at `latest` as two independent calls, so the
+  // decision and the gateway identity could come from different blocks, a
+  // reorg could unwind an allow that has already released keys, and an RPC
+  // endpoint that had been swapped for a different chain would be answered
+  // from rather than rejected. `auth-eth-bun` pins both; this is the same rule.
+  private async finalizedBlockNumber(): Promise<bigint> {
+    const chainId = await this.getChainId();
+    if (this.expectedChainId !== undefined && chainId !== this.expectedChainId) {
+      throw new Error('authorization backend chain ID mismatch');
+    }
+    const head = BigInt(await this.provider.getBlockNumber());
+    if (head < this.finalityConfirmations) {
+      throw new Error('authorization backend has not reached configured finality');
+    }
+    return head - this.finalityConfirmations;
   }
 
   private decodeHex(hex: string, sz: number = 32): string {
@@ -50,14 +80,15 @@ export class EthereumBackend {
       tcbStatus: bootInfo.tcbStatus,
       advisoryIds: bootInfo.advisoryIds
     };
+    const blockTag = await this.finalizedBlockNumber();
     let response;
     if (isKms) {
-      response = await this.kmsContract.isKmsAllowed(bootInfoStruct);
+      response = await this.kmsContract.isKmsAllowed(bootInfoStruct, { blockTag });
     } else {
-      response = await this.kmsContract.isAppAllowed(bootInfoStruct);
+      response = await this.kmsContract.isAppAllowed(bootInfoStruct, { blockTag });
     }
     const [isAllowed, reason] = response;
-    const gatewayAppId = await this.kmsContract.gatewayAppId();
+    const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
     return {
       isAllowed,
       reason,

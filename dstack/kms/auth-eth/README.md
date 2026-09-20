@@ -113,8 +113,22 @@ The project includes a Fastify-based HTTP server for TEE boot validation:
 Set these environment variables:
 - **`ETH_RPC_URL`** - Ethereum RPC endpoint (default: `http://localhost:8545`)
 - **`KMS_CONTRACT_ADDR`** - Deployed DstackKms contract address
+- **`ETH_CHAIN_ID`** - Chain ID this backend is allowed to answer from. Unset
+  means no pinning, which lets an RPC endpoint that has been swapped for a
+  different chain decide authorizations. Set it in production.
+- **`ETH_FINALITY_CONFIRMATIONS`** - Confirmation depth every read in one
+  decision is answered at (default: `0`, i.e. chain head). Every read in a
+  decision - the `isAppAllowed`/`isKmsAllowed` call and the `gatewayAppId`
+  read - is taken at the same block, so the two cannot disagree, and a reorg
+  shallower than this depth cannot unwind an allow that has already released
+  keys.
 - **`PORT`** - Server port (default: `8000`)
 - **`HOST`** - Server host (default: `127.0.0.1`)
+
+Both names and their parsing match `auth-eth-bun`, so an operator can move
+between the two backends without changing the environment. Note that
+`dstack-app/docker-compose.yaml` builds this backend from a pinned upstream
+commit, so it does not pick up local changes - bump the pin to pick these up.
 
 ### Running the Server
 ```bash
