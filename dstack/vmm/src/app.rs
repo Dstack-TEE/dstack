@@ -209,6 +209,11 @@ impl GpuConfig {
 
 /// Round up a value to the nearest multiple of another value.
 /// If the value is already a multiple, it remains unchanged.
+///
+/// `vcpu` and `memory` are deployment request fields with no upper bound, so
+/// the next multiple is not always representable. It is left unchanged when it
+/// is not: release builds have no overflow checks, and wrapping here would turn
+/// an absurd request into a small `-smp`/`-m` that QEMU happily accepts.
 pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
     if multiple <= 1 {
         return value;
@@ -219,7 +224,7 @@ pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
         return value;
     }
 
-    value + (multiple - remainder)
+    value.checked_add(multiple - remainder).unwrap_or(value)
 }
 
 /// Get the NUMA node associated with a PCI device.
