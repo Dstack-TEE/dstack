@@ -230,10 +230,17 @@ pub(crate) fn build_boot_info_for_attestation(
         } else {
             vm_config_str
         };
-        return amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
-            att,
-            vm_config_str,
-        );
+        let boot_info =
+            amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
+                att,
+                vm_config_str,
+            )?;
+        // `app_id` is an HKDF `info` component and ring concatenates those
+        // without length prefixes, so the 20-byte invariant is what keeps
+        // `(app_id, instance_id)` unambiguous. `build_boot_info` guards the
+        // other variants; guard SNP here rather than trusting the auth backend.
+        ensure_app_id_len(&boot_info.app_id)?;
+        return Ok(boot_info);
     }
     build_boot_info(att, use_boottime_mr, vm_config_str)
 }
@@ -1138,6 +1145,40 @@ mod tests {
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
+    }
+
+    /// `app_id` is an unlength-prefixed HKDF `info` component, so the 20-byte
+    /// invariant is what keeps `(app_id, instance_id)` from re-segmenting. The
+    /// SNP path must enforce it inside the KMS, before the auth backend is
+    /// consulted — `AuthApi::Dev` allows everything and would otherwise release
+    /// a "null app" key hierarchy derived from the bare context suffixes.
+    #[test]
+    fn build_boot_info_for_attestation_rejects_snp_mr_config_without_app_id() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = dstack_types::mr_config::MrConfigV3::new(
+            Vec::new(),
+            vec![0x22; 32],
+            None,
+            dstack_types::KeyProviderKind::None,
+            Vec::new(),
+            vec![0x99; 20],
+        );
+        assert!(mr_config.app_id.is_none(), "fixture must omit app_id");
+        let attestation = verified_snp_attestation_with_config(
+            measurement,
+            [0xab; 64],
+            String::new(),
+            &mr_config,
+        );
+        let vm_config = snp_vm_config(&input, &mr_config);
+
+        let err = build_boot_info_for_attestation(&attestation, false, &vm_config)
+            .expect_err("snp boot info must reject a missing app_id");
+        assert!(
+            err.to_string().contains("app_id must be 20 bytes"),
+            "unexpected error: {err:?}"
+        );
     }
 
     fn snp_boot_info() -> BootInfo {
