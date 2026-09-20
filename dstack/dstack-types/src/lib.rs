@@ -1524,12 +1524,28 @@ fn cbor_to_vec<T: Serialize>(value: &T, context: &str) -> Vec<u8> {
     out
 }
 
+/// Decode one CBOR document, and only one.
+///
+/// Every caller is decoding a fixed-size measurement document whose bytes are
+/// also hashed into `os_image_hash`, so a decoder that stops at the end of the
+/// first item and ignores the rest lets one byte string decode to a value it
+/// does not hash as. Nothing exploits that today because the verification path
+/// hashes the raw bytes (`verify_measurement_material`), but the ambiguity is
+/// cheap to remove here and expensive to notice later.
 fn cbor_from_slice<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     context: &str,
 ) -> Result<T, String> {
-    ciborium::de::from_reader(Cursor::new(bytes))
-        .map_err(|e| format!("{context}: failed to decode CBOR: {e}"))
+    let mut cursor = Cursor::new(bytes);
+    let value = ciborium::de::from_reader(&mut cursor)
+        .map_err(|e| format!("{context}: failed to decode CBOR: {e}"))?;
+    let trailing = bytes.len() as u64 - cursor.position();
+    if trailing != 0 {
+        return Err(format!(
+            "{context}: {trailing} trailing byte(s) after the CBOR document"
+        ));
+    }
+    Ok(value)
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -2874,5 +2890,57 @@ mod tdx_measurement_cbor_tests {
 
         let err = TdxOsImageMeasurement::from_cbor_slice(&cbor).unwrap_err();
         assert!(err.contains("unsupported version 2"), "unexpected: {err}");
+    }
+}
+
+#[cfg(test)]
+mod cbor_canonicalization_tests {
+    use super::*;
+
+    fn sev_measurement() -> SevOsImageMeasurement {
+        SevOsImageMeasurement {
+            base_cmdline: "console=ttyS0 dstack.rootfs_hash=11".to_string(),
+            ovmf_hash: vec![0x44; 48],
+            kernel_hash: vec![0x55; 32],
+            initrd_hash: vec![0x66; 32],
+            sev_hashes_table_gpa: 0x80_1000,
+            sev_es_reset_eip: 0xffff_fff0,
+            ovmf_sections: vec![OvmfSection {
+                gpa: 0x100000,
+                size: 0x1000,
+                section_type: 1,
+            }],
+        }
+    }
+
+    /// Every `*_MEASUREMENT_FILENAME` document is bound to `os_image_hash` by a
+    /// hash over its raw bytes, so today the trailing bytes ride along in that
+    /// hash and no live check is bypassed. That property is an accident of the
+    /// call sites, not of the decoder: the moment anything compares a
+    /// re-encoded `measurement_hash()` against a `sha256sum.txt` entry, a
+    /// document with trailing bytes decodes to one value and hashes as another.
+    /// Decoding is where the ambiguity belongs.
+    #[test]
+    fn cbor_decoders_reject_trailing_bytes() {
+        let mut cbor = sev_measurement().to_cbor_vec();
+        let clean = SevOsImageMeasurement::from_cbor_slice(&cbor).expect("clean document decodes");
+        cbor.push(0x00);
+
+        let err = SevOsImageMeasurement::from_cbor_slice(&cbor)
+            .expect_err("a document with trailing bytes must not decode");
+        assert!(err.contains("trailing"), "unexpected error: {err}");
+
+        // The re-encoded hash of what it decodes to is not the hash of the
+        // bytes it was decoded from -- the ambiguity the check removes.
+        assert_ne!(clean.measurement_hash().to_vec(), sha256(&cbor).to_vec());
+
+        // Same decoder, so every other measurement document is covered too.
+        let mut gcp = GcpOsImageMeasurement::new(vec![0x77; 32])
+            .expect("gcp measurement")
+            .to_cbor_vec();
+        gcp.extend_from_slice(b"junk");
+        let err = GcpOsImageMeasurement::from_cbor_slice(&gcp)
+            .expect_err("a GCP document with trailing bytes must not decode");
+        assert!(err.contains("trailing"), "unexpected error: {err}");
     }
 }
