@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use bollard::container::{ListContainersOptions, RemoveContainerOptions};
 use bollard::Docker;
 use fs_err as fs;
@@ -19,12 +19,22 @@ pub struct ComposeInfo {
 }
 
 /// Parse a docker-compose file and extract project name and service names
+///
+/// The caller deletes containers whose service is absent from `service_names`,
+/// so a service this parser cannot see is a live container it destroys. That
+/// makes an incomplete answer worse than no answer, and `include:` merges in
+/// services from files that are not read here at all -- Compose starts them and
+/// labels them with this same project. Refuse rather than guess.
 pub fn parse_docker_compose_file(compose_file: impl AsRef<Path>) -> Result<ComposeInfo> {
     let compose_content =
         fs::read_to_string(compose_file.as_ref()).context("failed to read docker-compose file")?;
 
     let yaml_docs = YamlLoader::load_from_str(&compose_content).context("failed to parse YAML")?;
     let yaml_doc = yaml_docs.first().context("empty YAML document")?;
+
+    if !yaml_doc["include"].is_badvalue() {
+        bail!("'include' brings in services this parser cannot enumerate");
+    }
 
     // Extract project name
     let project_name = if let Some(name) = yaml_doc["name"].as_str() {
@@ -256,6 +266,74 @@ pub fn remove_orphans_direct(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `include:` merges another file's services into the same project, and
+    /// Compose starts them. This parser cannot see them, so before the fix
+    /// every one of them looked like an orphan and `remove_orphans_direct`
+    /// deleted the live container's directory on every boot -- silently, since
+    /// `dstack-prepare.sh` runs the command with `|| true`.
+    ///
+    /// Verified against the real resolver: `docker compose config --format
+    /// json` on this file reports project `e2demo` with services `main` and
+    /// `sidecar`.
+    #[test]
+    fn an_included_service_is_not_treated_as_an_orphan() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("e2demo");
+        fs::create_dir_all(&project).unwrap();
+        let compose_file = project.join("docker-compose.yaml");
+        fs::write(
+            &compose_file,
+            "name: e2demo\ninclude:\n  - included.yaml\nservices:\n  main:\n    image: busybox\n",
+        )
+        .unwrap();
+
+        let docker_root = dir.path().join("docker");
+        let container = docker_root.join("containers").join("ccccccccccccdddd");
+        fs::create_dir_all(&container).unwrap();
+        fs::write(
+            container.join("config.v2.json"),
+            r#"{"Config":{"Labels":{"com.docker.compose.project":"e2demo","com.docker.compose.service":"sidecar"}}}"#,
+        )
+        .unwrap();
+
+        let result = remove_orphans_direct(&compose_file, &docker_root, false);
+        assert!(
+            container.exists(),
+            "the included service's container directory was deleted"
+        );
+        assert!(
+            result.is_err(),
+            "an unresolvable compose file must be reported, not silently skipped"
+        );
+    }
+
+    /// The common case still works: a service really dropped from the compose
+    /// file is still cleaned up.
+    #[test]
+    fn a_dropped_service_is_still_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("e2demo");
+        fs::create_dir_all(&project).unwrap();
+        let compose_file = project.join("docker-compose.yaml");
+        fs::write(
+            &compose_file,
+            "name: e2demo\nservices:\n  main:\n    image: busybox\n",
+        )
+        .unwrap();
+
+        let docker_root = dir.path().join("docker");
+        let container = docker_root.join("containers").join("ccccccccccccdddd");
+        fs::create_dir_all(&container).unwrap();
+        fs::write(
+            container.join("config.v2.json"),
+            r#"{"Config":{"Labels":{"com.docker.compose.project":"e2demo","com.docker.compose.service":"gone"}}}"#,
+        )
+        .unwrap();
+
+        remove_orphans_direct(&compose_file, &docker_root, false).unwrap();
+        assert!(!container.exists());
+    }
 
     #[test]
     fn test_yaml_anchor_parsing() {
