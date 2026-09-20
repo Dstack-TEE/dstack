@@ -29,7 +29,7 @@ use crate::main_service::Proxy;
 
 use super::io_bridge::bridge;
 use super::port_policy::{filter_allowed_addresses, should_send_pp};
-use super::tls_passthough::connect_multiple_hosts;
+use super::tls_passthough::{connect_multiple_hosts, ConnectionSlot};
 
 #[pin_project::pin_project]
 struct IgnoreUnexpectedEofStream<S> {
@@ -377,7 +377,7 @@ impl Proxy {
                 // Adaptive: stay in userspace rustls until the connection proves
                 // itself worth the offload, then hand it to the kernel.
                 let tls_stream = self.tls_accept_corked(inbound, buffer, h2).await?;
-                let (mut outbound, _counter, instance_id) =
+                let (mut outbound, _slot, instance_id) =
                     self.connect_upstream(addresses, port, app_id).await?;
                 self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
                     .await?;
@@ -395,7 +395,7 @@ impl Proxy {
                 // With kTLS the socket carries plaintext from userspace's point
                 // of view, so the payload can be relayed with splice and never
                 // enters this process at all.
-                let (mut outbound, _counter, instance_id) =
+                let (mut outbound, _slot, instance_id) =
                     self.connect_upstream(addresses, port, app_id).await?;
                 self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
                     .await?;
@@ -457,7 +457,7 @@ impl Proxy {
         addresses: super::AddressGroup,
         port: u16,
         app_id: &str,
-    ) -> Result<(TcpStream, crate::models::EnteredCounter, String)> {
+    ) -> Result<(TcpStream, ConnectionSlot, String)> {
         let max_connections = self.config.proxy.max_connections_per_app;
         timeout(
             self.config.proxy.timeouts.connect,
@@ -495,7 +495,7 @@ impl Proxy {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let (mut outbound, _counter, instance_id) =
+        let (mut outbound, _slot, instance_id) =
             self.connect_upstream(addresses, port, app_id).await?;
         self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
             .await?;

@@ -28,7 +28,7 @@ use tracing::{debug, debug_span, error, info, warn, Instrument};
 use crate::{
     config::ProxyConfig,
     main_service::Proxy,
-    models::EnteredCounter,
+    models::Counting,
     pp::{get_inbound_pp_header, DisplayAddr},
 };
 
@@ -308,7 +308,7 @@ fn conn_task(
     slot: Option<balance::CoreSlot>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     let span = debug_span!("conn", id = next_connection_id());
-    let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
+    let conn_entered = NUM_CONNECTIONS.enter();
     async move {
         let _conn_entered = conn_entered;
         let _slot = slot;
