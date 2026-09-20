@@ -506,10 +506,20 @@ impl ProxyInner {
                 .clone()
                 .map(|service| service as Arc<dyn crate::kv::PersistentWriteNotifier>),
         ));
-        // Initialize any configured domains
-        if let Err(err) = certbot.init_all().await {
-            warn!("Failed to initialize multi-domain certbot: {err:?}");
-        }
+        // No ACME work here. This runs before `proxy::start` binds the
+        // listeners, so anything awaited on this path is downtime for every
+        // domain, and issuance is the one step that cannot be bounded from
+        // here: an order is capped by `renew_timeout` (300 s by default) and
+        // the account registration in front of it by nothing at all.
+        //
+        // Nothing is lost by leaving it out. Every certificate the cluster
+        // already holds is in the resolver above, loaded straight from the KV
+        // store, and `start_certbot_task` runs a full renewal pass as its
+        // first act -- issuing for any domain that has no certificate and
+        // renewing any that is close to expiry, which is strictly more than
+        // this path ever did. That pass is spawned, so it proceeds while the
+        // proxy is already listening, and the certificate it obtains reaches
+        // this acceptor through the `CertResolver` the acceptors share.
 
         // Create TLS acceptors with CertResolver for SNI-based resolution
         // CertResolver allows atomic certificate updates without recreating acceptors

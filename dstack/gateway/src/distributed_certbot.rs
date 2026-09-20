@@ -461,40 +461,6 @@ impl DistributedCertBot {
         Ok(config.acme_url)
     }
 
-    /// Initialize all ZT-Domain certificates
-    pub async fn init_all(&self) -> Result<()> {
-        let configs = self.kv_store.list_zt_domain_configs();
-        for config in configs {
-            if let Err(err) = self.init_domain(&config.domain).await {
-                error!("cert[{}]: failed to initialize: {err:?}", config.domain);
-            }
-        }
-        Ok(())
-    }
-
-    /// Initialize certificate for a specific domain
-    pub async fn init_domain(&self, domain: &str) -> Result<()> {
-        // First, try to load from KvStore (synced from other nodes)
-        if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
-            let now = now_secs();
-            if cert_data.not_after > now {
-                info!(
-                    domain,
-                    "loaded from KvStore (issued by node {}, expires in {} days)",
-                    cert_data.issued_by,
-                    (cert_data.not_after - now) / 86400
-                );
-                self.cert_resolver.update_cert(domain, &cert_data)?;
-                return Ok(());
-            }
-            info!(domain, "KvStore certificate expired, will request new one");
-        }
-
-        // No valid cert, need to request new one
-        info!(domain, "no valid certificate found, requesting from ACME");
-        self.request_new_cert(domain).await
-    }
-
     /// Set CAA records for every configured ZT domain.
     ///
     /// Runs under the shared ACME lock, so a rotation or another
@@ -681,35 +647,6 @@ impl DistributedCertBot {
         };
 
         // Release lock regardless of result
-        if let Err(err) = self.release_cert_lock(domain) {
-            error!("failed to release lock: {err:?}");
-        }
-
-        result
-    }
-
-    /// Request new certificate for a domain
-    #[tracing::instrument(skip(self))]
-    async fn request_new_cert(&self, domain: &str) -> Result<()> {
-        let config = self
-            .kv_store
-            .get_zt_domain_config(domain)
-            .context("ZT-Domain config not found")?;
-
-        // Try to acquire lock first
-        if !self.try_acquire_cert_lock(domain) {
-            // Another node is requesting, wait for it
-            info!("another node is requesting, waiting...");
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
-                self.cert_resolver.update_cert(domain, &cert_data)?;
-                return Ok(());
-            }
-            bail!("failed to get certificate from KvStore after waiting");
-        }
-
-        let result = self.do_request_new(domain, &config).await;
-
         if let Err(err) = self.release_cert_lock(domain) {
             error!("failed to release lock: {err:?}");
         }
@@ -1220,6 +1157,36 @@ mod tests {
             .release_cert_lock("example.com")
             .expect("renewal lock release should succeed");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 4);
+    }
+
+    /// Issuance must never wait on another node holding the per-domain lock:
+    /// the node that loses the race has nothing to do, and the certificate the
+    /// winner publishes reaches it through the KV store's cert watch.
+    ///
+    /// There used to be a second entry point that did wait -- a startup
+    /// `init_all` called from `ProxyInner::new`, before the proxy bound its
+    /// listeners, which slept a hard-coded 30 s per contended domain. Issuance
+    /// now has exactly one entry point and it runs in the renewal task, beside
+    /// the proxy rather than in front of it.
+    #[tokio::test(start_paused = true)]
+    async fn issuance_skips_rather_than_sleeps_when_another_node_holds_the_cert_lock() {
+        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let certbot = certbot_with_domain(data_dir.path());
+        assert!(certbot
+            .kv_store
+            .try_acquire_cert_lock("app.example.com", RENEW_LOCK_TIMEOUT_SECS));
+
+        let started = tokio::time::Instant::now();
+        let renewed = certbot
+            .try_renew("app.example.com", false)
+            .await
+            .expect("a contended domain is skipped, not an error");
+        assert!(!renewed, "the losing node must not issue");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "issuance blocked for {:?} waiting on another node",
+            started.elapsed()
+        );
     }
 
     #[tokio::test]
