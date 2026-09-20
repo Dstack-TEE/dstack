@@ -87,20 +87,38 @@ impl CaCert {
     }
 
     /// Sign a remote certificate signing request.
+    ///
+    /// `app_info` is the identity **the signer established**, and it is what
+    /// both `PHALA_RATLS_APP_ID` and `PHALA_RATLS_APP_INFO` are stamped from.
+    ///
+    /// This used to be re-derived here from `csr.attestation` -- the requester's
+    /// own, unverified copy -- which put two wrong values in every certificate
+    /// the KMS issued. `Attestation<()>` has no verified report to read a device
+    /// id out of, so `decode_app_info` filled in `sha256("")` for every host;
+    /// and it passed no `vm_config`, so `os_image_hash` came from the config
+    /// embedded in the CSR rather than the one the signer authorized, which a
+    /// requester is free to make disagree. The signer has the verified values;
+    /// it passes them in.
+    ///
+    /// The app id is stamped only when it is non-empty: an empty one is not
+    /// "unknown" to a peer that compares by equality, it is a value that matches
+    /// every other app without one.
     pub fn sign_csr(
         &self,
         csr: &CertSigningRequestV2,
-        app_id: Option<&[u8]>,
+        app_info: Option<&AppInfo>,
         usage: &str,
     ) -> Result<Certificate> {
         let pki = rcgen::SubjectPublicKeyInfo::from_der(&csr.pubkey)
             .context("Failed to parse signature")?;
         let cfg = &csr.config;
-        let app_info = if cfg.ext_app_info {
-            Some(csr.attestation.clone().into_v1().decode_app_info(false)?)
-        } else {
-            None
-        };
+        if cfg.ext_app_info && app_info.is_none() {
+            bail!("cannot embed app info: the signer established none");
+        }
+        let app_id = app_info
+            .map(|info| info.app_id.as_slice())
+            .filter(|app_id| !app_id.is_empty());
+        let app_info = cfg.ext_app_info.then_some(app_info).flatten();
         let attestation = cfg.ext_quote.then_some(&csr.attestation);
         let req = CertRequest::builder()
             .key(&pki)
@@ -111,7 +129,7 @@ impl CaCert {
             .usage_client_auth(cfg.usage_client_auth)
             .maybe_attestation(attestation)
             .maybe_app_id(app_id)
-            .maybe_app_info(app_info.as_ref())
+            .maybe_app_info(app_info)
             .special_usage(usage)
             .maybe_not_before(cfg.not_before.map(unix_time_to_system_time))
             .maybe_not_after(cfg.not_after.map(unix_time_to_system_time))
@@ -893,6 +911,190 @@ mod tests {
             assert_eq!(decoded.os_image_hash, app_info.os_image_hash);
             assert_eq!(decoded.key_provider_info, app_info.key_provider_info);
             assert_eq!(decoded.init_script_hashes, app_info.init_script_hashes);
+        }
+    }
+
+    /// What a certificate says about the identity it belongs to.
+    ///
+    /// The KMS verifies an attestation, authorizes it, and then signs. The
+    /// identity it stamps has to be the one it verified: a relying party reading
+    /// `PHALA_RATLS_APP_ID` or `PHALA_RATLS_APP_INFO` off a certificate has no
+    /// other source for it.
+    mod issued_identity {
+        use super::*;
+        use dstack_attest::attestation::{StackEvidence, VersionedAttestation};
+        use sha2::{Digest, Sha256};
+
+        /// The guest-agent simulator's attestation -- a real TDX quote with a
+        /// real event log. A synthetic one would fail to decode before it could
+        /// produce a wrong answer, and a wrong answer is the thing under test.
+        const SIMULATOR_ATTESTATION: &[u8] =
+            include_bytes!("../../../sdk/simulator/attestation.bin");
+
+        /// The os image hash the requester's own attestation claims, and which
+        /// the signer did not verify.
+        const CLAIMED_OS_IMAGE_HASH: [u8; 32] = [0xbb; 32];
+        /// The os image hash the signer verified, against the `vm_config` it
+        /// authorized.
+        const VERIFIED_OS_IMAGE_HASH: [u8; 32] = [0xaa; 32];
+
+        fn ca() -> CaCert {
+            let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+            let cert = CertRequest::builder()
+                .subject("Dstack App CA")
+                .key(&key)
+                .ca_level(0)
+                .build()
+                .self_signed()
+                .unwrap();
+            CaCert::from_parts(key, cert)
+        }
+
+        /// The identity the signer established, for a given device.
+        fn verified_app_info(device_id: &[u8]) -> AppInfo {
+            AppInfo {
+                app_id: vec![0x11; 20],
+                compose_hash: vec![0x22; 32],
+                instance_id: vec![0x33; 20],
+                device_id: device_id.to_vec(),
+                mr_system: [0x44; 32],
+                mr_aggregated: [0x55; 32],
+                os_image_hash: VERIFIED_OS_IMAGE_HASH.to_vec(),
+                key_provider_info: b"kms".to_vec(),
+                init_script_hashes: None,
+            }
+        }
+
+        /// A CSR asking for the app-info extension, carrying an attestation
+        /// whose embedded config names a different os image than the signer
+        /// verified. A requester builds this freely: the CSR signature is its
+        /// own key's, and nothing binds the embedded config to the quote.
+        fn csr_claiming_another_os_image() -> CertSigningRequestV2 {
+            let mut attestation = VersionedAttestation::from_bytes(SIMULATOR_ATTESTATION)
+                .expect("decode the simulator attestation")
+                .into_v1();
+            let StackEvidence::Dstack { ref mut config, .. } = attestation.stack else {
+                panic!("the simulator fixture is expected to carry dstack stack evidence");
+            };
+            *config = format!(
+                r#"{{"os_image_hash":"{}"}}"#,
+                hex::encode(CLAIMED_OS_IMAGE_HASH)
+            );
+            let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+            CertSigningRequestV2 {
+                confirm: "please sign cert:".to_string(),
+                pubkey: key.public_key_der(),
+                config: CertConfigV2 {
+                    org_name: None,
+                    subject: "an-app".to_string(),
+                    subject_alt_names: vec![],
+                    usage_server_auth: true,
+                    usage_client_auth: true,
+                    ext_quote: false,
+                    ext_app_info: true,
+                    not_before: None,
+                    not_after: None,
+                },
+                attestation: VersionedAttestation::V1 { attestation },
+            }
+        }
+
+        /// Sign that CSR and read the identity back off the certificate, the way
+        /// a relying party does.
+        fn issued_app_info(device_id: &[u8]) -> AppInfo {
+            let cert = ca()
+                .sign_csr(
+                    &csr_claiming_another_os_image(),
+                    Some(&verified_app_info(device_id)),
+                    "app:custom",
+                )
+                .expect("sign csr");
+            cert.get_app_info()
+                .expect("read app info")
+                .expect("app info extension")
+        }
+
+        /// The device id used to be `sha256("")` in every certificate the KMS
+        /// issued: `sign_csr` decoded it from the requester's `Attestation<()>`,
+        /// which has no verified report to read a device id out of, so
+        /// `decode_app_info` filled in the hash of nothing. Anything pinning on
+        /// it was pinning a constant.
+        #[test]
+        fn an_issued_certificate_reports_the_device_the_signer_saw() {
+            let one = issued_app_info(b"the-ppid-of-one-host");
+            let other = issued_app_info(b"the-ppid-of-another-host");
+
+            let sha256_of_nothing = Sha256::digest([]).to_vec();
+            assert_ne!(
+                one.device_id, sha256_of_nothing,
+                "a certificate must not report the hash of nothing as its device id"
+            );
+            assert_eq!(one.device_id, b"the-ppid-of-one-host");
+            assert_ne!(
+                one.device_id, other.device_id,
+                "two hosts must not issue certificates with the same device id"
+            );
+        }
+
+        /// The identity the signer authorized and the identity it stamps have to
+        /// be the same one. `sign_csr` used to re-derive the second from the
+        /// requester's copy of the attestation with no `vm_config`, so
+        /// `os_image_hash` came from the config embedded in the CSR -- which the
+        /// requester chooses, and which the signer never checked.
+        #[test]
+        fn an_issued_certificate_reports_the_os_image_the_signer_verified() {
+            let issued = issued_app_info(b"a-device");
+            assert_eq!(
+                issued.os_image_hash,
+                VERIFIED_OS_IMAGE_HASH.to_vec(),
+                "the certificate must carry the os image the signer verified"
+            );
+            assert_ne!(issued.os_image_hash, CLAIMED_OS_IMAGE_HASH.to_vec());
+        }
+
+        /// The app-id extension comes from the same established identity, so the
+        /// two extensions cannot name different apps.
+        #[test]
+        fn an_issued_certificate_carries_the_established_app_id() {
+            let cert = ca()
+                .sign_csr(
+                    &csr_claiming_another_os_image(),
+                    Some(&verified_app_info(b"a-device")),
+                    "app:custom",
+                )
+                .expect("sign csr");
+            assert_eq!(
+                cert.get_app_id().expect("read app id"),
+                Some(vec![0x11; 20])
+            );
+        }
+
+        /// An empty app id is not "unknown" to a peer that compares by equality,
+        /// so it stays absent rather than being stamped.
+        #[test]
+        fn an_empty_app_id_is_left_absent() {
+            let mut csr = csr_claiming_another_os_image();
+            csr.config.ext_app_info = false;
+            let mut app_info = verified_app_info(b"a-device");
+            app_info.app_id = Vec::new();
+            let cert = ca()
+                .sign_csr(&csr, Some(&app_info), "app:custom")
+                .expect("sign csr");
+            assert_eq!(cert.get_app_id().expect("read app id"), None);
+        }
+
+        /// Fail closed: a CSR that asks for the app-info extension when the
+        /// signer established no identity is refused, not issued with a blank.
+        #[test]
+        fn app_info_is_not_embedded_without_an_established_identity() {
+            let Err(err) = ca().sign_csr(&csr_claiming_another_os_image(), None, "app:custom")
+            else {
+                panic!("app info must not be invented");
+            };
+            assert!(
+                format!("{err:#}").contains("cannot embed app info"),
+                "unexpected error: {err:#}"
+            );
         }
     }
 }

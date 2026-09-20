@@ -9,7 +9,7 @@ use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::{
-    attestation::{AttestationVerifier, VersionedAttestation},
+    attestation::{AppInfo, AttestationVerifier, VersionedAttestation},
     cert::{generate_ra_cert, CaCert, CertSigningRequestV2},
 };
 
@@ -23,36 +23,31 @@ pub enum CertRequestClient {
     },
 }
 
-/// The app id a locally issued certificate should carry, if any.
+/// The identity a locally issued certificate should carry, if any.
 ///
-/// KMS stamps the app_id it verified into the certificate it returns. The local
-/// CA branch has the same value available -- the CSR carries the attestation it
-/// was derived from -- but used to drop it, so every certificate issued through
-/// a local CA came back without the extension. Consumers that read the
-/// extension and have no fallback therefore rejected all of them:
-/// `AppIdValidator` in dstack-gateway's cluster sync client and the gateway's
-/// own `ensure_from_gateway` both do exactly that, which left clustering
-/// working under a KMS key provider and broken under every other one. (The
-/// gateway's inbound sync routes happen to fall back to the app-info extension,
-/// which is why the failure showed up on one side of the connection only.)
+/// KMS stamps the identity it verified into the certificate it returns. The
+/// local CA branch has the same values available -- the CSR carries the
+/// attestation it was derived from -- but used to drop the app id, so every
+/// certificate issued through a local CA came back without the extension.
+/// Consumers that read the extension and have no fallback therefore rejected
+/// all of them: `AppIdValidator` in dstack-gateway's cluster sync client and the
+/// gateway's own `ensure_from_gateway` both do exactly that, which left
+/// clustering working under a KMS key provider and broken under every other one.
+/// (The gateway's inbound sync routes happen to fall back to the app-info
+/// extension, which is why the failure showed up on one side of the connection
+/// only.)
 ///
 /// Reading the attestation without verifying it is sound *here and only here*:
 /// the sole caller is the guest agent signing a CSR it built itself, from its
 /// own `certificate_attestation`, against a CA whose key it already holds. It
 /// asserts nothing it could not assert anyway. A remote CSR must go through
-/// KMS, which verifies the quote first and stamps `boot_info.app_id`.
+/// KMS, which verifies the quote first and stamps what it verified.
 ///
-/// Best effort on purpose: an app whose attestation carries no app-id event
-/// decodes to an empty one, and stamping that would make every such peer match
-/// every other. Absent stays absent, and the peer rejects it as before.
-fn local_ca_app_id(attestation: &VersionedAttestation) -> Option<Vec<u8>> {
-    attestation
-        .clone()
-        .into_v1()
-        .decode_app_info(false)
-        .ok()
-        .map(|info| info.app_id)
-        .filter(|app_id| !app_id.is_empty())
+/// Best effort on purpose: an attestation with nothing decodable yields no
+/// identity at all, and `sign_csr` leaves both extensions absent -- or refuses
+/// the request outright, if the CSR asked for the app-info one.
+fn local_ca_app_info(attestation: &VersionedAttestation) -> Option<AppInfo> {
+    attestation.clone().into_v1().decode_app_info(false).ok()
 }
 
 /// The usage the KMS stamps on its own RPC certificate.
@@ -125,9 +120,9 @@ impl CertRequestClient {
     ) -> Result<Vec<String>> {
         match self {
             CertRequestClient::Local { ca } => {
-                let app_id = local_ca_app_id(&csr.attestation);
+                let app_info = local_ca_app_info(&csr.attestation);
                 let cert = ca
-                    .sign_csr(csr, app_id.as_deref(), "app:custom")
+                    .sign_csr(csr, app_info.as_ref(), "app:custom")
                     .context("Failed to sign certificate")?;
                 Ok(vec![cert.pem(), ca.pem_cert.clone()])
             }
@@ -341,15 +336,36 @@ mod tests {
     }
 
     /// The same rule at the unit it is decided in, so a failure says which of
-    /// the two halves moved.
+    /// the two halves moved. Dropping an empty app id is `sign_csr`'s half now,
+    /// which is what the two tests above drive; this one pins what is handed to
+    /// it.
     #[test]
-    fn local_ca_app_id_is_absent_rather_than_empty() {
-        assert_eq!(local_ca_app_id(&attestation_with_empty_app_id()), None);
-        assert_eq!(local_ca_app_id(&undecodable_attestation()), None);
+    fn local_ca_app_info_never_invents_an_app_id() {
         assert_eq!(
-            local_ca_app_id(&simulator_attestation()).map(hex::encode),
+            local_ca_app_info(&attestation_with_empty_app_id()).map(|info| info.app_id),
+            Some(Vec::new())
+        );
+        assert!(local_ca_app_info(&undecodable_attestation()).is_none());
+        assert_eq!(
+            local_ca_app_info(&simulator_attestation()).map(|info| hex::encode(info.app_id)),
             Some(SIMULATOR_APP_ID.to_string())
         );
+    }
+
+    /// An app info carrying nothing but an app id, for a test that only needs
+    /// the certificate to chain and to name an app.
+    fn app_info_for(app_id: &[u8]) -> AppInfo {
+        AppInfo {
+            app_id: app_id.to_vec(),
+            instance_id: Vec::new(),
+            device_id: Vec::new(),
+            mr_system: [0u8; 32],
+            mr_aggregated: [0u8; 32],
+            key_provider_info: Vec::new(),
+            os_image_hash: Vec::new(),
+            compose_hash: Vec::new(),
+            init_script_hashes: None,
+        }
     }
 
     /// The KMS PKI, built with the production primitives.
@@ -434,7 +450,7 @@ mod tests {
             csr.config.subject = alt_name.to_string();
             csr.config.subject_alt_names = vec![alt_name.to_string()];
             let leaf = app_ca
-                .sign_csr(&csr, Some(app_id), "app:custom")
+                .sign_csr(&csr, Some(&app_info_for(app_id)), "app:custom")
                 .expect("sign csr");
             CertPair {
                 cert_pem: format!(
