@@ -106,11 +106,12 @@
     },
     {
       "case_id": "tc-gos-concurrency-001",
-      "source_run": "guest-agent-robustness-concurrency-001",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/guest-agent-robustness-case.py",
-      "environment": "SIMULATOR",
-      "notes": "24 concurrent identical GetKey, DeriveK256Key and DeriveKey calls agreed on one key digest each against a lease-owned simulator, a second derivation path and 24 random-seed derivations proved the comparison distinguishes keys, and 24 concurrent GetQuote calls each echoed and embedded their own report data at bytes 568..632"
+      "environment": "INTEGRATION",
+      "notes": "24 concurrent identical GetKey, DeriveK256Key and DeriveKey calls agreed on one key digest each against a lease-owned simulator, a second derivation path and 24 random-seed derivations proved the comparison distinguishes keys, and 24 concurrent GetQuote calls each echoed and embedded their own report data at bytes 568..632 Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-concurrency-002",
@@ -122,47 +123,48 @@
     },
     {
       "case_id": "tc-gos-concurrency-003",
-      "source_run": "guest-agent-robustness-concurrency-003",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/guest-agent-robustness-case.py",
-      "environment": "SIMULATOR",
-      "notes": "66 concurrent calls over eleven methods across the internal, legacy, external and guest-api listeners were all answered 200, the post-load probe was answered, the agent's (pid, start time) pair was unchanged, and its open descriptors returned to the pre-load count"
+      "environment": "INTEGRATION",
+      "notes": "66 concurrent calls over eleven methods across the internal, legacy, external and guest-api listeners were all answered 200, the post-load probe was answered, the agent's (pid, start time) pair was unchanged, and its open descriptors returned to the pre-load count Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-contract-001",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Tappd method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every Tappd method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-contract-002",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every DstackGuest method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every DstackGuest method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-contract-003",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Worker method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every Worker method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-contract-004",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every GuestApi method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every GuestApi method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-dstackguest-001",
@@ -356,11 +358,12 @@
     },
     {
       "case_id": "tc-gos-observability-slow-consumer",
-      "source_run": "guest-agent-robustness-slow-consumer",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/guest-agent-robustness-case.py",
-      "environment": "SIMULATOR",
-      "notes": "a reader that stopped draining a follow stream left the agent's resident memory unchanged over 30s and recovered 256KB on resume, ten stalled readers against workers = 8 did not stop a Version call, and an idle follow stream ended after exactly 600s"
+      "environment": "INTEGRATION",
+      "notes": "a reader that stopped draining a follow stream left the agent's resident memory unchanged over 30s and recovered 256KB on resume, ten stalled readers against workers = 8 did not stop a Version call, and an idle follow stream ended after exactly 600s Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gos-platform-001",
@@ -1276,30 +1279,30 @@
     },
     {
       "case_id": "tc-gw-contract-001",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Gateway method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every Gateway method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gw-contract-002",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Debug method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every Debug method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gw-contract-003",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Admin method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every Admin method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-gw-debug-001",
@@ -1937,21 +1940,21 @@
     },
     {
       "case_id": "tc-kms-contract-001",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every KMS method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every KMS method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-contract-002",
-      "source_run": "request-contract-matrix-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/api-contract-matrix-case.py",
       "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Onboard method the inventory declares, under the policy in api-contract-matrix-policy.json.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "notes": "The full adversarial request-contract matrix over every Onboard method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-ct-001",
@@ -1963,57 +1966,57 @@
     },
     {
       "case_id": "tc-kms-keyhier-001",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "byte-identical disk, environment and k256 material plus an unchanged public identity across a lease-owned KMS restart. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "environment": "INTEGRATION",
+      "notes": "byte-identical disk, environment and k256 material plus an unchanged public identity across a lease-owned KMS restart. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-keyhier-002",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "nine application IDs, 36 pairwise-distinct environment keys, the attested identity bound to its own app_id namespace, and app_id length enforcement. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "environment": "INTEGRATION",
+      "notes": "nine application IDs, 36 pairwise-distinct environment keys, the attested identity bound to its own app_id namespace, and app_id length enforcement. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-keyhier-003",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "the issued k256 signature recovered to GetMeta.k256_pubkey over the documented preimage, six mutated chains failed, and protobuf matched JSON byte for byte. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "environment": "INTEGRATION",
+      "notes": "the issued k256 signature recovered to GetMeta.k256_pubkey over the documented preimage, six mutated chains failed, and protobuf matched JSON byte for byte. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-keyhier-004",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "signature_v1 and the legacy signature both recovered, four substituted claims failed, and the timestamp advanced while the published key stayed fixed. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "environment": "INTEGRATION",
+      "notes": "signature_v1 and the legacy signature both recovered, four substituted claims failed, and the timestamp advanced while the published key stayed fixed. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-keyhier-005",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "eight concurrent GetAppKey calls for one attested identity hashed to a single response. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "environment": "INTEGRATION",
+      "notes": "eight concurrent GetAppKey calls for one attested identity hashed to a single response. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-keyhier-006",
-      "source_run": "kms-key-hierarchy-offline-mock-2026-09-19",
+      "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
       "entrypoint": "shared/automation/kms-key-hierarchy-case.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "eight concurrent GetAppKey calls with distinct uncached image hashes each echoed their own hash with identical derived material. Verified against a mock KMS reproducing the documented derivation contexts and signature envelopes, and against the golden vectors in dstack/kms/src/crypto.rs; not yet executed on the lab fixture.",
-      "promoted_at": "2026-09-19T00:00:00Z"
+      "environment": "INTEGRATION",
+      "notes": "eight concurrent GetAppKey calls with distinct uncached image hashes each echoed their own hash with identical derived material. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-keys-certs-001",
