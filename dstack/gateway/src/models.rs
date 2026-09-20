@@ -247,6 +247,16 @@ impl InstanceInfo {
     /// the app id. Routing to the instance id directly ignores it on purpose:
     /// the point of taking an instance out of rotation is to investigate it
     /// while it is still running, which needs the instance to stay reachable.
+    ///
+    /// "Reachable" means reachable by anyone, not by the operator alone. An
+    /// instance id is a routing label, not a credential: it is the subdomain
+    /// of the gateway's own base domain that `proxy::parse_dst_info` reads off
+    /// any inbound SNI, and it is the URL a tenant is handed. So the gate is a
+    /// load-balancing control and never a way to stop an instance serving --
+    /// what does that is stopping the CVM, or a port-policy lockdown, which
+    /// `filter_allowed_addresses` applies to every path that selects a host.
+    /// Said the same way in `gateway/rpc/proto/gateway.proto` and in
+    /// `docs/app-health-checks.md`; [`Self::is_healthy`] follows the same rule.
     pub fn is_ready(&self) -> bool {
         self.ready.unwrap_or(true)
     }
