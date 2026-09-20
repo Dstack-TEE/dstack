@@ -96,6 +96,14 @@ pub struct ProxyInner {
     pub(crate) app_address_resolver: Arc<AppAddressResolver>,
 }
 
+/// Whether a rendered WireGuard config reached the interface.
+enum WgApply {
+    Applied,
+    /// `wg` refused the whole file, so the interface still carries the peers
+    /// it had before.
+    Refused(anyhow::Error),
+}
+
 const HANDSHAKE_CACHE_TTL: Duration = Duration::from_secs(30);
 const HANDSHAKE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -722,9 +730,14 @@ impl Proxy {
                 reported,
             )
             .context("failed to allocate IP address for client")?;
-        if let Err(err) = state.reconfigure() {
-            error!("failed to reconfigure: {err:?}");
-        }
+        // A CVM that is told it registered brings its tunnel up and waits for
+        // traffic. If its peer never reached the WireGuard interface it is
+        // unroutable until its next refresh, and indefinitely if the cause
+        // persists -- so this is reported rather than logged, which also sends
+        // the CVM on to the next gateway in its cluster.
+        state
+            .reconfigure_and_confirm()
+            .context("failed to apply the wireguard configuration")?;
         // Capture the prewarm decision before continuing under the lock.
         // If the instance arrived without port_policy (legacy CVM, or
         // compose_hash mismatch invalidated the cache), enqueue a
@@ -2304,21 +2317,42 @@ impl ProxyState {
         Ok(model.render()?)
     }
 
+    /// Push the current routing table to the WireGuard interface.
+    ///
+    /// A config `wg` refuses leaves the data plane on the table it already
+    /// had, which is a state the gateway goes on running in: that failure is
+    /// logged and counted rather than returned, as it always has been. A
+    /// caller that is about to tell a CVM it is reachable wants
+    /// [`Self::reconfigure_and_confirm`] instead.
     pub(crate) fn reconfigure(&mut self) -> Result<()> {
+        if let WgApply::Refused(err) = self.reconfigure_apply()? {
+            error!("{err:?}");
+        }
+        Ok(())
+    }
+
+    /// [`Self::reconfigure`], failing unless the rendered config reached the
+    /// interface.
+    pub(crate) fn reconfigure_and_confirm(&mut self) -> Result<()> {
+        match self.reconfigure_apply()? {
+            WgApply::Applied => Ok(()),
+            WgApply::Refused(err) => Err(err),
+        }
+    }
+
+    fn reconfigure_apply(&mut self) -> Result<WgApply> {
         // Every way out of here that is not a clean apply leaves the data plane
         // on the routing table it already had, so they all feed one counter --
         // the early returns included. A config that cannot be rendered or
-        // written never reaches `wg` at all, and both call sites of this
+        // written never reaches `wg` at all, and most call sites of this
         // function only log the `Err`, so a full disk would otherwise look
         // exactly like having nothing to apply.
         let result = self.reconfigure_inner();
-        if result.is_err() {
-            crate::metrics::record_wg_reconfigure(false);
-        }
+        crate::metrics::record_wg_reconfigure(matches!(result, Ok(WgApply::Applied)));
         result
     }
 
-    fn reconfigure_inner(&mut self) -> Result<()> {
+    fn reconfigure_inner(&mut self) -> Result<WgApply> {
         let wg_config = self.generate_wg_config()?;
         // the rendered config carries the interface's WireGuard private key.
         safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
@@ -2329,19 +2363,16 @@ impl ProxyState {
 
         match cmd!(wg syncconf $ifname $config_path) {
             Ok(_) => {
-                crate::metrics::record_wg_reconfigure(true);
                 info!("wg config updated");
+                Ok(WgApply::Applied)
             }
-            Err(err) => {
-                // `wg syncconf` rejects the whole file when one peer stanza is
-                // bad, and this stays `Ok` for the caller as it always has, so
-                // the counter is the only signal that routing updates stopped
-                // reaching the data plane.
-                crate::metrics::record_wg_reconfigure(false);
-                error!("failed to set wg config: {err:?}");
-            }
+            // `wg syncconf` rejects the whole file when one peer stanza is
+            // bad, so a refusal means none of the rendered peers reached the
+            // interface, not just the offending one.
+            Err(err) => Ok(WgApply::Refused(
+                anyhow::Error::new(err).context("failed to set wg config"),
+            )),
         }
-        Ok(())
     }
 
     /// Whether health observations are allowed to affect routing at all.

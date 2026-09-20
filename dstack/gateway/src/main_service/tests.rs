@@ -40,6 +40,11 @@ async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
         .join("wg.conf")
         .to_string_lossy()
         .into_owned();
+    // and the default interface is wg0, so `wg syncconf` would reprogram the
+    // host's real tunnel wherever the tests run with the privileges to do it.
+    // A name no interface can have makes every `wg` call fail the same way on
+    // every machine.
+    config.wg.interface = "wg-test-absent".to_string();
     tweak(&mut config);
     let options = ProxyOptions {
         config,
@@ -164,6 +169,34 @@ async fn test_wireguard_public_key_cannot_be_reused_by_another_instance() {
 
     assert!(result.is_err());
     assert!(!state.lock().state.instances.contains_key("instance-2"));
+}
+
+/// A CVM that is told it registered brings its tunnel up and starts waiting
+/// for traffic that cannot reach it: `wg syncconf` rejects the whole file when
+/// any one peer stanza is bad, so a failure here means the CVM that just
+/// registered is not a peer on this gateway. It would sit unroutable until its
+/// next refresh, and indefinitely if the cause persists.
+///
+/// The CVM tries the next URL in its gateway cluster on an error and keeps the
+/// one that answered, so reporting the failure is also what moves it to a node
+/// that can route it.
+#[tokio::test]
+async fn registration_fails_when_the_wireguard_config_cannot_be_applied() {
+    let state = create_test_state().await;
+
+    let result = state.do_register_cvm(
+        "app",
+        "instance",
+        &test_pubkey("pubkey-unroutable"),
+        "compose",
+        Default::default(),
+    );
+
+    let err = result.expect_err("registration must not report success it did not achieve");
+    assert!(
+        format!("{err:#}").contains("wireguard"),
+        "unexpected failure reason: {err:#}"
+    );
 }
 
 #[tokio::test]
