@@ -1554,16 +1554,26 @@ pub fn sha256sum_entry_hash(checksum_file: &[u8], filename: &str) -> Result<[u8;
         if line.is_empty() {
             continue;
         }
-        let mut parts = line.split_whitespace();
-        let Some(hash_hex) = parts.next() else {
-            continue;
-        };
-        let Some(path) = parts.next() else {
+        // Everything after the first whitespace run is the filename, the way
+        // `sha256sum` writes and reads it. Taking only the next whitespace
+        // token instead would silently drop the rest of the line, so a line
+        // holding a second `<hash> <name>` pair for the same file would
+        // authorize the first hash and hide the second -- while `sha256sum -c`
+        // reading the same file sees neither entry, because to it the filename
+        // runs to the end of the line.
+        let Some((hash_hex, rest)) = line.split_once(char::is_whitespace) else {
             return Err(format!(
                 "sha256sum.txt line {} is missing filename",
                 line_no + 1
             ));
         };
+        let path = rest.trim_start();
+        if path.is_empty() {
+            return Err(format!(
+                "sha256sum.txt line {} is missing filename",
+                line_no + 1
+            ));
+        }
         if path != filename {
             continue;
         }
@@ -1583,6 +1593,65 @@ pub fn sha256sum_entry_hash(checksum_file: &[u8], filename: &str) -> Result<[u8;
         found = Some(hash);
     }
     found.ok_or_else(|| format!("sha256sum.txt is missing {filename}"))
+}
+
+#[cfg(test)]
+mod sha256sum_entry_tests {
+    use super::sha256sum_entry_hash;
+
+    const A: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+    const B: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    fn entry(text: &str) -> Result<String, String> {
+        sha256sum_entry_hash(text.as_bytes(), "measurement.tdx.cbor").map(hex::encode)
+    }
+
+    /// The format `sha256sum` writes: the digest, two spaces, the name.
+    #[test]
+    fn reads_a_sha256sum_line() {
+        assert_eq!(entry(&format!("{A}  measurement.tdx.cbor\n")), Ok(A.into()));
+        assert_eq!(
+            entry(&format!("{B}  initrd\n{A}  measurement.tdx.cbor\n")),
+            Ok(A.into())
+        );
+        // Binary mode marks the name with `*`, which is part of the name.
+        assert!(entry(&format!("{A} *measurement.tdx.cbor\n")).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_entries_for_the_same_file() {
+        let text = format!("{A}  measurement.tdx.cbor\n{B}  measurement.tdx.cbor\n");
+        assert!(entry(&text).unwrap_err().contains("duplicate"));
+    }
+
+    /// A line holding a second `<hash> <name>` pair used to authorize the
+    /// first hash and silently drop the second, because only the next
+    /// whitespace token was read as the filename. `sha256sum -c` reading the
+    /// same file matches neither entry: to it the filename runs to the end of
+    /// the line. The manifest is what `os_image_hash` commits to, so a reader
+    /// and this parser must not disagree about what it authorizes.
+    #[test]
+    fn rejects_a_second_entry_hidden_on_the_same_line() {
+        let text = format!("{A}  measurement.tdx.cbor  {B}  measurement.tdx.cbor\n");
+        assert!(entry(&text).unwrap_err().contains("missing"));
+    }
+
+    /// `str::lines` splits only on `\n`, while `split_whitespace` also splits
+    /// on form feed and vertical tab -- so a token-based filename let an entry
+    /// hide behind one of those too.
+    #[test]
+    fn rejects_a_second_entry_hidden_behind_a_form_feed() {
+        for separator in ["\x0c", "\x0b"] {
+            let text = format!("{A}  measurement.tdx.cbor{separator}{B}  measurement.tdx.cbor\n");
+            assert!(entry(&text).unwrap_err().contains("missing"));
+        }
+    }
+
+    #[test]
+    fn rejects_a_line_without_a_filename() {
+        assert!(entry(&format!("{A}\n")).unwrap_err().contains("missing"));
+        assert!(entry(&format!("{A} \n")).unwrap_err().contains("missing"));
+    }
 }
 
 pub fn verify_measurement_material(
