@@ -291,6 +291,13 @@ impl ProxyInner {
         self.state.lock().or_panic("Failed to lock AppState")
     }
 
+    /// For tests that assert a handler does its slow work off this lock: the
+    /// only way to observe how long it is held is to compete for it.
+    #[cfg(test)]
+    pub(crate) fn routing_lock_is_free(&self) -> bool {
+        self.state.try_lock().is_ok()
+    }
+
     /// WireGuard handshake ages, without taking the routing lock.
     ///
     /// The cache is its own synchronization, so a caller that only needs
@@ -302,6 +309,10 @@ impl ProxyInner {
         stale_timeout: Option<Duration>,
     ) -> Result<BTreeMap<String, (u64, Duration)>> {
         self.handshake_cache.latest(stale_timeout)
+    }
+
+    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
+        gateway_nodes(&self.kv_store, false)
     }
 
     /// Publish this node's WireGuard observations to the KV store.
@@ -2633,16 +2644,6 @@ impl ProxyState {
         }
     }
 
-    /// Get latest handshake for an instance from KvStore (max across all nodes)
-    pub(crate) fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
-        self.kv_store.get_instance_latest_handshake(instance_id)
-    }
-
-    /// Get all nodes from KvStore (for admin API - includes all nodes)
-    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
-        self.get_all_nodes_filtered(false)
-    }
-
     /// Get nodes for CVM registration (excludes nodes with status "down")
     pub(crate) fn get_active_nodes(&self) -> Vec<GatewayNodeInfo> {
         self.get_all_nodes_filtered(true)
@@ -2650,29 +2651,33 @@ impl ProxyState {
 
     /// Get all nodes from KvStore with optional filtering
     fn get_all_nodes_filtered(&self, exclude_down: bool) -> Vec<GatewayNodeInfo> {
-        let node_statuses = if exclude_down {
-            self.kv_store.load_all_node_statuses()
-        } else {
-            Default::default()
-        };
-
-        self.kv_store
-            .load_all_nodes()
-            .into_iter()
-            // Shared with the metrics sampler so the gauge and the routing
-            // table cannot disagree about what "active" means.
-            .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
-            .map(|(id, node)| GatewayNodeInfo {
-                id,
-                uuid: node.uuid,
-                wg_public_key: node.wg_public_key,
-                wg_ip: node.wg_ip,
-                wg_endpoint: node.wg_endpoint,
-                url: node.url,
-                last_seen: self.kv_store.get_node_latest_last_seen(id).unwrap_or(0),
-            })
-            .collect()
+        gateway_nodes(&self.kv_store, exclude_down)
     }
+}
+
+fn gateway_nodes(kv_store: &KvStore, exclude_down: bool) -> Vec<GatewayNodeInfo> {
+    let node_statuses = if exclude_down {
+        kv_store.load_all_node_statuses()
+    } else {
+        Default::default()
+    };
+
+    kv_store
+        .load_all_nodes()
+        .into_iter()
+        // Shared with the metrics sampler so the gauge and the routing
+        // table cannot disagree about what "active" means.
+        .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
+        .map(|(id, node)| GatewayNodeInfo {
+            id,
+            uuid: node.uuid,
+            wg_public_key: node.wg_public_key,
+            wg_ip: node.wg_ip,
+            wg_endpoint: node.wg_endpoint,
+            url: node.url,
+            last_seen: kv_store.get_node_latest_last_seen(id).unwrap_or(0),
+        })
+        .collect()
 }
 
 pub struct RpcHandler {
@@ -2799,4 +2804,4 @@ impl RpcCall<Proxy> for RpcHandler {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

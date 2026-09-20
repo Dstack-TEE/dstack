@@ -12,8 +12,8 @@ use base64::Engine as _;
 use std::sync::atomic::Ordering;
 use tempfile::TempDir;
 
-struct TestState {
-    proxy: Proxy,
+pub(crate) struct TestState {
+    pub(crate) proxy: Proxy,
     _temp_dir: TempDir,
 }
 
@@ -24,7 +24,7 @@ impl std::ops::Deref for TestState {
     }
 }
 
-async fn create_test_state() -> TestState {
+pub(crate) async fn create_test_state() -> TestState {
     create_test_state_with(|_| {}).await
 }
 
