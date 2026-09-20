@@ -400,6 +400,41 @@ async fn relay_until(
     };
 
     loop {
+        // `write_all` is not cancel-safe, so it cannot sit in a `select!` arm,
+        // and awaiting it outside one left nothing polling the watchdog for as
+        // long as the write blocked. A peer that stops reading fills the socket
+        // buffer and parks the write there, which holds the connection to
+        // `timeouts.total` from either end. Single `write` calls are
+        // cancel-safe (nothing is written when the other branch wins), so the
+        // partial-write loop is ours to drive -- with the watchdog in it.
+        macro_rules! write_watched {
+            ($w:expr, $buf:expr, $n:expr, $ctx:expr) => {{
+                let n = $n;
+                let mut written = 0usize;
+                while written < n {
+                    let count = tokio::select! {
+                        () = async { match watchdog.as_mut() {
+                            Some(w) => w.tick().await,
+                            None => std::future::pending().await,
+                        } } => {
+                            if watchdog.as_mut().is_some_and(|w| w.stalled(moved)) {
+                                bail!("idle timeout");
+                            }
+                            continue;
+                        }
+                        r = $w.write(&$buf[written..n]) => r.context($ctx)?,
+                    };
+                    if count == 0 {
+                        bail!("write accepted no bytes");
+                    }
+                    written += count;
+                    // Per partial write, so a peer draining slowly still counts
+                    // as progress and is not reaped for being slow.
+                    moved += count as u64;
+                }
+            }};
+        }
+
         // `finish_one` drains a half-closed connection without splice: once one
         // side is done there is no long-lived stream left to optimise.
         //
@@ -431,36 +466,7 @@ async fn relay_until(
                     if n == 0 {
                         break;
                     }
-                    // Not `write_all`: it is not cancel-safe, so it cannot sit
-                    // in a `select!`, and leaving it outside meant a client
-                    // that stopped reading blocked the drain in its write with
-                    // the watchdog unpolled -- the mirror of the silent-backend
-                    // stall, and just as good for holding a connection to
-                    // `timeouts.total`. Single `write` calls are cancel-safe
-                    // (nothing is written when the other branch wins), so the
-                    // partial-write loop is ours to drive.
-                    let mut written = 0usize;
-                    while written < n {
-                        let count = tokio::select! {
-                            () = async { match watchdog.as_mut() {
-                                Some(w) => w.tick().await,
-                                None => std::future::pending().await,
-                            } } => {
-                                if watchdog.as_mut().is_some_and(|w| w.stalled(moved)) {
-                                    bail!("idle timeout");
-                                }
-                                continue;
-                            }
-                            r = $w.write(&$buf[written..n]) => r.context("write error")?,
-                        };
-                        if count == 0 {
-                            bail!("write accepted no bytes");
-                        }
-                        written += count;
-                        // Per partial write, so a peer draining slowly still
-                        // counts as progress and is not reaped for being slow.
-                        moved += count as u64;
-                    }
+                    write_watched!($w, $buf, n, "write error");
                 }
                 // Both directions are drained now; let the other peer see EOF.
                 $w.shutdown().await.ok();
@@ -482,15 +488,13 @@ async fn relay_until(
                 let n = r.context("read from client failed")?;
                 // Client is done sending: tell the app, keep relaying its reply.
                 if n == 0 { finish_one!(bw, br, aw, bufs.b); }
-                bw.write_all(&bufs.a[..n]).await.context("write to app failed")?;
-                moved += n as u64;
+                write_watched!(bw, bufs.a, n, "write to app failed");
             }
             r = br.read(&mut bufs.b) => {
                 let n = r.context("read from app failed")?;
                 // App is done replying: tell the client, keep relaying its input.
                 if n == 0 { finish_one!(aw, ar, bw, bufs.a); }
-                aw.write_all(&bufs.b[..n]).await.context("write to client failed")?;
-                moved += n as u64;
+                write_watched!(aw, bufs.b, n, "write to client failed");
             }
         }
         if gate.reached(moved, start) {
@@ -699,6 +703,83 @@ mod tests {
         let mut got = Vec::new();
         backend.read_to_end(&mut got).await.unwrap();
         assert!(got.is_empty());
+    }
+
+    /// Shrink both socket buffers so a few KiB of unread data is enough to
+    /// park a write, instead of the megabytes loopback autotuning grows to.
+    fn throttle(stream: &TcpStream) {
+        let sock = socket2::SockRef::from(stream);
+        sock.set_recv_buffer_size(4096).unwrap();
+        sock.set_send_buffer_size(4096).unwrap();
+    }
+
+    /// Run the pre-gate relay with an idle window, bounded so a relay that
+    /// never gives up fails the test instead of hanging it.
+    ///
+    /// Real timers rather than a paused clock: with time paused the runtime
+    /// advances to the next deadline whenever no event is ready at that
+    /// instant, which fires the watchdog on a relay that is merely waiting for
+    /// loopback data -- so the test would pass without a write ever blocking.
+    async fn relay_idle_for(
+        inbound: &mut TcpStream,
+        outbound: &mut TcpStream,
+        idle: Duration,
+    ) -> Result<bool> {
+        let gate = ungated();
+        tokio::time::timeout(
+            idle * 10,
+            relay_until(inbound, outbound, &gate.engage, 16 * 1024, Some(idle)),
+        )
+        .await
+        .expect("the relay outlived its idle window")
+    }
+
+    /// A peer that stops reading parks the relay in a write, and a write is
+    /// the one thing the pre-gate `select!` cannot watch: `write_all` is not
+    /// cancel-safe, so it is awaited outside the `select!` and nothing polls
+    /// the watchdog for as long as it blocks. The drain below already guards
+    /// this; the main loop has to as well, or a client that sends a request
+    /// and never reads the answer holds a relay until `timeouts.total`.
+    #[tokio::test]
+    async fn a_client_that_stops_reading_is_reaped_by_the_idle_timeout() {
+        let (client, mut inbound) = connected_pair().await;
+        let (mut outbound, mut backend) = connected_pair().await;
+        for s in [&client, &inbound, &outbound, &backend] {
+            throttle(s);
+        }
+
+        // The app answers; the client never reads a byte of it.
+        let _app = tokio::spawn(async move {
+            backend.write_all(&vec![0u8; 1 << 20]).await.ok();
+            backend
+        });
+
+        let err = relay_idle_for(&mut inbound, &mut outbound, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("idle timeout"), "{err:#}");
+        drop(client);
+    }
+
+    /// The mirror: the app stops reading while the client keeps sending.
+    #[tokio::test]
+    async fn an_app_that_stops_reading_is_reaped_by_the_idle_timeout() {
+        let (mut client, mut inbound) = connected_pair().await;
+        let (mut outbound, backend) = connected_pair().await;
+        for s in [&client, &inbound, &outbound, &backend] {
+            throttle(s);
+        }
+
+        let _client = tokio::spawn(async move {
+            client.write_all(&vec![0u8; 1 << 20]).await.ok();
+            client
+        });
+
+        let err = relay_idle_for(&mut inbound, &mut outbound, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("idle timeout"), "{err:#}");
+        drop(backend);
     }
 
     /// A gate that no test connection will ever reach, so the relay stays in
