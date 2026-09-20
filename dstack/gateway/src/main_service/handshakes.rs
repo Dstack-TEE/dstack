@@ -51,37 +51,28 @@ impl LatestHandshakesCache {
         self.cell.set(timestamps);
     }
 
+    /// The cached snapshot, never a freshly produced one.
+    ///
+    /// The routing path reaches this from `select_top_n_hosts` once per
+    /// proxied connection, holding the `ProxyState` mutex every tenant's
+    /// traffic takes. Producing a value here means forking `wg show` under
+    /// that lock -- and the cell only ever fills on success, so a host where
+    /// `wg show` cannot work (wrong `core.wg.interface`, no WireGuard module,
+    /// a container without `CAP_NET_ADMIN`) would fork once per inbound
+    /// connection, for as long as the traffic lasts. The producer runs in
+    /// [`Self::refresh`] and in the periodic task instead, both off the
+    /// routing path and on the blocking pool.
+    ///
+    /// Serving an expired snapshot rather than nothing is deliberate: every
+    /// consumer compares handshake *age* against its own threshold, so a stale
+    /// snapshot ages the whole fleet uniformly, while an empty map reads as
+    /// "no instance has ever handshaked" and would drain routing on the first
+    /// refresh that fails. Empty is only what a node that has never had a
+    /// snapshot actually knows.
     pub(crate) fn latest(&self, stale_timeout: Option<Duration>) -> Result<HandshakesWithAge> {
-        // Admin/public status paths call this synchronously. On fixture hosts the
-        // first successful `wg show` may not have completed yet (or the interface
-        // may be absent), so a hard Empty error collapses many Admin.* RPCs with
-        // "cached cell is empty". Prefer:
-        // 1) fresh TTL value
-        // 2) stale last-known value
-        // 3) one synchronous producer refresh
-        // 4) empty map so callers can still report registered hosts/meta
-        let timestamps = match self.cell.get() {
+        let timestamps = match self.cell.get_allow_stale() {
             Ok(snapshot) => snapshot.into_value(),
-            Err(cached_cell::GetError::Expired { .. }) | Err(cached_cell::GetError::Empty) => {
-                match self.cell.get_allow_stale() {
-                    Ok(snapshot) => snapshot.into_value(),
-                    Err(_) => {
-                        let interface = self.interface.clone();
-                        match fetch_latest_handshake_timestamps(&interface) {
-                            Ok(value) => {
-                                self.cell.set(value.clone());
-                                std::sync::Arc::new(value)
-                            }
-                            Err(err) => {
-                                warn!(
-                                    "WireGuard latest-handshakes unavailable; returning empty map: {err}"
-                                );
-                                std::sync::Arc::new(BTreeMap::new())
-                            }
-                        }
-                    }
-                }
-            }
+            Err(_) => Arc::new(BTreeMap::new()),
         };
         add_elapsed_time(timestamps.as_ref(), stale_timeout)
     }
@@ -154,6 +145,58 @@ fn add_elapsed_time(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cold cache must not fork a process on the routing path.
+    ///
+    /// `latest` is reached from `select_top_n_hosts` while `ProxyState`'s mutex
+    /// is held, once per proxied connection. A host where `wg show` can never
+    /// succeed -- a misconfigured `core.wg.interface`, no WireGuard module, a
+    /// container without `CAP_NET_ADMIN` -- never fills the cell, so a `latest`
+    /// that produces its own value forks once per inbound connection while
+    /// holding the lock every tenant's traffic takes.
+    #[test]
+    fn a_cold_cache_does_not_shell_out_on_the_routing_path() {
+        const CONNECTIONS: usize = 500;
+        let cache = LatestHandshakesCache::new(
+            "dstack-no-such-iface0".to_string(),
+            Duration::from_secs(30),
+        );
+
+        let started = std::time::Instant::now();
+        for _ in 0..CONNECTIONS {
+            assert!(
+                cache
+                    .latest(None)
+                    .expect("a cold cache still answers")
+                    .is_empty(),
+                "a host with no WireGuard data knows of no fresh handshake"
+            );
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "{CONNECTIONS} cold reads took {elapsed:?}: the routing path is spawning \
+             a process per connection"
+        );
+    }
+
+    /// An expired snapshot still routes.
+    ///
+    /// Consumers threshold on handshake *age*, so serving a stale map ages the
+    /// whole fleet uniformly. Returning nothing instead would read as "no
+    /// instance has ever handshaked" and drain routing on the first refresh
+    /// that fails.
+    #[test]
+    fn an_expired_snapshot_is_still_served() {
+        let cache = LatestHandshakesCache::new("dstack-no-such-iface0".to_string(), Duration::ZERO);
+        cache.set_for_test(BTreeMap::from([("pubkey-a".to_string(), 1730190589)]));
+
+        assert!(cache
+            .latest(None)
+            .expect("an expired snapshot still answers")
+            .contains_key("pubkey-a"));
+    }
 
     #[test]
     fn parses_latest_handshake_timestamps() {
