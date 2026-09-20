@@ -430,6 +430,105 @@ mod tests {
             .into_bytes()
     }
 
+    /// A TLS server that is not the source KMS: a self-signed certificate with
+    /// no attestation, answering `GetKmsKey` with root keys of its own choosing.
+    async fn serve_impostor_kms(dir: &std::path::Path) -> (String, Vec<u8>, rocket::Shutdown) {
+        #[rocket::post("/<_path..>")]
+        fn get_kms_key(
+            _path: std::path::PathBuf,
+        ) -> rocket::response::content::RawJson<&'static str> {
+            rocket::response::content::RawJson(r#"{"temp_ca_key":"","keys":[]}"#)
+        }
+
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = CertRequest::builder()
+            .subject("impostor")
+            .alt_names(&["127.0.0.1".to_string()])
+            .key(&key)
+            .build()
+            .self_signed()
+            .unwrap();
+        let cert_path = dir.join("impostor.crt");
+        let key_path = dir.join("impostor.key");
+        fs::write(&cert_path, cert.pem()).unwrap();
+        fs::write(&key_path, key.serialize_pem()).unwrap();
+
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let figment = rocket::Config::figment()
+            .merge(("address", "127.0.0.1"))
+            .merge(("port", port))
+            .merge(("log_level", "off"))
+            .merge(("tls.certs", cert_path))
+            .merge(("tls.key", key_path));
+        let rocket = rocket::custom(figment)
+            .mount("/", rocket::routes![get_kms_key])
+            .ignite()
+            .await
+            .unwrap();
+        let shutdown = rocket.shutdown();
+        rocket::tokio::spawn(rocket.launch());
+        for _ in 0..200 {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            rocket::tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        (
+            format!("https://127.0.0.1:{port}/prpc"),
+            key.public_key_der(),
+            shutdown,
+        )
+    }
+
+    fn onboarding_client_cert() -> (String, String) {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = CertRequest::builder()
+            .subject("RA-TLS TEMP Cert")
+            .key(&key)
+            .build()
+            .self_signed()
+            .unwrap();
+        (cert.pem(), key.serialize_pem())
+    }
+
+    async fn fetch_root_keys(url: &str, pinned_pubkey: Vec<u8>) -> Result<()> {
+        let verifier = Arc::new(AttestationVerifier::load(&Default::default()).unwrap());
+        let (ra_cert, ra_key) = onboarding_client_cert();
+        let client = source_kms_client(url, ra_cert, ra_key, verifier, pinned_pubkey).unwrap();
+        KmsClient::new(client)
+            .get_kms_key(GetKmsKeyRequest {
+                vm_config: String::new(),
+            })
+            .await
+            .map(|_| ())
+            .map_err(|err| anyhow::anyhow!("{err:?}"))
+    }
+
+    #[rocket::async_test]
+    async fn root_key_fetch_rejects_a_kms_it_did_not_authorize() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, server_pubkey, shutdown) = serve_impostor_kms(dir.path()).await;
+
+        let other_pubkey = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+            .unwrap()
+            .public_key_der();
+        let err = fetch_root_keys(&url, other_pubkey).await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("not the one onboarding authorized"),
+            "unexpected error: {err:#}"
+        );
+
+        // The same client reaches the server it was pinned to, so the pin is
+        // rejecting the peer rather than breaking the connection.
+        fetch_root_keys(&url, server_pubkey).await.unwrap();
+
+        shutdown.notify();
+    }
+
     fn auto_bootstrap_config(cert_dir: &std::path::Path) -> KmsConfig {
         use rocket::figment::{
             providers::{Format, Toml},
@@ -488,6 +587,58 @@ mod tests {
         assert!(ca_cert_expires_within(&inside_window, now, CA_RENEWAL_WINDOW).unwrap());
         assert!(!ca_cert_expires_within(&outside_window, now, CA_RENEWAL_WINDOW).unwrap());
     }
+}
+
+/// The source KMS as onboarding saw it on the first connection.
+#[derive(Clone)]
+struct SourceKms {
+    /// The attestation `ensure_kms_allowed` authorizes.
+    attestation: VerifiedAttestation,
+    /// The certificate public key that attestation is bound to.
+    cert_pubkey: Vec<u8>,
+}
+
+fn cert_public_key(cert_der: &[u8]) -> Result<Vec<u8>> {
+    let (_, cert) = x509_parser::parse_x509_certificate(cert_der)
+        .context("failed to parse the source KMS certificate")?;
+    Ok(cert.public_key().raw.to_vec())
+}
+
+/// Build the client that fetches the root keys from the source KMS.
+///
+/// The client certificate says who *we* are; mutual TLS says nothing about who
+/// answered. So this second connection is pinned to the certificate public key
+/// that carried the attestation `ensure_kms_allowed` authorized on the first
+/// one. Without the pin, whoever answers here chooses the root CA key and root
+/// k256 key the replica installs.
+fn source_kms_client(
+    other_kms_url: &str,
+    ra_cert: String,
+    ra_key: String,
+    attestation_verifier: Arc<AttestationVerifier>,
+    pinned_pubkey: Vec<u8>,
+) -> Result<RaClient> {
+    RaClientConfig::builder()
+        .tls_no_check(true)
+        .tls_built_in_root_certs(false)
+        .remote_uri(other_kms_url.to_string())
+        .tls_client_cert(ra_cert)
+        .tls_client_key(ra_key)
+        .attestation_verifier(attestation_verifier)
+        // The pin already names one verified KMS, so replaying its quote
+        // verification here would only repeat the first connection's check.
+        .verify_server_attestation(false)
+        .cert_validator(Box::new(move |info: Option<CertInfo>| {
+            let Some(info) = info else {
+                bail!("source KMS did not present a TLS certificate");
+            };
+            if cert_public_key(&info.cert_der)? != pinned_pubkey {
+                bail!("source KMS is not the one onboarding authorized");
+            }
+            Ok(())
+        }))
+        .build()
+        .into_client()
 }
 
 struct Keys {
@@ -589,8 +740,8 @@ impl Keys {
         domain: &str,
         attestation_verifier: Arc<AttestationVerifier>,
     ) -> Result<Self> {
-        let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
-        let attestation_slot_out = attestation_slot.clone();
+        let source_slot = Arc::new(Mutex::new(None::<SourceKms>));
+        let source_slot_out = source_slot.clone();
         let client = RaClientConfig::builder()
             .tls_no_check(true)
             .remote_uri(other_kms_url.to_string())
@@ -601,10 +752,16 @@ impl Keys {
                 let Some(attestation) = info.attestation else {
                     bail!("Source KMS certificate does not contain attestation");
                 };
-                let mut slot = attestation_slot_out
+                // The attestation was verified against this certificate's public
+                // key, so the key is what names the authorized KMS afterwards.
+                let cert_pubkey = cert_public_key(&info.cert_der)?;
+                let mut slot = source_slot_out
                     .lock()
                     .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?;
-                *slot = Some(attestation);
+                *slot = Some(SourceKms {
+                    attestation,
+                    cert_pubkey,
+                });
                 Ok(())
             }))
             .attestation_verifier(attestation_verifier.clone())
@@ -613,23 +770,26 @@ impl Keys {
         let mut kms_client = KmsClient::new(client);
 
         let tmp_ca = kms_client.get_temp_ca_cert().await?;
-        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
-        let ra_client = RaClient::new_mtls(
-            other_kms_url.into(),
-            ra_cert,
-            ra_key,
-            attestation_verifier.clone(),
-        )
-        .context("Failed to create client")?;
-        kms_client = KmsClient::new(ra_client);
-        let source_attestation = attestation_slot
+        let source = source_slot
             .lock()
             .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
             .clone()
             .context("Missing source KMS attestation")?;
-        ensure_kms_allowed(cfg, &source_attestation, &attestation_verifier)
+        ensure_kms_allowed(cfg, &source.attestation, &attestation_verifier)
             .await
             .context("Source KMS is not allowed for onboarding")?;
+
+        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
+        kms_client = KmsClient::new(
+            source_kms_client(
+                other_kms_url,
+                ra_cert,
+                ra_key,
+                attestation_verifier.clone(),
+                source.cert_pubkey,
+            )
+            .context("Failed to create client")?,
+        );
 
         let info = dstack_client().info().await.context("Failed to get info")?;
         let keys_res = kms_client

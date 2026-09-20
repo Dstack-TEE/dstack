@@ -110,24 +110,6 @@ impl RaClient {
             .context("failed to create client")
     }
 
-    pub fn new_mtls(
-        remote_uri: String,
-        cert_pem: String,
-        key_pem: String,
-        attestation_verifier: Arc<AttestationVerifier>,
-    ) -> Result<Self> {
-        RaClientConfig::builder()
-            .tls_no_check(true)
-            .tls_built_in_root_certs(false)
-            .remote_uri(remote_uri)
-            .tls_client_cert(cert_pem)
-            .tls_client_key(key_pem)
-            .attestation_verifier(attestation_verifier)
-            .build()
-            .into_client()
-            .context("failed to create client")
-    }
-
     async fn try_validate_attestation(&self, response: &Response) -> Result<()> {
         let Some(validator) = &self.cert_validator else {
             return Ok(());
