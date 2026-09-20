@@ -731,3 +731,15 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gos-concurrency-002"></a><a id="risk-gos-concurrency-002"></a>| `req-gos-concurrency-002` | `risk-gos-concurrency-002` | [tc-gos-concurrency-002](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-002/case.md#tc-gos-concurrency-002) — Head-of-line blocking on the quote path | P0 |
 <a id="req-gos-concurrency-003"></a><a id="risk-gos-concurrency-003"></a>| `req-gos-concurrency-003` | `risk-gos-concurrency-003` | [tc-gos-concurrency-003](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-003/case.md#tc-gos-concurrency-003) — Agent survival and process identity after concurrent load | P0 |
 <a id="req-gos-observability-slow-consumer"></a><a id="risk-gos-observability-slow-consumer"></a>| `req-gos-observability-slow-consumer` | `risk-gos-observability-slow-consumer` | [tc-gos-observability-slow-consumer](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-observability-slow-consumer/case.md#tc-gos-observability-slow-consumer) — Log streaming backpressure with a stalled consumer | P1 |
+
+<a id="audit-section-kms-key-hierarchy"></a>
+## KMS key hierarchy
+
+| Requirement | Risk | Case | Priority |
+|---|---|---|---|
+<a id="req-kms-keyhier-001"></a><a id="risk-kms-keyhier-001"></a>| `req-kms-keyhier-001` | `risk-kms-keyhier-001` | [tc-kms-keyhier-001](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-001/case.md#tc-kms-keyhier-001) — Derived key determinism across a KMS restart | P0 |
+<a id="req-kms-keyhier-002"></a><a id="risk-kms-keyhier-002"></a>| `req-kms-keyhier-002` | `risk-kms-keyhier-002` | [tc-kms-keyhier-002](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-002/case.md#tc-kms-keyhier-002) — Application-scoped environment key separation | P0 |
+<a id="req-kms-keyhier-003"></a><a id="risk-kms-keyhier-003"></a>| `req-kms-keyhier-003` | `risk-kms-keyhier-003` | [tc-kms-keyhier-003](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-003/case.md#tc-kms-keyhier-003) — Issued k256 signature chain recovery | P0 |
+<a id="req-kms-keyhier-004"></a><a id="risk-kms-keyhier-004"></a>| `req-kms-keyhier-004` | `risk-kms-keyhier-004` | [tc-kms-keyhier-004](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-004/case.md#tc-kms-keyhier-004) — Environment public key signature_v1 freshness | P0 |
+<a id="req-kms-keyhier-005"></a><a id="risk-kms-keyhier-005"></a>| `req-kms-keyhier-005` | `risk-kms-keyhier-005` | [tc-kms-keyhier-005](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-005/case.md#tc-kms-keyhier-005) — Concurrent GetAppKey for one attested identity | P0 |
+<a id="req-kms-keyhier-006"></a><a id="risk-kms-keyhier-006"></a>| `req-kms-keyhier-006` | `risk-kms-keyhier-006` | [tc-kms-keyhier-006](../cases/03-kms/14-key-hierarchy/tc-kms-keyhier-006/case.md#tc-kms-keyhier-006) — Concurrent GetAppKey across distinct image hashes | P0 |
