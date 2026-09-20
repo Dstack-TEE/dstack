@@ -2278,6 +2278,8 @@ dependencies = [
  "hex",
  "or-panic",
  "parity-scale-codec",
+ "prop-harness",
+ "proptest",
  "serde",
  "serde-human-bytes",
  "serde_jcs",

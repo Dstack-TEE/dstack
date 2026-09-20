@@ -2493,6 +2493,8 @@ pub struct ImageInfo {
 }
 
 pub mod mr_config;
+#[cfg(test)]
+mod proptests;
 pub mod shared_filenames;
 pub mod version;
 

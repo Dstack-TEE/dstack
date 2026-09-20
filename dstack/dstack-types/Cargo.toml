@@ -22,3 +22,7 @@ serde_json.workspace = true
 sha2.workspace = true
 sha3.workspace = true
 size-parser = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+prop-harness.workspace = true
+proptest.workspace = true
