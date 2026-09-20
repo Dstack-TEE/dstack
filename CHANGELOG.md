@@ -88,6 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Nothing is removed and the wire behaviour is unchanged, but Python's marker is a runtime warning rather than a build-time one: a downstream test suite that turns `DeprecationWarning` into an error (`filterwarnings = error`, which is a common setting) will fail on `DstackClientV0()` until it adds a filter. The frozen surface stays reachable under its explicit name; it just says what it is now
 
+- release: component images (`gateway`, `kms`, `verifier`, `local-key-provider`) publish to `ghcr.io/dstack-tee/<component>` instead of the `dstacktee` Docker Hub org, starting with 0.6.0-rc5. Existing 0.5.x images stay on Docker Hub and are not mirrored
 
 ### Deprecated
 - os: the Yocto guest-OS backend (`os/yocto/`) is deprecated in favor of mkosi (`os/mkosi/`), which is now the default and recommended backend. `os/build.sh` defaults to `--backend mkosi`, and `make os-image` / `make os-repro-check` build with mkosi. The Yocto builds move to `make os-image-yocto` / `make os-repro-check-yocto`; `make os-image-mkosi` / `make os-repro-check-mkosi` remain as aliases. Every Yocto entrypoint prints a deprecation warning, and the backend is kept only to rebuild existing Yocto images. The mkosi build still reads patches, units and scripts from `os/yocto/`, so the directory stays until those files move
