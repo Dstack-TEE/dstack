@@ -930,13 +930,22 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
     }
 }
 
+/// Redact an API token for display: its first and last four characters, or a
+/// full mask when it is too short for that to hide anything.
+///
+/// Counted in characters rather than bytes. The token is whatever the operator
+/// handed to `CreateDnsCredential`, and it is stored and replicated before any
+/// read path formats it, so a byte index landing inside a multi-byte character
+/// would not reject the bad write -- it would abort every node on the next
+/// `ListDnsCredentials`.
 fn redact_token(token: &str) -> String {
-    let len = token.len();
-    if len <= 8 {
-        "*".repeat(len)
-    } else {
-        format!("{}...{}", &token[..4], &token[len - 4..])
+    let count = token.chars().count();
+    if count <= 8 {
+        return "*".repeat(count);
     }
+    let head: String = token.chars().take(4).collect();
+    let tail: String = token.chars().skip(count - 4).collect();
+    format!("{head}...{tail}")
 }
 
 fn normalize_zt_domain(domain: &str) -> Result<String> {
@@ -1474,5 +1483,31 @@ mod set_instance_ready_tests {
             Some(false),
             "a stated false still gates off"
         );
+    }
+}
+
+#[cfg(test)]
+mod redact_token_tests {
+    use super::redact_token;
+
+    #[test]
+    fn redacts_a_long_ascii_token() {
+        assert_eq!(redact_token("0123456789abcdef"), "0123...cdef");
+    }
+
+    #[test]
+    fn masks_a_short_token_entirely() {
+        assert_eq!(redact_token("12345678"), "********");
+        assert_eq!(redact_token(""), "");
+    }
+
+    /// The token is whatever the operator pasted into `CreateDnsCredential`,
+    /// and it is stored and replicated before any read path formats it. A byte
+    /// index that lands inside a character would therefore abort every node on
+    /// the next `ListDnsCredentials`, not just reject the bad write.
+    #[test]
+    fn redacts_a_token_containing_multi_byte_characters() {
+        assert_eq!(redact_token("abcé12345"), "abcé...2345");
+        assert_eq!(redact_token("é123456789é"), "é123...789é");
     }
 }
