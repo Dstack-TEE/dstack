@@ -662,12 +662,14 @@ impl AcmeClient {
         force: bool,
     ) -> Result<bool> {
         let live_cert_pem = fs::read_to_string(live_cert_pem_path.as_ref())?;
-        let live_key_pem = fs::read_to_string(live_key_pem_path.as_ref())?;
+        // The live key is not read at all: a renewal is issued under a new one,
+        // so the only thing the old file decides is what gets replaced.
+        let key_pem = new_key_pem()?;
         let new_cert = if force {
-            self.renew_cert(&live_cert_pem, &live_key_pem).await?
+            self.renew_cert(&live_cert_pem, &key_pem).await?
         } else {
             let Some(new_cert) = self
-                .renew_cert_if_needed(&live_cert_pem, &live_key_pem, expires_in)
+                .renew_cert_if_needed(&live_cert_pem, &key_pem, expires_in)
                 .await?
             else {
                 return Ok(false);
@@ -678,7 +680,7 @@ impl AcmeClient {
             live_cert_pem_path.as_ref(),
             live_key_pem_path.as_ref(),
             &new_cert,
-            &live_key_pem,
+            &key_pem,
             backup_dir.as_ref(),
         )?;
         info!(
@@ -742,14 +744,7 @@ impl AcmeClient {
                 Some(reason) => info!("reissuing: {reason}"),
             }
         }
-        let key_pem = if live_key_pem_path.as_ref().exists() {
-            debug!("using existing cert key pair");
-            fs::read_to_string(live_key_pem_path.as_ref())?
-        } else {
-            debug!("generating new cert key pair");
-            let key = KeyPair::generate().context("failed to generate key")?;
-            key.serialize_pem()
-        };
+        let key_pem = new_key_pem()?;
         let cert_pem = self.request_new_certificate(&key_pem, domains).await?;
         self.store_cert(
             live_cert_pem_path.as_ref(),
@@ -1350,6 +1345,21 @@ fn extract_subject_alt_names(cert_pem: &str) -> Result<Vec<String>> {
         }
     }
     Ok(domains)
+}
+
+/// A fresh key for a certificate that is about to be issued.
+///
+/// Every issuance gets its own, a renewal included. Reusing `live/key.pem`
+/// across renewals means a key that leaks once stays usable for as long as the
+/// deployment keeps renewing under it, which is the thing a short certificate
+/// lifetime exists to bound; the certificate archive under `cert_dir` keeps
+/// every past key with its certificate, so nothing is lost by moving on from
+/// one. The gateway's certbot has always issued this way -- "always use new key
+/// for each renewal", `gateway/src/distributed_certbot.rs` -- and this is the
+/// same policy, not a second one.
+fn new_key_pem() -> Result<String> {
+    let key = KeyPair::generate().context("failed to generate key")?;
+    Ok(key.serialize_pem())
 }
 
 /// Write one generation of a certificate into `cert_dir` and publish it as the
