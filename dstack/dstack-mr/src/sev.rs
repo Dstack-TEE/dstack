@@ -875,16 +875,33 @@ fn file_sha256(path: &Path) -> Result<Vec<u8>> {
     Ok(Sha256::digest(data).to_vec())
 }
 
+/// Read the rootfs identity the measured kernel command line commits to.
+///
+/// A duplicated `dstack.rootfs_hash=` is rejected rather than resolved. The
+/// Linux command line has no "first wins" rule -- the dstack initramfs that
+/// mounts the rootfs reads the last occurrence -- so returning the first, as
+/// this did, would have answered with an identity the guest did not use. Taking
+/// the last would agree with the initramfs but would still accept a measured
+/// command line asserting two different rootfs identities, which is not a shape
+/// any dstack image produces and not one a reader can disambiguate. Callers use
+/// this as a validation gate on a command line an untrusted host supplies, so
+/// it fails closed.
 pub fn rootfs_hash_from_cmdline(cmdline: Option<&str>) -> Result<String> {
-    let rootfs_hash = cmdline
-        .unwrap_or_default()
-        .split_whitespace()
-        .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
-        .map(ToString::to_string)
-        .context("dstack.rootfs_hash is required in amd sev-snp measured cmdline")?;
+    let mut rootfs_hash = None;
+    for param in cmdline.unwrap_or_default().split_whitespace() {
+        let Some(value) = param.strip_prefix("dstack.rootfs_hash=") else {
+            continue;
+        };
+        if rootfs_hash.is_some() {
+            bail!("dstack.rootfs_hash appears more than once in the measured cmdline");
+        }
+        rootfs_hash = Some(value);
+    }
+    let rootfs_hash =
+        rootfs_hash.context("dstack.rootfs_hash is required in amd sev-snp measured cmdline")?;
     Ok(hex::encode(decode_required_hex(
         "dstack.rootfs_hash",
-        &rootfs_hash,
+        rootfs_hash,
         32,
     )?))
 }
@@ -1575,6 +1592,34 @@ mod tests {
     /// ABI `GUEST_FEATURES` field in `SNP_LAUNCH_START` mirrors.
     const SNP_ACTIVE: u64 = 1 << 0;
     const DEBUG_SWAP: u64 = 1 << 5;
+
+    /// `find_map` took the first `dstack.rootfs_hash=`, while the initramfs
+    /// that actually mounts the rootfs honours the last one. The function is
+    /// `pub` and reads authoritative, so a caller that trusted it would have
+    /// been told a different rootfs identity than the guest used.
+    #[test]
+    fn a_duplicated_rootfs_hash_is_not_silently_resolved() {
+        let first = hex_of(0x11, 32);
+        let last = hex_of(0x22, 32);
+        let cmdline = format!(
+            "console=ttyS0 dstack.rootfs_hash={first} init=/init dstack.rootfs_hash={last}"
+        );
+        let err = match rootfs_hash_from_cmdline(Some(&cmdline)) {
+            Ok(hash) => panic!("a duplicated rootfs hash resolved to {hash}"),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            err.contains("dstack.rootfs_hash appears more than once"),
+            "unexpected error: {err}"
+        );
+
+        // A single occurrence is unchanged.
+        let cmdline = format!("console=ttyS0 dstack.rootfs_hash={first}");
+        assert_eq!(
+            rootfs_hash_from_cmdline(Some(&cmdline)).expect("single occurrence"),
+            first
+        );
+    }
 
     #[test]
     fn verify_sev_launch_rejects_a_consistent_debugswap_guest() {
