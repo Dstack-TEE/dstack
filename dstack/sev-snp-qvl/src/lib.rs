@@ -443,7 +443,13 @@ fn decode_amd_snp_report(report_bytes: &[u8]) -> Result<AttestationReport> {
         .map_err(|err| anyhow!("failed to parse amd sev-snp report: {err}"))
 }
 
-pub fn parse_amd_snp_report(report_bytes: &[u8]) -> Result<ParsedAmdSnpReport> {
+/// Decode an attestation report's fields without checking its authenticity.
+///
+/// This does not verify the report signature or the AMD certificate chain.
+/// Use [`verify_amd_snp_attestation`] when authenticity is in question; use
+/// this only where the signature is established elsewhere, or for the guest's
+/// own report.
+pub fn parse_unverified_amd_snp_report(report_bytes: &[u8]) -> Result<ParsedAmdSnpReport> {
     let report = decode_amd_snp_report(report_bytes)?;
     parsed_amd_snp_report_from_report(&report)
 }

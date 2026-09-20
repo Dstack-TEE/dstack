@@ -1657,7 +1657,7 @@ fn decode_app_info_sev_snp(
     embedded_config: &str,
     external_vm_config: &str,
 ) -> Result<AppInfo> {
-    let parsed = crate::amd_sev_snp::parse_amd_snp_report(report)?;
+    let parsed = crate::amd_sev_snp::parse_unverified_amd_snp_report(report)?;
     let mr_config_document = if let Some(mr_config) = mr_config {
         Cow::Borrowed(mr_config)
     } else if let Some(mr_config) = mr_config_document_from_config(external_vm_config)? {
