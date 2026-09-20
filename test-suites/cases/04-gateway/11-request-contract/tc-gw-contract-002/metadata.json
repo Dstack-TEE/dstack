@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-contract-002",
+  "title": "Debug request-contract matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-contract-002"
+  ],
+  "risks": [
+    "risk-gw-contract-002"
+  ],
+  "tags": [
+    "gateway",
+    "request-contract"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Debug.GetSyncData"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/api-contract-matrix-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}
