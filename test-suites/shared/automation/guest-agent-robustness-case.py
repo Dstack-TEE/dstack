@@ -229,7 +229,13 @@ def process_stats(pid: int) -> dict[str, int]:
             if line.startswith(("VmRSS:", "Threads:")):
                 name, value = line.split(":", 1)
                 stats[name.lower().rstrip(":")] = int(value.split()[0])
-    stats["fds"] = len(os.listdir(f"/proc/{pid}/fd"))
+    try:
+        stats["fds"] = len(os.listdir(f"/proc/{pid}/fd"))
+    except PermissionError:
+        # The fixture may own the agent under another uid, and /proc/<pid>/fd
+        # is owner-only. The fd count is one observation among several; losing
+        # it must not turn an otherwise clean run into a failure.
+        stats["fds"] = None
     return stats
 
 
@@ -540,12 +546,20 @@ def survives_load(targets: dict[str, Target], pid: int) -> dict[str, Any]:
         "identity": identity,
         "stats_before": before,
         "stats_after": after,
-        "fd_growth": after["fds"] - before["fds"],
+        "fd_growth": (
+            after["fds"] - before["fds"]
+            if before["fds"] is not None and after["fds"] is not None
+            else None
+        ),
         "rss_growth_kb": after["vmrss"] - before["vmrss"],
     }
     # Connections are closed by the time the probe runs, so a descriptor the
-    # agent still holds per call is a leak, not work in flight.
-    if after["fds"] > before["fds"] + AGENT_WORKERS:
+    # agent still holds per call is a leak, not work in flight. The count is
+    # unavailable when the fixture owns the agent under another uid, since
+    # /proc/<pid>/fd is owner-only; the rest of the case still holds.
+    if before["fds"] is None or after["fds"] is None:
+        observations["fd_growth_unavailable"] = "/proc/<pid>/fd is not readable"
+    elif after["fds"] > before["fds"] + AGENT_WORKERS:
         raise AssertionError(
             f"the agent held {after['fds'] - before['fds']} more descriptors after "
             f"{len(replies)} closed connections"
