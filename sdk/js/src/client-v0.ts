@@ -8,7 +8,10 @@
 
 import fs from 'fs'
 import { send_rpc_request } from './send-rpc-request'
-import { to_hex, throwOnRpcError, resolveDstackEndpoint, type Hex } from './shared'
+import {
+  to_hex, throwOnRpcError, resolveDstackEndpoint, type Hex,
+  requireHex, requireString, requireList,
+} from './shared'
 
 export interface GetTlsKeyResponse {
   __name__: Readonly<'GetTlsKeyResponse'>
@@ -131,6 +134,24 @@ function x509key_to_uint8array(pem: string, max_length?: number) {
   return result
 }
 
+/**
+ * Parse the `tcb_info` document, or say that it was `tcb_info` that was wrong.
+ *
+ * `JSON.parse` stringifies whatever it is given, so a numeric `tcb_info` used
+ * to parse successfully and come back as that number typed as `TcbInfo` --
+ * every `.mrtd` read `undefined`, with nothing to say why. An absent one gave
+ * `"undefined" is not valid JSON`, which names no field. Rust, Python and Go
+ * all reject both.
+ */
+function parse_tcb_info<T extends TcbInfo>(value: unknown): T {
+  const text = requireString(value, 'tcb_info')
+  try {
+    return JSON.parse(text) as T
+  } catch (error) {
+    throw new Error(`the agent returned a malformed tcb_info: ${(error as Error).message}`)
+  }
+}
+
 export interface TlsKeyOptions {
   subject?: string;
   altNames?: string[];
@@ -192,9 +213,11 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
       algorithm: algorithm
     })
     const result = await send_rpc_request<{ key: string, signature_chain: string[] }>(this.endpoint, '/GetKey', payload)
+    throwOnRpcError(result)
     return Object.freeze({
-      key: new Uint8Array(Buffer.from(result.key, 'hex')),
-      signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
+      key: requireHex(result.key, 'key'),
+      signature_chain: requireList(result.signature_chain, 'signature_chain', 'error')
+        .map((sig, i) => requireHex(sig, `signature_chain[${i}]`)),
       __name__: 'GetKeyResponse',
     })
   }
@@ -291,9 +314,10 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
 
   async info(): Promise<InfoResponse<T>> {
     const result = await send_rpc_request<Omit<InfoResponse<TcbInfo>, 'tcb_info'> & { tcb_info: string }>(this.endpoint, '/Info', '{}')
+    throwOnRpcError(result)
     return Object.freeze({
       ...result,
-      tcb_info: JSON.parse(result.tcb_info) as T,
+      tcb_info: parse_tcb_info<T>(result.tcb_info),
     })
   }
 
@@ -368,10 +392,13 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
 
     const result = await send_rpc_request<{ signature: string, signature_chain: string[], public_key: string }>(this.endpoint, '/Sign', payload);
 
+    throwOnRpcError(result)
+
     return Object.freeze({
-        signature: new Uint8Array(Buffer.from(result.signature, 'hex')),
-        signature_chain: result.signature_chain.map(sig => new Uint8Array(Buffer.from(sig, 'hex'))),
-        public_key: new Uint8Array(Buffer.from(result.public_key, 'hex')),
+        signature: requireHex(result.signature, 'signature'),
+        signature_chain: requireList(result.signature_chain, 'signature_chain', 'error')
+          .map((sig, i) => requireHex(sig, `signature_chain[${i}]`)),
+        public_key: requireHex(result.public_key, 'public_key'),
         __name__: 'SignResponse',
     });
   }

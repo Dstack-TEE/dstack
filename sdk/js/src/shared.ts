@@ -7,6 +7,9 @@
 
 import fs from 'fs'
 
+/** An even number of hex digits, and nothing else. */
+const HEX_ONLY = /^(?:[0-9a-fA-F]{2})*$/
+
 export type Hex = `${string}`
 
 export function to_hex(data: string | Buffer | Uint8Array): string {
@@ -58,4 +61,100 @@ export function resolveDstackEndpoint(endpoint: string | undefined): string {
     throw new Error(`Unix socket file ${endpoint} does not exist`);
   }
   return endpoint
+}
+
+/**
+ * Decode a wire hex string, or say which field was malformed.
+ *
+ * Strict on purpose. Node's hex decoder stops at the first pair it cannot
+ * parse and returns the prefix it managed, without error: `Buffer.from(
+ * '0102zz', 'hex')` is two bytes, and an odd-length string loses its last
+ * digit. These fields are private keys, signature chain links and application
+ * identity -- handing back a silently truncated one is worse than throwing,
+ * and Rust, Python and Go all refuse the same input.
+ *
+ * Shared by both surfaces. It started as v1's, and v0 decoded with a bare
+ * `Buffer.from` until a response whose 64 valid digits were followed by junk
+ * was found to yield a plausible 32-byte key that `toViemAccount` turned into
+ * a working account at an address nobody chose.
+ */
+export function decodeHex(value: unknown, field: string): Uint8Array {
+  // The type check is not redundant with the regex, and dropping it is a
+  // silent-wrong-value bug rather than a style regression. `RegExp.test`
+  // stringifies its argument, so a one-element array passes -- `['00112233']`
+  // becomes `'00112233'` -- and `Buffer.from` then ignores the `'hex'`
+  // argument for a non-string input and coerces the elements as octets:
+  // `Number('00112233') & 0xff`, one attacker-chosen byte, no error. TypeScript
+  // cannot stop this because a JSON response is `any` at runtime.
+  if (typeof value !== 'string') {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected a hex string, got ${
+        value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value}`
+    )
+  }
+  if (!HEX_ONLY.test(value)) {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected an even-length hex string`
+    )
+  }
+  return new Uint8Array(Buffer.from(value, 'hex'))
+}
+
+/**
+ * Decode a `bytes` field the response is meaningless without.
+ *
+ * Absence is an error rather than the empty default: `app_id` and `key` are
+ * answers the agent always has, so a response without one is a response that
+ * did not come from a working agent. An empty *string* still decodes to zero
+ * bytes, which is what every other SDK does with it.
+ */
+export function requireHex(value: unknown, field: string): Uint8Array {
+  if (value === undefined) {
+    throw new Error(`the agent returned no ${field}`)
+  }
+  return decodeHex(value, field)
+}
+
+/**
+ * Read a `string` field the response is meaningless without.
+ *
+ * A bundle's `vendor` and `format` are what a caller dispatches on to pick a
+ * verifier, so handing back `undefined` there does not degrade the answer, it
+ * routes the evidence to no verifier at all -- quietly, since `undefined`
+ * matches no `case`. Rust and Python both make these required.
+ */
+export function requireString(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(
+      `the agent returned a malformed ${field}: expected a string, got ${
+        value === undefined ? 'nothing'
+          : value === null ? 'null'
+          : Array.isArray(value) ? 'an array' : typeof value}`
+    )
+  }
+  return value
+}
+
+/**
+ * Read a `repeated` field, or say which one was not a list.
+ *
+ * `Array.isArray` rather than a truthiness check: a bare `.map()` on a `null`
+ * or absent field throws `TypeError: Cannot read properties of null`, which
+ * names no field and reads like an SDK bug rather than a bad response.
+ *
+ * `whenAbsent` follows the proto. A missing `boottime_gpu_evidence` is the
+ * empty list, because the field is only populated when asked for; a missing
+ * `bundles` or `signature_chain` is a malformed response, because those are
+ * the whole answer of the call that returns them.
+ */
+export function requireList(
+  value: unknown, field: string, whenAbsent: 'empty' | 'error',
+): unknown[] {
+  if (value === undefined && whenAbsent === 'empty') {
+    return []
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`the agent returned a malformed ${field}: expected a list`)
+  }
+  return value
 }

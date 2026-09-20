@@ -6,57 +6,11 @@
 // unsuffixed `DstackClient` names since 0.6.0.
 
 import { send_rpc_request } from './send-rpc-request'
-import { to_hex, throwOnRpcError, resolveDstackEndpoint } from './shared'
-
-/** An even number of hex digits, and nothing else. */
-const HEX_ONLY = /^(?:[0-9a-fA-F]{2})*$/
-
-/**
- * Decode a wire hex string, or say which field was malformed.
- *
- * Strict on purpose. Node's hex decoder stops at the first pair it cannot
- * parse and returns the prefix it managed, without error: `Buffer.from(
- * '0102zz', 'hex')` is two bytes, and an odd-length string loses its last
- * digit. These fields are private keys, signature chain links and application
- * identity -- handing back a silently truncated one is worse than throwing,
- * and Rust, Python and Go all refuse the same input.
- */
-function decode_hex(value: unknown, field: string): Uint8Array {
-  // The type check is not redundant with the regex, and dropping it is a
-  // silent-wrong-value bug rather than a style regression. `RegExp.test`
-  // stringifies its argument, so a one-element array passes -- `['00112233']`
-  // becomes `'00112233'` -- and `Buffer.from` then ignores the `'hex'`
-  // argument for a non-string input and coerces the elements as octets:
-  // `Number('00112233') & 0xff`, one attacker-chosen byte, no error. TypeScript
-  // cannot stop this because a JSON response is `any` at runtime.
-  if (typeof value !== 'string') {
-    throw new Error(
-      `the agent returned a malformed ${field}: expected a hex string, got ${
-        value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value}`
-    )
-  }
-  if (!HEX_ONLY.test(value)) {
-    throw new Error(
-      `the agent returned a malformed ${field}: expected an even-length hex string`
-    )
-  }
-  return new Uint8Array(Buffer.from(value, 'hex'))
-}
-
-/**
- * Decode a `bytes` field the proto declares required.
- *
- * Absence is an error rather than the empty default: `app_id` and `key` are
- * answers the agent always has, so a response without one is a response that
- * did not come from a working agent. An empty *string* still decodes to zero
- * bytes, which is what every other SDK does with it.
- */
-function from_hex(value: unknown, field: string): Uint8Array {
-  if (value === undefined) {
-    throw new Error(`the agent returned no ${field}`)
-  }
-  return decode_hex(value, field)
-}
+import {
+  to_hex, throwOnRpcError, resolveDstackEndpoint,
+  decodeHex as decode_hex, requireHex as from_hex,
+  requireString as require_string, requireList as to_list,
+} from './shared'
 
 /**
  * Decode a `bytes` field, treating an absent key as the empty default.
@@ -275,50 +229,6 @@ function to_string(value: unknown, field: string): string {
     return ''
   }
   return require_string(value, field)
-}
-
-/**
- * Read a `string` field the response is meaningless without.
- *
- * A bundle's `vendor` and `format` are what a caller dispatches on to pick a
- * verifier, so handing back `undefined` there does not degrade the answer, it
- * routes the evidence to no verifier at all -- quietly, since `undefined`
- * matches no `case`. Rust and Python both make these required.
- */
-function require_string(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
-    throw new Error(
-      `the agent returned a malformed ${field}: expected a string, got ${
-        value === undefined ? 'nothing'
-          : value === null ? 'null'
-          : Array.isArray(value) ? 'an array' : typeof value}`
-    )
-  }
-  return value
-}
-
-/**
- * Read a `repeated` field, or say which one was not a list.
- *
- * `Array.isArray` rather than a truthiness check: a bare `.map()` on a `null`
- * or absent field throws `TypeError: Cannot read properties of null`, which
- * names no field and reads like an SDK bug rather than a bad response.
- *
- * `whenAbsent` follows the proto. A missing `boottime_gpu_evidence` is the
- * empty list, because the field is only populated when asked for; a missing
- * `bundles` or `signature_chain` is a malformed response, because those are
- * the whole answer of the call that returns them.
- */
-function to_list(
-  value: unknown, field: string, whenAbsent: 'empty' | 'error',
-): unknown[] {
-  if (value === undefined && whenAbsent === 'empty') {
-    return []
-  }
-  if (!Array.isArray(value)) {
-    throw new Error(`the agent returned a malformed ${field}: expected a list`)
-  }
-  return value
 }
 
 /**
