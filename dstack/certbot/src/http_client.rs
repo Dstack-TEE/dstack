@@ -13,6 +13,29 @@ use reqwest::Client;
 use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
+
+/// How long one call to the ACME directory may take.
+///
+/// `reqwest`'s async client has no default timeout -- unlike its blocking one,
+/// which defaults to 30 s -- so without this a directory that accepts the
+/// connection and then says nothing holds the call open indefinitely.
+///
+/// It matters here because `acme_url` is operator-settable and two callers run
+/// under the cluster-wide ACME lock with no outer bound of their own: account
+/// registration and credential rotation. An order is already capped by
+/// `renew_timeout`; those are not, so a silent directory would park the lock
+/// -- and with it every renewal in the cluster -- until the lock's own 600 s
+/// expiry, and the task waiting on it forever.
+const ACME_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn acme_client(timeout: Duration) -> Result<Client> {
+    Client::builder()
+        .user_agent("dstack-certbot/0.1")
+        .timeout(timeout)
+        .build()
+        .context("failed to build reqwest client")
+}
 
 /// A HTTP client that supports both HTTP and HTTPS connections.
 /// This is needed because the default instant_acme client only supports HTTPS.
@@ -24,11 +47,14 @@ pub struct ReqwestHttpClient {
 impl ReqwestHttpClient {
     /// Create a new HTTP client.
     pub fn new() -> Result<Self> {
-        let client = Client::builder()
-            .user_agent("dstack-certbot/0.1")
-            .build()
-            .context("failed to build reqwest client")?;
-        Ok(Self { client })
+        Self::with_timeout(ACME_REQUEST_TIMEOUT)
+    }
+
+    /// Create a new HTTP client bounding each request by `timeout`.
+    pub fn with_timeout(timeout: Duration) -> Result<Self> {
+        Ok(Self {
+            client: acme_client(timeout)?,
+        })
     }
 }
 
@@ -97,5 +123,38 @@ impl HttpClient for ReqwestHttpClient {
 
             Ok(BytesResponse::from(http_response))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use instant_acme::BodyWrapper;
+    use tokio::net::TcpListener;
+
+    /// `ensure_acme_account` and `rotate_acme_credentials` hold the shared ACME
+    /// lock across their directory calls with no timeout of their own, so a
+    /// directory that accepts the connection and then answers nothing has to be
+    /// given up on here or nowhere.
+    #[tokio::test]
+    async fn a_directory_that_never_answers_does_not_hold_the_acme_lock() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _accepted = listener.accept().await;
+            std::future::pending::<()>().await;
+        });
+        let client = ReqwestHttpClient::with_timeout(Duration::from_millis(200)).unwrap();
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("http://{address}/acme/new-acct"))
+            .body(BodyWrapper::from(b"{}".to_vec()))
+            .unwrap();
+        let out = tokio::time::timeout(Duration::from_secs(10), client.request(request)).await;
+        let out = out.expect("a silent directory must not hold the call open");
+        assert!(
+            out.is_err(),
+            "a silent directory must not read as an answer"
+        );
     }
 }
