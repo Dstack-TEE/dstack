@@ -548,15 +548,18 @@ def resolve_target(manifest: dict[str, Any], selector: str, service: str) -> Tar
     gateway = values.get("gateway") or {}
     services = values.get("services") or {}
     headers: dict[str, str] = {}
+    # The gateway fixture publishes each listener with its `/prpc` mount
+    # already in the url, so the method name is appended directly. The KMS
+    # `rpc_url` is the one exception and carries no mount.
     if selector == "gateway-rpc":
         base = gateway.get("rpc_url") or (services.get("rpc") or {}).get("url")
-        route = "/prpc/<Method>"
+        route = "/<Method>"
     elif selector == "gateway-debug":
         base = gateway.get("debug_url") or (services.get("debug") or {}).get("url")
-        route = "/prpc/<Method>"
+        route = "/<Method>"
     elif selector == "gateway-admin":
         base = gateway.get("admin_url") or (services.get("admin") or {}).get("url")
-        route = "/prpc/<Method>"
+        route = "/<Method>"
         token_file = gateway.get("admin_auth_token_file") or (
             services.get("admin") or {}
         ).get("auth_token_file")
