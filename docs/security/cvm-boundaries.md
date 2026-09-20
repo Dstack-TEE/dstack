@@ -78,7 +78,7 @@ This file contains system configuration in JSON format:
 | gateway_urls | array of string | List of gateway service URLs |
 | pccs_url | string | URL of the PCCS service (used when dstack components need to verify a remote TD CVM or SGX enclave) |
 | nvidia_attestation_proxy_url | string | Optional persistent OCSP and RIM cache used by NVIDIA local GPU attestation |
-| docker_registry | string | URL of the docker registry |
+| docker_registry | string | Docker Hub pull-through mirror. Installed only for a fully digest-pinned compose file -- see the security-mechanism table below |
 | host_api_url | string | VSOCK URL of host API |
 | vm_config | string | JSON string of VM configuration (os_image_hash, cpu_count, memory_size) |
 
@@ -90,7 +90,7 @@ The hash of this file is not extended to any RTMR because each field has its own
 | gateway_urls | URLs aren't security-critical. Trust is established through CA certificates from KMS. App CVM and dstack-gateway CVM verify each other's CA certificates to ensure they're under the same KMS authority. |
 | pccs_url | URL isn't security-critical. Trust is anchored by the root public key pinned in the attestation verification program. |
 | nvidia_attestation_proxy_url | The URL is not a collateral trust anchor. The measured guest verifies NVIDIA signatures and the signed OCSP validity window, and continues to require a fresh GPU evidence nonce. A bad endpoint can withhold collateral and cause a denial of service, but cannot forge a successful attestation or replay an expired `good` response. |
-| docker_registry | Docker daemon verifies image integrity using the pinned image hashes in the docker-compose file. |
+| docker_registry | The value is a `registry-mirrors` entry, which Docker consults for Docker Hub only, and the daemon rejects a manifest whose digest does not match an `@sha256:` reference. That only covers the images the compose file actually pins, so the guest installs the mirror **only when every Hub image in the (compose-hash-measured) compose file is digest-pinned** and no service is built locally; otherwise it logs a warning and leaves `daemon.json` alone, and the daemon pulls from the canonical registry over TLS. |
 | host_api_url | Used only for reporting or encrypted sealing key transport. An incorrect URL doesn't create security vulnerabilities. |
 | vm_config | Informs the CVM to report virtual hardware info to KMS when requesting keys. KMS uses this info to calculate expected RTMRs and verify image hash. If tampered with, image hash verification would fail and no keys would be distributed. |
 

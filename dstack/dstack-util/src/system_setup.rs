@@ -47,7 +47,7 @@ use tracing::{info, warn};
 use crate::{
     cmd_show_mrs,
     crypto::dh_decrypt,
-    gen_app_keys_from_seed,
+    docker_compose, gen_app_keys_from_seed,
     host_api::HostApi,
     host_shared::{mount_host_shared, unmount_host_shared},
     utils::{
@@ -3192,7 +3192,13 @@ impl Stage1<'_> {
             .docker_registry
             .as_deref()
             .unwrap_or_default();
-        if registry_url.is_empty() {
+        let app_compose = &self.shared.app_compose;
+        let mirrors = registry_mirrors(
+            registry_url,
+            &app_compose.runner,
+            app_compose.docker_compose_file.as_deref(),
+        );
+        if mirrors.is_empty() {
             return Ok(());
         }
         info!("Docker registry: {}", registry_url);
@@ -3207,9 +3213,142 @@ impl Stage1<'_> {
             bail!("Invalid daemon.json");
         }
         daemon_env["registry-mirrors"] =
-            Value::Array(vec![serde_json::Value::String(registry_url.to_string())]);
+            Value::Array(mirrors.into_iter().map(Value::String).collect());
         fs::write(DAEMON_ENV_FILE, serde_json::to_string(&daemon_env)?)?;
         Ok(())
+    }
+}
+
+/// The `registry-mirrors` list to write into `daemon.json`, given the
+/// host-supplied `docker_registry`.
+///
+/// `docker_registry` arrives in `.sys-config.json`, which is copied verbatim
+/// off the host share and is not measured. `docs/security/cvm-boundaries.md`
+/// accepts that because "Docker daemon verifies image integrity using the
+/// pinned image hashes in the docker-compose file" -- true only for the images
+/// the compose file actually pins. For a Docker Hub image written as a tag the
+/// daemon takes whatever the mirror resolves that tag to, so the host swaps the
+/// running code while the compose hash, MR_CONFIG_ID and the quote stay valid.
+///
+/// So the mirror is installed only when that stated mitigation holds for every
+/// image it could reach. Otherwise it is left out and the daemon pulls from the
+/// canonical registry over TLS -- the same thing it does when the operator
+/// configures no mirror at all, which is the default.
+fn registry_mirrors(registry_url: &str, runner: &str, compose_file: Option<&str>) -> Vec<String> {
+    if registry_url.is_empty() {
+        return vec![];
+    }
+    let Some(compose_file) = compose_file.filter(|_| runner.ends_with("-compose")) else {
+        warn!(
+            runner,
+            "ignoring the host-supplied registry mirror: no compose file pins what gets pulled"
+        );
+        return vec![];
+    };
+    match docker_compose::unpinned_hub_images(compose_file) {
+        Ok(unpinned) if unpinned.is_empty() => vec![registry_url.to_string()],
+        Ok(unpinned) => {
+            let services = unpinned
+                .iter()
+                .map(|image| format!("{} ({})", image.service, image.image))
+                .collect::<Vec<_>>()
+                .join(", ");
+            warn!(
+                "ignoring the host-supplied registry mirror: \
+                 a mirror serves Docker Hub and these images are not digest-pinned, \
+                 so the host could substitute them: {services}"
+            );
+            vec![]
+        }
+        Err(err) => {
+            warn!("ignoring the host-supplied registry mirror: {err:#}");
+            vec![]
+        }
+    }
+}
+
+#[cfg(test)]
+mod registry_mirror_tests {
+    use super::registry_mirrors;
+
+    const COMPOSE: &str = "docker-compose";
+
+    fn compose(images: &str) -> String {
+        format!("name: app\nservices:\n{images}")
+    }
+
+    #[test]
+    fn no_registry_installs_no_mirror() {
+        assert!(
+            registry_mirrors("", COMPOSE, Some(&compose("  a:\n    image: nginx\n"))).is_empty()
+        );
+    }
+
+    /// `.sys-config.json` is copied verbatim from the host share and is not
+    /// measured, so `docker_registry` is an adversary-chosen value. A mirror
+    /// serves Docker Hub, and the daemon only checks what it pulled against a
+    /// `@sha256:` reference -- so a tag-only image is one the host can swap
+    /// while the compose hash, MR_CONFIG_ID and the quote all stay valid.
+    #[test]
+    fn an_unpinned_hub_image_installs_no_mirror() {
+        for image in [
+            "nginx",
+            "nginx:1.25",
+            "myorg/app:v1",
+            "docker.io/library/nginx:1.25",
+        ] {
+            let compose = compose(&format!("  api:\n    image: {image}\n"));
+            assert!(
+                registry_mirrors("https://host.mirror", COMPOSE, Some(&compose)).is_empty(),
+                "{image} is not digest-pinned, so the host mirror must not be installed"
+            );
+        }
+    }
+
+    /// The mitigation `docs/security/cvm-boundaries.md` claims for
+    /// `docker_registry`, once it actually holds.
+    #[test]
+    fn a_fully_pinned_compose_installs_the_mirror() {
+        let digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        let compose = compose(&format!(
+            "  api:\n    image: nginx@{digest}\n  web:\n    image: ghcr.io/org/web:v1\n"
+        ));
+        assert_eq!(
+            registry_mirrors("https://host.mirror", COMPOSE, Some(&compose)),
+            vec!["https://host.mirror".to_string()]
+        );
+    }
+
+    /// `registry-mirrors` only ever serves Docker Hub, so a tag on another
+    /// registry is out of the mirror's reach and must not cost the app its
+    /// pull-through cache.
+    #[test]
+    fn an_unpinned_image_on_another_registry_still_installs_the_mirror() {
+        for image in [
+            "ghcr.io/org/app:v1",
+            "localhost:5000/app:v1",
+            "reg.example.com/app:v1",
+        ] {
+            let compose = compose(&format!("  api:\n    image: {image}\n"));
+            assert_eq!(
+                registry_mirrors("https://host.mirror", COMPOSE, Some(&compose)),
+                vec!["https://host.mirror".to_string()],
+                "{image} is not served by a Docker Hub mirror"
+            );
+        }
+    }
+
+    /// A compose file this guest cannot enumerate, and a runner that has no
+    /// compose file at all, are both cases where nothing proves what gets
+    /// pulled. Fail closed rather than hand the host the lever.
+    #[test]
+    fn a_compose_that_cannot_be_enumerated_installs_no_mirror() {
+        let unresolvable = compose("  api:\n    build: .\n");
+        assert!(registry_mirrors("https://host.mirror", COMPOSE, Some(&unresolvable)).is_empty());
+        let included =
+            "name: app\ninclude:\n  - other.yaml\nservices:\n  api:\n    image: nginx@sha256:00\n";
+        assert!(registry_mirrors("https://host.mirror", COMPOSE, Some(included)).is_empty());
+        assert!(registry_mirrors("https://host.mirror", "bash", None).is_empty());
     }
 }
 
