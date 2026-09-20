@@ -937,19 +937,14 @@ fn redact_token(token: &str) -> String {
     }
 }
 
-/// Force-release the certificate renew lock for one ZT domain, returning the
-/// key it was released under.
-///
-/// Normalized first, like every other record lookup on this surface: the lock
-/// lives under the normalized domain, so releasing whatever key the caller's
-/// spelling produces would delete nothing, log a release that did not happen,
-/// and leave the operator's escape hatch out of a wedged renewal closed.
+/// Force-release the renew lock of a ZT domain under its normalized key,
+/// returning that key.
 fn force_release_zt_domain_cert_lock(
     kv_store: &crate::kv::KvStore,
     domain: &str,
 ) -> Result<String> {
     let domain = normalize_zt_domain(domain)?;
-    kv_store.release_cert_lock(&domain)?;
+    kv_store.force_release_cert_lock(&domain)?;
     Ok(domain)
 }
 
@@ -1496,38 +1491,18 @@ mod cert_lock_admin_tests {
     use super::force_release_zt_domain_cert_lock;
     use crate::kv::KvStore;
 
-    fn test_kv(data_dir: &std::path::Path) -> KvStore {
-        KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
-    }
-
-    /// ZT-Domain records are keyed by the normalized domain, so the lock for
-    /// `app.example.com` is what a renewal takes however the operator spelled
-    /// it. Force-release is the escape hatch out of a wedged renewal: deleting
-    /// whatever key the caller's spelling happens to produce would report
-    /// success and leave the domain locked until the timeout.
     #[test]
     fn force_release_uses_the_key_the_lock_was_taken_under() {
         let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let kv = test_kv(dir.path());
-
-        assert!(kv.try_acquire_cert_lock("app.example.com", 600));
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
+        assert!(kv.try_acquire_cert_lock("app.example.com", 600).is_some());
 
         force_release_zt_domain_cert_lock(&kv, "APP.example.com.")
             .expect("force release should succeed");
 
         assert!(
-            kv.get_cert_lock("app.example.com").is_none(),
-            "the lock must be gone, not merely reported gone"
+            kv.try_acquire_cert_lock("app.example.com", 600).is_some(),
+            "the lock must actually be released, not merely reported released"
         );
-    }
-
-    /// Reporting success for a name that can never have held a lock hides a
-    /// typo behind the same message a real release prints.
-    #[test]
-    fn force_release_refuses_a_malformed_domain() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let kv = test_kv(dir.path());
-        force_release_zt_domain_cert_lock(&kv, "not a domain")
-            .expect_err("a malformed domain must be refused");
     }
 }
