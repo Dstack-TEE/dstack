@@ -675,6 +675,14 @@ pub struct AuthConfig {
 impl Config {
     /// Get or generate a unique node UUID.
     /// The UUID is stored in `{data_dir}/node_uuid` and persisted across restarts.
+    ///
+    /// A failed write is a warning and a fresh uuid rather than an error,
+    /// because by the time this runs the directory has already been proved
+    /// writable: `ProxyInner::new` opens the WaveKV store in it first, and a
+    /// storage failure there fails the boot. A node that could return a new
+    /// identity on every restart would have its own sync requests refused by
+    /// every peer until one of them synced *to* it, which is the recovery path
+    /// `SyncManager::check_uuid` deliberately leaves open.
     pub fn uuid(&self) -> Vec<u8> {
         use std::fs;
         use std::path::Path;
@@ -777,6 +785,7 @@ pub fn setup_wireguard(config: &WgConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fs_err as fs;
     use rocket::figment::providers::{Format, Toml};
     use std::str::FromStr;
 
@@ -916,6 +925,41 @@ mod tests {
         let gate = present.tcp_splice.expect("section present");
         assert_eq!(gate.after_duration, Some(Duration::from_secs(5)));
         assert!(gate.after_bytes.is_none());
+    }
+
+    /// `Config::uuid()` answers a failed write to `{data_dir}/node_uuid` with a
+    /// warning and a fresh v4 uuid, which would silently change this node's
+    /// identity on every restart -- if a gateway could start with an unwritable
+    /// data dir at all. It cannot: `ProxyInner::new` opens the WaveKV store in
+    /// that same directory before it ever calls `uuid()`, and a storage failure
+    /// there is deliberately fatal, so the identity is only ever regenerated on
+    /// a directory the process has already proved it can write.
+    #[test]
+    fn an_unwritable_data_dir_fails_the_boot_before_a_uuid_is_generated() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("temp dir");
+        let data_dir = root.path().join("data");
+        fs::create_dir_all(&data_dir).expect("create data dir");
+        fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o555))
+            .expect("make the data dir read-only");
+        if fs::write(data_dir.join("probe"), b"x").is_ok() {
+            // Running as a user the mode bits do not constrain; there is no
+            // unwritable directory to test against.
+            return;
+        }
+
+        let Err(err) = crate::kv::KvStore::new(1, vec![], &data_dir, None) else {
+            panic!("an unwritable data dir must fail the boot");
+        };
+        assert!(
+            format!("{err:#}").contains("cannot open the WaveKV data dir"),
+            "{err:#}"
+        );
+        assert!(
+            !data_dir.join("node_uuid").exists(),
+            "nothing on this path reaches Config::uuid()"
+        );
     }
 
     /// `data_timeout_enabled = false` is documented as turning off "data
