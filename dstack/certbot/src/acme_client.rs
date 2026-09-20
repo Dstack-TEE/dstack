@@ -279,6 +279,24 @@ fn dns_poll_sleep(budget: Duration, elapsed: Duration, backoff: Duration) -> Dur
     budget.saturating_sub(elapsed).min(backoff)
 }
 
+/// How long the DNS poll waits before its second lookup.
+const DNS_POLL_FIRST_BACKOFF: Duration = Duration::from_millis(250);
+
+/// The longest the DNS poll backs off for, however long the wait runs.
+const DNS_POLL_MAX_BACKOFF: Duration = Duration::from_secs(32);
+
+/// The poll count and backoff after a check that came back unsettled.
+///
+/// Split out for the same reason [`dns_poll_sleep`] is. `tries` only ever
+/// reaches a debug log, but it is incremented once per poll for as long as the
+/// budget lasts and the budget is operator configuration, so it has to hold
+/// every poll `max_dns_wait` can pay for. It was a `u8`, which runs out about
+/// two hours into the ramp above -- wrapping in release, and aborting in a
+/// build with overflow checks.
+fn next_poll(tries: u32, backoff: Duration) -> (u32, Duration) {
+    (tries + 1, DNS_POLL_MAX_BACKOFF.min(backoff * 2))
+}
+
 /// A AcmeClient instance.
 pub struct AcmeClient {
     account: Account,
@@ -892,8 +910,8 @@ impl AcmeClient {
     /// instant-acme. A record we never see is reported and the order proceeds,
     /// letting the CA decide.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
-        let mut delay = Duration::from_millis(250);
-        let mut tries = 1u8;
+        let mut delay = DNS_POLL_FIRST_BACKOFF;
+        let mut tries = 1;
 
         let mut unsettled_challenges = challenges.to_vec();
 
@@ -1005,8 +1023,7 @@ impl AcmeClient {
                     challenge.expected
                 );
                 if !challenge.expected.satisfied_by(&published, now_secs()) {
-                    delay = Duration::from_secs(32).min(delay * 2);
-                    tries += 1;
+                    (tries, delay) = next_poll(tries, delay);
                     debug!(
                         tries,
                         domain = &challenge.acme_domain,
@@ -1879,7 +1896,10 @@ mod caa_guard_tests {
 /// a live challenge.
 #[cfg(test)]
 mod dns_wait_tests {
-    use super::{advisory_dns_wait, dns_poll_sleep, DNS_WAIT_SHARE_OF_RENEW_TIMEOUT};
+    use super::{
+        advisory_dns_wait, dns_poll_sleep, next_poll, DNS_POLL_FIRST_BACKOFF,
+        DNS_WAIT_SHARE_OF_RENEW_TIMEOUT,
+    };
     use std::time::Duration;
 
     const fn secs(n: u64) -> Duration {
@@ -2025,6 +2045,26 @@ mod dns_wait_tests {
     }
 
     /// The sleep never runs past the budget, for any point inside it.
+    #[test]
+    fn the_poll_counter_holds_every_poll_the_longest_wait_pays_for() {
+        // Well inside what `max_dns_wait` accepts: it is seconds in the
+        // configuration and is only clamped against `renew_timeout`.
+        let budget = Duration::from_secs(24 * 60 * 60);
+        let mut elapsed = Duration::ZERO;
+        let mut backoff = DNS_POLL_FIRST_BACKOFF;
+        let mut tries = 1;
+
+        while elapsed < budget {
+            elapsed += dns_poll_sleep(budget, elapsed, backoff);
+            (tries, backoff) = next_poll(tries, backoff);
+        }
+
+        assert!(
+            u64::from(tries) > u64::from(u8::MAX),
+            "{tries} polls fit in the wait, so the counter has to outgrow a u8"
+        );
+    }
+
     #[test]
     fn a_poll_never_sleeps_past_the_budget() {
         for budget in [0u64, 1, 5, 60, 150] {
