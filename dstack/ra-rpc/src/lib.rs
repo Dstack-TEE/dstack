@@ -231,7 +231,9 @@ async fn dispatch_prpc(
     let (code, data) = match result {
         Ok(data) => (200, data),
         Err(err) => {
-            error!("rpc error: {err:?}");
+            // Bounded: the message quotes the request field that produced it,
+            // so an unbounded log line is one malformed request away.
+            error!("rpc error: {}", bound_error_text(&format_args!("{err:?}")));
             // Services can attach a status code to their error; anything that
             // does not is reported as a generic bad request, as before.
             let code = code_of(&err).unwrap_or(CODE_BAD_REQUEST);
@@ -241,14 +243,97 @@ async fn dispatch_prpc(
     (code, data)
 }
 
+/// The most error text a reply or a log line will carry.
+///
+/// A deserializer names the value it rejected, so the text is as long as the
+/// request field that produced it. At the 10 MiB default request limit that is
+/// a 10 MiB reply and a 10 MiB log line for one malformed request, which is a
+/// response amplifier and a way to fill the service's disk. No real dstack
+/// error is anywhere near this long.
+pub const MAX_ERROR_TEXT: usize = 2048;
+
+/// Bound an error message without losing either end of it.
+///
+/// Deserializer messages carry the failure kind in front of the offending
+/// value and the input position behind it, so the middle is the part that is
+/// safe to drop.
+pub fn bound_error_text(error: &impl Display) -> String {
+    let text = format!("{error:#}");
+    if text.len() <= MAX_ERROR_TEXT {
+        return text;
+    }
+    let keep = MAX_ERROR_TEXT / 2;
+    let head = floor_char_boundary(&text, keep);
+    let tail = ceil_char_boundary(&text, text.len() - keep);
+    let elided = tail - head;
+    format!(
+        "{}... {elided} bytes elided ...{}",
+        &text[..head],
+        &text[tail..]
+    )
+}
+
+fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
+    while index < text.len() && !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
 pub fn encode_error(json: bool, error: &impl Display) -> Vec<u8> {
-    let error = format!("{error:#}");
+    let error = bound_error_text(error);
     if json {
         serde_json::to_string_pretty(&serde_json::json!({ "error": error }))
             .unwrap_or_else(|_| r#"{"error": "failed to encode the error"}"#.to_string())
             .into_bytes()
     } else {
         encode_message_to_vec(&::prpc::server::ProtoError::new(error))
+    }
+}
+
+#[cfg(test)]
+mod bounded_error_tests {
+    use super::{bound_error_text, MAX_ERROR_TEXT};
+
+    #[test]
+    fn a_short_message_is_left_alone() {
+        let message = "invalid type: string, expected a sequence";
+        assert_eq!(bound_error_text(&message), message);
+    }
+
+    #[test]
+    fn a_long_message_keeps_both_ends() {
+        let message = format!(
+            "invalid type: string \"{}\", expected a sequence at line 1 column 70069",
+            "A".repeat(1 << 20)
+        );
+        let bounded = bound_error_text(&message);
+        assert!(bounded.len() <= MAX_ERROR_TEXT + 64, "{}", bounded.len());
+        assert!(bounded.starts_with("invalid type: string"), "{bounded}");
+        assert!(bounded.ends_with("at line 1 column 70069"), "{bounded}");
+        assert!(bounded.contains("bytes elided"), "{bounded}");
+    }
+
+    /// Byte-slicing a `String` panics when an index lands inside a character,
+    /// and the value being quoted is attacker-supplied.
+    #[test]
+    fn a_multi_byte_message_is_never_sliced_mid_character() {
+        for filler in ["\u{e9}", "\u{4e2d}", "\u{1f600}"] {
+            for extra in 0..8 {
+                let message = format!("head {} tail", filler.repeat(MAX_ERROR_TEXT + extra));
+                let bounded = bound_error_text(&message);
+                assert!(bounded.len() <= MAX_ERROR_TEXT + 64, "{}", bounded.len());
+                assert!(bounded.starts_with("head "), "{bounded}");
+                assert!(bounded.ends_with(" tail"), "{bounded}");
+            }
+        }
     }
 }
 
