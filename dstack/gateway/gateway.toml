@@ -157,8 +157,14 @@ handshake_stale = "30m"
 # Timeout for DNS TXT record resolution (app address lookup).
 dns_resolve = "5s"
 
-# Enable data transfer timeouts below. This might impact performance. Turn off if
-# bad performance is observed.
+# Whether a connection is subject to the idle window below.
+#
+# Off does not merely relax a per-operation timer: it takes the idle watchdog
+# out of every relay path -- buffered, spliced and kTLS alike -- so a connection
+# that transfers nothing is held until `total` (5h below), which becomes the
+# only bound left on it. `connect`, `handshake`, `pp_header` and `total` are
+# unaffected either way. Turn it off only if the watchdog is measurably in the
+# way.
 data_timeout_enabled = true
 # Timeout for a connection without any data transfer.
 idle = "10m"

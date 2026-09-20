@@ -309,6 +309,10 @@ impl ProxyConfig {
     /// The idle window every relay enforces, or `None` when data timeouts are
     /// off. Computed in one place so the buffered bridge and the gated fast
     /// paths cannot end up enforcing different things.
+    ///
+    /// `None` is a real absence and not a shorter leash: the buffered bridge
+    /// falls back to `copy_bidirectional`, and the spliced and kTLS relays drop
+    /// their watchdog, so nothing below `timeouts.total` bounds the connection.
     pub fn idle_timeout(&self) -> Option<Duration> {
         self.timeouts
             .data_timeout_enabled
@@ -543,6 +547,12 @@ pub struct Timeouts {
     #[serde(with = "serde_duration")]
     pub dns_resolve: Duration,
 
+    /// Whether [`Self::idle`] is enforced.
+    ///
+    /// `false` removes the idle watchdog from every relay path rather than
+    /// relaxing a single operation's timer -- see [`ProxyConfig::idle_timeout`]
+    /// -- leaving [`Self::total`] as the only bound on a connection that
+    /// transfers nothing.
     pub data_timeout_enabled: bool,
     #[serde(with = "serde_duration")]
     pub idle: Duration,
@@ -906,5 +916,35 @@ mod tests {
         let gate = present.tcp_splice.expect("section present");
         assert_eq!(gate.after_duration, Some(Duration::from_secs(5)));
         assert!(gate.after_bytes.is_none());
+    }
+
+    /// `data_timeout_enabled = false` is documented as turning off "data
+    /// transfer timeouts", which reads like a per-operation relaxation. It
+    /// removes the idle window outright, and `timeouts.total` is then the only
+    /// thing that ever ends an idle connection.
+    #[test]
+    fn disabling_data_timeouts_removes_the_idle_window_entirely() {
+        let on: ProxyConfig = Figment::from(Toml::string(DEFAULT_CONFIG))
+            .focus("core.proxy")
+            .extract()
+            .expect("the shipped proxy config");
+        assert_eq!(on.idle_timeout(), Some(on.timeouts.idle));
+
+        let off: ProxyConfig = Figment::from(Toml::string(DEFAULT_CONFIG))
+            .merge(Toml::string(
+                "[core.proxy.timeouts]\ndata_timeout_enabled = false\n",
+            ))
+            .focus("core.proxy")
+            .extract()
+            .expect("the proxy config with data timeouts off");
+        assert_eq!(
+            off.idle_timeout(),
+            None,
+            "no idle window is left for any relay path to enforce"
+        );
+        assert_eq!(
+            off.timeouts.total, on.timeouts.total,
+            "`total` still bounds it"
+        );
     }
 }
