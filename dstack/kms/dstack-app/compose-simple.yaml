@@ -4,6 +4,12 @@
 
 # KMS deployment with external auth-simple webhook
 # auth-simple runs outside the CVM (operator infrastructure)
+#
+# AUTH_WEBHOOK_URL must be https://. The KMS releases app keys on whatever this
+# backend answers, and because the backend is outside the CVM that answer
+# crosses a network the KMS does not control. There is no CA pinning, no shared
+# secret and no signature over the response, so over plain HTTP anything on the
+# path can turn a deny into an allow. The KMS warns at startup if it is http://.
 
 services:
   kms:

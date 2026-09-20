@@ -158,6 +158,7 @@ impl KmsState {
                 "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
             );
         }
+        upgrade_authority::warn_on_unauthenticated_auth_api(&config.auth_api);
         if !config.image.verify {
             warn!(
                 "os image verification is disabled; BootInfo.os_image_hash is taken from the \
