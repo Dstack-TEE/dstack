@@ -177,12 +177,20 @@ impl<'a> Tdvf<'a> {
         let mut data: Option<&[u8]> = None;
         let encoded_guid = encode_guid(TDX_METADATA_OFFSET_GUID)?;
         loop {
-            if offset < 18 {
+            // `tables` starts 18 bytes before the real table, which is exactly
+            // the footer entry the walk has already consumed, so an offset of
+            // 18 means every entry has been visited. Reading one more "entry"
+            // there would interpret whatever precedes the table as a length.
+            if offset <= 18 {
                 break;
             }
             let guid = &tables[offset - 16..offset];
             let entry_len = read_le::<u16>(tables, offset - 18, "entry length")? as usize;
-            if entry_len > offset.saturating_sub(18) {
+            // An entry's length covers its own 18-byte length+GUID header, so
+            // anything shorter is malformed -- and a zero-length entry leaves
+            // `offset` where it is, walking the table forever. The OVMF/SEV
+            // footer walk rejects the same shape in `ovmf_footer_entries`.
+            if entry_len < 18 || entry_len > offset.saturating_sub(18) {
                 bail!("Failed to parse TDVF metadata: Invalid entry length");
             }
             if guid == encoded_guid {
@@ -592,5 +600,77 @@ mod tests {
             "80100904000609020b021010"
         );
         Ok(())
+    }
+
+    const TABLE_FOOTER_GUID: &str = "96b582de-1fb2-45f7-baea-a366c55a082d";
+    const BYTES_AFTER_TABLE_FOOTER: usize = 32;
+    const GUID_TABLE_HEADER_SIZE: usize = 18;
+
+    /// Runs `f` on a worker thread so that a parser which never terminates
+    /// fails on a deadline instead of hanging the whole test run. The blobs
+    /// here are attacker-shaped, and a missing termination guard shows up as a
+    /// hang rather than as a wrong answer.
+    fn within_deadline<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+        use std::sync::mpsc::{channel, RecvTimeoutError};
+
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(value) => value,
+            Err(RecvTimeoutError::Timeout) => panic!("{what} did not finish within 5s"),
+            Err(RecvTimeoutError::Disconnected) => panic!("{what} panicked"),
+        }
+    }
+
+    fn parse_within_deadline(fw: Vec<u8>) -> Result<(), String> {
+        within_deadline("Tdvf::parse", move || {
+            Tdvf::parse(&fw)
+                .map(|_| ())
+                .map_err(|err| format!("{err:#}"))
+        })
+    }
+
+    /// Closes `payload` the way a real image does: the GUIDed table, a footer
+    /// entry whose size covers the table including itself, and the 32-byte
+    /// reset vector.
+    fn fw_with_guid_table(payload: &[u8], table: &[u8]) -> Vec<u8> {
+        let mut fw = payload.to_vec();
+        fw.extend_from_slice(table);
+        fw.extend_from_slice(&((table.len() + GUID_TABLE_HEADER_SIZE) as u16).to_le_bytes());
+        fw.extend_from_slice(&encode_guid(TABLE_FOOTER_GUID).unwrap());
+        fw.extend_from_slice(&[0u8; BYTES_AFTER_TABLE_FOOTER]);
+        fw
+    }
+
+    /// A real entry size covers its own 18-byte header, so zero is impossible
+    /// -- and it never advances the backwards walk over the table.
+    #[test]
+    fn parse_rejects_a_zero_length_guid_table_entry() {
+        let mut table = 0u16.to_le_bytes().to_vec();
+        table.extend_from_slice(&[0u8; 16]); // any GUID but the metadata one
+        let fw = fw_with_guid_table(&[0u8; 64], &table);
+
+        let err = parse_within_deadline(fw).expect_err("a zero-length entry must be rejected");
+        assert!(err.contains("entry length"), "unexpected error: {err}");
+    }
+
+    /// A firmware whose table simply has no metadata entry must report that,
+    /// not walk off the front of the table.
+    #[test]
+    fn parse_reports_a_table_without_the_metadata_entry() {
+        let mut table = 22u16.to_le_bytes().to_vec();
+        table.extend_from_slice(&[0u8; 16]);
+        let mut entry = vec![0u8; 4];
+        entry.extend_from_slice(&table);
+        let fw = fw_with_guid_table(&[0u8; 64], &entry);
+
+        let err =
+            parse_within_deadline(fw).expect_err("a table without the entry must be rejected");
+        assert!(
+            err.contains("Missing TDVF metadata"),
+            "unexpected error: {err}"
+        );
     }
 }
