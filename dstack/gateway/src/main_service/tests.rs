@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::config::{load_config_figment, Config, MutualConfig};
-use crate::kv::PortFlags;
+use crate::kv::{PortFlags, MAX_ACME_HIST_KEYS_PER_DOMAIN};
 use crate::models::HealthState;
 use crate::proxy::port_policy::is_port_allowed;
 use crate::time::encode_ts;

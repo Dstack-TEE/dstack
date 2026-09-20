@@ -96,21 +96,6 @@ pub struct ProxyInner {
     pub(crate) app_address_resolver: Arc<AppAddressResolver>,
 }
 
-/// History entries `AcmeInfo` will serve for one domain, newest first.
-///
-/// The endpoint is unauthenticated -- `ct_monitor` reaches it over the public
-/// proxy at `/.dstack/acme-info` to learn which keys may legitimately appear in
-/// a Certificate Transparency log -- while `save_cert_attestation` appends one
-/// key per renewal and never prunes. Without a bound the response, and the walk
-/// that builds it, grow for the life of the deployment and a stranger pays
-/// nothing to ask for them.
-///
-/// 32 is far more than a consumer needs: a certificate lives 90 days, so the
-/// newest few entries cover everything a CT log can still be holding, and 32
-/// leaves room for a burst of forced renewals on top. The authenticated
-/// `Admin.ListCertAttestations` is the view for reading further back.
-const MAX_ACME_HIST_KEYS_PER_DOMAIN: usize = 32;
-
 const HANDSHAKE_CACHE_TTL: Duration = Duration::from_secs(30);
 const HANDSHAKE_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -679,12 +664,12 @@ impl Proxy {
             .unwrap_or_default();
 
         for domain in &domains {
-            // Newest first, capped: see [`MAX_ACME_HIST_KEYS_PER_DOMAIN`]. The
-            // cap is per domain rather than over the whole response so that
-            // adding a domain cannot silently stop the older ones from being
-            // served -- a consumer checking CT logs needs every domain's keys.
-            let attestations = kv_store.list_cert_attestations(domain);
-            for att in attestations.into_iter().take(MAX_ACME_HIST_KEYS_PER_DOMAIN) {
+            // Newest first, capped per domain rather than over the response so
+            // that adding a domain cannot silently stop the older ones from
+            // being served. See [`crate::kv::MAX_ACME_HIST_KEYS_PER_DOMAIN`].
+            let attestations = kv_store
+                .list_recent_cert_attestations(domain, crate::kv::MAX_ACME_HIST_KEYS_PER_DOMAIN);
+            for att in attestations {
                 quoted_hist_keys.push(QuotedPublicKey {
                     public_key: att.public_key,
                     quote: att.quote,

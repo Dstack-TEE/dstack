@@ -654,6 +654,21 @@ pub const MAX_DECOMPRESSED_SYNC_BYTES: usize = 128 * 1024 * 1024;
 /// bound applies.
 pub const MAX_COMPRESSED_SYNC_BYTES: usize = 16 * 1024 * 1024;
 
+/// History entries `AcmeInfo` will draw for one domain, newest first.
+///
+/// The endpoint is unauthenticated -- `ct_monitor` reaches it over the public
+/// proxy at `/.dstack/acme-info` to learn which keys may legitimately appear in
+/// a Certificate Transparency log -- while `save_cert_attestation` appends one
+/// key per renewal and never prunes. Without a bound the response, and the
+/// walk that builds it, grow for the life of the deployment and a stranger pays
+/// nothing to ask for them.
+///
+/// 32 is far more than a consumer needs: a certificate lives 90 days, so the
+/// newest few entries cover everything a CT log can still be holding, and 32
+/// leaves room for a burst of forced renewals on top. The authenticated
+/// `Admin.ListCertAttestations` is the view for reading further back.
+pub const MAX_ACME_HIST_KEYS_PER_DOMAIN: usize = 32;
+
 /// Decompress gzip, refusing anything that expands past `limit`.
 ///
 /// Reads one byte past the limit so a payload landing exactly on it is still accepted
@@ -2246,16 +2261,47 @@ impl KvStore {
 
     /// List all attestation history for a domain (sorted by timestamp descending)
     pub fn list_cert_attestations(&self, domain: &str) -> Vec<CertAttestation> {
+        self.list_recent_cert_attestations(domain, 0)
+    }
+
+    /// The newest `limit` attestations for a domain, newest first. 0 is no
+    /// limit, as in `ListCertAttestationsRequest.limit`.
+    ///
+    /// `limit` bounds the decode, not just the result. `save_cert_attestation`
+    /// appends one history key per renewal and never prunes, and `AcmeInfo`
+    /// serves that history to anyone who can reach the public proxy port --
+    /// so decoding every entry in order to keep the newest few would leave a
+    /// stranger paying for the whole deployment's renewal history, under the
+    /// persistent read lock, on every request.
+    ///
+    /// The sort key is read out of the key rather than the record, so an entry
+    /// is only decoded if it is going to be returned. The two cannot disagree:
+    /// `save_cert_attestation` builds the key from the same `generated_at` it
+    /// stores. `latest` is skipped by the same parse, having no timestamp to
+    /// read -- and so is any other key this prefix might one day hold, which is
+    /// the conservative direction for a list of attestations.
+    pub fn list_recent_cert_attestations(
+        &self,
+        domain: &str,
+        limit: usize,
+    ) -> Vec<CertAttestation> {
         let prefix = keys::cert_attestation_prefix(domain);
-        let latest_key = keys::cert_attestation_latest(domain);
         let state = self.persistent.read();
-        let mut attestations: Vec<CertAttestation> = state
+        let mut newest = state
             .iter_by_prefix(&prefix)
             .filter_map(|(key, entry)| {
-                // Skip the "latest" entry
-                if key == &latest_key {
-                    return None;
-                }
+                let generated_at = key.strip_prefix(&prefix)?.parse::<u64>().ok()?;
+                Some((generated_at, key, entry))
+            })
+            .collect::<Vec<_>>();
+        // Newest first.
+        newest.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        if limit > 0 {
+            newest.truncate(limit);
+        }
+        newest
+            .into_iter()
+            .filter_map(|(_, key, entry)| {
                 let value = entry.value.as_ref()?;
                 match decode(value) {
                     Ok(att) => Some(att),
@@ -2266,10 +2312,7 @@ impl KvStore {
                     }
                 }
             })
-            .collect();
-        // Sort by generated_at descending (newest first)
-        attestations.sort_by(|a, b| b.generated_at.cmp(&a.generated_at));
-        attestations
+            .collect()
     }
 
     // ==================== Watch helpers ====================
@@ -2769,6 +2812,93 @@ mod value_encoding_tests {
         assert!(
             decode::<FutureCertData>(&stored).is_err(),
             "the previous certificate's chain must not be attached to the new one"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cert_attestation_history_tests {
+    use super::*;
+
+    fn store_with_renewals(dir: &std::path::Path, renewals: u64) -> KvStore {
+        let kv = KvStore::new(1, vec![], dir, None).expect("failed to create kv store");
+        for generated_at in 1..=renewals {
+            kv.save_cert_attestation(
+                "app.example.com",
+                &CertAttestation {
+                    public_key: vec![0xab; 32],
+                    // A real quote and attestation document, near enough:
+                    // the decode is what the limit has to bound.
+                    quote: "q".repeat(1024),
+                    attestation: "a".repeat(1024),
+                    generated_by: 1,
+                    generated_at,
+                },
+            )
+            .expect("save attestation");
+        }
+        kv
+    }
+
+    /// The limit has to bound the walk, not only the answer.
+    ///
+    /// `AcmeInfo` is unauthenticated and reachable on the public proxy port,
+    /// and the history it reads grows one key per renewal forever. Capping the
+    /// response after the fact still makes a stranger pay for decoding every
+    /// entry the deployment has ever written, under the persistent read lock.
+    ///
+    /// Compared against the unbounded call rather than a wall-clock budget, so
+    /// the test measures the same machine and the same build twice.
+    #[test]
+    fn a_limit_bounds_the_decoding_and_not_just_the_result() {
+        const RENEWALS: u64 = 10_000;
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = store_with_renewals(dir.path(), RENEWALS);
+
+        // Warm whatever the first walk touches, so the comparison is not
+        // measuring first-touch page faults.
+        assert_eq!(
+            kv.list_recent_cert_attestations("app.example.com", 32)
+                .len(),
+            32
+        );
+
+        let started = std::time::Instant::now();
+        let all = kv.list_cert_attestations("app.example.com");
+        let unbounded = started.elapsed();
+
+        let started = std::time::Instant::now();
+        let recent = kv.list_recent_cert_attestations("app.example.com", 32);
+        let bounded = started.elapsed();
+
+        assert_eq!(all.len(), RENEWALS as usize, "`latest` is not history");
+        assert_eq!(recent.len(), 32);
+        assert_eq!(
+            recent
+                .iter()
+                .map(|att| att.generated_at)
+                .collect::<Vec<_>>(),
+            (RENEWALS - 31..=RENEWALS).rev().collect::<Vec<_>>(),
+            "the bound must keep the newest entries"
+        );
+        assert!(
+            bounded * 5 < unbounded,
+            "reading the newest 32 of {RENEWALS} took {bounded:?} against {unbounded:?} \
+             for all of them: the limit is being applied after the decode"
+        );
+    }
+
+    /// `latest` shares the prefix the history is iterated under, and it is a
+    /// copy of an entry that is already in the history.
+    #[test]
+    fn the_latest_pointer_is_not_served_as_a_history_entry() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = store_with_renewals(dir.path(), 3);
+
+        let all = kv.list_cert_attestations("app.example.com");
+        assert_eq!(
+            all.iter().map(|att| att.generated_at).collect::<Vec<_>>(),
+            vec![3, 2, 1]
         );
     }
 }
