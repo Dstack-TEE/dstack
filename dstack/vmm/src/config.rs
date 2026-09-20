@@ -109,6 +109,63 @@ impl Protocol {
     }
 }
 
+/// Host-side preallocation policy for a CVM data disk. The variants map
+/// one-to-one onto `qemu-img`'s `preallocation=` option, so the semantics are
+/// qcow2's, not ours.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiskPrealloc {
+    /// Allocate nothing up front. The image grows as the guest writes, so the
+    /// host may be oversubscribed and a guest write can fail with ENOSPC.
+    #[default]
+    Off,
+    /// Allocate the qcow2 metadata only. Cheap, and it removes the metadata
+    /// growth cost on first write, but it reserves no space for guest data.
+    Metadata,
+    /// Reserve the full disk with fallocate(2). Fast, and it moves the ENOSPC
+    /// failure to VM creation time where the operator sees it.
+    Falloc,
+    /// Reserve the full disk and write it out. Slowest to create -- a 1 TB
+    /// disk writes 1 TB of zeros -- but it leaves nothing to allocate later.
+    Full,
+}
+
+impl FromStr for DiskPrealloc {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "off" => DiskPrealloc::Off,
+            "metadata" => DiskPrealloc::Metadata,
+            "falloc" => DiskPrealloc::Falloc,
+            "full" => DiskPrealloc::Full,
+            _ => bail!("invalid disk preallocation mode: {s}"),
+        })
+    }
+}
+
+impl DiskPrealloc {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DiskPrealloc::Off => "off",
+            DiskPrealloc::Metadata => "metadata",
+            DiskPrealloc::Falloc => "falloc",
+            DiskPrealloc::Full => "full",
+        }
+    }
+
+    pub fn is_off(&self) -> bool {
+        matches!(self, DiskPrealloc::Off)
+    }
+
+    /// Whether the mode reserves host blocks for guest data. `metadata` does
+    /// not -- it only builds the qcow2 tables -- so a guest that discards
+    /// takes nothing away from it.
+    pub fn reserves_data_blocks(&self) -> bool {
+        matches!(self, DiskPrealloc::Falloc | DiskPrealloc::Full)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CvmPlatform {
@@ -437,6 +494,14 @@ pub struct CvmConfig {
 
     /// Host sharing mode. (9p, vhd, vvfat)
     pub host_share_mode: String,
+
+    /// Default preallocation for newly created CVM data disks. A deploy
+    /// request may pick another mode per VM. This is a host storage policy:
+    /// the guest cannot observe it and it never enters the measurements.
+    /// It applies to disks created from here on; a VM that already has its
+    /// data disk keeps whatever it was created with.
+    #[serde(default)]
+    pub disk_prealloc: DiskPrealloc,
 
     /// QGS (Quote Generation Service) vsock port for kernel-level TSM support.
     /// When set, QEMU will pass this port to tdx-guest for configfs-tsm quote generation.
@@ -1282,6 +1347,27 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The four names are spelled out three times -- serde, `FromStr` and
+    /// `as_str` -- so a new variant that misses one of them fails here.
+    #[test]
+    fn disk_prealloc_names_round_trip_through_every_encoding() {
+        for mode in [
+            DiskPrealloc::Off,
+            DiskPrealloc::Metadata,
+            DiskPrealloc::Falloc,
+            DiskPrealloc::Full,
+        ] {
+            let name = mode.as_str();
+            assert_eq!(name.parse::<DiskPrealloc>().unwrap(), mode);
+            assert_eq!(serde_json::to_string(&mode).unwrap(), format!("\"{name}\""));
+            assert_eq!(
+                serde_json::from_str::<DiskPrealloc>(&format!("\"{name}\"")).unwrap(),
+                mode
+            );
+        }
+        assert!("sparse".parse::<DiskPrealloc>().is_err());
+    }
 
     #[cfg(unix)]
     fn cvm_with_qemu(dir: &tempfile::TempDir, script: &str) -> CvmConfig {

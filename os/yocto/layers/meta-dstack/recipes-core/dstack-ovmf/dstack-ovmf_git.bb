@@ -89,10 +89,11 @@ DEPENDS = "nasm-native acpica-native ovmf-native util-linux-native"
 # modules / no sevsecret). The patch fails loud if a future edk2 bump changes
 # the AmdSev layout.
 #
-# 0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch zeroes the
-# setup-header fields QEMU writes as boot loader, so RTMR[1] no longer depends
-# on the host's QEMU version. It pairs with os/image/normalize-kernel-header.py,
-# which applies the same normalization to the shipped bzImage.
+# 0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch writes the
+# setup-header fields QEMU writes as boot loader, with the values QEMU <= 10.1
+# writes, so RTMR[1] no longer depends on the host's QEMU version. It pairs with
+# os/image/normalize-kernel-header.py, which writes the same values into the
+# shipped bzImage.
 OVMF_BUILD_SEV ??= "1"
 
 EDK_TOOLS_DIR="edk2_basetools"

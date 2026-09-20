@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     app::Manifest,
-    config::{CvmConfig, CvmPlatform, Networking, NetworkingMode, ProcessAnnotation},
+    config::{CvmConfig, CvmPlatform, DiskPrealloc, Networking, NetworkingMode, ProcessAnnotation},
     netd::{tap_name, InterfaceIdentity},
     vm_launcher::{ChildCommand, LaunchSpec, OpenFile},
 };
@@ -143,22 +143,51 @@ pub struct VmConfig {
     pub gateway_enabled: bool,
 }
 
+/// Build the `qemu-img create` arguments for a CVM data disk.
+fn qemu_img_create_args(
+    image_file: &Path,
+    backing_file: Option<&Path>,
+    size: &str,
+    prealloc: DiskPrealloc,
+) -> Vec<String> {
+    let mut args = vec!["create".to_string(), "-f".to_string(), "qcow2".to_string()];
+    if let Some(backing_file) = backing_file {
+        args.push("-o".to_string());
+        args.push(format!("backing_file={}", backing_file.display()));
+        args.push("-o".to_string());
+        args.push("backing_fmt=qcow2".to_string());
+    }
+    if !prealloc.is_off() {
+        // qcow2 rejects preallocation on top of a backing file unless
+        // subcluster allocation is on, because without it a preallocated
+        // cluster cannot record which of its parts still read through to the
+        // backing image. Images that ship a base hda always land here, so the
+        // choice is extended_l2 (QEMU 5.2+) or no preallocation at all.
+        if backing_file.is_some() {
+            args.push("-o".to_string());
+            args.push("extended_l2=on".to_string());
+        }
+        args.push("-o".to_string());
+        args.push(format!("preallocation={}", prealloc.as_str()));
+    }
+    args.push(image_file.display().to_string());
+    args.push(size.to_string());
+    args
+}
+
 fn create_hd(
     image_file: impl AsRef<Path>,
     backing_file: Option<impl AsRef<Path>>,
     size: &str,
+    prealloc: DiskPrealloc,
 ) -> Result<()> {
-    let mut command = Command::new("qemu-img");
-    command.arg("create").arg("-f").arg("qcow2");
-    if let Some(backing_file) = backing_file {
-        command
-            .arg("-o")
-            .arg(format!("backing_file={}", backing_file.as_ref().display()));
-        command.arg("-o").arg("backing_fmt=qcow2");
-    }
-    command.arg(image_file.as_ref());
-    command.arg(size);
-    let output = command.output()?;
+    let args = qemu_img_create_args(
+        image_file.as_ref(),
+        backing_file.as_ref().map(AsRef::as_ref),
+        size,
+        prealloc,
+    );
+    let output = Command::new("qemu-img").args(&args).output()?;
     if !output.status.success() {
         bail!(
             "Failed to create disk: {}",
@@ -241,7 +270,6 @@ impl PreparedQemuLaunch {
         networks: &[Networking],
     ) -> Result<Self> {
         let workdir = VmWorkDir::new(workdir);
-        prepare_data_disk(vm, &workdir)?;
         prepare_shared_dir(&workdir)?;
         let app_compose = workdir.app_compose().context("failed to get app compose")?;
         let platform = cfg.resolved_platform();
@@ -290,6 +318,10 @@ impl PreparedQemuLaunch {
             (None, None)
         };
         prepare_shared_disk(&workdir, cfg)?;
+        // Last, because it is the one expensive step: a preallocating VM
+        // writes its whole disk here, and there is no point doing that only to
+        // fail on a missing swtpm binary or an unusable network.
+        prepare_data_disk(vm, &workdir)?;
 
         let tee_enabled = !vm.manifest.no_tee;
         let tdx_mr_config_id = if tee_enabled
@@ -335,13 +367,37 @@ impl PreparedQemuLaunch {
 
 fn prepare_data_disk(vm: &VmConfig, workdir: &VmWorkDir) -> Result<()> {
     let hda_path = workdir.hda_path();
-    if !hda_path.exists() {
-        create_hd(
-            &hda_path,
-            vm.image.hda.as_ref(),
-            &format!("{}G", vm.manifest.disk_size),
-        )?;
+    if hda_path.exists() {
+        return Ok(());
     }
+    let prealloc = vm.manifest.disk_prealloc;
+    // Build the disk under a temporary name and rename it into place. An
+    // existing hda.img is taken as a finished disk, and preallocation makes
+    // creation slow enough -- minutes for a large `full` disk -- that a VMM
+    // killed midway would otherwise leave a half-written image that the next
+    // start would boot from.
+    let partial_path = hda_path.with_extension("img.partial");
+    if partial_path.exists() {
+        tracing::warn!(
+            "removing a leftover partial data disk: {}",
+            partial_path.display()
+        );
+        fs::remove_file(&partial_path).context("failed to remove the partial data disk")?;
+    }
+    if !prealloc.is_off() {
+        tracing::info!(
+            "creating {}GB data disk with preallocation={}",
+            vm.manifest.disk_size,
+            prealloc.as_str()
+        );
+    }
+    create_hd(
+        &partial_path,
+        vm.image.hda.as_ref(),
+        &format!("{}G", vm.manifest.disk_size),
+        prealloc,
+    )?;
+    fs::rename(&partial_path, &hda_path).context("failed to publish the data disk")?;
     Ok(())
 }
 
@@ -1097,9 +1153,13 @@ mod tests {
         Figment,
     };
 
+    use crate::config::DiskPrealloc;
+
     use super::{
-        amd_sev_snp_memory_backend_arg, macvtap_fd_layout, parse_amd_sev_snp_qmp_capabilities,
-        virtio_pci_device, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder, VmConfig,
+        amd_sev_snp_memory_backend_arg, create_hd, fs, macvtap_fd_layout,
+        parse_amd_sev_snp_qmp_capabilities, prepare_data_disk, qemu_img_create_args,
+        virtio_pci_device, Command, Path, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder,
+        VmConfig,
     };
     use crate::app::image::{Image, ImageInfo};
     use crate::app::{needs_swtpm, GpuConfig, GpuSpec, Manifest, PortMapping, VmVolume, VmWorkDir};
@@ -1157,6 +1217,136 @@ mod tests {
         );
     }
 
+    #[test]
+    fn disk_creation_args_carry_preallocation_only_when_requested() {
+        let image = PathBuf::from("/vms/vm-1/hda.img");
+        let backing = PathBuf::from("/images/base/hda.img");
+
+        assert_eq!(
+            qemu_img_create_args(&image, None, "20G", DiskPrealloc::Off),
+            vec!["create", "-f", "qcow2", "/vms/vm-1/hda.img", "20G"]
+        );
+
+        // No backing file: qcow2 takes preallocation on its own.
+        assert_eq!(
+            qemu_img_create_args(&image, None, "20G", DiskPrealloc::Falloc),
+            vec![
+                "create",
+                "-f",
+                "qcow2",
+                "-o",
+                "preallocation=falloc",
+                "/vms/vm-1/hda.img",
+                "20G"
+            ]
+        );
+
+        // With a backing file, preallocation additionally needs extended_l2.
+        assert_eq!(
+            qemu_img_create_args(&image, Some(&backing), "20G", DiskPrealloc::Full),
+            vec![
+                "create",
+                "-f",
+                "qcow2",
+                "-o",
+                "backing_file=/images/base/hda.img",
+                "-o",
+                "backing_fmt=qcow2",
+                "-o",
+                "extended_l2=on",
+                "-o",
+                "preallocation=full",
+                "/vms/vm-1/hda.img",
+                "20G"
+            ]
+        );
+
+        // An off disk keeps the exact arguments it had before the option
+        // existed, so existing deployments create byte-identical images.
+        assert_eq!(
+            qemu_img_create_args(&image, Some(&backing), "20G", DiskPrealloc::Off),
+            vec![
+                "create",
+                "-f",
+                "qcow2",
+                "-o",
+                "backing_file=/images/base/hda.img",
+                "-o",
+                "backing_fmt=qcow2",
+                "/vms/vm-1/hda.img",
+                "20G"
+            ]
+        );
+    }
+
+    /// The option combination is the risky part: qemu-img rejects
+    /// preallocation on top of a backing file unless subcluster allocation is
+    /// on, and that rejection only shows up when qemu-img actually runs.
+    /// Skipped where qemu-img is not installed.
+    #[test]
+    fn preallocated_disk_reserves_host_space_on_top_of_a_backing_file() {
+        use std::os::unix::fs::MetadataExt;
+
+        if Command::new("qemu-img").arg("--version").output().is_err() {
+            eprintln!("qemu-img not installed, skipping");
+            return;
+        }
+
+        let root = tempfile::TempDir::new().unwrap();
+        let base = root.path().join("base.img");
+        let hda = root.path().join("hda.img");
+        create_hd(&base, None::<&Path>, "8M", DiskPrealloc::Off).unwrap();
+
+        create_hd(&hda, Some(&base), "8M", DiskPrealloc::Falloc).unwrap();
+        let allocated = fs::metadata(&hda).unwrap().blocks() * 512;
+        assert!(
+            allocated >= 8 * 1024 * 1024,
+            "expected the 8M disk to be reserved, got {allocated} bytes"
+        );
+
+        fs::remove_file(&hda).unwrap();
+        create_hd(&hda, Some(&base), "8M", DiskPrealloc::Off).unwrap();
+        let allocated = fs::metadata(&hda).unwrap().blocks() * 512;
+        assert!(
+            allocated < 8 * 1024 * 1024,
+            "expected a thin disk, got {allocated} bytes"
+        );
+    }
+
+    #[test]
+    fn a_half_written_data_disk_is_never_taken_for_a_finished_one() {
+        if Command::new("qemu-img").arg("--version").output().is_err() {
+            eprintln!("qemu-img not installed, skipping");
+            return;
+        }
+
+        let root = tempfile::TempDir::new().unwrap();
+        let workdir = VmWorkDir::new(root.path());
+        let (_config, mut vm, _prepared) = test_launch_fixture();
+        vm.manifest.disk_size = 1;
+
+        // What a VMM killed during a slow preallocating create leaves behind.
+        let partial = workdir.hda_path().with_extension("img.partial");
+        fs::write(&partial, b"half a qcow2").unwrap();
+
+        prepare_data_disk(&vm, &workdir).unwrap();
+        assert!(workdir.hda_path().exists());
+        assert!(!partial.exists(), "the stale partial disk was kept");
+        let info = Command::new("qemu-img")
+            .args(["info", &workdir.hda_path().display().to_string()])
+            .output()
+            .unwrap();
+        assert!(
+            info.status.success(),
+            "the published disk is not a valid image"
+        );
+
+        // A finished disk is left exactly as it is.
+        let before = fs::metadata(workdir.hda_path()).unwrap().len();
+        prepare_data_disk(&vm, &workdir).unwrap();
+        assert_eq!(fs::metadata(workdir.hda_path()).unwrap().len(), before);
+    }
+
     /// Minimal launch fixture. Nothing it points at has to exist on disk; every
     /// test overrides the fields it asserts on.
     fn test_launch_fixture() -> (Config, VmConfig, PreparedQemuLaunch) {
@@ -1196,6 +1386,7 @@ mod tests {
                 volumes: vec![VmVolume {
                     source: "/does-not-exist/volume.img".into(),
                 }],
+                disk_prealloc: DiskPrealloc::Off,
             },
             image: Image {
                 info: ImageInfo {

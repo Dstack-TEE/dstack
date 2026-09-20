@@ -602,6 +602,19 @@ pub(crate) fn validate_cert_validity(
     not_before: Option<u64>,
     not_after: Option<u64>,
 ) -> Result<()> {
+    // Both bounds reach certificate issuance, where a timestamp past the last
+    // representable certificate time has no X.509 encoding. Reject it here so
+    // the caller reads which field was out of range.
+    for (name, value) in [("not_before", not_before), ("not_after", not_after)] {
+        if let Some(value) = value {
+            if value > ra_tls::cert::MAX_CERT_VALIDITY_SECS {
+                anyhow::bail!(
+                    "{name} must not be later than {}",
+                    ra_tls::cert::MAX_CERT_VALIDITY_SECS
+                );
+            }
+        }
+    }
     if let (Some(not_before), Some(not_after)) = (not_before, not_after) {
         if not_before >= not_after {
             anyhow::bail!("not_before must be earlier than not_after");
@@ -1799,6 +1812,32 @@ pNs85uhOZE8z2jr8Pg==
             "not_before must be earlier than not_after"
         );
         assert!(validate_cert_validity(Some(12), Some(11)).is_err());
+    }
+
+    #[test]
+    fn a_validity_bound_past_the_representable_range_is_rejected() {
+        // A container can reach this API over the guest socket. An
+        // unrepresentable bound used to overflow during issuance, and the
+        // release profile aborts on panic, so one request killed the agent.
+        let maximum = ra_tls::cert::MAX_CERT_VALIDITY_SECS;
+        assert!(validate_cert_validity(None, Some(maximum)).is_ok());
+        assert!(validate_cert_validity(Some(0), Some(maximum)).is_ok());
+        for value in [maximum + 1, u64::MAX / 2, u64::MAX] {
+            assert!(
+                validate_cert_validity(None, Some(value))
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not_after"),
+                "not_after {value} must be rejected by name"
+            );
+            assert!(
+                validate_cert_validity(Some(value), None)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("not_before"),
+                "not_before {value} must be rejected by name"
+            );
+        }
     }
 
     #[tokio::test]

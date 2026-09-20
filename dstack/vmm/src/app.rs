@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
-    config::{Config, Networking, NetworkingMode, NicNetworking, ProcessAnnotation, Protocol},
+    config::{
+        Config, DiskPrealloc, Networking, NetworkingMode, NicNetworking, ProcessAnnotation,
+        Protocol,
+    },
     logrotate,
     netd::{self, InterfaceIdentity, PrepareBridgeRequest, PrepareMacvtapRequest},
 };
@@ -136,6 +139,11 @@ pub struct Manifest {
     pub networks: Vec<NicNetworking>,
     #[serde(default)]
     pub volumes: Vec<VmVolume>,
+    /// Host-side preallocation used when the data disk is created. Resolved
+    /// once at deployment from the request and the node default, so a later
+    /// change to `cvm.disk_prealloc` leaves existing VMs alone.
+    #[serde(default)]
+    pub disk_prealloc: DiskPrealloc,
 }
 
 impl Manifest {
@@ -480,7 +488,7 @@ impl App {
         self.refuse_if_removing(id)?;
         // Everything below reads whether this VM is running and acts on the
         // answer for as long as the launch takes. See [`App::launch_lock`].
-        let _launch = self.launch_lock(id).await;
+        let launch = self.launch_lock(id).await;
         self.refuse_if_removing(id)?;
         // A restart decided before a stop must not outlive it. The decision
         // read `started` from disk; `stop_vm` writes it false under this lock,
@@ -537,12 +545,42 @@ impl App {
             .context("GPU sanitization task failed")??;
             self.prepare_netd_networks(&vm_config, &mut runtime_networks)
                 .await?;
-            let processes = match vm_config.config_qemu(
-                &work_dir,
-                &self.config.cvm,
-                &devices,
-                &runtime_networks,
-            ) {
+            // Off the async executor: this writes the guest config files and,
+            // when the VM preallocates, creates the data disk. `full` on a
+            // large disk writes the whole thing, which is minutes of blocking
+            // work, and even `falloc` is not instant.
+            //
+            // The launch lock travels into the task and back out. A dropped
+            // request -- a client that gave up, a proxy timeout -- cancels
+            // this future but not the blocking work, and the disk is only
+            // published when that work finishes. Leaving the lock with the
+            // future would let the next attempt run qemu-img against the same
+            // paths while the abandoned one is still writing them.
+            let qemu_config = vm_config.clone();
+            let app_config = self.config.clone();
+            let qemu_workdir = work_dir.path().to_path_buf();
+            let qemu_devices = devices.clone();
+            let qemu_networks = runtime_networks.clone();
+            let (launch, configured) = match tokio::task::spawn_blocking(move || {
+                let result = qemu_config.config_qemu(
+                    &qemu_workdir,
+                    &app_config.cvm,
+                    &qemu_devices,
+                    &qemu_networks,
+                );
+                (launch, result)
+            })
+            .await
+            {
+                Ok(configured) => configured,
+                Err(join_error) => {
+                    self.release_vm_interfaces(&vm_config.manifest.id).await;
+                    return Err(join_error).context("QEMU configuration task failed");
+                }
+            };
+            // Back in this future's hands, and held until the launch is done.
+            let _launch = launch;
+            let processes = match configured {
                 Ok(processes) => processes,
                 Err(error) => {
                     self.release_vm_interfaces(&vm_config.manifest.id).await;
@@ -3012,6 +3050,8 @@ mod tests {
         assert_eq!(manifest.networks.len(), 1);
         assert_eq!(manifest.networks[0].mode, NetworkingMode::Bridge);
         assert_eq!(manifest.networks[0].bridge, "dstack-br0");
+        // A manifest written before the option existed keeps thin disks.
+        assert_eq!(manifest.disk_prealloc, DiskPrealloc::Off);
     }
 
     fn write_u16_le_at(buf: &mut [u8], off: usize, value: u16) {
@@ -3108,6 +3148,7 @@ mod tests {
             swtpm: false,
             networks: vec![],
             volumes: vec![],
+            disk_prealloc: DiskPrealloc::Off,
         }
     }
 
@@ -3462,6 +3503,7 @@ mod tests {
             swtpm: false,
             networks: vec![],
             volumes: vec![],
+            disk_prealloc: DiskPrealloc::Off,
         };
 
         let mr_config = MrConfigV3::new(

@@ -105,6 +105,31 @@ tdx_attestation_variant = "auto"
 
 host_share_mode = "9p"
 
+# Default preallocation for a new CVM data disk. This is a host storage
+# policy -- the guest cannot see it and it does not affect measurements -- and
+# a deploy request may pick another mode per VM.
+#   "off"      : allocate nothing; the image grows as the guest writes, so the
+#                host is oversubscribed and a guest write can hit ENOSPC.
+#   "metadata" : allocate qcow2 metadata only; no space is reserved for data.
+#   "falloc"   : reserve the whole disk with fallocate(2). Fast, and it turns a
+#                full host into a VM start failure instead of a guest ENOSPC.
+#   "full"     : reserve and zero the whole disk. Creation writes the full disk
+#                size, so a large disk takes minutes.
+# "falloc" and "full" reserve host blocks, so they require
+# `storage_discard: false` in the app's app-compose.json -- a guest that may
+# discard hands the reserved blocks straight back -- and deployments that ask
+# for both are rejected. Note what that costs the app: editing app-compose
+# changes its hash and therefore its app id, so those two modes are not free
+# of the identity for an app that ships with discard on. "metadata" reserves
+# nothing and needs no compose change.
+# Preallocation on top of a base image needs qcow2 subcluster allocation, so
+# the VMM creates such disks with extended_l2=on (QEMU 5.2+).
+# This value applies to disks created from here on, and a VM's mode is fixed
+# at deployment. An existing data disk is never converted -- editing the VM's
+# vm-manifest.json only changes what a later resize does -- so the way to
+# preallocate an existing VM is to redeploy it.
+disk_prealloc = "off"
+
 # QGS (Quote Generation Service) vsock port for kernel-level TSM support.
 # When set, QEMU will pass this port to tdx-guest for configfs-tsm quote generation.
 # The guest kernel will use this vsock port to communicate with the host QGS.

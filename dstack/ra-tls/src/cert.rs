@@ -113,8 +113,16 @@ impl CaCert {
             .maybe_app_id(app_id)
             .maybe_app_info(app_info.as_ref())
             .special_usage(usage)
-            .maybe_not_before(cfg.not_before.map(unix_time_to_system_time))
-            .maybe_not_after(cfg.not_after.map(unix_time_to_system_time))
+            .maybe_not_before(
+                cfg.not_before
+                    .map(|secs| unix_time_to_system_time(secs, "not_before"))
+                    .transpose()?,
+            )
+            .maybe_not_after(
+                cfg.not_after
+                    .map(|secs| unix_time_to_system_time(secs, "not_after"))
+                    .transpose()?,
+            )
             .build();
         self.sign(req).context("Failed to sign certificate")
     }
@@ -427,8 +435,25 @@ fn add_ext(params: &mut CertificateParams, oid: &[u64], content: impl AsRef<[u8]
         .push(CustomExtension::from_oid_content(oid, content));
 }
 
-fn unix_time_to_system_time(secs: u64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_secs(secs)
+/// The last instant RFC 5280 can encode: 9999-12-31T23:59:59Z. A validity
+/// boundary past it has no X.509 representation, and the values a caller can
+/// reach beyond it overflow `SystemTime` on every supported platform.
+pub const MAX_CERT_VALIDITY_SECS: u64 = 253_402_300_799;
+
+/// Convert a caller-supplied Unix timestamp into a certificate validity bound.
+///
+/// The timestamp arrives from a remote request, so an out-of-range value must
+/// be an error the caller sees rather than an arithmetic overflow. `UNIX_EPOCH
+/// + Duration::from_secs(u64::MAX)` panics, and the workspace builds release
+/// binaries with `panic = "abort"`, so an unchecked conversion turns one
+/// request into a process abort.
+fn unix_time_to_system_time(secs: u64, field: &str) -> Result<SystemTime> {
+    if secs > MAX_CERT_VALIDITY_SECS {
+        bail!("{field} {secs} is past the last representable certificate time");
+    }
+    UNIX_EPOCH
+        .checked_add(Duration::from_secs(secs))
+        .with_context(|| format!("{field} {secs} overflows the system clock range"))
 }
 
 impl CertRequest<'_, KeyPair> {
@@ -695,6 +720,86 @@ mod tests {
         // Verify decompression works
         let decompressed = decompress_ext_value(&compressed).unwrap();
         assert_eq!(decompressed, large_data);
+    }
+
+    #[test]
+    fn a_validity_bound_past_the_representable_range_is_an_error() {
+        // `UNIX_EPOCH + Duration::from_secs(u64::MAX)` panics, and release
+        // binaries abort on panic, so an out-of-range bound must be reported.
+        for secs in [
+            MAX_CERT_VALIDITY_SECS + 1,
+            u64::MAX / 2,
+            u64::MAX - 1,
+            u64::MAX,
+        ] {
+            let error = unix_time_to_system_time(secs, "not_after")
+                .expect_err("an out-of-range bound must not be accepted");
+            assert!(
+                error.to_string().contains("not_after"),
+                "the error must name the field: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_validity_bound_inside_the_representable_range_is_accepted() {
+        for secs in [0, 1, 4_102_444_800, MAX_CERT_VALIDITY_SECS] {
+            let time = unix_time_to_system_time(secs, "not_before")
+                .expect("a representable bound must be accepted");
+            assert_eq!(
+                time.duration_since(UNIX_EPOCH).unwrap(),
+                Duration::from_secs(secs)
+            );
+        }
+    }
+
+    #[test]
+    fn signing_a_csr_with_an_unrepresentable_not_after_fails_without_aborting() {
+        let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut ca_params = CertificateParams::new(vec![]).unwrap();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(1));
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let ca = CaCert::from_parts(
+            KeyPair::from_pem(&ca_key.serialize_pem()).unwrap(),
+            ca_cert,
+        );
+
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let csr = CertSigningRequestV2 {
+            confirm: "please sign cert:".to_string(),
+            pubkey: key.public_key_der(),
+            config: CertConfigV2 {
+                org_name: None,
+                subject: "test.example.com".to_string(),
+                subject_alt_names: vec![],
+                usage_server_auth: true,
+                usage_client_auth: false,
+                ext_quote: false,
+                ext_app_info: false,
+                not_before: None,
+                not_after: Some(u64::MAX),
+            },
+            attestation: Attestation {
+                quote: AttestationQuote::DstackTdx(TdxQuote {
+                    quote: vec![],
+                    event_log: vec![],
+                }),
+                runtime_events: vec![],
+                report_data: [0u8; 64],
+                config: "".into(),
+                report: (),
+            }
+            .into_versioned(),
+        };
+
+        let error = match ca.sign_csr(&csr, None, "app:custom") {
+            Ok(_) => panic!("an unrepresentable not_after must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("not_after"),
+            "the error must name the field: {error:#}"
+        );
     }
 
     #[test]

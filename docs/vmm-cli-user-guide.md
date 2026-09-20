@@ -233,6 +233,7 @@ First, create an application composition file that describes your application:
 - `--public-sysinfo`: Make system info publicly accessible
 - `--env-file`: File with environment variables to encrypt
 - `--no-instance-id`: Disable unique instance identification
+- `--no-storage-discard`: Keep deleted data-disk blocks instead of returning them to the host. Required by `deploy --disk-prealloc falloc|full`, and it also keeps filesystem allocation and deletion patterns from the host. The cost is that the image only ever grows: space freed inside the guest is never given back
 
 #### Example with Security Features
 
@@ -268,6 +269,17 @@ Deploy your application with the compose file:
 - `--vcpu`: Number of virtual CPUs (default: 1)
 - `--memory`: Memory size (e.g., 1G, 512M, 2048M)
 - `--disk`: Disk size (e.g., 20G, 100G)
+- `--disk-prealloc`: Preallocate the disk on the host: `off`, `metadata`, `falloc` or `full`. Omitting it uses the node's `cvm.disk_prealloc`, which ships as `off`. `falloc` reserves the full size up front, so a host that is out of space fails the VM's first start instead of leaving the guest to hit ENOSPC mid-run; `full` also zeroes it, which takes as long as writing the whole disk. The disk is created on first start, not at deploy time, so this is where the reservation -- and any failure to make it -- shows up. The VMM's `cvm.disk_prealloc` provides the default.
+
+  `falloc` and `full` reserve host blocks and therefore require `storage_discard: false` in the compose file (`compose --no-storage-discard`), because a guest that may discard returns the reserved blocks to the host on its first trim. Deploying either with discard still enabled is rejected:
+
+  ```
+  disk preallocation (falloc) reserves host blocks, so app-compose must set
+  storage_discard = false; either turn discard off in the compose file, or redeploy
+  with disk_prealloc = "off" or "metadata" -- the mode is fixed at deployment
+  ```
+
+  Editing app-compose changes its hash and so the app id, which for a KMS-backed app means another on-chain whitelist entry. `metadata` reserves no data blocks, needs no compose change, and is left alone by this check.
 - `--port`: Port mappings (see Port Mapping section)
 - `--gpu`: GPU assignments
 - `--ppcie`: Enable PPCIE mode (attach ALL available GPUs and NVSwitches)

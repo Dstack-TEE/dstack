@@ -882,6 +882,11 @@ class VmmCLI:
             "no_instance_id": args.no_instance_id,
             "secure_time": args.secure_time,
         }
+        # Only emit the field when it is turned off, so a default compose file
+        # keeps the exact bytes -- and therefore the compose hash -- it had
+        # before this option existed.
+        if args.no_storage_discard:
+            app_compose["storage_discard"] = False
         if args.key_provider:
             app_compose["key_provider"] = args.key_provider
         if args.prelaunch_script:
@@ -954,6 +959,8 @@ class VmmCLI:
             "stopped": args.stopped,
             "no_tee": args.no_tee,
         }
+        if args.disk_prealloc:
+            params["disk_prealloc"] = args.disk_prealloc
         if args.simulated_tee:
             params["simulated_tee"] = args.simulated_tee
         if args.swap is not None:
@@ -1373,7 +1380,9 @@ class VmmCLI:
         print(f"Image Version: {info.get('image_version', '-')}")
         print(f"vCPU:          {config.get('vcpu', '-')}")
         print(f"Memory:        {config.get('memory', '-')}MB")
-        print(f"Disk:          {config.get('disk_size', '-')}GB")
+        prealloc = config.get("disk_prealloc") or "off"
+        disk_note = "" if prealloc == "off" else f" (prealloc: {prealloc})"
+        print(f"Disk:          {config.get('disk_size', '-')}GB{disk_note}")
         print(f"GPUs:          {self._format_gpu_info(config.get('gpus'))}")
         print(f"Boot Progress: {info.get('boot_progress', '-')}")
         if info.get("boot_error"):
@@ -1910,6 +1919,15 @@ def main():
         "--secure-time", action="store_true", help="Enable secure time"
     )
     compose_parser.add_argument(
+        "--no-storage-discard",
+        action="store_true",
+        help=(
+            "Keep deleted data-disk blocks instead of returning them to the "
+            "host. Required by 'deploy --disk-prealloc falloc|full', and it "
+            "also stops the host from seeing filesystem allocation patterns"
+        ),
+    )
+    compose_parser.add_argument(
         "--swap",
         type=parse_memory_size,
         default=None,
@@ -1978,6 +1996,19 @@ def main():
     )
     deploy_parser.add_argument(
         "--hugepages", action="store_true", help="Enable hugepages for the VM"
+    )
+    deploy_parser.add_argument(
+        "--disk-prealloc",
+        choices=["off", "metadata", "falloc", "full"],
+        default=None,
+        help=(
+            "Preallocate the data disk on the host: metadata (qcow2 metadata "
+            "only), falloc (reserve space, fast) or full (reserve and zero). "
+            "falloc and full reserve host blocks and require "
+            "storage_discard=false in the compose file (see "
+            "'compose --no-storage-discard'). Defaults to the VMM's "
+            "cvm.disk_prealloc setting"
+        ),
     )
     deploy_parser.add_argument("--kms-url", action="append", type=str, help="KMS URL")
     deploy_parser.add_argument(
