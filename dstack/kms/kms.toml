@@ -66,6 +66,11 @@ insecure_allow_external_trust_anchors = false
 # sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
 
 [core.image]
+# Whether to check that the reported os_image_hash actually measures the image
+# the caller booted. Setting this to false makes BootInfo.os_image_hash whatever
+# the caller put in GetAppKeyRequest.vm_config, so an allowedOsImages allowlist
+# is then gating an attacker-supplied string. The KMS warns at startup and
+# reports the posture in KMS.GetMeta as `os_image_verification`.
 verify = true
 cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"

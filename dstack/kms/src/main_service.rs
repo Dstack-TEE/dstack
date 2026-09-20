@@ -28,7 +28,7 @@ use ra_tls::{
 };
 use scale::Decode;
 use tokio::sync::OnceCell;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
 
 use crate::{
@@ -156,6 +156,14 @@ impl KmsState {
         if !config.enforce_self_authorization {
             warn!(
                 "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
+            );
+        }
+        if !config.image.verify {
+            warn!(
+                "os image verification is disabled; BootInfo.os_image_hash is taken from the \
+                 caller's vm_config and is never checked against the image it claims to \
+                 measure, so an allowedOsImages allowlist is gating an attacker-supplied \
+                 string - do not use in production TEE deployments"
             );
         }
         Ok(Self {
@@ -288,7 +296,7 @@ impl RpcHandler {
         report: &VerifiedAttestation,
     ) -> Result<()> {
         if !self.state.config.image.verify {
-            info!("Image verification is disabled");
+            debug!("os image verification is disabled");
             return Ok(());
         }
         let mut detail = VerificationDetails::default();
@@ -472,6 +480,10 @@ impl KmsRpc for RpcHandler {
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
+            // Surfaced so a relying party can tell whether the
+            // `allowedOsImages` decision behind this KMS was made against a
+            // verified measurement or against a string the caller chose.
+            os_image_verification: Some(self.state.config.image.verify),
         })
     }
 
@@ -1236,6 +1248,25 @@ mod tests {
     }
 
     const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    /// `image.verify = false` means `BootInfo.os_image_hash` is whatever the
+    /// caller put in `vm_config`, so an `allowedOsImages` allowlist is gating
+    /// an attacker-supplied string. A relying party has to be able to see that.
+    #[rocket::async_test]
+    async fn get_meta_reports_whether_os_image_verification_is_on() {
+        for verify in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let (url, _) = serve_concurrent_auth_api(AUTH_API_INFO);
+            let meta = RpcHandler {
+                state: kms_state(dir.path(), &url, verify),
+                attestation: None,
+            }
+            .get_meta()
+            .await
+            .unwrap();
+            assert_eq!(meta.os_image_verification, Some(verify));
+        }
+    }
 
     /// `GetMeta` needs no client certificate and each call drives two or three
     /// `readContract` calls on the operator's chain RPC. A burst of anonymous

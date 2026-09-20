@@ -58,6 +58,15 @@ message GetMetaResponse {
   optional string kms_contract_address = 7;
   optional uint64 chain_id = 8;
   optional string app_auth_implementation = 9;
+  // Whether this KMS verifies that the reported `os_image_hash` actually
+  // measures the image the caller booted (`[core.image] verify`).
+  //
+  // When false the KMS skips that check entirely, so `os_image_hash` is
+  // whatever the caller put in `GetAppKeyRequest.vm_config` and any
+  // `allowedOsImages` allowlist downstream is checking a caller-supplied
+  // string. Additive and optional: an older KMS leaves it unset, which a
+  // relying party must not read as `true`.
+  optional bool os_image_verification = 10;
 }
 
 message GetKmsKeyRequest {
