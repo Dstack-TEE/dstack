@@ -435,6 +435,44 @@ mod tests {
         );
     }
 
+    /// "Carried forever" is a fixed cost, not a growing one.
+    ///
+    /// Each write copies the unknown fields out of the *stored* copy, so the
+    /// carried set is whatever that record holds minus what the writer
+    /// declares -- it cannot compound across writes. A field can only enter it
+    /// by being written by a build that declares it, and the writers are this
+    /// binary and peers whose certificate carries this gateway's own app id,
+    /// so the set is bounded by gateway source rather than by traffic or time.
+    #[test]
+    fn rewriting_a_record_forever_does_not_grow_it() {
+        let mut stored = stored_by_a_newer_build();
+        let fields = |bytes: &[u8]| split_map(bytes).expect("a map").1.len();
+        let baseline = fields(&stored);
+
+        for _ in 0..50 {
+            let record: Old = rmp_serde::from_slice(&stored).unwrap();
+            stored = carry_unknown_fields::<Old>(
+                "inst/app",
+                declared_fields::<Old>().unwrap(),
+                &stored,
+                rmp_serde::to_vec_named(&record).unwrap(),
+            );
+            assert_eq!(fields(&stored), baseline, "the older build grew the record");
+
+            let record: New = rmp_serde::from_slice(&stored).unwrap();
+            stored = carry_unknown_fields::<New>(
+                "inst/app",
+                declared_fields::<New>().unwrap(),
+                &stored,
+                rmp_serde::to_vec_named(&record).unwrap(),
+            );
+            assert_eq!(fields(&stored), baseline, "the newer build grew the record");
+        }
+
+        let seen: New = rmp_serde::from_slice(&stored).unwrap();
+        assert_eq!(seen.admin_port_policy, Some(7), "and nothing was lost");
+    }
+
     /// Anything that is not a string-keyed map is left exactly as encoded: a
     /// scalar, and the positional array encoding that older releases wrote
     /// before values became named maps.
