@@ -40,3 +40,7 @@ tokio = { workspace = true, features = ["rt"], optional = true }
 [features]
 default = ["crl-download"]
 crl-download = ["reqwest", "tokio"]
+
+[dev-dependencies]
+prop-harness.workspace = true
+proptest.workspace = true

@@ -687,3 +687,6 @@ fn verify_ak_chain_with_collateral(
         }
     }
 }
+
+#[cfg(test)]
+mod proptests;
