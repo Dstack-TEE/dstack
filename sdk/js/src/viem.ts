@@ -9,7 +9,8 @@ import { privateKeyToAccount } from 'viem/accounts'
 
 /**
  * @deprecated use toViemAccountSecure instead. This method has security concerns.
- * Current implementation uses raw key material without proper hashing.
+ * A `GetTlsKeyResponse` is used without hashing; a `GetKeyResponse` gives the
+ * same result as `toViemAccountSecure`.
  */
 export function toViemAccount(keyResponse: GetKeyResponse | GetTlsKeyResponse) {
   // Keep legacy behavior for GetTlsKeyResponse, but with warning.
@@ -23,8 +24,12 @@ export function toViemAccount(keyResponse: GetKeyResponse | GetTlsKeyResponse) {
 }
 
 /**
- * Creates a Viem account from DeriveKeyResponse using secure key derivation.
- * This method applies SHA256 hashing to the complete key material for enhanced security.
+ * Creates a Viem account from a key response.
+ *
+ * A `GetTlsKeyResponse` is hashed with SHA256 before use. A `GetKeyResponse`
+ * key is used as is: it is already a KMS-derived key specific to its path and
+ * purpose, so it needs no further hashing. Derive wallet keys from a dedicated
+ * path rather than reusing one key for several purposes.
  */
 export function toViemAccountSecure(keyResponse: GetKeyResponse | GetTlsKeyResponse) {
   // Keep legacy behavior for GetTlsKeyResponse, but with warning.

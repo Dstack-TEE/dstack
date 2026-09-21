@@ -394,7 +394,7 @@ const key = await client.getKey('wallet/solana', 'mainnet', 'ed25519')
 const keypair = toKeypairSecure(key)
 ```
 
-Given a `GetTlsKeyResponse` both helpers hash the PEM key with SHA-256 first, which is what makes them "secure" relative to `toViemAccount` and `toKeypair`; those unhashed variants are kept for migration only and emit a warning.
+Given a `GetTlsKeyResponse` both helpers hash the PEM key with SHA-256 first, which is what makes them "secure" relative to `toViemAccount` and `toKeypair`; those unhashed variants are kept for migration only and emit a warning. A `GetKeyResponse` key is used as is by both, since it is already derived per path and purpose by the KMS.
 
 ### Migrating v0 to v1
 

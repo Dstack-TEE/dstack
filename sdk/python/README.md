@@ -593,9 +593,10 @@ keypair = to_keypair_secure(
 print(keypair.pubkey())
 ```
 
-`to_account_secure` / `to_keypair_secure` hash the full key material with
-SHA-256 before deriving. The legacy `to_account()` / `to_keypair()` use raw key
-bytes and are kept only for backward compatibility.
+Given a `GetTlsKeyResponse`, `to_account_secure` / `to_keypair_secure` hash the
+key with SHA-256 before deriving; the legacy `to_account()` / `to_keypair()` do
+not, and are kept only for backward compatibility. A `GetKeyResponse` key is used
+as is by both, since it is already derived per path and purpose by the KMS.
 
 ## Migration from TappdClient
 
