@@ -211,17 +211,37 @@ pub(crate) fn build_boot_info_for_attestation(
     build_boot_info(att, use_boottime_mr, vm_config_str)
 }
 
-fn ensure_key_release_allowed(
-    boot_info: &BootInfo,
-    snp_enabled: bool,
-    aws_nitro_tpm_enabled: bool,
-) -> Result<()> {
+/// The per-platform local key-release opt-ins, read from `KmsConfig`.
+///
+/// Carried as a named struct rather than positional bools so that adding a
+/// platform does not silently reorder an existing call site.
+#[derive(Debug, Clone, Copy, Default)]
+struct KeyReleasePolicy {
+    snp: bool,
+    aws_nitro_tpm: bool,
+    nitro_enclave: bool,
+}
+
+impl From<&KmsConfig> for KeyReleasePolicy {
+    fn from(config: &KmsConfig) -> Self {
+        Self {
+            snp: config.sev_snp_key_release,
+            aws_nitro_tpm: config.aws_nitro_tpm_key_release,
+            nitro_enclave: config.nitro_enclave_key_release,
+        }
+    }
+}
+
+fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) -> Result<()> {
     match boot_info.tee_variant {
-        TeeVariant::DstackAmdSevSnp if !snp_enabled => {
+        TeeVariant::DstackAmdSevSnp if !policy.snp => {
             bail!("amd sev-snp key release is not enabled")
         }
-        TeeVariant::DstackAwsNitroTpm if !aws_nitro_tpm_enabled => {
+        TeeVariant::DstackAwsNitroTpm if !policy.aws_nitro_tpm => {
             bail!("aws nitro-tpm key release is not enabled")
+        }
+        TeeVariant::DstackNitroEnclave if !policy.nitro_enclave => {
+            bail!("aws nitro enclave key release is not enabled")
         }
         _ => Ok(()),
     }
@@ -229,11 +249,10 @@ fn ensure_key_release_allowed(
 
 fn ensure_self_key_release_allowed(
     self_boot_info: Option<&BootInfo>,
-    snp_enabled: bool,
-    aws_nitro_tpm_enabled: bool,
+    policy: KeyReleasePolicy,
 ) -> Result<()> {
     if let Some(boot_info) = self_boot_info {
-        ensure_key_release_allowed(boot_info, snp_enabled, aws_nitro_tpm_enabled)?;
+        ensure_key_release_allowed(boot_info, policy)?;
     }
     Ok(())
 }
@@ -367,11 +386,7 @@ impl KmsRpc for RpcHandler {
             .ensure_app_boot_allowed(&request.vm_config)
             .await
             .context("App not allowed")?;
-        ensure_key_release_allowed(
-            &boot_info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
         let app_id = boot_info.app_id;
         let instance_id = boot_info.instance_id;
         let os_image_hash = boot_info.os_image_hash;
@@ -480,11 +495,7 @@ impl KmsRpc for RpcHandler {
             .await
             .context("KMS self authorization failed")?;
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
-        ensure_key_release_allowed(
-            &info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_key_release_allowed(&info, (&self.state.config).into())?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
             keys: vec![KmsKeys {
@@ -513,11 +524,7 @@ impl KmsRpc for RpcHandler {
             .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
-        ensure_self_key_release_allowed(
-            self_boot_info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_self_key_release_allowed(self_boot_info, (&self.state.config).into())?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -556,11 +563,7 @@ impl KmsRpc for RpcHandler {
         let app_info = self
             .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config)
             .await?;
-        ensure_key_release_allowed(
-            &app_info.boot_info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
         let cert = app_ca
             .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
@@ -598,6 +601,17 @@ mod tests {
     };
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
+
+    const SNP_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
+        snp: true,
+        aws_nitro_tpm: false,
+        nitro_enclave: false,
+    };
+    const NITRO_ENCLAVE_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
+        snp: false,
+        aws_nitro_tpm: false,
+        nitro_enclave: true,
+    };
 
     #[test]
     fn remove_cache_only_deletes_the_named_hex_entry() {
@@ -938,14 +952,21 @@ mod tests {
             .expect("aws nitrotpm attestation should produce KMS boot info");
 
         // disabled (the default) fails closed for the new AWS NitroTPM mode
-        let err = ensure_key_release_allowed(&boot_info, false, false).unwrap_err();
+        let err = ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default()).unwrap_err();
         assert!(err.to_string().contains("not enabled"));
         // explicitly enabled permits it
-        ensure_key_release_allowed(&boot_info, false, true).unwrap();
+        ensure_key_release_allowed(
+            &boot_info,
+            KeyReleasePolicy {
+                aws_nitro_tpm: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // A TDX boot info is unaffected by the AWS gate even when it is disabled.
         boot_info.tee_variant = TeeVariant::DstackTdx;
-        ensure_key_release_allowed(&boot_info, false, false).unwrap();
+        ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default()).unwrap();
     }
 
     #[test]
@@ -1090,9 +1111,8 @@ mod tests {
     #[test]
     fn snp_key_release_requires_explicit_enablement() {
         let boot_info = snp_boot_info();
-        let enabled = false;
 
-        let err = ensure_key_release_allowed(&boot_info, enabled, false)
+        let err = ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
             .expect_err("snp boot info must not be key-release enabled by default");
         assert!(
             err.to_string()
@@ -1104,32 +1124,74 @@ mod tests {
     #[test]
     fn snp_key_release_accepts_auth_approved_boot_info_when_enabled() {
         let boot_info = snp_boot_info();
-        let enabled = true;
 
-        ensure_key_release_allowed(&boot_info, enabled, false)
+        ensure_key_release_allowed(&boot_info, SNP_ENABLED)
             .expect("explicitly enabled SNP key release should allow auth-approved boot info");
     }
 
     #[test]
     fn snp_key_release_leaves_tcb_and_advisory_policy_to_auth_api() {
         let mut boot_info = snp_boot_info();
-        let enabled = true;
 
         boot_info.tcb_status = "OutOfDate".to_string();
         boot_info.advisory_ids.push("SNP-TEST-ADVISORY".to_string());
-        ensure_key_release_allowed(&boot_info, enabled, false)
+        ensure_key_release_allowed(&boot_info, SNP_ENABLED)
             .expect("TCB/advisory policy should be decided by the auth API, not this local gate");
     }
 
     #[test]
     fn snp_self_boot_info_uses_same_release_policy_for_temp_ca() {
         let boot_info = snp_boot_info();
-        let disabled = false;
-        let enabled = true;
 
-        ensure_self_key_release_allowed(Some(&boot_info), disabled, false)
+        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default())
             .expect_err("disabled SNP self boot info must not receive temp CA key material");
-        ensure_self_key_release_allowed(Some(&boot_info), enabled, false)
+        ensure_self_key_release_allowed(Some(&boot_info), SNP_ENABLED)
             .expect("enabled clean SNP self boot info should pass the temp CA release gate");
+    }
+
+    #[test]
+    fn nitro_enclave_key_release_requires_explicit_enablement() {
+        let mut boot_info = snp_boot_info();
+        boot_info.tee_variant = TeeVariant::DstackNitroEnclave;
+
+        // disabled (the default) fails closed
+        let err = ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
+            .expect_err("nitro enclave boot info must not be key-release enabled by default");
+        assert!(
+            err.to_string()
+                .contains("aws nitro enclave key release is not enabled"),
+            "unexpected error: {err:?}"
+        );
+
+        // explicitly enabled permits it
+        ensure_key_release_allowed(&boot_info, NITRO_ENCLAVE_ENABLED)
+            .expect("explicitly enabled nitro enclave key release should allow the boot info");
+
+        // the temp CA path uses the same gate
+        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default()).expect_err(
+            "disabled nitro enclave self boot info must not receive temp CA key material",
+        );
+        ensure_self_key_release_allowed(Some(&boot_info), NITRO_ENCLAVE_ENABLED)
+            .expect("enabled nitro enclave self boot info should pass the temp CA release gate");
+    }
+
+    #[test]
+    fn key_release_gates_do_not_leak_across_platforms() {
+        let mut boot_info = snp_boot_info();
+
+        // Enabling one platform must not enable another.
+        boot_info.tee_variant = TeeVariant::DstackNitroEnclave;
+        ensure_key_release_allowed(&boot_info, SNP_ENABLED)
+            .expect_err("the SNP opt-in must not release keys to a nitro enclave");
+        boot_info.tee_variant = TeeVariant::DstackAmdSevSnp;
+        ensure_key_release_allowed(&boot_info, NITRO_ENCLAVE_ENABLED)
+            .expect_err("the nitro enclave opt-in must not release keys to an SNP guest");
+
+        // TDX and GCP TDX have no local gate and are unaffected by all of them.
+        for variant in [TeeVariant::DstackTdx, TeeVariant::DstackGcpTdx] {
+            boot_info.tee_variant = variant;
+            ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
+                .expect("TDX key release has no local opt-in gate");
+        }
     }
 }
