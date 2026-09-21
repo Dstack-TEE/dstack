@@ -592,6 +592,7 @@ mod tests {
                         pcr0: Vec::new(),
                         pcr1: Vec::new(),
                         pcr2: Vec::new(),
+                        pcr4: Vec::new(),
                     },
                     user_data: Vec::new(),
                     timestamp: 0,
