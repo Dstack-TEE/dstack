@@ -24,7 +24,8 @@ def to_account(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> LocalAcc
     """Create an Ethereum account from a DstackClientV0 key response.
 
     DEPRECATED: Use to_account_secure instead. This method has security concerns.
-    Current implementation uses raw key material without proper hashing.
+    A GetTlsKeyResponse is used without hashing; a GetKeyResponse gives the
+    same result as to_account_secure.
 
     Args:
         get_key_response: Response from get_key() or get_tls_key()
@@ -48,7 +49,13 @@ def to_account(get_key_response: GetKeyResponse | GetTlsKeyResponse) -> LocalAcc
 def to_account_secure(
     get_key_response: GetKeyResponse | GetTlsKeyResponse,
 ) -> LocalAccount:
-    """Create an Ethereum account using SHA256 of full key material for security."""
+    """Create an Ethereum account from a DstackClientV0 key response.
+
+    A GetTlsKeyResponse is hashed with SHA256 before use. A GetKeyResponse key
+    is used as is: it is already a KMS-derived key specific to its path and
+    purpose, so it needs no further hashing. Derive wallet keys from a
+    dedicated path rather than reusing one key for several purposes.
+    """
     if isinstance(get_key_response, GetTlsKeyResponse):
         warnings.warn(
             "to_account_secure: Please don't use getTlsKey method to get key, use getKey instead.",
