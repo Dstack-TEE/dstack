@@ -4,7 +4,7 @@
 
 services:
   relay:
-    image: ${KMS_IMAGE:?Set a published KMS image digest}
+    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:eb1998f99fe87f51c70f1480410f41251f3d2a6c0a4ffef7c75529bcc1e2dc1c}
     restart: unless-stopped
     command:
       - opstack-server
@@ -18,7 +18,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   helios:
-    image: ${KMS_IMAGE:?Set a published KMS image digest}
+    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:eb1998f99fe87f51c70f1480410f41251f3d2a6c0a4ffef7c75529bcc1e2dc1c}
     restart: unless-stopped
     command:
       - helios
@@ -33,7 +33,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   auth-api:
-    image: ${KMS_IMAGE:?Set a published KMS image digest}
+    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:eb1998f99fe87f51c70f1480410f41251f3d2a6c0a4ffef7c75529bcc1e2dc1c}
     command: [node, /opt/auth-eth/dist/main.js]
     restart: unless-stopped
     environment:
@@ -49,7 +49,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   kms:
-    image: ${KMS_IMAGE:?Set a published KMS image digest}
+    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:eb1998f99fe87f51c70f1480410f41251f3d2a6c0a4ffef7c75529bcc1e2dc1c}
     volumes:
       - kms-volume:/kms
       - /var/run/dstack.sock:/var/run/dstack.sock

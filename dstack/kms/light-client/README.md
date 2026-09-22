@@ -9,7 +9,8 @@ builder pins the [Helios fork](https://github.com/Dstack-TEE/helios/pull/1) by c
 
 Set these variables and render Compose before passing it to dstack:
 
-- `KMS_IMAGE`: the published `ghcr.io/dstack-tee/dstack-kms@sha256:...` digest.
+- `KMS_IMAGE`: optional override for the pinned preview image digest. Use a
+  reviewed release digest for production.
 - `KMS_CONTRACT_ADDR`: a Phala contract compatible with the current auth API.
 - `ETH_MAX_BLOCK_AGE_SECONDS`: the maximum accepted age of authenticated state.
   Choose explicitly based on acceptable revocation delay and observed latency.

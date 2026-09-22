@@ -96,7 +96,8 @@ The first two components are deployed as an dstack app on dstack in Local-Key-Pr
 The default [Docker Compose file](dstack-app/docker-compose.yaml) uses the
 [Phala L2 light client](light-client/README.md). Set `KMS_CONTRACT_ADDR` to a
 Phala contract compatible with the current auth API, and use a published KMS
-image digest; deployment does not build images. Reads use sequencer-authenticated, proof-verified state,
+image digest; deployment does not build images. Reads use sequencer-authenticated,
+proof-verified state,
 not L1-settled consensus. See the light-client guide for deployment requirements.
 
 The solidity contracts are deployed on an ethereum compatible chain.
