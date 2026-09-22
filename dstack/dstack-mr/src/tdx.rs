@@ -148,6 +148,9 @@ fn read_varuint(input: &mut &[u8]) -> Result<u64> {
             .split_first()
             .context("truncated TD HOB witness varuint")?;
         *input = rest;
+        if shift == 63 && byte & 0x7e != 0 {
+            bail!("TD HOB witness varuint is too large");
+        }
         value |= ((byte & 0x7f) as u64) << shift;
         if byte & 0x80 == 0 {
             return Ok(value);
@@ -766,6 +769,23 @@ mod tests {
                 return;
             }
         }
+    }
+
+    #[test]
+    fn read_varuint_rejects_values_larger_than_u64() {
+        let mut max = Vec::new();
+        put_varuint(u64::MAX, &mut max);
+        assert_eq!(read_varuint(&mut max.as_slice()).unwrap(), u64::MAX);
+
+        let mut bytes = [0xff; 10];
+        bytes[9] = 0x02;
+        let mut encoded = bytes.as_slice();
+
+        let err = read_varuint(&mut encoded).expect_err("an overflowing varuint must be rejected");
+        assert!(
+            err.to_string().contains("too large"),
+            "unexpected error: {err}"
+        );
     }
 
     fn witness_within_deadline(witness: Vec<u8>, memory_size: u64) -> Result<(), String> {
