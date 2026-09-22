@@ -93,7 +93,11 @@ below, which decides whether a CVM may boot and receive keys.
 
 ### Deployment
 The first two components are deployed as an dstack app on dstack in Local-Key-Provider mode.
-The docker compose file would look like [this](dstack-app/docker-compose.yaml).
+The default [Docker Compose file](dstack-app/docker-compose.yaml) uses the
+[Phala L2 light client](light-client/README.md). Set `KMS_CONTRACT_ADDR` to a
+Phala contract compatible with the current auth API before building from this
+repository checkout. Reads use sequencer-authenticated, proof-verified state,
+not L1-settled consensus. See the light-client guide for deployment requirements.
 
 The solidity contracts are deployed on an ethereum compatible chain.
 

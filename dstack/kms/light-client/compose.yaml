@@ -1,11 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
-#
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
 
 services:
   relay:
     image: dstack-phala-light-client:local
-    build: ../light-client
+    build: .
     restart: unless-stopped
     command:
       - opstack-server
@@ -46,40 +45,7 @@ services:
       ETH_BLOCK_LAG: "2"
       ETH_MAX_BLOCK_AGE_SECONDS: "60"
       KMS_CONTRACT_ADDR: ${KMS_CONTRACT_ADDR:?Set the Phala KMS contract address}
+    ports: ["127.0.0.1:18000:8000"]
     depends_on: [helios]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-
-  # KMS handles the TEE Remote Attestation
-  kms:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
-        WORKDIR /app
-        RUN apt-get update && apt-get install -y \
-            git \
-            build-essential \
-            libssl-dev \
-            protobuf-compiler \
-            libprotobuf-dev \
-            clang \
-            libclang-dev \
-            --no-install-recommends \
-            && rm -rf /var/lib/apt/lists/*
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
-            cd dstack && \
-            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
-        WORKDIR /app/dstack
-        RUN cargo build --release -p dstack-kms
-        CMD ["./target/release/dstack-kms"]
-    volumes:
-      - kms-volume:/etc/kms
-      - /var/run/dstack.sock:/var/run/dstack.sock
-    ports:
-      - 8000:8000
-    depends_on:
-      - auth-api
-
-volumes:
-  kms-volume:
