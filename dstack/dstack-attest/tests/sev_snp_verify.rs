@@ -406,3 +406,44 @@ fn advertised_os_image_hash_must_match_sha256sum() {
         "unexpected error: {err:?}"
     );
 }
+
+/// The whole `POST /verify` path, with the SNP report emptied.
+///
+/// `dstack-verifier` decodes the request body with
+/// `VersionedAttestation::from_bytes` and hands the result straight to
+/// `verify`, which routes an SNP quote with no `cert_chain` to the AMD KDS
+/// branch. That branch used to parse the report without checking its length,
+/// and release builds are `panic = "abort"`, so this body took the verifier
+/// process down rather than failing one request.
+#[tokio::test]
+async fn an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed() {
+    let VersionedAttestation::V0 { mut attestation } =
+        VersionedAttestation::from_scale(SEV_ATTESTATION_BIN).expect("decode VersionedAttestation")
+    else {
+        panic!("expected V0 attestation");
+    };
+    let AttestationQuote::DstackAmdSevSnp(quote) = &mut attestation.quote else {
+        panic!("expected an AMD SEV-SNP quote");
+    };
+    quote.report = Vec::new();
+    quote.cert_chain = Vec::new();
+
+    let body = attestation
+        .into_versioned()
+        .to_bytes()
+        .expect("encode attestation");
+    let verifier = dstack_attest::attestation::AttestationVerifier::new_prod(None)
+        .expect("build a production verifier");
+    let Err(err) = VersionedAttestation::from_bytes(&body)
+        .expect("decode attestation")
+        .into_v1()
+        .verify(&verifier)
+        .await
+    else {
+        panic!("an empty SNP report must be rejected");
+    };
+    assert!(
+        format!("{err:#}").contains("invalid amd sev-snp report length"),
+        "unexpected error: {err:#}"
+    );
+}
