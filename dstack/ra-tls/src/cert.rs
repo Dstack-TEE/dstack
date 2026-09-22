@@ -443,10 +443,10 @@ pub const MAX_CERT_VALIDITY_SECS: u64 = 253_402_300_799;
 /// Convert a caller-supplied Unix timestamp into a certificate validity bound.
 ///
 /// The timestamp arrives from a remote request, so an out-of-range value must
-/// be an error the caller sees rather than an arithmetic overflow. `UNIX_EPOCH
-/// + Duration::from_secs(u64::MAX)` panics, and the workspace builds release
-/// binaries with `panic = "abort"`, so an unchecked conversion turns one
-/// request into a process abort.
+/// be an error the caller sees rather than an arithmetic overflow.
+/// `UNIX_EPOCH + Duration::from_secs(u64::MAX)` panics, and the workspace builds
+/// release binaries with `panic = "abort"`, so an unchecked conversion turns
+/// one request into a process abort.
 fn unix_time_to_system_time(secs: u64, field: &str) -> Result<SystemTime> {
     if secs > MAX_CERT_VALIDITY_SECS {
         bail!("{field} {secs} is past the last representable certificate time");
@@ -759,10 +759,7 @@ mod tests {
         let mut ca_params = CertificateParams::new(vec![]).unwrap();
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Constrained(1));
         let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-        let ca = CaCert::from_parts(
-            KeyPair::from_pem(&ca_key.serialize_pem()).unwrap(),
-            ca_cert,
-        );
+        let ca = CaCert::from_parts(KeyPair::from_pem(&ca_key.serialize_pem()).unwrap(), ca_cert);
 
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
         let csr = CertSigningRequestV2 {
