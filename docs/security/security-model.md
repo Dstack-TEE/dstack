@@ -387,6 +387,10 @@ This argument has a limit, and it is worth stating because it is what keeps the 
 
 Production verifiers should reject deployments that use these development settings. Operators should treat them the same way they treat debug-mode TEE quotes: useful for testing, invalid for production trust.
 
+### `requireTcbUpToDate` does not gate AWS NitroTPM
+
+NitroTPM attestations carry no TCB version or advisories, so the verifier reports `tcb_status = "UpToDate"` for every verified NitroTPM attestation, and `DstackApp.requireTcbUpToDate` always passes on it. `IAppAuth.AppBootInfo` has no `teeVariant`, so an app owner cannot exclude the platform on-chain; the only gate is the KMS-local `aws_nitro_tpm_key_release` (off by default).
+
 ### KMS mTLS is route-enforced for sensitive operations
 
 The KMS Rocket TLS listener permits connections without a client certificate because some bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. A certificate that is presented must carry an attestation, but the issuer that signed it is not checked and is not the authorization boundary for key material.
