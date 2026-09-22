@@ -112,7 +112,7 @@ impl OnboardRpc for OnboardHandler {
         validate_onboarding_domain(&request.domain)?;
         let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
         let cfg = &self.state.config;
-        if cfg.bootstrap_info().exists() || cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+        if cfg.root_keys_exist() {
             bail!("KMS has already been bootstrapped");
         }
         ensure_self_kms_allowed(cfg, &self.state.attestation_verifier)
@@ -141,7 +141,7 @@ impl OnboardRpc for OnboardHandler {
         validate_onboarding_domain(&request.domain)?;
         let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
         let cfg = &self.state.config;
-        if cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+        if cfg.root_keys_exist() {
             bail!("KMS has already been onboarded");
         }
         let source_url = request.source_url.trim_end_matches('/').to_string();
@@ -479,6 +479,21 @@ mod tests {
         assert_eq!(fs::read(cfg.k256_key()).unwrap(), k256_key);
     }
 
+    #[rocket::async_test]
+    async fn auto_bootstrap_overwrites_an_interrupted_bootstrap() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let verifier = AttestationVerifier::load(&cfg.attestation).unwrap();
+
+        // A crash between the two root key writes.
+        fs::write(cfg.root_ca_key(), "stale").unwrap();
+        assert!(!cfg.root_keys_exist());
+
+        bootstrap_keys(&cfg, &verifier).await.unwrap();
+        assert!(cfg.keys_exists());
+        assert_ne!(fs::read(cfg.root_ca_key()).unwrap(), b"stale");
+    }
+
     #[test]
     fn ca_certificate_is_renewed_only_within_the_renewal_window() {
         let now = UNIX_EPOCH + Duration::from_secs(2_000_000_000);
@@ -662,17 +677,18 @@ impl Keys {
         .await
     }
 
+    /// The root keys go last: see [`KmsConfig::root_keys_exist`].
     fn store(&self, cfg: &KmsConfig) -> Result<()> {
-        self.store_keys(cfg)?;
         self.store_certs(cfg)?;
         safe_write(cfg.rpc_domain(), self.rpc_domain.as_bytes())?;
+        self.store_keys(cfg)?;
         Ok(())
     }
 
     fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
         safe_write_with_mode(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem(), 0o600)?;
-        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
         safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
         safe_write_with_mode(cfg.k256_key(), self.k256_key.to_bytes(), 0o600)?;
         Ok(())
     }
@@ -767,12 +783,11 @@ fn ca_cert_expires_within(cert_pem: &[u8], now: SystemTime, window: Duration) ->
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
     validate_onboarding_domain(&cfg.onboard.auto_bootstrap_domain)?;
     // `keys_exists()` wants every key *and* certificate, so losing one derived
-    // certificate - a crash between `store_keys` and `store_certs`, a restored
-    // disk image - sends the KMS back here. Generating new root keys then would
-    // silently change every app key and orphan every encrypted disk, so refuse
-    // and let the operator recover the missing file instead. Same guard as the
-    // `Onboard.Bootstrap` RPC.
-    if cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+    // certificate - a restored disk image - sends the KMS back here. Generating
+    // new root keys then would silently change every app key and orphan every
+    // encrypted disk, so refuse and let the operator recover the missing file
+    // instead. Same guard as the `Onboard.Bootstrap` RPC.
+    if cfg.root_keys_exist() {
         bail!("KMS has already been bootstrapped");
     }
     ensure_self_kms_allowed(cfg, verifier)

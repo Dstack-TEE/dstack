@@ -123,6 +123,13 @@ fn default_true() -> bool {
 }
 
 impl KmsConfig {
+    /// The root keys are the last files a bootstrap writes, so both existing
+    /// marks a completed one. Anything short of that is left over from an
+    /// interrupted bootstrap and may be overwritten.
+    pub fn root_keys_exist(&self) -> bool {
+        self.root_ca_key().exists() && self.k256_key().exists()
+    }
+
     pub fn keys_exists(&self) -> bool {
         self.tmp_ca_cert().exists()
             && self.tmp_ca_key().exists()
