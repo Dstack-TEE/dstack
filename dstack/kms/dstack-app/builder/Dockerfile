@@ -31,8 +31,11 @@ WORKDIR /build/helios
 RUN git init && git remote add origin https://github.com/Dstack-TEE/helios.git \
     && git fetch --depth 1 origin 535e59414ff36178b41566af0c7f3e34f71f4fd5 \
     && git checkout --detach FETCH_HEAD
-RUN cargo test --locked -p helios-opstack --lib \
-    && cargo build --locked --release -p helios-cli -p helios-opstack --bins
+RUN cargo test --locked --release -p helios-opstack --lib \
+    && cargo build --locked --release -p helios-cli -p helios-opstack --bins \
+    && install -D target/release/helios /out/helios \
+    && install -D target/release/opstack-server /out/opstack-server \
+    && rm -rf target
 
 FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS auth-builder
 WORKDIR /app
@@ -57,8 +60,8 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 WORKDIR /
 COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
-COPY --from=helios-builder /build/helios/target/release/helios /usr/local/bin/helios
-COPY --from=helios-builder /build/helios/target/release/opstack-server /usr/local/bin/opstack-server
+COPY --from=helios-builder /out/helios /usr/local/bin/helios
+COPY --from=helios-builder /out/opstack-server /usr/local/bin/opstack-server
 COPY --from=auth-builder /usr/local/bin/node /usr/local/bin/node
 COPY --from=auth-builder /app/dist/ /opt/auth-eth/dist/
 COPY --from=auth-builder /app/node_modules/ /opt/auth-eth/node_modules/
