@@ -1356,7 +1356,7 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
 mod gpu {
     use super::*;
 
-    const EVENT_VERSION: u32 = 2;
+    const EVENT_VERSION: u32 = 3;
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
     /// Bound Rego evaluation so a runaway application policy cannot hang boot.
     const POLICY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1370,6 +1370,8 @@ mod gpu {
         devices: u32,
         cc_mode: &'static str,
         devtools: bool,
+        dbgstat: NvidiaGpuDebugStatus,
+        secboot: bool,
         evidence_sha256: String,
     }
 
@@ -1386,7 +1388,17 @@ mod gpu {
         }
 
         pub(super) fn event(&self, devtools: bool) -> Result<Vec<u8>> {
-            attestation_event(&self.output, self.devices, devtools)
+            let dbgstat = if self
+                .parsed_claims
+                .iter()
+                .any(|claim| claim.dbgstat == NvidiaGpuDebugStatus::Enabled)
+            {
+                NvidiaGpuDebugStatus::Enabled
+            } else {
+                NvidiaGpuDebugStatus::Disabled
+            };
+            let secboot = self.parsed_claims.iter().all(|claim| claim.secboot);
+            attestation_event(&self.output, self.devices, devtools, dbgstat, secboot)
         }
 
         pub(super) fn verify_claim_policy(
@@ -1437,7 +1449,7 @@ mod gpu {
         dbgstat: NvidiaGpuDebugStatus,
     }
 
-    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
     #[serde(rename_all = "lowercase")]
     enum NvidiaGpuDebugStatus {
         Disabled,
@@ -1590,13 +1602,21 @@ mod gpu {
         Ok(())
     }
 
-    fn attestation_event(stdout: &[u8], devices: u32, devtools: bool) -> Result<Vec<u8>> {
+    fn attestation_event(
+        stdout: &[u8],
+        devices: u32,
+        devtools: bool,
+        dbgstat: NvidiaGpuDebugStatus,
+        secboot: bool,
+    ) -> Result<Vec<u8>> {
         let event = GpuAttestationEvent {
             version: EVENT_VERSION,
             provider: "nvidia",
             devices,
             cc_mode: "on",
             devtools,
+            dbgstat,
+            secboot,
             evidence_sha256: hex::encode(sha256(stdout)),
         };
         serde_json::to_vec(&event).context("failed to serialize GPU attestation event")
@@ -1953,13 +1973,17 @@ mod gpu {
         fn event_commits_to_complete_nvattest_output() {
             let nonce = "22".repeat(32);
             let output = nvattest_output(&nonce, 1);
-            let event: Value =
-                serde_json::from_slice(&attestation_event(&output, 1, true).unwrap()).unwrap();
+            let event: Value = serde_json::from_slice(
+                &attestation_event(&output, 1, true, NvidiaGpuDebugStatus::Enabled, false).unwrap(),
+            )
+            .unwrap();
             assert_eq!(event["version"], EVENT_VERSION);
             assert_eq!(event["devices"], 1);
             assert!(event.get("policy").is_none());
             assert_eq!(event["cc_mode"], "on");
             assert_eq!(event["devtools"], true);
+            assert_eq!(event["dbgstat"], "enabled");
+            assert_eq!(event["secboot"], false);
             assert_eq!(event["evidence_sha256"], hex::encode(sha256(&output)));
         }
 
