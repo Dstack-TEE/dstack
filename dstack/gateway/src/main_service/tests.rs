@@ -79,10 +79,8 @@ async fn wg_config_is_written_owner_only() {
     let state = create_test_state().await;
     let path = state.lock().config.wg.config_path.clone();
 
-    // `reconfigure_wg` also runs `wg syncconf`, which fails without a real
-    // interface — that failure is logged rather than propagated, so the write
-    // is still exercised here.
-    state.reconfigure_wg().expect("reconfigure failed");
+    // The file write succeeds even when syncconf fails without an interface.
+    let _ = state.reconfigure_wg();
 
     let rendered = std::fs::read_to_string(&path).expect("wg config was not written");
     assert!(
@@ -2366,7 +2364,10 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
         )
         .unwrap();
 
-    let removal = state.proxy.remove_cvm("peer-instance").unwrap();
+    let removal = state
+        .proxy
+        .remove_cvm_with("peer-instance", || Ok(()))
+        .unwrap();
     assert!(removal.record_existed);
     assert!(removal.removed_locally);
     assert!(!state.lock().state.instances.contains_key("peer-instance"));
@@ -2376,7 +2377,10 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
 
     // The recovery operation is safe to retry after a timeout or lost reply,
     // and the retry tells the operator there was nothing left to remove.
-    let retry = state.proxy.remove_cvm("peer-instance").unwrap();
+    let retry = state
+        .proxy
+        .remove_cvm_with("peer-instance", || Ok(()))
+        .unwrap();
     assert!(!retry.record_existed);
     assert!(!retry.removed_locally);
 }
@@ -2398,7 +2402,7 @@ async fn removing_a_cvm_clears_its_telemetry_even_with_no_record_left() {
 
     // No `inst/` record exists, so the removal reports nothing was there --
     // and still deletes both telemetry records.
-    let removal = state.proxy.remove_cvm("orphan").unwrap();
+    let removal = state.proxy.remove_cvm_with("orphan", || Ok(())).unwrap();
     assert!(!removal.record_existed);
     assert!(!removal.removed_locally);
     let leaked = live_keys_naming(&state, "orphan");
@@ -2410,7 +2414,10 @@ async fn removing_an_unknown_cvm_reports_that_nothing_existed() {
     let state = create_test_state().await;
 
     // A mistyped instance_id must not be mistaken for a successful removal.
-    let removal = state.proxy.remove_cvm("no-such-instance").unwrap();
+    let removal = state
+        .proxy
+        .remove_cvm_with("no-such-instance", || Ok(()))
+        .unwrap();
     assert!(!removal.record_existed);
     assert!(!removal.removed_locally);
 }
@@ -2441,7 +2448,10 @@ async fn rejected_instance_records_are_visible_to_the_operator() {
     assert!(rejected[0].active_locally);
 
     // Once removed, the record no longer shows up as rejected.
-    state.proxy.remove_cvm("peer-instance").unwrap();
+    state
+        .proxy
+        .remove_cvm_with("peer-instance", || Ok(()))
+        .unwrap();
     assert!(state.proxy.rejected_instances().is_empty());
 }
 
@@ -2678,4 +2688,136 @@ fn tombstone_collection_triggers_on_write_count_boundaries_not_on_time() {
     // Digest repair can lower an ack; a count that stepped back is not due
     // until it crosses the next boundary again.
     assert!(!tombstone_collection_due(Some(w(100, 0)), w(90, 0), 100));
+}
+
+#[tokio::test]
+async fn wg_apply_releases_routing_lock_and_skips_identical_config() {
+    let state = create_test_state().await;
+    let proxy = state.proxy.clone();
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        proxy.reconfigure_wg_with(|_, _| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(())
+        })
+    });
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let unlocked = state.state.try_lock().is_ok();
+    release_tx.send(()).unwrap();
+    worker.join().unwrap().unwrap();
+    assert!(unlocked, "blocking apply retained the routing lock");
+    state
+        .reconfigure_wg_with(|_, _| panic!("identical config applied twice"))
+        .unwrap();
+}
+
+#[tokio::test]
+async fn failed_wg_apply_is_not_cached() {
+    let state = create_test_state().await;
+    assert!(state
+        .reconfigure_wg_with(|_, _| anyhow::bail!("injected failure"))
+        .is_err());
+    let mut applied = false;
+    state
+        .reconfigure_wg_with(|_, _| {
+            applied = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(applied);
+}
+
+#[tokio::test]
+async fn registration_does_not_wait_for_wg_apply_lock() {
+    let state = create_test_state().await;
+    let proxy = state.proxy.clone();
+    let apply = state.wg_apply_lock.lock().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = proxy.do_register_cvm(
+            "app",
+            "instance",
+            &test_pubkey("new"),
+            "compose",
+            Some(policy(false, &[])).into(),
+        );
+        done_tx.send(result.is_ok()).unwrap();
+    });
+    let result = done_rx.recv_timeout(Duration::from_secs(5));
+    drop(apply);
+    worker.join().unwrap();
+    assert!(result.unwrap());
+}
+
+#[tokio::test]
+async fn removal_retries_apply_even_after_the_record_is_gone() {
+    let state = create_test_state().await;
+    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    assert!(state
+        .proxy
+        .remove_cvm_with("peer-instance", || anyhow::bail!("apply failed"))
+        .is_err());
+    assert!(!state.lock().state.instances.contains_key("peer-instance"));
+    let mut applied = false;
+    let outcome = state
+        .proxy
+        .remove_cvm_with("peer-instance", || {
+            applied = true;
+            Ok(())
+        })
+        .unwrap();
+    assert!(applied);
+    assert!(!outcome.record_existed);
+    assert!(!outcome.removed_locally);
+}
+
+#[tokio::test]
+async fn cancelling_registration_keeps_its_blocking_job_bounded() {
+    let state = create_test_state().await;
+    let proxy = state.proxy.clone();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let _state = proxy.lock();
+        locked_tx.send(()).unwrap();
+        // Bound even a regression that blocks the single-threaded test runtime.
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+    });
+    locked_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let proxy = state.proxy.clone();
+    let task = tokio::spawn(async move {
+        proxy
+            .register_cvm_async(
+                "app".into(),
+                "instance".into(),
+                test_pubkey("async"),
+                "compose".into(),
+                Some(policy(false, &[])).into(),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while state.registration_slot.available_permits() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("registration never acquired its permit");
+    task.abort();
+    let _ = task.await;
+    assert_eq!(
+        state.registration_slot.available_permits(),
+        0,
+        "cancellation released the permit while synchronous work was still running"
+    );
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    let _permit = tokio::time::timeout(Duration::from_secs(5), state.registration_slot.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(state.lock().state.instances.contains_key("instance"));
 }
