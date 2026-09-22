@@ -9,7 +9,6 @@ use dstack_guest_agent_rpc::v0::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
 use http_client::prpc::PrpcClient;
-use or_panic::ResultOrPanic;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -64,7 +63,7 @@ pub(crate) async fn local_kms_boot_info(verifier: &AttestationVerifier) -> Resul
     build_boot_info_for_attestation(&verified, false, "")
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BootResponse {
     pub is_allowed: bool,
@@ -72,7 +71,7 @@ pub(crate) struct BootResponse {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthApiInfoResponse {
     pub status: String,
@@ -84,7 +83,7 @@ pub(crate) struct AuthApiInfoResponse {
     pub app_implementation: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GetInfoResponse {
     pub is_dev: bool,
@@ -150,12 +149,7 @@ impl AuthApi {
                     "bootAuth/app"
                 };
                 let url = url_join(&webhook.url, path);
-                // One call per distinct question, however many callers are
-                // asking it right now. See `InFlight`.
-                webhook
-                    .boot_calls
-                    .dedup(format!("{url} {boot_info:?}"), http_post(&url, &boot_info))
-                    .await
+                http_post(&url, &boot_info).await
             }
         }
     }
@@ -171,10 +165,7 @@ impl AuthApi {
                 app_implementation: None,
             }),
             AuthApi::Webhook { webhook } => {
-                let info = webhook
-                    .info_calls
-                    .dedup(webhook.url.clone(), http_get(&webhook.url))
-                    .await?;
+                let info: AuthApiInfoResponse = http_get(&webhook.url).await?;
                 let eth_rpc_url = if info.eth_rpc_url.is_empty() {
                     None
                 } else {
@@ -190,91 +181,6 @@ impl AuthApi {
                 })
             }
         }
-    }
-}
-
-/// Collapses requests that are identical *and* overlapping in time into one
-/// call to the auth API.
-///
-/// `GetMeta`, `GetAppEnvEncryptPubKey` and `GetTempCaCert` need no client
-/// certificate - `RaTlsClientVerifier::client_auth_mandatory()` is `false` -
-/// and each drives two or three `readContract` calls on the operator's chain
-/// RPC. Without this, *n* concurrent anonymous requests cost *n* times that,
-/// and because the backend answers `isAllowed: false` when it cannot reach the
-/// chain, exhausting an RPC quota converts directly into denial of key release
-/// for every app.
-///
-/// This is deliberately **not** a cache. Nothing survives the call: the entry
-/// is retired before the result is handed out, so the next request - even one
-/// issued the instant this one returns - goes to the backend again. That is
-/// the invariant `repeated_authorization_is_never_served_from_a_decision_cache`
-/// pins, and it is why the key includes the full request payload: two callers
-/// share an answer only when they asked the identical question at the
-/// identical moment.
-///
-/// It bounds amplification under concurrency, which is the cheap attack (one
-/// connection, many parallel requests). It does not bound the serial request
-/// *rate*; that belongs at the listener, which the KMS does not have today.
-#[derive(Debug)]
-pub(crate) struct InFlight<T> {
-    calls: std::sync::Mutex<
-        std::collections::HashMap<String, tokio::sync::broadcast::Sender<Result<T, String>>>,
-    >,
-}
-
-impl<T> Default for InFlight<T> {
-    fn default() -> Self {
-        Self {
-            calls: Default::default(),
-        }
-    }
-}
-
-impl<T: Clone> InFlight<T> {
-    /// Run `request` unless an identical one is already running, in which case
-    /// wait for that one's answer.
-    ///
-    /// Followers receive the leader's error as a string: `anyhow::Error` is not
-    /// `Clone`, and the leader's own return value keeps the full context chain.
-    async fn dedup(
-        &self,
-        key: String,
-        request: impl std::future::Future<Output = Result<T>>,
-    ) -> Result<T> {
-        let leader = {
-            let mut calls = self.calls.lock().or_panic("in-flight mutex poisoned");
-            match calls.get(&key) {
-                Some(sender) => Err(sender.subscribe()),
-                None => {
-                    let (sender, _) = tokio::sync::broadcast::channel(1);
-                    calls.insert(key.clone(), sender.clone());
-                    Ok(sender)
-                }
-            }
-        };
-        let sender = match leader {
-            Ok(sender) => sender,
-            Err(mut receiver) => {
-                return match receiver.recv().await {
-                    Ok(Ok(value)) => Ok(value),
-                    Ok(Err(err)) => bail!("{err}"),
-                    Err(err) => bail!("coalesced auth api call was dropped: {err}"),
-                };
-            }
-        };
-        let result = request.await;
-        // Retire the entry before publishing, so a caller arriving after this
-        // point starts a fresh request rather than reading a finished one.
-        self.calls
-            .lock()
-            .or_panic("in-flight mutex poisoned")
-            .remove(&key);
-        let shared = match &result {
-            Ok(value) => Ok(value.clone()),
-            Err(err) => Err(format!("{err:#}")),
-        };
-        let _ = sender.send(shared);
-        result
     }
 }
 
@@ -443,11 +349,7 @@ mod tests {
 
     fn webhook(url: String) -> AuthApi {
         AuthApi::Webhook {
-            webhook: crate::config::Webhook {
-                url,
-                boot_calls: Default::default(),
-                info_calls: Default::default(),
-            },
+            webhook: Webhook { url },
         }
     }
 

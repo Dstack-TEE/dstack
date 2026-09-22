@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::main_service::upgrade_authority::{AuthApiInfoResponse, BootResponse, InFlight};
 use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
 use rocket::figment::Figment;
 use serde::Deserialize;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, time::Duration};
 pub const DEFAULT_CONFIG: &str = include_str!("../kms.toml");
 
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
@@ -189,14 +188,6 @@ impl AuthApi {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Webhook {
     pub url: String,
-    /// Shared across every clone of this config, so every RPC handler on one
-    /// KMS coalesces against the same set of in-flight calls. Not configurable
-    /// and not serialized - see
-    /// [`crate::main_service::upgrade_authority::InFlight`].
-    #[serde(skip)]
-    pub boot_calls: Arc<InFlight<BootResponse>>,
-    #[serde(skip)]
-    pub info_calls: Arc<InFlight<AuthApiInfoResponse>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

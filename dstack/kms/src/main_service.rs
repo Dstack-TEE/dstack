@@ -8,9 +8,10 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
@@ -20,6 +21,7 @@ use dstack_kms_rpc::{
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
+use moka::future::Cache;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
@@ -29,7 +31,9 @@ use ra_tls::{
 use scale::Decode;
 use tokio::sync::OnceCell;
 use tracing::{info, warn};
-use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
+use upgrade_authority::{
+    build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
+};
 
 use crate::{
     config::KmsConfig,
@@ -38,6 +42,13 @@ use crate::{
 
 pub(crate) mod amd_attest;
 pub(crate) mod upgrade_authority;
+
+/// How long the auth API's info and this KMS's own authorization are reused.
+///
+/// `GetMeta`, `GetAppEnvEncryptPubKey` and `GetTempCaCert` need no client certificate, and each
+/// would otherwise cost the auth API a round of chain RPC calls. Concurrent callers share one
+/// in-flight request. App authorization is never cached.
+const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -61,6 +72,8 @@ pub struct KmsStateInner {
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: OnceCell<BootInfo>,
+    self_allowed: Cache<(), ()>,
+    auth_api_info: Cache<(), GetInfoResponse>,
     metrics: KmsMetrics,
 }
 
@@ -93,6 +106,13 @@ impl KmsMetrics {
              dstack_kms_attestation_failures_total {attestation_failures_total}\n"
         )
     }
+}
+
+fn short_lived_cache<V: Clone + Send + Sync + 'static>() -> Cache<(), V> {
+    Cache::builder()
+        .max_capacity(1)
+        .time_to_live(AUTH_API_CACHE_TTL)
+        .build()
 }
 
 /// remove a single cache entry (a hex-named subdir/file) under `parent_dir`, or
@@ -168,6 +188,8 @@ impl KmsState {
                 verifier,
                 attestation_verifier,
                 self_boot_info: OnceCell::new(),
+                self_allowed: short_lived_cache(),
+                auth_api_info: short_lived_cache(),
                 metrics: KmsMetrics::default(),
             }),
         })
@@ -268,16 +290,23 @@ impl RpcHandler {
             .get_or_try_init(|| local_kms_boot_info(&self.state.attestation_verifier))
             .await
             .context("Failed to load cached self boot info")?;
-        let response = self
-            .state
-            .config
-            .auth_api
-            .is_app_allowed(boot_info, true)
+        self.state
+            .self_allowed
+            .try_get_with((), async {
+                let response = self
+                    .state
+                    .config
+                    .auth_api
+                    .is_app_allowed(boot_info, true)
+                    .await
+                    .context("Failed to call self KMS auth check")?;
+                if !response.is_allowed {
+                    bail!("KMS is not allowed: {}", response.reason);
+                }
+                Ok(())
+            })
             .await
-            .context("Failed to call self KMS auth check")?;
-        if !response.is_allowed {
-            bail!("KMS is not allowed: {}", response.reason);
-        }
+            .map_err(|err| anyhow!("{err:#}"))?;
         Ok(Some(boot_info))
     }
 
@@ -470,7 +499,12 @@ impl KmsRpc for RpcHandler {
         let bootstrap_info = fs::read_to_string(self.state.config.bootstrap_info())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
-        let info = self.state.config.auth_api.get_info().await?;
+        let info = self
+            .state
+            .auth_api_info
+            .try_get_with((), self.state.config.auth_api.get_info())
+            .await
+            .map_err(|err| anyhow!("{err:#}"))?;
         Ok(GetMetaResponse {
             ca_cert: self.state.inner.root_ca.pem_cert.clone(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
@@ -1298,23 +1332,15 @@ mod tests {
 
     const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
 
-    /// `GetMeta` needs no client certificate and each call drives two or three
-    /// `readContract` calls on the operator's chain RPC. A burst of anonymous
-    /// callers therefore used to multiply straight through to that RPC, and
-    /// since the backend answers `isAllowed: false` when it cannot reach the
-    /// chain, burning the quota denies key release for every app.
     #[rocket::async_test]
-    async fn concurrent_unauthenticated_get_meta_calls_do_not_amplify_upstream() {
+    async fn concurrent_get_meta_calls_share_one_auth_api_request() {
         let dir = tempfile::tempdir().unwrap();
         let (url, upstream_requests) = serve_concurrent_auth_api(AUTH_API_INFO);
         let state = kms_state(dir.path(), &url);
 
-        const CALLERS: usize = 24;
-        let burst: Vec<_> = (0..CALLERS)
+        let burst: Vec<_> = (0..24)
             .map(|_| {
                 let state = state.clone();
-                // No attestation: this is exactly what an anonymous caller
-                // gets, because `client_auth_mandatory()` is false.
                 rocket::tokio::spawn(async move {
                     RpcHandler {
                         state,
@@ -1330,25 +1356,9 @@ mod tests {
             assert_eq!(meta.chain_id, Some(1));
             assert_eq!(meta.gateway_app_id.as_deref(), Some("0xgateway"));
         }
-        let amplification = upstream_requests.load(std::sync::atomic::Ordering::SeqCst);
-        assert!(
-            amplification <= 2,
-            "{CALLERS} concurrent anonymous GetMeta calls cost {amplification} upstream calls"
-        );
-
-        // Coalescing is not caching: a call issued after the burst finished
-        // goes upstream again.
-        RpcHandler {
-            state,
-            attestation: None,
-        }
-        .get_meta()
-        .await
-        .unwrap();
         assert_eq!(
             upstream_requests.load(std::sync::atomic::Ordering::SeqCst),
-            amplification + 1,
-            "a later call must not be served from a retained result"
+            1
         );
     }
 }

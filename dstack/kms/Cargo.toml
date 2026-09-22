@@ -48,7 +48,7 @@ dstack-verifier = { workspace = true, default-features = false }
 dstack-mr.workspace = true
 dstack-attest.workspace = true
 dstack-api-auth.workspace = true
-or-panic.workspace = true
+moka = { workspace = true, features = ["future"] }
 
 [dev-dependencies]
 cc-eventlog.workspace = true
