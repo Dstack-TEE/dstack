@@ -84,7 +84,7 @@ ADMIN_TOKEN_HASH=$(echo -n "$ADMIN_TOKEN" | sha256sum | cut -d' ' -f1)
 cp docker-compose.yaml "$COMPOSE_TMP"
 
 subvar() {
-  sed -i "s|\${$1\(:?[^}]*\)\?}|${!1}|g" "$COMPOSE_TMP"
+  sed -i "s|\${$1\(:[-?][^}]*\)\?}|${!1}|g" "$COMPOSE_TMP"
 }
 
 subvar ETH_MAX_BLOCK_AGE_SECONDS
