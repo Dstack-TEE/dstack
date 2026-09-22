@@ -1122,7 +1122,7 @@ impl AttestationV1 {
                 // re-parse of the raw document, so the values that feed
                 // os_image_hash / MR derivation are authenticated.
                 let pcrs = NitroPcrs::from_verified(&verified_report.pcrs)
-                    .context("verified NSM report missing PCR0/1/2")?;
+                    .context("verified NSM report missing PCR0/1/2/4")?;
                 DstackVerifiedReport::DstackNitroEnclave(NitroVerifiedReport {
                     module_id: verified_report.module_id,
                     pcrs,
@@ -1211,6 +1211,9 @@ pub struct NitroPcrs {
     pub pcr1: Vec<u8>,
     #[serde(with = "serde_human_bytes")]
     pub pcr2: Vec<u8>,
+    /// PCR4 - Parent EC2 instance ID measurement
+    #[serde(with = "serde_human_bytes")]
+    pub pcr4: Vec<u8>,
 }
 
 impl NitroPcrs {
@@ -1222,7 +1225,13 @@ impl NitroPcrs {
         let pcr0 = pcrs.get(&0).cloned().context("PCR 0 not found")?;
         let pcr1 = pcrs.get(&1).cloned().context("PCR 1 not found")?;
         let pcr2 = pcrs.get(&2).cloned().context("PCR 2 not found")?;
-        Ok(NitroPcrs { pcr0, pcr1, pcr2 })
+        let pcr4 = pcrs.get(&4).cloned().context("PCR 4 not found")?;
+        Ok(NitroPcrs {
+            pcr0,
+            pcr1,
+            pcr2,
+            pcr4,
+        })
     }
 
     fn is_zero(&self) -> bool {
@@ -1266,7 +1275,13 @@ impl DstackNitroQuote {
         let pcr0 = doc.pcrs.get(&0).cloned().context("PCR 0 not found")?;
         let pcr1 = doc.pcrs.get(&1).cloned().context("PCR 1 not found")?;
         let pcr2 = doc.pcrs.get(&2).cloned().context("PCR 2 not found")?;
-        Ok(NitroPcrs { pcr0, pcr1, pcr2 })
+        let pcr4 = doc.pcrs.get(&4).cloned().context("PCR 4 not found")?;
+        Ok(NitroPcrs {
+            pcr0,
+            pcr1,
+            pcr2,
+            pcr4,
+        })
     }
 }
 
@@ -1580,14 +1595,7 @@ impl GetDeviceId for DstackVerifiedReport {
             DstackVerifiedReport::DstackTdx(tdx_report) => tdx_report.ppid.to_vec(),
             DstackVerifiedReport::DstackAmdSevSnp(report) => report.chip_id.to_vec(),
             DstackVerifiedReport::DstackGcpTdx { tdx_report, .. } => tdx_report.ppid.to_vec(),
-            DstackVerifiedReport::DstackNitroEnclave(report) => {
-                // i-1234567890abcdef0-enc9876543210abcde -> i-1234567890abcdef0
-                report
-                    .module_id
-                    .split_once('-')
-                    .map(|(id, _)| id.as_bytes().to_vec())
-                    .unwrap_or_default()
-            }
+            DstackVerifiedReport::DstackNitroEnclave(report) => report.pcrs.pcr4.clone(),
             DstackVerifiedReport::DstackAwsNitroTpm(report) => report.module_id.as_bytes().to_vec(),
         }
     }
@@ -2472,10 +2480,8 @@ impl Attestation {
             bail!("NSM user_data does not match report_data");
         }
 
-        // Decode PCRs from quote
-        let pcrs = nsm_quote
-            .decode_pcrs()
-            .context("Failed to decode nitro pcrs")?;
+        let pcrs = NitroPcrs::from_verified(&verified_report.pcrs)
+            .context("verified NSM report missing PCR0/1/2/4")?;
 
         Ok(NitroVerifiedReport {
             module_id: verified_report.module_id,
@@ -3052,19 +3058,24 @@ mod tests {
     }
 
     #[test]
-    fn nitro_pcrs_from_verified_extracts_0_1_2() {
+    fn nitro_pcrs_from_verified_extracts_0_1_2_4() {
         let mut map = std::collections::BTreeMap::new();
         map.insert(0u16, vec![0xaa; 48]);
         map.insert(1u16, vec![0xbb; 48]);
         map.insert(2u16, vec![0xcc; 48]);
         map.insert(3u16, vec![0xdd; 48]); // ignored
+        map.insert(4u16, vec![0xee; 48]);
         let pcrs = NitroPcrs::from_verified(&map).unwrap();
         assert_eq!(pcrs.pcr0, vec![0xaa; 48]);
         assert_eq!(pcrs.pcr1, vec![0xbb; 48]);
         assert_eq!(pcrs.pcr2, vec![0xcc; 48]);
+        assert_eq!(pcrs.pcr4, vec![0xee; 48]);
 
         // missing a required PCR is an error
         map.remove(&1u16);
+        assert!(NitroPcrs::from_verified(&map).is_err());
+        map.insert(1u16, vec![0xbb; 48]);
+        map.remove(&4u16);
         assert!(NitroPcrs::from_verified(&map).is_err());
     }
 
@@ -3074,6 +3085,7 @@ mod tests {
             pcr0: vec![0u8; 48],
             pcr1: vec![0u8; 48],
             pcr2: vec![0u8; 48],
+            pcr4: vec![0u8; 48],
         };
         assert!(debug.is_debug());
 
@@ -3081,6 +3093,7 @@ mod tests {
             pcr0: vec![1u8; 48],
             pcr1: vec![0u8; 48],
             pcr2: vec![0u8; 48],
+            pcr4: vec![0u8; 48],
         };
         assert!(!prod.is_debug());
         // image_hash = sha256(pcr0 || pcr1 || pcr2), never the all-zero sentinel
@@ -3294,5 +3307,26 @@ mod tests {
             VersionedAttestation::from_bytes(&[current_bytes.as_slice(), &[0xaa]].concat())
                 .is_err()
         );
+    }
+
+    fn nitro_report_with_pcr4(pcr4: Vec<u8>) -> DstackVerifiedReport {
+        DstackVerifiedReport::DstackNitroEnclave(NitroVerifiedReport {
+            module_id: "opaque-module-id".to_string(),
+            pcrs: NitroPcrs {
+                pcr0: vec![0x11; 48],
+                pcr1: vec![0x22; 48],
+                pcr2: vec![0x33; 48],
+                pcr4,
+            },
+            user_data: vec![],
+            timestamp: 0,
+        })
+    }
+
+    #[test]
+    fn nitro_enclave_device_id_is_parent_instance_pcr4() {
+        let pcr4 = vec![0x44; 48];
+        let report = nitro_report_with_pcr4(pcr4.clone());
+        assert_eq!(report.get_devide_id(), pcr4);
     }
 }

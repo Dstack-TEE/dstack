@@ -5,7 +5,7 @@
 //! Integration test: verify Nitro Enclave attestation end-to-end
 
 use dstack_attest::attestation::{
-    AttestationQuote, AttestationVerifier, DstackVerifiedReport, VersionedAttestation,
+    AttestationQuote, AttestationVerifier, DstackVerifiedReport, GetDeviceId, VersionedAttestation,
 };
 use nsm_qvl::{AttestationDocument, CoseSign1};
 use std::time::{Duration, SystemTime};
@@ -47,6 +47,16 @@ async fn verify_nitro_attestation_bin() {
         .verify_with_time(&verifier, Some(fixed_now))
         .await
         .unwrap();
+    // PCR4 is the AWS-defined measurement of the parent EC2 instance ID.
+    assert_eq!(
+        verified.report.get_devide_id(),
+        hex::decode(
+            "7b3574ad9b7e88ec8335e8ce967315fac77218441e97eea9795de704d7f2678d\
+             0b298ecda39b544c1689669f48cba5e8"
+        )
+        .unwrap()
+    );
+
     let DstackVerifiedReport::DstackNitroEnclave(report) = verified.report else {
         panic!("Nitro attestation verification failed");
     };

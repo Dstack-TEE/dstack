@@ -1706,6 +1706,7 @@ mod tests {
                     pcr0: vec![0x10; 48],
                     pcr1: vec![0x11; 48],
                     pcr2: vec![0x12; 48],
+                    pcr4: vec![0x14; 48],
                 },
                 user_data: Vec::new(),
                 timestamp: 0,
@@ -1726,6 +1727,7 @@ mod tests {
             pcr0: vec![0x10; 48],
             pcr1: vec![0x11; 48],
             pcr2: vec![0x12; 48],
+            pcr4: vec![0x14; 48],
         };
         let nitro_config: VmConfig = serde_json::from_value(serde_json::json!({
             "os_image_hash": hex::encode(nitro_pcrs.image_hash()),
@@ -1743,6 +1745,7 @@ mod tests {
             pcr0: vec![0; 48],
             pcr1: vec![0; 48],
             pcr2: vec![0; 48],
+            pcr4: vec![0; 48],
         };
         assert!(verifier
             .verify_os_image_hash_for_nitro_enclave(&nitro_config, &debug_nitro)
