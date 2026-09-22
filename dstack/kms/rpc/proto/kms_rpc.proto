@@ -134,6 +134,8 @@ service KMS {
 service Admin {
   // Clear the image cache
   rpc ClearImageCache(ClearImageCacheRequest) returns (google.protobuf.Empty);
+  // Hand root keys to an attested KMS during onboarding.
+  rpc GetKmsKey(GetKmsKeyRequest) returns (KmsKeyResponse);
 }
 
 message ClearImageCacheRequest {
@@ -154,6 +156,8 @@ message BootstrapResponse {
 message OnboardRequest {
   string source_url = 1;
   string domain = 2;
+  // Optional bearer token for the source KMS admin listener.
+  string source_token = 3;
 }
 
 message OnboardResponse {

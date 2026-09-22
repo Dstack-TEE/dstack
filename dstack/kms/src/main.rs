@@ -178,6 +178,7 @@ async fn main() -> Result<()> {
     };
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
     let quote_verifier = QuoteVerifier::new(state.attestation_verifier());
+    let admin_quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let figment = figment
         .clone()
         .merge(Serialized::defaults(figment.find_value("rpc")?));
@@ -223,12 +224,14 @@ async fn main() -> Result<()> {
             }
             let admin_srv = rocket::custom(admin_figment)
                 .attach(admin_fairing)
+                .attach(RaTlsClientAuth::fairing())
                 .mount("/", admin_auth::routes())
                 .mount(
                     "/prpc",
                     ra_rpc::prpc_routes!(KmsState, admin_service::AdminRpcHandler, trim: "Admin."),
                 )
                 .manage(state)
+                .manage(admin_quote_verifier)
                 .launch();
             tokio::try_join!(
                 async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },

@@ -10,20 +10,25 @@
 use anyhow::Result;
 use dstack_kms_rpc::{
     admin_server::{AdminRpc, AdminServer},
-    ClearImageCacheRequest,
+    ClearImageCacheRequest, GetKmsKeyRequest, KmsKeyResponse,
 };
 use ra_rpc::{CallContext, RpcCall};
 
-use crate::main_service::KmsState;
+use crate::main_service::{KmsState, RpcHandler};
 
 pub struct AdminRpcHandler {
     state: KmsState,
+    rpc: RpcHandler,
 }
 
 impl AdminRpc for AdminRpcHandler {
     async fn clear_image_cache(self, request: ClearImageCacheRequest) -> Result<()> {
         self.state
             .clear_image_cache(&request.image_hash, &request.config_hash)
+    }
+
+    async fn get_kms_key(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
+        self.rpc.handover_keys(request).await
     }
 }
 
@@ -33,6 +38,7 @@ impl RpcCall<KmsState> for AdminRpcHandler {
     fn construct(context: CallContext<'_, KmsState>) -> Result<Self> {
         Ok(AdminRpcHandler {
             state: context.state.clone(),
+            rpc: RpcHandler::from_context(context),
         })
     }
 }

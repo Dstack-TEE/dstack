@@ -152,6 +152,7 @@ impl OnboardRpc for OnboardHandler {
         let keys = Keys::onboard(
             cfg,
             &source_url,
+            &request.source_token,
             &request.domain,
             self.state.attestation_verifier.clone(),
         )
@@ -599,6 +600,7 @@ impl Keys {
     async fn onboard(
         cfg: &KmsConfig,
         other_kms_url: &str,
+        source_token: &str,
         domain: &str,
         attestation_verifier: Arc<AttestationVerifier>,
     ) -> Result<Self> {
@@ -621,6 +623,7 @@ impl Keys {
                 Ok(())
             }))
             .attestation_verifier(attestation_verifier.clone())
+            .maybe_bearer_token((!source_token.is_empty()).then(|| source_token.to_string()))
             .build()
             .into_client()?;
         let mut kms_client = KmsClient::new(client);

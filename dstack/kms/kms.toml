@@ -101,6 +101,12 @@ htpasswd_file = ""
 # interface that is reachable from the network.
 insecure_no_auth = false
 
+# Optional TLS for the admin listener. When configured, clients may present an
+# RA-TLS certificate. GetKmsKey requires it; other admin RPCs do not.
+# [core.admin.tls]
+# key = "/etc/kms/certs/rpc.key"
+# certs = "/etc/kms/certs/rpc.crt"
+
 [core.metrics]
 # Expose unauthenticated Prometheus metrics on /metrics.
 # Disable this if the KMS RPC listener is not protected by network policy
@@ -121,5 +127,8 @@ gateway_app_id = "any"
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""
+# Keep KMS.GetKmsKey on the public RPC listener for older onboarding clients.
+# New deployments should point onboarding at the admin listener instead.
+public_key_handover = true
 address = "0.0.0.0"
 port = 8000
