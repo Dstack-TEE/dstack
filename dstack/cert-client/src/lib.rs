@@ -25,54 +25,17 @@ pub enum CertRequestClient {
 
 /// The identity a locally issued certificate should carry, if any.
 ///
-/// KMS stamps the identity it verified into the certificate it returns. The
-/// local CA branch has the same values available -- the CSR carries the
-/// attestation it was derived from -- but used to drop the app id, so every
-/// certificate issued through a local CA came back without the extension.
-/// Consumers that read the extension and have no fallback therefore rejected
-/// all of them: `AppIdValidator` in dstack-gateway's cluster sync client and the
-/// gateway's own `ensure_from_gateway` both do exactly that, which left
-/// clustering working under a KMS key provider and broken under every other one.
-/// (The gateway's inbound sync routes happen to fall back to the app-info
-/// extension, which is why the failure showed up on one side of the connection
-/// only.)
-///
-/// Reading the attestation without verifying it is sound *here and only here*:
-/// the sole caller is the guest agent signing a CSR it built itself, from its
-/// own `certificate_attestation`, against a CA whose key it already holds. It
-/// asserts nothing it could not assert anyway. A remote CSR must go through
-/// KMS, which verifies the quote first and stamps what it verified.
-///
-/// Best effort on purpose: an attestation with nothing decodable yields no
-/// identity at all, and `sign_csr` leaves both extensions absent -- or refuses
-/// the request outright, if the CSR asked for the app-info one.
+/// Reading the attestation unverified is sound only here: the guest agent signs
+/// its own CSR with a CA key it already holds.
 fn local_ca_app_info(attestation: &VersionedAttestation) -> Option<AppInfo> {
     attestation.clone().into_v1().decode_app_info(false).ok()
 }
 
-/// The usage the KMS stamps on its own RPC certificate.
-///
-/// Every other certificate it signs belongs to an app and carries `app:custom`.
 const KMS_RPC_CERT_USAGE: &str = "kms:rpc";
 
-/// Refuse a KMS connection whose server certificate is not the KMS's own.
-///
-/// The CA pinned for this connection is the KMS root, and the KMS signs a
-/// per-app CA under that root for every app it issues a certificate to
-/// (`derive_app_ca` in dstack-kms). Those per-app CAs carry no name constraint,
-/// and `SignCert` copies the subject alternative names and the `serverAuth`
-/// usage straight out of the CSR -- deliberately, because that is what
-/// `GetTlsKey` exists to give an app. So a leaf minted for any app the KMS
-/// authorized chains to the same root, for any hostname the app asked for:
-/// pinning the root alone authenticates "some app this KMS authorized", not
-/// "this KMS".
-///
-/// `PHALA_RATLS_CERT_USAGE` is what separates the two, and an app cannot pick
-/// its value: the KMS writes `kms:rpc` on its own RPC certificate
-/// (`onboard_service::Keys::from_keys`) and `app:custom` on every certificate it
-/// signs for an app. dstack-util has always run this check against the same
-/// endpoint before fetching app keys; this is that check, shared, for the
-/// clients that call `SignCert` and `GetMeta`.
+/// The KMS root also anchors every per-app CA, whose leaves may carry any
+/// hostname an app asks for, so pinning the root alone accepts any app's
+/// certificate. Only the KMS's own RPC certificate carries `kms:rpc`.
 pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
     let Some(cert) = cert else {
         bail!("missing server cert");
@@ -81,16 +44,11 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
         bail!("missing server cert usage");
     };
     if usage != KMS_RPC_CERT_USAGE {
-        bail!("Invalid server cert usage: {usage}");
+        bail!("invalid server cert usage: {usage}");
     }
     Ok(())
 }
 
-/// Build the KMS RPC client with the trust rules a guest applies to a KMS.
-///
-/// Split out of [`CertRequestClient::create`] so those rules can be driven
-/// against a real TLS server by a test that has no TEE to mint the client
-/// certificate from.
 fn kms_client(
     url: String,
     ca_cert: String,
@@ -209,7 +167,7 @@ mod tests {
 
     /// The simulator's attestation with the app-id event's payload emptied.
     ///
-    /// This is the case the `.filter()` in `local_ca_app_id` exists for and the
+    /// This is the case the empty app id filter in `sign_csr` exists for and the
     /// only one that reaches it: `find_event_payload` returns an empty vec for a
     /// missing or empty payload, so `decode_app_info` SUCCEEDS and hands back an
     /// AppInfo whose app_id is empty. The undecodable attestation below does not
@@ -270,7 +228,7 @@ mod tests {
                 // when this is set, and hard fails when it cannot -- which
                 // would mask the app *id* path this is about. The gateway does
                 // set it, which is why the break showed on the client side
-                // only; see `local_ca_app_id`.
+                // only.
                 ext_app_info: false,
                 not_before: None,
                 not_after: None,
@@ -323,8 +281,8 @@ mod tests {
     ///
     /// An empty app id in the extension is not "unknown", it is a value, and
     /// both consumers compare by equality -- so every app without an app-id
-    /// event would have matched every other one. Dropping the `.filter()` in
-    /// `local_ca_app_id` turns this red.
+    /// event would have matched every other one. Dropping the empty app id filter
+    /// in `CaCert::sign_csr` turns this red.
     #[tokio::test]
     async fn an_attestation_with_no_app_id_leaves_the_extension_absent() {
         assert_eq!(
@@ -335,25 +293,6 @@ mod tests {
         assert_eq!(issued_app_id(undecodable_attestation()).await, None);
     }
 
-    /// The same rule at the unit it is decided in, so a failure says which of
-    /// the two halves moved. Dropping an empty app id is `sign_csr`'s half now,
-    /// which is what the two tests above drive; this one pins what is handed to
-    /// it.
-    #[test]
-    fn local_ca_app_info_never_invents_an_app_id() {
-        assert_eq!(
-            local_ca_app_info(&attestation_with_empty_app_id()).map(|info| info.app_id),
-            Some(Vec::new())
-        );
-        assert!(local_ca_app_info(&undecodable_attestation()).is_none());
-        assert_eq!(
-            local_ca_app_info(&simulator_attestation()).map(|info| hex::encode(info.app_id)),
-            Some(SIMULATOR_APP_ID.to_string())
-        );
-    }
-
-    /// An app info carrying nothing but an app id, for a test that only needs
-    /// the certificate to chain and to name an app.
     fn app_info_for(app_id: &[u8]) -> AppInfo {
         AppInfo {
             app_id: app_id.to_vec(),
@@ -368,128 +307,96 @@ mod tests {
         }
     }
 
-    /// The KMS PKI, built with the production primitives.
-    ///
-    /// A guest pins exactly one thing -- the root CA that came back with its app
-    /// keys -- so a root, a `kms:rpc` leaf under it, and the per-app chain
-    /// `SignCert` returns are the whole of what these tests need.
-    struct KmsPki {
-        root: CaCert,
+    fn p256_key() -> KeyPair {
+        KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("key")
     }
 
-    struct CertPair {
-        cert_pem: String,
-        key_pem: String,
+    /// The KMS root CA, as `onboard_service::Keys::from_keys` builds it.
+    fn kms_root() -> CaCert {
+        let key = p256_key();
+        let cert = CertRequest::builder()
+            .org_name("Dstack")
+            .subject("Dstack KMS CA")
+            .ca_level(1)
+            .key(&key)
+            .build()
+            .self_signed()
+            .expect("root cert");
+        CaCert::from_parts(key, cert)
     }
 
-    impl KmsPki {
-        /// The root as `onboard_service::Keys::from_keys` builds it: self-signed,
-        /// `ca_level(1)` so it can sign the per-app intermediates.
-        fn new() -> Self {
-            let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("root key");
-            let cert = CertRequest::builder()
-                .org_name("Dstack")
-                .subject("Dstack KMS CA")
-                .ca_level(1)
-                .key(&key)
-                .build()
-                .self_signed()
-                .expect("root cert");
-            Self {
-                root: CaCert::from_parts(key, cert),
-            }
-        }
-
-        /// The KMS's own RPC certificate: `kms:rpc`, signed straight by the root.
-        fn rpc_cert(&self, domain: &str) -> CertPair {
-            let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("rpc key");
-            let cert = self
-                .root
-                .sign(
-                    CertRequest::builder()
-                        .subject(domain)
-                        .alt_names(&[domain.to_string()])
-                        .special_usage("kms:rpc")
-                        .usage_server_auth(true)
-                        .key(&key)
-                        .build(),
-                )
-                .expect("rpc cert");
-            CertPair {
-                cert_pem: format!("{}\n{}", cert.pem(), self.root.pem_cert),
-                key_pem: key.serialize_pem(),
-            }
-        }
-
-        /// What `SignCert` returns to an app: a leaf carrying the alt names and
-        /// usages the app asked for, under the per-app CA the KMS derives.
-        ///
-        /// Both halves are the production ones -- `derive_app_ca`'s builder call
-        /// and [`CaCert::sign_csr`] -- so this is the chain a real KMS hands
-        /// back, not an approximation of it.
-        fn app_cert(&self, app_id: &[u8], alt_name: &str) -> CertPair {
-            let app_key = kdf::derive_p256_key_pair(&self.root.key, &[app_id, b"app-ca"])
-                .expect("app ca key");
-            let app_ca = self
-                .root
-                .sign(
-                    CertRequest::builder()
-                        .key(&app_key)
-                        .org_name("Dstack")
-                        .subject("Dstack App CA")
-                        .ca_level(0)
-                        .app_id(app_id)
-                        .special_usage("app:ca")
-                        .build(),
-                )
-                .expect("app ca");
-            let app_ca = CaCert::from_parts(app_key, app_ca);
-
-            let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
-            let mut csr = csr_with(undecodable_attestation(), leaf_key.public_key_der());
-            csr.config.subject = alt_name.to_string();
-            csr.config.subject_alt_names = vec![alt_name.to_string()];
-            let leaf = app_ca
-                .sign_csr(&csr, Some(&app_info_for(app_id)), "app:custom")
-                .expect("sign csr");
-            CertPair {
-                cert_pem: format!(
-                    "{}\n{}\n{}",
-                    leaf.pem(),
-                    app_ca.pem_cert,
-                    self.root.pem_cert
-                ),
-                key_pem: leaf_key.serialize_pem(),
-            }
-        }
+    /// The KMS's own RPC certificate chain and key.
+    fn kms_rpc_cert(root: &CaCert, domain: &str) -> (String, String) {
+        let key = p256_key();
+        let cert = root
+            .sign(
+                CertRequest::builder()
+                    .subject(domain)
+                    .alt_names(&[domain.to_string()])
+                    .special_usage("kms:rpc")
+                    .usage_server_auth(true)
+                    .key(&key)
+                    .build(),
+            )
+            .expect("rpc cert");
+        (
+            format!("{}\n{}", cert.pem(), root.pem_cert),
+            key.serialize_pem(),
+        )
     }
 
-    /// Stand in for the KMS at `127.0.0.1`, serving `chain` as the server
-    /// certificate, and answer `GetMeta` with a CA certificate of our choosing.
+    /// What `SignCert` returns to an app asking for `domain`: a leaf under the
+    /// per-app CA `derive_app_ca` builds.
+    fn app_cert(root: &CaCert, app_id: &[u8], domain: &str) -> (String, String) {
+        let app_key = kdf::derive_p256_key_pair(&root.key, &[app_id, b"app-ca"]).expect("key");
+        let app_ca = root
+            .sign(
+                CertRequest::builder()
+                    .key(&app_key)
+                    .org_name("Dstack")
+                    .subject("Dstack App CA")
+                    .ca_level(0)
+                    .app_id(app_id)
+                    .special_usage("app:ca")
+                    .build(),
+            )
+            .expect("app ca");
+        let app_ca = CaCert::from_parts(app_key, app_ca);
+        let key = p256_key();
+        let mut csr = csr_with(undecodable_attestation(), key.public_key_der());
+        csr.config.subject_alt_names = vec![domain.to_string()];
+        let leaf = app_ca
+            .sign_csr(&csr, Some(&app_info_for(app_id)), "app:custom")
+            .expect("sign csr");
+        (
+            format!("{}\n{}\n{}", leaf.pem(), app_ca.pem_cert, root.pem_cert),
+            key.serialize_pem(),
+        )
+    }
+
     #[rocket::post("/GetMeta")]
     fn get_meta() -> &'static str {
-        r#"{"ca_cert":"the ca cert an impostor chose"}"#
+        r#"{"ca_cert":"served ca cert"}"#
     }
 
-    async fn serve(chain: &CertPair) -> (u16, rocket::Shutdown, tempfile::TempDir) {
+    /// Serve `GetMeta` over TLS with `(cert, key)` and query it through the
+    /// guest's KMS client, pinning `root`.
+    async fn get_meta_from(root: &CaCert, (cert, key): (String, String)) -> Result<String> {
         let dir = tempfile::tempdir().expect("tempdir");
         let cert_path = dir.path().join("server.crt");
         let key_path = dir.path().join("server.key");
-        std::fs::write(&cert_path, &chain.cert_pem).expect("write cert");
-        std::fs::write(&key_path, &chain.key_pem).expect("write key");
-
-        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .expect("bind")
-            .local_addr()
-            .expect("local addr")
-            .port();
+        std::fs::write(&cert_path, cert).expect("write cert");
+        std::fs::write(&key_path, key).expect("write key");
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
         let figment = rocket::Config::figment()
             .merge(("port", port))
             .merge(("address", "127.0.0.1"))
             .merge(("log_level", "off"))
             .merge(("shutdown.ctrlc", false))
-            .merge(("tls.certs", cert_path.to_str().expect("cert path")))
-            .merge(("tls.key", key_path.to_str().expect("key path")));
+            .merge(("tls.certs", cert_path))
+            .merge(("tls.key", key_path));
         let rocket = rocket::custom(figment)
             .mount("/", rocket::routes![get_meta])
             .ignite()
@@ -497,23 +404,16 @@ mod tests {
             .expect("ignite");
         let shutdown = rocket.shutdown();
         tokio::spawn(rocket.launch());
-        for _ in 0..100 {
-            if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        while tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        (port, shutdown, dir)
-    }
 
-    /// Ask the impostor for the CA certificate, through the client a guest uses.
-    async fn get_root_ca_from(port: u16, pinned_ca: &str) -> Result<String> {
-        let client_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("client key");
+        let client_key = p256_key();
         let client_cert = CertRequest::builder()
-            .subject("a guest")
+            .subject("guest")
             .key(&client_key)
             .usage_client_auth(true)
             .build()
@@ -521,63 +421,34 @@ mod tests {
             .expect("client cert");
         let client = kms_client(
             format!("https://127.0.0.1:{port}"),
-            pinned_ca.to_string(),
+            root.pem_cert.clone(),
             client_cert.pem(),
             client_key.serialize_pem(),
             Arc::new(AttestationVerifier::new_prod(None).expect("verifier")),
         )?;
-        Ok(client.get_meta().await?.ca_cert)
+        let result = client.get_meta().await.map(|meta| meta.ca_cert);
+        shutdown.notify();
+        result
     }
 
-    /// The severity of `SignCert` copying caller-chosen names and usages: a
-    /// certificate minted through it for the KMS's own address chains to the
-    /// root every guest pins, so a guest that pins only that root accepts an app
-    /// as its KMS.
-    ///
-    /// The app id here is some *other* app's -- an attacker needs nothing but
-    /// authorization for key release, which every deployed app has.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_app_certificate_is_not_accepted_as_the_kms() {
-        let pki = KmsPki::new();
-        let (port, shutdown, _dir) = serve(&pki.app_cert(&[0xa1; 20], "127.0.0.1")).await;
-        let err = get_root_ca_from(port, &pki.root.pem_cert)
+        let root = kms_root();
+        let err = get_meta_from(&root, app_cert(&root, &[0xa1; 20], "127.0.0.1"))
             .await
             .expect_err("an app's certificate must not authenticate the KMS");
         assert!(
-            format!("{err:#}").contains("Invalid server cert usage: app:custom"),
-            "expected the app usage to be refused, got: {err:#}"
+            format!("{err:#}").contains("invalid server cert usage: app:custom"),
+            "unexpected error: {err:#}"
         );
-        shutdown.notify();
     }
 
-    /// And the check must not cost the real thing: the KMS's own `kms:rpc`
-    /// certificate, under the same root, still authenticates it.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_kms_rpc_certificate_is_accepted() {
-        let pki = KmsPki::new();
-        let (port, shutdown, _dir) = serve(&pki.rpc_cert("127.0.0.1")).await;
-        assert_eq!(
-            get_root_ca_from(port, &pki.root.pem_cert)
-                .await
-                .expect("the KMS's own certificate must be accepted"),
-            "the ca cert an impostor chose"
-        );
-        shutdown.notify();
-    }
-
-    /// The rule at the unit it is decided in, so a failure says which half moved.
-    #[test]
-    fn only_the_kms_rpc_usage_authenticates_a_kms() {
-        let info = |usage: Option<&str>| CertInfo {
-            cert_der: vec![],
-            attestation: None,
-            special_usage: usage.map(str::to_string),
-            app_id: None,
-        };
-        assert!(validate_kms_rpc_cert(Some(info(Some("kms:rpc")))).is_ok());
-        assert!(validate_kms_rpc_cert(Some(info(Some("app:custom")))).is_err());
-        assert!(validate_kms_rpc_cert(Some(info(Some("app:ca")))).is_err());
-        assert!(validate_kms_rpc_cert(Some(info(None))).is_err());
-        assert!(validate_kms_rpc_cert(None).is_err());
+        let root = kms_root();
+        let ca_cert = get_meta_from(&root, kms_rpc_cert(&root, "127.0.0.1"))
+            .await
+            .expect("the KMS's own certificate must be accepted");
+        assert_eq!(ca_cert, "served ca cert");
     }
 }

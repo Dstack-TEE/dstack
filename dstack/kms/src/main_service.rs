@@ -562,16 +562,8 @@ impl KmsRpc for RpcHandler {
             self.state.config.aws_nitro_tpm_key_release,
         )?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
-        // Stamp the identity this call verified, from the same verified
-        // attestation and the same `vm_config` the authorization above ran on.
-        // `sign_csr` used to re-derive it from the requester's copy of the
-        // attestation instead, which reported a constant device id and took
-        // `os_image_hash` from the config embedded in the CSR.
-        //
-        // Runtime measurements rather than boot-time ones (`false`), which is
-        // what certificates have always carried; authorization reads the
-        // boot-time ones. Both read `app-id` from the same event, so the app id
-        // here is the one the App CA above was derived for.
+        // Stamp the identity verified above, not the requester's own claims.
+        // Runtime measurements (`false`) are what certificates have always carried.
         let cert_app_info = attestation
             .decode_app_info_ex(false, &request.vm_config)
             .context("Failed to decode the verified app info")?;

@@ -2186,12 +2186,6 @@ pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
         .await
 }
 
-/// Accept only a certificate the KMS issued for its own RPC endpoint.
-///
-/// The attestation behind this certificate is already verified by the RA-TLS
-/// layer, and the KMS identity that matters to the guest is its CA public key,
-/// pinned separately by `verify_key_provider_id`. All that is left here is
-/// refusing a certificate minted for some other purpose.
 struct AppIdValidator {
     allowed_app_id: String,
 }
