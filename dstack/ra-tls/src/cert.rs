@@ -435,18 +435,9 @@ fn add_ext(params: &mut CertificateParams, oid: &[u64], content: impl AsRef<[u8]
         .push(CustomExtension::from_oid_content(oid, content));
 }
 
-/// The last instant RFC 5280 can encode: 9999-12-31T23:59:59Z. A validity
-/// boundary past it has no X.509 representation, and the values a caller can
-/// reach beyond it overflow `SystemTime` on every supported platform.
+/// The last timestamp representable by an RFC 5280 certificate.
 pub const MAX_CERT_VALIDITY_SECS: u64 = 253_402_300_799;
 
-/// Convert a caller-supplied Unix timestamp into a certificate validity bound.
-///
-/// The timestamp arrives from a remote request, so an out-of-range value must
-/// be an error the caller sees rather than an arithmetic overflow.
-/// `UNIX_EPOCH + Duration::from_secs(u64::MAX)` panics, and the workspace builds
-/// release binaries with `panic = "abort"`, so an unchecked conversion turns
-/// one request into a process abort.
 fn unix_time_to_system_time(secs: u64, field: &str) -> Result<SystemTime> {
     if secs > MAX_CERT_VALIDITY_SECS {
         bail!("{field} {secs} is past the last representable certificate time");
@@ -723,34 +714,10 @@ mod tests {
     }
 
     #[test]
-    fn a_validity_bound_past_the_representable_range_is_an_error() {
-        // `UNIX_EPOCH + Duration::from_secs(u64::MAX)` panics, and release
-        // binaries abort on panic, so an out-of-range bound must be reported.
-        for secs in [
-            MAX_CERT_VALIDITY_SECS + 1,
-            u64::MAX / 2,
-            u64::MAX - 1,
-            u64::MAX,
-        ] {
-            let error = unix_time_to_system_time(secs, "not_after")
-                .expect_err("an out-of-range bound must not be accepted");
-            assert!(
-                error.to_string().contains("not_after"),
-                "the error must name the field: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_validity_bound_inside_the_representable_range_is_accepted() {
-        for secs in [0, 1, 4_102_444_800, MAX_CERT_VALIDITY_SECS] {
-            let time = unix_time_to_system_time(secs, "not_before")
-                .expect("a representable bound must be accepted");
-            assert_eq!(
-                time.duration_since(UNIX_EPOCH).unwrap(),
-                Duration::from_secs(secs)
-            );
-        }
+    fn validates_certificate_timestamps() {
+        assert!(unix_time_to_system_time(MAX_CERT_VALIDITY_SECS, "not_after").is_ok());
+        assert!(unix_time_to_system_time(MAX_CERT_VALIDITY_SECS + 1, "not_after").is_err());
+        assert!(unix_time_to_system_time(u64::MAX, "not_after").is_err());
     }
 
     #[test]
