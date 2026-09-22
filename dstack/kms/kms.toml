@@ -45,7 +45,8 @@ sev_snp_key_release = false
 # AWS EC2 NitroTPM key/cert release remains disabled unless this local KMS gate
 # is explicitly enabled. NitroTPM is a new, non-confidential-compute attestation
 # mode (the AWS hypervisor is in the TCB), so it is opt-in like SEV-SNP. External
-# auth policy must still allow the verified BootInfo.
+# auth policy must still allow the verified BootInfo. NitroTPM has no TCB status,
+# so the verifier reports "UpToDate" and requireTcbUpToDate does not gate it.
 aws_nitro_tpm_key_release = false
 
 # AWS Nitro Enclave key/cert release remains disabled unless this local KMS gate
