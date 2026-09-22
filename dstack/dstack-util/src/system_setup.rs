@@ -281,20 +281,25 @@ impl HostShared {
                 }
                 bail!("Source file {src} does not exist");
             }
-            let src_size = src_path.metadata()?.len();
-            if src_size > max_size {
-                bail!("Source file {src} is too large, max size is {max_size} bytes");
-            }
             use fs::os::unix::fs::OpenOptionsExt;
-            let mut src_io = fs::OpenOptions::new()
+            use std::io::Read;
+            // O_NONBLOCK: opening a FIFO on the host share must not block the boot.
+            let src_io = fs::OpenOptions::new()
                 .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                 .open(src_path)?;
+            if !src_io.metadata()?.is_file() {
+                bail!("Source file {src} is not a regular file");
+            }
             let mut dst_io = fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .open(dst_path)?;
-            std::io::copy(&mut src_io, &mut dst_io)?;
+            let copied = std::io::copy(&mut src_io.take(max_size + 1), &mut dst_io)?;
+            if copied > max_size {
+                bail!("Source file {src} is too large, max size is {max_size} bytes");
+            }
             Ok(())
         };
         info!("Mounting host-shared");
