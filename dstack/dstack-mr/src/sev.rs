@@ -37,7 +37,7 @@ const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 /// `SNPActive`, bit 0 of `SEV_FEATURES` (AMD64 APM vol. 2, VMCB SEV_FEATURES;
 /// the same bit layout the SEV-SNP ABI's `GUEST_FEATURES` field in
 /// `SNP_LAUNCH_START` carries). Set on every SNP guest.
-pub const SEV_FEATURE_SNP_ACTIVE: u64 = 1 << 0;
+const SEV_FEATURE_SNP_ACTIVE: u64 = 1 << 0;
 
 /// `SEV_FEATURES` bits a dstack launch may carry.
 ///
@@ -63,7 +63,7 @@ pub const SEV_FEATURE_SNP_ACTIVE: u64 = 1 << 0;
 /// it too — so it is the only value accepted. Widening this is a one-line
 /// change once a launch path actually sets another bit; accepting bits nothing
 /// emits would only ever admit a guest dstack did not configure.
-pub const ALLOWED_GUEST_FEATURES: u64 = SEV_FEATURE_SNP_ACTIVE;
+const ALLOWED_GUEST_FEATURES: u64 = SEV_FEATURE_SNP_ACTIVE;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]

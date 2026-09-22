@@ -140,7 +140,7 @@ pub fn verify_quote_with_ca(
             return Err(VerificationError {
                 status: status.clone(),
                 error: anyhow!(
-                    "PCR {} value is {} bytes, expected {SHA256_DIGEST_LEN} for the                      {SHA256_BANK} bank",
+                    "PCR {} value is {} bytes, expected {SHA256_DIGEST_LEN} for the {SHA256_BANK} bank",
                     pcr.index,
                     pcr.value.len()
                 ),

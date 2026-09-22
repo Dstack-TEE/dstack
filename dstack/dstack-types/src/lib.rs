@@ -3009,16 +3009,13 @@ mod cbor_canonicalization_tests {
             .expect("measurement.aws.cbor names a version, like its three siblings");
         assert_eq!(version.as_integer(), Some(1u32.into()));
 
-        // CBOR stores the version as the single unsigned byte after the
-        // "version" key, so rewriting it forges another version.
-        let key = b"gversion";
-        let offset = cbor
-            .windows(key.len())
-            .position(|window| window == key)
-            .expect("encoded document contains a version key")
-            + key.len();
-        let mut forged = cbor.clone();
-        forged[offset] = 2;
+        let forged = cbor_to_vec(
+            &CborAwsOsImageMeasurement {
+                version: 2,
+                boot_pcr_digest: vec![0x77; 32],
+            },
+            "AwsOsImageMeasurement",
+        );
         let err = AwsOsImageMeasurement::from_cbor_slice(&forged)
             .expect_err("a v2 document must not decode as v1");
         assert!(err.contains("unsupported version 2"), "unexpected: {err}");
