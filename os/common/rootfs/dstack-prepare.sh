@@ -160,6 +160,29 @@ has_luks_header() {
 	return 1
 }
 
+# Only blkid's "probed, found nothing" (exit 2) counts as no filesystem;
+# anything uncertain must not lead to a zap.
+has_filesystem() {
+	local type rc=0
+	type=$(blkid -p -o value -s TYPE "$1" 2>/dev/null) || rc=$?
+	case $rc in
+	0) [ -n "$type" ] ;;
+	2) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+# zpool writes its own GPT on a whole disk and keeps the pool in a partition.
+has_zfs_member() {
+	local disk_name entry
+	disk_name=$(basename "$1")
+	for entry in "/sys/class/block/${disk_name}/${disk_name}"*; do
+		[ -e "$entry/partition" ] || continue
+		[ "$(blkid -p -o value -s TYPE "/dev/${entry##*/}" 2>/dev/null)" = zfs_member ] && return 0
+	done
+	return 1
+}
+
 create_data_partition() {
 	local disk="$1"
 	log "Creating GPT partition table on ${disk}..."
@@ -220,14 +243,27 @@ choose_data_device() {
 		return 0
 	fi
 
-	# 3.2. Check if /dev/vdb has partition table
+	# 3.2. Whole-disk filesystem or zpool: dstack.storage_encrypted=0 formats
+	# the raw disk, so it has no LUKS header. Zapping it would destroy the data.
+	if has_filesystem /dev/vdb; then
+		log "Detected a filesystem on /dev/vdb, using whole disk"
+		echo /dev/vdb
+		return 0
+	fi
+
+	# 3.3. Check if /dev/vdb has partition table
 	if has_partition_table /dev/vdb; then
+		if has_zfs_member /dev/vdb; then
+			log "Detected a ZFS pool on /dev/vdb, using whole disk"
+			echo /dev/vdb
+			return 0
+		fi
 		log "Error: /dev/vdb has partition table but no 'dstack-data' partition found"
 		log "Please check partition labels or specify dstack.data_device kernel parameter"
 		return 1
 	fi
 
-	# 3.3. /dev/vdb is empty, create partition table
+	# 3.4. /dev/vdb is empty, create partition table
 	log "Empty disk detected at /dev/vdb, creating dstack-data partition..."
 	local new_partition
 	new_partition=$(create_data_partition /dev/vdb)
