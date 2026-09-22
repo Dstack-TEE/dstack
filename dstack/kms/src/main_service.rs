@@ -8,9 +8,10 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
@@ -20,6 +21,7 @@ use dstack_kms_rpc::{
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
+use moka::future::Cache;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
@@ -29,7 +31,9 @@ use ra_tls::{
 use scale::Decode;
 use tokio::sync::OnceCell;
 use tracing::{info, warn};
-use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
+use upgrade_authority::{
+    build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
+};
 
 use crate::{
     config::KmsConfig,
@@ -38,6 +42,13 @@ use crate::{
 
 pub(crate) mod amd_attest;
 pub(crate) mod upgrade_authority;
+
+/// How long the auth API's info and this KMS's own authorization are reused.
+///
+/// `GetMeta`, `GetAppEnvEncryptPubKey` and `GetTempCaCert` need no client certificate, and each
+/// would otherwise cost the auth API a round of chain RPC calls. Concurrent callers share one
+/// in-flight request. App authorization is never cached.
+const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -61,6 +72,8 @@ pub struct KmsStateInner {
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: OnceCell<BootInfo>,
+    self_allowed: Cache<(), ()>,
+    auth_api_info: Cache<(), GetInfoResponse>,
     metrics: KmsMetrics,
 }
 
@@ -93,6 +106,13 @@ impl KmsMetrics {
              dstack_kms_attestation_failures_total {attestation_failures_total}\n"
         )
     }
+}
+
+fn short_lived_cache<V: Clone + Send + Sync + 'static>() -> Cache<(), V> {
+    Cache::builder()
+        .max_capacity(1)
+        .time_to_live(AUTH_API_CACHE_TTL)
+        .build()
 }
 
 /// remove a single cache entry (a hex-named subdir/file) under `parent_dir`, or
@@ -168,6 +188,8 @@ impl KmsState {
                 verifier,
                 attestation_verifier,
                 self_boot_info: OnceCell::new(),
+                self_allowed: short_lived_cache(),
+                auth_api_info: short_lived_cache(),
                 metrics: KmsMetrics::default(),
             }),
         })
@@ -268,16 +290,23 @@ impl RpcHandler {
             .get_or_try_init(|| local_kms_boot_info(&self.state.attestation_verifier))
             .await
             .context("Failed to load cached self boot info")?;
-        let response = self
-            .state
-            .config
-            .auth_api
-            .is_app_allowed(boot_info, true)
+        self.state
+            .self_allowed
+            .try_get_with((), async {
+                let response = self
+                    .state
+                    .config
+                    .auth_api
+                    .is_app_allowed(boot_info, true)
+                    .await
+                    .context("Failed to call self KMS auth check")?;
+                if !response.is_allowed {
+                    bail!("KMS is not allowed: {}", response.reason);
+                }
+                Ok(())
+            })
             .await
-            .context("Failed to call self KMS auth check")?;
-        if !response.is_allowed {
-            bail!("KMS is not allowed: {}", response.reason);
-        }
+            .map_err(|err| anyhow!("{err:#}"))?;
         Ok(Some(boot_info))
     }
 
@@ -470,7 +499,12 @@ impl KmsRpc for RpcHandler {
         let bootstrap_info = fs::read_to_string(self.state.config.bootstrap_info())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
-        let info = self.state.config.auth_api.get_info().await?;
+        let info = self
+            .state
+            .auth_api_info
+            .try_get_with((), self.state.config.auth_api.get_info())
+            .await
+            .map_err(|err| anyhow!("{err:#}"))?;
         Ok(GetMetaResponse {
             ca_cert: self.state.inner.root_ca.pem_cert.clone(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
@@ -601,6 +635,7 @@ mod tests {
     };
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
+    use std::time::Duration;
 
     const SNP_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
         snp: true,
@@ -1193,5 +1228,137 @@ mod tests {
             ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
                 .expect("TDX key release has no local opt-in gate");
         }
+    }
+
+    /// An auth API that counts requests and answers them all at once, so a
+    /// test can tell how many upstream calls a burst of concurrent RPCs cost.
+    fn serve_concurrent_auth_api(
+        body: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                counter.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut chunk = [0u8; 4096];
+                    let _ = stream.read(&mut chunk);
+                    // Hold the response long enough that a burst of callers is
+                    // genuinely in flight together rather than serialized.
+                    std::thread::sleep(Duration::from_millis(200));
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                });
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    /// A `KmsState` backed by freshly generated root material in `cert_dir`,
+    /// with its auth API pointed at `webhook_url`.
+    fn kms_state(cert_dir: &Path, webhook_url: &str) -> KmsState {
+        use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
+        use rocket::figment::{
+            providers::{Format, Toml},
+            Figment,
+        };
+
+        let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let ca_cert = CertRequest::builder()
+            .org_name("Dstack")
+            .subject("Dstack KMS CA")
+            .ca_level(1)
+            .key(&ca_key)
+            .build()
+            .self_signed()
+            .unwrap();
+        let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let tmp_ca_cert = CertRequest::builder()
+            .org_name("Dstack")
+            .subject("Dstack Client Temp CA")
+            .ca_level(0)
+            .key(&tmp_ca_key)
+            .build()
+            .self_signed()
+            .unwrap();
+        fs::write(cert_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
+        fs::write(cert_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
+        fs::write(cert_dir.join("tmp-ca.key"), tmp_ca_key.serialize_pem()).unwrap();
+        fs::write(cert_dir.join("tmp-ca.crt"), tmp_ca_cert.pem()).unwrap();
+        fs::write(
+            cert_dir.join("root-k256.key"),
+            SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
+        )
+        .unwrap();
+
+        let overrides = format!(
+            r#"
+            [core]
+            cert_dir = "{}"
+            attest_rpc_cert = false
+            enforce_self_authorization = false
+
+            [core.image]
+            cache_dir = "{}"
+
+            [core.auth_api]
+            type = "webhook"
+
+            [core.auth_api.webhook]
+            url = "{webhook_url}"
+            "#,
+            cert_dir.display(),
+            cert_dir.display(),
+        );
+        let config: KmsConfig = Figment::from(rocket::Config::default())
+            .merge(Toml::string(crate::config::DEFAULT_CONFIG))
+            .merge(Toml::string(&overrides))
+            .focus("core")
+            .extract()
+            .unwrap();
+        KmsState::new(config).unwrap()
+    }
+
+    const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    #[rocket::async_test]
+    async fn concurrent_get_meta_calls_share_one_auth_api_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, upstream_requests) = serve_concurrent_auth_api(AUTH_API_INFO);
+        let state = kms_state(dir.path(), &url);
+
+        let burst: Vec<_> = (0..24)
+            .map(|_| {
+                let state = state.clone();
+                rocket::tokio::spawn(async move {
+                    RpcHandler {
+                        state,
+                        attestation: None,
+                    }
+                    .get_meta()
+                    .await
+                })
+            })
+            .collect();
+        for handle in burst {
+            let meta = handle.await.unwrap().unwrap();
+            assert_eq!(meta.chain_id, Some(1));
+            assert_eq!(meta.gateway_app_id.as_deref(), Some("0xgateway"));
+        }
+        assert_eq!(
+            upstream_requests.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 }

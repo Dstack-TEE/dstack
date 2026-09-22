@@ -96,7 +96,7 @@ pub(crate) struct AuthApiInfoResponse {
     pub app_implementation: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GetInfoResponse {
     pub is_dev: bool,
