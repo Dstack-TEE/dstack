@@ -31,6 +31,7 @@ jobs:
       - name: Parse and check version
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
+          PREVIEW: ${{ inputs.preview }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             VERSION=$DISPATCH_VERSION
@@ -42,6 +43,10 @@ jobs:
           fi
           if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
             echo "Version must be a valid Docker tag" >&2
+            exit 1
+          fi
+          if [ "$PREVIEW" = true ] && [[ "$VERSION" != preview-* ]]; then
+            echo "Preview versions must start with preview-" >&2
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
