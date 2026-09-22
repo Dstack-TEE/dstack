@@ -2378,12 +2378,12 @@ impl<'a> Stage0<'a> {
                     return Ok(keys);
                 }
                 Err(err) => {
-                    warn!("Failed to get app keys from KMS {kms_url}: {err:?}");
+                    warn!("failed to get app keys from KMS {kms_url}: {err:?}");
                     errors.push(format!("{kms_url}: {err:#}"));
                 }
             }
         }
-        bail!("Failed to get app keys from KMS: {}", errors.join("; "))
+        Err(anyhow!(errors.join("; "))).context("failed to get app keys from KMS")
     }
 
     fn verify_key_provider_id(&self, provider_id: &[u8]) -> Result<()> {
