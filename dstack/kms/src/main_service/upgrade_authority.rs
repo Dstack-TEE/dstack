@@ -49,6 +49,19 @@ pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Policy backends left-pad short hex values, so a short field would alias a
+/// whitelisted full-width one.
+fn ensure_identity_widths(boot_info: &BootInfo) -> Result<()> {
+    ensure_app_id_len(&boot_info.app_id)?;
+    if boot_info.compose_hash.len() != 32 {
+        bail!("compose_hash must be 32 bytes");
+    }
+    if !matches!(boot_info.instance_id.len(), 0 | 20) {
+        bail!("instance_id must be 20 bytes or empty");
+    }
+    Ok(())
+}
+
 pub(crate) async fn local_kms_boot_info(verifier: &AttestationVerifier) -> Result<BootInfo> {
     let response = app_attest(pad64([0u8; 32]))
         .await
@@ -136,6 +149,7 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 
 impl AuthApi {
     pub async fn is_app_allowed(&self, boot_info: &BootInfo, is_kms: bool) -> Result<BootResponse> {
+        ensure_identity_widths(boot_info)?;
         match self {
             AuthApi::Dev { dev } => Ok(BootResponse {
                 is_allowed: true,
@@ -361,6 +375,43 @@ mod tests {
             Ok(()) => panic!("19-byte app_id must reject"),
             Err(err) => assert!(err.to_string().contains("app_id must be 20 bytes")),
         }
+    }
+
+    #[rocket::async_test]
+    async fn short_identities_are_refused_before_they_reach_the_backend() {
+        let (url, server) = serve(vec![
+            r#"{"isAllowed":true,"gatewayAppId":"gateway","reason":"well-formed"}"#,
+        ]);
+        let auth = webhook(url);
+
+        let mut aliasing_compose_hash = boot_info(1);
+        aliasing_compose_hash.compose_hash.truncate(31);
+        let err = auth
+            .is_app_allowed(&aliasing_compose_hash, false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("compose_hash must be 32 bytes"));
+
+        let mut aliasing_instance_id = boot_info(1);
+        aliasing_instance_id.instance_id.truncate(19);
+        let err = auth
+            .is_app_allowed(&aliasing_instance_id, false)
+            .await
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("instance_id must be 20 bytes or empty"));
+
+        // `--no-instance-id` deployments carry no instance id.
+        let mut no_instance_id = boot_info(1);
+        no_instance_id.instance_id.clear();
+        assert!(
+            auth.is_app_allowed(&no_instance_id, false)
+                .await
+                .unwrap()
+                .is_allowed
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[rocket::async_test]

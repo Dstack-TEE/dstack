@@ -391,4 +391,13 @@ contract DstackAppTest is Test {
         app.addComposeHash(bytes32(uint256(1)));
         assertTrue(app.allowedComposeHashes(bytes32(uint256(1))));
     }
+
+    function test_AddZeroValuedPolicyEntriesIsRejected() public {
+        vm.startPrank(owner);
+        vm.expectRevert("invalid compose hash");
+        app.addComposeHash(bytes32(0));
+        vm.expectRevert("invalid device ID");
+        app.addDevice(bytes32(0));
+        vm.stopPrank();
+    }
 }
