@@ -78,7 +78,7 @@ This file contains system configuration in JSON format:
 | gateway_urls | array of string | List of gateway service URLs |
 | pccs_url | string | URL of the PCCS service (used when dstack components need to verify a remote TD CVM or SGX enclave) |
 | nvidia_attestation_proxy_url | string | Optional persistent OCSP and RIM cache used by NVIDIA local GPU attestation |
-| docker_registry | string | Docker Hub pull-through mirror. Installed only for a fully digest-pinned compose file -- see the security-mechanism table below |
+| docker_registry | string | URL of the docker registry |
 | host_api_url | string | VSOCK URL of host API |
 | vm_config | string | JSON string of VM configuration (os_image_hash, cpu_count, memory_size) |
 
@@ -90,7 +90,7 @@ The hash of this file is not extended to any RTMR because each field has its own
 | gateway_urls | URLs aren't security-critical. Trust is established through CA certificates from KMS. App CVM and dstack-gateway CVM verify each other's CA certificates to ensure they're under the same KMS authority. |
 | pccs_url | URL isn't security-critical. Trust is anchored by the root public key pinned in the attestation verification program. |
 | nvidia_attestation_proxy_url | The URL is not a collateral trust anchor. The measured guest verifies NVIDIA signatures and the signed OCSP validity window, and continues to require a fresh GPU evidence nonce. A bad endpoint can withhold collateral and cause a denial of service, but cannot forge a successful attestation or replay an expired `good` response. |
-| docker_registry | The value is a `registry-mirrors` entry, which Docker consults for Docker Hub only, and the daemon rejects a manifest whose digest does not match an `@sha256:` reference. That only covers the images the compose file actually pins, so the guest installs the mirror **only when every Hub image in the (compose-hash-measured) compose file is digest-pinned** and no service is built locally; otherwise it logs a warning and leaves `daemon.json` alone, and the daemon pulls from the canonical registry over TLS. |
+| docker_registry | Docker daemon verifies image integrity using the pinned image hashes in the docker-compose file. |
 | host_api_url | Used only for reporting or encrypted sealing key transport. An incorrect URL doesn't create security vulnerabilities. |
 | vm_config | Informs the CVM to report virtual hardware info to KMS when requesting keys. KMS uses this info to calculate expected RTMRs and verify image hash. If tampered with, image hash verification would fail and no keys would be distributed. |
 
@@ -223,11 +223,8 @@ what it costs and in what it says:
   rule failed. That last part is a narrow oracle for whether a path exists and
   what shape its first two lines have; the path itself is already public, since
   it is measured into the compose hash. The file's *contents* are never quoted
-  back. It also names the unhealthy containers, unconditionally: an app that
-  opted into health gating asked the gateway to route on this answer, and the
-  gateway has to be able to say which container held the instance out of
-  rotation. The dashboard below publishes the *full* container list only when
-  `public_sysinfo` or `public_logs` is set.
+  back. Container names and statuses were already public through the dashboard
+  below.
 - `GetAttestationForAppKey` (frozen) generates a fresh platform attestation per
   call. With the frozen `Info` below, it is one of the two methods here that
   let an anonymous caller drive quote generation. It has no v1 counterpart
@@ -250,11 +247,6 @@ what it costs and in what it says:
   a quote vouches for them. Identity and the measurement hashes are always
   visible on both surfaces.
 
-The service also provides a web dashboard at the root URL (`/`) showing basic
-CVM information. The page itself is always served, but each section honours the
-app's flags: system and GPU details need `public_sysinfo`, the TCB blob needs
-`public_tcbinfo`, and the deployed-container table -- service names, image-derived
-names and statuses -- needs `public_sysinfo` or `public_logs`, since a log link is
-addressed by container name. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
+The service also provides a web dashboard at the root URL (`/`) showing basic CVM information. View the dashboard template [here](../../dstack/guest-agent/templates/dashboard.html).
 
 Full specifications: [agent_rpc.proto](../../dstack/guest-agent/rpc/proto/agent_rpc.proto) for the frozen surface, [agent_rpc_v1.proto](../../dstack/guest-agent/rpc/proto/agent_rpc_v1.proto) for v1.

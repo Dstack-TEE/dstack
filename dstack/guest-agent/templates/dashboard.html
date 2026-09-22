@@ -334,9 +334,6 @@ SPDX-License-Identifier: Apache-2.0
     {% endif %}
 
     <h2>Deployed Containers</h2>
-    {% if !public_sysinfo && !public_logs %}
-    <p>Container info is not public</p>
-    {% else %}
     <div class="table-scroll">
         <table>
             <thead>
@@ -365,7 +362,6 @@ SPDX-License-Identifier: Apache-2.0
             </tbody>
         </table>
     </div>
-    {% endif %}
 
     <h2>TCB Info</h2>
     {% if public_tcbinfo %}

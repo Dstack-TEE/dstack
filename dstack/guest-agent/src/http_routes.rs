@@ -66,16 +66,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         Default::default()
     };
 
-    // Same rule as the GPU sample above, for the same reason: this page is
-    // served on the public listener, so a guest that kept both its sysinfo and
-    // its logs private must not publish its service names through the
-    // container table -- and must not pay a Docker round trip to build one the
-    // template will not render.
-    let containers = if public_sysinfo || public_logs {
-        list_containers().await.unwrap_or_default().containers
-    } else {
-        Vec::new()
-    };
+    let containers = list_containers().await.unwrap_or_default().containers;
     let model = crate::models::Dashboard {
         app_name,
         app_id,
