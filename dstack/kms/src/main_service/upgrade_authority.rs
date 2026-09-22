@@ -102,12 +102,30 @@ async fn http_post<R: DeserializeOwned>(url: &str, body: &impl Serialize) -> Res
     send_request(reqwest::Client::new().post(url).json(body), url).await
 }
 
+/// Longest stretch of an auth-backend response quoted back in an error.
+///
+/// #525's convention: include the body so a misconfigured backend is
+/// diagnosable, bounded so an HTML error page cannot flood the logs.
+const MAX_QUOTED_BODY_BYTES: usize = 512;
+
+/// Take at most [`MAX_QUOTED_BODY_BYTES`] of `body`, ending on a character boundary.
+///
+/// Slicing a `String` at a fixed byte index panics when that index lands inside a
+/// multi-byte character, and this body is whatever the auth backend sent -- a proxy's
+/// error page, or a `reason` string an app owner controls through their `DstackApp`
+/// contract. Release binaries build with `panic = "abort"`, so that is the KMS process
+/// dying on the boot-authorization path rather than one call failing. Rounding the
+/// bound down to a boundary keeps it a byte bound, not a character count.
+fn quoted_body(body: &str) -> &str {
+    &body[..body.floor_char_boundary(MAX_QUOTED_BODY_BYTES)]
+}
+
 async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &str) -> Result<R> {
     static USER_AGENT: &str = concat!("dstack-kms/", env!("CARGO_PKG_VERSION"));
     let response = req.header("User-Agent", USER_AGENT).send().await?;
     let status = response.status();
     let body = response.text().await?;
-    let short_body = &body[..body.len().min(512)];
+    let short_body = quoted_body(&body);
     if !status.is_success() {
         bail!("auth api {url} returned {status}: {short_body}");
     }
@@ -268,7 +286,10 @@ mod tests {
         }
     }
 
-    fn serve(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+    fn serve<S: Into<String>>(
+        responses: Vec<S>,
+    ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+        let responses: Vec<String> = responses.into_iter().map(Into::into).collect();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = thread::spawn(move || {
@@ -403,5 +424,39 @@ mod tests {
         assert!(recovered.is_allowed);
         assert_eq!(recovered.reason, "recovered");
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    /// The auth backend's body is quoted into the error that reports a bad
+    /// response. Byte-slicing it at a fixed offset aborts the KMS when that
+    /// offset lands inside a multi-byte character, and this runs on every
+    /// response, including a successful one.
+    #[rocket::async_test]
+    async fn a_response_with_a_multibyte_character_on_the_quoting_bound_does_not_abort() {
+        let mut body = "A".repeat(MAX_QUOTED_BODY_BYTES - 1);
+        body.push('\u{e9}'); // occupies bytes 511..513, so 512 is mid-character
+        let (url, server) = serve(vec![body]);
+
+        let error = webhook(url)
+            .is_app_allowed(&boot_info(40), false)
+            .await
+            .unwrap_err();
+
+        assert!(format!("{error:#}").contains("failed to decode response"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_quoted_body_is_bounded_in_bytes_and_never_splits_a_character() {
+        assert_eq!(quoted_body("short"), "short");
+        assert_eq!(quoted_body(&"A".repeat(600)).len(), MAX_QUOTED_BODY_BYTES);
+        // Every alignment of a 2-, 3- and 4-byte character across the bound.
+        for pad in MAX_QUOTED_BODY_BYTES - 4..MAX_QUOTED_BODY_BYTES {
+            for wide in ['\u{e9}', '\u{4e2d}', '\u{1f600}'] {
+                let body = format!("{}{wide}{}", "A".repeat(pad), "B".repeat(16));
+                let quoted = quoted_body(&body);
+                assert!(quoted.len() <= MAX_QUOTED_BODY_BYTES);
+                assert!(body.starts_with(quoted));
+            }
+        }
     }
 }
