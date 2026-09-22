@@ -115,6 +115,39 @@ pub fn verify_quote_with_ca(
         });
     }
 
+    // The attested bank fixes both the digest length of every quoted PCR and
+    // the name `PcrValue` must carry, and neither was checked. Length matters
+    // because compute_pcr_digest() concatenates the values with nothing marking
+    // where one ends: a caller can re-split the preimage of a genuine,
+    // AK-signed pcr_digest into differently sized values, match the digest, and
+    // have VerifiedReport::get_pcr() hand out a PCR the TPM never held. The
+    // name matters because it is the only thing a consumer of VerifiedReport
+    // can read to learn which bank it is looking at.
+    const SHA256_BANK: &str = "sha256";
+    const SHA256_DIGEST_LEN: usize = 32;
+    for pcr in &quote.pcr_values {
+        if pcr.algorithm != SHA256_BANK {
+            return Err(VerificationError {
+                status: status.clone(),
+                error: anyhow!(
+                    "PCR {} is labelled {:?}, but the quote attests the {SHA256_BANK} bank",
+                    pcr.index,
+                    pcr.algorithm
+                ),
+            });
+        }
+        if pcr.value.len() != SHA256_DIGEST_LEN {
+            return Err(VerificationError {
+                status: status.clone(),
+                error: anyhow!(
+                    "PCR {} value is {} bytes, expected {SHA256_DIGEST_LEN} for the {SHA256_BANK} bank",
+                    pcr.index,
+                    pcr.value.len()
+                ),
+            });
+        }
+    }
+
     let computed_pcr_digest =
         compute_pcr_digest(&quote.pcr_values).map_err(|e| VerificationError {
             status: status.clone(),
@@ -685,5 +718,129 @@ fn verify_ak_chain_with_collateral(
             warn!("✗ AK certificate chain verification failed: {e:?}");
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{QuoteCollateral, GCP_ROOT_CA};
+
+    /// Everything a quote must satisfy to reach `compute_pcr_digest` is
+    /// reproducible without a TPM: the PCR selection list lives in the
+    /// still-unsigned TPMS_ATTEST, and `pcr_digest` is a plain SHA-256 over the
+    /// supplied PCR values. Both gates run before the AK signature is checked.
+    fn attest_message(pcr_indices: &[u8], hash_alg: u16, pcr_digest: &[u8]) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(&0xff544347u32.to_be_bytes()); // magic
+        msg.extend_from_slice(&0x8018u16.to_be_bytes()); // TPM_ST_ATTEST_QUOTE
+        msg.extend_from_slice(&0u16.to_be_bytes()); // qualified_signer
+        msg.extend_from_slice(&0u16.to_be_bytes()); // qualified_data
+        msg.extend_from_slice(&0u64.to_be_bytes()); // clock
+        msg.extend_from_slice(&0u32.to_be_bytes()); // reset_count
+        msg.extend_from_slice(&0u32.to_be_bytes()); // restart_count
+        msg.push(1); // safe
+        msg.extend_from_slice(&0u64.to_be_bytes()); // firmware_version
+        msg.extend_from_slice(&1u32.to_be_bytes()); // one selection
+        msg.extend_from_slice(&hash_alg.to_be_bytes());
+        msg.push(2); // sizeof_select
+        let mut bitmap = [0u8; 2];
+        for index in pcr_indices {
+            bitmap[(index / 8) as usize] |= 1 << (index % 8);
+        }
+        msg.extend_from_slice(&bitmap);
+        msg.extend_from_slice(&(pcr_digest.len() as u16).to_be_bytes());
+        msg.extend_from_slice(pcr_digest);
+        msg
+    }
+
+    fn quote_of(pcr_values: Vec<PcrValue>, message: Vec<u8>) -> TpmQuote {
+        TpmQuote {
+            message,
+            signature: Vec::new(),
+            pcr_values,
+            ak_cert: Vec::new(),
+            platform: Platform::Gcp,
+            event_log: Vec::new(),
+        }
+    }
+
+    fn empty_collateral() -> QuoteCollateral {
+        QuoteCollateral {
+            cert_chain_pem: String::new(),
+            crls: Vec::new(),
+            root_ca_crl: None,
+        }
+    }
+
+    /// `compute_pcr_digest` concatenates the PCR values with nothing marking
+    /// where one ends and the next begins, so a caller can move the boundary.
+    /// The signed `pcr_digest` still matches, the indices still match the signed
+    /// selection, and `VerifiedReport::get_pcr` then hands out a PCR 4 value
+    /// that no TPM ever held.
+    #[test]
+    fn rejects_pcr_values_whose_lengths_do_not_match_the_attested_bank() {
+        let pcr4 = vec![0xaa; 32];
+        let pcr7 = vec![0xbb; 32];
+        let mut concatenated = pcr4.clone();
+        concatenated.extend_from_slice(&pcr7);
+        let genuine_digest = Sha256::digest(&concatenated).to_vec();
+
+        // Same bytes, boundary moved one byte left.
+        let shifted = vec![
+            PcrValue {
+                index: 4,
+                algorithm: "sha256".into(),
+                value: concatenated[..31].to_vec(),
+            },
+            PcrValue {
+                index: 7,
+                algorithm: "sha256".into(),
+                value: concatenated[31..].to_vec(),
+            },
+        ];
+        let message = attest_message(&[4, 7], 0x000b, &genuine_digest);
+        let err = match verify_quote_with_ca(
+            &quote_of(shifted, message),
+            &empty_collateral(),
+            GCP_ROOT_CA,
+        ) {
+            Ok(report) => panic!(
+                "a re-split PCR list verified; get_pcr(4) = {}",
+                hex::encode(report.get_pcr(4).expect("PCR 4"))
+            ),
+            Err(err) => err.error.to_string(),
+        };
+        assert!(
+            err.contains("PCR 4") && err.contains("31 bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// `PcrValue::algorithm` is the only place a consumer of `VerifiedReport`
+    /// can read which bank the values came from, and nothing compared it against
+    /// the bank the signed TPMS_ATTEST names.
+    #[test]
+    fn rejects_pcr_values_that_misname_the_attested_bank() {
+        let pcr4 = vec![0xaa; 32];
+        let digest = Sha256::digest(&pcr4).to_vec();
+        let values = vec![PcrValue {
+            index: 4,
+            algorithm: "sha384".into(),
+            value: pcr4,
+        }];
+        let message = attest_message(&[4], 0x000b, &digest);
+        let err = match verify_quote_with_ca(
+            &quote_of(values, message),
+            &empty_collateral(),
+            GCP_ROOT_CA,
+        ) {
+            Ok(_) => panic!("a mislabelled PCR bank verified"),
+            Err(err) => err.error.to_string(),
+        };
+        assert!(
+            err.contains("PCR 4") && err.contains("sha384") && err.contains("sha256"),
+            "unexpected error: {err}"
+        );
     }
 }

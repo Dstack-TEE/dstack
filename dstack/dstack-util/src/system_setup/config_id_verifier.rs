@@ -48,7 +48,7 @@ fn read_snp_host_data() -> Result<[u8; 32]> {
     let AttestationQuote::DstackAmdSevSnp(quote) = attestation.quote else {
         bail!("attestation mode is not AMD SEV-SNP");
     };
-    let parsed = dstack_attest::amd_sev_snp::parse_amd_snp_report(&quote.report)
+    let parsed = dstack_attest::amd_sev_snp::parse_unverified_amd_snp_report(&quote.report)
         .context("Failed to parse SNP report")?;
     Ok(parsed.host_data)
 }

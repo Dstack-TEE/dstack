@@ -1524,12 +1524,28 @@ fn cbor_to_vec<T: Serialize>(value: &T, context: &str) -> Vec<u8> {
     out
 }
 
+/// Decode one CBOR document, and only one.
+///
+/// Every caller is decoding a fixed-size measurement document whose bytes are
+/// also hashed into `os_image_hash`, so a decoder that stops at the end of the
+/// first item and ignores the rest lets one byte string decode to a value it
+/// does not hash as. Nothing exploits that today because the verification path
+/// hashes the raw bytes (`verify_measurement_material`), but the ambiguity is
+/// cheap to remove here and expensive to notice later.
 fn cbor_from_slice<T: serde::de::DeserializeOwned>(
     bytes: &[u8],
     context: &str,
 ) -> Result<T, String> {
-    ciborium::de::from_reader(Cursor::new(bytes))
-        .map_err(|e| format!("{context}: failed to decode CBOR: {e}"))
+    let mut cursor = Cursor::new(bytes);
+    let value = ciborium::de::from_reader(&mut cursor)
+        .map_err(|e| format!("{context}: failed to decode CBOR: {e}"))?;
+    let trailing = bytes.len() as u64 - cursor.position();
+    if trailing != 0 {
+        return Err(format!(
+            "{context}: {trailing} trailing byte(s) after the CBOR document"
+        ));
+    }
+    Ok(value)
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -1540,6 +1556,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 pub const TDX_MEASUREMENT_FILENAME: &str = "measurement.tdx.cbor";
 pub const SNP_MEASUREMENT_FILENAME: &str = "measurement.snp.cbor";
 pub const GCP_MEASUREMENT_FILENAME: &str = "measurement.gcp.cbor";
+pub const AWS_MEASUREMENT_FILENAME: &str = "measurement.aws.cbor";
 
 pub fn image_hash_from_sha256sum(checksum_file: &[u8]) -> [u8; 32] {
     sha256(checksum_file)
@@ -1747,7 +1764,32 @@ pub struct AwsOsImageMeasurement {
     pub boot_pcr_digest: Vec<u8>,
 }
 
+/// On-wire mirror of [`AwsOsImageMeasurement`], matching
+/// `CborGcpOsImageMeasurement`: the document names its schema version so a
+/// future shape fails closed on an old verifier instead of decoding as this
+/// one. Like its three siblings it does not `deny_unknown_fields`: the version
+/// gate below is the fail-closed mechanism, and rejecting on the unknown field
+/// first would replace its diagnostic with `unknown field ...`. The bytes are
+/// bound to `os_image_hash` by the `measurement.aws.cbor` entry in
+/// `sha256sum.txt`, so an ignored field cannot change what was measured.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CborAwsOsImageMeasurement {
+    version: u32,
+    #[serde(with = "hex_bytes")]
+    boot_pcr_digest: Vec<u8>,
+}
+
+impl From<&AwsOsImageMeasurement> for CborAwsOsImageMeasurement {
+    fn from(measurement: &AwsOsImageMeasurement) -> Self {
+        Self {
+            version: AwsOsImageMeasurement::VERSION,
+            boot_pcr_digest: measurement.boot_pcr_digest.clone(),
+        }
+    }
+}
+
 impl AwsOsImageMeasurement {
+    pub const VERSION: u32 = 1;
     pub const BOOT_PCR_DIGEST_LEN: usize = 32;
     pub const PCR_SHA384_LEN: usize = 48;
 
@@ -1782,12 +1824,30 @@ impl AwsOsImageMeasurement {
     }
 
     pub fn to_cbor_vec(&self) -> Vec<u8> {
-        cbor_to_vec(self, "AwsOsImageMeasurement")
+        cbor_to_vec(
+            &CborAwsOsImageMeasurement::from(self),
+            "AwsOsImageMeasurement",
+        )
     }
 
     pub fn from_cbor_slice(bytes: &[u8]) -> Result<Self, String> {
-        let measurement: Self = cbor_from_slice(bytes, "AwsOsImageMeasurement")?;
+        let measurement: CborAwsOsImageMeasurement =
+            cbor_from_slice(bytes, "AwsOsImageMeasurement")?;
+        if measurement.version != Self::VERSION {
+            return Err(format!(
+                "AwsOsImageMeasurement: unsupported version {}, expected {}",
+                measurement.version,
+                Self::VERSION
+            ));
+        }
         Self::new(measurement.boot_pcr_digest)
+    }
+
+    pub fn cbor_json_value_from_slice(bytes: &[u8]) -> Result<serde_json::Value, String> {
+        let measurement: CborAwsOsImageMeasurement =
+            cbor_from_slice(bytes, "AwsOsImageMeasurement")?;
+        serde_json::to_value(measurement)
+            .map_err(|e| format!("AwsOsImageMeasurement: failed to convert to JSON: {e}"))
     }
 }
 
@@ -1819,7 +1879,7 @@ impl AwsOsImageMeasurementDocument {
             os_image_hash,
             &self.checksum_file,
             &self.measurement,
-            "measurement.aws.cbor",
+            AWS_MEASUREMENT_FILENAME,
         )
     }
 }
@@ -2873,6 +2933,91 @@ mod tdx_measurement_cbor_tests {
         cbor[at + key.len()] = 2;
 
         let err = TdxOsImageMeasurement::from_cbor_slice(&cbor).unwrap_err();
+        assert!(err.contains("unsupported version 2"), "unexpected: {err}");
+    }
+}
+
+#[cfg(test)]
+mod cbor_canonicalization_tests {
+    use super::*;
+
+    fn sev_measurement() -> SevOsImageMeasurement {
+        SevOsImageMeasurement {
+            base_cmdline: "console=ttyS0 dstack.rootfs_hash=11".to_string(),
+            ovmf_hash: vec![0x44; 48],
+            kernel_hash: vec![0x55; 32],
+            initrd_hash: vec![0x66; 32],
+            sev_hashes_table_gpa: 0x80_1000,
+            sev_es_reset_eip: 0xffff_fff0,
+            ovmf_sections: vec![OvmfSection {
+                gpa: 0x100000,
+                size: 0x1000,
+                section_type: 1,
+            }],
+        }
+    }
+
+    /// Every `*_MEASUREMENT_FILENAME` document is bound to `os_image_hash` by a
+    /// hash over its raw bytes, so today the trailing bytes ride along in that
+    /// hash and no live check is bypassed. That property is an accident of the
+    /// call sites, not of the decoder: the moment anything compares a
+    /// re-encoded `measurement_hash()` against a `sha256sum.txt` entry, a
+    /// document with trailing bytes decodes to one value and hashes as another.
+    /// Decoding is where the ambiguity belongs.
+    #[test]
+    fn cbor_decoders_reject_trailing_bytes() {
+        let mut cbor = sev_measurement().to_cbor_vec();
+        let clean = SevOsImageMeasurement::from_cbor_slice(&cbor).expect("clean document decodes");
+        cbor.push(0x00);
+
+        let err = SevOsImageMeasurement::from_cbor_slice(&cbor)
+            .expect_err("a document with trailing bytes must not decode");
+        assert!(err.contains("trailing"), "unexpected error: {err}");
+
+        // The re-encoded hash of what it decodes to is not the hash of the
+        // bytes it was decoded from -- the ambiguity the check removes.
+        assert_ne!(clean.measurement_hash().to_vec(), sha256(&cbor).to_vec());
+
+        // Same decoder, so every other measurement document is covered too.
+        let mut gcp = GcpOsImageMeasurement::new(vec![0x77; 32])
+            .expect("gcp measurement")
+            .to_cbor_vec();
+        gcp.extend_from_slice(b"junk");
+        let err = GcpOsImageMeasurement::from_cbor_slice(&gcp)
+            .expect_err("a GCP document with trailing bytes must not decode");
+        assert!(err.contains("trailing"), "unexpected error: {err}");
+    }
+
+    /// Each of `measurement.{tdx,snp,gcp}.cbor` encodes a mirror struct whose
+    /// first field is `version`, checked on decode, so a future schema change
+    /// fails closed on old verifiers. `measurement.aws.cbor` encoded its public
+    /// struct directly and named no version at all, which would have left a v2
+    /// document decoding as a v1 one.
+    #[test]
+    fn the_aws_measurement_document_names_and_checks_its_version() {
+        let cbor = AwsOsImageMeasurement::new(vec![0x77; 32])
+            .expect("aws measurement")
+            .to_cbor_vec();
+
+        let value: ciborium::value::Value =
+            ciborium::de::from_reader(Cursor::new(&cbor[..])).expect("document decodes as CBOR");
+        let entries = value.as_map().expect("document is a CBOR map");
+        let version = entries
+            .iter()
+            .find(|(key, _)| key.as_text() == Some("version"))
+            .map(|(_, value)| value.clone())
+            .expect("measurement.aws.cbor names a version, like its three siblings");
+        assert_eq!(version.as_integer(), Some(1u32.into()));
+
+        let forged = cbor_to_vec(
+            &CborAwsOsImageMeasurement {
+                version: 2,
+                boot_pcr_digest: vec![0x77; 32],
+            },
+            "AwsOsImageMeasurement",
+        );
+        let err = AwsOsImageMeasurement::from_cbor_slice(&forged)
+            .expect_err("a v2 document must not decode as v1");
         assert!(err.contains("unsupported version 2"), "unexpected: {err}");
     }
 }
