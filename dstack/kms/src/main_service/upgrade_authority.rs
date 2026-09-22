@@ -12,6 +12,7 @@ use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 /// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
 /// canonical struct shared by the producer (KMS) and the policy input the
@@ -254,10 +255,11 @@ pub(crate) async fn ensure_kms_allowed(
         .context("failed to build KMS boot info from attestation")?;
     // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
     // EVENT_LOG OIDs) which lacks vm_config, resulting in an empty os_image_hash.
-    // Fill it from the local KMS's own value. This is safe because mrAggregated already
-    // validates OS image integrity transitively through the RTMR measurement chain.
+    // Fill it from the local KMS's own value, so only mrAggregated gates the source image here.
+    // A source that presents a config but no os_image_hash is not legacy and gets no fallback.
     // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
-    if boot_info.os_image_hash.is_empty() {
+    if boot_info.os_image_hash.is_empty() && attestation.config.is_empty() {
+        warn!("source KMS uses the legacy cert format, falling back to the local os_image_hash");
         let local_info = local_kms_boot_info(verifier)
             .await
             .context("failed to get local KMS boot info for os_image_hash fallback")?;
