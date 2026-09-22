@@ -2306,7 +2306,7 @@ impl<'a> Stage0<'a> {
         self.shared.dir.join(APP_KEYS)
     }
 
-    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<AppKeys> {
+    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<(AppKeys, Vec<u8>)> {
         info!("Requesting app keys from KMS: {kms_url}");
         let tmp_ca = {
             info!("Getting temp ca cert");
@@ -2340,9 +2340,6 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
-        emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("failed to extend os-image-hash to the launch measurement")?;
-
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
             .context("Failed to parse ca cert")?;
         let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
@@ -2362,34 +2359,31 @@ impl<'a> Stage0<'a> {
                 tmp_ca_cert: tmp_ca.temp_ca_cert,
             },
         };
-        Ok(keys)
+        Ok((keys, response.os_image_hash))
     }
 
     async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
         if self.shared.sys_config.kms_urls.is_empty() {
             bail!("No KMS URLs are set");
         }
-        let keys = 'out: {
-            let mut error = anyhow!("unknown error");
-            for (i, kms_url) in self.shared.sys_config.kms_urls.iter().enumerate() {
-                let kms_url = kms_rpc_url(kms_url);
-                let response = self.request_app_keys_from_kms_url(kms_url.clone()).await;
-                match response {
-                    Ok(response) => {
-                        break 'out response;
-                    }
-                    Err(err) => {
-                        warn!("Failed to get app keys from KMS {kms_url}: {err:?}");
-                        // Record the first error
-                        if i == 0 {
-                            error = err;
-                        }
-                    }
+        let mut errors = vec![];
+        for kms_url in &self.shared.sys_config.kms_urls {
+            let kms_url = kms_rpc_url(kms_url);
+            match self.request_app_keys_from_kms_url(kms_url.clone()).await {
+                Ok((keys, os_image_hash)) => {
+                    // Measured here, outside the per-URL request, so that a
+                    // failover can never extend os-image-hash twice.
+                    emit_runtime_event("os-image-hash", &os_image_hash)
+                        .context("failed to extend os-image-hash to the launch measurement")?;
+                    return Ok(keys);
+                }
+                Err(err) => {
+                    warn!("Failed to get app keys from KMS {kms_url}: {err:?}");
+                    errors.push(format!("{kms_url}: {err:#}"));
                 }
             }
-            return Err(error).context("Failed to get app keys from KMS");
-        };
-        Ok(keys)
+        }
+        bail!("Failed to get app keys from KMS: {}", errors.join("; "))
     }
 
     fn verify_key_provider_id(&self, provider_id: &[u8]) -> Result<()> {
