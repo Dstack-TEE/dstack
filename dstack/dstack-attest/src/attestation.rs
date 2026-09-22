@@ -491,7 +491,14 @@ pub fn detect_tee_variant() -> Result<TeeVariant> {
             }
             bail!("Unsupported platform: GCP(-tdx)");
         }
-        Platform::NitroEnclave => Ok(TeeVariant::DstackNitroEnclave),
+        Platform::NitroEnclave => {
+            // DMI is host-controlled; require the NSM device before selecting a
+            // variant that skips runtime measurement and MR_CONFIG_ID checks.
+            if std::path::Path::new("/dev/nsm").exists() {
+                return Ok(TeeVariant::DstackNitroEnclave);
+            }
+            bail!("unsupported platform: Nitro Enclave without /dev/nsm");
+        }
         Platform::AwsEc2 => {
             if std::path::Path::new("/dev/tpmrm0").exists()
                 || std::path::Path::new("/dev/tpm0").exists()
