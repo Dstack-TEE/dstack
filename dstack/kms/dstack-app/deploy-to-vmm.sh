@@ -26,9 +26,6 @@ else
 # The address of the KMS contract
 # KMS_CONTRACT_ADDR=0x59E4a36B01a87fD9D1A4C12377253FE9a7b018Ba
 
-# The address of the auth-api service listening on Host machine
-# AUTH_API_RPC_ADDR=0.0.0.0:8001
-
 # The address of the KMS service listening on Host machine
 # KMS_RPC_ADDR=0.0.0.0:9201
 
@@ -41,20 +38,15 @@ else
 # Image hash verification feature flag
 VERIFY_IMAGE=true
 
-# The URL of the Ethereum RPC service
-ETH_RPC_URL=https://rpc.phala.network
-
-# The Git repository to deploy
-GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
-
-# The Git revision to deploy
-GIT_REV=HEAD
+# Maximum age of sequencer-authenticated state accepted for authorization.
+# Choose according to the acceptable revocation delay and observed RPC latency.
+# ETH_MAX_BLOCK_AGE_SECONDS=
 
 # The dstack OS image name to use for the KMS app
 OS_IMAGE=dstack-0.5.5
 
 # The dstack KMS image name to use for the KMS app
-KMS_IMAGE=dstacktee/dstack-kms@sha256:11ac59f524a22462ccd2152219b0bec48a28ceb734e32500152d4abefab7a62a
+# KMS_IMAGE=ghcr.io/dstack-tee/dstack-kms@sha256:<published-image-digest>
 
 # The admin token for the KMS app
 ADMIN_TOKEN=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)
@@ -66,13 +58,12 @@ fi
 required_env_vars=(
   "VMM_RPC"
   "KMS_RPC_ADDR"
-  "AUTH_API_RPC_ADDR"
   "GUEST_AGENT_ADDR"
   "KMS_CONTRACT_ADDR"
-  "ETH_RPC_URL"
+  "ETH_MAX_BLOCK_AGE_SECONDS"
   "IMAGE_DOWNLOAD_URL"
   "VERIFY_IMAGE"
-  "GIT_REPOSITORY"
+  "KMS_IMAGE"
 )
 
 for var in "${required_env_vars[@]}"; do
@@ -87,24 +78,20 @@ CLI="../../vmm/src/vmm-cli.py --url $VMM_RPC"
 
 COMPOSE_TMP=$(mktemp)
 
-GIT_REV=$(git rev-parse "$GIT_REV")
-
 # shellcheck disable=SC2034  # consumed via `subvar` into compose-*.yaml
 ADMIN_TOKEN_HASH=$(echo -n "$ADMIN_TOKEN" | sha256sum | cut -d' ' -f1)
 
-cp compose-dev.yaml "$COMPOSE_TMP"
+cp docker-compose.yaml "$COMPOSE_TMP"
 
 subvar() {
-  sed -i "s|\${$1}|${!1}|g" "$COMPOSE_TMP"
+  sed -i "s|\${$1\(:?[^}]*\)\?}|${!1}|g" "$COMPOSE_TMP"
 }
 
-subvar ETH_RPC_URL
+subvar ETH_MAX_BLOCK_AGE_SECONDS
 subvar KMS_CONTRACT_ADDR
-subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL
 subvar ADMIN_TOKEN_HASH
 subvar VERIFY_IMAGE
-subvar GIT_REPOSITORY
 subvar KMS_IMAGE
 
 echo "Docker compose file:"
@@ -141,7 +128,6 @@ $CLI deploy \
   --compose .app-compose.json \
   --image "$OS_IMAGE" \
   --port tcp:"$KMS_RPC_ADDR":8000 \
-  --port tcp:"$AUTH_API_RPC_ADDR":8001 \
   --port tcp:"$GUEST_AGENT_ADDR":8090 \
   --vcpu 8 \
   --memory 8G \

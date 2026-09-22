@@ -4,8 +4,7 @@
 
 services:
   relay:
-    image: dstack-phala-light-client:local
-    build: ../light-client
+    image: ${KMS_IMAGE:?Set a published KMS image digest}
     restart: unless-stopped
     command:
       - opstack-server
@@ -19,7 +18,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   helios:
-    image: dstack-phala-light-client:local
+    image: ${KMS_IMAGE:?Set a published KMS image digest}
     restart: unless-stopped
     command:
       - helios
@@ -34,9 +33,8 @@ services:
     security_opt: [no-new-privileges:true]
 
   auth-api:
-    build:
-      context: ../auth-eth
-      dockerfile: ../light-client/auth-api.Dockerfile
+    image: ${KMS_IMAGE:?Set a published KMS image digest}
+    command: [node, /opt/auth-eth/dist/main.js]
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
@@ -44,42 +42,58 @@ services:
       ETH_RPC_URL: http://helios:8545
       ETH_CHAIN_ID: "2035"
       ETH_BLOCK_LAG: "2"
-      ETH_MAX_BLOCK_AGE_SECONDS: "60"
+      ETH_MAX_BLOCK_AGE_SECONDS: ${ETH_MAX_BLOCK_AGE_SECONDS:?Set the maximum accepted block age}
       KMS_CONTRACT_ADDR: ${KMS_CONTRACT_ADDR:?Set the Phala KMS contract address}
     depends_on: [helios]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 
-  # KMS handles the TEE Remote Attestation
   kms:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
-        WORKDIR /app
-        RUN apt-get update && apt-get install -y \
-            git \
-            build-essential \
-            libssl-dev \
-            protobuf-compiler \
-            libprotobuf-dev \
-            clang \
-            libclang-dev \
-            --no-install-recommends \
-            && rm -rf /var/lib/apt/lists/*
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
-            cd dstack && \
-            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
-        WORKDIR /app/dstack
-        RUN cargo build --release -p dstack-kms
-        CMD ["./target/release/dstack-kms"]
+    image: ${KMS_IMAGE:?Set a published KMS image digest}
     volumes:
-      - kms-volume:/etc/kms
+      - kms-volume:/kms
       - /var/run/dstack.sock:/var/run/dstack.sock
     ports:
       - 8000:8000
     depends_on:
       - auth-api
+    restart: unless-stopped
+    configs:
+      - source: kms_config
+        target: /kms/kms.toml
+    command: sh -c 'mkdir -p /kms/certs /kms/images && exec dstack-kms -c /kms/kms.toml'
 
 volumes:
   kms-volume:
+
+configs:
+  kms_config:
+    content: |
+      [rpc]
+      address = "0.0.0.0"
+      port = 8000
+
+      [rpc.tls]
+      key = "/kms/certs/rpc.key"
+      certs = "/kms/certs/rpc.crt"
+
+      [core]
+      cert_dir = "/kms/certs"
+
+      [core.image]
+      verify = true
+      cache_dir = "/kms/images"
+      download_url = "${IMAGE_DOWNLOAD_URL}"
+      download_timeout = "2m"
+
+      [core.auth_api]
+      type = "webhook"
+
+      [core.auth_api.webhook]
+      url = "http://auth-api:8000"
+
+      [core.onboard]
+      enabled = true
+      auto_bootstrap_domain = ""
+      address = "0.0.0.0"
+      port = 8000
