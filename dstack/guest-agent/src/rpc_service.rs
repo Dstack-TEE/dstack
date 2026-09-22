@@ -602,6 +602,16 @@ pub(crate) fn validate_cert_validity(
     not_before: Option<u64>,
     not_after: Option<u64>,
 ) -> Result<()> {
+    for (name, value) in [("not_before", not_before), ("not_after", not_after)] {
+        if let Some(value) = value {
+            if value > ra_tls::cert::MAX_CERT_VALIDITY_SECS {
+                anyhow::bail!(
+                    "{name} must not be later than {}",
+                    ra_tls::cert::MAX_CERT_VALIDITY_SECS
+                );
+            }
+        }
+    }
     if let (Some(not_before), Some(not_after)) = (not_before, not_after) {
         if not_before >= not_after {
             anyhow::bail!("not_before must be earlier than not_after");
@@ -1789,7 +1799,8 @@ pNs85uhOZE8z2jr8Pg==
     }
 
     #[test]
-    fn test_tls_certificate_validity_order() {
+    fn test_tls_certificate_validity() {
+        let maximum = ra_tls::cert::MAX_CERT_VALIDITY_SECS;
         assert!(validate_cert_validity(None, None).is_ok());
         assert!(validate_cert_validity(Some(10), Some(11)).is_ok());
         assert_eq!(
@@ -1799,6 +1810,10 @@ pNs85uhOZE8z2jr8Pg==
             "not_before must be earlier than not_after"
         );
         assert!(validate_cert_validity(Some(12), Some(11)).is_err());
+        assert!(validate_cert_validity(None, Some(maximum)).is_ok());
+        assert!(validate_cert_validity(Some(0), Some(maximum)).is_ok());
+        assert!(validate_cert_validity(None, Some(maximum + 1)).is_err());
+        assert!(validate_cert_validity(Some(maximum + 1), None).is_err());
     }
 
     #[tokio::test]
