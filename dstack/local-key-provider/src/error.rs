@@ -26,8 +26,8 @@ pub enum ProviderError {
     #[error("SGX and TDX quoting-enclave identifiers do not match")]
     QeIdMismatch,
 
-    #[error("TD is running in debug mode")]
-    DebugTd,
+    #[error("untrusted TD: {0}")]
+    UntrustedTd(&'static str),
 
     #[error("invalid public key in TDX report data")]
     InvalidPublicKey,

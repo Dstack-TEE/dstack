@@ -15,11 +15,11 @@ For each request it:
    key in the TDX report data; and
 5. returns the ciphertext with an SGX quote binding its SHA-256 digest.
 
-The derivation covers MRTD and the RTMRs but not `TD_ATTRIBUTES`, so a debug
-TD running the same image would derive the same key as the production TD. The
-derivation is compatible with the external provider and with every disk sealed
-by it, so it cannot be extended without invalidating that data; step 1 is what
-keeps a debug TD -- whose memory the host can read -- from reaching the key.
+The derivation covers MRTD and the RTMRs but not `TD_ATTRIBUTES`, and it stays
+that way for compatibility with keys already in use. A debug TD running the
+same image would therefore derive the production TD's key. dcap-qvl rejects
+debug TDs by default; step 1 also checks the TD attributes and TDX module
+itself, so the key does not depend on that default.
 
 The wire protocol remains a four-byte big-endian JSON length followed by a
 `{"quote":[...]}` request. The response contains `encrypted_key` and

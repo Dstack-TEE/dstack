@@ -4,7 +4,7 @@
 
 use dcap_qvl::{
     collateral::CollateralClient,
-    quote::{Quote, TDReport10},
+    quote::{Quote, TDAttributes, TDReport10},
 };
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
@@ -76,27 +76,35 @@ impl KeyProvider {
     }
 }
 
-/// Refuse a TD the host launched in a state that does not protect it.
+/// Refuse a TD that the host launched in a state that does not protect it.
 ///
-/// A debug TD lets the host read and write its memory through the TDX debug
-/// interface, so handing one the sealing key hands the key to the host. The
-/// key does not distinguish the two either: `measurements()` covers MRTD and
-/// the RTMRs but not `td_attributes`, and that derivation is frozen -- it is
-/// what every existing local-key-provider deployment sealed its disk with --
-/// so a debug TD booting the same image derives exactly the production TD's
-/// key. This gate is the only thing standing between the two.
-///
-/// This is the TD-side counterpart of the check the guest already applies to
-/// this provider's SGX quote (`ra_tls::attestation::validate_tcb`). It is
-/// spelled out again instead of depending on `dstack-attest` so the enclave
-/// keeps its small dependency footprint.
+/// `fetch_and_verify` already rejects these TDs under dcap-qvl's default
+/// policy. The check is repeated here, following dcap-qvl's `validate_td10`,
+/// so that the sealing key does not depend on that default: the key
+/// derivation does not cover `td_attributes`, so a debug TD running the same
+/// image would derive the production TD's key. The `mr_signer_seam` check
+/// matches the guest's `validate_tcb`.
 fn require_production_td(report: &TDReport10) -> Result<(), ProviderError> {
-    if report.td_attributes[0] & 0x01 != 0 {
-        return Err(ProviderError::DebugTd);
+    let attributes = TDAttributes::parse(report.td_attributes)
+        .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
+    if attributes.tud & 0x01 != 0 {
+        return Err(ProviderError::UntrustedTd("debug mode is enabled"));
+    }
+    if attributes.tud != 0
+        || attributes.sec.reserved_lower != 0
+        || attributes.sec.reserved_bit29
+        || attributes.other.reserved != 0
+    {
+        return Err(ProviderError::UntrustedTd(
+            "reserved bits in TD attributes are set",
+        ));
+    }
+    if !attributes.sec.sept_ve_disable {
+        return Err(ProviderError::UntrustedTd("SEPT_VE_DISABLE is not enabled"));
     }
     if report.mr_signer_seam != [0_u8; 48] {
-        return Err(ProviderError::QuoteVerification(
-            "TD was launched by a non-production TDX module".into(),
+        return Err(ProviderError::UntrustedTd(
+            "TD was launched by a non-production TDX module",
         ));
     }
     Ok(())
@@ -143,8 +151,7 @@ mod tests {
 
     const TDX_QUOTE: &[u8] = include_bytes!("../../ra-tls/assets/tdx_quote");
     /// `td_attributes` starts 120 bytes into the TD report body, which itself
-    /// starts 48 bytes into the quote. `td_attributes_offset_is_the_recorded_one`
-    /// pins this against the parsed report.
+    /// starts 48 bytes into the quote.
     const TD_ATTRIBUTES_OFFSET: usize = 48 + 120;
 
     fn report(quote: &[u8]) -> TDReport10 {
@@ -156,12 +163,18 @@ mod tests {
             .unwrap()
     }
 
-    /// The recorded quote with the TD debug bit set, as a host gets by asking
-    /// the VMM to launch the same image with debug enabled.
-    fn debug_quote() -> Vec<u8> {
+    /// The recorded quote with `td_attributes[byte]` XOR'd with `mask`.
+    fn quote_with_attributes(byte: usize, mask: u8) -> Vec<u8> {
         let mut quote = TDX_QUOTE.to_vec();
-        quote[TD_ATTRIBUTES_OFFSET] |= 0x01;
+        quote[TD_ATTRIBUTES_OFFSET + byte] ^= mask;
         quote
+    }
+
+    fn rejection(quote: &[u8]) -> Option<&'static str> {
+        match require_production_td(&report(quote)) {
+            Err(ProviderError::UntrustedTd(reason)) => Some(reason),
+            _ => None,
+        }
     }
 
     #[test]
@@ -170,7 +183,6 @@ mod tests {
             report(TDX_QUOTE).td_attributes,
             TDX_QUOTE[TD_ATTRIBUTES_OFFSET..TD_ATTRIBUTES_OFFSET + 8]
         );
-        assert_eq!(report(&debug_quote()).td_attributes[0] & 0x01, 0x01);
     }
 
     #[test]
@@ -179,11 +191,18 @@ mod tests {
     }
 
     #[test]
-    fn refuses_to_provision_a_debug_mode_td() {
-        assert!(matches!(
-            require_production_td(&report(&debug_quote())),
-            Err(ProviderError::DebugTd)
-        ));
+    fn refuses_untrusted_td_attributes() {
+        let cases = [
+            (0, 0x01, "debug mode is enabled"),
+            (0, 0x02, "reserved bits in TD attributes are set"),
+            (1, 0x01, "reserved bits in TD attributes are set"),
+            (3, 0x20, "reserved bits in TD attributes are set"),
+            (4, 0x01, "reserved bits in TD attributes are set"),
+            (3, 0x10, "SEPT_VE_DISABLE is not enabled"),
+        ];
+        for (byte, mask, reason) in cases {
+            assert_eq!(rejection(&quote_with_attributes(byte, mask)), Some(reason));
+        }
     }
 
     #[test]
@@ -192,19 +211,8 @@ mod tests {
         report.mr_signer_seam[0] = 0x01;
         assert!(matches!(
             require_production_td(&report),
-            Err(ProviderError::QuoteVerification(_))
+            Err(ProviderError::UntrustedTd(_))
         ));
-    }
-
-    /// Why `refuses_to_provision_a_debug_mode_td` is load-bearing rather than
-    /// defence in depth: the derivation cannot tell a debug TD apart, and it
-    /// cannot be changed without invalidating every sealed disk in the field.
-    #[test]
-    fn a_debug_td_derives_the_production_key_so_only_the_gate_separates_them() {
-        assert_eq!(
-            measurements(&report(TDX_QUOTE)),
-            measurements(&report(&debug_quote()))
-        );
     }
 
     #[test]
