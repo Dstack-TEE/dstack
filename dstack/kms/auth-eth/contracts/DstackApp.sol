@@ -145,9 +145,6 @@ contract DstackApp is
 
     // Add a compose hash to allowed list
     function addComposeHash(bytes32 composeHash) external onlyOwner {
-        // Zero is what a short or absent composeHash left-pads to, and
-        // {_initializeCommon} already refuses to seed it for that reason.
-        // Allowlisting it here would make that padding an accept.
         require(composeHash != bytes32(0), "invalid compose hash");
         allowedComposeHashes[composeHash] = true;
         emit ComposeHashAdded(composeHash);
@@ -177,8 +174,6 @@ contract DstackApp is
 
     // Add a device ID to allowed list
     function addDevice(bytes32 deviceId) external onlyOwner {
-        // Same reasoning as {addComposeHash}: zero is the padded form of an
-        // absent deviceId, and {_initializeCommon} skips it.
         require(deviceId != bytes32(0), "invalid device ID");
         allowedDeviceIds[deviceId] = true;
         emit DeviceAdded(deviceId);

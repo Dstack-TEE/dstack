@@ -49,28 +49,14 @@ pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Check the identity widths the policy backends assume, at the point where a
-/// `BootInfo` stops being measured bytes and becomes contract arguments.
-///
-/// Both Ethereum backends `padStart` a short hex value to the full width before
-/// the `readContract` call, and their schemas bound only the maximum. So a
-/// 31-byte `compose_hash` is submitted as - and is indistinguishable from - the
-/// whitelisted 32-byte hash whose leading byte is `0x00`, and the same holds for
-/// a short `instance_id` against `address`.
-///
-/// The trusted OS always emits a 32-byte sha256 compose hash and either a
-/// 20-byte instance id or none at all (`--no-instance-id`), so this asserts an
-/// invariant that already holds rather than changing behaviour. It is asserted
-/// here because nothing between the event log and the contract call asserted
-/// it, which is the same gap `ensure_app_id_len` closes for `app_id`. `app_id`
-/// is re-checked here so that every field reaching a backend is checked in one
-/// place.
+/// Policy backends left-pad short hex values, so a short field would alias a
+/// whitelisted full-width one.
 fn ensure_identity_widths(boot_info: &BootInfo) -> Result<()> {
     ensure_app_id_len(&boot_info.app_id)?;
     if boot_info.compose_hash.len() != 32 {
         bail!("compose_hash must be 32 bytes");
     }
-    if !boot_info.instance_id.is_empty() && boot_info.instance_id.len() != 20 {
+    if !matches!(boot_info.instance_id.len(), 0 | 20) {
         bail!("instance_id must be 20 bytes or empty");
     }
     Ok(())
@@ -391,10 +377,6 @@ mod tests {
         }
     }
 
-    /// Both Ethereum backends left-pad a short value to the full width, so a
-    /// short `compose_hash` or `instance_id` aliases onto a whitelisted one.
-    /// Nothing below the backend bounded them, so the KMS refuses to submit
-    /// them rather than letting `padStart` decide what they mean.
     #[rocket::async_test]
     async fn short_identities_are_refused_before_they_reach_the_backend() {
         let (url, server) = serve(vec![
@@ -420,8 +402,7 @@ mod tests {
             .to_string()
             .contains("instance_id must be 20 bytes or empty"));
 
-        // `--no-instance-id` deployments legitimately carry none, and a
-        // well-formed payload still reaches the backend.
+        // `--no-instance-id` deployments carry no instance id.
         let mut no_instance_id = boot_info(1);
         no_instance_id.instance_id.clear();
         assert!(

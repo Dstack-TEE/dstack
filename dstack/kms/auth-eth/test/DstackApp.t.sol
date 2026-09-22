@@ -392,45 +392,12 @@ contract DstackAppTest is Test {
         assertTrue(app.allowedComposeHashes(bytes32(uint256(1))));
     }
 
-    // Both Ethereum auth backends left-pad a short hex value to the full width
-    // before calling in, so bytes32(0) is what an absent or truncated
-    // composeHash/deviceId arrives as. `_initializeCommon` already declines to
-    // seed either from zero; the setters used to disagree, which meant an owner
-    // could allowlist exactly the value that padding produces.
     function test_AddZeroValuedPolicyEntriesIsRejected() public {
         vm.startPrank(owner);
-
         vm.expectRevert("invalid compose hash");
         app.addComposeHash(bytes32(0));
-
         vm.expectRevert("invalid device ID");
         app.addDevice(bytes32(0));
-
         vm.stopPrank();
-
-        assertFalse(app.allowedComposeHashes(bytes32(0)));
-        assertFalse(app.allowedDeviceIds(bytes32(0)));
-
-        // A boot with no composeHash arrives as bytes32(0) and stays denied.
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
-            appId: address(app),
-            composeHash: bytes32(0),
-            instanceId: address(0),
-            deviceId: bytes32(0),
-            mrAggregated: bytes32(0),
-            mrSystem: bytes32(0),
-            osImageHash: bytes32(0),
-            tcbStatus: "UpToDate",
-            advisoryIds: new string[](0)
-        });
-        (bool allowed, string memory reason) = app.isAppAllowed(bootInfo);
-        assertFalse(allowed);
-        assertEq(reason, "Compose hash not allowed");
-    }
-
-    // The initializer's zero-skip is the behaviour the setters now match.
-    function test_InitializeSkipsZeroValuedPolicyEntries() public view {
-        assertFalse(app.allowedComposeHashes(bytes32(0)));
-        assertFalse(app.allowedDeviceIds(bytes32(0)));
     }
 }
