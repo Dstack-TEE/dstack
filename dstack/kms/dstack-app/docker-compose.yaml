@@ -3,52 +3,52 @@
 # SPDX-License-Identifier: Apache-2.0
 
 services:
-  # Helios is a Ethereum light client
-  helios:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
-        WORKDIR /app
-        RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* build-base openssl-dev protobuf protobuf-dev perl
-        RUN git clone https://github.com/a16z/helios && \
-            cd helios && \
-            git checkout 5c61864a167c16141a9a12b976c0e9398b332f07
-        WORKDIR /app/helios
-        RUN cargo build --release
-    command: [
-      "./target/release/helios",
-      "ethereum",
-      "--network", "mainnet",
-      "--checkpoint", "0xbee4f32f91e62060d2aa41c652f6c69431829cfb09b02ea3cad92f65bd15dcce",
-      "--rpc-bind-ip", "0.0.0.0",
-      "--rpc-port", "8545",
-      "--consensus-rpc", "https://ethereum.operationsolarstorm.org",
-      "--execution-rpc", "https://ethereum-rpc.publicnode.com"
-    ]
+  relay:
+    image: dstack-phala-light-client:local
+    build: ../light-client
+    restart: unless-stopped
+    command:
+      - opstack-server
+      - --network=phala
+      - --execution-rpc=https://rpc.phala.network
+      - --server-address=0.0.0.0:3000
+      - --gossip-address=0.0.0.0:9876
+    environment:
+      OP_NODE_P2P_STATIC: /ip4/8.229.99.126/tcp/9222/p2p/16Uiu2HAmA7EmxHixJhunY6dZKi7nriyUfBCWP3aBPvGUsQBbigm1
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
-  # Auth API is a webhook server that authenticates KMS instances and Apps launches
+  helios:
+    image: dstack-phala-light-client:local
+    restart: unless-stopped
+    command:
+      - helios
+      - opstack
+      - --network=phala
+      - --execution-rpc=https://rpc.phala.network
+      - --consensus-rpc=http://relay:3000
+      - --rpc-bind-ip=0.0.0.0
+      - --rpc-port=8545
+    depends_on: [relay]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
   auth-api:
     build:
-      context: .
-      dockerfile_inline: |
-        FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
-        WORKDIR /app
-
-        RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
-            cd dstack && \
-            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
-        WORKDIR /app/dstack/kms/auth-eth
-        RUN npm ci && npm run build
-        CMD node dist/main.js
+      context: ../auth-eth
+      dockerfile: ../light-client/auth-api.Dockerfile
+    restart: unless-stopped
     environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - ETH_RPC_URL=http://helios:8545
-      - KMS_CONTRACT_ADDR=0x515cd0dd984Adc75EE8625131FcC3d2D91f7F140
-    depends_on:
-      - helios
+      HOST: 0.0.0.0
+      PORT: "8000"
+      ETH_RPC_URL: http://helios:8545
+      ETH_CHAIN_ID: "2035"
+      ETH_BLOCK_LAG: "2"
+      ETH_MAX_BLOCK_AGE_SECONDS: "60"
+      KMS_CONTRACT_ADDR: ${KMS_CONTRACT_ADDR:?Set the Phala KMS contract address}
+    depends_on: [helios]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   # KMS handles the TEE Remote Attestation
   kms:
@@ -71,7 +71,7 @@ services:
             cd dstack && \
             git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
         WORKDIR /app/dstack
-        RUN cargo build --release --locked -p dstack-kms
+        RUN cargo build --release -p dstack-kms
         CMD ["./target/release/dstack-kms"]
     volumes:
       - kms-volume:/etc/kms
