@@ -404,10 +404,13 @@ mod tests {
             .expect("ignite");
         let shutdown = rocket.shutdown();
         tokio::spawn(rocket.launch());
-        while tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_err()
-        {
+        for _ in 0..250 {
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok()
+            {
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
