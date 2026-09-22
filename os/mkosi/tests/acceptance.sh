@@ -124,6 +124,11 @@ test ! -e "$D/../common/rootfs/wg-checker.service"
 # only meaningful with a terminal disable. Without it, every package pulled in
 # by Packages= would start at boot with no diff to 80-dstack.preset.
 grep -q '^disable \*$' "$D/mkosi.skeleton/usr/lib/systemd/system-preset/99-dstack-default.preset"
+# ...and it is only terminal if no foreign preset sorts before it.
+grep -q "! -name '\*dstack\*'" "$D/mkosi.postinst" || {
+  echo 'mkosi.postinst must drop foreign preset files' >&2; exit 1; }
+grep -qx 'enable systemd-networkd-wait-online.service' \
+  "$D/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset"
 # The TEE simulator serves synthetic quotes; its preset must not ship in prod.
 if grep -rq 'dstack-tee-simulator' "$D/mkosi.skeleton/"; then
   echo 'simulator preset must live in the dev profile skeleton' >&2

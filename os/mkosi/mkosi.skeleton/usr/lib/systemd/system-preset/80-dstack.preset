@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 enable systemd-networkd.service
+# The only unit WantedBy=network-online.target, which dstack-prepare waits on.
+enable systemd-networkd-wait-online.service
 enable systemd-resolved.service
 enable chrony.service
 enable docker.service
