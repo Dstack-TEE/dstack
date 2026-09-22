@@ -126,10 +126,7 @@ start)
     docker-compose|nerdctl-compose)
         echo "Starting containers with runner=$runner snapshotter=$snapshotter"
         dstack-util notify-host -e "boot.progress" -d "starting containers" || true
-        if ! compose_start; then
-            dstack-util notify-host -e "boot.error" -d "failed to start containers"
-            exit 1
-        fi
+        compose_start
         if [ "$runner" = docker-compose ]; then
             echo "Pruning unused Docker images and volumes"
             docker image prune -af
