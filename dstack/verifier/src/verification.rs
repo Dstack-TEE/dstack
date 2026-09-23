@@ -95,6 +95,10 @@ fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInf
 // cached.
 const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
+/// Upper bound on both a downloaded image archive and its extracted contents.
+/// Measurement images carry no rootfs; released ones are under 25 MB extracted.
+const MAX_IMAGE_SIZE: u64 = 100 << 20;
+
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
     version: u32,
@@ -294,6 +298,10 @@ impl CvmVerifier {
         Ok(measurements)
     }
 
+    fn images_dir(&self) -> PathBuf {
+        Path::new(&self.image_cache_dir).join("images")
+    }
+
     fn image_content_digest(image_dir: &Path) -> Result<Option<Vec<u8>>> {
         let sha256sum_path = image_dir.join("sha256sum.txt");
         if !sha256sum_path.exists() {
@@ -352,6 +360,47 @@ impl CvmVerifier {
         Ok(entries)
     }
 
+    /// Bind an extracted image to `os_image_hash` and drop everything the
+    /// binding does not cover.
+    fn verify_extracted_image(extracted_dir: &Path, hex_os_image_hash: &str) -> Result<()> {
+        // All image modes are addressed by sha256(sha256sum.txt); extra
+        // measurement CBOR files are ordinary entries and do not define
+        // alternate image hashes. Check it before anything else in the archive
+        // is parsed or hashed.
+        let files_doc = fs_err::read_to_string(extracted_dir.join("sha256sum.txt"))
+            .context("failed to read sha256sum.txt")?;
+        if hex::encode(Sha256::digest(&files_doc)) != hex_os_image_hash {
+            bail!("os_image_hash does not match sha256(sha256sum.txt)");
+        }
+        let manifest = Self::verify_image_manifest(extracted_dir, &files_doc)?;
+        Self::prune_unlisted_image_files(extracted_dir, &manifest)?;
+        Self::check_measured_files_are_listed(extracted_dir, &manifest)
+    }
+
+    /// `metadata.json` picks the firmware, kernel and initrd that get measured.
+    /// The manifest binds their bytes only if they are among its entries; any
+    /// other path -- absolute, `..`, or just unlisted -- would be measured from
+    /// bytes `os_image_hash` never committed to.
+    fn check_measured_files_are_listed(
+        extracted_dir: &Path,
+        manifest: &[sha256sum::Entry],
+    ) -> Result<()> {
+        let listed = |name: &str| manifest.iter().any(|entry| entry.name == name);
+        if !listed("metadata.json") {
+            bail!("sha256sum.txt does not list metadata.json");
+        }
+        let image_info = fs_err::read_to_string(extracted_dir.join("metadata.json"))
+            .context("failed to read image metadata")?;
+        let image_info: dstack_types::ImageInfo =
+            serde_json::from_str(&image_info).context("failed to parse image metadata")?;
+        for name in [&image_info.bios, &image_info.kernel, &image_info.initrd] {
+            if !listed(name) {
+                bail!("metadata.json names {name}, which sha256sum.txt does not list");
+            }
+        }
+        Ok(())
+    }
+
     fn extract_image_archive(tarball_path: &Path, extracted_dir: &Path) -> Result<()> {
         let file = fs_err::File::open(tarball_path).context("Failed to open image archive")?;
         // `MultiGzDecoder`, not `GzDecoder`: the latter stops at the first gzip
@@ -359,6 +408,7 @@ impl CvmVerifier {
         // extract partially without any error.
         let decoder = flate2::read::MultiGzDecoder::new(file);
         let mut archive = tar::Archive::new(decoder);
+        let mut extracted = 0u64;
         for entry in archive.entries().context("Failed to read image archive")? {
             let mut entry = entry.context("Failed to read image archive entry")?;
             let path = entry
@@ -373,6 +423,10 @@ impl CvmVerifier {
                     "image archive contains unsupported entry {}",
                     path.display()
                 );
+            }
+            extracted += entry.size();
+            if extracted > MAX_IMAGE_SIZE {
+                bail!("image archive extracts to more than {MAX_IMAGE_SIZE} bytes");
             }
             if !entry
                 .unpack_in(extracted_dir)
@@ -487,9 +541,7 @@ impl CvmVerifier {
         let hex_os_image_hash = hex::encode(&vm_config.os_image_hash);
 
         // Get image directory
-        let image_dir = Path::new(&self.image_cache_dir)
-            .join("images")
-            .join(&hex_os_image_hash);
+        let image_dir = self.images_dir().join(&hex_os_image_hash);
 
         let metadata_path = image_dir.join("metadata.json");
         if !metadata_path.exists() {
@@ -975,7 +1027,7 @@ impl CvmVerifier {
             .replace("{OS_IMAGE_HASH}", hex_os_image_hash);
 
         // Create a temporary directory for extraction within the cache directory
-        let cache_dir = Path::new(&self.image_cache_dir).join("images").join("tmp");
+        let cache_dir = self.images_dir().join("tmp");
         fs_err::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
         let auto_delete_temp_dir = tempfile::Builder::new()
             .prefix("tmp-download-")
@@ -1004,7 +1056,12 @@ impl CvmVerifier {
             .await
             .context("Failed to create tarball file")?;
         let mut response = response;
+        let mut downloaded = 0u64;
         while let Some(chunk) = response.chunk().await? {
+            downloaded += chunk.len() as u64;
+            if downloaded > MAX_IMAGE_SIZE {
+                bail!("image archive exceeds {MAX_IMAGE_SIZE} bytes");
+            }
             file.write_all(&chunk)
                 .await
                 .context("Failed to write chunk to file")?;
@@ -1019,27 +1076,7 @@ impl CvmVerifier {
         drop(file);
         Self::extract_image_archive(&tarball_path, &extracted_dir)?;
 
-        let sha256sum_path = extracted_dir.join("sha256sum.txt");
-        let files_doc =
-            fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        let manifest = Self::verify_image_manifest(&extracted_dir, &files_doc)?;
-
-        // Remove the files that are not listed in sha256sum.txt
-        Self::prune_unlisted_image_files(&extracted_dir, &manifest)?;
-
-        // All image modes are addressed by sha256(sha256sum.txt). Extra
-        // measurement CBOR files are ordinary sha256sum.txt entries and do not
-        // define alternate image hashes.
-        let legacy_os_image_hash = Sha256::new_with_prefix(files_doc.as_bytes()).finalize();
-        if hex::encode(legacy_os_image_hash) != hex_os_image_hash {
-            bail!("os_image_hash does not match sha256(sha256sum.txt)");
-        }
-
-        // Move the extracted files to the destination directory
-        let metadata_path = extracted_dir.join("metadata.json");
-        if !metadata_path.exists() {
-            bail!("metadata.json not found in the extracted archive");
-        }
+        Self::verify_extracted_image(&extracted_dir, hex_os_image_hash)?;
 
         if dst_dir.exists() {
             fs_err::remove_dir_all(dst_dir).context("Failed to remove destination directory")?;
@@ -1715,6 +1752,40 @@ mod tests {
         let mut resized = base.clone();
         resized.cpu_count += 1;
         assert_ne!(key(&resized), key(&base));
+    }
+
+    /// `os_image_hash` is checked before the manifest is parsed, and the files
+    /// `metadata.json` measures must be manifest entries.
+    #[test]
+    fn extracted_image_binds_the_files_metadata_measures() {
+        let verify = |kernel: &str| {
+            let metadata = format!(
+                r#"{{"cmdline":"","kernel":"{kernel}","initrd":"initrd","bios":"ovmf.fd"}}"#
+            );
+            let files: &[(&str, &[u8])] = &[
+                ("metadata.json", metadata.as_bytes()),
+                ("bzImage", b"kernel"),
+                ("initrd", b"initrd"),
+                ("ovmf.fd", b"firmware"),
+            ];
+            let files_doc: String = files
+                .iter()
+                .map(|(name, payload)| {
+                    format!("{}  {name}\n", hex::encode(Sha256::digest(payload)))
+                })
+                .collect();
+            let dir = image_dir_with_manifest(&files_doc, files);
+            let hash = hex::encode(Sha256::digest(&files_doc));
+            CvmVerifier::verify_extracted_image(dir.path(), &hash)
+        };
+        verify("bzImage").unwrap();
+        for kernel in ["/boot/bzImage", "../bzImage", "unlisted"] {
+            assert!(verify(kernel).is_err(), "accepted kernel {kernel}");
+        }
+
+        let dir = image_dir_with_manifest("not a manifest", &[]);
+        let err = CvmVerifier::verify_extracted_image(dir.path(), &"00".repeat(32)).unwrap_err();
+        assert!(err.to_string().contains("os_image_hash"), "{err:#}");
     }
 
     #[test]
