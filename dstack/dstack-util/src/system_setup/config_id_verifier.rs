@@ -184,10 +184,10 @@ fn verify_mr_config_v3_document(
             bail!("Invalid mr_config app_id");
         }
     }
-    if let Some(instance_id) = mr_config.instance_id.as_deref() {
-        if instance_id != local.instance_id {
-            bail!("Invalid mr_config instance_id");
-        }
+    // Absent means empty: a relying party cannot tell an omitted instance_id
+    // from `no_instance_id`, so it must not skip the check.
+    if mr_config.instance_id.as_deref().unwrap_or_default() != local.instance_id {
+        bail!("Invalid mr_config instance_id");
     }
     if mr_config.key_provider != local.key_provider {
         bail!("Invalid mr_config key_provider");
@@ -303,6 +303,33 @@ mod tests {
 
         verify_mr_config_v3_document(&document, local)?;
         Ok(())
+    }
+
+    #[test]
+    fn mr_config_v3_treats_missing_instance_id_as_empty() {
+        let compose_hash = [0x22u8; 32];
+        let app_id = [0x11u8; 20];
+        let document = MrConfigV3::new(
+            app_id.to_vec(),
+            compose_hash.to_vec(),
+            None,
+            KeyProviderKind::Kms,
+            Vec::new(),
+            Vec::new(),
+        )
+        .to_canonical_json();
+        let local = |instance_id| LocalMrConfigValues {
+            compose_hash: &compose_hash,
+            gpu_policy_hash: &[0x55u8; 32],
+            init_script_hashes: &[],
+            app_id: &app_id,
+            instance_id,
+            key_provider: KeyProviderKind::Kms,
+            key_provider_id: &[],
+        };
+
+        assert!(verify_mr_config_v3_document(&document, local(&[0x44u8; 20])).is_err());
+        assert!(verify_mr_config_v3_document(&document, local(&[])).is_ok());
     }
 
     #[test]
