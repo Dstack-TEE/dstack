@@ -8,13 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag version without kms-v, or a unique preview image tag
+        description: Existing release tag version without the kms-v prefix
         required: true
         type: string
-      preview:
-        description: Publish a preview image from the selected ref without a GitHub release
-        default: false
-        type: boolean
   push:
     tags:
       - 'kms-v*'
@@ -31,7 +27,6 @@ jobs:
       - name: Parse and check version
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
-          PREVIEW: ${{ inputs.preview }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             VERSION=$DISPATCH_VERSION
@@ -45,21 +40,16 @@ jobs:
             echo "Version must be a valid Docker tag" >&2
             exit 1
           fi
-          if [ "${PREVIEW:-false}" = true ] && [[ "$VERSION" != preview-* ]]; then
-            echo "Preview versions must start with preview-" >&2
-            exit 1
-          fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=kms-v$VERSION" >> "$GITHUB_ENV"
 
-      # Non-preview manual runs rebuild an existing release tag.
+      # Manual runs rebuild an existing release tag, not the selected branch.
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && !inputs.preview && env.RELEASE_TAG || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && env.RELEASE_TAG || github.sha }}
 
       - name: Checkout contract dependencies
-        if: ${{ !inputs.preview }}
         run: |
           git submodule update --init --recursive --depth 1 -- \
             dstack/kms/auth-eth/lib/forge-std \
@@ -122,17 +112,14 @@ jobs:
           push-to-registry: true
 
       - name: Install Foundry
-        if: ${{ !inputs.preview }}
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
 
       - name: Compile contracts with Foundry
-        if: ${{ !inputs.preview }}
         run: |
           cd dstack/kms/auth-eth
           forge build
 
       - name: GitHub Release
-        if: ${{ !inputs.preview }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}

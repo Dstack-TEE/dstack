@@ -2,9 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+x-kms-image: &kms-image ${KMS_IMAGE:?Set a published KMS image digest}
+
 services:
   relay:
-    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:0bc6c5e7c2a9a7d425d89cf52abdd1e867138ff9178011f57763106c517a1834}
+    image: *kms-image
     restart: unless-stopped
     command:
       - opstack-server
@@ -19,7 +21,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   helios:
-    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:0bc6c5e7c2a9a7d425d89cf52abdd1e867138ff9178011f57763106c517a1834}
+    image: *kms-image
     restart: unless-stopped
     command:
       - helios
@@ -27,6 +29,10 @@ services:
       - --network=phala
       - --execution-rpc=https://rpc.phala.network
       - --consensus-rpc=http://relay:3000
+      - --ethereum-consensus-rpc=https://ethereum.operationsolarstorm.org
+      - --ethereum-execution-rpc=https://eth.drpc.org
+      - --ethereum-checkpoint=0x3a19ad46aa7391ebfb8fa2690cb8ef56b70d69a2db8e32f4adb63ca7a8697598
+      - --max-head-age=${ETH_MAX_BLOCK_AGE_SECONDS:?Set the maximum accepted block age}
       - --rpc-bind-ip=0.0.0.0
       - --rpc-port=8545
     depends_on: [relay]
@@ -34,7 +40,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   auth-api:
-    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:0bc6c5e7c2a9a7d425d89cf52abdd1e867138ff9178011f57763106c517a1834}
+    image: *kms-image
     command: [node, /opt/auth-eth/dist/main.js]
     restart: unless-stopped
     environment:
@@ -50,7 +56,7 @@ services:
     security_opt: [no-new-privileges:true]
 
   kms:
-    image: ${KMS_IMAGE:-ghcr.io/dstack-tee/dstack-kms@sha256:0bc6c5e7c2a9a7d425d89cf52abdd1e867138ff9178011f57763106c517a1834}
+    image: *kms-image
     volumes:
       - kms-volume:/kms
       - /var/run/dstack.sock:/var/run/dstack.sock

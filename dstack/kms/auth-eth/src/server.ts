@@ -69,6 +69,9 @@ export async function build(): Promise<FastifyInstance> {
     blockLag: integerSetting('ETH_BLOCK_LAG'),
     maxAgeSeconds: integerSetting('ETH_MAX_BLOCK_AGE_SECONDS'),
   };
+  if (!readPolicy) {
+    server.log.warn('ETH_CHAIN_ID is unset: authorization reads skip chain ID and freshness checks');
+  }
   server.decorate('ethereum', new EthereumBackend(provider, kmsContractAddr, readPolicy));
 
   const publicRpcEndpoint = (value: string): string => {
