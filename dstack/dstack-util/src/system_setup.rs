@@ -3035,6 +3035,11 @@ impl<'a> Stage0<'a> {
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
         emit_runtime_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
+        // The cmdline is not measured on every platform (e.g. GCP TDX).
+        emit_runtime_event(
+            "storage-encrypted",
+            if opts.storage_encrypted { b"1" } else { b"0" },
+        )?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
