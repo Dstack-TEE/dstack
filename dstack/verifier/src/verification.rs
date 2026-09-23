@@ -142,8 +142,18 @@ impl CvmVerifier {
             .join(format!("{cache_key}.json"))
     }
 
+    /// Hash only what the measurement reads: `image` and the measurement documents
+    /// are caller-controlled and unused, so they must not be able to force a miss.
+    /// Clear them rather than allowlisting, so new `VmConfig` fields stay in the key.
     fn vm_config_cache_key(vm_config: &VmConfig) -> Result<String> {
-        let serialized = serde_json::to_vec(vm_config)
+        let vm_config = VmConfig {
+            image: None,
+            tdx_measurement: None,
+            gcp_measurement: None,
+            aws_measurement: None,
+            ..vm_config.clone()
+        };
+        let serialized = serde_json::to_vec(&vm_config)
             .context("Failed to serialize VM config for cache key computation")?;
         Ok(hex::encode(Sha256::digest(&serialized)))
     }
@@ -1721,6 +1731,38 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(entries.len(), 1, "temporary cache files must not survive");
+    }
+
+    #[test]
+    fn measurement_cache_key_ignores_unmeasured_fields() {
+        let base: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": "11".repeat(32),
+            "cpu_count": 2,
+            "memory_size": 0x8000_0000u64,
+        }))
+        .unwrap();
+        let key = |config: &VmConfig| CvmVerifier::vm_config_cache_key(config).unwrap();
+        let blob = || vec![0xaa; 4096];
+
+        let mut padded = base.clone();
+        padded.image = Some("x".repeat(4096));
+        padded.tdx_measurement = Some(dstack_types::TdxOsImageMeasurementDocument::new(
+            blob(),
+            blob(),
+        ));
+        padded.gcp_measurement = Some(dstack_types::GcpOsImageMeasurementDocument::new(
+            blob(),
+            blob(),
+        ));
+        padded.aws_measurement = Some(dstack_types::AwsOsImageMeasurementDocument::new(
+            blob(),
+            blob(),
+        ));
+        assert_eq!(key(&padded), key(&base));
+
+        let mut resized = base.clone();
+        resized.cpu_count += 1;
+        assert_ne!(key(&resized), key(&base));
     }
 
     #[test]
