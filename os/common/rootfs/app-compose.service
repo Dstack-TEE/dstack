@@ -1,5 +1,7 @@
 [Unit]
 Description=App Compose Service
+# After= alone is satisfied by a failed unit; app must not run without these.
+Requires=dstack-prepare.service dstack-guest-agent.service
 Wants=docker.service containerd.service containerd-stargz-grpc.service
 After=docker.service containerd.service containerd-stargz-grpc.service dstack-prepare.service dstack-guest-agent.service
 
