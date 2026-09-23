@@ -75,6 +75,8 @@ insecure_allow_external_trust_anchors = false
 # sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
 
 [core.image]
+# Verify os_image_hash against the booted image. If false, os_image_hash is
+# caller-supplied, so allowedOsImages is not enforced. Never disable in production.
 verify = true
 cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
