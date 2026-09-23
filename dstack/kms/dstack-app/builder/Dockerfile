@@ -27,6 +27,8 @@ RUN cd repo/dstack && cargo build --release -p dstack-kms --target x86_64-unknow
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM rust:1.94.1-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS helios-builder
+# Vendored OpenSSL embeds its build date unless SOURCE_DATE_EPOCH is set.
+ARG SOURCE_DATE_EPOCH
 WORKDIR /build/helios
 RUN git init && git remote add origin https://github.com/Dstack-TEE/helios.git \
     && git fetch --depth 1 origin ccf765a076cd696bab31ed61ccdb16f57156c8c3 \
