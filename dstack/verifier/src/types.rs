@@ -79,21 +79,25 @@ impl PolicyBootInfo {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
-    /// Indicates that the runtime event log was replayed against the quote and
-    /// the app identity was decoded from it.
+    /// Indicates that the app identity was decoded from evidence bound to the
+    /// quote.
     ///
-    /// That is RTMR3 on TDX, and the corresponding launch PCR on SEV-SNP and
-    /// AWS NitroTPM: both the digests and the payloads are verified, because
-    /// `app_id`, `compose_hash` and the rest are read out of those payloads.
+    /// On dstack TDX, GCP TDX and AWS NitroTPM that evidence is the runtime
+    /// event log, already replayed during quote verification against RTMR3
+    /// (plus TPM PCR14 on GCP) or PCR14 on NitroTPM, so a replay mismatch fails
+    /// `quote_verified` rather than this flag. Digests and payloads are both
+    /// covered, because `app_id`, `compose_hash` and the rest are read out of
+    /// the payloads. SEV-SNP has no runtime event log and takes the identity
+    /// from `mr_config`, bound through HOST_DATA; Nitro Enclave derives it from
+    /// the PCRs.
     ///
-    /// It says nothing about the boot-time event log. Nothing replays the
-    /// RTMR 0-2 entries a TDX quote carries, and that is deliberate: those
-    /// registers are verified by comparing the quoted values against
-    /// measurements recomputed from the OS image (see `os_image_hash_verified`
-    /// and `acpi_tables_verified`), which does not depend on the host's event
-    /// log at all. The boot event log is carried for diagnostics -- the
-    /// `--debug` RTMR diff and the three named ACPI digests the TDX lite path
-    /// cross-checks -- and dstack defines no semantics for its payloads.
+    /// It says nothing about the RTMR 0-2 entries a TDX event log carries;
+    /// nothing replays them. On dstack TDX those registers are verified by
+    /// comparing the quoted values against measurements recomputed from the OS
+    /// image (see `os_image_hash_verified`), which does not depend on the
+    /// host's event log. The TDX lite path only reads the three named ACPI
+    /// digests from it and requires them to match the recomputed ones; dstack
+    /// defines no semantics for the other payloads.
     pub event_log_verified: bool,
     pub os_image_hash_verified: bool,
     /// Indicates that TDX ACPI table contents were verified.
