@@ -25,8 +25,10 @@ and storage proofs, and code hashes, then executes contract calls locally. The
 public execution RPC cannot supply an unchecked `eth_call` result. The auth API
 checks chain ID 2035, uses a two-block proof-availability lag, and rejects stale
 state, including when a call expires in flight. The lag is not settlement finality
-and consumes part of the configured age budget. RPC outages, delayed proofs or
-relay stalls fail closed; startup needs enough authenticated blocks in the cache.
+and consumes part of the configured age budget. The relay reconnects its static
+peer after 30 seconds without a valid signed commitment, before the recommended
+60-second freshness limit expires. RPC outages, delayed proofs or relay stalls
+still fail closed; startup needs enough authenticated blocks in the cache.
 
 ## Trust and compatibility
 
