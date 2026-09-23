@@ -141,9 +141,11 @@ certificate alone:
 cargo run --bin dstack-verifier -- --verify-cert endpoint-cert.pem
 ```
 
-The input may be PEM or DER. On success, the verifier prints JSON and writes the
-same result next to the input as `endpoint-cert.pem.ratls-verification.json`.
-The verification checks that:
+The input may be PEM or DER. The verifier prints JSON and writes the same result
+next to the input as `endpoint-cert.pem.ratls-verification.json`; `is_valid`
+says whether every check below passed, `reason` says which one did not, and the
+exit status is non-zero when `is_valid` is `false`. The verification checks
+that:
 
 1. the certificate contains a dstack RA-TLS attestation extension;
 2. the embedded attestation verifies against the platform root, including AWS
@@ -151,7 +153,8 @@ The verification checks that:
 3. the attestation `report_data` is
    `QuoteContentType::RaTlsCert(SubjectPublicKeyInfo)`, so the verified
    attestation is bound to this exact TLS public key; and
-4. the reported `app_info.os_image_hash` is bound to the attested boot
+4. the attested app identity decodes; and
+5. the reported `app_info.os_image_hash` is bound to the attested boot
    measurement, surfaced as `app_info.os_image_hash_verified`. This binding is
    self-contained (no image download) for AWS NitroTPM, SEV-SNP, Nitro Enclave,
    GCP TDX, and TDX lite. It is reported as `false` for the TDX legacy
