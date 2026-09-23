@@ -3101,12 +3101,11 @@ impl Stage1<'_> {
         ciphertext: &[u8],
         allowed: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, String>> {
-        let vars = if !key.is_empty() && !ciphertext.is_empty() {
+        let vars = if !ciphertext.is_empty() {
             info!("Processing encrypted env");
-            let env_crypt_key: [u8; 32] = key
-                .try_into()
-                .ok()
-                .context("Invalid env crypt key length")?;
+            let env_crypt_key: [u8; 32] = key.try_into().ok().context(
+                "encrypted env is present but the key provider gave no valid env crypt key",
+            )?;
             let decrypted_json =
                 dh_decrypt(env_crypt_key, ciphertext).context("Failed to decrypt env file")?;
             crate::parse_env_file::parse_env(&decrypted_json, allowed)?
