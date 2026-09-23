@@ -227,6 +227,8 @@ The Gateway is a special app that routes traffic to other apps. Once deployed, a
 
 The `gatewayAppId` is returned in boot responses and used by KMS for key derivation.
 
+To trust several gateways, join their App IDs with commas (`"0xaaa...,0xbbb..."`). CVMs accept a gateway whose App ID is contained in this value.
+
 ---
 
 ## KMS Onboarding (Multi-Node)
