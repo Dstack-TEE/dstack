@@ -131,7 +131,10 @@ setup_tsm() {
 	fi
 	if ! mountpoint -q /sys/kernel/config 2>/dev/null; then
 		log "Mounting configfs for TSM..."
-		mount -t configfs none /sys/kernel/config
+		mount -t configfs none /sys/kernel/config || {
+			log "Warning: failed to mount configfs, TSM may not work"
+			return 1
+		}
 	fi
 	if [[ -e /dev/tdx_guest ]] && [[ ! -d /sys/kernel/config/tsm/report/com.intel.dcap ]]; then
 		log "Creating TSM report directory..."
