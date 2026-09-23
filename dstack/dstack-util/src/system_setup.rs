@@ -2215,6 +2215,11 @@ struct AppIdValidator {
 }
 
 impl AppIdValidator {
+    /// `allowed_app_id` may list several gateway app ids (e.g.
+    /// `"<id1>,<id2>"`), so the peer is accepted if its hex app id appears
+    /// anywhere in it. This relies on the KMS only issuing certificates with
+    /// 20-byte app ids (`ensure_app_id_len`), so a shorter id cannot match a
+    /// fragment.
     fn validate(&self, cert: Option<CertInfo>) -> Result<()> {
         if self.allowed_app_id == "any" {
             return Ok(());
