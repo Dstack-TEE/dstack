@@ -780,20 +780,7 @@ impl CvmVerifier {
         attestation: &VerifiedAttestation,
         details: &mut VerificationDetails,
     ) -> Result<()> {
-        let Some(report) = &attestation.report.tdx_report() else {
-            bail!("No TDX report");
-        };
-        let report = report
-            .report
-            .as_td10()
-            .context("Failed to decode TD report")?;
-
-        let verified_mrs = Mrs {
-            mrtd: report.mr_td.to_vec(),
-            rtmr0: report.rt_mr0.to_vec(),
-            rtmr1: report.rt_mr1.to_vec(),
-            rtmr2: report.rt_mr2.to_vec(),
-        };
+        let verified_mrs = verified_tdx_mrs(attestation)?;
 
         // Legacy TDX attestation keeps the original KMS verifier semantics:
         // os_image_hash must be the image digest (digest.txt =
@@ -820,14 +807,7 @@ impl CvmVerifier {
                 image_paths.kernel_header_normalized,
             )
             .context("Failed to compute expected measurements")?;
-        Mrs {
-            mrtd: expected_mrs.mrtd,
-            rtmr0: expected_mrs.rtmr0,
-            rtmr1: expected_mrs.rtmr1,
-            rtmr2: expected_mrs.rtmr2,
-        }
-        .assert_eq(&verified_mrs)
-        .context("MRs do not match")?;
+        assert_tdx_mrs_eq(&expected_mrs, &verified_mrs).context("MRs do not match")?;
         details.acpi_tables_verified = true;
         Ok(())
     }
@@ -838,26 +818,11 @@ impl CvmVerifier {
         attestation: &VerifiedAttestation,
         details: &mut VerificationDetails,
     ) -> Result<()> {
-        let Some(report) = &attestation.report.tdx_report() else {
-            bail!("No TDX report");
-        };
+        let verified_mrs = verified_tdx_mrs(attestation)?;
         let Some(tdx_quote) = attestation.tdx_quote() else {
             bail!("No TDX quote");
         };
         let event_log = &tdx_quote.event_log;
-        // Get boot info from attestation
-        let report = report
-            .report
-            .as_td10()
-            .context("Failed to decode TD report")?;
-
-        // Extract the verified MRs from the report
-        let verified_mrs = Mrs {
-            mrtd: report.mr_td.to_vec(),
-            rtmr0: report.rt_mr0.to_vec(),
-            rtmr1: report.rt_mr1.to_vec(),
-            rtmr2: report.rt_mr2.to_vec(),
-        };
 
         let document = vm_config
             .tdx_measurement
@@ -903,22 +868,13 @@ impl CvmVerifier {
         details.acpi_tables_verified = true;
         // RTMR0 below is rebuilt from the recomputed digests, so the expected
         // value depends on nothing the host reported about the tables.
-        let mrs = dstack_mr::tdx::tdx_measurements_from_measurement_document(
+        let expected_mrs = dstack_mr::tdx::tdx_measurements_from_measurement_document(
             document,
             vm_config,
             &acpi_hashes,
         )
         .context("Failed to compute TDX expected measurements without image download")?;
-
-        let expected_mrs = Mrs {
-            mrtd: mrs.mrtd.clone(),
-            rtmr0: mrs.rtmr0.clone(),
-            rtmr1: mrs.rtmr1.clone(),
-            rtmr2: mrs.rtmr2.clone(),
-        };
-        expected_mrs
-            .assert_eq(&verified_mrs)
-            .context("MRs do not match")
+        assert_tdx_mrs_eq(&expected_mrs, &verified_mrs).context("MRs do not match")
     }
 
     /// Verify Nitro Enclave OS image hash using the signature-verified NSM PCRs.
@@ -1144,46 +1100,39 @@ impl CvmVerifier {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Mrs {
-    mrtd: Vec<u8>,
-    rtmr0: Vec<u8>,
-    rtmr1: Vec<u8>,
-    rtmr2: Vec<u8>,
+/// MRTD and RTMR0-2 from the verified TD report.
+fn verified_tdx_mrs(attestation: &VerifiedAttestation) -> Result<TdxMeasurements> {
+    let report = attestation
+        .report
+        .tdx_report()
+        .context("No TDX report")?
+        .report
+        .as_td10()
+        .context("Failed to decode TD report")?;
+    Ok(TdxMeasurements {
+        mrtd: report.mr_td.to_vec(),
+        rtmr0: report.rt_mr0.to_vec(),
+        rtmr1: report.rt_mr1.to_vec(),
+        rtmr2: report.rt_mr2.to_vec(),
+    })
 }
 
-impl Mrs {
-    fn assert_eq(&self, other: &Self) -> Result<()> {
-        if self.mrtd != other.mrtd {
+fn assert_tdx_mrs_eq(expected: &TdxMeasurements, actual: &TdxMeasurements) -> Result<()> {
+    for (name, expected, actual) in [
+        ("MRTD", &expected.mrtd, &actual.mrtd),
+        ("RTMR0", &expected.rtmr0, &actual.rtmr0),
+        ("RTMR1", &expected.rtmr1, &actual.rtmr1),
+        ("RTMR2", &expected.rtmr2, &actual.rtmr2),
+    ] {
+        if expected != actual {
             bail!(
-                "MRTD mismatch: expected={}, actual={}",
-                hex::encode(&self.mrtd),
-                hex::encode(&other.mrtd)
+                "{name} mismatch: expected={}, actual={}",
+                hex::encode(expected),
+                hex::encode(actual)
             );
         }
-        if self.rtmr0 != other.rtmr0 {
-            bail!(
-                "RTMR0 mismatch: expected={}, actual={}",
-                hex::encode(&self.rtmr0),
-                hex::encode(&other.rtmr0)
-            );
-        }
-        if self.rtmr1 != other.rtmr1 {
-            bail!(
-                "RTMR1 mismatch: expected={}, actual={}",
-                hex::encode(&self.rtmr1),
-                hex::encode(&other.rtmr1)
-            );
-        }
-        if self.rtmr2 != other.rtmr2 {
-            bail!(
-                "RTMR2 mismatch: expected={}, actual={}",
-                hex::encode(&self.rtmr2),
-                hex::encode(&other.rtmr2)
-            );
-        }
-        Ok(())
     }
+    Ok(())
 }
 
 #[cfg(test)]
