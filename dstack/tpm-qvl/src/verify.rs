@@ -25,6 +25,9 @@ pub struct VerifiedReport {
     pub attest: TpmAttest,
     pub platform: Platform,
     pub pcr_values: Vec<PcrValue>,
+    /// Event-log entries of the quoted PCRs, all replayed against `pcr_values`.
+    /// Entries of unquoted PCRs are not attested and are dropped.
+    pub event_log: Vec<TpmEvent>,
 }
 
 impl VerifiedReport {
@@ -160,10 +163,11 @@ pub fn verify_quote_with_ca(
         });
     }
 
-    verify_event_log(&quote.pcr_values, &quote.event_log).map_err(|e| VerificationError {
-        status: status.clone(),
-        error: e.context("event log verification failed"),
-    })?;
+    let event_log =
+        verify_event_log(&quote.pcr_values, &quote.event_log).map_err(|e| VerificationError {
+            status: status.clone(),
+            error: e.context("event log verification failed"),
+        })?;
     debug!("✓ Event Log replay verification successful");
 
     status.pcr_verified = true;
@@ -211,6 +215,7 @@ pub fn verify_quote_with_ca(
         attest,
         platform: quote.platform,
         pcr_values: quote.pcr_values.clone(),
+        event_log,
     })
 }
 
@@ -347,7 +352,9 @@ fn compute_pcr_digest(pcr_values: &[PcrValue]) -> Result<Vec<u8>> {
     Ok(hasher.finalize().to_vec())
 }
 
-fn verify_event_log(pcr_values: &[PcrValue], event_log: &[TpmEvent]) -> Result<()> {
+/// Replay the event log against the quoted PCR values and return the replayed
+/// entries.
+fn verify_event_log(pcr_values: &[PcrValue], event_log: &[TpmEvent]) -> Result<Vec<TpmEvent>> {
     for pcr in pcr_values {
         let pcr_events: Vec<&TpmEvent> = event_log
             .iter()
@@ -394,7 +401,11 @@ fn verify_event_log(pcr_values: &[PcrValue], event_log: &[TpmEvent]) -> Result<(
         }
     }
 
-    Ok(())
+    Ok(event_log
+        .iter()
+        .filter(|e| pcr_values.iter().any(|p| p.index == e.pcr_index))
+        .cloned()
+        .collect())
 }
 
 fn extract_ak_public_key_from_cert(ak_cert_der: &[u8]) -> Result<PublicKey> {
@@ -842,5 +853,21 @@ mod tests {
             err.contains("PCR 4") && err.contains("sha384") && err.contains("sha256"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn event_log_keeps_only_quoted_pcrs() {
+        let event = |pcr_index, digest: u8| TpmEvent {
+            pcr_index,
+            digest: vec![digest; 32],
+        };
+        let pcr0 = PcrValue {
+            index: 0,
+            algorithm: "sha256".into(),
+            value: Sha256::digest([[0u8; 32], [1u8; 32]].concat()).to_vec(),
+        };
+        let log = [event(0, 1), event(2, 2), event(7, 3)];
+        let kept = verify_event_log(&[pcr0], &log).unwrap();
+        assert_eq!(kept.iter().map(|e| e.pcr_index).collect::<Vec<_>>(), [0]);
     }
 }

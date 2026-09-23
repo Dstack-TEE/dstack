@@ -22,11 +22,12 @@ use dstack_types::{TdxAttestationVariant, VmConfig};
 use hex_literal::hex;
 use ra_tls::attestation::{
     AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
-    TpmQuote, VerifiedAttestation, VersionedAttestation,
+    VerifiedAttestation, VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::{io::AsyncWriteExt, process::Command};
+use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 use tracing::{debug, info, warn};
 
 use crate::types::{
@@ -677,8 +678,12 @@ impl CvmVerifier {
             .decode_vm_config(&vm_config)
             .context("Failed to decode VM config")?;
         match &attestation.quote {
-            AttestationQuote::DstackGcpTdx(quote) => {
-                self.verify_os_image_hash_for_gcp_tdx(&vm_config, &quote.tpm_quote)?;
+            AttestationQuote::DstackGcpTdx(_) => {
+                let DstackVerifiedReport::DstackGcpTdx { tpm_report, .. } = &attestation.report
+                else {
+                    bail!("GCP TDX quote without a GCP TDX report");
+                };
+                self.verify_os_image_hash_for_gcp_tdx(&vm_config, tpm_report)?;
             }
             // The declared scheme alone selects the path, matched exhaustively
             // so a new variant fails the build here instead of taking one.
@@ -925,17 +930,13 @@ impl CvmVerifier {
     fn verify_os_image_hash_for_gcp_tdx(
         &self,
         vm_config: &VmConfig,
-        tpm_quote: &TpmQuote,
+        tpm_report: &TpmVerifiedReport,
     ) -> Result<()> {
         // Verify PCR 0 (GCP OVMF firmware)
         const EXPECTED_PCR0: [u8; 32] =
             hex!("0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802");
 
-        let pcr0 = tpm_quote
-            .pcr_values
-            .iter()
-            .find(|p| p.index == 0)
-            .context("PCR 0 not found in TPM quote")?;
+        let pcr0 = tpm_report.get_pcr(0)?;
 
         let document = vm_config
             .gcp_measurement
@@ -951,7 +952,7 @@ impl CvmVerifier {
             .context("failed to decode vm_config.gcp_measurement CBOR")?;
         let expected_uki_hash = &measurement.uki_authenticode_sha256;
 
-        let pcr2_events: Vec<_> = tpm_quote
+        let pcr2_events: Vec<_> = tpm_report
             .event_log
             .iter()
             .filter(|e| e.pcr_index == 2)
@@ -960,10 +961,10 @@ impl CvmVerifier {
         // Extract Event 28 (3rd event, 0-indexed as 2)
         // NOTE: This is GCP OVMF-specific behavior
         let event_28_digest = {
-            if pcr0.value != EXPECTED_PCR0 {
+            if pcr0 != EXPECTED_PCR0 {
                 bail!(
                     "PCR 0 mismatch: expected GCP OVMF v2, got {}",
-                    hex::encode(&pcr0.value)
+                    hex::encode(&pcr0)
                 );
             }
             &pcr2_events.get(2).context("Event 28 not found")?.digest
@@ -1133,9 +1134,9 @@ mod tests {
     use dstack_attest::amd_sev_snp::{AmdSnpTcbInfo, VerifiedAmdSnpReport};
     use ra_tls::attestation::{
         AwsNitroTpmVerifiedReport, DstackAwsNitroTpmQuote, DstackGcpTdxQuote, DstackNitroQuote,
-        NitroVerifiedReport, SnpQuote, TdxQuote,
+        NitroVerifiedReport, SnpQuote, TdxQuote, TpmQuote,
     };
-    use tpm_qvl::verify::{ClockInfo, QuoteInfo, TpmAttest, VerifiedReport as TpmVerifiedReport};
+    use tpm_qvl::verify::{ClockInfo, QuoteInfo, TpmAttest};
 
     fn aws_boot_pcrs(pcr4: u8) -> BTreeMap<u16, Vec<u8>> {
         BTreeMap::from([
@@ -1240,6 +1241,7 @@ mod tests {
             },
             platform: dstack_types::Platform::Gcp,
             pcr_values: Vec::new(),
+            event_log: Vec::new(),
         }
     }
 
@@ -1469,16 +1471,12 @@ mod tests {
         .unwrap();
         let expected_pcr0 =
             hex!("0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802");
-        let gcp_quote = |pcr0: Vec<u8>, event_28: Vec<u8>| TpmQuote {
-            message: Vec::new(),
-            signature: Vec::new(),
+        let gcp_report = |pcr0: Vec<u8>, event_28: Vec<u8>| TpmVerifiedReport {
             pcr_values: vec![tpm_types::PcrValue {
                 index: 0,
                 algorithm: "sha256".into(),
                 value: pcr0,
             }],
-            ak_cert: Vec::new(),
-            platform: dstack_types::Platform::Gcp,
             event_log: vec![
                 tpm_types::TpmEvent {
                     pcr_index: 2,
@@ -1493,23 +1491,24 @@ mod tests {
                     digest: event_28,
                 },
             ],
+            ..tpm_report_for_gcp()
         };
         verifier
             .verify_os_image_hash_for_gcp_tdx(
                 &gcp_config,
-                &gcp_quote(expected_pcr0.to_vec(), uki_hash.clone()),
+                &gcp_report(expected_pcr0.to_vec(), uki_hash.clone()),
             )
             .unwrap();
         assert!(verifier
             .verify_os_image_hash_for_gcp_tdx(
                 &gcp_config,
-                &gcp_quote(vec![0; 32], uki_hash.clone()),
+                &gcp_report(vec![0; 32], uki_hash.clone()),
             )
             .is_err());
         assert!(verifier
             .verify_os_image_hash_for_gcp_tdx(
                 &gcp_config,
-                &gcp_quote(expected_pcr0.to_vec(), vec![0; 32]),
+                &gcp_report(expected_pcr0.to_vec(), vec![0; 32]),
             )
             .is_err());
         let mut missing_document = gcp_config;
@@ -1517,7 +1516,7 @@ mod tests {
         assert!(verifier
             .verify_os_image_hash_for_gcp_tdx(
                 &missing_document,
-                &gcp_quote(expected_pcr0.to_vec(), uki_hash),
+                &gcp_report(expected_pcr0.to_vec(), uki_hash),
             )
             .is_err());
     }
