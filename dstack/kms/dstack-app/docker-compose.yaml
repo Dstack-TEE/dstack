@@ -14,6 +14,7 @@ services:
       - --gossip-address=0.0.0.0:9876
     environment:
       OP_NODE_P2P_STATIC: /ip4/8.229.99.126/tcp/9222/p2p/16Uiu2HAmA7EmxHixJhunY6dZKi7nriyUfBCWP3aBPvGUsQBbigm1
+      OP_NODE_P2P_STATIC_IDLE_TIMEOUT: "30"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
 
