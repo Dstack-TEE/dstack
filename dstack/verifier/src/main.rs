@@ -293,7 +293,7 @@ async fn verify_cert_os_image_hash(
     );
     let mut details = VerificationDetails::default();
     verifier
-        .verify_os_image_hash(String::new(), attestation, false, &mut details)
+        .verify_os_image_hash(String::new(), attestation, &mut details)
         .await
         .is_ok()
 }

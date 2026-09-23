@@ -347,7 +347,7 @@ impl RpcHandler {
         let mut detail = VerificationDetails::default();
         self.state
             .verifier
-            .verify_os_image_hash(vm_config, report, false, &mut detail)
+            .verify_os_image_hash(vm_config, report, &mut detail)
             .await
             .context("Failed to verify os image hash")?;
         Ok(())

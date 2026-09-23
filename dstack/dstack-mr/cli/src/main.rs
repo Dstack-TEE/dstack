@@ -325,7 +325,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
     let initrd = image_dir.join(&image_info.initrd).display().to_string();
     let cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
-    // Same resolution order as the verifier (see verifier::compute_measurement_details):
+    // Same resolution order as the verifier (see verifier::compute_measurements):
     // explicit vm_config.ovmf_variant > image_info.ovmf_variant > legacy default.
     let ovmf_variant = vm
         .ovmf_variant
