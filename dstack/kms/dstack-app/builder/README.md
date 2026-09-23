@@ -7,8 +7,6 @@ This directory contains the necessary files to build and run the dstack-kms Dock
 The builder creates a Docker image that includes:
 - The dstack-kms service compiled from Rust source code
 - Pure-Rust ACPI measurement support built into the dstack-kms binary
-- Helios and its gossip relay from a commit-pinned Dstack-TEE fork
-- The auth-eth API and Node runtime, invoked as `node /opt/auth-eth/dist/main.js`
 
 ## Prerequisites
 
@@ -42,10 +40,8 @@ Optional environment variables:
 
 Publication and OCI export happen only after both package lists pass validation.
 `NO_CACHE` applies to the validation builds; export then reuses their cached result.
-Manual release workflows normally require an existing component release tag.
-With `preview=true`, the workflow instead publishes the selected ref under the
-provided unique image tag, without creating a GitHub release. Use the resulting
-registry digest in Compose; never use a moving preview tag in measured deployment.
+Manual release workflows require an existing component release tag and check out
+that tag, rather than building the branch selected in the workflow UI.
 
 ## Reproducing a released image
 

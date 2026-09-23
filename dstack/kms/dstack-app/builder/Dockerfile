@@ -29,7 +29,7 @@ RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 FROM rust:1.94.1-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS helios-builder
 WORKDIR /build/helios
 RUN git init && git remote add origin https://github.com/Dstack-TEE/helios.git \
-    && git fetch --depth 1 origin 78afc573521ce857d868bdbce6239617fdbc864b \
+    && git fetch --depth 1 origin ccf765a076cd696bab31ed61ccdb16f57156c8c3 \
     && git checkout --detach FETCH_HEAD
 RUN cargo test --locked --release -p helios-opstack --lib \
     && cargo build --locked --release -p helios-cli -p helios-opstack --bins \
