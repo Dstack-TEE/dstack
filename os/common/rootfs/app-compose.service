@@ -4,6 +4,7 @@ Description=App Compose Service
 Requires=dstack-prepare.service dstack-guest-agent.service
 Wants=docker.service containerd.service containerd-stargz-grpc.service
 After=docker.service containerd.service containerd-stargz-grpc.service dstack-prepare.service dstack-guest-agent.service
+OnFailure=dstack-boot-error@%n.service
 
 [Service]
 Type=oneshot
