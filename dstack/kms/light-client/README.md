@@ -54,6 +54,8 @@ The relay, Ethereum RPCs and Phala RPC are data sources only.
 
 Operational failures fail closed with `authorization backend unavailable`:
 
+- **Startup.** Authorization is unavailable until Helios proves the signer and
+  caches three blocks, typically within a minute of boot.
 - **Feed stalls.** The relay reconnects its static peer after 30 seconds without
   a higher signed block. Longer outages exceed the age limit.
 - **L1 unavailable.** Without a fresh signer proof, Helios stops accepting blocks.
