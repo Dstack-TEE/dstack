@@ -216,18 +216,10 @@ impl CvmVerifier {
         Ok(())
     }
 
-    fn compute_measurements(
-        &self,
-        vm_config: &VmConfig,
-        fw_path: &Path,
-        kernel_path: &Path,
-        initrd_path: &Path,
-        kernel_cmdline: &str,
-        kernel_header_normalized: bool,
-    ) -> Result<TdxMeasurements> {
-        let firmware = fw_path.display().to_string();
-        let kernel = kernel_path.display().to_string();
-        let initrd = initrd_path.display().to_string();
+    fn compute_measurements(vm_config: &VmConfig, image: &ImagePaths) -> Result<TdxMeasurements> {
+        let firmware = image.fw_path.display().to_string();
+        let kernel = image.kernel_path.display().to_string();
+        let initrd = image.initrd_path.display().to_string();
 
         // Prefer the explicit variant the image declared; pre-`ovmf_variant`
         // deployments fall back to the only layout that existed back then.
@@ -239,11 +231,11 @@ impl CvmVerifier {
             .firmware(&firmware)
             .kernel(&kernel)
             .initrd(&initrd)
-            .kernel_cmdline(kernel_cmdline)
+            .kernel_cmdline(&image.kernel_cmdline)
             .root_verity(true)
             .hotplug_off(vm_config.hotplug_off)
             .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
-            .normalized_setup_header(kernel_header_normalized)
+            .normalized_setup_header(image.kernel_header_normalized)
             .maybe_pic(vm_config.pic)
             .maybe_qemu_version(vm_config.qemu_version.clone())
             .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
@@ -264,14 +256,10 @@ impl CvmVerifier {
             .context("Failed to compute expected MRs")
     }
 
-    fn load_or_compute_measurements(
+    async fn load_or_compute_measurements(
         &self,
         vm_config: &VmConfig,
-        fw_path: &Path,
-        kernel_path: &Path,
-        initrd_path: &Path,
-        kernel_cmdline: &str,
-        kernel_header_normalized: bool,
+        image: ImagePaths,
     ) -> Result<TdxMeasurements> {
         let cache_key = Self::vm_config_cache_key(vm_config)?;
 
@@ -279,14 +267,11 @@ impl CvmVerifier {
             return Ok(measurements);
         }
 
-        let measurements = self.compute_measurements(
-            vm_config,
-            fw_path,
-            kernel_path,
-            initrd_path,
-            kernel_cmdline,
-            kernel_header_normalized,
-        )?;
+        let vm_config = vm_config.clone();
+        let measurements =
+            tokio::task::spawn_blocking(move || Self::compute_measurements(&vm_config, &image))
+                .await
+                .context("measurement task failed")??;
 
         if let Err(e) = self.store_measurements_in_cache(&cache_key, &measurements) {
             warn!(
@@ -555,14 +540,8 @@ impl CvmVerifier {
     ) -> Result<TdxMeasurements> {
         let image_paths = self.ensure_image_downloaded(vm_config).await?;
 
-        self.load_or_compute_measurements(
-            vm_config,
-            &image_paths.fw_path,
-            &image_paths.kernel_path,
-            &image_paths.initrd_path,
-            &image_paths.kernel_cmdline,
-            image_paths.kernel_header_normalized,
-        )
+        self.load_or_compute_measurements(vm_config, image_paths)
+            .await
     }
 
     pub async fn verify(&self, request: VerificationRequest) -> Result<VerificationResponse> {
@@ -798,14 +777,8 @@ impl CvmVerifier {
         }
 
         let expected_mrs = self
-            .load_or_compute_measurements(
-                vm_config,
-                &image_paths.fw_path,
-                &image_paths.kernel_path,
-                &image_paths.initrd_path,
-                &image_paths.kernel_cmdline,
-                image_paths.kernel_header_normalized,
-            )
+            .load_or_compute_measurements(vm_config, image_paths)
+            .await
             .context("Failed to compute expected measurements")?;
         assert_tdx_mrs_eq(&expected_mrs, &verified_mrs).context("MRs do not match")?;
         details.acpi_tables_verified = true;
