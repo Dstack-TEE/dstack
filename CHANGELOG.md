@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- dstack-util: the measured `gpu-attestation` event now exposes aggregate `dbgstat` and `secboot` values from the NVIDIA-signed claims. `dbgstat` is `enabled` if any attested GPU reports enabled, while `secboot` is true only if every attested GPU reports secure boot; the event schema version is bumped to 3.
 - sdk: every SDK ships two clients, one per guest-agent surface, and nothing else. `DstackClientV0` speaks the frozen v0.5.11 API on the unversioned paths -- every method a v0.5.x SDK had, including `verify()` (which calls the server `Verify` RPC) and `emit_event()` (which surfaces the agent's removal error verbatim). `DstackClientV1` speaks `dstack.guest.v1` at `/v1` and has exactly its six methods: `issue_cert`, `get_key`, `attest`, `attest_gpu`, `info`, `version`. They are transport mirrors, not a compatibility layer: neither translates a call to the other, and each one's method set is its surface's method set. **v1 derives different key material than v0 for the same inputs** -- see `docs/guest-api-v1.md` for the migration. `TappdClient` is untouched.
 
   The blockchain adapters (Ethereum/viem, Solana) remain **v0-only** and stay typed against the v0 `GetKeyResponse`. v1 has no chain-related surface, deliberately: it returns key material, and what an application builds from those bytes is its own business rather than something the SDKs model.

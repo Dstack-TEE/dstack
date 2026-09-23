@@ -118,7 +118,7 @@ For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Devic
 
 ### Dual Attestation
 
-GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the optional policy and ready-state operations succeed, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, asserted CC/DevTools state, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX, both `gpu-policy-hash` and `gpu-attestation` are append-only RTMR3 events; they are never derived from application-controlled `report_data`.
+GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the optional policy and ready-state operations succeed, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, asserted CC/DevTools state, aggregate signed-claim debug and secure-boot status, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX, both `gpu-policy-hash` and `gpu-attestation` are append-only RTMR3 events; they are never derived from application-controlled `report_data`.
 
 For a successful TDX GPU launch, the GPU-relevant RTMR3 event order is:
 
@@ -135,14 +135,22 @@ boot-mr-done
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "provider": "nvidia",
   "devices": 1,
   "cc_mode": "on",
   "devtools": false,
+  "dbgstat": "disabled",
+  "secboot": true,
   "evidence_sha256": "<sha256-of-complete-nvattest-json>"
 }
 ```
+
+`devtools` is the aggregate NVML state and is true if any device has DevTools
+mode enabled. `dbgstat` and `secboot` summarize the NVIDIA-signed claims:
+`dbgstat` is `enabled` if any device reports enabled, and `secboot` is true only
+if every device reports secure boot. The complete per-device claims remain in
+the boot-time evidence committed by `evidence_sha256`.
 
 `/v1/Attest` returns that complete boot-time `nvattest` record when the request sets `include_boottime_gpu_evidence`; it runs no new attestation. `AttestResponse.boottime_gpu_evidence` is a list of `GpuEvidenceBundle`, each carrying `vendor`, `format`, and `evidence`. The boot record is the bundle whose `vendor` is `nvidia` and whose `format` is `nvidia-nvattest-boottime-json-v1`; its `evidence` is hex-encoded bytes that decode to the exact UTF-8 nvattest output as the agent read it from disk. The other format, `nvidia-nvattest-collect-evidence-json-v1`, comes from `/v1/AttestGpu` and is fresh evidence against a caller nonce; the two are deliberately distinct because a verifier for one does not appraise the other. To bind the API result to TDX evidence: verify the quote, replay the event log to the quote's RTMR3, require exactly one pre-`system-ready` `gpu-attestation` event, decode its JSON payload, select the boot-time bundle by `format`, and compare `evidence_sha256` with `SHA-256(hex_decode(bundle.evidence))`. Hash the decoded bytes, not the JSON string as returned and not a re-serialized form: parsing and re-serializing changes the digest and breaks the comparison. Only after this comparison should the verifier inspect the returned claims. This exact-byte comparison includes any whitespace or trailing newline in the decoded record.
 

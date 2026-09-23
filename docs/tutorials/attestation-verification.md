@@ -486,7 +486,7 @@ These are the standard events you'll see in the log:
 | `compose-hash` | SHA-256 of docker compose config | Should match `tcb_info.compose_hash` |
 | `init-script-hash` | SHA-256 of one init script; repeated in configured order (maximum 5) | Should match the independently approved script bytes |
 | `gpu-policy-hash` | SHA-256 of the JCS-canonicalized GPU policy (default `{}`) | Should match the expected `requirements.gpu_policy` digest |
-| `gpu-attestation` | Verified GPU state and digest of the boot-time `nvattest` JSON | Required for an attested GPU launch; verify as described below |
+| `gpu-attestation` | Verified GPU state, aggregate `dbgstat`/`secboot`, and digest of the boot-time `nvattest` JSON | Required for an attested GPU launch; verify as described below |
 | `instance-id` | Unique instance identifier | Should match `instance_id` from response |
 | `boot-mr-done` | Boot measurements complete | Marker event |
 | `os-image-hash` | Guest OS image hash | Should match `tcb_info.os_image_hash` |
