@@ -7,7 +7,6 @@ use hex_literal::hex;
 use scale::Decode;
 use sha2::{Digest, Sha384};
 
-use crate::acpi::Tables;
 use crate::num::read_le;
 use crate::{measure_log, measure_sha384, utf16_encode, Machine, OvmfVariant, RtmrLog};
 
@@ -497,23 +496,17 @@ impl<'a> Tdvf<'a> {
 
     #[allow(dead_code)]
     pub fn rtmr0(&self, machine: &Machine) -> Result<Vec<u8>> {
-        let (rtmr0_log, _) = self.rtmr0_log(machine)?;
-        Ok(measure_log(&rtmr0_log))
+        Ok(measure_log(&self.rtmr0_log(machine)?))
     }
 
-    pub fn rtmr0_log(&self, machine: &Machine) -> Result<(RtmrLog, Tables)> {
+    pub fn rtmr0_log(&self, machine: &Machine) -> Result<RtmrLog> {
         let tables = machine.build_tables()?;
         let acpi_hashes = AcpiTableHashes {
             tables: measure_sha384(&tables.tables),
             rsdp: measure_sha384(&tables.rsdp),
             loader: measure_sha384(&tables.loader),
         };
-        let log = self.rtmr0_log_with_acpi_hashes(
-            machine.memory_size,
-            machine.ovmf_variant,
-            &acpi_hashes,
-        )?;
-        Ok((log, tables))
+        self.rtmr0_log_with_acpi_hashes(machine.memory_size, machine.ovmf_variant, &acpi_hashes)
     }
 
     pub(crate) fn rtmr0_log_with_acpi_hashes(
