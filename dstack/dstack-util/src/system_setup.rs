@@ -2656,21 +2656,37 @@ impl<'a> Stage0<'a> {
 
         let disk_initialized = self.is_disk_initialized(opts);
 
-        if !disk_initialized {
+        let has_filesystem = if opts.storage_encrypted && disk_initialized {
+            info!("Mounting encrypted data disk");
+            let initializing =
+                self.open_encrypted_volume(disk_crypt_key, name, opts.storage_discard)?;
+            if initializing {
+                warn!("data disk initialization was interrupted, initializing it again");
+            }
+            !initializing
+        } else {
+            disk_initialized
+        };
+
+        if !has_filesystem {
             self.vmm
                 .notify_q("boot.progress", "initializing data disk")
                 .await;
 
-            if opts.storage_encrypted {
+            if !opts.storage_encrypted {
+                info!("Skipping disk encryption as requested by kernel cmdline");
+            } else if !disk_initialized {
                 info!("Setting up disk encryption");
                 self.luks_setup(disk_crypt_key, name, opts.storage_discard)?;
-            } else {
-                info!("Skipping disk encryption as requested by kernel cmdline");
             }
 
             match opts.storage_fs {
                 FsType::Zfs => {
                     info!("Creating ZFS filesystem");
+                    if disk_initialized {
+                        // The interrupted attempt may have left a pool label behind.
+                        cmd!(zpool labelclear -f $fs_dev).ok();
+                    }
                     let autotrim = if opts.storage_discard { "on" } else { "off" };
                     cmd! {
                         zpool create -o autoexpand=on -o autotrim=$autotrim -m none dstack $fs_dev;
@@ -2690,15 +2706,17 @@ impl<'a> Stage0<'a> {
                     }
                 }
             }
+            if opts.storage_encrypted {
+                let device = &self.args.device;
+                cmd!(cryptsetup config --label= $device)
+                    .context("failed to clear the LUKS initializing label")?;
+            }
         } else {
             self.vmm
                 .notify_q("boot.progress", "mounting data disk")
                 .await;
 
-            if opts.storage_encrypted {
-                info!("Mounting encrypted data disk");
-                self.open_encrypted_volume(disk_crypt_key, name, opts.storage_discard)?;
-            } else {
+            if !opts.storage_encrypted {
                 info!("Mounting unencrypted data disk");
             }
 
@@ -2803,6 +2821,8 @@ impl<'a> Stage0<'a> {
                 "aes-xts-plain64",
                 "--pbkdf",
                 "pbkdf2",
+                "--label",
+                LUKS_INITIALIZING_LABEL,
                 "-d-",
             ])
             .arg(root_hd)
@@ -2823,10 +2843,17 @@ impl<'a> Stage0<'a> {
         {
             bail!("Failed to setup luks volume");
         }
-        self.open_encrypted_volume(disk_crypt_key, name, discard)
+        self.open_encrypted_volume(disk_crypt_key, name, discard)?;
+        Ok(())
     }
 
-    fn open_encrypted_volume(&self, disk_crypt_key: &str, name: &str, discard: bool) -> Result<()> {
+    /// Returns whether the header still carries the initializing label.
+    fn open_encrypted_volume(
+        &self,
+        disk_crypt_key: &str,
+        name: &str,
+        discard: bool,
+    ) -> Result<bool> {
         let root_hd = &self.args.device;
         let disk_crypt_key = disk_crypt_key.trim();
         // Create a private tmpfs mount to ensure the header stays in-memory.
@@ -2851,7 +2878,8 @@ impl<'a> Stage0<'a> {
         .context("Failed to load LUKS2 header")?;
 
         let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
-        validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
+        let initializing =
+            validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
 
         info!("Opening the device");
         let mut command = Command::new("cryptsetup");
@@ -2895,7 +2923,7 @@ impl<'a> Stage0<'a> {
             info!("Waiting for device mapper {}...", dm_path);
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        Ok(())
+        Ok(initializing)
     }
 
     async fn measure_app_info(&self) -> Result<AppInfo> {
@@ -3263,13 +3291,18 @@ macro_rules! const_pad {
 
 const PAYLOAD_OFFSET: u64 = 16777216;
 
-fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<()> {
-    validate_single_luks2_header(&mut reader, 0)?;
+/// Set by luksFormat and cleared once the filesystem exists, so a disk still
+/// carrying it was interrupted mid-initialization and holds no data.
+const LUKS_INITIALIZING_LABEL: &str = "dstack-initializing";
+
+/// Returns whether the primary header carries [`LUKS_INITIALIZING_LABEL`].
+fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<bool> {
+    let initializing = validate_single_luks2_header(&mut reader, 0)?;
     validate_single_luks2_header(&mut reader, 1)?;
-    Ok(())
+    Ok(initializing)
 }
 
-fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<()> {
+fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<bool> {
     let mut hdr_data = vec![0u8; 4096];
     reader
         .read_exact(&mut hdr_data)
@@ -3302,7 +3335,8 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     if version != 2 {
         bail!("Invalid LUKS version: {version}");
     }
-    if label != [0; 48] {
+    let initializing = label == const_pad!(LUKS_INITIALIZING_LABEL.as_bytes(), 48);
+    if !initializing && label != [0; 48] {
         bail!("Invalid LUKS label: {:?}", label);
     }
     if csum_alg != const_pad!(b"sha256", 32) {
@@ -3475,13 +3509,18 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
             bail!("Invalid LUKS digest segments: {segments:?}");
         }
     }
-    Ok(())
+    Ok(initializing)
 }
 
 #[test]
 fn test_validate_luks2_header() {
-    let header_data = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header");
+    let mut header_data = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
+    assert!(
+        !validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header")
+    );
+    header_data[24..24 + LUKS_INITIALIZING_LABEL.len()]
+        .copy_from_slice(LUKS_INITIALIZING_LABEL.as_bytes());
+    assert!(validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header"));
     let header_data = include_bytes!("../tests/fixtures/luks_header_cipher_null").to_vec();
     let error = validate_luks2_headers(&mut &header_data[..]).unwrap_err();
     assert!(error
