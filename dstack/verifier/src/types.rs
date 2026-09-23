@@ -77,13 +77,25 @@ impl PolicyBootInfo {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
-    /// Indicates that the event log was verified against the quote.
+    /// Indicates that the app identity was decoded from evidence bound to the
+    /// quote.
     ///
-    /// For RTMR3 (runtime measurements), both the digest and payload integrity are verified
-    /// by replaying the event log and comparing against the quote. For RTMR 0-2 (boot-time
-    /// measurements), only the digests are verified through replay comparison with the quote;
-    /// the payload content is not validated. dstack does not define semantics for RTMR 0-2
-    /// event log payloads.
+    /// On dstack TDX, GCP TDX and AWS NitroTPM that evidence is the runtime
+    /// event log, already replayed during quote verification against RTMR3
+    /// (plus TPM PCR14 on GCP) or PCR14 on NitroTPM, so a replay mismatch fails
+    /// `quote_verified` rather than this flag. Digests and payloads are both
+    /// covered, because `app_id`, `compose_hash` and the rest are read out of
+    /// the payloads. SEV-SNP has no runtime event log and takes the identity
+    /// from `mr_config`, bound through HOST_DATA; Nitro Enclave derives it from
+    /// the PCRs.
+    ///
+    /// It says nothing about the RTMR 0-2 entries a TDX event log carries;
+    /// nothing replays them. On dstack TDX those registers are verified by
+    /// comparing the quoted values against measurements recomputed from the OS
+    /// image (see `os_image_hash_verified`), which does not depend on the
+    /// host's event log. The TDX lite path only reads the three named ACPI
+    /// digests from it and requires them to match the recomputed ones; dstack
+    /// defines no semantics for the other payloads.
     pub event_log_verified: bool,
     pub os_image_hash_verified: bool,
     /// Indicates that TDX ACPI table contents were verified.
