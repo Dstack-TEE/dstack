@@ -126,7 +126,7 @@ dstack uses encrypted environment variables to allow app developers to securely 
    - CVM decrypts the ciphertext using AESGCM with the derived shared secret
    - CVM parses the JSON and only stores variables listed in allowed_envs from app-compose.json
    - CVM performs basic regex validation on values
-   - Final result is stored as /dstack/.hostshared/.decrypted-env and loaded system-wide via app-compose.service
+   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`
 
 This file is not measured to RTMRs. But it is highly recommended to add application-specific integrity checks on encrypted environment variables at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
 
