@@ -135,33 +135,12 @@ interface = "wg-cluster${node_id}"
 endpoint = "gateway-${node_id}:9013"
 
 [core.proxy]
-cert_chain = "/etc/gateway/proxy.cert"
-cert_key = "/etc/gateway/proxy.key"
-base_domain = "cluster.test"
 listen_addr = "0.0.0.0"
 listen_port = 9014
 tappd_port = 8090
 external_port = 9014
 EOF
-    # The proxy listener wants its certificate beside the config, and each test
-    # has a config directory of its own now -- so generating it separately, once,
-    # left every test after the first with a gateway that exits at startup with
-    # "failed to read proxy cert_chain".
-    generate_proxy_cert "$node_id"
     log_info "wrote node${node_id} config (bootnode=${bootnode_url:-none})"
-}
-
-# The proxy listener wants a certificate even though this suite never drives the
-# data path. Self-signed is enough; the RPC certificates that actually gate
-# cluster membership come from the guest agent, not from here.
-generate_proxy_cert() {
-    local node_id=$1
-    local dir="$CONFIG_DIR/${CURRENT_TEST:-suite}/node${node_id}"
-    [ -f "$dir/proxy.cert" ] && return 0
-    openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-        -keyout "$dir/proxy.key" -out "$dir/proxy.cert" \
-        -subj "/CN=cluster.test" \
-        -addext "subjectAltName=DNS:cluster.test,DNS:*.cluster.test" 2>/dev/null
 }
 
 # Each test runs in a compose project of its own, so its containers, its logs

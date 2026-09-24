@@ -15,7 +15,7 @@ use dstack_gateway_rpc::{
     GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
     GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
     GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
-    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    HandshakeEntry, HostInfo, ImportCertRequest, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListRejectedInstancesResponse,
     ListZtDomainsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
     PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy, RejectedInstanceInfo, RemoveCvmRequest,
@@ -31,8 +31,9 @@ use tracing::{info, warn};
 use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
+    cert_store::get_cert_expiry,
     kv::{
-        import::Rejection, DnsCredential, DnsProvider, GlobalCertbotConfig,
+        import::Rejection, CertData, DnsCredential, DnsProvider, GlobalCertbotConfig,
         GlobalTombstoneGcConfig, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig,
     },
     main_service::Proxy,
@@ -709,6 +710,23 @@ impl AdminRpc for AdminRpcHandler {
         }
 
         Ok(ListCertAttestationsResponse { latest, history })
+    }
+
+    async fn import_cert(self, request: ImportCertRequest) -> Result<()> {
+        let domain = normalize_zt_domain(&request.domain)?;
+        let not_after =
+            get_cert_expiry(&request.cert_pem).context("failed to read the certificate expiry")?;
+        let data = CertData {
+            cert_pem: request.cert_pem,
+            key_pem: request.key_pem,
+            not_after,
+            issued_by: self.state.kv_store().my_node_id(),
+            issued_at: now_secs(),
+        };
+        self.state.cert_resolver.update_cert(&domain, &data)?;
+        self.state.kv_store().save_cert_data(&domain, &data)?;
+        info!("imported certificate for *.{domain}");
+        Ok(())
     }
 
     // ==================== Global Certbot Configuration ====================
