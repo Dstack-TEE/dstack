@@ -45,8 +45,17 @@ sev_snp_key_release = false
 # AWS EC2 NitroTPM key/cert release remains disabled unless this local KMS gate
 # is explicitly enabled. NitroTPM is a new, non-confidential-compute attestation
 # mode (the AWS hypervisor is in the TCB), so it is opt-in like SEV-SNP. External
-# auth policy must still allow the verified BootInfo.
+# auth policy must still allow the verified BootInfo. NitroTPM has no TCB status,
+# so the verifier reports "UpToDate" and requireTcbUpToDate does not gate it.
 aws_nitro_tpm_key_release = false
+
+# AWS Nitro Enclave key/cert release remains disabled unless this local KMS gate
+# is explicitly enabled. The signed NSM document measures the enclave image, but
+# the AWS hypervisor is in the TCB and dstack extends no runtime measurement
+# register on this platform, so app_id and instance_id are read from an event
+# list nothing replays against hardware. Opt-in like SEV-SNP and NitroTPM.
+# External auth policy must still allow the verified BootInfo.
+nitro_enclave_key_release = false
 
 # Optional attestation trust-anchor files. Omitted entries use vendor roots.
 [core.attestation]
@@ -66,6 +75,8 @@ insecure_allow_external_trust_anchors = false
 # sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
 
 [core.image]
+# Verify os_image_hash against the booted image. If false, os_image_hash is
+# caller-supplied, so allowedOsImages is not enforced. Never disable in production.
 verify = true
 cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
@@ -101,6 +112,8 @@ type = "webhook"
 
 [core.auth_api.webhook]
 url = "http://auth-api:8000"
+# Per-call timeout; GetMeta reaches the auth API without a client certificate.
+timeout = "60s"
 
 [core.auth_api.dev]
 gateway_app_id = "any"

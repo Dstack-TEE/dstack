@@ -450,6 +450,8 @@ message HealthResponse {
   // The containers that made `healthy` false, so an operator reading gateway
   // logs can tell which one is holding the instance out of rotation. Purely
   // diagnostic -- the gateway routes on `healthy` alone.
+  // Not gated by `public_sysinfo`/`public_logs`: the gateway needs it, and the
+  // external listener is unauthenticated, so it cannot answer only the gateway.
   repeated ContainerHealth unhealthy = 2;
   // Set when the agent could not see the app at all for several refreshes in
   // a row (container runtime unreachable, permission denied). `healthy` is

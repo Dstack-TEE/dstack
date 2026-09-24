@@ -325,7 +325,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
     let initrd = image_dir.join(&image_info.initrd).display().to_string();
     let cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
 
-    // Same resolution order as the verifier (see verifier::compute_measurement_details):
+    // Same resolution order as the verifier (see verifier::compute_measurements):
     // explicit vm_config.ovmf_variant > image_info.ovmf_variant > legacy default.
     let ovmf_variant = vm
         .ovmf_variant
@@ -352,6 +352,9 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
         })
         .hugepages(vm.hugepages)
         .num_gpus(vm.num_gpus)
+        .num_nics(vm.num_nics)
+        .num_verity_volumes(vm.num_verity_volumes)
+        .swtpm(vm.swtpm)
         .num_nvswitches(vm.num_nvswitches)
         .host_share_mode(vm.host_share_mode.clone())
         .ovmf_variant(ovmf_variant)

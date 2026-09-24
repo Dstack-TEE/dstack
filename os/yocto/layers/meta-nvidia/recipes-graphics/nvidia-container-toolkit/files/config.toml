@@ -12,7 +12,7 @@ ldconfig = "@/sbin/ldconfig"
 
 [nvidia-container-runtime]
 # debug = "/var/log/nvidia-container-runtime.log"
-log-level = "debug"
+log-level = "info"
 
 # Specify the runtimes to consider. This list is processed in order and the PATH
 # searched for matching executables unless the entry is an absolute path.

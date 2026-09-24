@@ -88,10 +88,20 @@ pub(crate) mod stats;
 mod tls_passthough;
 mod tls_terminate;
 
+/// One TLS record. `extract_sni` does not reassemble records, so a larger
+/// ClientHello cannot be parsed anyway.
+const MAX_CLIENT_HELLO_BYTES: usize = 5 + (1 << 14);
+
 async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
     let mut buffer = vec![0u8; 4096];
     let mut data_len = 0;
     loop {
+        if data_len == buffer.len() {
+            if buffer.len() >= MAX_CLIENT_HELLO_BYTES {
+                bail!("no sni in the first {MAX_CLIENT_HELLO_BYTES} bytes of the client hello");
+            }
+            buffer.resize((buffer.len() * 2).min(MAX_CLIENT_HELLO_BYTES), 0);
+        }
         // read data from stream
         let n = stream
             .read(&mut buffer[data_len..])
@@ -650,59 +660,69 @@ mod tests {
         assert_eq!(config.ktls.is_some(), probe_ktls().is_ok());
     }
 
-    /// Build a ClientHello whose SNI is `host`.
-    fn client_hello(host: &[u8]) -> Vec<u8> {
-        let mut server_name_list = vec![0u8];
-        server_name_list.extend_from_slice(&(host.len() as u16).to_be_bytes());
-        server_name_list.extend_from_slice(host);
+    /// A ClientHello whose `server_name` sits behind `filler` bytes of key share.
+    fn client_hello(sni: &str, filler: usize) -> Vec<u8> {
+        fn u16_prefixed(body: &[u8]) -> Vec<u8> {
+            let mut out = (body.len() as u16).to_be_bytes().to_vec();
+            out.extend_from_slice(body);
+            out
+        }
 
-        let mut sni_ext = vec![0u8, 0u8];
-        sni_ext.extend_from_slice(&(server_name_list.len() as u16 + 2).to_be_bytes());
-        sni_ext.extend_from_slice(&(server_name_list.len() as u16).to_be_bytes());
-        sni_ext.extend_from_slice(&server_name_list);
+        let mut server_name = vec![0u8]; // name_type: host_name
+        server_name.extend_from_slice(&u16_prefixed(sni.as_bytes()));
+        let mut extensions = vec![0x00, 0x33]; // key_share
+        extensions.extend_from_slice(&u16_prefixed(&vec![0u8; filler]));
+        extensions.extend_from_slice(&[0x00, 0x00]); // server_name
+        extensions.extend_from_slice(&u16_prefixed(&u16_prefixed(&server_name)));
 
-        let mut body = vec![0x03, 0x03];
-        body.extend(std::iter::repeat_n(0u8, 32));
-        body.push(0);
-        body.extend_from_slice(&[0, 2, 0x13, 0x01]);
-        body.extend_from_slice(&[1, 0]);
-        body.extend_from_slice(&(sni_ext.len() as u16).to_be_bytes());
-        body.extend_from_slice(&sni_ext);
+        let mut body = vec![0x03, 0x03]; // legacy_version
+        body.extend_from_slice(&[0u8; 32]); // random
+        body.push(0); // session_id
+        body.extend_from_slice(&u16_prefixed(&[0x13, 0x01])); // cipher_suites
+        body.extend_from_slice(&[1, 0]); // compression_methods
+        body.extend_from_slice(&u16_prefixed(&extensions));
 
-        let mut handshake = vec![0x01];
-        let len = body.len() as u32;
-        handshake.extend_from_slice(&len.to_be_bytes()[1..]);
+        let mut handshake = vec![0x01]; // client_hello
+        handshake.extend_from_slice(&(body.len() as u32).to_be_bytes()[1..]);
         handshake.extend_from_slice(&body);
 
-        let mut record = vec![0x16, 0x03, 0x01];
-        record.extend_from_slice(&(handshake.len() as u16).to_be_bytes());
-        record.extend_from_slice(&handshake);
+        let mut record = vec![0x16, 0x03, 0x01]; // handshake record
+        record.extend_from_slice(&u16_prefixed(&handshake));
         record
     }
 
-    async fn sniff(host: &[u8]) -> Result<Option<String>> {
+    /// Feed `hello` to `take_sni`, keeping the client open so a short read is
+    /// not mistaken for a hangup.
+    async fn sniff(hello: Vec<u8>) -> (Result<(Option<String>, Vec<u8>)>, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let mut client = TcpStream::connect(listener.local_addr().unwrap())
             .await
             .unwrap();
         let (mut server, _) = listener.accept().await.unwrap();
-        tokio::io::AsyncWriteExt::write_all(&mut client, &client_hello(host))
+        tokio::io::AsyncWriteExt::write_all(&mut client, &hello)
             .await
             .unwrap();
-        take_sni(&mut server).await.map(|(sni, _)| sni)
+        (take_sni(&mut server).await, client)
+    }
+
+    #[tokio::test]
+    async fn an_sni_past_the_first_read_is_still_found() {
+        let (sniffed, _client) = sniff(client_hello("app.example.com", 6000)).await;
+        let (sni, _buffer) = sniffed.unwrap();
+        assert_eq!(sni.as_deref(), Some("app.example.com"));
     }
 
     #[tokio::test]
     async fn an_sni_that_is_not_a_dns_name_is_refused_without_echoing_it() {
-        let mut host = vec![b'a'; 4000];
-        host[10] = b'\n';
-        let err = sniff(&host)
-            .await
-            .expect_err("a 4000-byte SNI was accepted");
+        let mut host = "a".repeat(4000);
+        host.replace_range(10..11, "\n");
+        let (sniffed, _client) = sniff(client_hello(&host, 0)).await;
+        let err = sniffed.expect_err("a 4000-byte SNI was accepted");
         assert!(!format!("{err:#}").contains("aaaa"), "{err:#}");
 
         let host = "3327603e03f5bd1f830812ca4a789277fc31f577-8080s.app.dstack.org";
-        assert_eq!(sniff(host.as_bytes()).await.unwrap().as_deref(), Some(host));
+        let (sniffed, _client) = sniff(client_hello(host, 0)).await;
+        assert_eq!(sniffed.unwrap().0.as_deref(), Some(host));
     }
 
     #[test]

@@ -15,7 +15,7 @@ use dstack_gateway_rpc::{
     GetDnsCredentialRequest, GetInfoRequest, GetInfoResponse, GetInstanceHandshakesRequest,
     GetInstanceHandshakesResponse, GetInstancePortPolicyRequest, GetInstancePortPolicyResponse,
     GetMetaResponse, GetNodeStatusesResponse, GetZtDomainRequest, GlobalConnectionsStats,
-    HandshakeEntry, HostInfo, LastSeenEntry, ListCertAttestationsRequest,
+    HandshakeEntry, HostInfo, ImportCertRequest, LastSeenEntry, ListCertAttestationsRequest,
     ListCertAttestationsResponse, ListDnsCredentialsResponse, ListRejectedInstancesResponse,
     ListZtDomainsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
     PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy, RejectedInstanceInfo, RemoveCvmRequest,
@@ -31,8 +31,9 @@ use tracing::{info, warn};
 use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
 use crate::{
+    cert_store::get_cert_expiry,
     kv::{
-        import::Rejection, DnsCredential, DnsProvider, GlobalCertbotConfig,
+        import::Rejection, CertData, DnsCredential, DnsProvider, GlobalCertbotConfig,
         GlobalTombstoneGcConfig, NodeStatus, PortFlags, PortPolicy, ZtDomainConfig,
     },
     main_service::Proxy,
@@ -47,46 +48,60 @@ pub struct AdminRpcHandler {
 
 impl AdminRpcHandler {
     pub(crate) async fn status(self) -> Result<StatusResponse> {
+        tokio::task::spawn_blocking(move || {
+            self.state.refresh_state()?;
+            self.status_snapshot()
+        })
+        .await
+        .context("status task failed")?
+    }
+
+    fn status_snapshot(self) -> Result<StatusResponse> {
         let (base_domain, _port) = self
             .state
             .kv_store()
             .get_best_zt_domain()
             .unwrap_or_default();
-        let mut state = self.state.lock();
-        state.refresh_state()?;
-        let hosts = state
-            .state
-            .instances
-            .values()
-            .map(|instance| {
-                // Get global latest_handshake from KvStore (max across all nodes)
-                let latest_handshake = state
-                    .get_instance_latest_handshake(&instance.id)
-                    .unwrap_or(0);
-                HostInfo {
+        // KV reads can wait behind a sync merge, so do them after releasing
+        // the routing lock.
+        let mut hosts = {
+            let state = self.state.lock();
+            state
+                .state
+                .instances
+                .values()
+                .map(|instance| HostInfo {
                     instance_id: instance.id.clone(),
                     ip: instance.ip.to_string(),
                     app_id: instance.app_id.clone(),
                     base_domain: base_domain.clone(),
-                    latest_handshake,
+                    latest_handshake: 0,
                     num_connections: instance.num_connections(),
                     ready: Some(instance.is_ready()),
                     health: instance.health().as_str().to_string(),
-                }
-            })
-            .collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>()
+        };
+        for host in &mut hosts {
+            host.latest_handshake = self
+                .state
+                .kv_store()
+                .get_instance_latest_handshake(&host.instance_id)
+                .unwrap_or(0);
+        }
+        let config = &self.state.config;
         Ok(StatusResponse {
-            id: state.config.sync.node_id,
-            url: state.config.sync.my_url.clone(),
-            uuid: state.config.uuid(),
-            bootnode_url: state.config.sync.bootnode.clone(),
-            nodes: state.get_all_nodes(),
+            id: config.sync.node_id,
+            url: config.sync.my_url.clone(),
+            uuid: config.uuid(),
+            bootnode_url: config.sync.bootnode.clone(),
+            nodes: self.state.get_all_nodes(),
             hosts,
             num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
             // Reads the post-probe config, so this is what the data path is
             // running rather than what the file asked for.
-            accel: Some(accel_status(&state.config.proxy)),
-            health_gating: state.config.proxy.health_check.enabled,
+            accel: Some(accel_status(&config.proxy)),
+            health_gating: config.proxy.health_check.enabled,
         })
     }
 }
@@ -130,8 +145,8 @@ impl AdminRpc for AdminRpcHandler {
             .kv_store()
             .get_best_zt_domain()
             .unwrap_or_default();
+        let handshakes = self.state.latest_handshakes(None)?;
         let state = self.state.lock();
-        let handshakes = state.latest_handshakes(None)?;
 
         if let Some(instance) = state.state.instances.get(&request.id) {
             let host_info = HostInfo {
@@ -163,11 +178,10 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn get_meta(self) -> Result<GetMetaResponse> {
-        let state = self.state.lock();
-        let handshakes = state.latest_handshakes(None)?;
+        let handshakes = self.state.latest_handshakes(None)?;
 
         // Total registered instances
-        let registered = state.state.instances.len();
+        let registered = self.state.lock().state.instances.len();
 
         // Get current timestamp
         let now = SystemTime::now()
@@ -647,16 +661,17 @@ impl AdminRpc for AdminRpcHandler {
         self,
         request: RenewZtDomainCertRequest,
     ) -> Result<RenewZtDomainCertResponse> {
+        let domain = normalize_zt_domain(&request.domain)?;
         let certbot = &self.state.certbot;
         let renewed = certbot
-            .try_renew(&request.domain, request.force)
+            .try_renew(&domain, request.force)
             .await
             .context("certificate renewal failed")?;
 
         if renewed {
             // Get the new certificate data for response
             let kv_store = self.state.kv_store();
-            let cert_data = kv_store.get_cert_data(&request.domain);
+            let cert_data = kv_store.get_cert_data(&domain);
             let not_after = cert_data.map(|d| d.not_after).unwrap_or(0);
             Ok(RenewZtDomainCertResponse { renewed, not_after })
         } else {
@@ -668,12 +683,8 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn force_release_cert_lock(self, request: ForceReleaseCertLockRequest) -> Result<()> {
-        let kv_store = self.state.kv_store();
-        kv_store.release_cert_lock(&request.domain)?;
-        info!(
-            "Force released certificate lock for domain: {}",
-            request.domain
-        );
+        let domain = force_release_zt_domain_cert_lock(self.state.kv_store(), &request.domain)?;
+        info!("force released certificate lock for domain: {domain}");
         Ok(())
     }
 
@@ -682,9 +693,10 @@ impl AdminRpc for AdminRpcHandler {
         request: ListCertAttestationsRequest,
     ) -> Result<ListCertAttestationsResponse> {
         let kv_store = self.state.kv_store();
+        let domain = normalize_zt_domain(&request.domain)?;
 
         let latest = kv_store
-            .get_cert_attestation_latest(&request.domain)
+            .get_cert_attestation_latest(&domain)
             .map(|att| CertAttestationInfo {
                 public_key: att.public_key,
                 quote: att.quote,
@@ -694,7 +706,7 @@ impl AdminRpc for AdminRpcHandler {
             });
 
         let mut history: Vec<CertAttestationInfo> = kv_store
-            .list_cert_attestations(&request.domain)
+            .list_cert_attestations(&domain)
             .into_iter()
             .map(|att| CertAttestationInfo {
                 public_key: att.public_key,
@@ -711,6 +723,23 @@ impl AdminRpc for AdminRpcHandler {
         }
 
         Ok(ListCertAttestationsResponse { latest, history })
+    }
+
+    async fn import_cert(self, request: ImportCertRequest) -> Result<()> {
+        let domain = normalize_zt_domain(&request.domain)?;
+        let not_after =
+            get_cert_expiry(&request.cert_pem).context("failed to read the certificate expiry")?;
+        let data = CertData {
+            cert_pem: request.cert_pem,
+            key_pem: request.key_pem,
+            not_after,
+            issued_by: self.state.kv_store().my_node_id(),
+            issued_at: now_secs(),
+        };
+        self.state.cert_resolver.update_cert(&domain, &data)?;
+        self.state.kv_store().save_cert_data(&domain, &data)?;
+        info!("imported certificate for *.{domain}");
+        Ok(())
     }
 
     // ==================== Global Certbot Configuration ====================
@@ -930,13 +959,27 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
     }
 }
 
+/// Counted in characters: a byte index inside a multi-byte character would
+/// panic on every read of a stored credential.
 fn redact_token(token: &str) -> String {
-    let len = token.len();
-    if len <= 8 {
-        "*".repeat(len)
-    } else {
-        format!("{}...{}", &token[..4], &token[len - 4..])
+    let count = token.chars().count();
+    if count <= 8 {
+        return "*".repeat(count);
     }
+    let head: String = token.chars().take(4).collect();
+    let tail: String = token.chars().skip(count - 4).collect();
+    format!("{head}...{tail}")
+}
+
+/// Force-release the renew lock of a ZT domain under its normalized key,
+/// returning that key.
+fn force_release_zt_domain_cert_lock(
+    kv_store: &crate::kv::KvStore,
+    domain: &str,
+) -> Result<String> {
+    let domain = normalize_zt_domain(domain)?;
+    kv_store.force_release_cert_lock(&domain)?;
+    Ok(domain)
 }
 
 fn normalize_zt_domain(domain: &str) -> Result<String> {
@@ -1473,6 +1516,39 @@ mod set_instance_ready_tests {
             explicit.ready,
             Some(false),
             "a stated false still gates off"
+        );
+    }
+}
+
+#[cfg(test)]
+mod redact_token_tests {
+    use super::redact_token;
+
+    #[test]
+    fn redacts_by_character() {
+        assert_eq!(redact_token("0123456789abcdef"), "0123...cdef");
+        assert_eq!(redact_token("12345678"), "********");
+        assert_eq!(redact_token("abcé12345"), "abcé...2345");
+    }
+}
+
+#[cfg(test)]
+mod cert_lock_admin_tests {
+    use super::force_release_zt_domain_cert_lock;
+    use crate::kv::KvStore;
+
+    #[test]
+    fn force_release_uses_the_key_the_lock_was_taken_under() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = KvStore::new(1, vec![], dir.path(), None).expect("failed to create kv store");
+        assert!(kv.try_acquire_cert_lock("app.example.com", 600).is_some());
+
+        force_release_zt_domain_cert_lock(&kv, "APP.example.com.")
+            .expect("force release should succeed");
+
+        assert!(
+            kv.try_acquire_cert_lock("app.example.com", 600).is_some(),
+            "the lock must actually be released, not merely reported released"
         );
     }
 }

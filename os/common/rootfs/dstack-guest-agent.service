@@ -1,8 +1,9 @@
 [Unit]
 Description=dstack Guest Agent Service
 Requires=dstack-guest-agent.socket
-After=network.target tboot.service dstack-guest-agent.socket
+After=network.target dstack-prepare.service dstack-guest-agent.socket
 Before=docker.service
+OnFailure=dstack-boot-error@%n.service
 
 [Service]
 OOMScoreAdjust=-1000

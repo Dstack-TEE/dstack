@@ -80,9 +80,6 @@ endpoint = "10.90.0.1:{o["wg_port"]}"
 [core.proxy]
 listen_addr = "127.0.0.1"
 listen_port = {o["proxy_port"]}
-base_domain = "{o["base_domain"]}"
-cert_chain = "{cert}"
-cert_key = "{key}"
 workers = {o.get("workers", "2")}
 max_connections_per_app = 0
 buffer_size = 65536

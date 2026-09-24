@@ -43,10 +43,6 @@ match, UKI assembly fails.
 Because this is release-format post-processing rather than a Yocto operation,
 the helper lives beside the common assembler.
 
-`dstack-image-oci.sh` pushes and lists assembled guest-image directories in an
-OCI registry. It is likewise independent of the backend that produced the
-image.
-
 ## Kernel build tree
 
 The optional `artifacts.kernel_devel` manifest entry is published as

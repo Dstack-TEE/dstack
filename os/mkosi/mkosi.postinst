@@ -19,3 +19,9 @@ rm -f "$B"/etc/ssh/ssh_host_*_key "$B"/etc/ssh/ssh_host_*_key.pub
 # Build outputs are merged after package installation, so refresh the final
 # rootfs cache after manually staged NVIDIA and container-runtime libraries.
 ldconfig -r "$B"
+
+# systemd applies the first matching rule across all preset files sorted by
+# name, so a distro preset such as Debian's 90-systemd.preset would shadow the
+# `disable *` in 99-dstack-default.preset. Keep dstack's policy the only one.
+find "$B"/usr/lib/systemd/system-preset "$B"/etc/systemd/system-preset \
+  -maxdepth 1 -name '*.preset' ! -name '*dstack*' -print -delete 2>/dev/null || true

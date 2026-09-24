@@ -896,7 +896,7 @@ impl QemuCommandBuilder<'_> {
             ));
             bus_number += device_count + 1;
         }
-        Ok((smp, memory_gib * 1024))
+        Ok((smp, memory_gib.saturating_mul(1024)))
     }
 
     fn configure_gpus(&self, command: &mut Command) -> Result<()> {

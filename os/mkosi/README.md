@@ -157,7 +157,7 @@ would produce invalid or unparseable TDX measurement material.
 
 The distribution snapshot, build-only packages, guest packages, profiles,
 source mounts, source-date epoch, tools tree, package cleanup, file removal,
-systemd presets, tmpfiles, service masks and the build/postinstall/finalize/
+systemd presets, service masks and the build/postinstall/finalize/
 postoutput/clean lifecycle are mkosi-native. The native tar output is replaced
 in `mkosi.postoutput` by the identically named Yocto-compatible archive, so no
 unrelated mkosi rootfs artifact escapes the staging directory.
@@ -182,6 +182,8 @@ Only four project-specific mechanisms remain:
 
 The tiny postinstall hook is also retained because mkosi's native `MachineId=`
 supports a UUID, `random`, or `uninitialized`, while the Yocto contract requires
-an existing but empty `/etc/machine-id`. Rust and Go distributions are pinned by
+an existing but empty `/etc/machine-id`. `mkosi.finalize` applies
+`rootfs.tmpfiles` instead of shipping it in tmpfiles.d, where it would re-run
+on every boot against the read-only root. Rust and Go distributions are pinned by
 version and SHA-256 inside the mkosi build overlay because Debian trixie's Rust
 package is too old for this workspace; they never come from the host.

@@ -369,18 +369,7 @@ mod tests {
         let task = tokio::spawn(serve_listener(listener, state.clone()));
         let quote = state.tpm.attest(&[0x42; 32]).unwrap();
         let root = state.tpm.root_ca_pem();
-        let q = quote.clone();
-        let collateral = tokio::task::spawn_blocking(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime
-                .block_on(tpm_qvl::get_collateral(&q, &root))
-                .unwrap()
-        })
-        .await
-        .unwrap();
+        let collateral = tpm_qvl::get_collateral(&quote, &root).await.unwrap();
         tpm_qvl::QuoteVerifier::new(state.tpm.root_ca_pem())
             .verify(&quote, &collateral)
             .unwrap();

@@ -267,7 +267,6 @@ endpoint = "<host ip>:9013"
 [core.proxy]
 listen_addr = "0.0.0.0"
 listen_port = 9014
-external_port = 443
 ```
 
 gateway-2.toml:
@@ -311,7 +310,6 @@ endpoint = "<host ip>:9013"
 [core.proxy]
 listen_addr = "0.0.0.0"
 listen_port = 9014
-external_port = 443
 ```
 
 ### 2.7 Single-Host Deployment Notes

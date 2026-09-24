@@ -118,7 +118,7 @@ For every NVML-enumerated GPU, dstack calls `Device::is_cc_enabled()` and `Devic
 
 ### Dual Attestation
 
-GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the optional policy and ready-state operations succeed, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, asserted CC/DevTools state, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX, both `gpu-policy-hash` and `gpu-attestation` are append-only RTMR3 events; they are never derived from application-controlled `report_data`.
+GPU workloads require verification of both hardware components. The CPU TEE quote verifies the CVM and its measured guest code. NVIDIA-signed evidence, checked against NVIDIA RIMs and certificate status by `nvattest`, verifies the GPU appraisal. After the optional policy and ready-state operations succeed, dstack emits a `gpu-attestation` launch event before `system-ready`. Its versioned payload records the number of appraised devices, asserted CC/DevTools state, aggregate signed-claim debug and secure-boot status, and SHA-256 of the complete nvattest JSON output (claims and detached EAT). On TDX, both `gpu-policy-hash` and `gpu-attestation` are append-only RTMR3 events; they are never derived from application-controlled `report_data`.
 
 For a successful TDX GPU launch, the GPU-relevant RTMR3 event order is:
 
@@ -135,14 +135,22 @@ boot-mr-done
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "provider": "nvidia",
   "devices": 1,
   "cc_mode": "on",
   "devtools": false,
+  "dbgstat": "disabled",
+  "secboot": true,
   "evidence_sha256": "<sha256-of-complete-nvattest-json>"
 }
 ```
+
+`devtools` is the aggregate NVML state and is true if any device has DevTools
+mode enabled. `dbgstat` and `secboot` summarize the NVIDIA-signed claims:
+`dbgstat` is `enabled` if any device reports enabled, and `secboot` is true only
+if every device reports secure boot. The complete per-device claims remain in
+the boot-time evidence committed by `evidence_sha256`.
 
 `/v1/Attest` returns that complete boot-time `nvattest` record when the request sets `include_boottime_gpu_evidence`; it runs no new attestation. `AttestResponse.boottime_gpu_evidence` is a list of `GpuEvidenceBundle`, each carrying `vendor`, `format`, and `evidence`. The boot record is the bundle whose `vendor` is `nvidia` and whose `format` is `nvidia-nvattest-boottime-json-v1`; its `evidence` is hex-encoded bytes that decode to the exact UTF-8 nvattest output as the agent read it from disk. The other format, `nvidia-nvattest-collect-evidence-json-v1`, comes from `/v1/AttestGpu` and is fresh evidence against a caller nonce; the two are deliberately distinct because a verifier for one does not appraise the other. To bind the API result to TDX evidence: verify the quote, replay the event log to the quote's RTMR3, require exactly one pre-`system-ready` `gpu-attestation` event, decode its JSON payload, select the boot-time bundle by `format`, and compare `evidence_sha256` with `SHA-256(hex_decode(bundle.evidence))`. Hash the decoded bytes, not the JSON string as returned and not a re-serialized form: parsing and re-serializing changes the digest and breaks the comparison. Only after this comparison should the verifier inspect the returned claims. This exact-byte comparison includes any whitespace or trailing newline in the decoded record.
 
@@ -256,6 +264,7 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] Launch event log replays correctly (RTMR3 on TDX-family platforms, PCR14 on AWS NitroTPM)
 - [ ] Config commitment matches the expected app/config target (on AWS: PCR14 replay; PCR8 is an optional shortcut — see the [AWS verifier runbook](../aws-ec2-production-verifier-runbook.md))
 - [ ] reportData contains your challenge (replay protection)
+- [ ] A `report_data` binding to a public key is treated as evidence only together with a live handshake or signature over that key — see [`report_data` domain tags are a parsing convention, not a capability](#report_data-domain-tags-are-a-parsing-convention-not-a-capability)
 - [ ] No security-relevant check depends on `pre_launch_script` running before the application; such checks belong in `init_script` or in the application itself
 
 **GPU verification (when required):**
@@ -377,6 +386,15 @@ The one case dstack does not leave to downstream is a genuinely invalid TCB: `dc
 
 > **Future work:** this will be refactored toward a grace-period model, where an out-of-date TCB is accepted for a bounded window after a new TCB level is published rather than being a binary downstream decision.
 
+### `report_data` domain tags are a parsing convention, not a capability
+
+Any container can choose `report_data` outright: `GetQuote` and `Attest` take up to 64 bytes verbatim, and the legacy `Tappd.TdxQuote` maps a `prefix` to a custom tag. So an app can obtain a quote whose `report_data` is `sha512("ratls-cert:" || K)` for a key *K* it does not hold. The tags only let a verifier parse `report_data` unambiguously; they are not an authorization boundary:
+
+- The identity in the quote (`app_id`, `compose_hash`, `instance_id`, MRs) comes from the system-owned RTMR3 log, so a minted quote always names the CVM that minted it.
+- Every dstack consumer that reads `ratls-cert:` as key possession also makes the peer use the key: `ra-rpc` checks it against the public key of a completed TLS handshake, and the KMS verifies the CSR signature first.
+
+A relying party must do the same: treat such a quote as evidence that the named CVM asked for the binding, not that anyone holds *K*, unless it is tied to a live handshake or a signature by *K*.
+
 ### Development modes are auditable, not production-safe
 
 dstack keeps several development switches as runtime or on-chain configuration rather than Cargo feature flags. Examples include KMS `attest_rpc_cert = false`, KMS `auth_api.type = "dev"`, and KMS contract `gateway_app_id = "any"`. These settings exist for local development and integration tests, not for production deployments.
@@ -386,6 +404,10 @@ This is intentional. Runtime configuration that affects the trust boundary is vi
 This argument has a limit, and it is worth stating because it is what keeps the list short. A switch qualifies only if the trust decision still happens and is merely recorded as a measured setting. A switch that decides *whether* attestation happens at all does not qualify: there is then no measurement to audit, because the thing that would have produced it was skipped. Gateway `core.debug.insecure_skip_attestation` was such a switch -- it turned off both the peer identity check on WaveKV sync and the gateway's own app id lookup -- and it was removed rather than documented.
 
 Production verifiers should reject deployments that use these development settings. Operators should treat them the same way they treat debug-mode TEE quotes: useful for testing, invalid for production trust.
+
+### `requireTcbUpToDate` does not gate AWS NitroTPM
+
+NitroTPM attestations carry no TCB version or advisories, so the verifier reports `tcb_status = "UpToDate"` for every verified NitroTPM attestation, and `DstackApp.requireTcbUpToDate` always passes on it. `IAppAuth.AppBootInfo` has no `teeVariant`, so an app owner cannot exclude the platform on-chain; the only gate is the KMS-local `aws_nitro_tpm_key_release` (off by default).
 
 ### KMS mTLS is route-enforced for sensitive operations
 

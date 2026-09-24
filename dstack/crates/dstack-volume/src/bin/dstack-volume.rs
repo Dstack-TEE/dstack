@@ -80,8 +80,12 @@ fn read_compose(compose_path: &Path) -> Result<AppCompose> {
 }
 
 fn prepare_volumes() -> Result<Vec<VerityVolume>> {
-    let _ = run_cmd!(modprobe dm-verity);
-    let _ = run_cmd!(udevadm settle --timeout=5);
+    if let Err(err) = run_cmd!(modprobe dm-verity) {
+        warn!("could not load the dm-verity module, continuing: {err:#}");
+    }
+    if let Err(err) = run_cmd!(udevadm settle --timeout=5) {
+        warn!("udev did not settle, device nodes may be incomplete: {err:#}");
+    }
     discover_volumes()
 }
 
@@ -338,7 +342,13 @@ fn verify_first_block(path: &Path) -> Result<()> {
 }
 
 fn mount_volume(requested: &RequestedVolume, mapped: &Path) -> Result<()> {
-    let fs_type = run_fun!(blkid -o value -s TYPE $mapped).unwrap_or_default();
+    let fs_type = run_fun!(blkid -o value -s TYPE $mapped).unwrap_or_else(|err| {
+        warn!(
+            "blkid failed on {}, letting the kernel probe: {err:#}",
+            mapped.display()
+        );
+        String::new()
+    });
     let target = &requested.target;
     fs::create_dir_all(target)?;
     if is_mountpoint(target)? {
@@ -415,7 +425,7 @@ fn unescape_mountinfo(value: &[u8]) -> Vec<u8> {
     let mut decoded = Vec::with_capacity(value.len());
     let mut index = 0;
     while index < value.len() {
-        if value[index] == b'\\' && index + 3 < value.len() {
+        if value[index] == b'\\' && index + 4 <= value.len() {
             let octal = &value[index + 1..index + 4];
             if octal.iter().all(|byte| matches!(byte, b'0'..=b'7')) {
                 decoded.push((octal[0] - b'0') * 64 + (octal[1] - b'0') * 8 + (octal[2] - b'0'));
@@ -494,6 +504,7 @@ mod tests {
     #[test]
     fn decodes_mountinfo_escapes() {
         assert_eq!(unescape_mountinfo(b"/run/my\\040volume"), b"/run/my volume");
+        assert_eq!(unescape_mountinfo(b"/run/trailing\\040"), b"/run/trailing ");
     }
 
     #[test]

@@ -225,12 +225,6 @@ pub struct ProxyConfig {
     /// quietest core goes from 63% to 97% busy.
     #[serde(default = "default_true")]
     pub connection_rebalance: bool,
-    #[serde(default)]
-    pub base_domain: Option<String>,
-    #[serde(default)]
-    pub cert_chain: Option<PathBuf>,
-    #[serde(default)]
-    pub cert_key: Option<PathBuf>,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
     /// Dedicated DNS servers for app-address TXT lookups.

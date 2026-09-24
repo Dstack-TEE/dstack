@@ -81,7 +81,7 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config("vmm", DEFAULT_CONFIG, config_file, false)
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
     Tcp,
@@ -632,9 +632,6 @@ pub struct ImageConfig {
     /// Path to guest image directory
     #[serde(default)]
     pub path: PathBuf,
-    /// OCI image registry for guest images (e.g., "dstacktee/guest-image")
-    #[serde(default)]
-    pub registry: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -657,6 +654,9 @@ pub struct Config {
 
     /// The buffer size in VMM process for guest events
     pub event_buffer_size: usize,
+
+    /// Maximum length in bytes of a guest-reported event name
+    pub max_event_name_len: usize,
 
     /// CVM configuration
     pub cvm: CvmConfig,

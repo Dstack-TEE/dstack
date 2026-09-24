@@ -231,7 +231,7 @@ async fn dispatch_prpc(
     let (code, data) = match result {
         Ok(data) => (200, data),
         Err(err) => {
-            error!("rpc error: {err:?}");
+            error!("rpc error: {}", bound_error_text(&format_args!("{err:?}")));
             // Services can attach a status code to their error; anything that
             // does not is reported as a generic bad request, as before.
             let code = code_of(&err).unwrap_or(CODE_BAD_REQUEST);
@@ -241,14 +241,51 @@ async fn dispatch_prpc(
     (code, data)
 }
 
+/// A deserializer error quotes the rejected value, so unbounded it is as long as the request.
+pub const MAX_ERROR_TEXT: usize = 2048;
+
+/// Bound an error message, dropping the middle: the error kind is in front and the input
+/// position behind.
+pub fn bound_error_text(error: &impl Display) -> String {
+    let text = format!("{error:#}");
+    if text.len() <= MAX_ERROR_TEXT {
+        return text;
+    }
+    let head = text.floor_char_boundary(MAX_ERROR_TEXT / 2);
+    let tail = text.ceil_char_boundary(text.len() - MAX_ERROR_TEXT / 2);
+    format!(
+        "{}... {} bytes elided ...{}",
+        &text[..head],
+        tail - head,
+        &text[tail..]
+    )
+}
+
 pub fn encode_error(json: bool, error: &impl Display) -> Vec<u8> {
-    let error = format!("{error:#}");
+    let error = bound_error_text(error);
     if json {
         serde_json::to_string_pretty(&serde_json::json!({ "error": error }))
             .unwrap_or_else(|_| r#"{"error": "failed to encode the error"}"#.to_string())
             .into_bytes()
     } else {
         encode_message_to_vec(&::prpc::server::ProtoError::new(error))
+    }
+}
+
+#[cfg(test)]
+mod bounded_error_tests {
+    use super::{bound_error_text, MAX_ERROR_TEXT};
+
+    #[test]
+    fn a_multi_byte_message_is_never_sliced_mid_character() {
+        for filler in ["\u{e9}", "\u{4e2d}", "\u{1f600}"] {
+            for extra in 0..8 {
+                let message = format!("head {} tail", filler.repeat(MAX_ERROR_TEXT + extra));
+                let bounded = bound_error_text(&message);
+                assert!(bounded.len() <= MAX_ERROR_TEXT + 64, "{}", bounded.len());
+                assert!(bounded.starts_with("head ") && bounded.ends_with(" tail"));
+            }
+        }
     }
 }
 

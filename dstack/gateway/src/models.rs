@@ -451,6 +451,18 @@ impl<C: Counting> EnteredCounter<C> {
         Self(connections)
     }
 }
+impl EnteredCounter {
+    /// Enter only if `others + counter < max`, checking and incrementing in one
+    /// atomic step.
+    pub fn try_enter(counter: &Arc<AtomicU64>, others: u64, max: u64) -> Option<Self> {
+        counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                (n + others < max).then_some(n + 1)
+            })
+            .ok()?;
+        Some(Self(counter.clone()))
+    }
+}
 impl<C: Counting> Drop for EnteredCounter<C> {
     fn drop(&mut self) {
         self.0.dec();
