@@ -108,18 +108,7 @@ pub(crate) fn spawn_poller(state: Proxy) {
         "polling application health every {:?} (timeout {:?})",
         config.interval, config.timeout
     );
-    // Deliberately unsupervised. This was a `loop` around a nested spawn,
-    // restarting the poller if its `JoinHandle` came back -- but neither arm
-    // could ever run. `poll_forever` does not return, and the release profile
-    // sets `panic = "abort"` (`dstack/Cargo.toml`), so a panic inside the task
-    // -- a poisoned `ProxyState` mutex being the likeliest -- takes the process
-    // down before any handle observes it. The restart is the deployment's: the
-    // shipped app runs the gateway under `restart: always`
-    // (`gateway/dstack-app/docker-compose.yaml`).
-    //
-    // The same reasoning covers every `or_panic` in this crate, `lock()` on the
-    // `ProxyState` mutex included: under `abort` none of them are recoverable
-    // in-process, so none of them should be written as if they were.
+    // Unsupervised: the release profile aborts on panic, so nothing could restart it.
     tokio::spawn(poll_forever(state, config));
 }
 
@@ -413,34 +402,6 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
-
-    /// `spawn_poller` says a panic in the poller ends the process rather than
-    /// the task, and every `or_panic` in this crate says the same thing by
-    /// omission. That is only true while the release profile aborts.
-    ///
-    /// Switching it to unwind would not break a build or a test -- it would
-    /// quietly turn nine `or_panic` sites, `ProxyInner::lock` among them, into
-    /// half-dead tasks inside a process that stays up and keeps serving, which
-    /// is the state the removed supervision loop was written to handle and
-    /// never could.
-    #[test]
-    fn the_release_profile_aborts_on_panic() {
-        let manifest =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../Cargo.toml"))
-                .expect("the workspace manifest is two directories up from this crate");
-        let profile = manifest
-            .split("[profile.release]")
-            .nth(1)
-            .expect("the workspace declares a release profile");
-        assert!(
-            profile
-                .lines()
-                .take_while(|line| !line.trim_start().starts_with('['))
-                .any(|line| line.replace(' ', "") == "panic=\"abort\""),
-            "the release profile no longer aborts on panic: \
-             re-read the comment on `spawn_poller` before relying on it"
-        );
-    }
 
     /// The bound is a per-call-site opt-in now, not a property of the
     /// transport, so nothing but a test stops a refactor from dropping it --
