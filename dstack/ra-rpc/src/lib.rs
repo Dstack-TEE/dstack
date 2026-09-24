@@ -226,12 +226,12 @@ async fn dispatch_prpc(
     query: bool,
     server: impl PrpcService + Send + 'static,
 ) -> (u16, Vec<u8>) {
-    info!("dispatching request: {path}");
+    info!("dispatching request: {}", log_text(&path));
     let result = server.dispatch_request(path, data, json, query).await;
     let (code, data) = match result {
         Ok(data) => (200, data),
         Err(err) => {
-            error!("rpc error: {}", bound_error_text(&format_args!("{err:?}")));
+            error!("rpc error: {}", log_text(&format_args!("{err:?}")));
             // Services can attach a status code to their error; anything that
             // does not is reported as a generic bad request, as before.
             let code = code_of(&err).unwrap_or(CODE_BAD_REQUEST);
@@ -261,6 +261,15 @@ pub fn bound_error_text(error: &impl Display) -> String {
     )
 }
 
+/// Caller-controlled text on its way into a log line: the method path, and error
+/// text that quotes the request or, on the VMM, relays a guest agent's reply.
+/// Bounded like an error reply, with line breaks and terminal controls blanked
+/// so the caller cannot forge log lines.
+pub fn log_text(text: &impl Display) -> String {
+    let text = bound_error_text(text);
+    dstack_types::sanitize_for_log(&text, text.len())
+}
+
 pub fn encode_error(json: bool, error: &impl Display) -> Vec<u8> {
     let error = bound_error_text(error);
     if json {
@@ -274,7 +283,15 @@ pub fn encode_error(json: bool, error: &impl Display) -> Vec<u8> {
 
 #[cfg(test)]
 mod bounded_error_tests {
-    use super::{bound_error_text, MAX_ERROR_TEXT};
+    use super::{bound_error_text, log_text, MAX_ERROR_TEXT};
+
+    #[test]
+    fn logged_text_stays_on_one_line() {
+        let logged = log_text(&"bad method\nINFO forged\r\u{2028}\u{1b}[2J");
+        assert_eq!(logged, "bad method INFO forged   [2J");
+        let long = log_text(&"x\n".repeat(MAX_ERROR_TEXT));
+        assert!(long.contains("bytes elided") && !long.contains('\n'));
+    }
 
     #[test]
     fn a_multi_byte_message_is_never_sliced_mid_character() {

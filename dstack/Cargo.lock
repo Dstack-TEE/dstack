@@ -5844,6 +5844,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "bon",
+ "dstack-types",
  "or-panic",
  "prost-types 0.13.5",
  "prpc",

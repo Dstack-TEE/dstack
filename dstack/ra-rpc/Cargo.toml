@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+dstack-types.workspace = true
 prpc.workspace = true
 rocket = { workspace = true, features = ["mtls"], optional = true }
 rustls = { workspace = true, optional = true }
