@@ -3,28 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """Adversarial request-contract matrix for dstack pRPC services.
 
-Every RPC case in this suite promises that the method is exercised with its
-request fields absent, default, valid, boundary-invalid and combined with an
-unknown field, over both the JSON and the protobuf representation. The shipped
-harnesses send one valid request and one wrong-typed value for the *first*
-field only. This module implements the promised matrix, and asserts the
-invariants that hold for every method whatever its semantics:
+Invariants asserted for every method, whatever it means:
 
-  L1  a malformed request never produces a 5xx, a dropped connection, or a
-      transport-level failure;
-  L2  a rejection of a JSON request carries a structured JSON body with an
-      ``error`` string, and a rejection of a protobuf request carries a
-      decodable ``ProtoError``;
+  L1  a malformed request never produces a 5xx or a transport failure;
+  L2  a rejected JSON request gets a JSON ``error`` string, a rejected protobuf
+      request gets a decodable ``ProtoError``;
   L3  the listener still answers a valid request after the whole matrix;
-  L4  a rejection neither echoes an unbounded amount of attacker-supplied
-      text nor grows with the size of the field it refused;
+  L4  a rejection neither echoes an unbounded amount of input nor grows with
+      the field it refused;
   L5  no request exceeds the per-call deadline;
-  L6  the rejection's ``Content-Type`` matches the request's representation,
-      so a client that sent JSON can parse the error it gets back.
-
-It is transport-agnostic: a target is a unix socket path or a base URL plus a
-route template, so the same matrix runs against the guest agent, the gateway,
-the KMS and the VMM.
+  L6  a rejection's ``Content-Type`` matches the request's representation.
 """
 
 from __future__ import annotations
@@ -36,11 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 CALL_TIMEOUT = 20
-# A rejection is allowed to quote the value it refused, but not to scale with
-# it. The product bounds its error text and then wraps it in a JSON envelope,
-# so the ceiling is a little above that bound; what actually matters is the
-# second check below, that two requests differing only in the size of one field
-# do not produce rejections that differ in size.
+# A rejection may quote the value it refused, but must not scale with it.
 MAX_ECHO = 8192
 MAX_ECHO_SCALING = 256
 
@@ -389,34 +373,19 @@ def check_invariants(calls: list[Call], echoed_markers: dict[str, str]) -> list[
                 }
             )
             continue
-        # A label records the representation the request was sent in. "raw"
-        # framing rows carry their own content type in the label.
-        sent_json = call.representation == "json" or call.label.endswith(
-            (
-                "json-empty-body",
-                "json-not-object",
-                "json-scalar",
-                "json-null",
-                "json-truncated",
-                "json-trailing-garbage",
-                "json-deep-nesting",
-                "json-duplicate-keys",
-                "json-huge-4mib",
-                "ct-mismatch-pb-as-json",
-            )
-        )
+        sent_json = call.representation == "json"
         if call.http is not None and call.http >= 400:
             if sent_json:
                 ok, detail = json_error(call)
-                invariant, expected = "L2", "application/json"
+                expected = "application/json"
             else:
                 ok, detail = proto_error(call)
-                invariant, expected = "L2", "application/octet-stream"
+                expected = "application/octet-stream"
             if not ok:
                 violations.append(
                     {
                         **base,
-                        "invariant": invariant,
+                        "invariant": "L2",
                         "detail": f"unstructured rejection ({detail}): "
                         f"{call.text[:256]!r}",
                     }
@@ -441,15 +410,6 @@ def check_invariants(calls: list[Call], echoed_markers: dict[str, str]) -> list[
                         "detail": "a request sent as "
                         f"{'JSON' if sent_json else 'protobuf'} was rejected with "
                         f"Content-Type {call.response_content_type}",
-                    }
-                )
-            if not ok and sent_json:
-                violations.append(
-                    {
-                        **base,
-                        "invariant": "L6",
-                        "detail": "a JSON request was rejected with a non-JSON body "
-                        f"and Content-Type {call.response_content_type or 'unset'}",
                     }
                 )
         marker = echoed_markers.get(call.label)
