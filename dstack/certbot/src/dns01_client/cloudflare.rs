@@ -3,18 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::dns01_client::Record;
 
 use super::Dns01Api;
 
 const DEFAULT_CLOUDFLARE_API_URL: &str = "https://api.cloudflare.com/client/v4";
+
+/// `reqwest` has no default timeout, and zone discovery runs under the cluster-wide ACME lock.
+const API_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `total_pages` comes from the provider; 100 pages of 50 zones is plenty.
+const MAX_ZONE_PAGES: u32 = 100;
+
+fn api_client() -> Result<Client> {
+    Client::builder()
+        .timeout(API_TIMEOUT)
+        .build()
+        .context("failed to build the cloudflare api client")
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CloudflareClient {
@@ -86,15 +100,13 @@ impl CloudflareClient {
             .trim_end_matches('.')
             .to_lowercase();
 
-        let client = Client::new();
+        let client = api_client()?;
         let url = format!("{api_url}/zones");
 
         let per_page = 50u32;
-        let mut page = 1u32;
         let mut zones: HashMap<String, String> = HashMap::new();
-        let mut total_pages = 1u32;
 
-        while page <= total_pages {
+        for page in 1..=MAX_ZONE_PAGES {
             debug!(url = %url, base_domain = %base, page, per_page, "cloudflare list zones request");
 
             let response = client
@@ -143,12 +155,20 @@ impl CloudflareClient {
                 "cloudflare list zones response"
             );
 
-            total_pages = zones_response.result_info.total_pages;
+            let total_pages = zones_response.result_info.total_pages;
             for z in zones_response.result {
                 zones.insert(z.name.to_lowercase(), z.id);
             }
 
-            page += 1;
+            if page >= total_pages {
+                break;
+            }
+            if page == MAX_ZONE_PAGES {
+                warn!(
+                    "stopped listing zones at page {MAX_ZONE_PAGES} of {total_pages}; \
+                     a zone past that point cannot be resolved"
+                );
+            }
         }
 
         let parts: Vec<&str> = base.split('.').collect();
@@ -164,7 +184,7 @@ impl CloudflareClient {
     }
 
     async fn add_record(&self, record: &impl Serialize) -> Result<Response> {
-        let client = Client::new();
+        let client = api_client()?;
         let url = format!("{}/zones/{}/dns_records", self.api_url, self.zone_id);
         let response = client
             .post(&url)
@@ -188,7 +208,7 @@ impl CloudflareClient {
     }
 
     async fn remove_record_inner(&self, record_id: &str) -> Result<()> {
-        let client = Client::new();
+        let client = api_client()?;
         let url = format!(
             "{}/zones/{}/dns_records/{}",
             self.api_url, self.zone_id, record_id
@@ -214,7 +234,7 @@ impl CloudflareClient {
     }
 
     async fn get_records_inner(&self, domain: &str) -> Result<Vec<Record>> {
-        let client = Client::new();
+        let client = api_client()?;
         let url = format!("{}/zones/{}/dns_records", self.api_url, self.zone_id);
 
         let per_page = 100u32;
@@ -416,5 +436,68 @@ mod tests {
         client.remove_record(&record_id).await.unwrap();
         let record = client.get_caa_records(&subdomain).await.unwrap();
         assert!(record.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod zone_discovery_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A page of zones that says there are a million more of them.
+    const A_MILLION_PAGES: &str = r#"{"result":[],"result_info":{"page":1,"per_page":50,"total_pages":1000000,"count":0,"total_count":0}}"#;
+
+    /// A stand-in provider that answers every request with the same page and
+    /// counts how many it was asked for.
+    async fn serve(body: &'static str) -> (String, Arc<AtomicU32>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicU32::new(0));
+        let counter = requests.clone();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::Relaxed);
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buffer = [0u8; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match socket.read(&mut buffer).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(read) => request.extend_from_slice(&buffer[..read]),
+                        }
+                    }
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    socket.write_all(response.as_bytes()).await.ok();
+                    socket.shutdown().await.ok();
+                });
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    #[tokio::test]
+    async fn zone_discovery_stops_at_the_page_cap() {
+        let (api_url, requests) = serve(A_MILLION_PAGES).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            CloudflareClient::new("example.com".into(), "token".into(), Some(api_url)),
+        )
+        .await
+        .expect("zone discovery never finished: the page count is the provider's to choose");
+        assert!(
+            result.is_err(),
+            "no zone on the listing matches, so discovery has to fail"
+        );
+        let made = requests.load(Ordering::Relaxed);
+        assert!(
+            made <= MAX_ZONE_PAGES,
+            "{made} requests for a cap of {MAX_ZONE_PAGES} pages"
+        );
     }
 }
