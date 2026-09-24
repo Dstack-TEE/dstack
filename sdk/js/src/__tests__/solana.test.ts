@@ -2,83 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-import { expect, describe, it, vi } from 'vitest'
+import { expect, describe, it } from 'vitest'
 import { Keypair } from '@solana/web3.js'
-
-import { DstackClientV0, TappdClient } from '../index'
+import type { GetKeyResponse, GetTlsKeyResponse } from '../client-v0'
 import { toKeypair, toKeypairSecure } from '../solana'
 
 describe('solana support', () => {
-  describe('toKeypair (legacy)', () => {
-    it('should able to get keypair from getKey with DstackClientV0', async () => {
-      const client = new DstackClientV0()
-      const result = await client.getKey('/', 'test')
-      const keypair = toKeypair(result)
-      expect(keypair).toBeInstanceOf(Keypair)
-      expect(keypair.secretKey.length).toBe(64)
+  for (const [name, adapter] of [
+    ['toKeypair', toKeypair],
+    ['toKeypairSecure', toKeypairSecure],
+  ] as const) {
+    describe(name, () => {
+      it('creates a keypair from getKey', async () => {
+        const result: GetKeyResponse = {
+          __name__: 'GetKeyResponse',
+          key: new Uint8Array(32).fill(1),
+          signature_chain: [],
+        }
+        const keypair = adapter(result)
+        expect(keypair).toBeInstanceOf(Keypair)
+        expect(keypair.secretKey.length).toBe(64)
+      })
+
+      it('rejects TLS keys', async () => {
+        const result: GetTlsKeyResponse = {
+          __name__: 'GetTlsKeyResponse',
+          key: 'not used',
+          certificate_chain: [],
+          asUint8Array: () => new Uint8Array(),
+        }
+        expect(() => adapter(result as never)).toThrow(/TLS keys cannot be used/)
+      })
     })
-
-    it('should able to get keypair from deriveKey with TappdClient', async () => {
-      const client = new TappdClient()
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      const result = await client.deriveKey('/', 'test')
-      const keypair = toKeypair(result)
-      expect(keypair).toBeInstanceOf(Keypair)
-      expect(keypair.secretKey.length).toBe(64)
-      expect(consoleSpy).toHaveBeenCalledWith('toKeypair: Please don\'t use `deriveKey` method to get key, use `getKey` instead.')
-
-      consoleSpy.mockRestore()
-    })
-
-    it('should able to get keypair from getTlsKey with DstackClientV0', async () => {
-      const client = new DstackClientV0()
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      const result = await client.getTlsKey()
-      const keypair = toKeypair(result)
-      expect(keypair).toBeInstanceOf(Keypair)
-      expect(keypair.secretKey.length).toBe(64)
-      expect(consoleSpy).toHaveBeenCalledWith('toKeypair: Please don\'t use `deriveKey` method to get key, use `getKey` instead.')
-
-      consoleSpy.mockRestore()
-    })
-  })
-
-  describe('toKeypairSecure', () => {
-    it('should able to get keypair from getKey with DstackClientV0', async () => {
-      const client = new DstackClientV0()
-      const result = await client.getKey('/', 'test')
-      const keypair = toKeypairSecure(result)
-      expect(keypair).toBeInstanceOf(Keypair)
-      expect(keypair.secretKey.length).toBe(64)
-    })
-
-    it('should able to get keypair from deriveKey with TappdClient', async () => {
-      const client = new TappdClient()
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      const result = await client.deriveKey('/', 'test')
-      const keypair = toKeypairSecure(result)
-      expect(keypair).toBeInstanceOf(Keypair)
-      expect(keypair.secretKey.length).toBe(64)
-      expect(consoleSpy).toHaveBeenCalledWith('toKeypairSecure: Please don\'t use `deriveKey` method to get key, use `getKey` instead.')
-
-      consoleSpy.mockRestore()
-    })
-
-    it('should able to get keypair from getTlsKey with DstackClientV0', async () => {
-      const client = new DstackClientV0()
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      const result = await client.getTlsKey()
-      const keypair = toKeypairSecure(result)
-      expect(keypair).toBeInstanceOf(Keypair)
-      expect(keypair.secretKey.length).toBe(64)
-      expect(consoleSpy).toHaveBeenCalledWith('toKeypairSecure: Please don\'t use `deriveKey` method to get key, use `getKey` instead.')
-
-      consoleSpy.mockRestore()
-    })
-  })
+  }
 })

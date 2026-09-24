@@ -68,12 +68,13 @@ main() {
 	mkdir -p /proc
 	mkdir -p /sys
 	mkdir -p /run
-	mount -t proc proc /proc
-	mount -t sysfs sysfs /sys
-	mount -t tmpfs tmpfs /run
+	# systemd keeps these mounts as-is, so apply its options here.
+	mount -t proc -o nosuid,nodev,noexec proc /proc
+	mount -t sysfs -o nosuid,nodev,noexec sysfs /sys
+	mount -t tmpfs -o nosuid,nodev,mode=0755 tmpfs /run
 
 	mkdir -p /dev
-	mount -t devtmpfs devtmpfs /dev
+	mount -t devtmpfs -o nosuid,strictatime,mode=0755 devtmpfs /dev
 
 	mkdir -p /dev/pts
 
@@ -107,7 +108,7 @@ main() {
 		log "missing dm-verity parameters; refusing to continue"
 		exit 1
 	fi
-	veritysetup open "${ROOT_DEV}" rootfs "${ROOT_DEV}" "${ROOT_HASH}" --hash-offset="${DATA_SIZE}"
+	veritysetup open "${ROOT_DEV}" rootfs "${ROOT_DEV}" "${ROOT_HASH}" --hash-offset="${DATA_SIZE}" --panic-on-corruption
 	log "mounting verified rootfs from /dev/mapper/rootfs"
 	mount -t squashfs /dev/mapper/rootfs ${ROOT_DIR}
 	mount_move_all sys proc dev run

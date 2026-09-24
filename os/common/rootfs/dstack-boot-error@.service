@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Pulled in via OnFailure=dstack-boot-error@%n.service to report a failed boot
+# unit to the host.
+[Unit]
+Description=Report %i failure to the host
+After=dstack-prepare.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/dstack-util notify-host -e boot.error -d "%i failed"

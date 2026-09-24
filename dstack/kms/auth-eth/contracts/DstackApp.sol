@@ -145,6 +145,7 @@ contract DstackApp is
 
     // Add a compose hash to allowed list
     function addComposeHash(bytes32 composeHash) external onlyOwner {
+        require(composeHash != bytes32(0), "invalid compose hash");
         allowedComposeHashes[composeHash] = true;
         emit ComposeHashAdded(composeHash);
         _emitPolicy("compose-hash", composeHash, true);
@@ -173,6 +174,7 @@ contract DstackApp is
 
     // Add a device ID to allowed list
     function addDevice(bytes32 deviceId) external onlyOwner {
+        require(deviceId != bytes32(0), "invalid device ID");
         allowedDeviceIds[deviceId] = true;
         emit DeviceAdded(deviceId);
         _emitPolicy("device", deviceId, true);

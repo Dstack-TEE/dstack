@@ -7,7 +7,7 @@ COMPONENT_KERNEL_TREES=()
 
 component_cache_key() {
     key_file "$COMPONENT_PATH/dstack-rust-build.sh"
-    key_tree dstack os/common/rootfs
+    key_tree dstack os/common/rootfs os/yocto/layers/meta-dstack/recipes-core/chrony
     key_tools rustc cargo
 }
 

@@ -4,7 +4,7 @@
 
 use dcap_qvl::{
     collateral::CollateralClient,
-    quote::{Quote, TDReport10},
+    quote::{Quote, TDAttributes, TDReport10},
 };
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
@@ -66,6 +66,7 @@ impl KeyProvider {
         let tdx_report = report.report.as_td10().copied().ok_or_else(|| {
             ProviderError::QuoteVerification("verified quote is not a TDX quote".into())
         })?;
+        require_production_td(&tdx_report)?;
         debug!(
             tcb_status = %report.status,
             advisories = ?report.advisory_ids,
@@ -73,6 +74,40 @@ impl KeyProvider {
         );
         Ok(tdx_report)
     }
+}
+
+/// Refuse a TD that the host launched in a state that does not protect it.
+///
+/// `fetch_and_verify` already rejects these TDs under dcap-qvl's default
+/// policy. The check is repeated here, following dcap-qvl's `validate_td10`,
+/// so that the sealing key does not depend on that default: the key
+/// derivation does not cover `td_attributes`, so a debug TD running the same
+/// image would derive the production TD's key. The `mr_signer_seam` check
+/// matches the guest's `validate_tcb`.
+fn require_production_td(report: &TDReport10) -> Result<(), ProviderError> {
+    let attributes = TDAttributes::parse(report.td_attributes)
+        .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
+    if attributes.tud & 0x01 != 0 {
+        return Err(ProviderError::UntrustedTd("debug mode is enabled"));
+    }
+    if attributes.tud != 0
+        || attributes.sec.reserved_lower != 0
+        || attributes.sec.reserved_bit29
+        || attributes.other.reserved != 0
+    {
+        return Err(ProviderError::UntrustedTd(
+            "reserved bits in TD attributes are set",
+        ));
+    }
+    if !attributes.sec.sept_ve_disable {
+        return Err(ProviderError::UntrustedTd("SEPT_VE_DISABLE is not enabled"));
+    }
+    if report.mr_signer_seam != [0_u8; 48] {
+        return Err(ProviderError::UntrustedTd(
+            "TD was launched by a non-production TDX module",
+        ));
+    }
+    Ok(())
 }
 
 fn parse_quote(kind: &'static str, raw_quote: &[u8]) -> Result<Quote, ProviderError> {
@@ -114,9 +149,75 @@ fn measurements(report: &TDReport10) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    const TDX_QUOTE: &[u8] = include_bytes!("../../ra-tls/assets/tdx_quote");
+    /// `td_attributes` starts 120 bytes into the TD report body, which itself
+    /// starts 48 bytes into the quote.
+    const TD_ATTRIBUTES_OFFSET: usize = 48 + 120;
+
+    fn report(quote: &[u8]) -> TDReport10 {
+        Quote::parse(quote)
+            .unwrap()
+            .report
+            .as_td10()
+            .copied()
+            .unwrap()
+    }
+
+    /// The recorded quote with `td_attributes[byte]` XOR'd with `mask`.
+    fn quote_with_attributes(byte: usize, mask: u8) -> Vec<u8> {
+        let mut quote = TDX_QUOTE.to_vec();
+        quote[TD_ATTRIBUTES_OFFSET + byte] ^= mask;
+        quote
+    }
+
+    fn rejection(quote: &[u8]) -> Option<&'static str> {
+        match require_production_td(&report(quote)) {
+            Err(ProviderError::UntrustedTd(reason)) => Some(reason),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn td_attributes_offset_is_the_recorded_one() {
+        assert_eq!(
+            report(TDX_QUOTE).td_attributes,
+            TDX_QUOTE[TD_ATTRIBUTES_OFFSET..TD_ATTRIBUTES_OFFSET + 8]
+        );
+    }
+
+    #[test]
+    fn accepts_the_recorded_production_td() {
+        assert!(require_production_td(&report(TDX_QUOTE)).is_ok());
+    }
+
+    #[test]
+    fn refuses_untrusted_td_attributes() {
+        let cases = [
+            (0, 0x01, "debug mode is enabled"),
+            (0, 0x02, "reserved bits in TD attributes are set"),
+            (1, 0x01, "reserved bits in TD attributes are set"),
+            (3, 0x20, "reserved bits in TD attributes are set"),
+            (4, 0x01, "reserved bits in TD attributes are set"),
+            (3, 0x10, "SEPT_VE_DISABLE is not enabled"),
+        ];
+        for (byte, mask, reason) in cases {
+            assert_eq!(rejection(&quote_with_attributes(byte, mask)), Some(reason));
+        }
+    }
+
+    #[test]
+    fn refuses_a_td_from_a_non_production_tdx_module() {
+        let mut report = report(TDX_QUOTE);
+        report.mr_signer_seam[0] = 0x01;
+        assert!(matches!(
+            require_production_td(&report),
+            Err(ProviderError::UntrustedTd(_))
+        ));
+    }
+
     #[test]
     fn extracts_all_key_derivation_measurements_in_wire_order() {
-        let quote = Quote::parse(include_bytes!("../../ra-tls/assets/tdx_quote")).unwrap();
+        let quote = Quote::parse(TDX_QUOTE).unwrap();
         let report = quote.report.as_td10().unwrap();
         let output = measurements(report);
 

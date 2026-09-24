@@ -35,7 +35,7 @@ against the returned evidence.
   "is_valid": true,
   "details": {
     "quote_verified": true,
-    "event_log_verified": true,  // See "Verification Process" for semantics
+    "event_log_verified": true,  // app identity decoded; see "Verification Process"
     "os_image_hash_verified": true,
     "acpi_tables_verified": true,         // true only when TDX ACPI table contents are verified
     "os_image_is_dev": false,             // true=dev image, false=prod, null=unknown/N/A
@@ -141,9 +141,11 @@ certificate alone:
 cargo run --bin dstack-verifier -- --verify-cert endpoint-cert.pem
 ```
 
-The input may be PEM or DER. On success, the verifier prints JSON and writes the
-same result next to the input as `endpoint-cert.pem.ratls-verification.json`.
-The verification checks that:
+The input may be PEM or DER. The verifier prints JSON and writes the same result
+next to the input as `endpoint-cert.pem.ratls-verification.json`; `is_valid`
+says whether every check below passed, `reason` says which one did not, and the
+exit status is non-zero when `is_valid` is `false`. The verification checks
+that:
 
 1. the certificate contains a dstack RA-TLS attestation extension;
 2. the embedded attestation verifies against the platform root, including AWS
@@ -151,7 +153,8 @@ The verification checks that:
 3. the attestation `report_data` is
    `QuoteContentType::RaTlsCert(SubjectPublicKeyInfo)`, so the verified
    attestation is bound to this exact TLS public key; and
-4. the reported `app_info.os_image_hash` is bound to the attested boot
+4. the attested app identity decodes; and
+5. the reported `app_info.os_image_hash` is bound to the attested boot
    measurement, surfaced as `app_info.os_image_hash_verified`. This binding is
    self-contained (no image download) for AWS NitroTPM, SEV-SNP, Nitro Enclave,
    GCP TDX, and TDX lite. It is reported as `false` for the TDX legacy
@@ -237,7 +240,7 @@ $ curl -s -d @quote.json localhost:8080/verify | jq
 The verifier performs the following verification steps:
 
 1. **Quote Verification**: Validates the platform quote using the platform verifier: DCAP for TDX, AMD SNP report verification for SEV-SNP, NSM for Nitro Enclaves, and AWS NitroTPM attestation-document verification for EC2 NitroTPM.
-2. **Event Log Verification**: Replays event logs to ensure RTMR/PCR values match and extracts app information. For RTMR3 and AWS NitroTPM PCR14 launch measurements, both the digest and payload integrity are verified. For TDX RTMR 0-2 boot-time measurements, only the digests are verified; the payload content is not validated as dstack does not define semantics for these payloads.
+2. **Event Log Verification**: Decodes app information (`app_id`, `compose_hash`, ...) from evidence bound to the quote and reports it as `event_log_verified`. On dstack TDX, GCP TDX and AWS NitroTPM it is read from the runtime event log, whose digests and payloads step 1 already replayed against the quoted register (RTMR3, plus TPM PCR14 on GCP; PCR14 on NitroTPM), so a replay mismatch fails quote verification. SEV-SNP has no runtime event log and takes it from `mr_config`, bound through HOST_DATA; Nitro Enclaves derive it from the PCRs. The RTMR 0-2 entries of a TDX event log are not replayed: on dstack TDX those registers are verified in step 3 against measurements recomputed from the OS image, which does not depend on the host's event log, and dstack defines no semantics for their payloads.
 3. **OS Image Hash Verification**:
    - Treats `vm_config` and any attached measurement material as untrusted inputs until they are bound to the hardware quote
    - For the full-image TDX path, downloads or loads the image identified by `os_image_hash`, checks the image checksum manifest, uses dstack-mr to compute expected MRTD/RTMR0-2, and compares them against the verified measurements from the quote

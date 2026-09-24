@@ -29,7 +29,6 @@ use ra_tls::{
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::{safe_write, safe_write_with_mode};
-use sha2::Digest;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::info;
 
@@ -112,7 +111,7 @@ impl OnboardRpc for OnboardHandler {
         validate_onboarding_domain(&request.domain)?;
         let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
         let cfg = &self.state.config;
-        if cfg.bootstrap_info().exists() || cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+        if cfg.root_keys_exist() {
             bail!("KMS has already been bootstrapped");
         }
         ensure_self_kms_allowed(cfg, &self.state.attestation_verifier)
@@ -141,7 +140,7 @@ impl OnboardRpc for OnboardHandler {
         validate_onboarding_domain(&request.domain)?;
         let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
         let cfg = &self.state.config;
-        if cfg.root_ca_key().exists() || cfg.k256_key().exists() {
+        if cfg.root_keys_exist() {
             bail!("KMS has already been onboarded");
         }
         let source_url = request.source_url.trim_end_matches('/').to_string();
@@ -238,16 +237,15 @@ fn build_attestation_info_response(
 ) -> Result<AttestationInfoResponse> {
     let boot_info = build_boot_info_for_attestation(verified, false, vm_config)
         .context("Failed to decode app info")?;
-    let raw_device_id = verified.report.get_devide_id();
     Ok(AttestationInfoResponse {
-        device_id: sha2::Sha256::digest(&raw_device_id).to_vec(),
+        device_id: boot_info.device_id,
         mr_aggregated: boot_info.mr_aggregated,
         os_image_hash: boot_info.os_image_hash,
         tee_variant,
         site_name,
         eth_rpc_url,
         kms_contract_address,
-        ppid: raw_device_id,
+        ppid: verified.report.get_devide_id(),
     })
 }
 
@@ -428,6 +426,70 @@ mod tests {
             .unwrap()
             .pem()
             .into_bytes()
+    }
+
+    fn auto_bootstrap_config(cert_dir: &std::path::Path) -> KmsConfig {
+        use rocket::figment::{
+            providers::{Format, Toml},
+            Figment,
+        };
+        let overrides = format!(
+            r#"
+            [core]
+            cert_dir = "{}"
+            attest_rpc_cert = false
+            enforce_self_authorization = false
+
+            [core.onboard]
+            auto_bootstrap_domain = "kms.example.com"
+            "#,
+            cert_dir.display()
+        );
+        Figment::from(rocket::Config::default())
+            .merge(Toml::string(crate::config::DEFAULT_CONFIG))
+            .merge(Toml::string(&overrides))
+            .focus("core")
+            .extract()
+            .unwrap()
+    }
+
+    #[rocket::async_test]
+    async fn auto_bootstrap_refuses_to_replace_existing_root_keys() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let verifier = AttestationVerifier::load(&cfg.attestation).unwrap();
+
+        bootstrap_keys(&cfg, &verifier).await.unwrap();
+        let root_ca_key = fs::read(cfg.root_ca_key()).unwrap();
+        let k256_key = fs::read(cfg.k256_key()).unwrap();
+
+        // A single missing certificate is enough to make `keys_exists()` false,
+        // which is what sends the KMS back into onboarding on the next start.
+        fs::remove_file(cfg.rpc_cert()).unwrap();
+        assert!(!cfg.keys_exists());
+
+        let err = bootstrap_keys(&cfg, &verifier).await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("already been bootstrapped"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(fs::read(cfg.root_ca_key()).unwrap(), root_ca_key);
+        assert_eq!(fs::read(cfg.k256_key()).unwrap(), k256_key);
+    }
+
+    #[rocket::async_test]
+    async fn auto_bootstrap_overwrites_an_interrupted_bootstrap() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let verifier = AttestationVerifier::load(&cfg.attestation).unwrap();
+
+        // A crash between the two root key writes.
+        fs::write(cfg.root_ca_key(), "stale").unwrap();
+        assert!(!cfg.root_keys_exist());
+
+        bootstrap_keys(&cfg, &verifier).await.unwrap();
+        assert!(cfg.keys_exists());
+        assert_ne!(fs::read(cfg.root_ca_key()).unwrap(), b"stale");
     }
 
     #[test]
@@ -613,17 +675,18 @@ impl Keys {
         .await
     }
 
+    /// The root keys go last: see [`KmsConfig::root_keys_exist`].
     fn store(&self, cfg: &KmsConfig) -> Result<()> {
-        self.store_keys(cfg)?;
         self.store_certs(cfg)?;
         safe_write(cfg.rpc_domain(), self.rpc_domain.as_bytes())?;
+        self.store_keys(cfg)?;
         Ok(())
     }
 
     fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
         safe_write_with_mode(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem(), 0o600)?;
-        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
         safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
+        safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
         safe_write_with_mode(cfg.k256_key(), self.k256_key.to_bytes(), 0o600)?;
         Ok(())
     }
@@ -717,6 +780,14 @@ fn ca_cert_expires_within(cert_pem: &[u8], now: SystemTime, window: Duration) ->
 
 pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifier) -> Result<()> {
     validate_onboarding_domain(&cfg.onboard.auto_bootstrap_domain)?;
+    // `keys_exists()` wants every key *and* certificate, so losing one derived
+    // certificate - a restored disk image - sends the KMS back here. Generating
+    // new root keys then would silently change every app key and orphan every
+    // encrypted disk, so refuse and let the operator recover the missing file
+    // instead. Same guard as the `Onboard.Bootstrap` RPC.
+    if cfg.root_keys_exist() {
+        bail!("KMS has already been bootstrapped");
+    }
     ensure_self_kms_allowed(cfg, verifier)
         .await
         .context("KMS is not allowed to auto-bootstrap")?;

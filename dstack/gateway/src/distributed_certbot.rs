@@ -165,18 +165,16 @@ impl DistributedCertBot {
         Ok(())
     }
 
-    fn try_acquire_cert_lock(&self, domain: &str) -> bool {
+    fn try_acquire_cert_lock(&self, domain: &str) -> Option<crate::kv::CertRenewLock> {
         let acquired = self
             .kv_store
-            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS);
-        if acquired {
-            self.notify_lock_write();
-        }
-        acquired
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)?;
+        self.notify_lock_write();
+        Some(acquired)
     }
 
-    fn release_cert_lock(&self, domain: &str) -> Result<()> {
-        self.kv_store.release_cert_lock(domain)?;
+    fn release_cert_lock(&self, domain: &str, lock: &crate::kv::CertRenewLock) -> Result<()> {
+        self.kv_store.release_cert_lock(domain, lock)?;
         self.notify_lock_write();
         Ok(())
     }
@@ -630,10 +628,10 @@ impl DistributedCertBot {
         }
 
         // Try to acquire lock
-        if !self.try_acquire_cert_lock(domain) {
+        let Some(lock) = self.try_acquire_cert_lock(domain) else {
             info!("another node is renewing, skipping");
             return Ok(false);
-        }
+        };
 
         info!("acquired renew lock, starting renewal");
 
@@ -647,7 +645,7 @@ impl DistributedCertBot {
         };
 
         // Release lock regardless of result
-        if let Err(err) = self.release_cert_lock(domain) {
+        if let Err(err) = self.release_cert_lock(domain, &lock) {
             error!("failed to release lock: {err:?}");
         }
 
@@ -1145,16 +1143,18 @@ mod tests {
             .expect("rotation lock release should succeed");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 2);
 
-        assert!(certbot.try_acquire_cert_lock("example.com"));
+        let renewal = certbot
+            .try_acquire_cert_lock("example.com")
+            .expect("renewal lock should be free");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 3);
-        assert!(!certbot.try_acquire_cert_lock("example.com"));
+        assert!(certbot.try_acquire_cert_lock("example.com").is_none());
         assert_eq!(
             notifier.0.load(Ordering::Relaxed),
             3,
             "a rejected acquisition did not write and must not wake push"
         );
         certbot
-            .release_cert_lock("example.com")
+            .release_cert_lock("example.com", &renewal)
             .expect("renewal lock release should succeed");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 4);
     }
@@ -1466,14 +1466,20 @@ mod tests {
             .release_rotation_lock(&stale)
             .expect("stale release should be a no-op, not an error");
         assert!(
-            certbot.kv_store.get_rotation_lock().is_some(),
+            certbot
+                .kv_store
+                .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+                .is_none(),
             "the newer holder's lock must remain in place"
         );
         certbot
             .kv_store
             .release_rotation_lock(&current)
             .expect("owner release should succeed");
-        assert!(certbot.kv_store.get_rotation_lock().is_none());
+        assert!(certbot
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+            .is_some());
     }
 
     #[test]

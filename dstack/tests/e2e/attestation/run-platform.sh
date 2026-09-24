@@ -186,7 +186,7 @@ if ! ATTESTATION_HEX=$(dstack-util attest --report-data "$REPORT_DATA" --hex); t
   exit 1
 fi
 jq -n --arg attestation "$ATTESTATION_HEX" \
-  '{attestation: $attestation, debug: true}' > "$WORK/request.json"
+  '{attestation: $attestation}' > "$WORK/request.json"
 
 cat > "$WORK/verifier.toml" <<EOF_CONFIG
 address = "127.0.0.1"
