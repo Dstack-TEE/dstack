@@ -304,6 +304,47 @@ impl ProxyInner {
         self.handshake_cache.latest(stale_timeout)
     }
 
+    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
+        gateway_nodes(&self.kv_store, false)
+    }
+
+    /// Publish this node's WireGuard observations to the KV store.
+    ///
+    /// The KV writes wait on the store's write lock, which a sync merge holds,
+    /// so they must not run under the routing lock.
+    pub(crate) fn refresh_state(&self) -> Result<()> {
+        let handshakes = self.latest_handshakes(None)?;
+        let instance_ids: Vec<(String, u64)> = {
+            let state = self.lock();
+            state
+                .state
+                .instances
+                .iter()
+                .filter_map(|(id, info)| {
+                    let (timestamp, _) = handshakes.get(&info.public_key)?;
+                    Some((id.clone(), *timestamp))
+                })
+                .collect()
+        };
+
+        for (instance_id, timestamp) in &instance_ids {
+            if let Err(err) = self
+                .kv_store
+                .sync_instance_handshake(instance_id, *timestamp)
+            {
+                debug!("failed to sync instance handshake: {err:?}");
+            }
+        }
+
+        if let Err(err) = self
+            .kv_store
+            .sync_node_last_seen(self.config.sync.node_id, now_secs())
+        {
+            debug!("failed to sync node last_seen: {err:?}");
+        }
+        Ok(())
+    }
+
     pub async fn new(
         options: ProxyOptions,
         port_policy_tx: UnboundedSender<String>,
@@ -963,6 +1004,9 @@ fn start_recycle_thread(proxy: Proxy) {
     }
     std::thread::spawn(move || loop {
         std::thread::sleep(proxy.config.recycle.interval);
+        if let Err(err) = proxy.refresh_state() {
+            warn!("failed to refresh state: {err:?}");
+        }
         if let Err(err) = proxy.lock().recycle() {
             error!("failed to run recycle: {err:?}");
         };
@@ -2514,12 +2558,9 @@ impl ProxyState {
         Ok(())
     }
 
+    /// Drop instances the cluster has stopped seeing. The caller runs
+    /// `ProxyInner::refresh_state` first, off this lock.
     fn recycle(&mut self) -> Result<()> {
-        // Refresh state: sync local handshakes to KvStore, update local last_seen from global
-        if let Err(err) = self.refresh_state() {
-            warn!("failed to refresh state: {err:?}");
-        }
-
         // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
 
         // Recycle stale CVM instances based on global last_seen (max across all nodes)
@@ -2581,53 +2622,11 @@ impl ProxyState {
         Ok(())
     }
 
-    pub(crate) fn refresh_state(&mut self) -> Result<()> {
-        // Get local WG handshakes and sync to KvStore
-        let handshakes = self.latest_handshakes(None)?;
-
-        // Build a map from public_key to instance_id for lookup
-        let pk_to_id: BTreeMap<&str, &str> = self
-            .state
-            .instances
-            .iter()
-            .map(|(id, info)| (info.public_key.as_str(), id.as_str()))
-            .collect();
-
-        // Sync local handshake observations to KvStore
-        for (pk, (ts, _)) in &handshakes {
-            if let Some(&instance_id) = pk_to_id.get(pk.as_str()) {
-                if let Err(err) = self.kv_store.sync_instance_handshake(instance_id, *ts) {
-                    debug!("failed to sync instance handshake: {err:?}");
-                }
-            }
-        }
-
-        // Update this node's last_seen in KvStore
-        let now = now_secs();
-        if let Err(err) = self
-            .kv_store
-            .sync_node_last_seen(self.config.sync.node_id, now)
-        {
-            debug!("failed to sync node last_seen: {err:?}");
-        }
-        Ok(())
-    }
-
     /// Sync connection count for an instance to KvStore
     pub(crate) fn sync_connections(&self, instance_id: &str, count: u64) {
         if let Err(err) = self.kv_store.sync_connections(instance_id, count) {
             debug!("Failed to sync connections: {err:?}");
         }
-    }
-
-    /// Get latest handshake for an instance from KvStore (max across all nodes)
-    pub(crate) fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
-        self.kv_store.get_instance_latest_handshake(instance_id)
-    }
-
-    /// Get all nodes from KvStore (for admin API - includes all nodes)
-    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
-        self.get_all_nodes_filtered(false)
     }
 
     /// Get nodes for CVM registration (excludes nodes with status "down")
@@ -2637,29 +2636,33 @@ impl ProxyState {
 
     /// Get all nodes from KvStore with optional filtering
     fn get_all_nodes_filtered(&self, exclude_down: bool) -> Vec<GatewayNodeInfo> {
-        let node_statuses = if exclude_down {
-            self.kv_store.load_all_node_statuses()
-        } else {
-            Default::default()
-        };
-
-        self.kv_store
-            .load_all_nodes()
-            .into_iter()
-            // Shared with the metrics sampler so the gauge and the routing
-            // table cannot disagree about what "active" means.
-            .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
-            .map(|(id, node)| GatewayNodeInfo {
-                id,
-                uuid: node.uuid,
-                wg_public_key: node.wg_public_key,
-                wg_ip: node.wg_ip,
-                wg_endpoint: node.wg_endpoint,
-                url: node.url,
-                last_seen: self.kv_store.get_node_latest_last_seen(id).unwrap_or(0),
-            })
-            .collect()
+        gateway_nodes(&self.kv_store, exclude_down)
     }
+}
+
+fn gateway_nodes(kv_store: &KvStore, exclude_down: bool) -> Vec<GatewayNodeInfo> {
+    let node_statuses = if exclude_down {
+        kv_store.load_all_node_statuses()
+    } else {
+        Default::default()
+    };
+
+    kv_store
+        .load_all_nodes()
+        .into_iter()
+        // Shared with the metrics sampler so the gauge and the routing
+        // table cannot disagree about what "active" means.
+        .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
+        .map(|(id, node)| GatewayNodeInfo {
+            id,
+            uuid: node.uuid,
+            wg_public_key: node.wg_public_key,
+            wg_ip: node.wg_ip,
+            wg_endpoint: node.wg_endpoint,
+            url: node.url,
+            last_seen: kv_store.get_node_latest_last_seen(id).unwrap_or(0),
+        })
+        .collect()
 }
 
 pub struct RpcHandler {

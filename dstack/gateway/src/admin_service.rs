@@ -47,46 +47,60 @@ pub struct AdminRpcHandler {
 
 impl AdminRpcHandler {
     pub(crate) async fn status(self) -> Result<StatusResponse> {
+        tokio::task::spawn_blocking(move || {
+            self.state.refresh_state()?;
+            self.status_snapshot()
+        })
+        .await
+        .context("status task failed")?
+    }
+
+    fn status_snapshot(self) -> Result<StatusResponse> {
         let (base_domain, _port) = self
             .state
             .kv_store()
             .get_best_zt_domain()
             .unwrap_or_default();
-        let mut state = self.state.lock();
-        state.refresh_state()?;
-        let hosts = state
-            .state
-            .instances
-            .values()
-            .map(|instance| {
-                // Get global latest_handshake from KvStore (max across all nodes)
-                let latest_handshake = state
-                    .get_instance_latest_handshake(&instance.id)
-                    .unwrap_or(0);
-                HostInfo {
+        // KV reads can wait behind a sync merge, so do them after releasing
+        // the routing lock.
+        let mut hosts = {
+            let state = self.state.lock();
+            state
+                .state
+                .instances
+                .values()
+                .map(|instance| HostInfo {
                     instance_id: instance.id.clone(),
                     ip: instance.ip.to_string(),
                     app_id: instance.app_id.clone(),
                     base_domain: base_domain.clone(),
-                    latest_handshake,
+                    latest_handshake: 0,
                     num_connections: instance.num_connections(),
                     ready: Some(instance.is_ready()),
                     health: instance.health().as_str().to_string(),
-                }
-            })
-            .collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>()
+        };
+        for host in &mut hosts {
+            host.latest_handshake = self
+                .state
+                .kv_store()
+                .get_instance_latest_handshake(&host.instance_id)
+                .unwrap_or(0);
+        }
+        let config = &self.state.config;
         Ok(StatusResponse {
-            id: state.config.sync.node_id,
-            url: state.config.sync.my_url.clone(),
-            uuid: state.config.uuid(),
-            bootnode_url: state.config.sync.bootnode.clone(),
-            nodes: state.get_all_nodes(),
+            id: config.sync.node_id,
+            url: config.sync.my_url.clone(),
+            uuid: config.uuid(),
+            bootnode_url: config.sync.bootnode.clone(),
+            nodes: self.state.get_all_nodes(),
             hosts,
             num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
             // Reads the post-probe config, so this is what the data path is
             // running rather than what the file asked for.
-            accel: Some(accel_status(&state.config.proxy)),
-            health_gating: state.config.proxy.health_check.enabled,
+            accel: Some(accel_status(&config.proxy)),
+            health_gating: config.proxy.health_check.enabled,
         })
     }
 }
