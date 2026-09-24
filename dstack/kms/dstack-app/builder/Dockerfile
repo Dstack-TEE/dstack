@@ -26,6 +26,27 @@ RUN rustup target add x86_64-unknown-linux-musl
 RUN cd repo/dstack && cargo build --release -p dstack-kms --target x86_64-unknown-linux-musl
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
+FROM rust:1.94.1-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506ba959f9685b308a55 AS helios-builder
+# Vendored OpenSSL embeds its build date unless SOURCE_DATE_EPOCH is set.
+ARG SOURCE_DATE_EPOCH
+WORKDIR /build/helios
+RUN git init && git remote add origin https://github.com/Dstack-TEE/helios.git \
+    && git fetch --depth 1 origin 645af74b627e167db22d2b52f2ccc4512e4e80d9 \
+    && git checkout --detach FETCH_HEAD
+RUN cargo test --locked --release -p helios-opstack --lib \
+    && cargo build --locked --release -p helios-cli -p helios-opstack --bins \
+    && install -D target/release/helios /out/helios \
+    && install -D target/release/opstack-server /out/opstack-server \
+    && rm -rf target
+
+FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS auth-builder
+WORKDIR /app
+COPY --from=kms-builder /build/repo/dstack/kms/auth-eth/package*.json ./
+RUN npm ci --ignore-scripts
+COPY --from=kms-builder /build/repo/dstack/kms/auth-eth/tsconfig.json ./
+COPY --from=kms-builder /build/repo/dstack/kms/auth-eth/src/ src/
+RUN npm run build && npm prune --omit=dev --ignore-scripts
+
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
 COPY --from=build-shared /pin-packages.sh /build/
 COPY ./shared/pinned-packages.txt /build/
@@ -41,6 +62,11 @@ RUN ./pin-packages.sh ./pinned-packages.txt && \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 WORKDIR /
 COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
+COPY --from=helios-builder /out/helios /usr/local/bin/helios
+COPY --from=helios-builder /out/opstack-server /usr/local/bin/opstack-server
+COPY --from=auth-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=auth-builder /app/dist/ /opt/auth-eth/dist/
+COPY --from=auth-builder /app/node_modules/ /opt/auth-eth/node_modules/
 COPY --from=kms-builder /build/.GIT_REV /etc/
 # The OCI metadata is generated once by build-lib.sh and injected here, as
 # the config labels and as the manifest annotations, so the three views of

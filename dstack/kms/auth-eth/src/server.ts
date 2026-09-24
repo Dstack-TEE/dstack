@@ -57,7 +57,22 @@ export async function build(): Promise<FastifyInstance> {
   const rpcUrl = process.env.ETH_RPC_URL || 'http://localhost:8545';
   const kmsContractAddr = process.env.KMS_CONTRACT_ADDR || '0x0000000000000000000000000000000000000000';
   const provider = new ethers.JsonRpcProvider(rpcUrl);
-  server.decorate('ethereum', new EthereumBackend(provider, kmsContractAddr));
+  const integerSetting = (name: string): number => {
+    const value = process.env[name] ?? '';
+    if (!/^(0|[1-9][0-9]*)$/.test(value) || !Number.isSafeInteger(Number(value))) {
+      throw new Error(`invalid ${name}`);
+    }
+    return Number(value);
+  };
+  const readPolicy = process.env.ETH_CHAIN_ID === undefined ? undefined : {
+    chainId: integerSetting('ETH_CHAIN_ID'),
+    blockLag: integerSetting('ETH_BLOCK_LAG'),
+    maxAgeSeconds: integerSetting('ETH_MAX_BLOCK_AGE_SECONDS'),
+  };
+  if (!readPolicy) {
+    server.log.warn('ETH_CHAIN_ID is unset: authorization reads skip chain ID and freshness checks');
+  }
+  server.decorate('ethereum', new EthereumBackend(provider, kmsContractAddr, readPolicy));
 
   const publicRpcEndpoint = (value: string): string => {
     try {

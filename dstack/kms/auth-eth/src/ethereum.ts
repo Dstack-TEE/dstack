@@ -13,17 +13,45 @@ const DSTACK_KMS_ABI = [
   "function appImplementation() view returns (address)"
 ];
 
+export interface VerifiedReadPolicy {
+  chainId: number;
+  blockLag: number;
+  maxAgeSeconds: number;
+}
+
 export class EthereumBackend {
   private provider: ethers.JsonRpcProvider;
   private kmsContract: ethers.Contract;
 
-  constructor(provider: ethers.JsonRpcProvider, kmsContractAddr: string) {
+  constructor(provider: ethers.JsonRpcProvider, kmsContractAddr: string, private readPolicy?: VerifiedReadPolicy) {
     this.provider = provider;
     this.kmsContract = new ethers.Contract(
       ethers.getAddress(kmsContractAddr),
       DSTACK_KMS_ABI,
       provider
     );
+  }
+
+  private async authorizationBlock(): Promise<{ blockTag: ethers.BlockTag; timestamp?: number }> {
+    if (!this.readPolicy) return { blockTag: await this.provider.getBlockNumber() };
+    const { chainId, blockLag } = this.readPolicy;
+    if (Number((await this.provider.getNetwork()).chainId) !== chainId) {
+      throw new Error('authorization chain ID mismatch');
+    }
+    const head = await this.provider.getBlockNumber();
+    if (head < blockLag) throw new Error('authorization head unavailable');
+    const block = await this.provider.getBlock(head - blockLag);
+    if (!block) throw new Error('authorization block is not fresh');
+    this.checkFreshness(block.timestamp);
+    return { blockTag: block.number, timestamp: block.timestamp };
+  }
+
+  private checkFreshness(timestamp?: number): void {
+    if (!this.readPolicy || timestamp === undefined) return;
+    const now = Math.floor(Date.now() / 1000);
+    if (now - timestamp > this.readPolicy.maxAgeSeconds || timestamp > now + 5) {
+      throw new Error('authorization block is not fresh');
+    }
   }
 
   private decodeHex(hex: string, sz: number = 32): string {
@@ -50,8 +78,7 @@ export class EthereumBackend {
       tcbStatus: bootInfo.tcbStatus,
       advisoryIds: bootInfo.advisoryIds
     };
-    // Read the whole decision from one block.
-    const blockTag = await this.provider.getBlockNumber();
+    const { blockTag, timestamp } = await this.authorizationBlock();
     let response;
     if (isKms) {
       response = await this.kmsContract.isKmsAllowed(bootInfoStruct, { blockTag });
@@ -60,6 +87,7 @@ export class EthereumBackend {
     }
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
+    this.checkFreshness(timestamp);
     return {
       isAllowed,
       reason,
@@ -68,7 +96,7 @@ export class EthereumBackend {
   }
 
   async getGatewayAppId(): Promise<string> {
-    return await this.kmsContract.gatewayAppId();
+    return await this.kmsContract.gatewayAppId({ blockTag: (await this.authorizationBlock()).blockTag });
   }
 
   async getChainId(): Promise<number> {
@@ -77,6 +105,6 @@ export class EthereumBackend {
   }
 
   async getAppImplementation(): Promise<string> {
-    return await this.kmsContract.appImplementation();
+    return await this.kmsContract.appImplementation({ blockTag: (await this.authorizationBlock()).blockTag });
   }
 }

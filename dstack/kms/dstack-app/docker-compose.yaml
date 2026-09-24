@@ -2,84 +2,113 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+x-kms-image: &kms-image ${KMS_IMAGE:?Set a published KMS image digest}
+# Only this file is mounted: the rest of host-shared holds the app keys.
+x-user-config: &user-config /dstack/.host-shared/.user-config:/etc/user-config:ro
+
 services:
-  # Helios is a Ethereum light client
-  helios:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
-        WORKDIR /app
-        RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/* build-base openssl-dev protobuf protobuf-dev perl
-        RUN git clone https://github.com/a16z/helios && \
-            cd helios && \
-            git checkout 5c61864a167c16141a9a12b976c0e9398b332f07
-        WORKDIR /app/helios
-        RUN cargo build --release
-    command: [
-      "./target/release/helios",
-      "ethereum",
-      "--network", "mainnet",
-      "--checkpoint", "0xbee4f32f91e62060d2aa41c652f6c69431829cfb09b02ea3cad92f65bd15dcce",
-      "--rpc-bind-ip", "0.0.0.0",
-      "--rpc-port", "8545",
-      "--consensus-rpc", "https://ethereum.operationsolarstorm.org",
-      "--execution-rpc", "https://ethereum-rpc.publicnode.com"
-    ]
-
-  # Auth API is a webhook server that authenticates KMS instances and Apps launches
-  auth-api:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
-        WORKDIR /app
-
-        RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
-            cd dstack && \
-            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
-        WORKDIR /app/dstack/kms/auth-eth
-        RUN npm ci && npm run build
-        CMD node dist/main.js
+  # Data sources are untrusted, so the host may override them through the
+  # unmeasured user config without changing the compose hash.
+  relay:
+    image: *kms-image
+    restart: unless-stopped
+    volumes: [*user-config]
+    command:
+      - sh
+      - -c
+      - |
+        cfg() { v=$$(sed -n "s/^$$1=//p" /etc/user-config 2>/dev/null | tail -n 1); echo "$${v:-$$2}"; }
+        export OP_NODE_P2P_STATIC="$$(cfg OP_NODE_P2P_STATIC /ip4/8.229.99.126/tcp/9222/p2p/16Uiu2HAmA7EmxHixJhunY6dZKi7nriyUfBCWP3aBPvGUsQBbigm1)"
+        exec opstack-server --network=phala --execution-rpc=https://rpc.phala.network \
+          --server-address=0.0.0.0:3000 --gossip-address=0.0.0.0:9876
     environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - ETH_RPC_URL=http://helios:8545
-      - KMS_CONTRACT_ADDR=0x515cd0dd984Adc75EE8625131FcC3d2D91f7F140
-    depends_on:
-      - helios
+      OP_NODE_P2P_STATIC_IDLE_TIMEOUT: "30"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
-  # KMS handles the TEE Remote Attestation
+  helios:
+    image: *kms-image
+    restart: unless-stopped
+    volumes: [*user-config]
+    command:
+      - sh
+      - -c
+      - |
+        cfg() { v=$$(sed -n "s/^$$1=//p" /etc/user-config 2>/dev/null | tail -n 1); echo "$${v:-$$2}"; }
+        exec helios opstack --network=phala \
+          --execution-rpc="$$(cfg PHALA_RPC_URL https://rpc.phala.network)" \
+          --consensus-rpc=http://relay:3000 \
+          --ethereum-consensus-rpc="$$(cfg ETHEREUM_CONSENSUS_RPC https://ethereum.operationsolarstorm.org)" \
+          --ethereum-execution-rpc="$$(cfg ETHEREUM_EXECUTION_RPC https://eth.drpc.org)" \
+          --ethereum-checkpoint=0x3a19ad46aa7391ebfb8fa2690cb8ef56b70d69a2db8e32f4adb63ca7a8697598 \
+          --max-head-age=${ETH_MAX_BLOCK_AGE_SECONDS:?Set the maximum accepted block age} \
+          --rpc-bind-ip=0.0.0.0 --rpc-port=8545
+    depends_on: [relay]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  auth-api:
+    image: *kms-image
+    command: [node, /opt/auth-eth/dist/main.js]
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8000"
+      ETH_RPC_URL: http://helios:8545
+      ETH_CHAIN_ID: "2035"
+      ETH_BLOCK_LAG: "2"
+      ETH_MAX_BLOCK_AGE_SECONDS: ${ETH_MAX_BLOCK_AGE_SECONDS:?Set the maximum accepted block age}
+      KMS_CONTRACT_ADDR: ${KMS_CONTRACT_ADDR:?Set the Phala KMS contract address}
+    depends_on: [helios]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
   kms:
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4
-        WORKDIR /app
-        RUN apt-get update && apt-get install -y \
-            git \
-            build-essential \
-            libssl-dev \
-            protobuf-compiler \
-            libprotobuf-dev \
-            clang \
-            libclang-dev \
-            --no-install-recommends \
-            && rm -rf /var/lib/apt/lists/*
-        RUN git clone https://github.com/Dstack-TEE/dstack.git && \
-            cd dstack && \
-            git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
-        WORKDIR /app/dstack
-        RUN cargo build --release -p dstack-kms
-        CMD ["./target/release/dstack-kms"]
+    image: *kms-image
     volumes:
-      - kms-volume:/etc/kms
+      - kms-volume:/kms
       - /var/run/dstack.sock:/var/run/dstack.sock
     ports:
       - 8000:8000
     depends_on:
       - auth-api
+    restart: unless-stopped
+    configs:
+      - source: kms_config
+        target: /kms/kms.toml
+    command: sh -c 'mkdir -p /kms/certs /kms/images && exec dstack-kms -c /kms/kms.toml'
 
 volumes:
   kms-volume:
+
+configs:
+  kms_config:
+    content: |
+      [rpc]
+      address = "0.0.0.0"
+      port = 8000
+
+      [rpc.tls]
+      key = "/kms/certs/rpc.key"
+      certs = "/kms/certs/rpc.crt"
+
+      [core]
+      cert_dir = "/kms/certs"
+
+      [core.image]
+      verify = true
+      cache_dir = "/kms/images"
+      download_url = "${IMAGE_DOWNLOAD_URL}"
+      download_timeout = "2m"
+
+      [core.auth_api]
+      type = "webhook"
+
+      [core.auth_api.webhook]
+      url = "http://auth-api:8000"
+
+      [core.onboard]
+      enabled = true
+      auto_bootstrap_domain = ""
+      address = "0.0.0.0"
+      port = 8000

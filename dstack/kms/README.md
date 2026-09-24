@@ -103,7 +103,12 @@ certificate. `core.onboard.public_key_handover = true` (the default) keeps
 
 ### Deployment
 The first two components are deployed as an dstack app on dstack in Local-Key-Provider mode.
-The docker compose file would look like [this](dstack-app/docker-compose.yaml).
+The default [Docker Compose file](dstack-app/docker-compose.yaml) uses the
+[Phala L2 light client](light-client/README.md). Set `KMS_CONTRACT_ADDR` to a
+Phala contract compatible with the current auth API, and use a published KMS
+image digest; deployment does not build images. Reads use proof-verified state
+signed by the L1-registered Phala sequencer, not L1-settled state. See the
+light-client guide for deployment requirements.
 
 The solidity contracts are deployed on an ethereum compatible chain.
 
