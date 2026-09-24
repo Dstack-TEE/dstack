@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError, Weak},
     time::Duration,
 };
 
@@ -26,7 +27,7 @@ use ra_tls::attestation::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use tokio::io::AsyncWriteExt;
+use tokio::{io::AsyncWriteExt, sync::Mutex as AsyncMutex};
 use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
 use tracing::{debug, info, warn};
 
@@ -95,6 +96,10 @@ fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInf
 // cached.
 const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
+/// Upper bound on both a downloaded image archive and its extracted contents.
+/// Measurement images carry no rootfs; released ones are under 25 MB extracted.
+const MAX_IMAGE_SIZE: u64 = 100 << 20;
+
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
     version: u32,
@@ -117,6 +122,7 @@ pub struct CvmVerifier {
     pub download_url: String,
     pub download_timeout: Duration,
     pub attestation_verifier: Arc<AttestationVerifier>,
+    download_locks: Mutex<HashMap<String, Weak<AsyncMutex<()>>>>,
 }
 
 impl CvmVerifier {
@@ -131,7 +137,24 @@ impl CvmVerifier {
             download_url,
             download_timeout,
             attestation_verifier,
+            download_locks: Mutex::default(),
         }
+    }
+
+    /// One lock per image, held from the cache check until the image is
+    /// installed, so concurrent requests for an image download it once.
+    fn download_lock(&self, hex_os_image_hash: &str) -> Arc<AsyncMutex<()>> {
+        let mut locks = self
+            .download_locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(hex_os_image_hash).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::default();
+        locks.insert(hex_os_image_hash.to_owned(), Arc::downgrade(&lock));
+        lock
     }
 
     fn measurement_cache_dir(&self) -> PathBuf {
@@ -294,6 +317,10 @@ impl CvmVerifier {
         Ok(measurements)
     }
 
+    fn images_dir(&self) -> PathBuf {
+        Path::new(&self.image_cache_dir).join("images")
+    }
+
     fn image_content_digest(image_dir: &Path) -> Result<Option<Vec<u8>>> {
         let sha256sum_path = image_dir.join("sha256sum.txt");
         if !sha256sum_path.exists() {
@@ -352,6 +379,47 @@ impl CvmVerifier {
         Ok(entries)
     }
 
+    /// Bind an extracted image to `os_image_hash` and drop everything the
+    /// binding does not cover.
+    fn verify_extracted_image(extracted_dir: &Path, hex_os_image_hash: &str) -> Result<()> {
+        // All image modes are addressed by sha256(sha256sum.txt); extra
+        // measurement CBOR files are ordinary entries and do not define
+        // alternate image hashes. Check it before anything else in the archive
+        // is parsed or hashed.
+        let files_doc = fs_err::read_to_string(extracted_dir.join("sha256sum.txt"))
+            .context("failed to read sha256sum.txt")?;
+        if hex::encode(Sha256::digest(&files_doc)) != hex_os_image_hash {
+            bail!("os_image_hash does not match sha256(sha256sum.txt)");
+        }
+        let manifest = Self::verify_image_manifest(extracted_dir, &files_doc)?;
+        Self::prune_unlisted_image_files(extracted_dir, &manifest)?;
+        Self::check_measured_files_are_listed(extracted_dir, &manifest)
+    }
+
+    /// `metadata.json` picks the firmware, kernel and initrd that get measured.
+    /// The manifest binds their bytes only if they are among its entries; any
+    /// other path -- absolute, `..`, or just unlisted -- would be measured from
+    /// bytes `os_image_hash` never committed to.
+    fn check_measured_files_are_listed(
+        extracted_dir: &Path,
+        manifest: &[sha256sum::Entry],
+    ) -> Result<()> {
+        let listed = |name: &str| manifest.iter().any(|entry| entry.name == name);
+        if !listed("metadata.json") {
+            bail!("sha256sum.txt does not list metadata.json");
+        }
+        let image_info = fs_err::read_to_string(extracted_dir.join("metadata.json"))
+            .context("failed to read image metadata")?;
+        let image_info: dstack_types::ImageInfo =
+            serde_json::from_str(&image_info).context("failed to parse image metadata")?;
+        for name in [&image_info.bios, &image_info.kernel, &image_info.initrd] {
+            if !listed(name) {
+                bail!("metadata.json names {name}, which sha256sum.txt does not list");
+            }
+        }
+        Ok(())
+    }
+
     fn extract_image_archive(tarball_path: &Path, extracted_dir: &Path) -> Result<()> {
         let file = fs_err::File::open(tarball_path).context("Failed to open image archive")?;
         // `MultiGzDecoder`, not `GzDecoder`: the latter stops at the first gzip
@@ -359,6 +427,7 @@ impl CvmVerifier {
         // extract partially without any error.
         let decoder = flate2::read::MultiGzDecoder::new(file);
         let mut archive = tar::Archive::new(decoder);
+        let mut extracted = 0u64;
         for entry in archive.entries().context("Failed to read image archive")? {
             let mut entry = entry.context("Failed to read image archive entry")?;
             let path = entry
@@ -373,6 +442,10 @@ impl CvmVerifier {
                     "image archive contains unsupported entry {}",
                     path.display()
                 );
+            }
+            extracted += entry.size();
+            if extracted > MAX_IMAGE_SIZE {
+                bail!("image archive extracts to more than {MAX_IMAGE_SIZE} bytes");
             }
             if !entry
                 .unpack_in(extracted_dir)
@@ -487,9 +560,7 @@ impl CvmVerifier {
         let hex_os_image_hash = hex::encode(&vm_config.os_image_hash);
 
         // Get image directory
-        let image_dir = Path::new(&self.image_cache_dir)
-            .join("images")
-            .join(&hex_os_image_hash);
+        let image_dir = self.images_dir().join(&hex_os_image_hash);
 
         let metadata_path = image_dir.join("metadata.json");
         if !metadata_path.exists() {
@@ -970,12 +1041,16 @@ impl CvmVerifier {
     }
 
     pub async fn download_image(&self, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
+        let guard = self.download_lock(hex_os_image_hash).lock_owned().await;
+        if dst_dir.join("metadata.json").exists() {
+            return Ok(());
+        }
         let url = self
             .download_url
             .replace("{OS_IMAGE_HASH}", hex_os_image_hash);
 
         // Create a temporary directory for extraction within the cache directory
-        let cache_dir = Path::new(&self.image_cache_dir).join("images").join("tmp");
+        let cache_dir = self.images_dir().join("tmp");
         fs_err::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
         let auto_delete_temp_dir = tempfile::Builder::new()
             .prefix("tmp-download-")
@@ -1004,52 +1079,49 @@ impl CvmVerifier {
             .await
             .context("Failed to create tarball file")?;
         let mut response = response;
+        let mut downloaded = 0u64;
         while let Some(chunk) = response.chunk().await? {
+            downloaded += chunk.len() as u64;
+            if downloaded > MAX_IMAGE_SIZE {
+                bail!("image archive exceeds {MAX_IMAGE_SIZE} bytes");
+            }
             file.write_all(&chunk)
                 .await
                 .context("Failed to write chunk to file")?;
         }
 
-        let extracted_dir = tmp_dir.join("extracted");
-        fs_err::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
-
         file.flush()
             .await
             .context("Failed to flush image archive")?;
         drop(file);
-        Self::extract_image_archive(&tarball_path, &extracted_dir)?;
 
-        let sha256sum_path = extracted_dir.join("sha256sum.txt");
-        let files_doc =
-            fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
-        let manifest = Self::verify_image_manifest(&extracted_dir, &files_doc)?;
+        let hex_os_image_hash = hex_os_image_hash.to_owned();
+        let dst_dir = dst_dir.to_owned();
+        tokio::task::spawn_blocking(move || {
+            // A blocking task outlives its caller: if the caller is cancelled
+            // (e.g. by `download_timeout`), this still runs to the end. Keep
+            // the lock until the install finishes, or the next download for
+            // this image would race it on `dst_dir`.
+            let _guard = guard;
+            Self::install_image(auto_delete_temp_dir.path(), &hex_os_image_hash, &dst_dir)
+        })
+        .await
+        .context("image install task failed")?
+    }
 
-        // Remove the files that are not listed in sha256sum.txt
-        Self::prune_unlisted_image_files(&extracted_dir, &manifest)?;
-
-        // All image modes are addressed by sha256(sha256sum.txt). Extra
-        // measurement CBOR files are ordinary sha256sum.txt entries and do not
-        // define alternate image hashes.
-        let legacy_os_image_hash = Sha256::new_with_prefix(files_doc.as_bytes()).finalize();
-        if hex::encode(legacy_os_image_hash) != hex_os_image_hash {
-            bail!("os_image_hash does not match sha256(sha256sum.txt)");
-        }
-
-        // Move the extracted files to the destination directory
-        let metadata_path = extracted_dir.join("metadata.json");
-        if !metadata_path.exists() {
-            bail!("metadata.json not found in the extracted archive");
-        }
+    fn install_image(tmp_dir: &Path, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
+        let extracted_dir = tmp_dir.join("extracted");
+        fs_err::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
+        Self::extract_image_archive(&tmp_dir.join("image.tar.gz"), &extracted_dir)?;
+        Self::verify_extracted_image(&extracted_dir, hex_os_image_hash)?;
 
         if dst_dir.exists() {
             fs_err::remove_dir_all(dst_dir).context("Failed to remove destination directory")?;
         }
         let dst_dir_parent = dst_dir.parent().context("Failed to get parent directory")?;
         fs_err::create_dir_all(dst_dir_parent).context("Failed to create parent directory")?;
-        // Move the extracted files to the destination directory
         fs_err::rename(extracted_dir, dst_dir)
-            .context("Failed to move extracted files to destination directory")?;
-        Ok(())
+            .context("Failed to move extracted files to destination directory")
     }
 }
 
@@ -1717,6 +1789,40 @@ mod tests {
         assert_ne!(key(&resized), key(&base));
     }
 
+    /// `os_image_hash` is checked before the manifest is parsed, and the files
+    /// `metadata.json` measures must be manifest entries.
+    #[test]
+    fn extracted_image_binds_the_files_metadata_measures() {
+        let verify = |kernel: &str| {
+            let metadata = format!(
+                r#"{{"cmdline":"","kernel":"{kernel}","initrd":"initrd","bios":"ovmf.fd"}}"#
+            );
+            let files: &[(&str, &[u8])] = &[
+                ("metadata.json", metadata.as_bytes()),
+                ("bzImage", b"kernel"),
+                ("initrd", b"initrd"),
+                ("ovmf.fd", b"firmware"),
+            ];
+            let files_doc: String = files
+                .iter()
+                .map(|(name, payload)| {
+                    format!("{}  {name}\n", hex::encode(Sha256::digest(payload)))
+                })
+                .collect();
+            let dir = image_dir_with_manifest(&files_doc, files);
+            let hash = hex::encode(Sha256::digest(&files_doc));
+            CvmVerifier::verify_extracted_image(dir.path(), &hash)
+        };
+        verify("bzImage").unwrap();
+        for kernel in ["/boot/bzImage", "../bzImage", "unlisted"] {
+            assert!(verify(kernel).is_err(), "accepted kernel {kernel}");
+        }
+
+        let dir = image_dir_with_manifest("not a manifest", &[]);
+        let err = CvmVerifier::verify_extracted_image(dir.path(), &"00".repeat(32)).unwrap_err();
+        assert!(err.to_string().contains("os_image_hash"), "{err:#}");
+    }
+
     #[test]
     fn image_cache_pruning_keeps_checksum_identity() {
         let files_doc = format!("{}  metadata.json\n", hex::encode(Sha256::digest(b"{}")));
@@ -1780,6 +1886,80 @@ mod tests {
                 "{path}"
             );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_download_an_image_once() {
+        let metadata = br#"{"cmdline":"","kernel":"bzImage","initrd":"initrd","bios":"ovmf.fd"}"#;
+        let files: &[(&str, &[u8])] = &[
+            ("metadata.json", metadata),
+            ("bzImage", b"kernel"),
+            ("initrd", b"initrd"),
+            ("ovmf.fd", b"firmware"),
+        ];
+        let files_doc: String = files
+            .iter()
+            .map(|(name, payload)| format!("{}  {name}\n", hex::encode(Sha256::digest(payload))))
+            .collect();
+        let hash = hex::encode(Sha256::digest(&files_doc));
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        for (name, payload) in files
+            .iter()
+            .chain([&("sha256sum.txt", files_doc.as_bytes())])
+        {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            archive.append_data(&mut header, name, *payload).unwrap();
+        }
+        let tarball = archive.into_inner().unwrap().finish().unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/{{OS_IMAGE_HASH}}",
+            listener.local_addr().unwrap()
+        );
+        let served = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        tokio::spawn({
+            let served = served.clone();
+            async move {
+                use tokio::io::AsyncReadExt;
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    served.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = stream.read(&mut [0; 4096]).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        tarball.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes()).await;
+                    let _ = stream.write_all(&tarball).await;
+                }
+            }
+        });
+
+        let cache = tempfile::tempdir().unwrap();
+        let verifier = Arc::new(CvmVerifier::new(
+            cache.path().to_str().unwrap().into(),
+            url,
+            Duration::from_secs(10),
+            test_attestation_verifier(),
+        ));
+        let dst_dir = verifier.images_dir().join(&hash);
+        let downloads: Vec<_> = (0..8)
+            .map(|_| {
+                let (verifier, hash, dst_dir) = (verifier.clone(), hash.clone(), dst_dir.clone());
+                tokio::spawn(async move { verifier.download_image(&hash, &dst_dir).await })
+            })
+            .collect();
+        for download in downloads {
+            download.await.unwrap().unwrap();
+        }
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(fs_err::read(dst_dir.join("bzImage")).unwrap(), b"kernel");
     }
 
     #[test]
