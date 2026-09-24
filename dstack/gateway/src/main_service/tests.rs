@@ -2234,6 +2234,82 @@ async fn learning_of_a_remote_deletion_withdraws_this_nodes_observations() {
     );
 }
 
+/// A sync merge holding the KV store must not stall routing while the reload
+/// withdraws this node's observations of a remotely deleted instance.
+#[tokio::test]
+async fn a_remote_deletion_withdraws_observations_off_the_routing_lock() {
+    let state = create_test_state().await;
+    sync_from_peer(
+        &state,
+        "peer-instance",
+        "10.0.0.40",
+        &test_pubkey("peer-key"),
+    );
+    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
+    state
+        .kv_store
+        .persistent()
+        .write()
+        .delete(crate::kv::keys::inst("peer-instance"))
+        .unwrap();
+
+    // Stand in for a sync merge holding the store.
+    let store_held = state.kv_store().ephemeral().write();
+    let proxy = state.proxy.clone();
+    let reload = std::thread::spawn(move || {
+        reload_instances_from_kv_store(&proxy, &proxy.kv_store.clone()).unwrap()
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let routing = state
+        .proxy
+        .state
+        .try_lock()
+        .expect("the routing lock is held while the reload waits on the KV store");
+    assert!(
+        !routing.state.instances.contains_key("peer-instance"),
+        "test is vacuous: the reload never got past the routing table"
+    );
+    drop(routing);
+    drop(store_held);
+    reload.join().unwrap();
+}
+
+/// A sync merge holding the KV store must not stall routing while the recycle
+/// reads each instance's global last-seen.
+#[tokio::test]
+async fn recycling_reads_last_seen_off_the_routing_lock() {
+    let state = create_test_state_with(|config| config.recycle.timeout = Duration::ZERO).await;
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-stale",
+            "app-stale",
+            &test_pubkey("pubkey-stale"),
+            "hash-stale",
+            Default::default(),
+        )
+        .unwrap();
+
+    // Stand in for a sync merge holding the store.
+    let store_held = state.kv_store().ephemeral().write();
+    let proxy = state.proxy.clone();
+    let recycle = std::thread::spawn(move || proxy.recycle());
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert!(
+        !recycle.is_finished(),
+        "test is vacuous: the recycle never reached a KV read"
+    );
+    assert!(
+        state.proxy.state.try_lock().is_ok(),
+        "the routing lock is held while the recycle waits on the KV store"
+    );
+    drop(store_held);
+    recycle.join().unwrap().unwrap();
+    assert!(!state.lock().state.instances.contains_key("inst-stale"));
+}
+
 #[tokio::test]
 async fn proxy_state_adopts_the_wavekv_winner_regardless_of_value_reg_time() {
     let state = create_test_state().await;

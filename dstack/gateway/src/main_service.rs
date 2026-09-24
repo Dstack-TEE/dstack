@@ -345,6 +345,68 @@ impl ProxyInner {
         Ok(())
     }
 
+    /// Drop instances the cluster has stopped seeing.
+    ///
+    /// Reading each instance's global last-seen waits on the KV store's lock,
+    /// which a sync merge holds, so the reads run off the routing lock. The
+    /// removal itself stays under it, where a re-registration cannot interleave
+    /// with the KV delete.
+    fn recycle(&self) -> Result<()> {
+        let stale_timeout = self.config.recycle.timeout;
+        let candidates: Vec<(String, SystemTime)> = self
+            .lock()
+            .state
+            .instances
+            .iter()
+            .filter(|(_, info)| info.reg_time.elapsed().unwrap_or_default() > stale_timeout)
+            .map(|(id, info)| (id.clone(), info.reg_time))
+            .collect();
+
+        let now = SystemTime::now();
+        let stale: Vec<(String, SystemTime)> = candidates
+            .into_iter()
+            .filter(|(id, reg_time)| {
+                // Global last_seen from KvStore (max across all nodes)
+                let last_seen = self
+                    .kv_store
+                    .get_instance_latest_handshake(id)
+                    .map(decode_ts)
+                    .unwrap_or(*reg_time);
+                let elapsed = now.duration_since(last_seen).unwrap_or_default();
+                if elapsed > stale_timeout {
+                    debug!("stale instance: {id} last_seen={last_seen:?} ({elapsed:?} ago)");
+                    true
+                } else {
+                    false
+                }
+            })
+            .collect();
+        if stale.is_empty() {
+            return Ok(());
+        }
+
+        let mut state = self.lock();
+        let mut num_recycled = 0;
+        for (id, reg_time) in stale {
+            // Registered again with a new key since the snapshot: not stale.
+            if state
+                .state
+                .instances
+                .get(&id)
+                .is_none_or(|info| info.reg_time != reg_time)
+            {
+                continue;
+            }
+            state.remove_instance(&id)?;
+            num_recycled += 1;
+        }
+        if num_recycled > 0 {
+            info!("recycled {num_recycled} stale instances");
+            state.reconfigure()?;
+        }
+        Ok(())
+    }
+
     pub async fn new(
         options: ProxyOptions,
         port_policy_tx: UnboundedSender<String>,
@@ -1010,7 +1072,7 @@ fn start_recycle_thread(proxy: Proxy) {
         if let Err(err) = proxy.refresh_state() {
             warn!("failed to refresh state: {err:?}");
         }
-        if let Err(err) = proxy.lock().recycle() {
+        if let Err(err) = proxy.recycle() {
             error!("failed to run recycle: {err:?}");
         };
     });
@@ -1572,14 +1634,9 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
         })
         .map(|(id, _)| id.clone())
         .collect();
-    for instance_id in removed {
+    for instance_id in &removed {
         info!("WaveKV: instance {instance_id} was deleted remotely, dropping it");
-        state.forget_instance(&instance_id);
-        // The node that deleted it could only withdraw its own `conn/` and
-        // `handshake/` keys. Ours are ours to withdraw.
-        if let Err(err) = store.sync_forget_local_observations(&instance_id) {
-            warn!("failed to withdraw this node's observations of {instance_id}: {err:?}");
-        }
+        state.forget_instance(instance_id);
         wg_changed = true;
     }
 
@@ -1662,10 +1719,22 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
     report_unreadable_overrides(&mut state.reported_bad_overrides, unreadable_overrides);
 
-    if wg_changed {
-        state.reconfigure()?;
+    let reconfigured = if wg_changed {
+        state.reconfigure()
+    } else {
+        Ok(())
+    };
+    drop(state);
+
+    // The node that deleted it could only withdraw its own `conn/` and
+    // `handshake/` keys. Ours are ours to withdraw, off the routing lock since
+    // the writes wait on a sync merge.
+    for instance_id in &removed {
+        if let Err(err) = store.sync_forget_local_observations(instance_id) {
+            warn!("failed to withdraw this node's observations of {instance_id}: {err:?}");
+        }
     }
-    Ok(())
+    reconfigured
 }
 
 /// WireGuard peers keyed by public key, valued by (last handshake, elapsed).
@@ -2565,53 +2634,6 @@ impl ProxyState {
         // Sync deletion to KvStore
         if let Err(err) = self.kv_store.sync_delete_instance(id) {
             error!("Failed to sync instance deletion to KvStore: {err:?}");
-        }
-        Ok(())
-    }
-
-    /// Drop instances the cluster has stopped seeing. The caller runs
-    /// `ProxyInner::refresh_state` first, off this lock.
-    fn recycle(&mut self) -> Result<()> {
-        // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
-
-        // Recycle stale CVM instances based on global last_seen (max across all nodes)
-        let stale_timeout = self.config.recycle.timeout;
-        let now = SystemTime::now();
-
-        let stale_instances: Vec<_> = self
-            .state
-            .instances
-            .iter()
-            .filter(|(id, info)| {
-                // Skip if instance was registered recently
-                if info.reg_time.elapsed().unwrap_or_default() <= stale_timeout {
-                    return false;
-                }
-                // Check global last_seen from KvStore (max across all nodes)
-                let global_ts = self.kv_store.get_instance_latest_handshake(id);
-                let last_seen = global_ts.map(decode_ts).unwrap_or(info.reg_time);
-                let elapsed = now.duration_since(last_seen).unwrap_or_default();
-                if elapsed > stale_timeout {
-                    debug!(
-                        "stale instance: {} last_seen={:?} ({:?} ago)",
-                        id, last_seen, elapsed
-                    );
-                    true
-                } else {
-                    false
-                }
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        let num_recycled = stale_instances.len();
-        for id in stale_instances {
-            self.remove_instance(&id)?;
-        }
-
-        if num_recycled > 0 {
-            info!("recycled {num_recycled} stale instances");
-            self.reconfigure()?;
         }
         Ok(())
     }
