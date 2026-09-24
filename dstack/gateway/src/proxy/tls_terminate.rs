@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use dstack_guest_agent_rpc::v0::AppInfo;
+use dstack_types::AppCompose;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -15,7 +17,7 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::tokio::TokioIo;
 use proxy_protocol::ProxyHeader;
 use rustls::version::{TLS12, TLS13};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -206,7 +208,7 @@ impl Proxy {
                 "/app-info" => {
                     let agent = crate::dstack_agent().context("Failed to get dstack agent")?;
                     let app_info = agent.info().await.context("Failed to get app info")?;
-                    json_response(&app_info)
+                    json_response(&public_app_info(app_info))
                 }
                 "/acme-info" => {
                     let acme_info = self.acme_info(None).context("Failed to get acme info")?;
@@ -618,6 +620,27 @@ impl AsyncWrite for MergedStream {
     }
 }
 
+/// The internal `Info` call returns the TCB info and VM config even when the
+/// app compose sets `public_tcbinfo = false`; the guest agent only withholds
+/// them on its external surface. `/app-info` is public, so withhold them here too.
+fn public_app_info(mut info: AppInfo) -> AppInfo {
+    if !tcb_info_is_public(&info.tcb_info) {
+        info.tcb_info.clear();
+        info.vm_config.clear();
+    }
+    info
+}
+
+fn tcb_info_is_public(tcb_info: &str) -> bool {
+    #[derive(Deserialize)]
+    struct TcbInfo {
+        app_compose: String,
+    }
+    serde_json::from_str::<TcbInfo>(tcb_info)
+        .and_then(|tcb| serde_json::from_str::<AppCompose>(&tcb.app_compose))
+        .is_ok_and(|compose| compose.public_tcbinfo)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,5 +681,38 @@ mod tests {
         assert_eq!(&sink, b"clienthello");
         let (remainder, _socket) = stream.into_socket_parts();
         assert!(remainder.is_empty(), "got {remainder:?}");
+    }
+
+    fn app_info_with_compose(extra: serde_json::Value) -> AppInfo {
+        let mut compose = serde_json::json!({
+            "manifest_version": "3",
+            "name": "gateway",
+            "runner": "docker-compose",
+        });
+        compose
+            .as_object_mut()
+            .expect("object")
+            .extend(extra.as_object().expect("object").clone());
+        AppInfo {
+            tcb_info: serde_json::json!({ "app_compose": compose.to_string() }).to_string(),
+            vm_config: "{\"cpu_count\":2}".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn app_info_withholds_tcb_info_when_the_compose_opts_out() {
+        let info = public_app_info(app_info_with_compose(
+            serde_json::json!({ "public_tcbinfo": false }),
+        ));
+        assert!(info.tcb_info.is_empty());
+        assert!(info.vm_config.is_empty());
+    }
+
+    #[test]
+    fn app_info_keeps_tcb_info_by_default() {
+        let info = public_app_info(app_info_with_compose(serde_json::json!({})));
+        assert!(!info.tcb_info.is_empty());
+        assert!(!info.vm_config.is_empty());
     }
 }
