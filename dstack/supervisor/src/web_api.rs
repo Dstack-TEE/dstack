@@ -74,10 +74,7 @@ fn ping() -> Json<Response<&'static str>> {
 
 #[post("/clear")]
 fn clear(supervisor: &State<Supervisor>) -> Json<Response<()>> {
-    to_json({
-        supervisor.clear();
-        Ok(())
-    })
+    to_json(supervisor.clear())
 }
 
 #[post("/shutdown")]

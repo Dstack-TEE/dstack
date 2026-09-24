@@ -328,7 +328,11 @@ impl Process {
 #[cfg(unix)]
 fn exit_code(status: ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
-    status.into_raw()
+    // Report the exit code, or 128 + signal like a shell, not the raw wait status.
+    status
+        .code()
+        .or_else(|| status.signal().map(|signal| 128 + signal))
+        .unwrap_or(-1)
 }
 
 #[cfg(not(unix))]
@@ -461,5 +465,18 @@ mod log_rotation_tests {
         assert!(!is_rotation(&EventKind::Modify(ModifyKind::Data(
             DataChange::Any
         ))));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod exit_status_tests {
+    use super::exit_code;
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+
+    #[test]
+    fn exit_code_is_not_the_raw_wait_status() {
+        assert_eq!(exit_code(ExitStatus::from_raw(1 << 8)), 1);
+        assert_eq!(exit_code(ExitStatus::from_raw(9)), 128 + 9);
     }
 }
