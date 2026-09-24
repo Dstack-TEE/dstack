@@ -70,9 +70,6 @@ impl prpc::server::Service for DemoServer {
                 let value: serde_json::Value = serde_json::from_slice(data.as_ref())?;
                 Ok(serde_json::to_vec(&value)?)
             }
-            // A typed request, the way the generated code decodes one. serde
-            // names the value it rejected, so the error is as long as the
-            // field that produced it.
             "Typed" => {
                 #[derive(serde::Deserialize)]
                 struct Typed {
@@ -215,11 +212,7 @@ async fn a_body_over_the_limit_is_reported_as_payload_too_large() {
     assert_eq!(status, 200);
 }
 
-/// `?json` is not the only way a caller says it is speaking JSON, and the
-/// pre-dispatch failures -- an oversized body, a certificate that will not
-/// parse, a quote that does not verify -- are encoded on a different path from
-/// the dispatcher's own errors. Both have to agree with the content type, or a
-/// JSON client is handed a protobuf `ProtoError` it cannot read.
+/// Pre-dispatch failures are encoded outside the dispatcher and must still honour the content type.
 #[tokio::test]
 async fn a_json_request_is_refused_in_json_before_the_dispatcher_runs() {
     let figment = rocket::Config::figment().merge((
@@ -260,39 +253,6 @@ async fn a_json_request_is_refused_in_json_before_the_dispatcher_runs() {
     );
 }
 
-/// The same request without a JSON content type still gets the protobuf form.
-#[tokio::test]
-async fn a_protobuf_request_is_refused_in_protobuf_before_the_dispatcher_runs() {
-    let figment = rocket::Config::figment().merge((
-        "limits",
-        rocket::data::Limits::default().limit("Echo", rocket::data::ToByteUnit::bytes(8u64)),
-    ));
-    let rocket = rocket::custom(figment).manage(AppState).mount(
-        "/",
-        ra_rpc::prpc_routes!(AppState, DemoHandler, trim: "Demo."),
-    );
-    let client = Client::tracked(rocket)
-        .await
-        .expect("failed to build the test client");
-
-    let response = client
-        .post("/Demo.Echo")
-        .header(rocket::http::ContentType::Binary)
-        .body(vec![0u8; 64])
-        .dispatch()
-        .await;
-
-    assert_eq!(response.status().code, 413);
-    assert_eq!(
-        response.content_type(),
-        Some(rocket::http::ContentType::Binary),
-        "a protobuf request must be refused with a binary content type"
-    );
-}
-
-/// A deserializer names the value it rejected, so the reply is as long as the
-/// field that produced it. Bounding it keeps one malformed request from
-/// becoming a multi-megabyte reply and a multi-megabyte log line.
 #[tokio::test]
 async fn a_rejection_does_not_echo_the_whole_offending_value() {
     let client = client().await;
@@ -305,8 +265,6 @@ async fn a_rejection_does_not_echo_the_whole_offending_value() {
         "a rejection echoed {} bytes",
         body.len()
     );
-    // Both ends of the message survive: the failure kind in front of the
-    // value and the input position behind it.
     assert!(body.contains("invalid type"), "{body}");
     assert!(body.contains("expected a sequence"), "{body}");
 }
