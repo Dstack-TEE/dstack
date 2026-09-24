@@ -29,7 +29,9 @@ use crate::app::{
     validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
     VmWorkDir,
 };
-use crate::config::{CvmConfig, DiskPrealloc, Networking, NetworkingMode, NicNetworking};
+use crate::config::{
+    CvmConfig, DiskPrealloc, Networking, NetworkingMode, NicNetworking, PortMappingConfig,
+};
 
 fn hex_sha256(data: &str) -> String {
     use sha2::Digest;
@@ -263,6 +265,49 @@ fn validate_unique_port_mappings(mappings: &[PortMapping]) -> Result<()> {
     Ok(())
 }
 
+/// Converts requested port mappings, enforcing `cvm.port_mapping` on every
+/// mapping not already in `held`. The web UI resends a VM's full port list on
+/// every update, so an existing mapping must stay accepted after the node
+/// narrows its policy.
+fn port_map_from_proto(
+    ports: &[rpc::PortMapping],
+    pm_cfg: &PortMappingConfig,
+    held: &[PortMapping],
+) -> Result<Vec<PortMapping>> {
+    let port_map = ports
+        .iter()
+        .map(|p| {
+            let address = if !p.host_address.is_empty() {
+                p.host_address.parse().context("Invalid host address")?
+            } else {
+                pm_cfg.address
+            };
+            let mapping = PortMapping {
+                address,
+                protocol: p.protocol.parse().context("Invalid protocol")?,
+                from: p.host_port.try_into().context("Invalid host port")?,
+                to: p.vm_port.try_into().context("Invalid vm port")?,
+                nic_index: p.nic_index.map(|index| index as usize),
+            };
+            if !held.contains(&mapping) {
+                if !pm_cfg.enabled {
+                    bail!("Port mapping is disabled");
+                }
+                if !pm_cfg.is_allowed(mapping.protocol.as_str(), mapping.from) {
+                    bail!(
+                        "Port mapping is not allowed for {}:{}",
+                        mapping.protocol.as_str(),
+                        mapping.from
+                    );
+                }
+            }
+            Ok(mapping)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_unique_port_mappings(&port_map)?;
+    Ok(port_map)
+}
+
 // Shared function to create manifest from VM configuration
 pub fn create_manifest_from_vm_config(
     request: VmConfiguration,
@@ -270,35 +315,7 @@ pub fn create_manifest_from_vm_config(
 ) -> Result<Manifest> {
     validate_label(&request.name)?;
 
-    let pm_cfg = &cvm_config.port_mapping;
-    if !(request.ports.is_empty() || pm_cfg.enabled) {
-        bail!("Port mapping is disabled");
-    }
-    let port_map = request
-        .ports
-        .iter()
-        .map(|p| {
-            let from = p.host_port.try_into().context("Invalid host port")?;
-            let to = p.vm_port.try_into().context("Invalid vm port")?;
-            if !pm_cfg.is_allowed(&p.protocol, from) {
-                bail!("Port mapping is not allowed for {}:{}", p.protocol, from);
-            }
-            let protocol = p.protocol.parse().context("Invalid protocol")?;
-            let address = if !p.host_address.is_empty() {
-                p.host_address.parse().context("Invalid host address")?
-            } else {
-                pm_cfg.address
-            };
-            Ok(PortMapping {
-                address,
-                protocol,
-                from,
-                to,
-                nic_index: p.nic_index.map(|index| index as usize),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    validate_unique_port_mappings(&port_map)?;
+    let port_map = port_map_from_proto(&request.ports, &cvm_config.port_mapping, &[])?;
     let networks = networks_from_vm_config(&request, cvm_config)?;
     validate_port_mapping_nics(
         &port_map,
@@ -1093,19 +1110,11 @@ impl VmmRpc for RpcHandler {
             manifest.no_tee = no_tee;
         }
         if request.update_ports {
-            let port_map = request
-                .ports
-                .iter()
-                .map(|p| {
-                    Ok(PortMapping {
-                        address: p.host_address.parse().context("Invalid host address")?,
-                        protocol: p.protocol.parse().context("Invalid protocol")?,
-                        from: p.host_port.try_into().context("Invalid host port")?,
-                        to: p.vm_port.try_into().context("Invalid vm port")?,
-                        nic_index: p.nic_index.map(|index| index as usize),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let port_map = port_map_from_proto(
+                &request.ports,
+                &self.app.config.cvm.port_mapping,
+                &manifest.port_map,
+            )?;
             self.validate_port_mapping_conflicts(Some(&request.id), &port_map)?;
             manifest.port_map = port_map;
         }
@@ -2855,6 +2864,35 @@ mod tests {
         for slot in ["0000:10:00.0", "0000:0f:00.0,romfile=/tmp/rom"] {
             assert!(ensure_gpus_offered(&[gpu(slot)], &offered).is_err());
         }
+    }
+
+    #[test]
+    fn port_map_enforces_node_policy_on_new_mappings_only() {
+        let port = |host_port: u32| rpc::PortMapping {
+            protocol: "tcp".into(),
+            host_port,
+            vm_port: host_port,
+            host_address: String::new(),
+            nic_index: None,
+        };
+        let mut pm_cfg = test_cvm_config().port_mapping;
+
+        pm_cfg.enabled = false;
+        let err = port_map_from_proto(&[port(8080)], &pm_cfg, &[]).unwrap_err();
+        assert!(err.to_string().contains("disabled"), "{err}");
+
+        pm_cfg.enabled = true;
+        let held = port_map_from_proto(&[port(8080)], &pm_cfg, &[]).unwrap();
+        assert_eq!(held[0].address, pm_cfg.address);
+        let err = port_map_from_proto(&[port(30000)], &pm_cfg, &[]).unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "{err}");
+
+        pm_cfg.enabled = false;
+        assert_eq!(
+            port_map_from_proto(&[port(8080)], &pm_cfg, &held).unwrap(),
+            held
+        );
+        assert!(port_map_from_proto(&[port(8080), port(8081)], &pm_cfg, &held).is_err());
     }
 
     #[test]

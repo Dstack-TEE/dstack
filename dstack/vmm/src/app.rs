@@ -87,7 +87,7 @@ fn signal_pidfd(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct PortMapping {
     pub address: IpAddr,
     pub protocol: Protocol,
