@@ -314,6 +314,16 @@ pub fn create_manifest_from_vm_config(
     cvm_config: &crate::config::CvmConfig,
 ) -> Result<Manifest> {
     validate_label(&request.name)?;
+    // Same checks as `validate_resize_request`.
+    if request.vcpu == 0 {
+        bail!("vcpu must be greater than zero");
+    }
+    if request.memory == 0 {
+        bail!("memory must be greater than zero");
+    }
+    if request.disk_size == 0 {
+        bail!("disk_size must be greater than zero");
+    }
 
     let port_map = port_map_from_proto(&request.ports, &cvm_config.port_mapping, &[])?;
     let networks = networks_from_vm_config(&request, cvm_config)?;
@@ -1747,6 +1757,13 @@ mod tests {
         );
         assert!(err.contains("compose"), "{err}");
         assert!(!err.contains("storage_discard"), "{err}");
+    }
+
+    #[test]
+    fn deployment_rejects_zero_resources() {
+        let mut request = test_vm_configuration();
+        request.memory = 0;
+        assert!(create_manifest_from_vm_config(request, &test_cvm_config()).is_err());
     }
 
     #[test]

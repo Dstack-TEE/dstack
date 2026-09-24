@@ -209,6 +209,7 @@ impl GpuConfig {
 
 /// Round up a value to the nearest multiple of another value.
 /// If the value is already a multiple, it remains unchanged.
+/// Left unchanged if the next multiple overflows, rather than wrapping to a tiny value.
 pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
     if multiple <= 1 {
         return value;
@@ -219,7 +220,7 @@ pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
         return value;
     }
 
-    value + (multiple - remainder)
+    value.checked_add(multiple - remainder).unwrap_or(value)
 }
 
 /// Get the NUMA node associated with a PCI device.
@@ -3263,6 +3264,11 @@ mod tests {
         // without a detectable one has to.
         config.cvm.qemu_version = Some("9.2.1".to_string());
         Ok(config)
+    }
+
+    #[test]
+    fn round_up_does_not_wrap() {
+        assert_eq!(round_up(u32::MAX, 2), u32::MAX);
     }
 
     #[test]
