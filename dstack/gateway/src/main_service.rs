@@ -874,14 +874,13 @@ fn report_new_rejections(
 /// the record is readable again. Instance-id routing is never gated, so the
 /// instance stays reachable for investigation either way.
 fn instance_info_from_record(
-    store: &KvStore,
+    overrides: Result<(Option<PortPolicy>, Option<bool>)>,
     instance_id: String,
     data: InstanceRecord,
-    legacy: Option<&LegacyOverrides>,
     known_gated: bool,
 ) -> (InstanceInfo, Option<String>) {
     let mut unreadable = None;
-    let (admin_port_policy, ready) = match read_overrides(store, &instance_id, legacy) {
+    let (admin_port_policy, ready) = match overrides {
         Ok(overrides) => overrides,
         Err(err) => {
             unreadable = Some(format!("{err:#}"));
@@ -977,8 +976,12 @@ fn build_state_from_kv_store(
         // Nothing is in memory yet to fall back on, unlike the reload path, so
         // a record predating the declaration reads as not gated: routable and
         // unpolled, and the CVM's next re-registration states it again.
-        let (info, unreadable) =
-            instance_info_from_record(store, instance_id.clone(), data, legacy, false);
+        let (info, unreadable) = instance_info_from_record(
+            read_overrides(store, &instance_id, legacy),
+            instance_id.clone(),
+            data,
+            false,
+        );
         if let Some(reason) = unreadable {
             error!(
                 "cannot read the operator overrides for instance {instance_id}, holding it \
@@ -1542,7 +1545,16 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
         .into_iter()
         .map(str::to_owned)
         .collect();
-    let instances = accepted.instances;
+    // Read the overrides before taking the routing lock: each read waits on the
+    // KV store's lock, which a sync merge holds.
+    let instances: BTreeMap<String, _> = accepted
+        .instances
+        .into_iter()
+        .map(|(id, data)| {
+            let overrides = read_overrides(store, &id, legacy_overrides.get(&id));
+            (id, (data, overrides))
+        })
+        .collect();
     let mut state = proxy.lock();
     report_new_rejections(&mut state.reported_rejections, &accepted.rejected);
     let mut wg_changed = false;
@@ -1572,8 +1584,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     }
 
     let mut unreadable_overrides = BTreeMap::new();
-    for (instance_id, data) in instances {
-        let legacy = legacy_overrides.get(&instance_id);
+    for (instance_id, (data, overrides)) in instances {
         // What this node already believes the app declared, for a record that
         // predates the field. See `instance_info_from_record`.
         let known_gated = state
@@ -1582,7 +1593,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             .get(&instance_id)
             .is_some_and(|existing| existing.health_check());
         let (mut new_info, unreadable) =
-            instance_info_from_record(store, instance_id.clone(), data, legacy, known_gated);
+            instance_info_from_record(overrides, instance_id.clone(), data, known_gated);
         if let Some(reason) = unreadable {
             unreadable_overrides.insert(instance_id.clone(), reason);
         }
