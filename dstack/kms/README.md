@@ -69,16 +69,11 @@ curl -X POST "http://127.0.0.1:8001/prpc/Admin.ClearImageCache?json" \
 This admin authentication is separate from the on-chain / webhook authorization
 below, which decides whether a CVM may boot and receive keys.
 
-KMS-to-KMS onboarding sends `GetKmsKey` with a self-issued RA-TLS client
-certificate. Client certificates are optional at the TLS layer, so other admin
-RPCs continue to use only HTTP authentication. The onboarding request can carry
-an optional bearer token. For compatibility,
-`core.onboard.public_key_handover = true` keeps the same method on the public
-RPC listener; disable it after all onboarding clients use the admin listener.
+KMS-to-KMS onboarding calls `Admin.GetKmsKey` with a self-issued RA-TLS client
+certificate plus the source's admin bearer token; other admin RPCs need no client
+certificate. `core.onboard.public_key_handover = true` (the default) keeps
+`KMS.GetKmsKey` on the public listener for older clients.
 
-The generated client calls `/prpc/GetKmsKey`. The server also accepts the
-explicit aliases `/prpc/Admin.GetKmsKey` on the admin listener and
-`/prpc/KMS.GetKmsKey` on the public listener.
 
 ## KMS Implementation
 

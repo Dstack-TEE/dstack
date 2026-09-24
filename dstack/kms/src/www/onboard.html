@@ -224,11 +224,6 @@ SPDX-License-Identifier: Apache-2.0
                                 <input type="text" id="domain" v-model="bootstrapDomain" required
                                     placeholder="The domain name serving this KMS RPC">
                             </div>
-                            <div class="form-group">
-                                <label for="source_token">Source admin token (optional):</label>
-                                <input type="password" id="source_token" v-model="sourceToken"
-                                    autocomplete="off">
-                            </div>
                             <button type="submit">Bootstrap</button>
                         </form>
                         <button @click="selectedOption = null; error = ''; success = ''"
@@ -242,6 +237,11 @@ SPDX-License-Identifier: Apache-2.0
                                 <label for="source_url">Source KMS URL:</label>
                                 <input type="url" id="source_url" v-model="sourceUrl" required
                                     placeholder="RPC URL of the existing KMS">
+                            </div>
+                            <div class="form-group">
+                                <label for="source_token">Source admin token (optional):</label>
+                                <input type="password" id="source_token" v-model="sourceToken"
+                                    autocomplete="off">
                             </div>
                             <div class="form-group">
                                 <label for="domain">Domain Name:</label>

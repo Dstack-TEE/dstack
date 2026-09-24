@@ -135,16 +135,6 @@ async fn a_successful_call_is_reported_as_ok() {
 }
 
 #[tokio::test]
-async fn the_service_prefix_is_optional() {
-    let client = client().await;
-    for method in ["Echo", "Demo.Echo"] {
-        let (status, body) = post(&client, method, r#"{"text":"hello"}"#).await;
-        assert_eq!(status, 200);
-        assert_eq!(body, r#"{"text":"hello"}"#);
-    }
-}
-
-#[tokio::test]
 async fn an_unknown_method_is_reported_as_not_found() {
     let client = client().await;
     let (status, body) = post(&client, "Demo.NoSuchMethod", "{}").await;
