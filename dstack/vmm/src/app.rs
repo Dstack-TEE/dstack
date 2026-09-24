@@ -1507,6 +1507,10 @@ impl App {
     }
 
     pub(crate) fn vm_event_report(&self, cid: u32, event: &str, body: String) -> Result<()> {
+        if event.len() > self.config.max_event_name_len {
+            error!(cid, "event name too large, skipping");
+            return Ok(());
+        }
         info!(cid, event, "VM event");
         if body.len() > 1024 * 4 {
             error!("Event body too large, skipping");

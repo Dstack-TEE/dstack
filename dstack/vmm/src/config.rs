@@ -658,6 +658,9 @@ pub struct Config {
     /// The buffer size in VMM process for guest events
     pub event_buffer_size: usize,
 
+    /// Maximum length in bytes of a guest-reported event name
+    pub max_event_name_len: usize,
+
     /// CVM configuration
     pub cvm: CvmConfig,
 
