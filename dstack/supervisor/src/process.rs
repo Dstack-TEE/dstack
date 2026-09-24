@@ -328,12 +328,7 @@ impl Process {
 #[cfg(unix)]
 fn exit_code(status: ExitStatus) -> i32 {
     use std::os::unix::process::ExitStatusExt;
-    // The wait status is not the exit code: `exit 1` is 0x0100 in there, which
-    // was reported as `exited(256)`, and a process killed by a signal has no
-    // exit code at all -- SIGKILL was reported as `exited(9)`, which is what a
-    // child that exited 9 by itself should have said. Report the code when
-    // there is one, and 128 + signal otherwise, the way a shell does, so the
-    // two cannot be read as each other.
+    // Report the exit code, or 128 + signal like a shell, not the raw wait status.
     status
         .code()
         .or_else(|| status.signal().map(|signal| 128 + signal))
@@ -455,12 +450,8 @@ mod exit_status_tests {
     use std::process::ExitStatus;
 
     #[test]
-    fn a_child_that_exits_reports_the_code_it_exited_with() {
+    fn exit_code_is_not_the_raw_wait_status() {
         assert_eq!(exit_code(ExitStatus::from_raw(1 << 8)), 1);
-    }
-
-    #[test]
-    fn a_child_killed_by_a_signal_is_not_reported_as_an_exit_code() {
         assert_eq!(exit_code(ExitStatus::from_raw(9)), 128 + 9);
     }
 }

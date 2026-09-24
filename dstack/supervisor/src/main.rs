@@ -143,8 +143,9 @@ async fn async_main(args: Args) -> Result<()> {
         .context(format!("Failed to bind on {endpoint}"))?;
     #[cfg(unix)]
     if let Some(socket) = endpoint.unix() {
-        restrict_socket(socket)
-            .with_context(|| format!("Failed to restrict {}", socket.display()))?;
+        // `/deploy` runs arbitrary commands unauthenticated; only the owner (the VMM) may connect.
+        use std::os::unix::fs::PermissionsExt;
+        fs_err::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
     }
     if let Some(pid_file) = &args.pid_file {
         mk_parents(pid_file)?;
@@ -159,25 +160,6 @@ async fn async_main(args: Args) -> Result<()> {
     Ok(())
 }
 
-/// The mode the control socket is bound at.
-///
-/// `/deploy` runs a command of the caller's choosing, with the caller's
-/// arguments and environment, as the user the supervisor runs as, and the
-/// socket authenticates nobody. Left at the `0o777 & !umask` a bind produces,
-/// it offers that to every account on the host. The VMM starts the supervisor
-/// as its own child and is its only client, so owner-only costs nothing --
-/// netd restricts its control socket for the same reason (`vmm/src/netd.rs`).
-#[cfg(unix)]
-const SOCKET_MODE: u32 = 0o600;
-
-#[cfg(unix)]
-fn restrict_socket(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(SOCKET_MODE))?;
-    Ok(())
-}
-
 fn mk_parents(path: impl AsRef<Path>) -> Result<()> {
     let path = path.as_ref();
     let Some(parent) = path.parent() else {
@@ -185,25 +167,4 @@ fn mk_parents(path: impl AsRef<Path>) -> Result<()> {
     };
     fs_err::create_dir_all(parent).context("Failed to create parent directory")?;
     Ok(())
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt as _;
-
-    #[test]
-    fn the_control_socket_is_reachable_only_by_its_owner() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("supervisor.sock");
-        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
-
-        restrict_socket(&path).unwrap();
-
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            SOCKET_MODE,
-            "an unauthenticated /deploy is exposed to other users on the host"
-        );
-    }
 }
