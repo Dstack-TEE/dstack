@@ -68,14 +68,8 @@ pub struct HttpsClientConfig {
     /// cluster from any other holder of a certificate the shared CA signed, and CA-path
     /// validation alone does not make that distinction.
     pub cert_validator: Arc<dyn CertValidator>,
-    /// How long one exchange -- connect, request, response body -- may take.
-    ///
-    /// Neither hyper's client nor its connector has a timeout of any kind, so
-    /// without this a peer that completes the TLS handshake and then answers
-    /// nothing holds the caller for as long as it cares to keep the socket
-    /// open. `SyncManager` wraps its own calls in `sync.timeout`, which covers
-    /// the periodic sync but not `fetch_peers_from_bootnode` -- and that one
-    /// runs inside `ProxyInner::new`, before the proxy binds its listeners.
+    /// Bound on one whole exchange (connect, request, response body); hyper's
+    /// client has none, and the bootnode fetch does not go through `SyncManager`.
     pub timeout: Duration,
 }
 
@@ -264,11 +258,6 @@ impl HttpsClient {
     }
 
     /// Bound one whole exchange, response body included.
-    ///
-    /// The bound covers the body read as well as the request: a peer that
-    /// answers with headers and then stalls mid-body is the same hang with an
-    /// extra step, and `read_body_bounded` limits how much may arrive, not how
-    /// long it may take to arrive.
     async fn within_timeout<T>(
         &self,
         url: &str,
@@ -567,12 +556,7 @@ mod transport_tests {
     }
 
     /// A peer that accepts the connection and then says nothing must not hold
-    /// the caller forever.
-    ///
-    /// `fetch_peers_from_bootnode` runs inside `ProxyInner::new`, before the
-    /// proxy binds its listeners, and the bootnode is not assumed honest -- so
-    /// an unanswered request there is a gateway that never serves and never
-    /// logs a reason.
+    /// the caller forever (the bootnode fetch runs before the proxy listens).
     #[tokio::test]
     async fn a_peer_that_never_answers_does_not_hang_the_client() {
         let _ = rustls::crypto::ring::default_provider().install_default();
