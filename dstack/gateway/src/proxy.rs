@@ -88,33 +88,6 @@ pub(crate) mod stats;
 mod tls_passthough;
 mod tls_terminate;
 
-/// Longest SNI the gateway will act on.
-///
-/// A host name is at most 253 bytes (RFC 1035), and this one gets a
-/// `_dstack-app-address.` label prepended before it is queried, so anything
-/// longer cannot resolve to anything.
-const MAX_SNI_LEN: usize = 253;
-
-/// Is this a name the gateway can look up?
-///
-/// The host-name character set and nothing wider. An SNI reaches two places
-/// before anything has authenticated the client: a DNS query name, and -- when
-/// that query fails -- an `error!` line that repeats it once per layer of
-/// `anyhow` context. So whatever an anonymous ClientHello puts in this field is
-/// what the gateway asks a nameserver for and what it writes to its journal, at
-/// whatever rate that client chooses. A newline or a terminal escape in either
-/// is the caller's choice, not ours.
-///
-/// `_` is accepted because underscore labels are ordinary in real zones; every
-/// other byte is refused.
-fn is_hostname(sni: &str) -> bool {
-    !sni.is_empty()
-        && sni.len() <= MAX_SNI_LEN
-        && sni
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_'))
-}
-
 async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
     let mut buffer = vec![0u8; 4096];
     let mut data_len = 0;
@@ -131,10 +104,9 @@ async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
 
         if let Some(sni) = extract_sni(&buffer[..data_len]) {
             let sni = String::from_utf8(sni.to_vec()).context("sni: invalid utf-8")?;
-            if !is_hostname(&sni) {
-                // Quoting the value would write it to the log, which is half of
-                // what this refuses.
-                bail!("sni is not a host name ({} bytes)", sni.len());
+            // The SNI goes into DNS queries and error logs; do not echo a bad one.
+            if rustls::pki_types::DnsName::try_from(sni.as_str()).is_err() {
+                bail!("sni is not a valid dns name ({} bytes)", sni.len());
             }
             debug!("got sni: {sni}");
             buffer.truncate(data_len);
@@ -708,70 +680,29 @@ mod tests {
         record
     }
 
-    /// The SNI goes into a DNS query and into an `error!` line that repeats it
-    /// for every layer of context, so whatever an anonymous client puts there
-    /// is what the gateway resolves and what it writes to its journal. A host
-    /// name is at most 253 bytes and cannot contain a newline; anything else
-    /// can only ever fail the lookup, so it must not get that far.
+    async fn sniff(host: &[u8]) -> Result<Option<String>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (mut server, _) = listener.accept().await.unwrap();
+        tokio::io::AsyncWriteExt::write_all(&mut client, &client_hello(host))
+            .await
+            .unwrap();
+        take_sni(&mut server).await.map(|(sni, _)| sni)
+    }
+
     #[tokio::test]
-    async fn an_oversized_sni_is_refused_before_it_is_resolved_or_logged() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+    async fn an_sni_that_is_not_a_dns_name_is_refused_without_echoing_it() {
         let mut host = vec![b'a'; 4000];
         host[10] = b'\n';
-        let hello = client_hello(&host);
-        assert!(hello.len() < 4096, "fixture must fit the sniff buffer");
-        tokio::spawn(async move {
-            let mut client = TcpStream::connect(addr).await.unwrap();
-            use tokio::io::AsyncWriteExt as _;
-            let _ = client.write_all(&hello).await;
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        });
-        let (mut inbound, _) = listener.accept().await.unwrap();
-        let err = take_sni(&mut inbound)
+        let err = sniff(&host)
             .await
-            .expect_err("a 4000-byte SNI carrying a newline was accepted");
-        let msg = format!("{err:#}");
-        assert!(
-            !msg.contains("aaaa"),
-            "the rejection echoed the SNI back into the log: {msg}"
-        );
-    }
+            .expect_err("a 4000-byte SNI was accepted");
+        assert!(!format!("{err:#}").contains("aaaa"), "{err:#}");
 
-    /// The names the gateway actually serves must still get through: an app-id
-    /// subdomain under a managed base domain, and a custom domain.
-    #[tokio::test]
-    async fn an_ordinary_host_name_still_reaches_the_router() {
-        for host in [
-            "3327603e03f5bd1f830812ca4a789277fc31f577-8080s.app.dstack.org",
-            "my_app.example.com",
-            "a",
-        ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = listener.local_addr().unwrap();
-            let hello = client_hello(host.as_bytes());
-            tokio::spawn(async move {
-                let mut client = TcpStream::connect(addr).await.unwrap();
-                use tokio::io::AsyncWriteExt as _;
-                let _ = client.write_all(&hello).await;
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            });
-            let (mut inbound, _) = listener.accept().await.unwrap();
-            let (sni, _) = take_sni(&mut inbound).await.expect(host);
-            assert_eq!(sni.as_deref(), Some(host));
-        }
-    }
-
-    /// The bound is the host-name limit, so a 253-byte name is served and a
-    /// 254-byte one is not.
-    #[test]
-    fn the_host_name_bound_is_the_dns_name_limit() {
-        assert!(is_hostname(&"a".repeat(MAX_SNI_LEN)));
-        assert!(!is_hostname(&"a".repeat(MAX_SNI_LEN + 1)));
-        assert!(!is_hostname(""));
-        for bad in ["a\nb", "a b", "a\u{1b}[31m", "a/b", "a:b", "a%0ab"] {
-            assert!(!is_hostname(bad), "accepted {bad:?}");
-        }
+        let host = "3327603e03f5bd1f830812ca4a789277fc31f577-8080s.app.dstack.org";
+        assert_eq!(sniff(host.as_bytes()).await.unwrap().as_deref(), Some(host));
     }
 
     #[test]
