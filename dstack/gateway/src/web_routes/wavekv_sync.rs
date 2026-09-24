@@ -179,14 +179,8 @@ pub(crate) fn handle_sync(
     ))
 }
 
-/// Refuse an envelope claiming an id no peer can legitimately present.
-///
-/// 0 is not a node id. Neither is this node's own: nothing syncs to itself, so
-/// an envelope carrying our id is either a peer misconfigured onto it or a
-/// caller reaching for the ack bookkeeping we keep about ourselves -- which we
-/// report to every peer, and which their tombstone watermarks are a minimum
-/// over. `sender_id` is self-asserted either way; this only rules out the two
-/// values that can never be honest.
+/// Refuse node id 0 and this node's own id: nothing syncs to itself, so such an
+/// envelope is a misconfigured peer or a forged ack for us.
 fn ensure_plausible_sender(state: &Proxy, sender_id: u32) -> Result<(), Status> {
     if sender_id == 0 {
         warn!("rejected an envelope from invalid node_id 0");
@@ -880,13 +874,6 @@ mod tests {
         assert!(gunzip_bounded(&one_over, MAX_DECOMPRESSED_SYNC_BYTES).is_err());
     }
 
-    /// Nothing syncs to itself.
-    ///
-    /// An envelope carrying this node's own id is either a peer misconfigured
-    /// onto our id or a caller reaching for the ack bookkeeping we keep about
-    /// ourselves -- which we report to every peer and which feeds their
-    /// tombstone watermarks. Neither is a sync, so it stops at the door
-    /// alongside node id 0.
     #[tokio::test]
     async fn an_envelope_claiming_this_nodes_own_id_is_refused() {
         let (proxy, _tmp) = serving_gateway(true).await;
