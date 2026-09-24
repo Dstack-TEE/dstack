@@ -415,7 +415,7 @@ fn unescape_mountinfo(value: &[u8]) -> Vec<u8> {
     let mut decoded = Vec::with_capacity(value.len());
     let mut index = 0;
     while index < value.len() {
-        if value[index] == b'\\' && index + 3 < value.len() {
+        if value[index] == b'\\' && index + 4 <= value.len() {
             let octal = &value[index + 1..index + 4];
             if octal.iter().all(|byte| matches!(byte, b'0'..=b'7')) {
                 decoded.push((octal[0] - b'0') * 64 + (octal[1] - b'0') * 8 + (octal[2] - b'0'));
@@ -494,6 +494,7 @@ mod tests {
     #[test]
     fn decodes_mountinfo_escapes() {
         assert_eq!(unescape_mountinfo(b"/run/my\\040volume"), b"/run/my volume");
+        assert_eq!(unescape_mountinfo(b"/run/trailing\\040"), b"/run/trailing ");
     }
 
     #[test]
