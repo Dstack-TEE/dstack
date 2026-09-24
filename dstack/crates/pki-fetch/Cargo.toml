@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "pki-fetch"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded download of issuer certificates and CRLs named by unverified certificates"
+
+[dependencies]
+anyhow.workspace = true
+pem.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "rt", "time"] }
