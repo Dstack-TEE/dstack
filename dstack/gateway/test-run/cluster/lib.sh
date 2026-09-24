@@ -137,8 +137,6 @@ endpoint = "gateway-${node_id}:9013"
 [core.proxy]
 listen_addr = "0.0.0.0"
 listen_port = 9014
-tappd_port = 8090
-external_port = 9014
 EOF
     log_info "wrote node${node_id} config (bootnode=${bootnode_url:-none})"
 }
