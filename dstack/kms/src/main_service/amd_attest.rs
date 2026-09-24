@@ -60,8 +60,10 @@ pub(crate) fn validate_amd_snp_measurement_binding(
 ///
 /// This helper first recomputes and validates the QEMU SNP launch measurement.
 /// `mr_system` is `sha256(MEASUREMENT)`, `mr_aggregated` is
-/// `sha256(MEASUREMENT || HOST_DATA)`, and `device_id` is the
-/// hardware-verified 64-byte SNP `chip_id`. `app_id`, `compose_hash`,
+/// `sha256(MEASUREMENT || HOST_DATA)`, and `device_id` is
+/// `sha256(chip_id)` over the hardware-verified 64-byte SNP `chip_id` — the
+/// same 32-byte form `GetAttestationInfo` reports and operators register, so
+/// device allowlists compare equal. `app_id`, `compose_hash`,
 /// `instance_id`, and key provider identity come from the MrConfigV3 document
 /// bound by HOST_DATA.
 ///
@@ -116,7 +118,7 @@ fn build_amd_snp_boot_info_with_tcb_status(
         app_id: mr_config.app_id.clone().unwrap_or_default(),
         compose_hash: mr_config.compose_hash.clone(),
         instance_id: mr_config.instance_id.clone().unwrap_or_default(),
-        device_id: verified_chip_id.to_vec(),
+        device_id: Sha256::digest(verified_chip_id).to_vec(),
         key_provider_info,
         tcb_status: tcb_status.to_string(),
         advisory_ids: advisory_ids.to_vec(),
@@ -368,7 +370,7 @@ mod tests {
             .expect("matching measurement should build snp boot info");
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
-        assert_eq!(boot_info.device_id, chip_id.to_vec());
+        assert_eq!(boot_info.device_id, Sha256::digest(chip_id).to_vec());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
         assert_eq!(boot_info.compose_hash, vec![0x22; 32]);
         assert_eq!(boot_info.os_image_hash, test_os_image_hash(&input).unwrap());
@@ -404,7 +406,7 @@ mod tests {
         .expect("verified snp attestation should feed boot info helper");
 
         assert_eq!(boot_info.mr_aggregated.len(), 32);
-        assert_eq!(boot_info.device_id, chip_id.to_vec());
+        assert_eq!(boot_info.device_id, Sha256::digest(chip_id).to_vec());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
         assert_eq!(boot_info.tcb_status, "UpToDate");
         Ok(())
@@ -486,7 +488,7 @@ mod tests {
         .expect("vm_config-carried snp measurement inputs should build boot info");
 
         assert_eq!(boot_info.mr_aggregated.len(), 32);
-        assert_eq!(boot_info.device_id, chip_id.to_vec());
+        assert_eq!(boot_info.device_id, Sha256::digest(chip_id).to_vec());
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
         Ok(())
     }
@@ -715,8 +717,11 @@ mod tests {
         let boot_info = build_amd_snp_boot_info(&verified, &[0x01; 64], &input).unwrap();
         let changed_boot_info = build_amd_snp_boot_info(&verified, &[0x02; 64], &input).unwrap();
 
-        assert_eq!(boot_info.device_id, vec![0x01; 64]);
-        assert_eq!(changed_boot_info.device_id, vec![0x02; 64]);
+        assert_eq!(boot_info.device_id, Sha256::digest([0x01; 64]).to_vec());
+        assert_eq!(
+            changed_boot_info.device_id,
+            Sha256::digest([0x02; 64]).to_vec()
+        );
         assert_ne!(boot_info.device_id, changed_boot_info.device_id);
         assert_eq!(boot_info.instance_id, changed_boot_info.instance_id);
         assert_eq!(

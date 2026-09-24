@@ -29,7 +29,6 @@ use ra_tls::{
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::{safe_write, safe_write_with_mode};
-use sha2::Digest;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::info;
 
@@ -238,16 +237,15 @@ fn build_attestation_info_response(
 ) -> Result<AttestationInfoResponse> {
     let boot_info = build_boot_info_for_attestation(verified, false, vm_config)
         .context("Failed to decode app info")?;
-    let raw_device_id = verified.report.get_devide_id();
     Ok(AttestationInfoResponse {
-        device_id: sha2::Sha256::digest(&raw_device_id).to_vec(),
+        device_id: boot_info.device_id,
         mr_aggregated: boot_info.mr_aggregated,
         os_image_hash: boot_info.os_image_hash,
         tee_variant,
         site_name,
         eth_rpc_url,
         kms_contract_address,
-        ppid: raw_device_id,
+        ppid: verified.report.get_devide_id(),
     })
 }
 

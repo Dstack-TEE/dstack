@@ -1109,7 +1109,10 @@ mod tests {
 
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
-        assert_eq!(boot_info.device_id, vec![0xab; 64]);
+        assert_eq!(
+            boot_info.device_id,
+            sha2::Sha256::digest([0xab; 64]).to_vec()
+        );
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
     }
 
@@ -1145,7 +1148,10 @@ mod tests {
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
-        assert_eq!(boot_info.device_id, vec![0xab; 64]);
+        assert_eq!(
+            boot_info.device_id,
+            sha2::Sha256::digest([0xab; 64]).to_vec()
+        );
     }
 
     #[test]
