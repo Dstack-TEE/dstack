@@ -512,7 +512,7 @@ mod tests {
         let last = state.identity().await.unwrap();
 
         assert!(
-            std::sync::Arc::ptr_eq(&first, &last),
+            std::ptr::eq(first, last),
             "identity was decoded again; every Info call is generating a quote"
         );
     }

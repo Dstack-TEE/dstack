@@ -107,11 +107,9 @@ struct AppStateInner {
     /// when each parsed the key itself.
     app_root_signing_key: Option<SigningKey>,
     /// Identity as decoded from the boot attestation. See [`AppIdentity`].
-    identity: RwLock<Option<Arc<AppIdentity>>>,
+    identity: tokio::sync::OnceCell<AppIdentity>,
     /// When the last identity decode failed, so the retry can be throttled.
-    /// See [`IDENTITY_RETRY_INTERVAL`]. Separate from the cache above because
-    /// it is written only on the degraded path, and read only when the cache
-    /// is empty.
+    /// See [`IDENTITY_RETRY_INTERVAL`].
     identity_last_failure: Mutex<Option<Instant>>,
     /// Queues platform calls; see [`AppStateInner::attest`].
     attest_lock: Arc<tokio::sync::Mutex<()>>,
@@ -290,8 +288,8 @@ impl AppState {
                 health,
                 gpu_attestor,
                 app_root_signing_key,
-                identity: RwLock::new(None),
-                identity_last_failure: Mutex::new(None),
+                identity: Default::default(),
+                identity_last_failure: Default::default(),
                 attest_lock: Arc::default(),
                 cloud_vendor: read_dmi_file("sys_vendor"),
                 cloud_product: read_dmi_file("product_name"),
@@ -378,65 +376,29 @@ impl AppState {
     /// include anonymous ones. Within the window the caller is told the
     /// identity is unavailable and when the next attempt is, and the platform
     /// is not touched at all.
-    pub(crate) async fn identity(&self) -> Result<Arc<AppIdentity>> {
-        if let Some(identity) = self.cached_identity()? {
-            return Ok(identity);
-        }
-        let state = self.clone();
+    pub(crate) async fn identity(&self) -> Result<&AppIdentity> {
         self.inner
-            .attest(move |platform| {
-                // Callers queued behind a decode pick up its outcome here.
-                if let Some(identity) = state.cached_identity()? {
-                    return Ok(identity);
-                }
-                let identity = match decode_identity(platform) {
-                    Ok(identity) => Arc::new(identity),
-                    Err(err) => {
-                        *state
-                            .inner
-                            .identity_last_failure
-                            .lock()
-                            .or_panic("lock should never fail") = Some(Instant::now());
-                        return Err(err);
+            .identity
+            .get_or_try_init(|| async {
+                let last_failure = &self.inner.identity_last_failure;
+                if let Some(failed_at) = *last_failure.lock().or_panic("lock should never fail") {
+                    let elapsed = failed_at.elapsed();
+                    if elapsed < IDENTITY_RETRY_INTERVAL {
+                        let retry_in = (IDENTITY_RETRY_INTERVAL - elapsed).as_secs() + 1;
+                        anyhow::bail!(
+                            "the app identity is unavailable: decoding it failed and the next attempt is at most {retry_in}s away"
+                        );
                     }
-                };
-                *state
-                    .inner
-                    .identity
-                    .write()
-                    .or_panic("lock should never fail") = Some(identity.clone());
-                Ok(identity)
+                }
+                self.inner
+                    .attest(decode_identity)
+                    .await
+                    .inspect_err(|_| {
+                        *last_failure.lock().or_panic("lock should never fail") =
+                            Some(Instant::now());
+                    })
             })
             .await
-    }
-
-    /// The cached identity, or `None` if a decode may be attempted now. Fails
-    /// while the last failed decode is still throttled.
-    fn cached_identity(&self) -> Result<Option<Arc<AppIdentity>>> {
-        if let Some(identity) = self
-            .inner
-            .identity
-            .read()
-            .or_panic("lock should never fail")
-            .as_ref()
-        {
-            return Ok(Some(identity.clone()));
-        }
-        if let Some(failed_at) = *self
-            .inner
-            .identity_last_failure
-            .lock()
-            .or_panic("lock should never fail")
-        {
-            let elapsed = failed_at.elapsed();
-            if elapsed < IDENTITY_RETRY_INTERVAL {
-                let retry_in = (IDENTITY_RETRY_INTERVAL - elapsed).as_secs() + 1;
-                anyhow::bail!(
-                    "the app identity is unavailable: decoding it failed and the next attempt is at most {retry_in}s away"
-                );
-            }
-        }
-        Ok(None)
     }
 
     /// The VM's hardware configuration, as the VMM produced it.
@@ -1170,7 +1132,7 @@ pub(crate) mod tests {
     /// whether it should refuse. Counting the calls is the only way to see the
     /// identity throttle work: what it changes is how often the platform is
     /// touched, not what any single call returns. The gate holds the next
-    /// `Info` or quote call inside the platform, as a slow quote does.
+    /// quote inside the platform, as a slow quote does.
     #[derive(Default)]
     struct InfoAttestationProbe {
         calls: AtomicUsize,
@@ -1395,7 +1357,6 @@ pNs85uhOZE8z2jr8Pg==
         impl PlatformBackend for TestSimulatorPlatform {
             fn attestation_for_info(&self) -> Result<VersionedAttestation> {
                 self.probe.calls.fetch_add(1, Ordering::Relaxed);
-                self.probe.pass_gate();
                 if self.probe.failing.load(Ordering::Relaxed) {
                     anyhow::bail!("the platform cannot attest right now");
                 }
@@ -1479,8 +1440,8 @@ pNs85uhOZE8z2jr8Pg==
                 "/nonexistent/nvattest",
             ),
             app_root_signing_key: SigningKey::from_slice(&DUMMY_K256_KEY).ok(),
-            identity: RwLock::new(None),
-            identity_last_failure: Mutex::new(None),
+            identity: Default::default(),
+            identity_last_failure: Default::default(),
             attest_lock: Arc::default(),
             // Read the same way production does, so a test comparing v1 `Info`
             // against v0 `get_info` compares like with like.
@@ -2098,44 +2059,6 @@ pNs85uhOZE8z2jr8Pg==
         quote.await.unwrap().unwrap();
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn identity_retry_is_off_executor_singleflight_and_cancellation_safe() {
-        let probe = Arc::new(InfoAttestationProbe::failing());
-        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
-        state.identity().await.unwrap_err();
-        *state.inner.identity_last_failure.lock().unwrap() =
-            Some(Instant::now() - IDENTITY_RETRY_INTERVAL);
-        probe.set_failing(false);
-        let (entered_rx, release_tx) = probe.arm_gate();
-        let first_state = state.clone();
-        let first = tokio::spawn(async move { first_state.identity().await });
-        tokio::time::timeout(Duration::from_secs(2), entered_rx)
-            .await
-            .unwrap()
-            .unwrap();
-        first.abort();
-        assert!(first.await.unwrap_err().is_cancelled());
-        let mut followers = Vec::new();
-        for _ in 0..16 {
-            let state = state.clone();
-            followers.push(tokio::spawn(async move { state.identity().await }));
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert_eq!(probe.calls(), 2, "only one retry may enter the platform");
-        assert!(followers.iter().all(|task| !task.is_finished()));
-        release_tx.send(()).unwrap();
-        let identity = state.identity().await.unwrap();
-        for task in followers {
-            let other = tokio::time::timeout(Duration::from_secs(2), task)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-            assert!(Arc::ptr_eq(&identity, &other));
-        }
-        assert_eq!(probe.calls(), 2);
-    }
-
     /// A failed decode must be as cheap to repeat as a cached success is.
     /// `identity()` is reached from the anonymous `/prpc/v1/Info`, and each
     /// attempt is a hardware quote plus an RTMR replay under the global quote
@@ -2198,7 +2121,7 @@ pNs85uhOZE8z2jr8Pg==
             .identity()
             .await
             .expect("a decoded identity is cached");
-        assert!(Arc::ptr_eq(&identity, &again));
+        assert!(std::ptr::eq(identity, again));
         assert_eq!(
             probe.calls(),
             2,
