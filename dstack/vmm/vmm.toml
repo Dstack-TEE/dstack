@@ -92,7 +92,8 @@ use_mrconfigid = true
 # default -- an already deployed app would come back from a restart with a
 # different identity and be refused its keys.
 qemu_pci_hole64_size = 0
-qemu_hotplug_off = false
+# Required for GPU passthrough: verifiers do not model ACPI PCI hotplug on root ports.
+qemu_hotplug_off = true
 # TDX attestation/hash scheme policy:
 # - "legacy": digest.txt + legacy verifier
 # - "lite": digest.txt + measurement.tdx.cbor + no-QEMU verifier

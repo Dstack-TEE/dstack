@@ -176,34 +176,35 @@ mod tests {
                 0,
                 1,
                 0,
-                "f47ab428541cb334c6de6e59e7fcf44a5db7b314e9dd4c643978968917eb25b2",
+                "0948490885eb9a777d553c7c0c529e3647533f4251b394f2f7f0a9862dadb4ca",
             ),
             (
                 1,
                 0,
                 8,
                 0,
-                "ae3fefc72eb747cbff363e4f5ac7f3366f257849dc5f2719a9368303abaef4cc",
+                "93946fc370652394d13211bd1e9361a27128a56339017f9e3645d86f0bddc1bd",
             ),
             (
                 1,
                 0,
                 1,
                 1,
-                "8a48a13bc6041d73f7decce488054a8d25800cc82e11fa9bd1687e010ac9c9b0",
+                "bc29add92b02f264c41cfbde65beb24499cbb43e10fefe191f3a513284c050de",
             ),
             (
                 1,
                 0,
                 1,
                 4,
-                "2052ea73c74e1462947e600c95742e48cae0f7a84bc0ec79ab12f7a7818aec7a",
+                "323e607f82db7a002bd6a71e7a6ac1ed746e94e3daba75dde2958751861c1a57",
             ),
         ];
         for (nics, volumes, gpus, switches, expected) in cases {
             let mut c = config(nics, volumes);
             c.num_gpus = gpus;
             c.num_nvswitches = switches;
+            c.hotplug_off = gpus > 0;
             assert_eq!(qemu_hash(c)?, expected);
         }
         Ok(())

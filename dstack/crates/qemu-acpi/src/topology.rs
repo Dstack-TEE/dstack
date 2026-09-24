@@ -37,6 +37,8 @@ pub enum TopologyError {
     TooManyPrePxbDevices { requested: u64, available: u64 },
     #[error("NVSwitch passthrough requires an iommufd object, but no GPU creates one")]
     NvswitchWithoutIommufd,
+    #[error("PCI hotplug on root ports is not modeled; set hotplug_off for GPU passthrough")]
+    HotplugWithRootPorts,
 }
 
 impl MachineConfig {
@@ -91,6 +93,9 @@ impl MachineConfig {
         if self.num_nvswitches > 0 && self.num_gpus == 0 {
             return Err(TopologyError::NvswitchWithoutIommufd);
         }
+        if !self.hotplug_off && passthrough_ports > 0 {
+            return Err(TopologyError::HotplugWithRootPorts);
+        }
         Ok(())
     }
 }
@@ -131,5 +136,18 @@ mod tests {
                 available: 16
             })
         ));
+    }
+
+    #[test]
+    fn root_port_passthrough_requires_hotplug_off() {
+        let mut config = pxb_config();
+        config.hugepages = false;
+        assert!(matches!(
+            config.validate(),
+            Err(TopologyError::HotplugWithRootPorts)
+        ));
+
+        config.hotplug_off = true;
+        assert!(config.validate().is_ok());
     }
 }

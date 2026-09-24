@@ -56,7 +56,7 @@ def fixed_cases():
         Case(pci_hole64_size=1 << 40),
         Case(hugepages=True),
         Case(hugepages=True, gpus=1),
-        Case(hugepages=True, gpus=8, switches=4),
+        Case(hugepages=True, gpus=8, switches=4, hotplug_off=True),
         Case(version="9.1.0", hugepages=True, gpus=1, hotplug_off=True),
     ]
     return cases
@@ -89,7 +89,7 @@ def random_case(rng):
         switches=switches,
         hugepages=hugepages,
         root_verity=root_verity,
-        hotplug_off=rng.choice([False, True]),
+        hotplug_off=rng.choice([False, True]) or passthrough > 0,
         smm=rng.choice([False, True]),
         pic=rng.choice([False, True]),
         pci_hole64_size=rng.choice([0, 32 << 30, 1 << 40]),
