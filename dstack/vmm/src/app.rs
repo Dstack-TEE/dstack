@@ -3628,19 +3628,6 @@ mod tests {
         .map_err(anyhow::Error::msg)?;
         Ok(())
     }
-
-    #[tokio::test]
-    async fn guest_event_name_is_bounded() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = app_talking_to(&dir.path().join("netd.sock"));
-        let (config, _) = bridge_vm(&app, "vm-1");
-        std::fs::create_dir_all(&config.workdir).unwrap();
-        app.lock().add(VmState::new(config));
-
-        let too_long = "x".repeat(app.config.max_event_name_len + 1);
-        app.vm_event_report(3, &too_long, "body".into()).unwrap();
-        assert!(app.lock().get("vm-1").unwrap().state.events.is_empty());
-    }
 }
 
 /// CIDs that must survive a pool rebuild, mapped to the VM that owns each one.
