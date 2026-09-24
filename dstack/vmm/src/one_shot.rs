@@ -11,6 +11,17 @@ use crate::main_service;
 use anyhow::{Context, Result};
 use fs_err as fs;
 
+/// Truncate by character: slicing at byte 200 panics inside a multi-byte character.
+fn compose_preview(compose_file: &str) -> String {
+    const PREVIEW_CHARS: usize = 200;
+    let preview: String = compose_file.chars().take(PREVIEW_CHARS).collect();
+    if preview.len() < compose_file.len() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
+}
+
 pub async fn run_one_shot(
     vm_config_path: &str,
     config: Config,
@@ -182,11 +193,7 @@ Example of correct compose_file structure:
 Debug: Compose file content (first 200 chars):
 {}",
                         error_msg,
-                        if vm_config.compose_file.len() > 200 {
-                            format!("{}...", &vm_config.compose_file[..200])
-                        } else {
-                            vm_config.compose_file.clone()
-                        }
+                        compose_preview(&vm_config.compose_file)
                     );
                 }
 
@@ -197,11 +204,7 @@ Debug: Compose file content (first 200 chars):
 Compose file content (first 200 chars):
 {}",
                         error_msg,
-                        if vm_config.compose_file.len() > 200 {
-                            format!("{}...", &vm_config.compose_file[..200])
-                        } else {
-                            vm_config.compose_file.clone()
-                        }
+                        compose_preview(&vm_config.compose_file)
                     )
                 });
             }
@@ -384,4 +387,15 @@ Compose file content (first 200 chars):
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compose_preview_truncates_by_character() {
+        let preview = compose_preview(&"\u{4e2d}".repeat(250));
+        assert_eq!(preview.chars().count(), 203);
+    }
 }
