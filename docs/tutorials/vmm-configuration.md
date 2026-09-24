@@ -116,7 +116,7 @@ max_allocable_memory_in_mb = 990616             # Adjust: total MB - 16384
 qmp_socket = false
 use_mrconfigid = true
 qemu_pci_hole64_size = 0
-qemu_hotplug_off = false
+qemu_hotplug_off = true
 
 [cvm.networking]
 mode = "user"

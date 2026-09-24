@@ -344,7 +344,7 @@ qmp_socket = false
 user = ""
 use_mrconfigid = {use_mrconfigid}
 qemu_pci_hole64_size = 0
-qemu_hotplug_off = false
+qemu_hotplug_off = true
 host_share_mode = "{host_share_mode}"
 qgs_port = 4050
 
