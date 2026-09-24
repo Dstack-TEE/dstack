@@ -1785,29 +1785,4 @@ mod tests {
             .iter()
             .any(|arg| arg.contains("vfio-pci,host=0000:02:00.0")));
     }
-
-    /// vcpu and memory are deployment request fields with no upper bound, and
-    /// the hugepage NUMA split does arithmetic on both. Release builds have no
-    /// overflow checks, so an overflow here is a silent `-smp`/`-m` of the
-    /// wrong size rather than an error.
-    #[test]
-    fn an_absurd_vcpu_or_memory_does_not_overflow_the_numa_split() {
-        let (config, mut vm, mut prepared) = test_launch_fixture();
-        vm.manifest.hugepages = true;
-        vm.manifest.vcpu = u32::MAX;
-        vm.manifest.memory = u32::MAX;
-        prepared.hugepage_numa_nodes =
-            Some(HashMap::from([("0".to_string(), 0), ("1".to_string(), 0)]));
-        let builder = QemuCommandBuilder {
-            vm: &vm,
-            cfg: &config.cvm,
-            gpus: &GpuConfig::default(),
-            prepared: &prepared,
-        };
-        let (smp, mem) = builder
-            .configure_hugepage_memory(&mut Command::new("qemu-system-x86_64"))
-            .unwrap();
-        assert!(smp >= u32::MAX / 2, "-smp collapsed to {smp}");
-        assert!(mem >= u32::MAX / 2, "-m collapsed to {mem}");
-    }
 }

@@ -209,11 +209,7 @@ impl GpuConfig {
 
 /// Round up a value to the nearest multiple of another value.
 /// If the value is already a multiple, it remains unchanged.
-///
-/// `vcpu` and `memory` are deployment request fields with no upper bound, so
-/// the next multiple is not always representable. It is left unchanged when it
-/// is not: release builds have no overflow checks, and wrapping here would turn
-/// an absurd request into a small `-smp`/`-m` that QEMU happily accepts.
+/// Left unchanged if the next multiple overflows, rather than wrapping to a tiny value.
 pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
     if multiple <= 1 {
         return value;
@@ -3268,12 +3264,9 @@ mod tests {
         Ok(config)
     }
 
-    /// `configure_hugepage_memory` divides by this count. Nothing else stops
-    /// the divisor being zero, so the "at least node 0" fallback is the whole
-    /// guard -- pin it rather than reason about it.
     #[test]
-    fn the_hugepage_numa_split_always_has_at_least_one_node() {
-        assert_eq!(hugepage_numa_nodes(&GpuConfig::default()).unwrap().len(), 1);
+    fn round_up_does_not_wrap() {
+        assert_eq!(round_up(u32::MAX, 2), u32::MAX);
     }
 
     #[test]

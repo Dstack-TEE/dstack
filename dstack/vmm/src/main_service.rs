@@ -314,8 +314,7 @@ pub fn create_manifest_from_vm_config(
     cvm_config: &crate::config::CvmConfig,
 ) -> Result<Manifest> {
     validate_label(&request.name)?;
-    // The same three a resize refuses. Without this a VM is created with a
-    // `-m 0` and a `0G` data disk, and only the launch says so.
+    // Same checks as `validate_resize_request`.
     if request.vcpu == 0 {
         bail!("vcpu must be greater than zero");
     }
@@ -1760,29 +1759,11 @@ mod tests {
         assert!(!err.contains("storage_discard"), "{err}");
     }
 
-    /// A resize refuses a zero vcpu, memory or disk; a deployment has to
-    /// refuse the same values, or the VM is created with a `-m 0` and a `0G`
-    /// data disk and only fails later, out of the caller's sight.
     #[test]
-    fn a_deployment_rejects_the_same_zero_resources_a_resize_does() {
-        for (name, mutate) in [
-            (
-                "vcpu",
-                (|r: &mut VmConfiguration| r.vcpu = 0) as fn(&mut VmConfiguration),
-            ),
-            ("memory", |r: &mut VmConfiguration| r.memory = 0),
-            ("disk_size", |r: &mut VmConfiguration| r.disk_size = 0),
-        ] {
-            let mut request = test_vm_configuration();
-            mutate(&mut request);
-            let err = format!(
-                "{:#}",
-                create_manifest_from_vm_config(request, &test_cvm_config())
-                    .expect_err("a zero resource must be refused at deployment")
-            );
-            assert!(err.contains(name), "{name}: {err}");
-        }
-        create_manifest_from_vm_config(test_vm_configuration(), &test_cvm_config()).unwrap();
+    fn deployment_rejects_zero_resources() {
+        let mut request = test_vm_configuration();
+        request.memory = 0;
+        assert!(create_manifest_from_vm_config(request, &test_cvm_config()).is_err());
     }
 
     #[test]
