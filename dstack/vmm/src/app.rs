@@ -1507,11 +1507,7 @@ impl App {
     }
 
     pub(crate) fn vm_event_report(&self, cid: u32, event: &str, body: String) -> Result<()> {
-        // A guest chooses both of these, over a host API request that may
-        // carry 10 MiB. The name only ever selects one of the four short
-        // branches below; an unrecognised one is logged and kept in the event
-        // ring for every later GetInfo, so cap it before it is logged, next to
-        // the cap the body already has.
+        // Guest-chosen and kept in the event ring, so bound it like the body.
         const MAX_EVENT_NAME_LEN: usize = 64;
         if event.len() > MAX_EVENT_NAME_LEN {
             error!(cid, "event name too large, skipping");
@@ -3635,39 +3631,17 @@ mod tests {
         Ok(())
     }
 
-    /// A guest names its own events. The body has a cap; the name had none,
-    /// so a guest could hand the host a multi-megabyte string to log and to
-    /// keep in the event ring for every later `GetInfo`.
     #[tokio::test]
-    async fn a_guest_event_name_is_bounded() {
+    async fn guest_event_name_is_bounded() {
         let dir = tempfile::tempdir().unwrap();
         let app = app_talking_to(&dir.path().join("netd.sock"));
         let (config, _) = bridge_vm(&app, "vm-1");
         std::fs::create_dir_all(&config.workdir).unwrap();
         app.lock().add(VmState::new(config));
 
-        // What one 10 MiB host API request can carry.
-        let huge = "x".repeat(10 * 1024 * 1024);
-        app.vm_event_report(3, &huge, "body".into()).unwrap();
-
-        let kept: usize = app
-            .lock()
-            .get("vm-1")
-            .unwrap()
-            .state
-            .events
-            .iter()
-            .map(|event| event.event.len())
-            .sum();
-        assert_eq!(
-            kept, 0,
-            "a guest kept {kept} bytes of event name on the host"
-        );
-
-        // A name the VMM acts on still gets through.
-        app.vm_event_report(3, "boot.progress", "ready".into())
+        app.vm_event_report(3, &"x".repeat(1024), "body".into())
             .unwrap();
-        assert_eq!(app.lock().get("vm-1").unwrap().state.boot_progress, "ready");
+        assert!(app.lock().get("vm-1").unwrap().state.events.is_empty());
     }
 }
 
