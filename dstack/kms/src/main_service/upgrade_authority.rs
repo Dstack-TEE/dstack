@@ -12,6 +12,8 @@ use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use std::time::Duration;
 use tracing::warn;
 
 /// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
@@ -107,12 +109,29 @@ pub(crate) struct GetInfoResponse {
     pub app_implementation: Option<String>,
 }
 
-async fn http_get<R: DeserializeOwned>(url: &str) -> Result<R> {
-    send_request(reqwest::Client::new().get(url), url).await
+const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Shared so auth API calls reuse pooled connections instead of reconnecting per decision.
+fn auth_api_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(AUTH_API_CONNECT_TIMEOUT)
+            .build()
+            .unwrap_or_default()
+    })
 }
 
-async fn http_post<R: DeserializeOwned>(url: &str, body: &impl Serialize) -> Result<R> {
-    send_request(reqwest::Client::new().post(url).json(body), url).await
+async fn http_get<R: DeserializeOwned>(url: &str, timeout: Duration) -> Result<R> {
+    send_request(auth_api_client().get(url).timeout(timeout), url).await
+}
+
+async fn http_post<R: DeserializeOwned>(
+    url: &str,
+    body: &impl Serialize,
+    timeout: Duration,
+) -> Result<R> {
+    send_request(auth_api_client().post(url).json(body).timeout(timeout), url).await
 }
 
 /// Longest stretch of an auth-backend response quoted back in an error.
@@ -163,7 +182,7 @@ impl AuthApi {
                     "bootAuth/app"
                 };
                 let url = url_join(&webhook.url, path);
-                http_post(&url, &boot_info).await
+                http_post(&url, &boot_info, webhook.timeout).await
             }
         }
     }
@@ -179,7 +198,7 @@ impl AuthApi {
                 app_implementation: None,
             }),
             AuthApi::Webhook { webhook } => {
-                let info: AuthApiInfoResponse = http_get(&webhook.url).await?;
+                let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
                 let eth_rpc_url = if info.eth_rpc_url.is_empty() {
                     None
                 } else {
@@ -364,8 +383,37 @@ mod tests {
 
     fn webhook(url: String) -> AuthApi {
         AuthApi::Webhook {
-            webhook: Webhook { url },
+            webhook: Webhook {
+                url,
+                timeout: std::time::Duration::from_millis(500),
+            },
         }
+    }
+
+    /// `GetMeta` reaches the auth API unauthenticated, so a silent backend must not hold it open.
+    #[rocket::async_test]
+    async fn a_backend_that_never_answers_does_not_hold_the_request_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let _blackhole = thread::spawn(move || {
+            let held: Vec<_> = listener.incoming().take(1).collect();
+            thread::sleep(std::time::Duration::from_secs(30));
+            drop(held);
+        });
+
+        let auth = webhook(format!("http://{address}"));
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(10), auth.get_info()).await;
+
+        assert!(
+            outcome.is_ok(),
+            "the auth API call was still running after 10s"
+        );
+        let error = outcome.unwrap().expect_err("a silent backend must fail");
+        assert!(
+            format!("{error:#}").contains("timed out") || format!("{error:#}").contains("timeout"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
