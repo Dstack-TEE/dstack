@@ -149,7 +149,7 @@ class ConfigBackend {
     // check device ID
     if (!config.kms.allowAnyDevice) {
       const allowedDevices = config.kms.devices.map(normalizeHex);
-      if (allowedDevices.length > 0 && !allowedDevices.includes(deviceId)) {
+      if (!allowedDevices.includes(deviceId)) {
         return {
           isAllowed: false,
           reason: 'KMS is not allowed to boot on this device',
@@ -195,7 +195,7 @@ class ConfigBackend {
     // check device ID
     if (!appConfig.allowAnyDevice) {
       const allowedDevices = appConfig.devices.map(normalizeHex);
-      if (allowedDevices.length > 0 && !allowedDevices.includes(deviceId)) {
+      if (!allowedDevices.includes(deviceId)) {
         return {
           isAllowed: false,
           reason: 'app is not allowed to boot on this device',
