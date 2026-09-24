@@ -67,13 +67,8 @@ where
     };
 
     let phase = loop {
-        // `write_all` is not cancel-safe, so it cannot sit in a `select!` arm,
-        // and awaiting it outside one left nothing polling the watchdog for as
-        // long as the write blocked. A peer that stops reading fills the socket
-        // buffer and parks the write there, which holds the connection to
-        // `timeouts.total` from either end. Single `write` calls are
-        // cancel-safe (nothing is written when the other branch wins), so the
-        // partial-write loop is ours to drive -- with the watchdog in it.
+        // A peer that stops reading parks the write, so the watchdog must be
+        // polled during it. `write_all` is not cancel-safe; single `write`s are.
         macro_rules! write_watched {
             ($w:expr, $buf:expr, $n:expr, $ctx:expr) => {{
                 let n = $n;
@@ -95,8 +90,6 @@ where
                         bail!("write accepted no bytes");
                     }
                     written += count;
-                    // Per partial write, so a peer draining slowly still counts
-                    // as progress and is not reaped for being slow.
                     moved += count as u64;
                 }
             }};
@@ -246,25 +239,14 @@ mod tests {
         }
     }
 
-    /// Shrink both socket buffers so a few KiB of unread data is enough to
-    /// park a write, instead of the megabytes loopback autotuning grows to.
+    /// Shrink the socket buffers so a few KiB of unread data parks a write.
     fn throttle(stream: &TcpStream) {
         let sock = socket2::SockRef::from(stream);
         sock.set_recv_buffer_size(4096).unwrap();
         sock.set_send_buffer_size(4096).unwrap();
     }
 
-    /// A peer that stops reading parks the relay in a write, and a write is
-    /// the one thing the pre-gate `select!` cannot watch: `write_all` is not
-    /// cancel-safe, so it is awaited outside the `select!` and nothing polls
-    /// the watchdog for as long as it blocks. The drain below already guards
-    /// this; the main loop has to as well, or a client that sends a request
-    /// and never reads the answer holds a relay until `timeouts.total`.
-    ///
-    /// Real timers rather than a paused clock: with time paused the runtime
-    /// advances to the next deadline whenever no event is ready at that
-    /// instant, which fires the watchdog on a relay that is merely waiting for
-    /// loopback data -- so the test would pass without the write ever blocking.
+    // Real timers: a paused clock fires the watchdog before the write blocks.
     #[tokio::test]
     async fn a_client_that_stops_reading_is_reaped_by_the_idle_timeout() {
         let (client, mut tls_side) = connected_pair().await;
@@ -272,8 +254,6 @@ mod tests {
         for s in [&client, &tls_side, &upstream, &backend] {
             throttle(s);
         }
-
-        // The app answers; the client never reads a byte of it.
         let _app = tokio::spawn(async move {
             backend.write_all(&vec![0u8; 1 << 20]).await.ok();
             backend
@@ -286,11 +266,7 @@ mod tests {
         )
         .await
         .expect("the relay outlived its idle window");
-        let Err(err) = relayed else {
-            panic!("the relay finished instead of reaping a stalled write");
-        };
-        assert!(err.to_string().contains("idle timeout"), "{err:#}");
-        drop(client);
+        assert!(matches!(relayed, Err(e) if e.to_string().contains("idle timeout")));
     }
 
     #[tokio::test]

@@ -61,12 +61,8 @@ where
                     .write_buf(&mut self.buf)
                     .await
                     .context("write error")?;
-                // A writer that takes nothing while reporting success can no
-                // longer accept bytes. Without this the state stays `Write`
-                // with a non-empty buffer, the loop re-enters at once, and the
-                // zero-length write counts as progress -- so the watchdog sees
-                // a busy connection and the bridge spins hot on a core until
-                // `timeouts.total`. The relay paths bail the same way.
+                // Otherwise the loop re-enters at once and the empty write
+                // counts as progress, spinning until `timeouts.total`.
                 if n == 0 && !self.buf.is_empty() {
                     bail!("write accepted no bytes");
                 }
@@ -263,8 +259,7 @@ mod tests {
     use std::task::{Context as TaskContext, Poll};
     use std::time::Duration;
 
-    /// A writer that reports success while accepting nothing -- what the
-    /// `AsyncWrite` contract calls "can no longer accept bytes".
+    /// Reports success while accepting nothing.
     struct AcceptsNothing;
 
     impl AsyncWrite for AcceptsNothing {
@@ -291,21 +286,8 @@ mod tests {
         }
     }
 
-    fn test_config() -> ProxyConfig {
-        crate::config::load_config_figment(None)
-            .focus("core.proxy")
-            .extract()
-            .expect("the shipped default config should parse")
-    }
-
-    /// A zero-length write leaves the direction in `Write` with a non-empty
-    /// buffer, so the loop re-enters immediately -- and it used to count as
-    /// progress, which kept the idle watchdog quiet while the bridge span hot
-    /// on a core until `timeouts.total`.
-    ///
-    /// The bridge gets a thread and a runtime of its own because that spin
-    /// never yields: a timeout sharing its runtime would never be polled, and
-    /// dropping a runtime whose task never returns hangs the test.
+    // Own thread and runtime: the pre-fix spin never yields, so an in-runtime
+    // timeout would never fire.
     #[test]
     fn a_writer_that_accepts_no_bytes_is_an_error_not_a_spin() {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -315,32 +297,27 @@ mod tests {
                 .build()
                 .unwrap();
             let outcome = rt.block_on(async {
-                let config = test_config();
+                let config: ProxyConfig = crate::config::load_config_figment(None)
+                    .focus("core.proxy")
+                    .extract()
+                    .unwrap();
                 let mut client_rx: &[u8] = b"request";
-                let mut client_tx = tokio::io::sink();
-                // The app never answers, so only the direction facing the
-                // writer that takes nothing can make progress.
-                let mut app_rx = tokio::io::empty();
-                let mut app_tx = AcceptsNothing;
-                match relay(
+                relay(
                     &mut client_rx,
-                    &mut client_tx,
-                    &mut app_rx,
-                    &mut app_tx,
+                    &mut tokio::io::sink(),
+                    &mut tokio::io::empty(),
+                    &mut AcceptsNothing,
                     &config,
                 )
                 .await
-                {
-                    Ok(()) => "the bridge returned success".to_string(),
-                    Err(err) => format!("{err:#}"),
-                }
             });
-            tx.send(outcome).ok();
+            tx.send(outcome.map_err(|e| format!("{e:#}"))).ok();
         });
 
-        let outcome = rx
+        let err = rx
             .recv_timeout(Duration::from_secs(5))
-            .expect("the bridge never came back from a zero-length write");
-        assert!(outcome.contains("write accepted no bytes"), "{outcome}");
+            .expect("the bridge spun on a zero-length write")
+            .unwrap_err();
+        assert!(err.contains("write accepted no bytes"), "{err}");
     }
 }

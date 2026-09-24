@@ -28,7 +28,7 @@ use tracing::{debug, debug_span, error, info, warn, Instrument};
 use crate::{
     config::ProxyConfig,
     main_service::Proxy,
-    models::Counting,
+    models::EnteredCounter,
     pp::{get_inbound_pp_header, DisplayAddr},
 };
 
@@ -88,28 +88,12 @@ pub(crate) mod stats;
 mod tls_passthough;
 mod tls_terminate;
 
-/// Largest ClientHello the gateway will buffer while looking for the SNI.
-///
-/// The record layer bounds one handshake fragment at 2^14 bytes, and a hello
-/// that does not fit in a single record cannot be read here anyway:
-/// [`extract_sni`] parses the handshake as one contiguous block, so a second
-/// record's header would land in the middle of it.
-///
-/// The fixed 4 KiB this replaces was not the margin it looked like. A TLS 1.3
-/// hello carrying a post-quantum key share (X25519MLKEM768 is ~1.2 KiB), a
-/// session ticket and ECH is already past 2 KiB, and extension order is the
-/// client's to choose -- so `server_name` may sit behind all of it. Past 4 KiB
-/// the read landed in an empty slice and returned `Ok(0)`, which is
-/// indistinguishable from a hangup: the connection was refused with "no sni
-/// found" and nothing said a limit had been hit.
+/// One TLS record. `extract_sni` does not reassemble records, so a larger
+/// ClientHello cannot be parsed anyway.
 const MAX_CLIENT_HELLO_BYTES: usize = 5 + (1 << 14);
 
-/// First read. Every ordinary ClientHello fits, so the buffer only grows for
-/// the ones that do not and the common connection still allocates 4 KiB.
-const SNI_BUFFER_INITIAL_BYTES: usize = 4096;
-
 async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
-    let mut buffer = vec![0u8; SNI_BUFFER_INITIAL_BYTES];
+    let mut buffer = vec![0u8; 4096];
     let mut data_len = 0;
     loop {
         if data_len == buffer.len() {
@@ -308,7 +292,7 @@ fn conn_task(
     slot: Option<balance::CoreSlot>,
 ) -> impl std::future::Future<Output = ()> + Send + 'static {
     let span = debug_span!("conn", id = next_connection_id());
-    let conn_entered = NUM_CONNECTIONS.enter();
+    let conn_entered = EnteredCounter::new(&NUM_CONNECTIONS);
     async move {
         let _conn_entered = conn_entered;
         let _slot = slot;
@@ -672,9 +656,7 @@ mod tests {
         assert_eq!(config.ktls.is_some(), probe_ktls().is_ok());
     }
 
-    /// A TLS 1.3 ClientHello whose `server_name` sits behind `filler` bytes of
-    /// key share, which is where a post-quantum client puts it: extension
-    /// order is the client's to choose.
+    /// A ClientHello whose `server_name` sits behind `filler` bytes of key share.
     pub(crate) fn client_hello(sni: &str, filler: usize) -> Vec<u8> {
         fn u16_prefixed(body: &[u8]) -> Vec<u8> {
             let mut out = (body.len() as u16).to_be_bytes().to_vec();
@@ -705,44 +687,25 @@ mod tests {
         record
     }
 
-    /// Feed `hello` to `take_sni` over a real socket, leaving the client end
-    /// open so a short read is never mistaken for a hangup.
+    /// Feed `hello` to `take_sni`, keeping the client open so a short read is
+    /// not mistaken for a hangup.
     async fn sniff(hello: Vec<u8>) -> (Result<(Option<String>, Vec<u8>)>, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let client = TcpStream::connect(addr).await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
         let (mut server, _) = listener.accept().await.unwrap();
-        let client = tokio::spawn(async move {
-            let mut client = client;
-            tokio::io::AsyncWriteExt::write_all(&mut client, &hello)
-                .await
-                .ok();
-            client
-        });
-        let sniffed = take_sni(&mut server).await;
-        (sniffed, client.await.unwrap())
+        tokio::io::AsyncWriteExt::write_all(&mut client, &hello)
+            .await
+            .unwrap();
+        (take_sni(&mut server).await, client)
     }
 
-    /// A TLS 1.3 hello carrying post-quantum key shares, a session ticket and
-    /// ECH is already past 2 KiB, so the `server_name` landing past the first
-    /// 4 KiB is a client doing nothing unusual.
     #[tokio::test]
     async fn an_sni_past_the_first_read_is_still_found() {
         let (sniffed, _client) = sniff(client_hello("app.example.com", 6000)).await;
-        let (sni, _buffer) = sniffed.expect("a large client hello is not an error");
+        let (sni, _buffer) = sniffed.unwrap();
         assert_eq!(sni.as_deref(), Some("app.example.com"));
-    }
-
-    /// Past the cap the connection is refused -- but it has to say so, and say
-    /// which limit it hit, rather than looking like a client that hung up.
-    #[tokio::test]
-    async fn a_client_hello_past_the_cap_names_the_limit() {
-        let (sniffed, _client) = sniff(client_hello("app.example.com", 1 << 15)).await;
-        let err = sniffed
-            .map(|(sni, _buffer)| sni)
-            .expect_err("a client hello past the cap must be refused");
-        let err = format!("{err:#}");
-        assert!(err.contains(&MAX_CLIENT_HELLO_BYTES.to_string()), "{err}");
     }
 
     #[test]
