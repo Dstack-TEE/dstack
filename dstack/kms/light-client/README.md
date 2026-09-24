@@ -3,7 +3,7 @@
 The default [KMS Compose](../dstack-app/docker-compose.yaml) runs KMS, auth-api,
 Helios and its gossip relay inside the same CVM. All services use one published
 KMS image; no deployment-time builds or source downloads are required. The KMS
-builder pins the [Helios fork](https://github.com/Dstack-TEE/helios/pull/1) by commit.
+builder pins the [Helios fork](https://github.com/Dstack-TEE/helios) by commit.
 
 ## Deployment
 
@@ -25,6 +25,8 @@ The app must enable `secure_time` (`vmm-cli.py compose --secure-time`, as
 NTS-synchronized time, the host can roll the clock back and replay old signed
 blocks to hide revocations. `secure_time` is part of `app-compose.json`, so only
 approve KMS compose hashes whose `app-compose.json` sets it to `true`.
+Secure time needs a guest image whose chrony supports NTS (dstack 0.6.0 or
+later); older images hang at boot ([#745](https://github.com/Dstack-TEE/dstack/issues/745)).
 
 Only the KMS port is published.
 

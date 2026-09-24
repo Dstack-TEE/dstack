@@ -43,7 +43,7 @@ VERIFY_IMAGE=true
 # ETH_MAX_BLOCK_AGE_SECONDS=
 
 # The dstack OS image name to use for the KMS app
-OS_IMAGE=dstack-0.5.5
+OS_IMAGE=dstack-0.6.0
 
 # The dstack KMS image name to use for the KMS app
 # KMS_IMAGE=ghcr.io/dstack-tee/dstack-kms@sha256:<published-image-digest>
