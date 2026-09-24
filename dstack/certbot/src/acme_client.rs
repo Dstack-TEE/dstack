@@ -662,12 +662,12 @@ impl AcmeClient {
         force: bool,
     ) -> Result<bool> {
         let live_cert_pem = fs::read_to_string(live_cert_pem_path.as_ref())?;
-        let live_key_pem = fs::read_to_string(live_key_pem_path.as_ref())?;
+        let key_pem = new_key_pem()?;
         let new_cert = if force {
-            self.renew_cert(&live_cert_pem, &live_key_pem).await?
+            self.renew_cert(&live_cert_pem, &key_pem).await?
         } else {
             let Some(new_cert) = self
-                .renew_cert_if_needed(&live_cert_pem, &live_key_pem, expires_in)
+                .renew_cert_if_needed(&live_cert_pem, &key_pem, expires_in)
                 .await?
             else {
                 return Ok(false);
@@ -678,7 +678,7 @@ impl AcmeClient {
             live_cert_pem_path.as_ref(),
             live_key_pem_path.as_ref(),
             &new_cert,
-            &live_key_pem,
+            &key_pem,
             backup_dir.as_ref(),
         )?;
         info!(
@@ -696,21 +696,15 @@ impl AcmeClient {
         key_pem: &str,
         backup_dir: impl AsRef<Path>,
     ) -> Result<()> {
-        use path_absolutize::Absolutize;
-
         // Put the new cert in {backup_dir}/%Y%m%d_%H%M%S/cert.pem
         let cert_dir = self.new_cert_dir(backup_dir.as_ref())?;
-        let backup_path = cert_dir.absolutize()?;
-        let cert_path = backup_path.join("cert.pem");
-        let key_path = backup_path.join("key.pem");
-        fs::write(&cert_path, cert_pem)?;
-        fs::write(&key_path, key_pem)?;
-        debug!("stored new cert in {}", cert_dir.display());
-
-        // symlink live_cert_pem_path to the new cert
-        ln_force(cert_path, live_cert_pem_path)?;
-        ln_force(key_path, live_key_pem_path)?;
-        Ok(())
+        store_cert_at(
+            &cert_dir,
+            live_cert_pem_path,
+            live_key_pem_path,
+            cert_pem,
+            key_pem,
+        )
     }
 
     /// Issue a certificate for `domains` unless the live one is already for
@@ -748,14 +742,7 @@ impl AcmeClient {
                 Some(reason) => info!("reissuing: {reason}"),
             }
         }
-        let key_pem = if live_key_pem_path.as_ref().exists() {
-            debug!("using existing cert key pair");
-            fs::read_to_string(live_key_pem_path.as_ref())?
-        } else {
-            debug!("generating new cert key pair");
-            let key = KeyPair::generate().context("failed to generate key")?;
-            key.serialize_pem()
-        };
+        let key_pem = new_key_pem()?;
         let cert_pem = self.request_new_certificate(&key_pem, domains).await?;
         self.store_cert(
             live_cert_pem_path.as_ref(),
@@ -904,7 +891,7 @@ impl AcmeClient {
     /// letting the CA decide.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
         let mut delay = Duration::from_millis(250);
-        let mut tries = 1u8;
+        let mut tries = 1u32;
 
         let mut unsettled_challenges = challenges.to_vec();
 
@@ -1358,15 +1345,85 @@ fn extract_subject_alt_names(cert_pem: &str) -> Result<Vec<String>> {
     Ok(domains)
 }
 
-fn ln_force(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<()> {
-    // Check if the symlink exists without following it
-    if dst.as_ref().symlink_metadata().is_ok() {
-        fs::remove_file(dst.as_ref())?;
-    } else if let Some(dst_parent) = dst.as_ref().parent() {
-        fs::create_dir_all(dst_parent)?;
+/// Every issuance, renewals included, gets a new key, as in the gateway's certbot.
+fn new_key_pem() -> Result<String> {
+    let key = KeyPair::generate().context("failed to generate key")?;
+    Ok(key.serialize_pem())
+}
+
+/// Write one generation of a certificate into `cert_dir` and publish it as the
+/// live pair.
+fn store_cert_at(
+    cert_dir: &Path,
+    live_cert_pem_path: &Path,
+    live_key_pem_path: &Path,
+    cert_pem: &str,
+    key_pem: &str,
+) -> Result<()> {
+    use path_absolutize::Absolutize;
+
+    let backup_path = cert_dir.absolutize()?;
+    let cert_path = backup_path.join("cert.pem");
+    let key_path = backup_path.join("key.pem");
+    fs::write(&cert_path, cert_pem)?;
+    safe_write::safe_write_with_mode(&key_path, key_pem, 0o600)
+        .context("failed to write the certificate key")?;
+    debug!("stored new cert in {}", cert_dir.display());
+
+    publish_generation(&backup_path, live_cert_pem_path, live_key_pem_path)
+}
+
+/// The name the live paths resolve the current generation through.
+const CURRENT_LINK: &str = ".current";
+
+/// Publish the generation in `cert_dir` as the live pair. When both live paths share a
+/// directory they resolve through one `.current` link, so a single rename flips cert and key.
+fn publish_generation(cert_dir: &Path, live_cert: &Path, live_key: &Path) -> Result<()> {
+    let live_dir = parent_dir(live_cert);
+    if live_dir != parent_dir(live_key) {
+        ln_atomic(&cert_dir.join("cert.pem"), live_cert)?;
+        ln_atomic(&cert_dir.join("key.pem"), live_key)?;
+        return Ok(());
     }
-    fs::os::unix::fs::symlink(src.as_ref(), dst.as_ref())?;
+    ln_atomic(cert_dir, &live_dir.join(CURRENT_LINK))?;
+    let current = Path::new(CURRENT_LINK);
+    ln_atomic_if_changed(&current.join("cert.pem"), live_cert)?;
+    ln_atomic_if_changed(&current.join("key.pem"), live_key)?;
     Ok(())
+}
+
+/// The directory `path` names a file in, as a path that can be joined onto.
+fn parent_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
+/// Point `dst` at `src` with a rename, so `dst` never goes missing.
+fn ln_atomic(src: &Path, dst: &Path) -> Result<()> {
+    let dir = parent_dir(dst);
+    fs::create_dir_all(dir)?;
+    let name = dst.file_name().context("cannot link a path with no name")?;
+    let staging = dir.join(format!(
+        ".{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id()
+    ));
+    if staging.symlink_metadata().is_ok() {
+        fs::remove_file(&staging)?;
+    }
+    fs::os::unix::fs::symlink(src, &staging)?;
+    fs::rename(&staging, dst)?;
+    Ok(())
+}
+
+/// [`ln_atomic`], skipped when `dst` already points at `src`.
+fn ln_atomic_if_changed(src: &Path, dst: &Path) -> Result<()> {
+    if fs::read_link(dst).is_ok_and(|target| target == src) {
+        return Ok(());
+    }
+    ln_atomic(src, dst)
 }
 
 #[cfg(test)]
@@ -1952,5 +2009,84 @@ mod dns_wait_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// Store generation `generation`, using its name as both cert and key so a
+    /// reader can tell in one comparison whether it got a matching pair.
+    fn publish(root: &Path, generation: u32) {
+        let content = format!("generation-{generation}");
+        let cert_dir = root.join("backup").join(&content);
+        fs::create_dir_all(&cert_dir).unwrap();
+        store_cert_at(
+            &cert_dir,
+            &root.join("live/cert.pem"),
+            &root.join("live/key.pem"),
+            &content,
+            &content,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_stored_certificate_key_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), 1);
+
+        let stored = root.path().join("backup/generation-1/key.pem");
+        assert_eq!(
+            fs::metadata(&stored).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "the certificate key is readable by anyone on the host"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("live/key.pem")).unwrap(),
+            "generation-1"
+        );
+    }
+
+    #[test]
+    fn a_reader_never_catches_the_live_pair_half_published() {
+        let root = tempfile::tempdir().unwrap();
+        publish(root.path(), 0);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let reading = stop.clone();
+        let cert_path = root.path().join("live/cert.pem");
+        let key_path = root.path().join("live/key.pem");
+        let reader = std::thread::spawn(move || {
+            while !reading.load(Ordering::Relaxed) {
+                // Read the cert on both sides of the key so the reader's own straddle is ignored.
+                let before = fs::read_to_string(&cert_path);
+                let key = fs::read_to_string(&key_path);
+                let after = fs::read_to_string(&cert_path);
+                let (Ok(before), Ok(key), Ok(after)) = (&before, &key, &after) else {
+                    return Some(format!("cert {before:?}, key {key:?}, cert {after:?}"));
+                };
+                if before == after && before != key {
+                    return Some(format!("cert {before:?} published with key {key:?}"));
+                }
+            }
+            None
+        });
+
+        for generation in 1..=500 {
+            publish(root.path(), generation);
+        }
+        stop.store(true, Ordering::Relaxed);
+
+        assert_eq!(
+            reader.join().unwrap(),
+            None,
+            "the live pair was observed half published"
+        );
     }
 }
