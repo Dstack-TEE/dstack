@@ -114,6 +114,10 @@ async fn take_sni(stream: &mut TcpStream) -> Result<(Option<String>, Vec<u8>)> {
 
         if let Some(sni) = extract_sni(&buffer[..data_len]) {
             let sni = String::from_utf8(sni.to_vec()).context("sni: invalid utf-8")?;
+            // The SNI goes into DNS queries and error logs; do not echo a bad one.
+            if rustls::pki_types::DnsName::try_from(sni.as_str()).is_err() {
+                bail!("sni is not a valid dns name ({} bytes)", sni.len());
+            }
             debug!("got sni: {sni}");
             buffer.truncate(data_len);
             return Ok((Some(sni), buffer));
@@ -706,6 +710,19 @@ mod tests {
         let (sniffed, _client) = sniff(client_hello("app.example.com", 6000)).await;
         let (sni, _buffer) = sniffed.unwrap();
         assert_eq!(sni.as_deref(), Some("app.example.com"));
+    }
+
+    #[tokio::test]
+    async fn an_sni_that_is_not_a_dns_name_is_refused_without_echoing_it() {
+        let mut host = "a".repeat(4000);
+        host.replace_range(10..11, "\n");
+        let (sniffed, _client) = sniff(client_hello(&host, 0)).await;
+        let err = sniffed.expect_err("a 4000-byte SNI was accepted");
+        assert!(!format!("{err:#}").contains("aaaa"), "{err:#}");
+
+        let host = "3327603e03f5bd1f830812ca4a789277fc31f577-8080s.app.dstack.org";
+        let (sniffed, _client) = sniff(client_hello(host, 0)).await;
+        assert_eq!(sniffed.unwrap().0.as_deref(), Some(host));
     }
 
     #[test]
