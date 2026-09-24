@@ -68,6 +68,11 @@ export DSTACK_VMM_URL=unix:/path/to/socket
 
 **Priority Order:** Command line `--url` > `DSTACK_VMM_URL` environment variable > default `http://localhost:8080`
 
+For an `https://` URL (a TLS-terminating proxy in front of the VMM), the
+certificate is verified against the system CA store. Point `SSL_CERT_FILE` at
+your own CA for a private certificate. `--insecure` skips verification, and then
+anyone on the path can read the credentials sent with each request.
+
 ### Authentication
 
 When the dstack-vmm server has `[auth] enabled = true`, the token now guards the
