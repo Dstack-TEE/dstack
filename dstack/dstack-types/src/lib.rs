@@ -1562,46 +1562,6 @@ pub fn image_hash_from_sha256sum(checksum_file: &[u8]) -> [u8; 32] {
     sha256(checksum_file)
 }
 
-pub fn sha256sum_entry_hash(checksum_file: &[u8], filename: &str) -> Result<[u8; 32], String> {
-    let text = std::str::from_utf8(checksum_file)
-        .map_err(|e| format!("sha256sum.txt is not valid UTF-8: {e}"))?;
-    let mut found = None;
-    for (line_no, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let mut parts = line.split_whitespace();
-        let Some(hash_hex) = parts.next() else {
-            continue;
-        };
-        let Some(path) = parts.next() else {
-            return Err(format!(
-                "sha256sum.txt line {} is missing filename",
-                line_no + 1
-            ));
-        };
-        if path != filename {
-            continue;
-        }
-        if found.is_some() {
-            return Err(format!(
-                "sha256sum.txt contains duplicate {filename} entries"
-            ));
-        }
-        let hash = hex::decode(hash_hex)
-            .map_err(|e| format!("sha256sum.txt {filename} hash is not valid hex: {e}"))?;
-        let hash: [u8; 32] = hash.try_into().map_err(|hash: Vec<u8>| {
-            format!(
-                "sha256sum.txt {filename} hash has invalid length {}, expected 32",
-                hash.len()
-            )
-        })?;
-        found = Some(hash);
-    }
-    found.ok_or_else(|| format!("sha256sum.txt is missing {filename}"))
-}
-
 pub fn verify_measurement_material(
     os_image_hash: &[u8],
     checksum_file: &[u8],
@@ -1615,7 +1575,7 @@ pub fn verify_measurement_material(
             hex::encode(image_hash_from_sha256sum(checksum_file))
         ));
     }
-    let expected_measurement_hash = sha256sum_entry_hash(checksum_file, filename)?;
+    let expected_measurement_hash = sha256sum::entry_hash(checksum_file, filename)?;
     let actual_measurement_hash = sha256(measurement);
     if expected_measurement_hash != actual_measurement_hash {
         return Err(format!(
@@ -2484,6 +2444,7 @@ pub struct ImageInfo {
 }
 
 pub mod mr_config;
+pub mod sha256sum;
 pub mod shared_filenames;
 pub mod version;
 
