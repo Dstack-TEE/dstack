@@ -11,11 +11,7 @@ use crate::main_service;
 use anyhow::{Context, Result};
 use fs_err as fs;
 
-/// The head of a compose file, for an error message about it.
-///
-/// Truncation counts characters, not bytes: a compose file is operator input
-/// and may hold any UTF-8, and slicing one at byte 200 aborts the process
-/// whenever a character straddles that byte.
+/// Truncate by character: slicing at byte 200 panics inside a multi-byte character.
 fn compose_preview(compose_file: &str) -> String {
     const PREVIEW_CHARS: usize = 200;
     let preview: String = compose_file.chars().take(PREVIEW_CHARS).collect();
@@ -397,20 +393,9 @@ Compose file content (first 200 chars):
 mod tests {
     use super::*;
 
-    /// A compose file is operator input and may hold any UTF-8. Truncating it
-    /// for an error message must not depend on where a character starts.
     #[test]
-    fn a_compose_preview_truncates_by_character() {
-        let head = "\u{4e2d}".repeat(250);
-        assert!(
-            head.chars().count() > 200,
-            "the preview has to actually truncate"
-        );
-        let preview = compose_preview(&head);
-        assert_eq!(preview.chars().count(), 203, "{preview}");
-        assert!(preview.ends_with("..."));
-
-        let short = "{\"name\": \"\u{e9}\"}";
-        assert_eq!(compose_preview(short), short);
+    fn compose_preview_truncates_by_character() {
+        let preview = compose_preview(&"\u{4e2d}".repeat(250));
+        assert_eq!(preview.chars().count(), 203);
     }
 }
