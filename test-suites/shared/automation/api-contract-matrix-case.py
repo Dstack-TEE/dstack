@@ -222,9 +222,7 @@ def wrong_type_for(field_def: dict[str, Any]) -> Any:
     return {"not": "a scalar"}
 
 
-def sweep_rejection_only(
-    target: Target, entry: dict[str, Any]
-) -> list[Call]:
+def sweep_rejection_only(target: Target, entry: dict[str, Any]) -> list[Call]:
     """Vectors a service must refuse before it can dispatch the method."""
     service, method = entry["service"], entry["method"]
     key = f"{service}.{method}"
@@ -287,7 +285,9 @@ def sweep_framing(target: Target, method: str) -> list[Call]:
     return calls
 
 
-def sweep_full(target: Target, entry: dict[str, Any], markers: dict[str, str]) -> list[Call]:
+def sweep_full(
+    target: Target, entry: dict[str, Any], markers: dict[str, str]
+) -> list[Call]:
     """The complete vector set for one method."""
     service, method = entry["service"], entry["method"]
     key = f"{service}.{method}"
@@ -351,7 +351,9 @@ def sweep_full(target: Target, entry: dict[str, Any], markers: dict[str, str]) -
         )
     )
     highest = max((int(f["number"]) for f in fields), default=0)
-    body = encode_request(fields, valid) + varint(((highest + 1000) << 3) | 0) + varint(7)
+    body = (
+        encode_request(fields, valid) + varint(((highest + 1000) << 3) | 0) + varint(7)
+    )
     calls.append(
         invoke(
             target,

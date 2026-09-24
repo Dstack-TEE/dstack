@@ -392,9 +392,18 @@ def check_invariants(calls: list[Call], echoed_markers: dict[str, str]) -> list[
         # A label records the representation the request was sent in. "raw"
         # framing rows carry their own content type in the label.
         sent_json = call.representation == "json" or call.label.endswith(
-            ("json-empty-body", "json-not-object", "json-scalar", "json-null",
-             "json-truncated", "json-trailing-garbage", "json-deep-nesting",
-             "json-duplicate-keys", "json-huge-4mib", "ct-mismatch-pb-as-json")
+            (
+                "json-empty-body",
+                "json-not-object",
+                "json-scalar",
+                "json-null",
+                "json-truncated",
+                "json-trailing-garbage",
+                "json-deep-nesting",
+                "json-duplicate-keys",
+                "json-huge-4mib",
+                "ct-mismatch-pb-as-json",
+            )
         )
         if call.http is not None and call.http >= 400:
             if sent_json:
@@ -446,7 +455,11 @@ def check_invariants(calls: list[Call], echoed_markers: dict[str, str]) -> list[
         marker = echoed_markers.get(call.label)
         if marker and marker in call.text:
             violations.append(
-                {**base, "invariant": "L4", "detail": "response echoed the input marker"}
+                {
+                    **base,
+                    "invariant": "L4",
+                    "detail": "response echoed the input marker",
+                }
             )
         if call.seconds > CALL_TIMEOUT:
             violations.append(
