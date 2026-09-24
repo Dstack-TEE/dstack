@@ -1,0 +1,7 @@
+{
+    "key-providers": {
+        "attestation-agent": {
+            "ttrpc": "unix:///run/confidential-containers/cdh.sock"
+        }
+    }
+}
