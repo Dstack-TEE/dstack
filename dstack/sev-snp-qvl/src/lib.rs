@@ -27,10 +27,6 @@ const VLEK_CERT_GUID: [u8; 16] = [
     0xa8, 0x07, 0x4b, 0xc2, 0xa2, 0x5a, 0x48, 0x3e, 0xaa, 0xe6, 0x39, 0xc0, 0x45, 0xa0, 0xb8, 0xa1,
 ];
 const CERT_TABLE_ENTRY_SIZE: usize = 24;
-/// Largest number of entries accepted from a kernel certificate table. The
-/// table the SNP guest driver fills carries ARK, ASK and VCEK, and this code
-/// only looks for two of those, so eight is ample headroom.
-const MAX_CERT_TABLE_ENTRIES: usize = 8;
 pub const AMD_KDS_DEFAULT_BASE_URL: &str = "https://kdsintf.amd.com/vcek/v1";
 const AMD_KDS_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AMD_KDS_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -902,17 +898,18 @@ fn normalize_kernel_cert_table(auxblob: &[u8]) -> Result<(CertBytes, CertBytes)>
     let vcek = vcek.context("amd sev-snp certificate table missing VCEK certificate")?;
     Ok((
         CertBytes {
-            bytes: ask,
+            bytes: ask.to_vec(),
             encoding: CertEncoding::Der,
         },
         CertBytes {
-            bytes: vcek,
+            bytes: vcek.to_vec(),
             encoding: CertEncoding::Der,
         },
     ))
 }
 
-fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
+// Entries may overlap, so borrow them: copying each one lets a small blob decode to gigabytes.
+fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], &[u8])>> {
     if auxblob.len() < CERT_TABLE_ENTRY_SIZE {
         bail!("amd sev-snp certificate table is too short");
     }
@@ -938,23 +935,13 @@ fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
         if guid == [0u8; 16] && offset == 0 && length == 0 {
             break;
         }
-        // Nothing stops two entries pointing at the same bytes, so the data
-        // this returns is not bounded by the blob it came from: one 24-byte
-        // entry can name the whole blob, and a blob is all entries but the
-        // terminator. A 64 KiB auxblob copies 179 MiB that way, a 1 MiB one
-        // about 46 GiB, and all of it is held at once. This runs on
-        // `cert_chain[0]` of an unverified SNP attestation, before any
-        // signature is checked, so the bound has to be here.
-        if entries.len() >= MAX_CERT_TABLE_ENTRIES {
-            bail!("amd sev-snp certificate table has more than {MAX_CERT_TABLE_ENTRIES} entries");
-        }
         let end = offset
             .checked_add(length)
             .context("amd sev-snp certificate table entry length overflows")?;
         if offset < CERT_TABLE_ENTRY_SIZE || end > auxblob.len() || length == 0 {
             bail!("amd sev-snp certificate table entry has invalid bounds");
         }
-        entries.push((guid, auxblob[offset..end].to_vec()));
+        entries.push((guid, &auxblob[offset..end]));
         pos = pos
             .checked_add(CERT_TABLE_ENTRY_SIZE)
             .context("amd sev-snp certificate table entry count overflows")?;
@@ -1174,13 +1161,10 @@ mod tests {
         );
     }
 
-    /// Entries may name overlapping ranges, so a table that is nothing but
-    /// entries each naming the whole blob decodes to `len/24` copies of it and
-    /// holds them all: 179 MiB from a 64 KiB auxblob, about 46 GiB from a
-    /// 1 MiB one. This runs on `cert_chain[0]` of an unverified attestation.
+    /// Each entry names the whole blob; copying them would need about 46 GiB.
     #[test]
-    fn rejects_a_certificate_table_that_decodes_to_more_than_it_contains() {
-        const LEN: usize = 1024 * 1024;
+    fn overlapping_certificate_table_entries_are_not_copied() {
+        const LEN: usize = CERT_TABLE_ENTRY_SIZE * 43_690;
 
         let mut auxblob = vec![0u8; LEN];
         for at in (0..LEN - CERT_TABLE_ENTRY_SIZE).step_by(CERT_TABLE_ENTRY_SIZE) {
@@ -1191,11 +1175,8 @@ mod tests {
                 .copy_from_slice(&((LEN - CERT_TABLE_ENTRY_SIZE) as u32).to_le_bytes());
         }
 
-        let err = parse_kernel_cert_table(&auxblob).unwrap_err();
-        assert!(
-            err.to_string().contains("entries"),
-            "unexpected error: {err:#}"
-        );
+        let err = normalize_kernel_cert_table(&auxblob).unwrap_err();
+        assert!(err.to_string().contains("missing ASK"), "{err:#}");
     }
 
     #[test]
