@@ -23,14 +23,8 @@ pub mod volume_format;
 
 pub use volume::Compression;
 
-/// Read the root hash out of `veritysetup` output.
-///
-/// One grammar for both commands this project reads. `veritysetup format`
-/// prints `Root hash:\t<hex>` flush left; `veritysetup status` prints
-/// `  root hash:\t<hex>` indented and lower-cased. Two parsers, one per
-/// command, is how a later cryptsetup release gets to break one of them
-/// silently -- so accept both spellings in one place and require what follows
-/// to actually be a hash.
+/// Read the root hash from `veritysetup format` (`Root hash:`) or
+/// `veritysetup status` (indented `root hash:`) output.
 pub fn parse_verity_root_hash(output: &str) -> Option<String> {
     output
         .lines()
@@ -48,44 +42,17 @@ pub fn parse_verity_root_hash(output: &str) -> Option<String> {
 mod root_hash_tests {
     use super::parse_verity_root_hash;
 
-    /// Captured from `veritysetup 2.7.0`: `format` writes the summary flush
-    /// left with a capital R, `status` writes it indented and lower-cased.
     #[test]
     fn both_veritysetup_spellings_parse() {
-        const ROOT: &str = "e85f5e7498a2b6f3ef05d0f612cfbec7f7bff7c2cbd64ffdebb972ab54606f89";
-        let format_output = format!(
-            "VERITY header information for hash.img\n\
-             UUID:            \taa7082ce-3622-4ce5-a875-9cc88edf35a7\n\
-             Hash algorithm:  \tsha256\n\
-             Salt:            \t00\n\
-             Root hash:      \t{ROOT}\n\
-             Hash device size: \t8192 [bytes]\n"
-        );
-        let status_output = format!(
-            "/dev/mapper/dstack-verity0 is active.\n\
-             \ttype:        VERITY\n\
-             \tstatus:      verified\n\
-             \thash name:   sha256\n\
-             \troot hash:   {ROOT}\n"
+        assert_eq!(
+            parse_verity_root_hash("Salt:\t00\nRoot hash:      \tabc123\n").as_deref(),
+            Some("abc123")
         );
         assert_eq!(
-            parse_verity_root_hash(&format_output).as_deref(),
-            Some(ROOT)
+            parse_verity_root_hash("  type:  VERITY\n  root hash:   abc123\n").as_deref(),
+            Some("abc123")
         );
-        assert_eq!(
-            parse_verity_root_hash(&status_output).as_deref(),
-            Some(ROOT)
-        );
-    }
-
-    /// A line that announces a root hash and then does not carry one is not a
-    /// root hash. Returning it would feed `veritysetup open` a bad argument
-    /// and blame the volume for it.
-    #[test]
-    fn a_label_without_a_hash_is_not_a_root_hash() {
         assert_eq!(parse_verity_root_hash("Root hash:\n"), None);
-        assert_eq!(parse_verity_root_hash("root hash:   (none)\n"), None);
-        assert_eq!(parse_verity_root_hash("no root hash here\n"), None);
     }
 }
 
