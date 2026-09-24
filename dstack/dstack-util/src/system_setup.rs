@@ -1640,9 +1640,9 @@ mod gpu {
             bail!("nvattest is not available in this image");
         }
         // Certificate/OCSP validation needs a sane clock even when
-        // secure_time is off; best-effort step chrony before attesting.
-        if let Err(err) = cmd!(chronyc makestep) {
-            warn!("failed to step system clock: {err:?}");
+        // secure_time is off; give chrony up to 30s to sync before attesting.
+        if let Err(err) = cmd!(chronyc waitsync 30 0 0 1) {
+            warn!("system clock not synchronized: {err:?}");
         }
         let nonce: [u8; nvattest::NONCE_LEN] = rand::thread_rng().gen();
         let (nonce, output) = nvattest::run(&nonce, proxy_url, nvattest::DEFAULT_TIMEOUT).await?;
