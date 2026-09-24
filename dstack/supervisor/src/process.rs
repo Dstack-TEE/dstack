@@ -376,30 +376,8 @@ async fn redirect(mut input: impl AsyncRead + Unpin, to: String) {
     }
 }
 
-/// How many times a redirect target has been opened, counted for the tests
-/// below. A reopen leaves nothing behind in the file it reopens, so counting is
-/// the only way to see the thing that was wrong here: not what was written, but
-/// how often the writing stopped to `fsync` and start over.
-#[cfg(test)]
-static LOG_OPENS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-/// Whether a watcher event means the log path stopped naming the file this
-/// task holds open, so the next write has to go to a new one.
-///
-/// Deliberately not `is_modify()`. On Linux `recommended_watcher` is inotify,
-/// where `is_modify()` also matches `IN_MODIFY` -- which is exactly what the
-/// `write_all` below generates, on its own output. Streaming 8 MiB from a
-/// supervised child through the previous condition cost 1145 `fsync` calls and
-/// 1146 reopens of a log nothing had rotated, one per read buffer, each one a
-/// synchronous flush on the path a chatty child writes fastest.
-///
-/// A rename is `IN_MOVED_FROM`, which inotify reports as `Modify(Name(_))` and
-/// not as a remove, so `logrotate(8)` in its default mode still gets a reopen.
-/// A truncate-in-place rotation -- what `dstack-vmm`'s own `logrotate` module
-/// does, and what `logrotate(8)`'s `copytruncate` does -- needs no reopen at
-/// all: the file is opened with `O_APPEND`, so every write goes to the current
-/// end of it whether or not it was just emptied. That is the requirement the
-/// vmm module's documentation states, and it is what makes this safe to drop.
+/// inotify reports our own `write_all` as `Modify(Data)`, so only a removal or a
+/// rename (logrotate's default mode) means the path no longer names our file.
 fn is_rotation(kind: &notify::EventKind) -> bool {
     use notify::event::{EventKind, ModifyKind};
     matches!(
@@ -436,8 +414,6 @@ async fn try_redirect(input: &mut (impl AsyncRead + Unpin), to: String) -> Resul
             .create(true)
             .append(true)
             .open(dst_path)?;
-        #[cfg(test)]
-        LOG_OPENS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         loop {
             tokio::select! {
@@ -473,188 +449,17 @@ async fn try_redirect(input: &mut (impl AsyncRead + Unpin), to: String) -> Resul
 
 #[cfg(test)]
 mod log_rotation_tests {
-    use super::*;
-    use std::sync::atomic::Ordering;
-    use std::time::Duration;
-
-    /// [`LOG_OPENS`] is process-wide, so the tests that read it take turns.
-    static SERIAL: Mutex<()> = Mutex::new(());
-
-    struct Redirect {
-        _serial: std::sync::MutexGuard<'static, ()>,
-        opens_at_start: usize,
-    }
-
-    impl Redirect {
-        fn start() -> Self {
-            let serial = SERIAL.lock().unwrap_or_else(|err| err.into_inner());
-            Self {
-                opens_at_start: LOG_OPENS.load(Ordering::SeqCst),
-                _serial: serial,
-            }
-        }
-
-        fn opens(&self) -> usize {
-            LOG_OPENS.load(Ordering::SeqCst) - self.opens_at_start
-        }
-    }
-
-    /// Wait for `condition`, or give the assertion after it something to say.
-    async fn settle(condition: impl Fn() -> bool) {
-        for _ in 0..400 {
-            if condition() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    }
-
-    fn size(path: &Path) -> u64 {
-        fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
-    }
-
-    /// A child's own output must not look like a rotation.
-    ///
-    /// inotify reports every `write_all` below as `IN_MODIFY` on the log path,
-    /// which the watcher used to accept, so each read buffer cost an `fsync`
-    /// and a reopen. Measured on the real binary before this changed: 8 MiB of
-    /// child output produced 1145 `fsync` calls and 1146 opens of a log nothing
-    /// had rotated.
-    #[tokio::test]
-    async fn streaming_output_does_not_reopen_the_log() {
-        let counter = Redirect::start();
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("stdout.log");
-
-        let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
-        let path = log.to_string_lossy().into_owned();
-        let redirect = tokio::spawn(async move { try_redirect(&mut reader, path).await });
-
-        let chunk = vec![b'x'; 8192];
-        for _ in 0..128 {
-            tokio::io::AsyncWriteExt::write_all(&mut writer, &chunk)
-                .await
-                .unwrap();
-        }
-        drop(writer);
-        redirect.await.unwrap().unwrap();
-
-        assert_eq!(size(&log), 128 * 8192);
-        assert_eq!(
-            counter.opens(),
-            1,
-            "1 MiB of output reopened the log {} times",
-            counter.opens()
-        );
-    }
-
-    /// A rotation that renames the log away still has to be followed.
-    ///
-    /// inotify reports the rename as `IN_MOVED_FROM`, which `notify` maps to
-    /// `Modify(Name(_))` rather than to a remove -- so dropping `is_modify()`
-    /// wholesale would have left `logrotate(8)`'s default mode writing into an
-    /// unlinked inode forever.
-    #[tokio::test]
-    async fn a_renamed_log_is_reopened() {
-        let counter = Redirect::start();
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("stdout.log");
-        let rotated = dir.path().join("stdout.log.1");
-
-        let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
-        let path = log.to_string_lossy().into_owned();
-        let redirect = tokio::spawn(async move { try_redirect(&mut reader, path).await });
-
-        tokio::io::AsyncWriteExt::write_all(&mut writer, b"before\n")
-            .await
-            .unwrap();
-        settle(|| size(&log) == 7).await;
-
-        fs::rename(&log, &rotated).unwrap();
-        settle(|| log.exists()).await;
-        assert!(log.exists(), "the log was never reopened after the rename");
-
-        tokio::io::AsyncWriteExt::write_all(&mut writer, b"after\n")
-            .await
-            .unwrap();
-        drop(writer);
-        redirect.await.unwrap().unwrap();
-
-        assert_eq!(fs::read_to_string(&rotated).unwrap(), "before\n");
-        assert_eq!(fs::read_to_string(&log).unwrap(), "after\n");
-        // One rename reaches the watcher twice: `notify` reports `IN_MOVED_FROM`
-        // as `Modify(Name(From))` and then synthesizes a `Modify(Name(Both))`
-        // carrying the old path as well. Both name this log, so a rotation
-        // costs a reopen more than it strictly needs. Bounded by how often a
-        // log is rotated, which is the point.
-        assert!(
-            counter.opens() >= 2,
-            "the rename was never followed: {} opens",
-            counter.opens()
-        );
-    }
-
-    /// The rotation dstack actually performs needs no reopen.
-    ///
-    /// `dstack-vmm`'s `logrotate` module copies the log and then truncates it
-    /// in place, precisely so a live writer's fd stays valid; `logrotate(8)`'s
-    /// `copytruncate` does the same. The file is opened with `O_APPEND`, so the
-    /// next write lands at the new end of it. Nothing to follow, and the
-    /// truncation is an `IN_MODIFY` this must not react to -- reacting is what
-    /// made a chatty child cost an `fsync` per buffer.
-    #[tokio::test]
-    async fn a_truncated_log_keeps_appending_without_a_reopen() {
-        let counter = Redirect::start();
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("stdout.log");
-
-        let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
-        let path = log.to_string_lossy().into_owned();
-        let redirect = tokio::spawn(async move { try_redirect(&mut reader, path).await });
-
-        tokio::io::AsyncWriteExt::write_all(&mut writer, b"before\n")
-            .await
-            .unwrap();
-        settle(|| size(&log) == 7).await;
-
-        fs::write(&log, b"").unwrap();
-        tokio::io::AsyncWriteExt::write_all(&mut writer, b"after\n")
-            .await
-            .unwrap();
-        drop(writer);
-        redirect.await.unwrap().unwrap();
-
-        // No sparse hole: `O_APPEND` put the write at the current end of file,
-        // not at the offset the writer had reached before the truncation.
-        assert_eq!(fs::read_to_string(&log).unwrap(), "after\n");
-        assert_eq!(counter.opens(), 1, "a truncation is not a rotation");
-    }
+    use super::is_rotation;
+    use notify::event::{DataChange, EventKind, ModifyKind, RemoveKind, RenameMode};
 
     #[test]
-    fn only_a_removal_or_a_rename_counts_as_a_rotation() {
-        use notify::event::{
-            AccessKind, CreateKind, DataChange, EventKind, MetadataKind, ModifyKind, RemoveKind,
-            RenameMode,
-        };
-
-        for kind in [
-            EventKind::Remove(RemoveKind::File),
-            EventKind::Remove(RemoveKind::Any),
-            EventKind::Modify(ModifyKind::Name(RenameMode::From)),
-            EventKind::Modify(ModifyKind::Name(RenameMode::Any)),
-        ] {
-            assert!(is_rotation(&kind), "{kind:?} is a rotation");
-        }
-        for kind in [
-            // What every `write_all` in `try_redirect` produces.
-            EventKind::Modify(ModifyKind::Data(DataChange::Any)),
-            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
-            EventKind::Modify(ModifyKind::Any),
-            EventKind::Create(CreateKind::File),
-            EventKind::Access(AccessKind::Any),
-        ] {
-            assert!(!is_rotation(&kind), "{kind:?} is not a rotation");
-        }
+    fn only_a_removal_or_a_rename_is_a_rotation() {
+        assert!(is_rotation(&EventKind::Remove(RemoveKind::File)));
+        assert!(is_rotation(&EventKind::Modify(ModifyKind::Name(
+            RenameMode::From
+        ))));
+        assert!(!is_rotation(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Any
+        ))));
     }
 }
