@@ -3035,7 +3035,8 @@ impl<'a> Stage0<'a> {
 
         // Save app keys
         let keys_json = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
-        fs::write(self.app_keys_file(), keys_json).context("Failed to write app keys")?;
+        safe_write_with_mode(self.app_keys_file(), keys_json, 0o600)
+            .context("Failed to write app keys")?;
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
@@ -3100,14 +3101,15 @@ impl Stage1<'_> {
 
     fn write_env_file(&self, env_vars: &BTreeMap<String, String>) -> Result<()> {
         info!("Writing env");
-        fs::write(
+        safe_write_with_mode(
             self.shared.dir.join(DECRYPTED_ENV),
             crate::parse_env_file::convert_env_to_str(env_vars),
+            0o600,
         )
         .context("Failed to write decrypted env file")?;
-        let env_json = fs::File::create(self.shared.dir.join(DECRYPTED_ENV_JSON))
-            .context("Failed to create env file")?;
-        serde_json::to_writer(env_json, &env_vars).context("Failed to write decrypted env file")?;
+        let env_json = serde_json::to_vec(env_vars).context("Failed to serialize decrypted env")?;
+        safe_write_with_mode(self.shared.dir.join(DECRYPTED_ENV_JSON), env_json, 0o600)
+            .context("Failed to write decrypted env file")?;
         Ok(())
     }
 
