@@ -33,7 +33,7 @@ CVMs running in dstack support three boot modes:
 ## Admin API authentication
 
 The KMS public RPCs authenticate callers by RA-TLS attestation. Operator-facing
-admin RPCs (currently `ClearImageCache`) are instead served on a **separate admin
+admin RPCs are instead served on a **separate admin
 listener** (`[core.admin]` in `kms.toml`) behind the same shared HTTP
 authenticator used by the VMM and gateway, configured identically to the gateway
 admin API, so the credential travels in the `Authorization: Bearer <token>` or
@@ -48,6 +48,10 @@ port = 8001
 auth_token = "<token>"
 # htpasswd_file = "/etc/kms/admin.htpasswd"   # bcrypt (htpasswd -B), optional
 insecure_no_auth = false
+
+[core.admin.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
 ```
 
 The token can also be supplied via the `DSTACK_KMS_ADMIN_TOKEN` or
@@ -64,6 +68,12 @@ curl -X POST "http://127.0.0.1:8001/prpc/Admin.ClearImageCache?json" \
 
 This admin authentication is separate from the on-chain / webhook authorization
 below, which decides whether a CVM may boot and receive keys.
+
+KMS-to-KMS onboarding calls `Admin.GetKmsKey` with a self-issued RA-TLS client
+certificate plus the source's admin bearer token; other admin RPCs need no client
+certificate. `core.onboard.public_key_handover = true` (the default) keeps
+`KMS.GetKmsKey` on the public listener for older clients.
+
 
 ## KMS Implementation
 

@@ -214,6 +214,9 @@ pub(crate) struct Dev {
 pub(crate) struct OnboardConfig {
     pub enabled: bool,
     pub auto_bootstrap_domain: String,
+    /// Keep GetKmsKey available on the public RPC listener for compatibility.
+    #[serde(default = "default_true")]
+    pub public_key_handover: bool,
 }
 
 #[cfg(test)]

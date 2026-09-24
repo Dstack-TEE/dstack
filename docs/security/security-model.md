@@ -417,6 +417,10 @@ App key release and KMS key handover require verified caller attestation from th
 
 The unauthenticated or non-client-certificate surface includes bootstrap and temp-CA bootstrap material retrieval, env-encryption public-key retrieval, metadata, health, and metrics behavior documented for operators. `GetTempCaCert` returns temp CA private material and remains in use by guests and by KMS-to-KMS onboarding, which mint their client certificates from that CA; operators must treat it as bootstrap-sensitive rather than harmless public metadata.
 
+KMS-to-KMS root-key handover is served by `Admin.GetKmsKey` on the authenticated
+admin listener, which additionally requires a verified RA-TLS client certificate.
+The legacy public `KMS.GetKmsKey` is controlled by `core.onboard.public_key_handover`.
+
 ## Limitations
 
 ### Attestation proves identity, not correctness
