@@ -928,13 +928,16 @@ fn dns_cred_to_proto(cred: DnsCredential) -> DnsCredentialInfo {
     }
 }
 
+/// Counted in characters: a byte index inside a multi-byte character would
+/// panic on every read of a stored credential.
 fn redact_token(token: &str) -> String {
-    let len = token.len();
-    if len <= 8 {
-        "*".repeat(len)
-    } else {
-        format!("{}...{}", &token[..4], &token[len - 4..])
+    let count = token.chars().count();
+    if count <= 8 {
+        return "*".repeat(count);
     }
+    let head: String = token.chars().take(4).collect();
+    let tail: String = token.chars().skip(count - 4).collect();
+    format!("{head}...{tail}")
 }
 
 /// Force-release the certificate renew lock for one ZT domain, returning the
@@ -1488,6 +1491,18 @@ mod set_instance_ready_tests {
             Some(false),
             "a stated false still gates off"
         );
+    }
+}
+
+#[cfg(test)]
+mod redact_token_tests {
+    use super::redact_token;
+
+    #[test]
+    fn redacts_by_character() {
+        assert_eq!(redact_token("0123456789abcdef"), "0123...cdef");
+        assert_eq!(redact_token("12345678"), "********");
+        assert_eq!(redact_token("abcé12345"), "abcé...2345");
     }
 }
 
