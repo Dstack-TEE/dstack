@@ -304,6 +304,25 @@ impl ProxyInner {
         self.handshake_cache.latest(stale_timeout)
     }
 
+    /// Publish this node's per-instance connection counts to the KV store.
+    ///
+    /// The KV writes wait on the store's lock, which a sync merge holds, so
+    /// they must not run under the routing lock.
+    pub(crate) fn sync_connections(&self) {
+        let counts: Vec<(String, u64)> = self
+            .lock()
+            .state
+            .instances
+            .iter()
+            .map(|(id, instance)| (id.clone(), instance.num_connections()))
+            .collect();
+        for (instance_id, count) in counts {
+            if let Err(err) = self.kv_store.sync_connections(&instance_id, count) {
+                debug!("failed to sync connections: {err:?}");
+            }
+        }
+    }
+
     pub async fn new(
         options: ProxyOptions,
         port_policy_tx: UnboundedSender<String>,
@@ -1452,11 +1471,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
             let mut ticker = tokio::time::interval(sync_interval);
             loop {
                 ticker.tick().await;
-                let state = proxy_for_sync.lock();
-                for (instance_id, instance) in &state.state.instances {
-                    let count = instance.num_connections();
-                    state.sync_connections(instance_id, count);
-                }
+                proxy_for_sync.sync_connections();
             }
         });
         info!(
@@ -2611,13 +2626,6 @@ impl ProxyState {
             debug!("failed to sync node last_seen: {err:?}");
         }
         Ok(())
-    }
-
-    /// Sync connection count for an instance to KvStore
-    pub(crate) fn sync_connections(&self, instance_id: &str, count: u64) {
-        if let Err(err) = self.kv_store.sync_connections(instance_id, count) {
-            debug!("Failed to sync connections: {err:?}");
-        }
     }
 
     /// Get latest handshake for an instance from KvStore (max across all nodes)
