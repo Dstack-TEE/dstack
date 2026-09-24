@@ -101,10 +101,7 @@ type = "webhook"
 
 [core.auth_api.webhook]
 url = "http://auth-api:8000"
-# How long one authorization call may take. GetMeta and GetAppEnvEncryptPubKey
-# reach this backend without a client certificate, so an anonymous caller picks
-# how many of these are in flight; a backend that accepts the connection and
-# never answers would otherwise hold each one for the life of the process.
+# Per-call timeout; GetMeta reaches the auth API without a client certificate.
 timeout = "60s"
 
 [core.auth_api.dev]

@@ -96,29 +96,15 @@ pub(crate) struct GetInfoResponse {
     pub app_implementation: Option<String>,
 }
 
-/// How long the auth API has to accept a connection.
-///
-/// Separate from the configured request timeout and not configurable: a TCP
-/// connect that has not completed in this long is a backend that is down, not
-/// one that is slow, and no deployment needs to tune that apart from the rest.
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The one client every auth API call goes through.
-///
-/// A `reqwest::Client` owns the connection pool and the TLS configuration, so
-/// building one per call threw both away and paid a fresh connect -- and, over
-/// HTTPS, a fresh handshake -- for every authorization decision. There is
-/// deliberately no decision cache above this (pinned by a test), which is what
-/// makes the pool worth keeping.
+/// Shared so auth API calls reuse pooled connections instead of reconnecting per decision.
 fn auth_api_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .connect_timeout(AUTH_API_CONNECT_TIMEOUT)
             .build()
-            // A builder that cannot produce a client means no TLS backend; the
-            // default client is the same thing without our connect timeout, and
-            // failing every call from here would be worse than losing it.
             .unwrap_or_default()
     })
 }
@@ -368,18 +354,12 @@ mod tests {
         }
     }
 
-    /// `KMS.GetMeta` needs no client certificate (`ra_rpc::ratls_client_verifier`
-    /// makes client auth optional and the handler checks nothing), and it calls
-    /// the auth API on every request with no decision cache. So an anonymous
-    /// caller on the public RPC listener decides how many of these are in
-    /// flight. A backend that accepts the connection and never answers must not
-    /// keep each one open for the life of the process.
+    /// `GetMeta` reaches the auth API unauthenticated, so a silent backend must not hold it open.
     #[rocket::async_test]
     async fn a_backend_that_never_answers_does_not_hold_the_request_open() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let _blackhole = thread::spawn(move || {
-            // Accept, then hold the socket open without ever writing a byte.
             let held: Vec<_> = listener.incoming().take(1).collect();
             thread::sleep(std::time::Duration::from_secs(30));
             drop(held);
@@ -391,8 +371,7 @@ mod tests {
 
         assert!(
             outcome.is_ok(),
-            "the auth API call carried no timeout of its own and was still \
-             running after 10s; an anonymous GetMeta flood accumulates these"
+            "the auth API call was still running after 10s"
         );
         let error = outcome.unwrap().expect_err("a silent backend must fail");
         assert!(
