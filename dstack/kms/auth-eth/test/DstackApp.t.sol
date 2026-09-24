@@ -265,8 +265,10 @@ contract DstackAppTest is Test {
         vm.startPrank(owner);
         app.addDevice(deviceId);
         app.addComposeHash(composeHash);
-        app.setRequireTcbUpToDate(true);
         vm.stopPrank();
+
+        string[] memory advisoryIds = new string[](1);
+        advisoryIds[0] = "INTEL-SA-00614";
 
         IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
             appId: address(app),
@@ -277,10 +279,17 @@ contract DstackAppTest is Test {
             mrSystem: bytes32(0),
             osImageHash: bytes32(0),
             tcbStatus: "OutOfDate",
-            advisoryIds: new string[](0)
+            advisoryIds: advisoryIds
         });
 
+        // Legacy 5-arg init skips the TCB check (specification.md §3.4). This deliberately
+        // diverges from auth-simple's strict default; see auth-simple/index.test.ts.
         (bool allowed, string memory reason) = app.isAppAllowed(bootInfo);
+        assertTrue(allowed);
+
+        vm.prank(owner);
+        app.setRequireTcbUpToDate(true);
+        (allowed, reason) = app.isAppAllowed(bootInfo);
         assertFalse(allowed);
         assertEq(reason, "TCB status is not up to date");
 
