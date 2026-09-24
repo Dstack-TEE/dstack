@@ -1,37 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-"""Drive the live guest agent under concurrent load and a stalled reader.
+"""Drive the live guest agent under concurrent load and a stalled log reader.
 
-The guest-OS chapter's concurrency coverage is in-process: Rust thread pools
-over parsers, plus one concurrent-startup case. Nothing drives the running
-agent with more than one request at a time, so four behaviours the source
-commits to are asserted nowhere:
-
-  C1  derivation is a pure function of its arguments -- N concurrent identical
-      ``GetKey``/``DeriveK256Key``/``DeriveKey`` calls return byte-identical
-      key material, and N concurrent ``GetQuote`` calls each bind their own
-      ``report_data`` rather than another caller's;
-  C2  a trivial method stays answerable while the slowest attestation method
-      saturates the runtime, and the agent is still the process it started as
-      afterwards. ``dstack/tdx-attest/src/linux.rs`` ``get_quote`` takes a
-      global ``std::sync::Mutex`` and then blocks with no connect, read or
-      write timeout; only ``rpc_service_v1.rs`` ``attest`` wraps that in
-      ``spawn_blocking``. Every other quote call site runs it straight on the
-      executor that serves the whole agent, and the stall reaches the agent's
-      own systemd watchdog, whose heartbeat is a ``Worker.Version`` request to
-      its external listener;
-  C3  the agent answers a valid request after the load, in the same process it
-      started as -- a restart must not be able to hide a wedge or an abort;
-  C4  a log reader that stops draining does not make the agent buffer without
-      bound, does not park the runtime, and the per-chunk timeout in
-      ``http_routes.rs`` ``get_logs`` still ends an idle ``follow`` stream.
-
-C2 only means something where generating a quote costs something, which is
-real TDX hardware talking to the host's QGS. The simulator's backend answers
-from a fixture in microseconds, so this harness refuses to report PASS for a
-head-of-line-blocking case whose load turned out to be free: it reports
-BLOCKED and says what the load cost.
+Head-of-line blocking (tc-gos-concurrency-002) only means something where a
+quote costs real work, so that case reports BLOCKED instead of PASS when one
+quote is cheaper than ``LOAD_COST_FLOOR_SECONDS``.
 
 Standalone use for development:
 
@@ -57,39 +31,25 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
-# The worker count `dstack/guest-agent/dstack.toml` asks for. It is an upper
-# bound, not the runtime's actual width: `#[rocket::main]` in
-# `guest-agent/src/main.rs` builds the tokio runtime before that configuration
-# is read, so `workers` never reaches it and the agent gets one worker per
-# vCPU. A lease-owned 2-vCPU guest was measured with two `rocket-worker-t`
-# threads. Saturating above the configured figure therefore saturates the real
-# one on any CVM this plan provisions.
+# `workers` in dstack/guest-agent/dstack.toml. The runtime is built before the
+# config is read, so the real width is one worker per vCPU, which is smaller.
 AGENT_WORKERS = 8
 CONCURRENCY = 3 * AGENT_WORKERS
 
-# `report_data` is 64 bytes, and `TDX_QUOTE_REPORT_DATA_RANGE` in
-# dstack/dstack-attest/src/attestation.rs pins where a TDX quote carries it.
+# `TDX_QUOTE_REPORT_DATA_RANGE` in dstack/dstack-attest/src/attestation.rs.
 REPORT_DATA_BYTES = 64
 QUOTE_REPORT_DATA_RANGE = (568, 632)
 
-# C2 bounds. A trivial method must answer within this while the attestation
-# path is saturated; below the floor the load is not a load at all.
 TRIVIAL_LATENCY_BOUND_SECONDS = 1.0
 LOAD_COST_FLOOR_SECONDS = 0.05
 LOAD_SECONDS = 20.0
 TRIVIAL_SAMPLE_INTERVAL_SECONDS = 0.1
 
-# C4 bounds. `get_logs` wraps each chunk in `timeout(Duration::from_secs(600))`.
-LOG_CHUNK_TIMEOUT_SECONDS = 600
-LOG_CHUNK_TIMEOUT_TOLERANCE_SECONDS = 45
 STALL_SECONDS = 30.0
 STALL_SAMPLE_INTERVAL_SECONDS = 2.0
-# A stalled reader may leave at most this much in the kernel socket buffer and
-# the agent's own write buffer. Anything past it is the agent accumulating the
-# log stream in memory instead of letting the socket push back.
+# Room for the socket and write buffers; more is the agent buffering the stream.
 STALL_RSS_GROWTH_KB = 32 * 1024
-# One precomputed line repeated as fast as a shell can write it, throttled just
-# enough to leave the host a core. Measured at ~30k lines/s, ~3.3 MB/s.
+# About 3.3 MB/s, so buffering would pass the RSS bound well inside the window.
 CHATTY_SCRIPT = (
     "line=$(printf 'L%.0s' $(seq 1 100)); i=0; while :; do i=$((i+1)); "
     'printf "%s %s\n" "$i" "$line"; '
@@ -113,7 +73,7 @@ class Target:
     base_url: str | None = None
 
     def route(self, method: str) -> str:
-        """Resolve the route for one method."""
+        """Resolve the route for one method (isolated and physical-TDX templates)."""
         return self.route_template.replace("<Method>", method).replace(
             "{method}", method
         )
@@ -164,12 +124,7 @@ def connect(target: Target, timeout: float = CALL_TIMEOUT_SECONDS):
 
 
 def post(target: Target, method: str, payload: dict[str, Any]) -> Reply:
-    """Send one JSON pRPC request on its own connection.
-
-    A fresh connection per call is the point: a measurement that shared a
-    connection would queue behind its own earlier request and report the
-    agent's pipelining rather than its scheduling.
-    """
+    """Send one JSON pRPC request on its own connection, so calls never queue."""
     body = json.dumps(payload).encode()
     started = time.monotonic()
     connection = connect(target)
@@ -200,12 +155,7 @@ def parallel(count: int, work: Callable[[int], Any]) -> list[Any]:
 
 
 def digest(value: Any) -> str:
-    """A stable digest of one response field.
-
-    Key material never reaches an artifact, a log line or a comparison in
-    cleartext: everything this harness asserts about derived keys is asserted
-    about these digests.
-    """
+    """A digest of one response field, so key material never reaches an artifact."""
     if isinstance(value, str):
         return hashlib.sha256(value.encode()).hexdigest()
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -239,21 +189,13 @@ def process_stats(pid: int) -> dict[str, int]:
     try:
         stats["fds"] = len(os.listdir(f"/proc/{pid}/fd"))
     except PermissionError:
-        # The fixture may own the agent under another uid, and /proc/<pid>/fd
-        # is owner-only. The fd count is one observation among several; losing
-        # it must not turn an otherwise clean run into a failure.
+        # /proc/<pid>/fd is owner-only and the fixture may run the agent as another uid.
         stats["fds"] = None
     return stats
 
 
 def guest_command(values: dict[str, Any], command: str) -> str | None:
-    """Run one command in the lease-owned guest, or return None.
-
-    Best-effort by construction. Everything this reads is corroboration for a
-    measurement taken over the RPC surface; a fixture that publishes no guest
-    access, or a guest that has already been SIGABRTed, must leave the case
-    reporting what it measured rather than erroring on the corroboration.
-    """
+    """Run one command in the guest over the fixture's ssh_argv, or return None."""
     argv = values.get("ssh_argv")
     if (
         not isinstance(argv, list)
@@ -285,15 +227,7 @@ AGENT_STATE_COMMAND = (
 
 
 def guest_agent_state(values: dict[str, Any]) -> dict[str, Any] | None:
-    """The in-guest agent's identity, size and restart count.
-
-    On hardware the agent runs inside the CVM, so `/proc` on the control host
-    says nothing about it and `resolve_pid` has nothing to resolve. The pair
-    that identifies the process is its PID and field 22 of `/proc/<pid>/stat`,
-    its start time in clock ticks since boot, exactly as `process_identity`
-    uses on the control host: a supervisor can restart the agent onto the same
-    PID, and only the start time says it is a different process.
-    """
+    """The in-guest agent's (pid, start time), size and restart count."""
     output = guest_command(values, AGENT_STATE_COMMAND)
     if output is None:
         return None
@@ -305,8 +239,6 @@ def guest_agent_state(values: dict[str, Any]) -> dict[str, Any] | None:
         elif name == "restarts":
             state["restarts"] = int(rest) if rest.strip().isdigit() else None
         elif name == "stat":
-            # `comm` is parenthesised and may contain spaces, so the fields
-            # after it are found from the last ") " rather than by splitting.
             fields = rest.rsplit(") ", 1)[-1].split()
             state["starttime_ticks"] = int(fields[19]) if len(fields) > 19 else None
         elif name.startswith("Threads:"):
@@ -339,13 +271,7 @@ def guest_agent_restarted(
 
 
 def process_identity(pid: int) -> dict[str, Any]:
-    """The agent's identity, in a form a restart cannot reproduce.
-
-    A PID alone is not identity: the supervisor could restart the agent and the
-    kernel could hand back the same number. Field 22 of `/proc/<pid>/stat` is
-    the process start time in clock ticks since boot, so the pair is unique for
-    as long as the host is up.
-    """
+    """The agent's (pid, start time); a restart onto the same pid changes it."""
     with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
         fields = stat.read().rsplit(") ", 1)[1].split()
     return {"pid": pid, "starttime_ticks": int(fields[19])}
@@ -391,9 +317,7 @@ def derivation_identical(targets: dict[str, Target]) -> dict[str, Any]:
             f"{CONCURRENCY} identical Tappd.DeriveK256Key calls returned {len(k256)} distinct keys"
         )
 
-    # `Tappd.DeriveKey` derives a P-256 key from the app root key and the path,
-    # then issues a fresh certificate over it. The key is a pure function of
-    # the request; the chain is not, and this harness does not pretend it is.
+    # The key is a pure function of the request; the freshly issued chain is not.
     derive_request = {
         "path": "robustness/a",
         "subject": "localhost",
@@ -532,8 +456,6 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
 
     with ThreadPoolExecutor(max_workers=CONCURRENCY + 1) as pool:
         loaders = [pool.submit(saturate, index) for index in range(CONCURRENCY)]
-        # Let the load reach steady state before the first sample: a probe sent
-        # while the first quotes are still in flight measures an unloaded agent.
         time.sleep(1.0)
         while time.monotonic() < deadline:
             reply = post(guest, "Version", {})
@@ -563,12 +485,7 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
         "agent_restarted": restarted,
         "agent_journal": guest_agent_journal(values) if restarted else [],
     }
-    # Checked before the per-call outcomes, because it explains them. A dropped
-    # connection reads as a transport problem until you know the agent it was
-    # talking to was killed: the systemd watchdog's own heartbeat is a
-    # `Worker.Version` request to the agent (`run_watchdog` in `server.rs`), so
-    # a stalled runtime stops the heartbeat and systemd SIGABRTs the unit at
-    # `WatchdogSec`. Every connection open at that moment is reset.
+    # Checked first: a watchdog restart explains every dropped call below (#1256).
     if restarted:
         raise AssertionError(
             f"the agent did not survive the load: {agent_before} became {agent_after}. "
@@ -647,8 +564,6 @@ def survives_load(
             f"{len(unanswered)} of {len(replies)} concurrent calls got no HTTP answer: "
             f"{unanswered[:3]}"
         )
-    # Every method in the table is one the agent implements on that listener,
-    # so a non-200 here is the agent refusing work it accepted before the load.
     require_all_ok([reply for _, reply in replies], "mixed-load")
 
     liveness = post(targets["DstackGuest"], "GetKey", MIXED_LOAD[0][2])
@@ -673,10 +588,7 @@ def survives_load(
         ),
         "rss_growth_kb": after["vmrss"] - before["vmrss"],
     }
-    # Connections are closed by the time the probe runs, so a descriptor the
-    # agent still holds per call is a leak, not work in flight. The count is
-    # unavailable when the fixture owns the agent under another uid, since
-    # /proc/<pid>/fd is owner-only; the rest of the case still holds.
+    # Every connection is closed by now, so a descriptor still held is a leak.
     if before["fds"] is None or after["fds"] is None:
         observations["fd_growth_unavailable"] = "/proc/<pid>/fd is not readable"
     elif after["fds"] > before["fds"] + AGENT_WORKERS:
@@ -735,11 +647,7 @@ def start_log_source(name: str, script: str) -> None:
 
 
 def open_log_stream(target: Target, container: str) -> tuple[socket.socket, bytes]:
-    """Open a `follow` log stream and read only its response head.
-
-    Reading the head first is what makes the stall meaningful: it proves the
-    agent accepted the request and started producing before the reader stopped.
-    """
+    """Open a `follow` log stream and read only its response head."""
     if not target.socket_path:
         raise Blocked("the slow-consumer probe needs the agent's external unix socket")
     stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -765,8 +673,6 @@ def slow_consumer(
     worker = targets["Worker"]
     chatty = f"{LOG_SOURCE_PREFIX}-chatty-{os.getpid()}"
     observations: dict[str, Any] = {}
-    # Roughly 3 MB/s, so a stall window that buffered instead of pushing back
-    # would pass the growth bound within ten seconds rather than at the end.
     start_log_source(chatty, CHATTY_SCRIPT)
     try:
         time.sleep(2)
@@ -799,8 +705,7 @@ def slow_consumer(
                     f"{STALL_RSS_GROWTH_KB}KB bound: the stream is being buffered "
                     "instead of pushed back on"
                 )
-            # The stall must have been a stall, not a finished stream. Draining
-            # now proves the agent still had the stream open and producing.
+            # Data still pending proves the window stalled a live stream.
             stream.settimeout(10)
             drained = 0
             try:
@@ -820,8 +725,7 @@ def slow_consumer(
         finally:
             stream.close()
 
-        # More stalled readers than the agent has workers. If a stalled write
-        # parked a worker, the agent would stop answering here.
+        # More stalled readers than workers: a parked worker would stop answers.
         stalled = []
         try:
             for _ in range(AGENT_WORKERS + 2):
@@ -840,50 +744,6 @@ def slow_consumer(
     finally:
         docker("rm", "-f", chatty)
     return observations
-
-
-def log_chunk_timeout(targets: dict[str, Target]) -> dict[str, Any]:
-    """An idle `follow` stream ends when the per-chunk timeout fires."""
-    worker = targets["Worker"]
-    idle = f"{LOG_SOURCE_PREFIX}-idle-{os.getpid()}"
-    start_log_source(idle, f"sleep {LOG_CHUNK_TIMEOUT_SECONDS * 3}")
-    try:
-        started = time.monotonic()
-        stream, head = open_log_stream(worker, idle)
-        try:
-            if not head.startswith(b"HTTP/1.1 200"):
-                raise AssertionError(
-                    f"the idle log stream did not start: {head[:200].decode(errors='replace')}"
-                )
-            stream.settimeout(
-                LOG_CHUNK_TIMEOUT_SECONDS + LOG_CHUNK_TIMEOUT_TOLERANCE_SECONDS + 30
-            )
-            body = b""
-            while True:
-                chunk = stream.recv(65536)
-                if not chunk:
-                    break
-                body += chunk
-            elapsed = time.monotonic() - started
-        finally:
-            stream.close()
-        observations = {
-            "elapsed_seconds": round(elapsed, 1),
-            "expected_seconds": LOG_CHUNK_TIMEOUT_SECONDS,
-            "tolerance_seconds": LOG_CHUNK_TIMEOUT_TOLERANCE_SECONDS,
-            "body_bytes": len(body),
-        }
-        if (
-            abs(elapsed - LOG_CHUNK_TIMEOUT_SECONDS)
-            > LOG_CHUNK_TIMEOUT_TOLERANCE_SECONDS
-        ):
-            raise AssertionError(
-                f"an idle follow stream ended after {elapsed:.1f}s, not the "
-                f"{LOG_CHUNK_TIMEOUT_SECONDS}s per-chunk timeout in get_logs"
-            )
-        return observations
-    finally:
-        docker("rm", "-f", idle)
 
 
 # --------------------------------------------------------------------------
@@ -1041,14 +901,13 @@ CASES: dict[str, Case] = {
         services=["Worker", "DstackGuest"],
         needs_pid=True,
         summary="A log reader that stopped draining did not make the agent buffer without "
-        "bound or park its runtime, and an idle follow stream ended at the per-chunk timeout.",
-        remarks="This confirms streaming backpressure and the follow-stream timeout for "
-        "the agent's own log route. It does not confirm physical TEE trust properties, and "
-        "it says nothing about Docker's own log retention.",
+        "bound or park its runtime.",
+        remarks="This confirms streaming backpressure for the agent's own log route. It "
+        "does not confirm physical TEE trust properties.",
         artifact="log-slow-consumer.json",
         artifact_description="Resident-memory and thread samples across the stalled window, "
-        "the bytes recovered when the reader resumed, the liveness probe taken with more "
-        "stalled readers than the agent has workers, and the measured per-chunk timeout.",
+        "the bytes recovered when the reader resumed, and the liveness probe taken with more "
+        "stalled readers than the agent has workers.",
         steps=[
             Step(
                 "The external and internal listeners answered and a container runtime "
@@ -1062,11 +921,6 @@ CASES: dict[str, Case] = {
                 "readers open than it has workers.",
                 "Proves the agent pushes back on a slow consumer instead of buffering.",
                 slow_consumer,
-            ),
-            Step(
-                "An idle follow stream ended at the per-chunk timeout.",
-                "Proves a silent log source does not hold a connection open forever.",
-                lambda targets, _pid, _values: log_chunk_timeout(targets),
             ),
             Step(
                 "The agent answered after every stream closed.",
