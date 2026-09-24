@@ -320,17 +320,8 @@ impl ProxyInner {
         self.state.lock().or_panic("Failed to lock AppState")
     }
 
-    /// Reconfigure the WireGuard interface without holding the routing lock
-    /// across the blocking apply.
-    ///
-    /// Rendering needs a consistent view of the instance table, so it happens
-    /// under `self.state`; writing `wg.conf` and forking `wg syncconf`
-    /// happens after that guard is dropped. Holding the routing lock across
-    /// those blocking OS calls let a burst of registrations stall every
-    /// proxied connection and every lock-taking RPC behind the apply.
-    ///
-    /// Callers must not hold `self.state`. Synchronous callers (startup and
-    /// explicit removal) wait for one snapshot, not for an unbounded dirty loop.
+    /// Render the WireGuard config under the routing lock, then write and apply
+    /// it after releasing that lock. Callers must not hold `self.state`.
     pub(crate) fn reconfigure_wg(&self) -> Result<()> {
         self.reconfigure_wg_with(apply_wg_config)
     }

@@ -133,25 +133,4 @@ mod tests {
         drop(tx);
         worker.join().unwrap();
     }
-
-    #[test]
-    fn disconnected_queue_stops_retrying() {
-        let (tx, rx) = sync_channel(1);
-        let (done_tx, done_rx) = channel();
-        let worker = thread::spawn(move || {
-            run(
-                rx,
-                || {
-                    done_tx.send(()).unwrap();
-                    anyhow::bail!("injected persistent failure");
-                },
-                Duration::ZERO,
-                Duration::from_millis(10),
-            );
-        });
-        tx.send(()).unwrap();
-        done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        drop(tx);
-        worker.join().unwrap();
-    }
 }

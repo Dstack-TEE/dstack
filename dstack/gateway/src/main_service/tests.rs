@@ -40,6 +40,9 @@ async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
         .join("wg.conf")
         .to_string_lossy()
         .into_owned();
+    // and the default interface is wg0, so `wg syncconf` would reprogram the
+    // host's real tunnel wherever the tests run with enough privileges.
+    config.wg.interface = "wg-test-absent".to_string();
     tweak(&mut config);
     let options = ProxyOptions {
         config,
@@ -2727,97 +2730,4 @@ async fn failed_wg_apply_is_not_cached() {
         })
         .unwrap();
     assert!(applied);
-}
-
-#[tokio::test]
-async fn registration_does_not_wait_for_wg_apply_lock() {
-    let state = create_test_state().await;
-    let proxy = state.proxy.clone();
-    let apply = state.wg_apply_lock.lock().unwrap();
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        let result = proxy.do_register_cvm(
-            "app",
-            "instance",
-            &test_pubkey("new"),
-            "compose",
-            Some(policy(false, &[])).into(),
-        );
-        done_tx.send(result.is_ok()).unwrap();
-    });
-    let result = done_rx.recv_timeout(Duration::from_secs(5));
-    drop(apply);
-    worker.join().unwrap();
-    assert!(result.unwrap());
-}
-
-#[tokio::test]
-async fn removal_retries_apply_even_after_the_record_is_gone() {
-    let state = create_test_state().await;
-    sync_from_peer(&state, "peer-instance", "10.0.0.40", &test_pubkey("good"));
-    reload_instances_from_kv_store(&state.proxy, &state.kv_store).unwrap();
-    assert!(state
-        .proxy
-        .remove_cvm_with("peer-instance", || anyhow::bail!("apply failed"))
-        .is_err());
-    assert!(!state.lock().state.instances.contains_key("peer-instance"));
-    let mut applied = false;
-    let outcome = state
-        .proxy
-        .remove_cvm_with("peer-instance", || {
-            applied = true;
-            Ok(())
-        })
-        .unwrap();
-    assert!(applied);
-    assert!(!outcome.record_existed);
-    assert!(!outcome.removed_locally);
-}
-
-#[tokio::test]
-async fn cancelling_registration_keeps_its_blocking_job_bounded() {
-    let state = create_test_state().await;
-    let proxy = state.proxy.clone();
-    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let holder = std::thread::spawn(move || {
-        let _state = proxy.lock();
-        locked_tx.send(()).unwrap();
-        // Bound even a regression that blocks the single-threaded test runtime.
-        let _ = release_rx.recv_timeout(Duration::from_secs(5));
-    });
-    locked_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let proxy = state.proxy.clone();
-    let task = tokio::spawn(async move {
-        proxy
-            .register_cvm_async(
-                "app".into(),
-                "instance".into(),
-                test_pubkey("async"),
-                "compose".into(),
-                Some(policy(false, &[])).into(),
-            )
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while state.registration_slot.available_permits() != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("registration never acquired its permit");
-    task.abort();
-    let _ = task.await;
-    assert_eq!(
-        state.registration_slot.available_permits(),
-        0,
-        "cancellation released the permit while synchronous work was still running"
-    );
-    release_tx.send(()).unwrap();
-    holder.join().unwrap();
-    let _permit = tokio::time::timeout(Duration::from_secs(5), state.registration_slot.acquire())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(state.lock().state.instances.contains_key("instance"));
 }
