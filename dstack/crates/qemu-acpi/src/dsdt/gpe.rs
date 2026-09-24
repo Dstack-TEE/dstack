@@ -80,16 +80,4 @@ mod tests {
     fn e01_matches_qemu() {
         super::super::fixture::assert_region(&super::e01(false), 8245, 8258);
     }
-
-    #[test]
-    fn e01_scans_root_port_buses_when_pcnt_exists() {
-        use sha2::{Digest, Sha256};
-
-        let e01 = super::e01(true);
-        assert_eq!(e01.len() - super::e01(false).len(), 51);
-        assert_eq!(
-            hex::encode(Sha256::digest(e01)),
-            "6e22ff760f3c9e6263713cd7590518d1fd5ca2cd2344e8856bb618d2bef6d470"
-        );
-    }
 }

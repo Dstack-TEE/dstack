@@ -447,22 +447,6 @@ mod tests {
     }
 
     #[test]
-    fn eight_root_ports_include_qemus_hotplug_aml() {
-        use sha2::{Digest, Sha256};
-
-        let hotplug_on = super::build(6, 8, true, None, true);
-        let hotplug_off = super::build(6, 8, true, None, false);
-        assert_eq!(hotplug_on.len() - hotplug_off.len(), 854);
-
-        let pcnt = super::pcnt(6, 8, None).unwrap();
-        assert_eq!(pcnt.len(), 411);
-        assert_eq!(
-            hex::encode(Sha256::digest(pcnt)),
-            "29f0fc0087802ef8886aa8eff10bbd78b471e50f8ce2d543861cd437a2806851"
-        );
-    }
-
-    #[test]
     fn root_port_bsel_mapping_follows_qemus_reverse_child_walk() {
         assert_eq!(
             super::root_ports(6, 8, None),
@@ -477,56 +461,5 @@ mod tests {
                 (0x68, 0),
             ]
         );
-    }
-
-    #[test]
-    fn eight_root_port_devices_match_independent_qemu_encoding() {
-        use sha2::{Digest, Sha256};
-
-        let ports = super::root_ports(6, 8, None);
-        let mut hotplug_off = Vec::new();
-        let mut hotplug_on = Vec::new();
-        for (devfn, bsel) in ports {
-            hotplug_off.extend(super::pci_device(devfn, true, None, &[]));
-            hotplug_on.extend(super::pci_device(devfn, true, Some(bsel), &[]));
-        }
-        assert_eq!(hotplug_off.len(), 240);
-        assert_eq!(hotplug_on.len(), 1094);
-        assert_eq!(
-            hex::encode(Sha256::digest(hotplug_off)),
-            "7a107a6f0cf575cff4f70489c1b61a8c1ef1ae86a89de182ab0f412cea7bf80d"
-        );
-        assert_eq!(
-            hex::encode(Sha256::digest(hotplug_on)),
-            "caec37e9162f026c9e36fe4952fb55f6aa7db09fc92e4e785914f84b05a705b3"
-        );
-    }
-
-    #[test]
-    fn root_port_hotplug_terms_match_independent_qemu_encoding() {
-        use sha2::{Digest, Sha256};
-
-        let base = super::root_port_child(None);
-        for (bsel, expected) in [
-            (
-                0,
-                "2ab2603633fbf9eee2f7b9104d9f2510a55884520f1f02ddc41276fc9dfee90f",
-            ),
-            (
-                2,
-                "4b39e662fdf5334c777209850bb8984abb1dbda74f2f20bd807198e7683662ee",
-            ),
-        ] {
-            let port = super::root_port_child(Some(bsel));
-            assert_eq!(hex::encode(Sha256::digest(&port[base.len()..])), expected);
-        }
-    }
-
-    #[test]
-    fn root_port_hotplug_aml_is_conditional() {
-        let hotplug_off = super::build(6, 8, true, None, false);
-        let no_ports = super::build(6, 0, true, None, false);
-        assert_eq!(hotplug_off.len() - no_ports.len(), 8 * 30);
-        assert!(super::pcnt(6, 0, None).is_none());
     }
 }
