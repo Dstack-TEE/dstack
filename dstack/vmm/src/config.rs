@@ -946,7 +946,10 @@ impl Config {
         }
         for (name, value) in [
             ("cvm.pccs_url", Some(self.cvm.pccs_url.as_str())),
-            ("cvm.sev_snp_kds_url", Some(self.cvm.sev_snp_kds_url.as_str())),
+            (
+                "cvm.sev_snp_kds_url",
+                Some(self.cvm.sev_snp_kds_url.as_str()),
+            ),
             (
                 "cvm.nvidia_attestation_proxy_url",
                 self.cvm.nvidia_attestation_proxy_url.as_deref(),
