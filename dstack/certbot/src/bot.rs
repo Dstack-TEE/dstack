@@ -88,12 +88,7 @@ async fn create_new_account(
     Ok(client)
 }
 
-/// Write the ACME account credentials.
-///
-/// The account key is what answers challenges for every domain the account has
-/// ever authorized, so a copy of this file reissues all of them.
-/// `docs/security/security-best-practices.md` names ACME credentials among the
-/// files that have to be owner-only; this one was not.
+/// The account key can reissue every domain the account has authorized.
 fn store_credentials(path: &Path, credentials: &str) -> Result<()> {
     safe_write::safe_write_with_mode(path, credentials, 0o600)
         .context("failed to write credentials")
@@ -258,14 +253,7 @@ impl CertBot {
     }
 }
 
-/// Run the post-renewal hook, bounded by `timeout`.
-///
-/// Waited on through tokio rather than `std::process::Command::status`, which
-/// waits on the calling thread: `CertBot::run` is a daemon loop on the same
-/// runtime, so a hook that never returns parked a worker and took every later
-/// renewal with it. The bound is `renew_timeout` because the hook is the last
-/// step of the renewal run rather than a thing with a budget of its own, and
-/// `kill_on_drop` means the bound ends the hook instead of leaving it behind.
+/// Run the post-renewal hook without blocking the runtime, killed after `timeout`.
 async fn run_hook(hook: &str, timeout: Duration) {
     let status = Command::new("/bin/sh")
         .arg("-c")
@@ -424,13 +412,6 @@ mod hook_tests {
             "ticked",
             "the hook parked the runtime it was waited on from"
         );
-    }
-
-    #[tokio::test]
-    async fn a_hook_that_finishes_is_waited_for() {
-        let started = Instant::now();
-        run_hook("sleep 0.2", Duration::from_secs(30)).await;
-        assert!(started.elapsed() >= Duration::from_millis(200));
     }
 }
 

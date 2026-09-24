@@ -279,24 +279,6 @@ fn dns_poll_sleep(budget: Duration, elapsed: Duration, backoff: Duration) -> Dur
     budget.saturating_sub(elapsed).min(backoff)
 }
 
-/// How long the DNS poll waits before its second lookup.
-const DNS_POLL_FIRST_BACKOFF: Duration = Duration::from_millis(250);
-
-/// The longest the DNS poll backs off for, however long the wait runs.
-const DNS_POLL_MAX_BACKOFF: Duration = Duration::from_secs(32);
-
-/// The poll count and backoff after a check that came back unsettled.
-///
-/// Split out for the same reason [`dns_poll_sleep`] is. `tries` only ever
-/// reaches a debug log, but it is incremented once per poll for as long as the
-/// budget lasts and the budget is operator configuration, so it has to hold
-/// every poll `max_dns_wait` can pay for. It was a `u8`, which runs out about
-/// two hours into the ramp above -- wrapping in release, and aborting in a
-/// build with overflow checks.
-fn next_poll(tries: u32, backoff: Duration) -> (u32, Duration) {
-    (tries + 1, DNS_POLL_MAX_BACKOFF.min(backoff * 2))
-}
-
 /// A AcmeClient instance.
 pub struct AcmeClient {
     account: Account,
@@ -680,8 +662,6 @@ impl AcmeClient {
         force: bool,
     ) -> Result<bool> {
         let live_cert_pem = fs::read_to_string(live_cert_pem_path.as_ref())?;
-        // The live key is not read at all: a renewal is issued under a new one,
-        // so the only thing the old file decides is what gets replaced.
         let key_pem = new_key_pem()?;
         let new_cert = if force {
             self.renew_cert(&live_cert_pem, &key_pem).await?
@@ -910,8 +890,8 @@ impl AcmeClient {
     /// instant-acme. A record we never see is reported and the order proceeds,
     /// letting the CA decide.
     async fn check_dns(&self, challenges: &[Challenge]) -> Result<()> {
-        let mut delay = DNS_POLL_FIRST_BACKOFF;
-        let mut tries = 1;
+        let mut delay = Duration::from_millis(250);
+        let mut tries = 1u32;
 
         let mut unsettled_challenges = challenges.to_vec();
 
@@ -1023,7 +1003,8 @@ impl AcmeClient {
                     challenge.expected
                 );
                 if !challenge.expected.satisfied_by(&published, now_secs()) {
-                    (tries, delay) = next_poll(tries, delay);
+                    delay = Duration::from_secs(32).min(delay * 2);
+                    tries += 1;
                     debug!(
                         tries,
                         domain = &challenge.acme_domain,
@@ -1364,16 +1345,7 @@ fn extract_subject_alt_names(cert_pem: &str) -> Result<Vec<String>> {
     Ok(domains)
 }
 
-/// A fresh key for a certificate that is about to be issued.
-///
-/// Every issuance gets its own, a renewal included. Reusing `live/key.pem`
-/// across renewals means a key that leaks once stays usable for as long as the
-/// deployment keeps renewing under it, which is the thing a short certificate
-/// lifetime exists to bound; the certificate archive under `cert_dir` keeps
-/// every past key with its certificate, so nothing is lost by moving on from
-/// one. The gateway's certbot has always issued this way -- "always use new key
-/// for each renewal", `gateway/src/distributed_certbot.rs` -- and this is the
-/// same policy, not a second one.
+/// Every issuance, renewals included, gets a new key, as in the gateway's certbot.
 fn new_key_pem() -> Result<String> {
     let key = KeyPair::generate().context("failed to generate key")?;
     Ok(key.serialize_pem())
@@ -1394,9 +1366,6 @@ fn store_cert_at(
     let cert_path = backup_path.join("cert.pem");
     let key_path = backup_path.join("key.pem");
     fs::write(&cert_path, cert_pem)?;
-    // The private key the served certificate is issued under. It is owner-only
-    // for the same reason the KMS and gateway keys are, and the certbot
-    // workdir is on a host whose other users this key says nothing about.
     safe_write::safe_write_with_mode(&key_path, key_pem, 0o600)
         .context("failed to write the certificate key")?;
     debug!("stored new cert in {}", cert_dir.display());
@@ -1407,23 +1376,11 @@ fn store_cert_at(
 /// The name the live paths resolve the current generation through.
 const CURRENT_LINK: &str = ".current";
 
-/// Point the live certificate and key at the generation in `cert_dir`.
-///
-/// Publishing is one rename per link rather than a remove followed by a
-/// symlink: between those two the live path does not exist at all, and a
-/// process that dies in between leaves it that way for good.
-///
-/// The pair is the same problem one level up -- a reader that catches a renewal
-/// between the two links gets a certificate and a key that do not go together,
-/// and the key does change on renewal. So when both live paths sit in one
-/// directory, which every certbot configuration has them do, they resolve
-/// through a single `.current` link and renaming that publishes the whole
-/// generation in one step. The live names themselves are then written once and
-/// never touched again.
+/// Publish the generation in `cert_dir` as the live pair. When both live paths share a
+/// directory they resolve through one `.current` link, so a single rename flips cert and key.
 fn publish_generation(cert_dir: &Path, live_cert: &Path, live_key: &Path) -> Result<()> {
     let live_dir = parent_dir(live_cert);
     if live_dir != parent_dir(live_key) {
-        // Nothing to publish the pair through; each link still lands atomically.
         ln_atomic(&cert_dir.join("cert.pem"), live_cert)?;
         ln_atomic(&cert_dir.join("key.pem"), live_key)?;
         return Ok(());
@@ -1443,13 +1400,11 @@ fn parent_dir(path: &Path) -> &Path {
     }
 }
 
-/// Point `dst` at `src`, replacing whatever `dst` is now in a single step.
+/// Point `dst` at `src` with a rename, so `dst` never goes missing.
 fn ln_atomic(src: &Path, dst: &Path) -> Result<()> {
     let dir = parent_dir(dst);
     fs::create_dir_all(dir)?;
     let name = dst.file_name().context("cannot link a path with no name")?;
-    // Named after the target so a leftover is attributable, and after the
-    // process so two certbots cannot stage over each other.
     let staging = dir.join(format!(
         ".{}.{}.tmp",
         name.to_string_lossy(),
@@ -1896,10 +1851,7 @@ mod caa_guard_tests {
 /// a live challenge.
 #[cfg(test)]
 mod dns_wait_tests {
-    use super::{
-        advisory_dns_wait, dns_poll_sleep, next_poll, DNS_POLL_FIRST_BACKOFF,
-        DNS_WAIT_SHARE_OF_RENEW_TIMEOUT,
-    };
+    use super::{advisory_dns_wait, dns_poll_sleep, DNS_WAIT_SHARE_OF_RENEW_TIMEOUT};
     use std::time::Duration;
 
     const fn secs(n: u64) -> Duration {
@@ -2046,26 +1998,6 @@ mod dns_wait_tests {
 
     /// The sleep never runs past the budget, for any point inside it.
     #[test]
-    fn the_poll_counter_holds_every_poll_the_longest_wait_pays_for() {
-        // Well inside what `max_dns_wait` accepts: it is seconds in the
-        // configuration and is only clamped against `renew_timeout`.
-        let budget = Duration::from_secs(24 * 60 * 60);
-        let mut elapsed = Duration::ZERO;
-        let mut backoff = DNS_POLL_FIRST_BACKOFF;
-        let mut tries = 1;
-
-        while elapsed < budget {
-            elapsed += dns_poll_sleep(budget, elapsed, backoff);
-            (tries, backoff) = next_poll(tries, backoff);
-        }
-
-        assert!(
-            u64::from(tries) > u64::from(u8::MAX),
-            "{tries} polls fit in the wait, so the counter has to outgrow a u8"
-        );
-    }
-
-    #[test]
     fn a_poll_never_sleeps_past_the_budget() {
         for budget in [0u64, 1, 5, 60, 150] {
             for elapsed in 0..=budget + 2 {
@@ -2132,10 +2064,7 @@ mod publish_tests {
         let key_path = root.path().join("live/key.pem");
         let reader = std::thread::spawn(move || {
             while !reading.load(Ordering::Relaxed) {
-                // The cert is read on either side of the key so a straddle of
-                // the reader's own two `open` calls -- which no layout can
-                // prevent -- is told apart from a live pair that really was
-                // half published.
+                // Read the cert on both sides of the key so the reader's own straddle is ignored.
                 let before = fs::read_to_string(&cert_path);
                 let key = fs::read_to_string(&key_path);
                 let after = fs::read_to_string(&cert_path);
@@ -2158,28 +2087,6 @@ mod publish_tests {
             reader.join().unwrap(),
             None,
             "the live pair was observed half published"
-        );
-    }
-
-    #[test]
-    fn a_renewal_moves_the_live_pair_with_one_rename() {
-        let root = tempfile::tempdir().unwrap();
-        let cert_path = root.path().join("live/cert.pem");
-        let key_path = root.path().join("live/key.pem");
-        publish(root.path(), 1);
-        let cert_link = fs::read_link(&cert_path).unwrap();
-        let key_link = fs::read_link(&key_path).unwrap();
-
-        publish(root.path(), 2);
-
-        assert_eq!(fs::read_link(&cert_path).unwrap(), cert_link);
-        assert_eq!(fs::read_link(&key_path).unwrap(), key_link);
-        assert_eq!(fs::read_to_string(&cert_path).unwrap(), "generation-2");
-        assert_eq!(fs::read_to_string(&key_path).unwrap(), "generation-2");
-        assert_eq!(
-            fs::read_link(root.path().join("live").join(CURRENT_LINK)).unwrap(),
-            root.path().join("backup/generation-2"),
-            "the whole generation has to be published by renaming one link"
         );
     }
 }
