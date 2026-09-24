@@ -10,6 +10,7 @@ use dstack_types::Platform;
 use p256::ecdsa::{signature::hazmat::PrehashVerifier, Signature, VerifyingKey};
 use rsa::RsaPublicKey;
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 use x509_parser::prelude::*;
 
@@ -96,6 +97,15 @@ pub fn verify_quote_with_ca(
                 attested_pcr_indices,
                 provided_pcr_indices
             ),
+        });
+    }
+
+    // A TPM selects each PCR once; duplicates would make the unsigned replay below quadratic.
+    let mut seen = HashSet::new();
+    if let Some(pcr) = quote.pcr_values.iter().find(|p| !seen.insert(p.index)) {
+        return Err(VerificationError {
+            status,
+            error: anyhow!("duplicate PCR index {} in quote", pcr.index),
         });
     }
 
@@ -355,19 +365,22 @@ fn compute_pcr_digest(pcr_values: &[PcrValue]) -> Result<Vec<u8>> {
 /// Replay the event log against the quoted PCR values and return the replayed
 /// entries.
 fn verify_event_log(pcr_values: &[PcrValue], event_log: &[TpmEvent]) -> Result<Vec<TpmEvent>> {
+    let quoted: HashSet<u32> = pcr_values.iter().map(|p| p.index).collect();
+    let mut events_by_pcr: HashMap<u32, Vec<&TpmEvent>> = HashMap::new();
+    for event in event_log.iter().filter(|e| quoted.contains(&e.pcr_index)) {
+        events_by_pcr
+            .entry(event.pcr_index)
+            .or_default()
+            .push(event);
+    }
     for pcr in pcr_values {
-        let pcr_events: Vec<&TpmEvent> = event_log
-            .iter()
-            .filter(|e| e.pcr_index == pcr.index)
-            .collect();
-
-        if pcr_events.is_empty() {
+        let Some(pcr_events) = events_by_pcr.get(&pcr.index) else {
             continue;
-        }
+        };
 
         // Replay PCR extension to verify Event Log matches quote
         let mut replayed_pcr = vec![0u8; 32];
-        for event in &pcr_events {
+        for event in pcr_events {
             let mut hasher = Sha256::new();
             hasher.update(&replayed_pcr);
             hasher.update(&event.digest);
@@ -403,7 +416,7 @@ fn verify_event_log(pcr_values: &[PcrValue], event_log: &[TpmEvent]) -> Result<V
 
     Ok(event_log
         .iter()
-        .filter(|e| pcr_values.iter().any(|p| p.index == e.pcr_index))
+        .filter(|e| quoted.contains(&e.pcr_index))
         .cloned()
         .collect())
 }
@@ -869,5 +882,46 @@ mod tests {
         let log = [event(0, 1), event(2, 2), event(7, 3)];
         let kept = verify_event_log(&[pcr0], &log).unwrap();
         assert_eq!(kept.iter().map(|e| e.pcr_index).collect::<Vec<_>>(), [0]);
+    }
+
+    #[test]
+    fn rejects_duplicate_pcr_indices() {
+        let value = vec![0xaa; 32];
+        let values = vec![
+            PcrValue {
+                index: 0,
+                algorithm: "sha256".into(),
+                value: value.clone(),
+            },
+            PcrValue {
+                index: 0,
+                algorithm: "sha256".into(),
+                value: value.clone(),
+            },
+        ];
+        let digest = Sha256::digest([value.clone(), value].concat()).to_vec();
+        // Two single-PCR selections both naming PCR 0.
+        let single = attest_message(&[0], 0x000b, &digest);
+        let selection = &single[39..44];
+        let message = [
+            &single[..35],
+            &2u32.to_be_bytes(),
+            selection,
+            selection,
+            &single[44..],
+        ]
+        .concat();
+        let err = match verify_quote_with_ca(
+            &quote_of(values, message),
+            &empty_collateral(),
+            GCP_ROOT_CA,
+        ) {
+            Ok(_) => panic!("duplicate PCR indices verified"),
+            Err(err) => err.error.to_string(),
+        };
+        assert!(
+            err.contains("duplicate PCR index 0"),
+            "unexpected error: {err}"
+        );
     }
 }
