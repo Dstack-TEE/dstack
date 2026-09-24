@@ -130,7 +130,6 @@ describe('Server', () => {
   });
 });
 
-
 describe('verified-read configuration', () => {
   const settings = ['ETH_CHAIN_ID', 'ETH_BLOCK_LAG', 'ETH_MAX_BLOCK_AGE_SECONDS'];
   const saved = settings.map(name => process.env[name]);
