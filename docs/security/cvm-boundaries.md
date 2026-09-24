@@ -33,7 +33,7 @@ This is the main configuration file for the application in JSON format:
 | kms_enabled | 0.3.1 | boolean | Enable/disable KMS |
 | gateway_enabled | 0.3.1 | boolean | Enable/disable gateway |
 | local_key_provider_enabled | 0.3.1 | boolean | Use a local key provider |
-| key_provider_id | 0.5.1 | string | Optional pin for the key provider identity (hex-encoded bytes). For `kms` this is the KMS CA public key; for `local` the sealing-provider MR. For `tpm` and `none` it must be an empty string — the TPM app-root public key is instance-specific and is not used as a provider id or measured as one. |
+| key_provider_id | 0.5.1 | string | Optional pin for the key provider identity (hex-encoded bytes). For `kms` this is the KMS CA public key; for `local` the sealing-provider MR. For `tpm` and `none` it must be an empty string — the TPM app-root public key is instance-specific and is not used as a provider id or measured as one. When empty, any provider is accepted; its identity is still recorded in the `key-provider` launch event. |
 | public_logs | 0.3.3 | boolean | Whether logs are publicly visible |
 | public_sysinfo | 0.3.3 | boolean | Whether system info is public. Covers the guest dashboard and `/metrics`, including the `dstack_gpu_*` series (since 0.6.0), which expose each GPU's UUID and PCI bus address alongside utilization, memory, temperature and power. |
 | public_tcbinfo | 0.5.1 | boolean | Whether TCB info is public |
@@ -126,9 +126,9 @@ dstack uses encrypted environment variables to allow app developers to securely 
    - CVM decrypts the ciphertext using AESGCM with the derived shared secret
    - CVM parses the JSON and only stores variables listed in allowed_envs from app-compose.json
    - CVM performs basic regex validation on values
-   - Final result is stored as /dstack/.hostshared/.decrypted-env and loaded system-wide via app-compose.service
+   - Final result is stored as /dstack/.host-shared/.decrypted-env.json and passed to app-compose.service through `dstack-util exec-with-env`
 
-This file is not measured to RTMRs. But it is highly recommended to add application-specific integrity checks on encrypted environment variables at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
+This file is not measured to RTMRs, and the envelope is not bound to an instance or compose hash: the KMS derives `env_crypt_key` from the app ID alone, so the host can withhold the file or replay any earlier ciphertext for the same app. It is highly recommended to add application-specific integrity checks, such as a version or expiry inside the plaintext, at the application layer. See [security-best-practices.md](./security-best-practices.md) for more details.
 
 ### .user-config
 This is an optional application-specific configuration file that applications inside the CVM can access. dstack OS simply stores it at /dstack/.host-shared/.user-config without any measurement or additional processing, unless `requirements.launch_token_hash` is set in app-compose.json — in that case the guest reads the launch token from JSON path `dstack.launch_token` in this file and fails closed at boot, before key provisioning, unless its SHA-256 matches the pinned hash.
@@ -226,19 +226,17 @@ what it costs and in what it says:
   back. Container names and statuses were already public through the dashboard
   below.
 - `GetAttestationForAppKey` (frozen) generates a fresh platform attestation per
-  call. With the frozen `Info` below, it is one of the two methods here that
-  let an anonymous caller drive quote generation. It has no v1 counterpart
-  on purpose: a v1 application attests its own key through the internal socket
-  (`/v1/GetKey`, then `/v1/Attest`) and serves the result itself, so the public
-  listener never gained a second attestation-on-demand entry point.
-- The frozen `Info` decodes identity out of a boot attestation per call, which
-  costs a hardware quote under the agent's global quote lock. The v1 `Info`
-  serves the same identity from a cache decoded once at startup, so an
-  anonymous caller cannot drive quote generation through it; if the boot-time
-  decode failed, retries are throttled to one attempt per interval. Of the two
-  quote-generating methods, the frozen `Info` is the one worth rate-limiting
-  first: it is what clients actually poll, and it replays the event log on top
-  of the quote.
+  call, and is the only method here that does so unconditionally. It has no
+  v1 counterpart on purpose: a v1 application attests its own key through the
+  internal socket (`/v1/GetKey`, then `/v1/Attest`) and serves the result
+  itself, so the public listener never gained a second attestation-on-demand
+  entry point.
+- Both `Info` methods serve identity from a cache decoded once at startup; if
+  that decode failed, retries are throttled to one attempt per interval. The
+  frozen `Info` still quotes to serve `tcb_info`, which on this listener only
+  happens when the app set `public_tcbinfo`. It also starts the demo
+  certificate request behind `app_cert` (a quote plus a KMS round trip), which
+  runs one at a time and, after a failure, at most once per interval.
 - Both `Info` methods honour the app's `public_tcbinfo` choice, with different
   reach. The frozen one blanks `tcb_info` and `vm_config` but always serves
   `key_provider_info`. The v1 one blanks `app_compose`, `vm_config`, and

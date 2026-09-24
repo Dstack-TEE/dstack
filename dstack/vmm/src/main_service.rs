@@ -14,12 +14,10 @@ use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
-    PullRegistryImageRequest, RegistryImageInfo, RegistryImageListResponse, ReloadVmsResponse,
-    ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse, SvListResponse,
-    SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
+    ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
+    SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
-use or_panic::ResultOrPanic;
 use path_absolutize::Absolutize;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
@@ -29,7 +27,9 @@ use crate::app::{
     validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
     VmWorkDir,
 };
-use crate::config::{CvmConfig, DiskPrealloc, Networking, NetworkingMode, NicNetworking};
+use crate::config::{
+    CvmConfig, DiskPrealloc, Networking, NetworkingMode, NicNetworking, PortMappingConfig,
+};
 
 fn hex_sha256(data: &str) -> String {
     use sha2::Digest;
@@ -110,7 +110,28 @@ pub fn resolve_gpus_with_config(
     if !cvm_config.gpu.allow_attach_all && gpus.attach_mode.is_all() {
         bail!("Attaching all GPUs is not allowed");
     }
+    if !gpus.gpus.is_empty() && !gpus.attach_mode.is_all() {
+        let offered: Vec<_> = cvm_config
+            .gpu
+            .list_devices()?
+            .into_iter()
+            .map(|dev| dev.slot)
+            .collect();
+        ensure_gpus_offered(&gpus.gpus, &offered)?;
+    }
     Ok(gpus)
+}
+
+/// Listed slots must be among the GPUs `ListGpus` offers, i.e. pass
+/// `cvm.gpu.listing`, `include` and `exclude`; otherwise any host PCI device
+/// (or a string carrying QEMU option separators) reaches `-device vfio-pci`.
+fn ensure_gpus_offered(requested: &[GpuSpec], offered: &[String]) -> Result<()> {
+    for gpu in requested {
+        if !offered.contains(&gpu.slot) {
+            bail!("GPU {} is not offered by this node", gpu.slot);
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
@@ -242,42 +263,67 @@ fn validate_unique_port_mappings(mappings: &[PortMapping]) -> Result<()> {
     Ok(())
 }
 
+/// Converts requested port mappings, enforcing `cvm.port_mapping` on every
+/// mapping not already in `held`. The web UI resends a VM's full port list on
+/// every update, so an existing mapping must stay accepted after the node
+/// narrows its policy.
+fn port_map_from_proto(
+    ports: &[rpc::PortMapping],
+    pm_cfg: &PortMappingConfig,
+    held: &[PortMapping],
+) -> Result<Vec<PortMapping>> {
+    let port_map = ports
+        .iter()
+        .map(|p| {
+            let address = if !p.host_address.is_empty() {
+                p.host_address.parse().context("Invalid host address")?
+            } else {
+                pm_cfg.address
+            };
+            let mapping = PortMapping {
+                address,
+                protocol: p.protocol.parse().context("Invalid protocol")?,
+                from: p.host_port.try_into().context("Invalid host port")?,
+                to: p.vm_port.try_into().context("Invalid vm port")?,
+                nic_index: p.nic_index.map(|index| index as usize),
+            };
+            if !held.contains(&mapping) {
+                if !pm_cfg.enabled {
+                    bail!("Port mapping is disabled");
+                }
+                if !pm_cfg.is_allowed(mapping.protocol.as_str(), mapping.from) {
+                    bail!(
+                        "Port mapping is not allowed for {}:{}",
+                        mapping.protocol.as_str(),
+                        mapping.from
+                    );
+                }
+            }
+            Ok(mapping)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    validate_unique_port_mappings(&port_map)?;
+    Ok(port_map)
+}
+
 // Shared function to create manifest from VM configuration
 pub fn create_manifest_from_vm_config(
     request: VmConfiguration,
     cvm_config: &crate::config::CvmConfig,
 ) -> Result<Manifest> {
     validate_label(&request.name)?;
-
-    let pm_cfg = &cvm_config.port_mapping;
-    if !(request.ports.is_empty() || pm_cfg.enabled) {
-        bail!("Port mapping is disabled");
+    // Same checks as `validate_resize_request`.
+    if request.vcpu == 0 {
+        bail!("vcpu must be greater than zero");
     }
-    let port_map = request
-        .ports
-        .iter()
-        .map(|p| {
-            let from = p.host_port.try_into().context("Invalid host port")?;
-            let to = p.vm_port.try_into().context("Invalid vm port")?;
-            if !pm_cfg.is_allowed(&p.protocol, from) {
-                bail!("Port mapping is not allowed for {}:{}", p.protocol, from);
-            }
-            let protocol = p.protocol.parse().context("Invalid protocol")?;
-            let address = if !p.host_address.is_empty() {
-                p.host_address.parse().context("Invalid host address")?
-            } else {
-                pm_cfg.address
-            };
-            Ok(PortMapping {
-                address,
-                protocol,
-                from,
-                to,
-                nic_index: p.nic_index.map(|index| index as usize),
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    validate_unique_port_mappings(&port_map)?;
+    if request.memory == 0 {
+        bail!("memory must be greater than zero");
+    }
+    if request.disk_size == 0 {
+        bail!("disk_size must be greater than zero");
+    }
+
+    let port_map = port_map_from_proto(&request.ports, &cvm_config.port_mapping, &[])?;
     let networks = networks_from_vm_config(&request, cvm_config)?;
     validate_port_mapping_nics(
         &port_map,
@@ -834,7 +880,6 @@ impl RpcHandler {
         &self,
         vm_id: &str,
         manifest: &mut Manifest,
-        vm_work_dir: &VmWorkDir,
         vcpu: Option<u32>,
         memory: Option<u32>,
         disk_size: Option<u32>,
@@ -864,47 +909,58 @@ impl RpcHandler {
             if disk_size < manifest.disk_size {
                 bail!("Cannot shrink disk size");
             }
-            if disk_size > manifest.disk_size {
-                let hda_path = vm_work_dir.hda_path();
-                if hda_path.exists() {
-                    info!("Resizing disk to {}GB", disk_size);
-                    let new_size_str = format!("{}G", disk_size);
-                    // Grow the disk the same way it was created, so a VM
-                    // deployed with preallocation keeps its space reserved.
-                    let mut args = vec!["resize".to_string()];
-                    if !manifest.disk_prealloc.is_off() {
-                        args.push(format!(
-                            "--preallocation={}",
-                            manifest.disk_prealloc.as_str()
-                        ));
-                    }
-                    args.push(hda_path.display().to_string());
-                    args.push(new_size_str);
-                    // Off the async executor, for the same reason the launch
-                    // path does it: growing a preallocated disk reserves the
-                    // added space before it returns, and `full` writes it.
-                    let output = tokio::task::spawn_blocking(move || {
-                        std::process::Command::new("qemu-img").args(&args).output()
-                    })
-                    .await
-                    .context("disk resize task failed")?
-                    .context("Failed to resize disk")?;
-                    if !output.status.success() {
-                        bail!(
-                            "Failed to resize disk: {}",
-                            String::from_utf8_lossy(&output.stderr)
-                        );
-                    }
-                } else {
-                    // A never-started stopped VM has no data disk yet. Its
-                    // first launch creates hda.img from manifest.disk_size.
-                    info!("Recording {}GB disk size for uninitialized VM", disk_size);
-                }
-                manifest.disk_size = disk_size;
-            }
+            manifest.disk_size = disk_size;
         }
 
         Ok(true)
+    }
+
+    /// Grows the data disk to `manifest.disk_size` if that exceeds `old_size`.
+    async fn grow_disk_if_needed(
+        vm_work_dir: &VmWorkDir,
+        manifest: &Manifest,
+        old_size: u32,
+    ) -> Result<()> {
+        let disk_size = manifest.disk_size;
+        if disk_size <= old_size {
+            return Ok(());
+        }
+        let hda_path = vm_work_dir.hda_path();
+        if !hda_path.exists() {
+            // A never-started stopped VM has no data disk yet. Its
+            // first launch creates hda.img from manifest.disk_size.
+            info!("Recording {}GB disk size for uninitialized VM", disk_size);
+            return Ok(());
+        }
+        info!("Resizing disk to {}GB", disk_size);
+        let new_size_str = format!("{}G", disk_size);
+        // Grow the disk the same way it was created, so a VM
+        // deployed with preallocation keeps its space reserved.
+        let mut args = vec!["resize".to_string()];
+        if !manifest.disk_prealloc.is_off() {
+            args.push(format!(
+                "--preallocation={}",
+                manifest.disk_prealloc.as_str()
+            ));
+        }
+        args.push(hda_path.display().to_string());
+        args.push(new_size_str);
+        // Off the async executor, for the same reason the launch
+        // path does it: growing a preallocated disk reserves the
+        // added space before it returns, and `full` writes it.
+        let output = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("qemu-img").args(&args).output()
+        })
+        .await
+        .context("disk resize task failed")?
+        .context("Failed to resize disk")?;
+        if !output.status.success() {
+            bail!(
+                "Failed to resize disk: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(())
     }
 }
 
@@ -1020,45 +1076,26 @@ impl VmmRpc for RpcHandler {
         // Again under the lock: removal can have claimed the VM while this
         // waited for it.
         self.app.refuse_if_removing(&request.id)?;
+        let vm_work_dir = self.app.work_dir(&request.id)?;
+        let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
+        let old_disk_size = manifest.disk_size;
+        // Validate the whole request against an in-memory manifest before
+        // touching the host, so a rejected update changes nothing.
         let new_id = if !request.compose_file.is_empty() {
             // check the compose file is valid
             let _app_compose: AppCompose =
                 serde_json::from_str(&request.compose_file).context("Invalid compose file")?;
-            let compose_file_path = self.compose_file_path(&request.id)?;
-            if !compose_file_path.exists() {
+            if !self.compose_file_path(&request.id)?.exists() {
                 bail!("The instance {} not found", request.id);
             }
-            // Read the manifest here rather than reusing the one below, so a
-            // rejected update leaves the stored compose file untouched.
-            let manifest = self
-                .app
-                .work_dir(&request.id)?
-                .manifest()
-                .context("Failed to read manifest")?;
             validate_disk_prealloc_against_compose(manifest.disk_prealloc, &request.compose_file)?;
-            fs::write(compose_file_path, &request.compose_file)
-                .context("Failed to write compose file")?;
-
             app_id_of(&request.compose_file)
         } else {
             Default::default()
         };
-        if !request.encrypted_env.is_empty() {
-            let encrypted_env_path = self.encrypted_env_path(&request.id)?;
-            fs::write(encrypted_env_path, &request.encrypted_env)
-                .context("Failed to write encrypted env")?;
-        }
-        if !request.user_config.is_empty() {
-            let user_config_path = self.user_config_path(&request.id)?;
-            fs::write(user_config_path, &request.user_config)
-                .context("Failed to write user config")?;
-        }
-        let vm_work_dir = self.app.work_dir(&request.id)?;
-        let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
         self.apply_resource_updates(
             &request.id,
             &mut manifest,
-            &vm_work_dir,
             request.vcpu,
             request.memory,
             request.disk_size,
@@ -1072,19 +1109,11 @@ impl VmmRpc for RpcHandler {
             manifest.no_tee = no_tee;
         }
         if request.update_ports {
-            let port_map = request
-                .ports
-                .iter()
-                .map(|p| {
-                    Ok(PortMapping {
-                        address: p.host_address.parse().context("Invalid host address")?,
-                        protocol: p.protocol.parse().context("Invalid protocol")?,
-                        from: p.host_port.try_into().context("Invalid host port")?,
-                        to: p.vm_port.try_into().context("Invalid vm port")?,
-                        nic_index: p.nic_index.map(|index| index as usize),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let port_map = port_map_from_proto(
+                &request.ports,
+                &self.app.config.cvm.port_mapping,
+                &manifest.port_map,
+            )?;
             self.validate_port_mapping_conflicts(Some(&request.id), &port_map)?;
             manifest.port_map = port_map;
         }
@@ -1095,7 +1124,7 @@ impl VmmRpc for RpcHandler {
             manifest.gateway_urls = request.gateway_urls.clone();
         }
         if request.update_networking {
-            let networks = if request.networks.is_empty() {
+            manifest.networks = if request.networks.is_empty() {
                 validate_default_network(&self.app.config.cvm)?;
                 vec![]
             } else {
@@ -1108,6 +1137,33 @@ impl VmmRpc for RpcHandler {
                 let networks = networks_from_proto(&request.networks, &cvm)?;
                 resolve_requested_networks(&networks, &cvm, manifest.vcpu)?
             };
+        }
+        // Both only when this request moved one of the two halves, and after
+        // both, since either half can move and the other still has to agree
+        // with it. A VM deployed before the node could answer for its ports
+        // must stay editable in every other respect: read-modify-write sends
+        // the whole configuration back, and refusing a memory change over a
+        // port mapping nobody touched -- or over a node default that changed
+        // under it -- would make the VM unmanageable rather than fixed.
+        if request.update_ports || request.update_networking {
+            validate_port_mapping_nics(
+                &manifest.port_map,
+                &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
+            )?;
+        }
+        let compose_file = if request.compose_file.is_empty() {
+            fs::read_to_string(vm_work_dir.app_compose_path())
+                .context("failed to read app compose for swtpm decision")?
+        } else {
+            request.compose_file.clone()
+        };
+        manifest.swtpm = needs_swtpm(
+            key_provider_from_compose(&compose_file)?,
+            manifest.simulated_tee,
+        );
+
+        Self::grow_disk_if_needed(&vm_work_dir, &manifest, old_disk_size).await?;
+        if request.update_networking {
             // Under the launch lock this whole call holds. Reading "not
             // running" outside it and acting on the answer inside is the exact
             // race the lock exists to close: a launch can start, prepare its
@@ -1123,27 +1179,21 @@ impl VmmRpc for RpcHandler {
             if !is_running && self.app.release_vm_interfaces(&request.id).await {
                 vm_work_dir.clear_runtime_networks()?;
             }
-            manifest.networks = networks;
         }
-        // Both only when this request moved one of the two halves, and after
-        // both, since either half can move and the other still has to agree
-        // with it. A VM deployed before the node could answer for its ports
-        // must stay editable in every other respect: read-modify-write sends
-        // the whole configuration back, and refusing a memory change over a
-        // port mapping nobody touched -- or over a node default that changed
-        // under it -- would make the VM unmanageable rather than fixed.
-        if request.update_ports || request.update_networking {
-            validate_port_mapping_nics(
-                &manifest.port_map,
-                &resolved_nic_modes(&manifest.networks, &self.app.config.cvm, manifest.vcpu),
-            )?;
+        if !request.compose_file.is_empty() {
+            fs::write(self.compose_file_path(&request.id)?, &request.compose_file)
+                .context("Failed to write compose file")?;
         }
-        let compose_file = fs::read_to_string(vm_work_dir.app_compose_path())
-            .context("failed to read app compose for swtpm decision")?;
-        manifest.swtpm = needs_swtpm(
-            key_provider_from_compose(&compose_file)?,
-            manifest.simulated_tee,
-        );
+        if !request.encrypted_env.is_empty() {
+            let encrypted_env_path = self.encrypted_env_path(&request.id)?;
+            fs::write(encrypted_env_path, &request.encrypted_env)
+                .context("Failed to write encrypted env")?;
+        }
+        if !request.user_config.is_empty() {
+            let user_config_path = self.user_config_path(&request.id)?;
+            fs::write(user_config_path, &request.user_config)
+                .context("Failed to write user config")?;
+        }
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to put manifest")?;
@@ -1203,16 +1253,17 @@ impl VmmRpc for RpcHandler {
         self.app.refuse_if_removing(&request.id)?;
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
+        let old_disk_size = manifest.disk_size;
         self.apply_resource_updates(
             &request.id,
             &mut manifest,
-            &vm_work_dir,
             request.vcpu,
             request.memory,
             request.disk_size,
             request.image.as_deref(),
         )
         .await?;
+        Self::grow_disk_if_needed(&vm_work_dir, &manifest, old_disk_size).await?;
         vm_work_dir
             .put_manifest(&manifest)
             .context("failed to update manifest")?;
@@ -1357,51 +1408,6 @@ impl VmmRpc for RpcHandler {
         Ok(())
     }
 
-    async fn list_registry_images(self) -> Result<RegistryImageListResponse> {
-        let registry = &self.app.config.image.registry;
-        if registry.is_empty() {
-            return Ok(RegistryImageListResponse { images: vec![] });
-        }
-
-        let tags = crate::app::registry::list_registry_tags(registry)
-            .await
-            .context("failed to list registry tags")?;
-
-        // Get local images to mark which are already downloaded
-        let local_images = self.app.list_images()?;
-        let local_names: std::collections::HashSet<String> =
-            local_images.into_iter().map(|(name, _)| name).collect();
-
-        let pull_status = self.app.pull_status.lock().or_panic("mutex poisoned");
-
-        // Filter to version-like tags (skip sha256-* hash tags)
-        let images = tags
-            .into_iter()
-            .filter(|tag| !tag.starts_with("sha256-"))
-            .map(|tag| {
-                let local_name = if tag.starts_with("dstack-") {
-                    tag.clone()
-                } else {
-                    format!("dstack-{tag}")
-                };
-                let is_local = local_names.contains(&local_name);
-                let (is_pulling, error) = match pull_status.get(&tag) {
-                    Some(crate::app::PullStatus::Pulling) => (true, String::new()),
-                    Some(crate::app::PullStatus::Failed(msg)) => (false, msg.clone()),
-                    None => (false, String::new()),
-                };
-                RegistryImageInfo {
-                    tag,
-                    local: is_local,
-                    pulling: is_pulling,
-                    error,
-                }
-            })
-            .collect();
-
-        Ok(RegistryImageListResponse { images })
-    }
-
     async fn delete_image(self, request: Id) -> Result<()> {
         let name = &request.id;
         if name.is_empty() || name.contains("..") || name.contains('/') {
@@ -1432,51 +1438,6 @@ impl VmmRpc for RpcHandler {
         })?;
 
         info!("deleted local image: {name}");
-        Ok(())
-    }
-
-    async fn pull_registry_image(self, request: PullRegistryImageRequest) -> Result<()> {
-        let registry = &self.app.config.image.registry;
-        if registry.is_empty() {
-            bail!("image registry is not configured");
-        }
-
-        // Check if already pulling
-        {
-            let mut status = self.app.pull_status.lock().or_panic("mutex poisoned");
-            if matches!(
-                status.get(&request.tag),
-                Some(crate::app::PullStatus::Pulling)
-            ) {
-                bail!("image {} is already being pulled", request.tag);
-            }
-            status.insert(request.tag.clone(), crate::app::PullStatus::Pulling);
-        }
-
-        // Spawn background task
-        let tag = request.tag.clone();
-        let registry = registry.clone();
-        let image_path = self.app.config.image.path.clone();
-        let pull_status = self.app.pull_status.clone();
-
-        info!("starting background pull for {tag}");
-        tokio::spawn(async move {
-            let result = crate::app::registry::pull_and_extract(&registry, &tag, &image_path).await;
-
-            let mut status = pull_status.lock().unwrap_or_else(|e| e.into_inner());
-            match result {
-                Ok(()) => {
-                    status.remove(&tag);
-                    info!("registry image {tag} pulled successfully");
-                }
-                Err(e) => {
-                    let msg = format!("{e:#}");
-                    tracing::error!("failed to pull registry image {tag}: {msg}");
-                    status.insert(tag, crate::app::PullStatus::Failed(msg));
-                }
-            }
-        });
-
         Ok(())
     }
 }
@@ -1704,6 +1665,13 @@ mod tests {
         );
         assert!(err.contains("compose"), "{err}");
         assert!(!err.contains("storage_discard"), "{err}");
+    }
+
+    #[test]
+    fn deployment_rejects_zero_resources() {
+        let mut request = test_vm_configuration();
+        request.memory = 0;
+        assert!(create_manifest_from_vm_config(request, &test_cvm_config()).is_err());
     }
 
     #[test]
@@ -2824,6 +2792,89 @@ mod tests {
             tmp.path().join("volume.img").display().to_string()
         );
         Ok(())
+    }
+
+    #[test]
+    fn listed_gpus_must_be_offered_by_node() {
+        let offered = ["0000:0f:00.0".to_string()];
+        let gpu = |slot: &str| GpuSpec { slot: slot.into() };
+        assert!(ensure_gpus_offered(&[gpu("0000:0f:00.0")], &offered).is_ok());
+        for slot in ["0000:10:00.0", "0000:0f:00.0,romfile=/tmp/rom"] {
+            assert!(ensure_gpus_offered(&[gpu(slot)], &offered).is_err());
+        }
+    }
+
+    #[test]
+    fn port_map_enforces_node_policy_on_new_mappings_only() {
+        let port = |host_port: u32| rpc::PortMapping {
+            protocol: "tcp".into(),
+            host_port,
+            vm_port: host_port,
+            host_address: String::new(),
+            nic_index: None,
+        };
+        let mut pm_cfg = test_cvm_config().port_mapping;
+
+        pm_cfg.enabled = false;
+        let err = port_map_from_proto(&[port(8080)], &pm_cfg, &[]).unwrap_err();
+        assert!(err.to_string().contains("disabled"), "{err}");
+
+        pm_cfg.enabled = true;
+        let held = port_map_from_proto(&[port(8080)], &pm_cfg, &[]).unwrap();
+        assert_eq!(held[0].address, pm_cfg.address);
+        let err = port_map_from_proto(&[port(30000)], &pm_cfg, &[]).unwrap_err();
+        assert!(err.to_string().contains("not allowed"), "{err}");
+
+        pm_cfg.enabled = false;
+        assert_eq!(
+            port_map_from_proto(&[port(8080)], &pm_cfg, &held).unwrap(),
+            held
+        );
+        assert!(port_map_from_proto(&[port(8080), port(8081)], &pm_cfg, &held).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_rejected_update_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config: crate::config::Config =
+            Figment::from(crate::config::load_config_figment(None))
+                .extract()
+                .unwrap();
+        config.run_path = tmp.path().to_path_buf();
+        let manifest =
+            create_manifest_from_vm_config(test_vm_configuration(), &config.cvm).unwrap();
+        let app = App::new(
+            config,
+            supervisor_client::SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        app.work_dir(&manifest.id)
+            .unwrap()
+            .put_manifest(&manifest)
+            .unwrap();
+        let compose_path = app.compose_file_path(&manifest.id).unwrap();
+        fs::create_dir_all(compose_path.parent().unwrap()).unwrap();
+        fs::write(&compose_path, "{}").unwrap();
+
+        // Port mapping is disabled by default, so the new port is refused.
+        let err = RpcHandler { app }
+            .update_vm(UpdateVmRequest {
+                id: manifest.id.clone(),
+                compose_file: r#"{"manifest_version":"2","name":"new","runner":"docker-compose"}"#
+                    .into(),
+                update_ports: true,
+                ports: vec![rpc::PortMapping {
+                    protocol: "tcp".into(),
+                    host_port: 8080,
+                    vm_port: 8080,
+                    host_address: String::new(),
+                    nic_index: None,
+                }],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("disabled"), "{err:#}");
+        assert_eq!(fs::read_to_string(&compose_path).unwrap(), "{}");
     }
 
     #[test]

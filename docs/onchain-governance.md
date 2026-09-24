@@ -98,6 +98,8 @@ GATEWAY_APP_ID=<app-id> \
 
 Output: `Set gateway app ID: <app-id>`
 
+To trust more than one gateway (for example during a gateway migration), set the value to several app IDs joined by commas, e.g. `<app-id-1>,<app-id-2>`. A CVM accepts a gateway whose certificate carries any app ID contained in this string.
+
 Add the gateway's compose hash to the whitelist. To compute the compose hash:
 
 ```bash
@@ -155,7 +157,7 @@ The central governance contract that manages OS image whitelisting, app registra
 |----------|-------------|
 | `addOsImageHash(bytes32)` | Whitelist an OS image hash |
 | `removeOsImageHash(bytes32)` | Remove an OS image from whitelist |
-| `setGatewayAppId(string)` | Set the trusted Gateway app ID |
+| `setGatewayAppId(string)` | Set the trusted Gateway app ID(s) |
 | `registerApp(address)` | Register an app contract |
 | `deployAndRegisterApp(...)` | Deploy and register app in one transaction |
 | `isAppAllowed(AppBootInfo)` | Check if an app is allowed to boot |

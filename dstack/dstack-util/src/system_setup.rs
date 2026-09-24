@@ -54,7 +54,7 @@ use crate::{
         deserialize_json_file, sha256, sha256_file, AppCompose, AppKeys, KeyProviderKind, SysConfig,
     },
 };
-use cert_client::CertRequestClient;
+use cert_client::{validate_kms_rpc_cert, CertRequestClient};
 use cmd_lib::run_fun as cmd;
 use dstack_gateway_rpc::{
     gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
@@ -281,20 +281,25 @@ impl HostShared {
                 }
                 bail!("Source file {src} does not exist");
             }
-            let src_size = src_path.metadata()?.len();
-            if src_size > max_size {
-                bail!("Source file {src} is too large, max size is {max_size} bytes");
-            }
             use fs::os::unix::fs::OpenOptionsExt;
-            let mut src_io = fs::OpenOptions::new()
+            use std::io::Read;
+            // O_NONBLOCK: opening a FIFO on the host share must not block the boot.
+            let src_io = fs::OpenOptions::new()
                 .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                 .open(src_path)?;
+            if !src_io.metadata()?.is_file() {
+                bail!("Source file {src} is not a regular file");
+            }
             let mut dst_io = fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .open(dst_path)?;
-            std::io::copy(&mut src_io, &mut dst_io)?;
+            let copied = std::io::copy(&mut src_io.take(max_size + 1), &mut dst_io)?;
+            if copied > max_size {
+                bail!("Source file {src} is too large, max size is {max_size} bytes");
+            }
             Ok(())
         };
         info!("Mounting host-shared");
@@ -396,8 +401,17 @@ impl GatewayKeyStore {
     }
 
     fn load_from(path: &Path) -> Option<Self> {
-        let content = fs::read_to_string(path).ok()?;
-        serde_json::from_str(&content).ok()
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(err) => {
+                warn!("failed to read the gateway cache, re-registering: {err}");
+                return None;
+            }
+        };
+        serde_json::from_str(&content)
+            .inspect_err(|err| warn!("malformed gateway cache, re-registering: {err}"))
+            .ok()
     }
 
     fn load_from_default() -> Option<Self> {
@@ -1356,7 +1370,7 @@ async fn do_sys_setup(stage0: Stage0<'_>) -> Result<()> {
 mod gpu {
     use super::*;
 
-    const EVENT_VERSION: u32 = 2;
+    const EVENT_VERSION: u32 = 3;
     const POLICY_ENTRYPOINT: &str = "data.policy.nv_match";
     /// Bound Rego evaluation so a runaway application policy cannot hang boot.
     const POLICY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -1370,6 +1384,8 @@ mod gpu {
         devices: u32,
         cc_mode: &'static str,
         devtools: bool,
+        dbgstat: NvidiaGpuDebugStatus,
+        secboot: bool,
         evidence_sha256: String,
     }
 
@@ -1386,7 +1402,17 @@ mod gpu {
         }
 
         pub(super) fn event(&self, devtools: bool) -> Result<Vec<u8>> {
-            attestation_event(&self.output, self.devices, devtools)
+            let dbgstat = if self
+                .parsed_claims
+                .iter()
+                .any(|claim| claim.dbgstat == NvidiaGpuDebugStatus::Enabled)
+            {
+                NvidiaGpuDebugStatus::Enabled
+            } else {
+                NvidiaGpuDebugStatus::Disabled
+            };
+            let secboot = self.parsed_claims.iter().all(|claim| claim.secboot);
+            attestation_event(&self.output, self.devices, devtools, dbgstat, secboot)
         }
 
         pub(super) fn verify_claim_policy(
@@ -1437,7 +1463,7 @@ mod gpu {
         dbgstat: NvidiaGpuDebugStatus,
     }
 
-    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
     #[serde(rename_all = "lowercase")]
     enum NvidiaGpuDebugStatus {
         Disabled,
@@ -1590,13 +1616,21 @@ mod gpu {
         Ok(())
     }
 
-    fn attestation_event(stdout: &[u8], devices: u32, devtools: bool) -> Result<Vec<u8>> {
+    fn attestation_event(
+        stdout: &[u8],
+        devices: u32,
+        devtools: bool,
+        dbgstat: NvidiaGpuDebugStatus,
+        secboot: bool,
+    ) -> Result<Vec<u8>> {
         let event = GpuAttestationEvent {
             version: EVENT_VERSION,
             provider: "nvidia",
             devices,
             cc_mode: "on",
             devtools,
+            dbgstat,
+            secboot,
             evidence_sha256: hex::encode(sha256(stdout)),
         };
         serde_json::to_vec(&event).context("failed to serialize GPU attestation event")
@@ -1615,9 +1649,9 @@ mod gpu {
             bail!("nvattest is not available in this image");
         }
         // Certificate/OCSP validation needs a sane clock even when
-        // secure_time is off; best-effort step chrony before attesting.
-        if let Err(err) = cmd!(chronyc makestep) {
-            warn!("failed to step system clock: {err:?}");
+        // secure_time is off; give chrony up to 30s to sync before attesting.
+        if let Err(err) = cmd!(chronyc waitsync 30 0 0 1) {
+            warn!("system clock not synchronized: {err:?}");
         }
         let nonce: [u8; nvattest::NONCE_LEN] = rand::thread_rng().gen();
         let (nonce, output) = nvattest::run(&nonce, proxy_url, nvattest::DEFAULT_TIMEOUT).await?;
@@ -1953,13 +1987,17 @@ mod gpu {
         fn event_commits_to_complete_nvattest_output() {
             let nonce = "22".repeat(32);
             let output = nvattest_output(&nonce, 1);
-            let event: Value =
-                serde_json::from_slice(&attestation_event(&output, 1, true).unwrap()).unwrap();
+            let event: Value = serde_json::from_slice(
+                &attestation_event(&output, 1, true, NvidiaGpuDebugStatus::Enabled, false).unwrap(),
+            )
+            .unwrap();
             assert_eq!(event["version"], EVENT_VERSION);
             assert_eq!(event["devices"], 1);
             assert!(event.get("policy").is_none());
             assert_eq!(event["cc_mode"], "on");
             assert_eq!(event["devtools"], true);
+            assert_eq!(event["dbgstat"], "enabled");
+            assert_eq!(event["secboot"], false);
             assert_eq!(event["evidence_sha256"], hex::encode(sha256(&output)));
         }
 
@@ -2186,30 +2224,16 @@ pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
         .await
 }
 
-/// Accept only a certificate the KMS issued for its own RPC endpoint.
-///
-/// The attestation behind this certificate is already verified by the RA-TLS
-/// layer, and the KMS identity that matters to the guest is its CA public key,
-/// pinned separately by `verify_key_provider_id`. All that is left here is
-/// refusing a certificate minted for some other purpose.
-fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
-    let Some(cert) = cert else {
-        bail!("missing server cert");
-    };
-    let Some(usage) = cert.special_usage else {
-        bail!("missing server cert usage");
-    };
-    if usage != "kms:rpc" {
-        bail!("Invalid server cert usage: {usage}");
-    }
-    Ok(())
-}
-
 struct AppIdValidator {
     allowed_app_id: String,
 }
 
 impl AppIdValidator {
+    /// `allowed_app_id` may list several gateway app ids (e.g.
+    /// `"<id1>,<id2>"`), so the peer is accepted if its hex app id appears
+    /// anywhere in it. This relies on the KMS only issuing certificates with
+    /// 20-byte app ids (`ensure_app_id_len`), so a shorter id cannot match a
+    /// fragment.
     fn validate(&self, cert: Option<CertInfo>) -> Result<()> {
         if self.allowed_app_id == "any" {
             return Ok(());
@@ -2301,7 +2325,7 @@ impl<'a> Stage0<'a> {
         self.shared.dir.join(APP_KEYS)
     }
 
-    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<AppKeys> {
+    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<(AppKeys, Vec<u8>)> {
         info!("Requesting app keys from KMS: {kms_url}");
         let tmp_ca = {
             info!("Getting temp ca cert");
@@ -2335,9 +2359,6 @@ impl<'a> Stage0<'a> {
             .await
             .context("Failed to get app key")?;
 
-        emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("failed to extend os-image-hash to the launch measurement")?;
-
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
             .context("Failed to parse ca cert")?;
         let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
@@ -2357,34 +2378,31 @@ impl<'a> Stage0<'a> {
                 tmp_ca_cert: tmp_ca.temp_ca_cert,
             },
         };
-        Ok(keys)
+        Ok((keys, response.os_image_hash))
     }
 
     async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
         if self.shared.sys_config.kms_urls.is_empty() {
             bail!("No KMS URLs are set");
         }
-        let keys = 'out: {
-            let mut error = anyhow!("unknown error");
-            for (i, kms_url) in self.shared.sys_config.kms_urls.iter().enumerate() {
-                let kms_url = kms_rpc_url(kms_url);
-                let response = self.request_app_keys_from_kms_url(kms_url.clone()).await;
-                match response {
-                    Ok(response) => {
-                        break 'out response;
-                    }
-                    Err(err) => {
-                        warn!("Failed to get app keys from KMS {kms_url}: {err:?}");
-                        // Record the first error
-                        if i == 0 {
-                            error = err;
-                        }
-                    }
+        let mut errors = vec![];
+        for kms_url in &self.shared.sys_config.kms_urls {
+            let kms_url = kms_rpc_url(kms_url);
+            match self.request_app_keys_from_kms_url(kms_url.clone()).await {
+                Ok((keys, os_image_hash)) => {
+                    // Measured here, outside the per-URL request, so that a
+                    // failover can never extend os-image-hash twice.
+                    emit_runtime_event("os-image-hash", &os_image_hash)
+                        .context("failed to extend os-image-hash to the launch measurement")?;
+                    return Ok(keys);
+                }
+                Err(err) => {
+                    warn!("failed to get app keys from KMS {kms_url}: {err:?}");
+                    errors.push(format!("{kms_url}: {err:#}"));
                 }
             }
-            return Err(error).context("Failed to get app keys from KMS");
-        };
-        Ok(keys)
+        }
+        Err(anyhow!(errors.join("; "))).context("failed to get app keys from KMS")
     }
 
     fn verify_key_provider_id(&self, provider_id: &[u8]) -> Result<()> {
@@ -3026,11 +3044,17 @@ impl<'a> Stage0<'a> {
 
         // Save app keys
         let keys_json = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
-        fs::write(self.app_keys_file(), keys_json).context("Failed to write app keys")?;
+        safe_write_with_mode(self.app_keys_file(), keys_json, 0o600)
+            .context("Failed to write app keys")?;
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
         emit_runtime_event("storage-fs", opts.storage_fs.to_string().as_bytes())?;
+        // The cmdline is not measured on every platform (e.g. GCP TDX).
+        emit_runtime_event(
+            "storage-encrypted",
+            if opts.storage_encrypted { b"1" } else { b"0" },
+        )?;
         info!(
             "Filesystem options: encryption={}, filesystem={:?}",
             opts.storage_encrypted, opts.storage_fs
@@ -3068,12 +3092,11 @@ impl Stage1<'_> {
         ciphertext: &[u8],
         allowed: &BTreeSet<String>,
     ) -> Result<BTreeMap<String, String>> {
-        let vars = if !key.is_empty() && !ciphertext.is_empty() {
+        let vars = if !ciphertext.is_empty() {
             info!("Processing encrypted env");
-            let env_crypt_key: [u8; 32] = key
-                .try_into()
-                .ok()
-                .context("Invalid env crypt key length")?;
+            let env_crypt_key: [u8; 32] = key.try_into().ok().context(
+                "encrypted env is present but the key provider gave no valid env crypt key",
+            )?;
             let decrypted_json =
                 dh_decrypt(env_crypt_key, ciphertext).context("Failed to decrypt env file")?;
             crate::parse_env_file::parse_env(&decrypted_json, allowed)?
@@ -3086,14 +3109,15 @@ impl Stage1<'_> {
 
     fn write_env_file(&self, env_vars: &BTreeMap<String, String>) -> Result<()> {
         info!("Writing env");
-        fs::write(
+        safe_write_with_mode(
             self.shared.dir.join(DECRYPTED_ENV),
             crate::parse_env_file::convert_env_to_str(env_vars),
+            0o600,
         )
         .context("Failed to write decrypted env file")?;
-        let env_json = fs::File::create(self.shared.dir.join(DECRYPTED_ENV_JSON))
-            .context("Failed to create env file")?;
-        serde_json::to_writer(env_json, &env_vars).context("Failed to write decrypted env file")?;
+        let env_json = serde_json::to_vec(env_vars).context("Failed to serialize decrypted env")?;
+        safe_write_with_mode(self.shared.dir.join(DECRYPTED_ENV_JSON), env_json, 0o600)
+            .context("Failed to write decrypted env file")?;
         Ok(())
     }
 
@@ -3346,7 +3370,8 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         // Pin where the encrypted key material is read from. The binary area
         // must sit between the two header copies and the encrypted payload;
         // otherwise a host with raw disk access could redirect it elsewhere.
-        if area.offset() < 2 * hdr_size || area.offset() + area.size() > PAYLOAD_OFFSET {
+        let area_end = area.offset().checked_add(area.size());
+        if area.offset() < 2 * hdr_size || area_end.is_none_or(|end| end > PAYLOAD_OFFSET) {
             bail!(
                 "Invalid LUKS keyslot area: offset={} size={}",
                 area.offset(),
@@ -3462,22 +3487,52 @@ fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
     // so the surrounding header stays intact; "00768" parses to 768, which is
     // inside the header copies (< 2 * hdr_size) rather than the metadata gap.
     let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    let needle = br#""offset":"32768""#;
-    let replacement = br#""offset":"00768""#;
-    let mut patched = 0;
-    let mut i = 0;
-    while i + needle.len() <= header.len() {
-        if &header[i..i + needle.len()] == needle {
-            header[i..i + needle.len()].copy_from_slice(replacement);
-            patched += 1;
-            i += needle.len();
-        } else {
-            i += 1;
-        }
-    }
+    let patched = patch_luks_json(&mut header, br#""offset":"32768""#, br#""offset":"00768""#);
     assert_eq!(patched, 2, "expected to patch both header copies");
     let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
     assert!(error.to_string().contains("Invalid LUKS keyslot area"));
+}
+
+/// Replace `needle` with `replacement` inside every LUKS JSON region, keeping
+/// each region the same length by giving back trailing NUL padding.
+#[cfg(test)]
+fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usize {
+    assert!(replacement.len() >= needle.len());
+    let grow = replacement.len() - needle.len();
+    let mut patched = 0;
+    let mut i = 0;
+    while i + needle.len() <= header.len() {
+        if &header[i..i + needle.len()] != needle {
+            i += 1;
+            continue;
+        }
+        let tail = &mut header[i..];
+        let end = tail.iter().position(|b| *b == 0).expect("NUL padding");
+        assert!(end + grow < tail.len(), "not enough NUL padding");
+        tail.copy_within(needle.len()..end, replacement.len());
+        tail[..replacement.len()].copy_from_slice(replacement);
+        patched += 1;
+        i += replacement.len();
+    }
+    patched
+}
+
+#[test]
+fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
+    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
+    // 2**64 - 32768 + 1000: added to the accepted offset 32768 it wraps to
+    // 1000, which is below PAYLOAD_OFFSET.
+    let patched = patch_luks_json(
+        &mut header,
+        br#""size":"258048""#,
+        br#""size":"18446744073709519848""#,
+    );
+    assert_eq!(patched, 2, "expected to patch both header copies");
+    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
+    assert!(
+        error.to_string().contains("Invalid LUKS keyslot area"),
+        "{error:#}"
+    );
 }
 
 #[cfg(test)]

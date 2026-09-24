@@ -93,6 +93,7 @@ do_install() {
         install -m 0644 ${DSTACK_ROOTFS_FILES}/app-compose.service ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-gateway-checker.service ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-guest-agent.socket ${D}${systemd_system_unitdir}
+        install -m 0644 ${DSTACK_ROOTFS_FILES}/dstack-boot-error@.service ${D}${systemd_system_unitdir}
         install -m 0644 ${DSTACK_ROOTFS_FILES}/llmnr.conf ${D}${sysconfdir}/systemd/resolved.conf.d
         # Drop-ins the image ships are vendor configuration, so they belong
         # beside the units in ${systemd_system_unitdir}. /etc is the operator's

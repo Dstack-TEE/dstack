@@ -18,14 +18,14 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use arc_swap::{ArcSwap, Guard};
 use or_panic::ResultOrPanic;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::kv::CertData;
 
@@ -241,7 +241,23 @@ impl CertStoreBuilder {
             .duration_since(std::time::UNIX_EPOCH)
             .context("system time is before Unix epoch")?
             .as_secs();
-        anyhow::ensure!(data.not_after > now, "certificate is expired");
+        // `not_after` is a replicated field; the chain is what gets served.
+        if data.not_after <= now {
+            bail!("certificate record for {domain} is expired");
+        }
+        let cert_not_after = get_cert_expiry(&data.cert_pem).with_context(|| {
+            format!("failed to read the expiry of the certificate for {domain}")
+        })?;
+        if cert_not_after <= now {
+            bail!("certificate for {domain} is expired");
+        }
+        if cert_not_after < data.not_after {
+            // Renewal is scheduled from the record, so this delays it.
+            warn!(
+                "cert_store: the record for {domain} outlives its certificate by {} seconds",
+                data.not_after - cert_not_after
+            );
+        }
 
         let certified_key = parse_certified_key(&data.cert_pem, &data.key_pem)
             .with_context(|| format!("failed to parse certificate for {}", domain))?;
@@ -255,7 +271,7 @@ impl CertStoreBuilder {
         info!(
             "cert_store: prepared wildcard certificate for *.{} (expires: {})",
             domain,
-            format_expiry(data.not_after)
+            format_expiry(cert_not_after)
         );
 
         // Store metadata
@@ -278,6 +294,14 @@ impl Default for CertStoreBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The `notAfter` of the first certificate in a PEM chain, as a Unix timestamp.
+pub(crate) fn get_cert_expiry(cert_pem: &str) -> Option<u64> {
+    use x509_parser::prelude::*;
+    let pem = Pem::iter_from_buffer(cert_pem.as_bytes()).next()?.ok()?;
+    let cert = pem.parse_x509().ok()?;
+    u64::try_from(cert.validity().not_after.timestamp()).ok()
 }
 
 /// Parse certificate and private key PEM strings into a CertifiedKey
@@ -443,6 +467,42 @@ mod tests {
 
         // Should not resolve different domain
         assert!(!store.has_cert_for_sni("example.org"));
+    }
+
+    /// A certificate whose chain has already expired, described by a record
+    /// that says otherwise.
+    fn make_expired_cert_data() -> CertData {
+        use ra_tls::rcgen::{self, CertificateParams, KeyPair};
+
+        let key_pair = KeyPair::generate().expect("failed to generate key pair");
+        let mut params = CertificateParams::new(vec!["test.example.com".to_string()])
+            .expect("failed to create cert params");
+        params.not_before = rcgen::date_time_ymd(2019, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2020, 1, 1);
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("failed to generate self-signed cert");
+
+        CertData {
+            cert_pem: cert.pem(),
+            key_pem: key_pair.serialize_pem(),
+            not_after: u64::MAX,
+            issued_by: 1,
+            issued_at: 0,
+        }
+    }
+
+    #[test]
+    fn an_expired_chain_is_rejected_however_the_record_dates_it() {
+        let mut builder = CertStoreBuilder::new();
+        let err = builder
+            .add_cert("example.com", &make_expired_cert_data())
+            .expect_err("an expired certificate chain must be rejected");
+        assert!(
+            err.to_string().contains("expired"),
+            "unexpected rejection reason: {err:#}"
+        );
+        assert!(!builder.build().has_cert("example.com"));
     }
 
     #[test]

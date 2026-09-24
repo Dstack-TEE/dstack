@@ -58,6 +58,9 @@ message GetMetaResponse {
   optional string kms_contract_address = 7;
   optional uint64 chain_id = 8;
   optional string app_auth_implementation = 9;
+  // `[core.image] verify`: whether `os_image_hash` is checked against the
+  // booted image. Unset on older KMS; do not treat unset as true.
+  optional bool os_image_verification = 10;
 }
 
 message GetKmsKeyRequest {

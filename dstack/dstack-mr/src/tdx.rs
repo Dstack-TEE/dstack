@@ -15,7 +15,9 @@ use crate::kernel::{
     tdx_kernel_hash_uses_precomputed_high_mem, TDX_KERNEL_HASH_COMPAT_2G_MEMORY,
     TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
 };
-use crate::tdvf::{rtmr0_log_from_td_hob_hash_with_acpi_hashes, AcpiTableHashes, Tdvf};
+use crate::tdvf::{
+    rtmr0_log_from_td_hob_hash_with_acpi_hashes, AcpiTableHashes, Tdvf, MAX_TDVF_SECTIONS,
+};
 use crate::util::{measure_log, measure_sha384};
 use anyhow::{bail, Context, Result};
 use dstack_types::{
@@ -146,6 +148,9 @@ fn read_varuint(input: &mut &[u8]) -> Result<u64> {
             .split_first()
             .context("truncated TD HOB witness varuint")?;
         *input = rest;
+        if shift == 63 && byte & 0x7e != 0 {
+            bail!("TD HOB witness varuint is too large");
+        }
         value |= ((byte & 0x7f) as u64) << shift;
         if byte & 0x80 == 0 {
             return Ok(value);
@@ -163,26 +168,44 @@ fn read_varuint(input: &mut &[u8]) -> Result<u64> {
 /// ranges follow that split.
 const Q35_HIGH_MEMORY_SPLIT: u64 = 0xB000_0000;
 
+/// Largest number of accepted ranges a TD HOB witness may declare. The witness
+/// carries one range per TD_HOB/TEMP_MEM section -- four in the real metadata
+/// -- so the TDVF section-table limit is an upper bound no firmware the parser
+/// accepts can reach. On the TDX-lite path the witness bytes come from
+/// `vm_config.tdx_measurement`, which the requester authors, and a range costs
+/// about two bytes there while `MemoryAcceptor::accept` rebuilds and re-sorts
+/// the whole range vector per call: a 1 MiB body is a quarter-million ranges
+/// and O(n^2 log n) work.
+const MAX_TD_HOB_WITNESS_RANGES: u64 = MAX_TDVF_SECTIONS as u64;
+
 fn measure_td_hob_from_witness_data(data: &[u8], memory_size: u64) -> Result<Vec<u8>> {
     let mut input = data;
     let base_page = read_varuint(&mut input)?;
     let td_hob_page_delta = read_varuint(&mut input)?;
     let range_count = read_varuint(&mut input)?;
-    let td_hob_base_addr = (base_page + td_hob_page_delta)
-        .checked_mul(0x1000)
+    if range_count > MAX_TD_HOB_WITNESS_RANGES {
+        bail!("TD HOB witness declares {range_count} ranges, more than the {MAX_TD_HOB_WITNESS_RANGES} supported");
+    }
+    let td_hob_base_addr = base_page
+        .checked_add(td_hob_page_delta)
+        .and_then(|page| page.checked_mul(0x1000))
         .context("TD HOB base address overflow")?;
 
     let mut memory_acceptor = MemoryAcceptor::new(0, memory_size);
     for _ in 0..range_count {
         let start_page_delta = read_varuint(&mut input)?;
         let page_count = read_varuint(&mut input)?;
-        let start = (base_page + start_page_delta)
-            .checked_mul(0x1000)
+        let start = base_page
+            .checked_add(start_page_delta)
+            .and_then(|page| page.checked_mul(0x1000))
             .context("TD HOB range start overflow")?;
         let len = page_count
             .checked_mul(0x1000)
             .context("TD HOB range length overflow")?;
-        memory_acceptor.accept(start, start + len);
+        let end = start
+            .checked_add(len)
+            .context("TD HOB range end overflow")?;
+        memory_acceptor.accept(start, end);
     }
     if !input.is_empty() {
         bail!("TD HOB witness has trailing bytes");
@@ -240,7 +263,9 @@ fn measure_td_hob_from_witness_data(data: &[u8], memory_size: u64) -> Result<Vec
         add_memory_resource_hob(0x07, last_start, last_end - last_start);
     }
 
-    let end_of_hob_list = td_hob_base_addr + td_hob.len() as u64 + 8;
+    let end_of_hob_list = td_hob_base_addr
+        .checked_add(td_hob.len() as u64 + 8)
+        .context("TD HOB end-of-list address overflow")?;
     td_hob[48..56].copy_from_slice(&end_of_hob_list.to_le_bytes());
 
     Ok(measure_sha384(&td_hob))
@@ -730,5 +755,105 @@ mod tests {
             hex::encode(sample_measurement().to_cbor_vec()),
             "a36776657273696f6e0465696d616765a467636d646c696e65788c636f6e736f6c653d747479533020696e69743d2f696e69742070616e69633d312064737461636b2e726f6f7466735f686173683d313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131312064737461636b2e726f6f7466735f73697a653d34303936736b65726e656c5f61757468656e7469636f6465583022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222278186b65726e656c5f6865616465725f6e6f726d616c697a6564f56d696e697472645f73686133383458303333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333336474647666a3646f766d6669707265323032353035646d727464a26b73696e676c655f7061737358304444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444446874776f5f7061737358305555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555556674645f686f625066666666666666666666666666666666",
         );
+    }
+
+    fn put_varuint(mut value: u64, out: &mut Vec<u8>) {
+        loop {
+            let mut byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value != 0 {
+                byte |= 0x80;
+            }
+            out.push(byte);
+            if value == 0 {
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn read_varuint_rejects_values_larger_than_u64() {
+        let mut max = Vec::new();
+        put_varuint(u64::MAX, &mut max);
+        assert_eq!(read_varuint(&mut max.as_slice()).unwrap(), u64::MAX);
+
+        let mut bytes = [0xff; 10];
+        bytes[9] = 0x02;
+        let mut encoded = bytes.as_slice();
+
+        let err = read_varuint(&mut encoded).expect_err("an overflowing varuint must be rejected");
+        assert!(
+            err.to_string().contains("too large"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn witness_within_deadline(witness: Vec<u8>, memory_size: u64) -> Result<(), String> {
+        use std::sync::mpsc::{channel, RecvTimeoutError};
+
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(
+                measure_td_hob_from_witness_data(&witness, memory_size)
+                    .map(|_| ())
+                    .map_err(|err| format!("{err:#}")),
+            );
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("witness measurement did not finish within 5s")
+            }
+            Err(RecvTimeoutError::Disconnected) => panic!("witness measurement panicked"),
+        }
+    }
+
+    /// The witness is decoded from `vm_config.tdx_measurement`, which the
+    /// requester supplies, and every range costs about two bytes. A body an
+    /// attacker can post in one request must not turn into quadratic work.
+    #[test]
+    fn measure_td_hob_from_witness_data_rejects_more_ranges_than_a_firmware_has_sections() {
+        const RANGES: u64 = 50_000;
+
+        let mut witness = Vec::new();
+        put_varuint(0x800, &mut witness); // base_page
+        put_varuint(0, &mut witness); // td_hob_page_delta
+        put_varuint(RANGES, &mut witness); // range_count
+        for i in 0..RANGES {
+            put_varuint(i * 2, &mut witness); // start_page_delta
+            put_varuint(1, &mut witness); // page_count
+        }
+
+        let err = witness_within_deadline(witness, 2 * 1024 * 1024 * 1024)
+            .expect_err("an oversized range count must be rejected");
+        assert!(err.contains("ranges"), "unexpected error: {err}");
+    }
+
+    /// Every address in the witness is a varint the requester chose, so the
+    /// page-to-address arithmetic has to survive values no generator emits.
+    #[test]
+    fn measure_td_hob_from_witness_data_rejects_ranges_whose_addresses_wrap() {
+        let with_range = |base_page: u64, start_page_delta: u64, page_count: u64| {
+            let mut witness = Vec::new();
+            put_varuint(base_page, &mut witness);
+            put_varuint(0, &mut witness); // td_hob_page_delta
+            put_varuint(1, &mut witness); // range_count
+            put_varuint(start_page_delta, &mut witness);
+            put_varuint(page_count, &mut witness);
+            witness
+        };
+
+        // `base_page + start_page_delta` wraps.
+        let err = witness_within_deadline(with_range(0x1000, u64::MAX, 1), 2 * 1024 * 1024 * 1024)
+            .expect_err("a wrapping range start must be rejected");
+        assert!(err.contains("overflow"), "unexpected error: {err}");
+
+        // The start is representable, but `start + len` wraps.
+        let err = witness_within_deadline(
+            with_range(0x000f_ffff_ffff_ffff, 0, 2),
+            2 * 1024 * 1024 * 1024,
+        )
+        .expect_err("a wrapping range end must be rejected");
+        assert!(err.contains("overflow"), "unexpected error: {err}");
     }
 }

@@ -12,13 +12,12 @@ address = "unix:./vmm.sock"
 reuse = true
 kms_url = "http://127.0.0.1:8081"
 event_buffer_size = 20
+max_event_name_len = 128
 node_name = ""
 
 [image]
 # Path to guest image directory (default: ~/.dstack-vmm/image)
 # path = ""
-# OCI image registry for guest images (e.g., "dstacktee/guest-image")
-registry = ""
 
 [cvm]
 # TEE platform: "auto", "tdx", or "amd-sev-snp". Auto selects AMD SEV-SNP when host CPU flags include sev_snp, otherwise TDX.

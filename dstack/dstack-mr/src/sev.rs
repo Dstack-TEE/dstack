@@ -29,10 +29,42 @@ const ZEROS_LD: [u8; LD_BYTES] = [0u8; LD_BYTES];
 pub const MAX_VCPUS: u32 = 512;
 /// Maximum number of OVMF metadata sections accepted in a measurement input.
 pub const MAX_OVMF_SECTIONS: usize = 64;
-/// 64 GiB worth of 4 KiB pages — upper bound on measured OVMF metadata pages.
-pub const MAX_OVMF_METADATA_PAGES: u64 = 16_777_216;
+/// Upper bound on measured OVMF metadata pages, the same as `tdvf::MAX_MEASURED_PAGES`.
+/// Each page costs a SHA-384 before the result is compared; real firmware uses 31 pages.
+pub const MAX_OVMF_METADATA_PAGES: u64 = 0x1_0000;
 // VMSA page GPA: (u64)(-1) page-aligned, bits >51 cleared.
 const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
+
+/// `SNPActive`, bit 0 of `SEV_FEATURES` (AMD64 APM vol. 2, VMCB SEV_FEATURES;
+/// the same bit layout the SEV-SNP ABI's `GUEST_FEATURES` field in
+/// `SNP_LAUNCH_START` carries). Set on every SNP guest.
+const SEV_FEATURE_SNP_ACTIVE: u64 = 1 << 0;
+
+/// `SEV_FEATURES` bits a dstack launch may carry.
+///
+/// `guest_features` is the only launch parameter that is neither pinned by
+/// `SevOsImageMeasurement` nor otherwise constrained: it rides in the
+/// host-written `SnpMeasurementDocument` alongside `vcpus`/`vcpu_type`, outside
+/// the CBOR that `os_image_hash` commits to, and lands verbatim in both VMSA
+/// pages at offset 0x3B0. Because the expected launch digest is *recomputed*
+/// from the declared value, a host that really booted the guest with extra
+/// feature bits and declares them gets a matching digest and a key release —
+/// the bits themselves were never policy-checked. The dangerous direction is
+/// DebugSwap (bit 5), which swaps the guest's debug registers on VMEXIT and so
+/// exposes guest state to the hypervisor; clearing RestrictedInjection (bit 3),
+/// SecureTSC (bit 9) or VmsaRegProt (bit 14) likewise removes a guest-side
+/// protection the operator may believe is on.
+///
+/// dstack has exactly one launch path, and it sets no feature property:
+/// `sev-snp-guest,id=sev0,policy=0x30000,...` in `dstack/vmm/src/app/qemu.rs`,
+/// which leaves KVM to start the guest with `SNPActive` alone, and the VMM
+/// writes the matching `guest_features: 1` into the measurement document
+/// (`dstack/vmm/src/app.rs`). `1` is therefore the only value dstack has ever
+/// produced — the captured real-hardware vector in this module's tests carries
+/// it too — so it is the only value accepted. Widening this is a one-line
+/// change once a launch path actually sets another bit; accepting bits nothing
+/// emits would only ever admit a guest dstack did not configure.
+const ALLOWED_GUEST_FEATURES: u64 = SEV_FEATURE_SNP_ACTIVE;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -111,8 +143,16 @@ where
 
 /// Validate a `MeasurementInput` for shape/bounds before recomputation.
 pub fn validate_measurement_input(input: &MeasurementInput) -> Result<()> {
-    if input.guest_features == 0 {
-        bail!("guest_features must be non-zero");
+    if input.guest_features & SEV_FEATURE_SNP_ACTIVE == 0 {
+        bail!("guest_features must set SNPActive (bit 0)");
+    }
+    let unexpected_features = input.guest_features & !ALLOWED_GUEST_FEATURES;
+    if unexpected_features != 0 {
+        bail!(
+            "guest_features {:#x} carries unsupported SEV_FEATURES bits {unexpected_features:#x}; \
+             dstack launches amd sev-snp guests with SNPActive only ({ALLOWED_GUEST_FEATURES:#x})",
+            input.guest_features
+        );
     }
 
     rootfs_hash_from_cmdline(Some(&input.base_cmdline))?;
@@ -836,16 +876,33 @@ fn file_sha256(path: &Path) -> Result<Vec<u8>> {
     Ok(Sha256::digest(data).to_vec())
 }
 
+/// Read the rootfs identity the measured kernel command line commits to.
+///
+/// A duplicated `dstack.rootfs_hash=` is rejected rather than resolved. The
+/// Linux command line has no "first wins" rule -- the dstack initramfs that
+/// mounts the rootfs reads the last occurrence -- so returning the first, as
+/// this did, would have answered with an identity the guest did not use. Taking
+/// the last would agree with the initramfs but would still accept a measured
+/// command line asserting two different rootfs identities, which is not a shape
+/// any dstack image produces and not one a reader can disambiguate. Callers use
+/// this as a validation gate on a command line an untrusted host supplies, so
+/// it fails closed.
 pub fn rootfs_hash_from_cmdline(cmdline: Option<&str>) -> Result<String> {
-    let rootfs_hash = cmdline
-        .unwrap_or_default()
-        .split_whitespace()
-        .find_map(|param| param.strip_prefix("dstack.rootfs_hash="))
-        .map(ToString::to_string)
-        .context("dstack.rootfs_hash is required in amd sev-snp measured cmdline")?;
+    let mut rootfs_hash = None;
+    for param in cmdline.unwrap_or_default().split_whitespace() {
+        let Some(value) = param.strip_prefix("dstack.rootfs_hash=") else {
+            continue;
+        };
+        if rootfs_hash.is_some() {
+            bail!("dstack.rootfs_hash appears more than once in the measured cmdline");
+        }
+        rootfs_hash = Some(value);
+    }
+    let rootfs_hash =
+        rootfs_hash.context("dstack.rootfs_hash is required in amd sev-snp measured cmdline")?;
     Ok(hex::encode(decode_required_hex(
         "dstack.rootfs_hash",
-        &rootfs_hash,
+        rootfs_hash,
         32,
     )?))
 }
@@ -1209,6 +1266,36 @@ mod tests {
         );
     }
 
+    /// The old 16M-page ceiling cost 11.3 s of CPU per request; the shipped
+    /// dstack-0.6.0 table (31 pages) must still be accepted.
+    #[test]
+    fn page_budget_rejects_old_ceiling_and_admits_real_table() {
+        let mut input = valid_input();
+        input.ovmf_sections = [
+            (0x800000u64, 0x9000u64, 1u32),
+            (0x80a000, 0x3000, 1),
+            (0x80d000, 0x1000, 2),
+            (0x80e000, 0x1000, 3),
+            (0x80f000, 0x1000, 4),
+            (0x811000, 0xf000, 1),
+            (0x810000, 0x1000, 0x10),
+        ]
+        .map(|(gpa, size, section_type)| OvmfSectionParam {
+            gpa,
+            size,
+            section_type,
+        })
+        .to_vec();
+        validate_measurement_input(&input).expect("the shipped metadata must be accepted");
+
+        input.ovmf_sections.push(OvmfSectionParam {
+            gpa: 0x1000_0000,
+            size: 16_000_000 * 4096,
+            section_type: 1,
+        });
+        assert!(validate_measurement_input(&input).is_err());
+    }
+
     fn valid_input() -> MeasurementInput {
         let rootfs_hash = hex_of(0x33, 32);
         MeasurementInput {
@@ -1527,6 +1614,103 @@ mod tests {
         assert_eq!(binding.mr_config.app_id, mr_config.app_id);
     }
 
+    /// A host that really boots the guest with DebugSwap and declares it is not
+    /// tampering: every field is internally consistent, the recomputed launch
+    /// digest matches the hardware `MEASUREMENT`, and `host_data` matches the
+    /// mr_config. The only thing standing between that guest and a key release
+    /// is a policy check on `guest_features` itself.
+    /// Bit positions from the AMD64 APM `SEV_FEATURES` table, which the SEV-SNP
+    /// ABI `GUEST_FEATURES` field in `SNP_LAUNCH_START` mirrors.
+    const SNP_ACTIVE: u64 = 1 << 0;
+    const DEBUG_SWAP: u64 = 1 << 5;
+
+    /// `find_map` took the first `dstack.rootfs_hash=`, while the initramfs
+    /// that actually mounts the rootfs honours the last one. The function is
+    /// `pub` and reads authoritative, so a caller that trusted it would have
+    /// been told a different rootfs identity than the guest used.
+    #[test]
+    fn a_duplicated_rootfs_hash_is_not_silently_resolved() {
+        let first = hex_of(0x11, 32);
+        let last = hex_of(0x22, 32);
+        let cmdline = format!(
+            "console=ttyS0 dstack.rootfs_hash={first} init=/init dstack.rootfs_hash={last}"
+        );
+        let err = match rootfs_hash_from_cmdline(Some(&cmdline)) {
+            Ok(hash) => panic!("a duplicated rootfs hash resolved to {hash}"),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            err.contains("dstack.rootfs_hash appears more than once"),
+            "unexpected error: {err}"
+        );
+
+        // A single occurrence is unchanged.
+        let cmdline = format!("console=ttyS0 dstack.rootfs_hash={first}");
+        assert_eq!(
+            rootfs_hash_from_cmdline(Some(&cmdline)).expect("single occurrence"),
+            first
+        );
+    }
+
+    #[test]
+    fn verify_sev_launch_rejects_a_consistent_debugswap_guest() {
+        let mut input = valid_input();
+        input.guest_features = SNP_ACTIVE | DEBUG_SWAP;
+        let mr_config = synthetic_mr_config();
+        let host_data = MrConfigV3::snp_host_data_from_document(&mr_config.to_canonical_json());
+        let measurement = compute_expected_measurement(&input).expect("measurement");
+        let vm_config = synthetic_vm_config(&input, &mr_config);
+
+        let err = match verify_sev_launch(&measurement, &host_data, &vm_config) {
+            Ok(binding) => panic!(
+                "a DebugSwap launch verified; bound os_image_hash {}",
+                hex::encode(binding.os_image_hash)
+            ),
+            Err(err) => err.to_string(),
+        };
+        assert!(
+            err.contains("unsupported SEV_FEATURES bits 0x20"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_guest_features_outside_the_launch_allowlist() {
+        let cases: [(&str, u64); 4] = [
+            ("RestrictedInjection", SNP_ACTIVE | (1 << 3)),
+            ("DebugSwap", SNP_ACTIVE | (1 << 5)),
+            ("SecureTSC", SNP_ACTIVE | (1 << 9)),
+            ("reserved bit 63", SNP_ACTIVE | (1 << 63)),
+        ];
+        for (name, features) in cases {
+            let mut input = valid_input();
+            input.guest_features = features;
+            let err = validate_measurement_input(&input)
+                .expect_err("feature bit outside the allowlist must not be accepted")
+                .to_string();
+            assert!(
+                err.contains("unsupported SEV_FEATURES bits"),
+                "{name}: unexpected error: {err}"
+            );
+        }
+
+        // SNPActive missing is still rejected, now by name.
+        let mut input = valid_input();
+        input.guest_features = 0;
+        let err = validate_measurement_input(&input)
+            .expect_err("guest_features 0 must not be accepted")
+            .to_string();
+        assert!(
+            err.contains("must set SNPActive"),
+            "unexpected error: {err}"
+        );
+
+        // The one value dstack's launch path produces stays accepted.
+        let mut input = valid_input();
+        input.guest_features = SNP_ACTIVE;
+        validate_measurement_input(&input).expect("SNPActive-only launch is accepted");
+    }
+
     #[test]
     fn verify_sev_launch_rejects_forged_measurement() {
         let (_input, _mr, measurement, host_data, vm_config) = honest_case();
@@ -1579,7 +1763,12 @@ mod tests {
             ("vcpu_type", |i| {
                 i.vcpu_type = Some("epyc-milan".to_string())
             }),
-            ("guest_features", |i| i.guest_features = 3),
+            // guest_features is not in this list: the SEV_FEATURES allowlist
+            // now rejects every value but SNPActive before the measurement is
+            // ever recomputed, so there is no tampered value left to reach the
+            // measurement comparison. See
+            // `rejects_guest_features_outside_the_launch_allowlist` and
+            // `verify_sev_launch_rejects_a_consistent_debugswap_guest`.
         ];
         for (name, mutate) in cases {
             let mut tampered = input.clone();

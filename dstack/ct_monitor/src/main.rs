@@ -335,31 +335,19 @@ impl Monitor {
     async fn check_new_logs(&mut self) -> Result<()> {
         let logs = self.get_logs(10000).await?;
         debug!("got {} logs", logs.len());
-        let mut found_last_checked = false;
+        let outcome = scan(&logs, self.last_checked, |log| self.check_one_log(log)).await;
 
-        for log in logs.iter() {
-            let log_id = log.id;
-
-            if let Some(last_checked) = self.last_checked {
-                if log_id == last_checked {
-                    found_last_checked = true;
-                    break;
-                }
-            }
-            debug!("🔍 checking log id={}", log_id);
-            self.check_one_log(log).await?;
+        if let Some(watermark) = outcome.new_last_checked {
+            debug!("last checked: {}", watermark);
+            self.last_checked = Some(watermark);
         }
 
-        if !found_last_checked && self.last_checked.is_some() {
+        if outcome.missing_watermark {
             bail!("last checked log not found, something went wrong");
         }
-
-        if !logs.is_empty() {
-            let last_log = &logs[0];
-            debug!("last checked: {}", last_log.id);
-            self.last_checked = Some(last_log.id);
+        if let Some(failures) = outcome.failure_summary() {
+            bail!("{failures}");
         }
-
         Ok(())
     }
 
@@ -374,6 +362,79 @@ impl Monitor {
             }
             tokio::time::sleep(Duration::from_secs(60)).await;
         }
+    }
+}
+
+/// What one pass over the log list found.
+struct ScanOutcome {
+    /// The id to resume from next pass, or `None` if the list was empty.
+    new_last_checked: Option<u64>,
+    /// Every log that failed its check, in the order they were seen.
+    failures: Vec<(u64, String)>,
+    /// The previous watermark was not in the list -- the monitor has fallen
+    /// further behind than one page of results, and certificates may have gone
+    /// unchecked.
+    missing_watermark: bool,
+}
+
+impl ScanOutcome {
+    fn failure_summary(&self) -> Option<String> {
+        let first = self.failures.first()?;
+        Some(match self.failures.len() {
+            1 => format!("log id={} failed its check: {}", first.0, first.1),
+            n => format!(
+                "{n} logs failed their checks, first was id={}: {}",
+                first.0, first.1
+            ),
+        })
+    }
+}
+
+/// Check every log newer than `last_checked`, and report what happened.
+///
+/// A failing log does not end the pass. It used to: the loop propagated the
+/// first error with `?`, which meant the watermark was never advanced, so the
+/// next pass sixty seconds later re-fetched the same page and wedged on the
+/// same entry forever -- and `run` only logs the error, so the monitor went on
+/// looking healthy while checking nothing. One benign unknown key, or a single
+/// crt.sh rate-limit whose HTML body fails to parse as PEM, was enough to stop
+/// detection permanently.
+///
+/// So the pass runs to the end, the watermark advances, and the failures are
+/// reported together. A certificate that genuinely should not exist is alerted
+/// on once rather than every minute, which is the trade this makes: the
+/// alternative is alerting forever about one certificate and never looking at
+/// any other.
+///
+/// Separated from the HTTP calls so it can be tested without a network.
+async fn scan<'a, F, Fut>(logs: &'a [CTLog], last_checked: Option<u64>, mut check: F) -> ScanOutcome
+where
+    F: FnMut(&'a CTLog) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    let mut failures = Vec::new();
+    let mut found_last_checked = false;
+
+    for log in logs.iter() {
+        if Some(log.id) == last_checked {
+            found_last_checked = true;
+            break;
+        }
+        debug!("🔍 checking log id={}", log.id);
+        if let Err(err) = check(log).await {
+            error!("❌ log id={} failed its check: {:#}", log.id, err);
+            failures.push((log.id, format!("{err:#}")));
+        }
+    }
+
+    ScanOutcome {
+        // crt.sh returns newest first, so the head of the list is the
+        // watermark. Advance it even when a log failed: the failure has been
+        // reported, and not advancing re-reports it instead of looking at
+        // anything new.
+        new_last_checked: logs.first().map(|log| log.id),
+        failures,
+        missing_watermark: !found_last_checked && last_checked.is_some(),
     }
 }
 
@@ -411,4 +472,115 @@ async fn main() -> anyhow::Result<()> {
     let mut monitor = Monitor::new(args.gateway, args.verifier_url)?;
     monitor.run().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn log(id: u64) -> CTLog {
+        CTLog {
+            id,
+            issuer_ca_id: 0,
+            issuer_name: String::new(),
+            common_name: String::new(),
+            name_value: String::new(),
+            not_before: String::new(),
+            not_after: String::new(),
+            serial_number: String::new(),
+            result_count: 0,
+            entry_timestamp: String::new(),
+        }
+    }
+
+    /// The wedge. `check_one_log` fails on any certificate whose key is
+    /// unknown *and* on any crt.sh response that does not parse as PEM -- a
+    /// 429 page is enough. Aborting the pass there left the watermark where it
+    /// was, so the next pass re-fetched the same page and stopped at the same
+    /// entry, forever, while `run` only logged the error.
+    #[tokio::test]
+    async fn a_failing_log_does_not_stop_the_pass() {
+        let logs = vec![log(3), log(2), log(1)];
+        let seen = RefCell::new(Vec::new());
+
+        let outcome = scan(&logs, None, |entry| {
+            seen.borrow_mut().push(entry.id);
+            async move {
+                if entry.id == 2 {
+                    bail!("certificate issued to unknown pubkey")
+                }
+                Ok(())
+            }
+        })
+        .await;
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![3, 2, 1],
+            "every log must still be checked"
+        );
+        assert_eq!(
+            outcome.new_last_checked,
+            Some(3),
+            "the watermark must advance or the next pass repeats this one"
+        );
+        assert_eq!(outcome.failures.len(), 1);
+        assert!(outcome.failure_summary().unwrap().contains("id=2"));
+    }
+
+    #[tokio::test]
+    async fn every_failure_is_reported_not_just_the_first() {
+        let logs = vec![log(3), log(2), log(1)];
+        let outcome = scan(&logs, None, |_| async { bail!("nope") }).await;
+
+        assert_eq!(outcome.failures.len(), 3);
+        let summary = outcome.failure_summary().unwrap();
+        assert!(summary.contains("3 logs failed"), "{summary}");
+        assert!(summary.contains("id=3"), "{summary}");
+    }
+
+    #[tokio::test]
+    async fn a_clean_pass_reports_nothing() {
+        let logs = vec![log(3), log(2)];
+        let outcome = scan(&logs, None, |_| async { Ok(()) }).await;
+
+        assert!(outcome.failures.is_empty());
+        assert!(outcome.failure_summary().is_none());
+        assert!(!outcome.missing_watermark);
+        assert_eq!(outcome.new_last_checked, Some(3));
+    }
+
+    /// Unchanged: the pass stops at the previous watermark and rechecks nothing.
+    #[tokio::test]
+    async fn the_pass_stops_at_the_previous_watermark() {
+        let logs = vec![log(5), log(4), log(3), log(2)];
+        let seen = RefCell::new(Vec::new());
+
+        let outcome = scan(&logs, Some(3), |entry| {
+            seen.borrow_mut().push(entry.id);
+            async { Ok(()) }
+        })
+        .await;
+
+        assert_eq!(*seen.borrow(), vec![5, 4]);
+        assert_eq!(outcome.new_last_checked, Some(5));
+        assert!(!outcome.missing_watermark);
+    }
+
+    /// Unchanged: falling more than a page behind is still an error.
+    #[tokio::test]
+    async fn a_watermark_that_fell_off_the_page_is_reported() {
+        let logs = vec![log(9), log(8)];
+        let outcome = scan(&logs, Some(1), |_| async { Ok(()) }).await;
+
+        assert!(outcome.missing_watermark);
+        assert_eq!(outcome.new_last_checked, Some(9));
+    }
+
+    #[tokio::test]
+    async fn an_empty_page_leaves_the_watermark_alone() {
+        let outcome = scan(&[], Some(7), |_| async { Ok(()) }).await;
+        assert_eq!(outcome.new_last_checked, None);
+    }
 }

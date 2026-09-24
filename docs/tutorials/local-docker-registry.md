@@ -138,7 +138,7 @@ The KMS Docker image is **built from source** and pushed to your local registry 
 
 - Follow the [KMS Build & Configuration](/tutorial/kms-build-configuration) tutorial.
 
-**Do not attempt to pull KMS images from Docker Hub.** The tutorial workflow builds everything from source to ensure you have a verifiable, reproducible deployment.
+**Do not pull a pre-built KMS image.** The tutorial workflow builds everything from source to ensure you have a verifiable, reproducible deployment.
 
 ### Verify Registry is Ready
 

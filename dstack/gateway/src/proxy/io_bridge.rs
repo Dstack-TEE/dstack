@@ -56,10 +56,16 @@ where
                 Ok(false)
             }
             NextStep::Write => {
-                self.writer
+                let n = self
+                    .writer
                     .write_buf(&mut self.buf)
                     .await
                     .context("write error")?;
+                // Otherwise the loop re-enters at once and the empty write
+                // counts as progress, spinning until `timeouts.total`.
+                if n == 0 && !self.buf.is_empty() {
+                    bail!("write accepted no bytes");
+                }
                 self.progress += 1;
                 if self.buf.is_empty() {
                     self.next_step = NextStep::Flush;
@@ -243,5 +249,75 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::task::{Context as TaskContext, Poll};
+    use std::time::Duration;
+
+    /// Reports success while accepting nothing.
+    struct AcceptsNothing;
+
+    impl AsyncWrite for AcceptsNothing {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            _buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(0))
+        }
+
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    // Own thread and runtime: the pre-fix spin never yields, so an in-runtime
+    // timeout would never fire.
+    #[test]
+    fn a_writer_that_accepts_no_bytes_is_an_error_not_a_spin() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let outcome = rt.block_on(async {
+                let config: ProxyConfig = crate::config::load_config_figment(None)
+                    .focus("core.proxy")
+                    .extract()
+                    .unwrap();
+                let mut client_rx: &[u8] = b"request";
+                relay(
+                    &mut client_rx,
+                    &mut tokio::io::sink(),
+                    &mut tokio::io::empty(),
+                    &mut AcceptsNothing,
+                    &config,
+                )
+                .await
+            });
+            tx.send(outcome.map_err(|e| format!("{e:#}"))).ok();
+        });
+
+        let err = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the bridge spun on a zero-length write")
+            .unwrap_err();
+        assert!(err.contains("write accepted no bytes"), "{err}");
     }
 }

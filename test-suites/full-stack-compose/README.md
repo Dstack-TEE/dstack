@@ -38,7 +38,7 @@ would make a passing result irrelevant to production:
   hashes, and a concrete 20-byte Gateway app ID. `allowAnyDevice = true` and
   `gatewayAppId = "any"` are rejected.
 - Container references in measured app manifests are content-addressed Docker
-  image IDs. Tags are used only as the Docker Hub/build inputs that are pulled,
+  image IDs. Tags are used only as the registry/build inputs that are pulled,
   inspected, saved, and imported before boot.
 
 ## Prerequisites
@@ -103,10 +103,13 @@ account registration on current code. The `upgrade` phase cannot: Gateway 0.5.8
 registers the shared account long before the current binary starts, so every
 current-code run there takes the load path instead.
 
-The defaults pull these released images from Docker Hub:
+The defaults pull these released images:
 
 - `dstacktee/dstack-kms:0.5.8@sha256:9650dcb47dad0065470f432f00e78e012912214ef1a5b1d7272918817e61a26d`
 - `dstacktee/dstack-gateway:0.5.8@sha256:6eb1dc1a5000f37cc5b0322d3fdb71e7f2e31859b5e3a611634919278cee2411`
+
+0.5.x images live on Docker Hub; releases from 0.6.0 publish to `ghcr.io/dstack-tee`.
+Override with `DSTACK_E2E_OLD_KMS_IMAGE` / `DSTACK_E2E_OLD_GATEWAY_IMAGE`.
 
 The driver checks each released binary's `--version` output before deploying
 anything. Set `DSTACK_E2E_SKIP_CURRENT_BUILD=true` only when the current musl
