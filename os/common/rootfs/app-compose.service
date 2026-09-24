@@ -1,15 +1,17 @@
 [Unit]
 Description=App Compose Service
+# After= alone is satisfied by a failed unit; app must not run without these.
+Requires=dstack-prepare.service dstack-guest-agent.service
 Wants=docker.service containerd.service containerd-stargz-grpc.service
 After=docker.service containerd.service containerd-stargz-grpc.service dstack-prepare.service dstack-guest-agent.service
+OnFailure=dstack-boot-error@%n.service
 
 [Service]
 Type=oneshot
 RemainAfterExit=true
-EnvironmentFile=-/dstack/.host-shared/.decrypted-env
 WorkingDirectory=/dstack
-ExecStart=/bin/app-compose.sh
-ExecStop=/bin/app-compose.sh stop
+ExecStart=/bin/dstack-util exec-with-env --env-file /dstack/.host-shared/.decrypted-env.json -- /bin/app-compose.sh
+ExecStop=/bin/dstack-util exec-with-env --env-file /dstack/.host-shared/.decrypted-env.json -- /bin/app-compose.sh stop
 StandardOutput=journal+console
 StandardError=journal+console
 

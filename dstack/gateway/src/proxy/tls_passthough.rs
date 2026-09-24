@@ -4,7 +4,8 @@
 
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -25,7 +26,7 @@ use crate::{
 use super::{
     io_bridge::bridge_tcp,
     port_policy::{filter_allowed_addresses, should_send_pp},
-    AddressGroup,
+    AddressGroup, AddressInfo,
 };
 
 const APP_ADDRESS_DNS_CACHE_SIZE: usize = 256;
@@ -186,27 +187,32 @@ pub(crate) async fn proxy_with_sni(
     proxy_to_app(state, inbound, pp_header, buffer, &addr.app_id, addr.port).await
 }
 
-/// Check if app has reached max connections limit
-fn check_connection_limit(
-    addresses: &AddressGroup,
+/// Count a connection on `counter` if the app is under its limit. The check and
+/// the increment are one atomic step, so a burst cannot all pass on the same
+/// total. `others` (the app's other candidates) is read outside that step, so a
+/// multi-instance app can overshoot by at most `connect_top_n - 1`.
+fn enter_connection_limit(
+    counter: &Arc<AtomicU64>,
+    others: &[AddressInfo],
     max_connections: u64,
     app_id: &str,
-) -> Result<()> {
+) -> Result<EnteredCounter> {
     if max_connections == 0 {
-        return Ok(());
+        return Ok(counter.clone().enter());
     }
-    let total: u64 = addresses
+    let others: u64 = others
         .iter()
         .map(|a| a.counter.load(Ordering::Relaxed))
         .sum();
-    if total >= max_connections {
+    let Some(entered) = EnteredCounter::try_enter(counter, others, max_connections) else {
+        let total = counter.load(Ordering::Relaxed) + others;
         warn!(
             app_id,
             total, max_connections, "app connection limit exceeded"
         );
         bail!("app connection limit exceeded: {total}/{max_connections}");
-    }
-    Ok(())
+    };
+    Ok(entered)
 }
 
 /// connect to multiple hosts simultaneously and return the first successful connection
@@ -217,12 +223,16 @@ pub(crate) async fn connect_multiple_hosts(
     max_connections: u64,
     app_id: &str,
 ) -> Result<(TcpStream, EnteredCounter, String)> {
-    check_connection_limit(&addresses, max_connections, app_id)?;
-
     let mut candidates = addresses.into_iter();
     let Some(first) = candidates.next() else {
         bail!("no addresses to connect to app <{app_id}>");
     };
+    let first_counter = enter_connection_limit(
+        &first.counter,
+        candidates.as_slice(),
+        max_connections,
+        app_id,
+    )?;
 
     // Fast path: with a single candidate there is nothing to race, so skip the
     // JoinSet and the task spawn it needs. That allocation and scheduling
@@ -230,19 +240,22 @@ pub(crate) async fn connect_multiple_hosts(
     // case.
     if candidates.as_slice().is_empty() {
         let addr = first;
-        let counter = addr.counter.enter();
         let ip = addr.ip;
         debug!("connecting to {ip}:{port}");
         let connection = TcpStream::connect((ip, port))
             .await
             .map_err(|e| anyhow::anyhow!("failed to connect to app@{ip}:{port}: {e}"))?;
         let _ = connection.set_nodelay(true);
-        return Ok((connection, counter, addr.instance_id));
+        return Ok((connection, first_counter, addr.instance_id));
     }
 
     let mut join_set = JoinSet::new();
+    let mut first_counter = Some(first_counter);
     for addr in std::iter::once(first).chain(candidates) {
-        let counter = addr.counter.enter();
+        let counter = match first_counter.take() {
+            Some(counter) => counter,
+            None => addr.counter.enter(),
+        };
         let ip = addr.ip;
         let instance_id = addr.instance_id;
         debug!("connecting to {ip}:{port}");
@@ -334,6 +347,13 @@ pub(crate) async fn proxy_to_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_connection_limit_check_takes_the_slot() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let _first = enter_connection_limit(&counter, &[], 1, "app").unwrap();
+        assert!(enter_connection_limit(&counter, &[], 1, "app").is_err());
+    }
 
     #[tokio::test]
     async fn test_resolve_app_address() -> Result<()> {

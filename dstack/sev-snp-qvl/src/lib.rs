@@ -27,6 +27,9 @@ const VLEK_CERT_GUID: [u8; 16] = [
     0xa8, 0x07, 0x4b, 0xc2, 0xa2, 0x5a, 0x48, 0x3e, 0xaa, 0xe6, 0x39, 0xc0, 0x45, 0xa0, 0xb8, 0xa1,
 ];
 const CERT_TABLE_ENTRY_SIZE: usize = 24;
+/// Size of an AMD SEV-SNP attestation report, for every version the `sev`
+/// crate decodes.
+const AMD_SNP_REPORT_LEN: usize = 1184;
 pub const AMD_KDS_DEFAULT_BASE_URL: &str = "https://kdsintf.amd.com/vcek/v1";
 const AMD_KDS_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AMD_KDS_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -142,8 +145,7 @@ impl QuoteVerifier {
         if !cert_chain.is_empty() {
             return self.verify(report, cert_chain, expected_report_data);
         }
-        let report_obj = AttestationReport::from_bytes(report)
-            .map_err(|err| anyhow!("failed to parse amd sev-snp report: {err}"))?;
+        let report_obj = decode_amd_snp_report(report)?;
         let mut errors = Vec::new();
         for product in amd_snp_product_candidates_for_report(&report_obj)? {
             match kds_client
@@ -421,15 +423,34 @@ pub fn verify_amd_snp_attestation(
     )
 }
 
-pub fn parse_amd_snp_report(report_bytes: &[u8]) -> Result<ParsedAmdSnpReport> {
-    if report_bytes.len() != 1184 {
+/// Decode an attestation report, rejecting anything that is not report-sized
+/// first.
+///
+/// `AttestationReport::from_bytes` indexes `bytes[0..4]` and, for a version it
+/// does not know, `bytes[392]`, without looking at the length: a report shorter
+/// than that aborts the process, because release builds are `panic = "abort"`
+/// (`dstack/Cargo.toml`). The report arrives in an unverified attestation blob,
+/// so the length has to be checked on every path that reaches this parser, not
+/// on the three that happened to.
+fn decode_amd_snp_report(report_bytes: &[u8]) -> Result<AttestationReport> {
+    if report_bytes.len() != AMD_SNP_REPORT_LEN {
         bail!(
-            "invalid amd sev-snp report length: expected 1184 bytes, got {}",
+            "invalid amd sev-snp report length: expected {AMD_SNP_REPORT_LEN} bytes, got {}",
             report_bytes.len()
         );
     }
-    let report = AttestationReport::from_bytes(report_bytes)
-        .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
+    AttestationReport::from_bytes(report_bytes)
+        .map_err(|err| anyhow!("failed to parse amd sev-snp report: {err}"))
+}
+
+/// Decode an attestation report's fields without checking its authenticity.
+///
+/// This does not verify the report signature or the AMD certificate chain.
+/// Use [`verify_amd_snp_attestation`] when authenticity is in question; use
+/// this only where the signature is established elsewhere, or for the guest's
+/// own report.
+pub fn parse_unverified_amd_snp_report(report_bytes: &[u8]) -> Result<ParsedAmdSnpReport> {
+    let report = decode_amd_snp_report(report_bytes)?;
     parsed_amd_snp_report_from_report(&report)
 }
 
@@ -491,14 +512,7 @@ fn verify_amd_snp_attestation_with_certs_and_arks(
     vcek_bytes: CertBytes,
     ark_for_product: impl Fn(AmdSnpProduct) -> (CertBytes, bool),
 ) -> Result<VerifiedAmdSnpReport> {
-    if report_bytes.len() != 1184 {
-        bail!(
-            "invalid amd sev-snp report length: expected 1184 bytes, got {}",
-            report_bytes.len()
-        );
-    }
-    let report = AttestationReport::from_bytes(report_bytes)
-        .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
+    let report = decode_amd_snp_report(report_bytes)?;
     let mut errors = Vec::new();
     for product in amd_snp_product_candidates_for_report(&report)? {
         let (ark, external_root) = ark_for_product(product);
@@ -526,14 +540,7 @@ fn verify_amd_snp_attestation_with_cert_chain(
     vcek_bytes: CertBytes,
     external_root: bool,
 ) -> Result<VerifiedAmdSnpReport> {
-    if report_bytes.len() != 1184 {
-        bail!(
-            "invalid amd sev-snp report length: expected 1184 bytes, got {}",
-            report_bytes.len()
-        );
-    }
-    let report = AttestationReport::from_bytes(report_bytes)
-        .map_err(|err| anyhow::anyhow!("failed to parse amd sev-snp report: {err}"))?;
+    let report = decode_amd_snp_report(report_bytes)?;
 
     let ark = parse_certificate(&ark_bytes, "ark")?;
     let ask = parse_certificate(&ask_bytes, "ask")?;
@@ -898,17 +905,18 @@ fn normalize_kernel_cert_table(auxblob: &[u8]) -> Result<(CertBytes, CertBytes)>
     let vcek = vcek.context("amd sev-snp certificate table missing VCEK certificate")?;
     Ok((
         CertBytes {
-            bytes: ask,
+            bytes: ask.to_vec(),
             encoding: CertEncoding::Der,
         },
         CertBytes {
-            bytes: vcek,
+            bytes: vcek.to_vec(),
             encoding: CertEncoding::Der,
         },
     ))
 }
 
-fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
+// Entries may overlap, so borrow them: copying each one lets a small blob decode to gigabytes.
+fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], &[u8])>> {
     if auxblob.len() < CERT_TABLE_ENTRY_SIZE {
         bail!("amd sev-snp certificate table is too short");
     }
@@ -940,7 +948,7 @@ fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
         if offset < CERT_TABLE_ENTRY_SIZE || end > auxblob.len() || length == 0 {
             bail!("amd sev-snp certificate table entry has invalid bounds");
         }
-        entries.push((guid, auxblob[offset..end].to_vec()));
+        entries.push((guid, &auxblob[offset..end]));
         pos = pos
             .checked_add(CERT_TABLE_ENTRY_SIZE)
             .context("amd sev-snp certificate table entry count overflows")?;
@@ -986,6 +994,36 @@ mod tests {
             ..up_to_date
         };
         assert_eq!(stale_vcek_reported.tcb_status(), "OutOfDate");
+    }
+
+    /// `fetch_and_verify` takes the KDS branch whenever `cert_chain` is empty,
+    /// and that branch reached `AttestationReport::from_bytes` with whatever
+    /// the requester sent. `from_bytes` reads `bytes[0..4]` and, for an unknown
+    /// version, `bytes[392]`, unguarded — so an empty report is an abort, not a
+    /// rejected request. Both shapes come straight out of a `POST /verify`
+    /// body.
+    #[test]
+    fn a_short_report_without_a_cert_chain_is_rejected_rather_than_parsed() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("failed to build a test runtime");
+        let verifier = QuoteVerifier::new_prod();
+        let kds = AmdKdsClient::new().expect("failed to build a KDS client");
+
+        // Empty: `&bytes[0..4]` is out of range.
+        // Four bytes of version 3: `bytes[392]` is out of range.
+        for report in [vec![], vec![0x03, 0x00, 0x00, 0x00], vec![0u8; 1183]] {
+            let err = runtime
+                .block_on(verifier.fetch_and_verify(&kds, &report, &[], &[0u8; 64]))
+                .expect_err("a short report must be rejected");
+            assert!(
+                err.to_string()
+                    .contains("invalid amd sev-snp report length"),
+                "unexpected error for a {}-byte report: {err:#}",
+                report.len()
+            );
+        }
     }
 
     #[test]
@@ -1158,6 +1196,24 @@ mod tests {
             err.to_string().contains("certificate table"),
             "unexpected error: {err:#}"
         );
+    }
+
+    /// Each entry names the whole blob; copying them would need about 46 GiB.
+    #[test]
+    fn overlapping_certificate_table_entries_are_not_copied() {
+        const LEN: usize = CERT_TABLE_ENTRY_SIZE * 43_690;
+
+        let mut auxblob = vec![0u8; LEN];
+        for at in (0..LEN - CERT_TABLE_ENTRY_SIZE).step_by(CERT_TABLE_ENTRY_SIZE) {
+            auxblob[at..at + 16].copy_from_slice(&[0x11u8; 16]);
+            auxblob[at + 16..at + 20]
+                .copy_from_slice(&(CERT_TABLE_ENTRY_SIZE as u32).to_le_bytes());
+            auxblob[at + 20..at + 24]
+                .copy_from_slice(&((LEN - CERT_TABLE_ENTRY_SIZE) as u32).to_le_bytes());
+        }
+
+        let err = normalize_kernel_cert_table(&auxblob).unwrap_err();
+        assert!(err.to_string().contains("missing ASK"), "{err:#}");
     }
 
     #[test]

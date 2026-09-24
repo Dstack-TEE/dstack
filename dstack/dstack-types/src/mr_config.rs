@@ -105,7 +105,9 @@ impl From<serde_json::Error> for MrConfigDocumentError {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MrConfigV3 {
-    #[serde(default = "mr_config_v3_version")]
+    /// Document schema version, always 3. No serde default: `validate_mr_config`
+    /// rejects anything but 3, and a default would have made an absent version
+    /// mean 3 rather than fail that gate.
     pub version: u8,
     /// Optional application identity pin.
     #[serde(default, with = "hex_bytes")]
@@ -251,7 +253,7 @@ mod tests {
     #[test]
     fn mr_config_v3_defaults_missing_app_id_to_empty() -> Result<(), Box<dyn Error>> {
         let config = MrConfigV3::from_document(
-            r#"{"compose_hash":"2222222222222222222222222222222222222222222222222222222222222222","key_provider":"none"}"#,
+            r#"{"version":3,"compose_hash":"2222222222222222222222222222222222222222222222222222222222222222","key_provider":"none"}"#,
         )?;
 
         assert!(config.app_id.is_none());
@@ -315,5 +317,22 @@ mod tests {
             MrConfigV3::snp_host_data_from_document(&pretty)
         );
         Ok(())
+    }
+
+    /// `validate_mr_config` gates on `version != 3`, which only means anything
+    /// if an absent `version` is absent. A serde default made every document
+    /// that never mentions a version pass that gate as a v3 document.
+    #[test]
+    fn a_document_without_a_version_is_not_a_v3_document() {
+        let err = MrConfigV3::from_document(concat!(
+            "{\"compose_hash\":",
+            "\"2222222222222222222222222222222222222222222222222222222222222222\",",
+            "\"key_provider\":\"none\"}"
+        ))
+        .expect_err("a document without a version must not parse as v3");
+        assert!(
+            err.to_string().contains("version"),
+            "unexpected error: {err}"
+        );
     }
 }

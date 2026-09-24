@@ -302,7 +302,7 @@ pub struct CertData {
 }
 
 /// Certificate renew lock
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CertRenewLock {
     pub started_at: u64,
     pub started_by: NodeId,
@@ -2116,38 +2116,66 @@ impl KvStore {
         Ok(())
     }
 
-    // ==================== Certificate Renew Lock ====================
+    // ==================== Renew / Rotation Locks ====================
 
-    /// Get certificate renew lock for a domain
-    pub fn get_cert_lock(&self, domain: &str) -> Option<CertRenewLock> {
-        self.persistent.read().decode(&keys::cert_lock(domain))
-    }
-
-    /// Try to acquire certificate renew lock
-    /// Returns true if lock acquired, false if already locked by another node
-    pub fn try_acquire_cert_lock(&self, domain: &str, lock_timeout_secs: u64) -> bool {
+    /// Try to take the lease at `key`, returning the value written; pass it to
+    /// [`Self::release_lock`]. A crashed holder is covered by the timeout.
+    ///
+    /// Read, expiry check and write share one write guard, so this is mutual
+    /// exclusion within a node. Across nodes it is best-effort: WaveKV is
+    /// last-writer-wins without compare-and-swap, so two nodes can both acquire
+    /// during a replication gap, which the loser's release then detects.
+    fn try_acquire_lock(&self, key: String, lock_timeout_secs: u64) -> Option<CertRenewLock> {
         let now = now_secs();
-
-        if let Some(existing) = self.get_cert_lock(domain) {
-            // Check if lock is still valid (not expired)
+        let mut state = self.persistent.write();
+        // A corrupt record decodes as absent (logged and counted) and is
+        // overwritten here, so it heals instead of wedging the key.
+        if let Some(existing) = state.decode::<CertRenewLock>(&key) {
             if now < existing.started_at.saturating_add(lock_timeout_secs) {
-                return false;
+                return None;
             }
         }
-
-        // Acquire the lock
         let lock = CertRenewLock {
             started_at: now,
             started_by: self.my_node_id,
         };
-        self.persistent
-            .write()
-            .put_encoded(keys::cert_lock(domain), &lock, false)
-            .is_ok()
+        state.put_encoded(key, &lock, false).ok()?;
+        Some(lock)
     }
 
-    /// Release certificate renew lock
-    pub fn release_cert_lock(&self, domain: &str) -> Result<()> {
+    /// Release the lease at `key` only if it still holds `acquired`, so a
+    /// holder that outlived the timeout cannot delete its successor's lock.
+    fn release_lock(&self, key: String, acquired: &CertRenewLock) -> Result<()> {
+        let mut state = self.persistent.write();
+        if let Some(current) = state.decode::<CertRenewLock>(&key) {
+            if current != *acquired {
+                warn!(
+                    "not releasing lock {key}: node {} took it over after this holder exceeded the lock timeout",
+                    current.started_by
+                );
+                return Ok(());
+            }
+        }
+        state.delete(key)?;
+        Ok(())
+    }
+
+    /// Try to acquire the per-domain certificate renew lock.
+    pub fn try_acquire_cert_lock(
+        &self,
+        domain: &str,
+        lock_timeout_secs: u64,
+    ) -> Option<CertRenewLock> {
+        self.try_acquire_lock(keys::cert_lock(domain), lock_timeout_secs)
+    }
+
+    pub fn release_cert_lock(&self, domain: &str, acquired: &CertRenewLock) -> Result<()> {
+        self.release_lock(keys::cert_lock(domain), acquired)
+    }
+
+    /// Delete the certificate renew lock whoever holds it, for
+    /// `Admin.ForceReleaseCertLock`.
+    pub fn force_release_cert_lock(&self, domain: &str) -> Result<()> {
         self.persistent.write().delete(keys::cert_lock(domain))?;
         Ok(())
     }
@@ -2156,69 +2184,14 @@ impl KvStore {
     ///
     /// Every operation over that account takes it -- rotation, CAA
     /// reconciliation, and first-use registration -- so they are ordered
-    /// against each other across nodes as well as within one; see
+    /// against each other; see
     /// [`crate::distributed_certbot::DistributedCertBot`].
-    ///
-    /// Returns the lock value that was written; pass it back to
-    /// [`Self::release_rotation_lock`] so a rotation that outlived the timeout
-    /// cannot delete the lock of the node that took over.
-    ///
-    /// Best-effort only: WaveKV is last-writer-wins without compare-and-swap,
-    /// so two nodes can both acquire during a replication gap. This narrows the
-    /// window for concurrent rotation from the full rotation duration to the
-    /// replication latency; it is not mutual exclusion. A crashed holder is
-    /// covered by the timeout.
     pub fn try_acquire_rotation_lock(&self, lock_timeout_secs: u64) -> Option<CertRenewLock> {
-        let now = now_secs();
-
-        if let Some(existing) = self.get_rotation_lock() {
-            // Check if lock is still valid (not expired)
-            if now < existing.started_at.saturating_add(lock_timeout_secs) {
-                return None;
-            }
-        }
-
-        let lock = CertRenewLock {
-            started_at: now,
-            started_by: self.my_node_id,
-        };
-        self.persistent
-            .write()
-            .put_encoded(keys::GLOBAL_ACME_ROTATION_LOCK.to_string(), &lock, false)
-            .ok()?;
-        Some(lock)
+        self.try_acquire_lock(keys::GLOBAL_ACME_ROTATION_LOCK.into(), lock_timeout_secs)
     }
 
-    /// Get the global ACME credential rotation lock
-    pub fn get_rotation_lock(&self) -> Option<CertRenewLock> {
-        self.persistent
-            .read()
-            .decode(keys::GLOBAL_ACME_ROTATION_LOCK)
-    }
-
-    /// Release the global ACME credential rotation lock.
-    ///
-    /// Only deletes the lock when the currently visible value is the one that
-    /// `acquired` wrote: a rotation that outlived the lock timeout must not
-    /// delete the lock of the node that took over (which would let a third
-    /// rotation start concurrently). Like acquisition, the check is
-    /// best-effort under WaveKV's last-writer-wins replication.
     pub fn release_rotation_lock(&self, acquired: &CertRenewLock) -> Result<()> {
-        if let Some(current) = self.get_rotation_lock() {
-            if current.started_by != acquired.started_by
-                || current.started_at != acquired.started_at
-            {
-                warn!(
-                    "not releasing ACME rotation lock: node {} took it over after this rotation exceeded the lock timeout",
-                    current.started_by
-                );
-                return Ok(());
-            }
-        }
-        self.persistent
-            .write()
-            .delete(keys::GLOBAL_ACME_ROTATION_LOCK.to_string())?;
-        Ok(())
+        self.release_lock(keys::GLOBAL_ACME_ROTATION_LOCK.into(), acquired)
     }
 
     // ==================== Certificate Attestation ====================
@@ -2409,9 +2382,75 @@ mod acme_credentials_tests {
             )
             .expect("certificate lock write should succeed");
         assert!(
-            !kv.try_acquire_cert_lock("overflow.example", 600),
+            kv.try_acquire_cert_lock("overflow.example", 600).is_none(),
             "a non-expired certificate lock with a saturated expiry must remain held"
         );
+    }
+}
+
+#[cfg(test)]
+mod cert_lock_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    fn test_kv(data_dir: &std::path::Path) -> KvStore {
+        KvStore::new(1, vec![], data_dir, None).expect("failed to create kv store")
+    }
+
+    #[test]
+    fn a_holder_that_was_taken_over_does_not_release_the_new_holder_lock() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = test_kv(dir.path());
+        let acquired = kv
+            .try_acquire_cert_lock("takeover.example", 600)
+            .expect("first acquisition should succeed");
+        kv.persistent
+            .write()
+            .put_encoded(
+                keys::cert_lock("takeover.example"),
+                &CertRenewLock {
+                    started_at: acquired.started_at + 1,
+                    started_by: 2,
+                },
+                false,
+            )
+            .expect("takeover write should succeed");
+
+        kv.release_cert_lock("takeover.example", &acquired)
+            .expect("release should not error");
+        assert!(
+            kv.try_acquire_cert_lock("takeover.example", 600).is_none(),
+            "the new holder lock must survive the old holder release"
+        );
+    }
+
+    #[test]
+    fn two_tasks_on_one_node_cannot_both_acquire() {
+        let dir = tempfile::tempdir().expect("failed to create temp dir");
+        let kv = Arc::new(test_kv(dir.path()));
+
+        for round in 0..100 {
+            let domain = format!("race{round}.example");
+            let barrier = Arc::new(Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (kv, barrier, domain) = (kv.clone(), barrier.clone(), domain.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        kv.try_acquire_cert_lock(&domain, 600).is_some()
+                    })
+                })
+                .collect();
+            let acquired = handles
+                .into_iter()
+                .map(|handle| handle.join().expect("thread should not panic"))
+                .filter(|acquired| *acquired)
+                .count();
+            assert_eq!(
+                acquired, 1,
+                "round {round}: exactly one task may hold the lock"
+            );
+        }
     }
 }
 
@@ -2494,8 +2533,11 @@ mod value_encoding_tests {
             .put(keys::cert_lock("legacy.example"), legacy)
             .expect("put should succeed");
 
-        let decoded = kv
-            .get_cert_lock("legacy.example")
+        let decoded: CertRenewLock = kv
+            .persistent
+            .read()
+            .decode_strict(&keys::cert_lock("legacy.example"))
+            .expect("a record written by an older gateway must stay decodable")
             .expect("a record written by an older gateway must stay readable");
         assert_eq!(decoded.started_at, 1_700_000_000);
         assert_eq!(decoded.started_by, 7);

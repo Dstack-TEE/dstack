@@ -59,6 +59,33 @@ The verifier returns `DstackVerifiedReport::DstackNitroEnclave` containing:
 - `user_data` (report_data)
 - `timestamp`
 
+## KMS key release
+
+Key release to a Nitro Enclave is gated locally by `nitro_enclave_key_release`
+in `kms.toml`, which defaults to `false`:
+
+```toml
+[core]
+nitro_enclave_key_release = true
+```
+
+This gate sits *after* full attestation verification and after the external auth
+policy decision, so both must also pass. It mirrors `sev_snp_key_release` and
+`aws_nitro_tpm_key_release`: platforms whose confidentiality guarantee does not
+come from a CPU the way Intel TDX's does are opt-in, so that enabling one never
+implies another.
+
+Two properties of this platform are worth knowing before enabling it:
+
+- The AWS hypervisor is in the TCB. The NSM document is signed by an AWS root,
+  and PCR0/1/2 measure the enclave image, but there is no hardware memory
+  encryption isolating the enclave from the platform operator.
+- dstack extends no runtime measurement register on this variant, so `app_id`
+  and `instance_id` in the attestation come from an event list that nothing
+  replays against a quoted register. `os_image_hash` and `compose_hash`, which
+  are derived from the signed PCRs, are unaffected.
+
 ## Relevant Code
 - `dstack-attest/src/attestation.rs`
 - `nsm-qvl/src/verify.rs`
+- `kms/src/main_service.rs` (`ensure_key_release_allowed`)

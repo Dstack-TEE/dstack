@@ -50,14 +50,16 @@ export class EthereumBackend {
       tcbStatus: bootInfo.tcbStatus,
       advisoryIds: bootInfo.advisoryIds
     };
+    // Read the whole decision from one block.
+    const blockTag = await this.provider.getBlockNumber();
     let response;
     if (isKms) {
-      response = await this.kmsContract.isKmsAllowed(bootInfoStruct);
+      response = await this.kmsContract.isKmsAllowed(bootInfoStruct, { blockTag });
     } else {
-      response = await this.kmsContract.isAppAllowed(bootInfoStruct);
+      response = await this.kmsContract.isAppAllowed(bootInfoStruct, { blockTag });
     }
     const [isAllowed, reason] = response;
-    const gatewayAppId = await this.kmsContract.gatewayAppId();
+    const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
     return {
       isAllowed,
       reason,

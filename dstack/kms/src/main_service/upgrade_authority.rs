@@ -12,6 +12,9 @@ use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use std::time::Duration;
+use tracing::warn;
 
 /// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
 /// canonical struct shared by the producer (KMS) and the policy input the
@@ -26,7 +29,6 @@ pub(crate) fn build_boot_info(
     let variant = att.quote.variant();
     let (tcb_status, advisory_ids) = dstack_verifier::policy_tcb_fields(att);
     let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
-    ensure_app_id_len(&app_info.app_id)?;
     Ok(BootInfo {
         tee_variant: variant,
         mr_aggregated: app_info.mr_aggregated.to_vec(),
@@ -45,6 +47,19 @@ pub(crate) fn build_boot_info(
 pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
     if app_id.len() != 20 {
         bail!("app_id must be 20 bytes");
+    }
+    Ok(())
+}
+
+/// Policy backends left-pad short hex values, so a short field would alias a
+/// whitelisted full-width one.
+fn ensure_identity_widths(boot_info: &BootInfo) -> Result<()> {
+    ensure_app_id_len(&boot_info.app_id)?;
+    if boot_info.compose_hash.len() != 32 {
+        bail!("compose_hash must be 32 bytes");
+    }
+    if !matches!(boot_info.instance_id.len(), 0 | 20) {
+        bail!("instance_id must be 20 bytes or empty");
     }
     Ok(())
 }
@@ -83,7 +98,7 @@ pub(crate) struct AuthApiInfoResponse {
     pub app_implementation: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GetInfoResponse {
     pub is_dev: bool,
@@ -94,12 +109,47 @@ pub(crate) struct GetInfoResponse {
     pub app_implementation: Option<String>,
 }
 
-async fn http_get<R: DeserializeOwned>(url: &str) -> Result<R> {
-    send_request(reqwest::Client::new().get(url), url).await
+const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Shared so auth API calls reuse pooled connections instead of reconnecting per decision.
+fn auth_api_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(AUTH_API_CONNECT_TIMEOUT)
+            .build()
+            .unwrap_or_default()
+    })
 }
 
-async fn http_post<R: DeserializeOwned>(url: &str, body: &impl Serialize) -> Result<R> {
-    send_request(reqwest::Client::new().post(url).json(body), url).await
+async fn http_get<R: DeserializeOwned>(url: &str, timeout: Duration) -> Result<R> {
+    send_request(auth_api_client().get(url).timeout(timeout), url).await
+}
+
+async fn http_post<R: DeserializeOwned>(
+    url: &str,
+    body: &impl Serialize,
+    timeout: Duration,
+) -> Result<R> {
+    send_request(auth_api_client().post(url).json(body).timeout(timeout), url).await
+}
+
+/// Longest stretch of an auth-backend response quoted back in an error.
+///
+/// #525's convention: include the body so a misconfigured backend is
+/// diagnosable, bounded so an HTML error page cannot flood the logs.
+const MAX_QUOTED_BODY_BYTES: usize = 512;
+
+/// Take at most [`MAX_QUOTED_BODY_BYTES`] of `body`, ending on a character boundary.
+///
+/// Slicing a `String` at a fixed byte index panics when that index lands inside a
+/// multi-byte character, and this body is whatever the auth backend sent -- a proxy's
+/// error page, or a `reason` string an app owner controls through their `DstackApp`
+/// contract. Release binaries build with `panic = "abort"`, so that is the KMS process
+/// dying on the boot-authorization path rather than one call failing. Rounding the
+/// bound down to a boundary keeps it a byte bound, not a character count.
+fn quoted_body(body: &str) -> &str {
+    &body[..body.floor_char_boundary(MAX_QUOTED_BODY_BYTES)]
 }
 
 async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &str) -> Result<R> {
@@ -107,7 +157,7 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
     let response = req.header("User-Agent", USER_AGENT).send().await?;
     let status = response.status();
     let body = response.text().await?;
-    let short_body = &body[..body.len().min(512)];
+    let short_body = quoted_body(&body);
     if !status.is_success() {
         bail!("auth api {url} returned {status}: {short_body}");
     }
@@ -118,6 +168,7 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 
 impl AuthApi {
     pub async fn is_app_allowed(&self, boot_info: &BootInfo, is_kms: bool) -> Result<BootResponse> {
+        ensure_identity_widths(boot_info)?;
         match self {
             AuthApi::Dev { dev } => Ok(BootResponse {
                 is_allowed: true,
@@ -131,7 +182,7 @@ impl AuthApi {
                     "bootAuth/app"
                 };
                 let url = url_join(&webhook.url, path);
-                http_post(&url, &boot_info).await
+                http_post(&url, &boot_info, webhook.timeout).await
             }
         }
     }
@@ -147,7 +198,7 @@ impl AuthApi {
                 app_implementation: None,
             }),
             AuthApi::Webhook { webhook } => {
-                let info: AuthApiInfoResponse = http_get(&webhook.url).await?;
+                let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
                 let eth_rpc_url = if info.eth_rpc_url.is_empty() {
                     None
                 } else {
@@ -222,10 +273,11 @@ pub(crate) async fn ensure_kms_allowed(
         .context("failed to build KMS boot info from attestation")?;
     // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
     // EVENT_LOG OIDs) which lacks vm_config, resulting in an empty os_image_hash.
-    // Fill it from the local KMS's own value. This is safe because mrAggregated already
-    // validates OS image integrity transitively through the RTMR measurement chain.
+    // Fill it from the local KMS's own value, so only mrAggregated gates the source image here.
+    // A source that presents a config but no os_image_hash is not legacy and gets no fallback.
     // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
-    if boot_info.os_image_hash.is_empty() {
+    if boot_info.os_image_hash.is_empty() && attestation.config.is_empty() {
+        warn!("source KMS uses the legacy cert format, falling back to the local os_image_hash");
         let local_info = local_kms_boot_info(verifier)
             .await
             .context("failed to get local KMS boot info for os_image_hash fallback")?;
@@ -268,7 +320,10 @@ mod tests {
         }
     }
 
-    fn serve(responses: Vec<&'static str>) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+    fn serve<S: Into<String>>(
+        responses: Vec<S>,
+    ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+        let responses: Vec<String> = responses.into_iter().map(Into::into).collect();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = thread::spawn(move || {
@@ -328,8 +383,37 @@ mod tests {
 
     fn webhook(url: String) -> AuthApi {
         AuthApi::Webhook {
-            webhook: Webhook { url },
+            webhook: Webhook {
+                url,
+                timeout: std::time::Duration::from_millis(500),
+            },
         }
+    }
+
+    /// `GetMeta` reaches the auth API unauthenticated, so a silent backend must not hold it open.
+    #[rocket::async_test]
+    async fn a_backend_that_never_answers_does_not_hold_the_request_open() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let _blackhole = thread::spawn(move || {
+            let held: Vec<_> = listener.incoming().take(1).collect();
+            thread::sleep(std::time::Duration::from_secs(30));
+            drop(held);
+        });
+
+        let auth = webhook(format!("http://{address}"));
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(10), auth.get_info()).await;
+
+        assert!(
+            outcome.is_ok(),
+            "the auth API call was still running after 10s"
+        );
+        let error = outcome.unwrap().expect_err("a silent backend must fail");
+        assert!(
+            format!("{error:#}").contains("timed out") || format!("{error:#}").contains("timeout"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
@@ -340,6 +424,43 @@ mod tests {
             Ok(()) => panic!("19-byte app_id must reject"),
             Err(err) => assert!(err.to_string().contains("app_id must be 20 bytes")),
         }
+    }
+
+    #[rocket::async_test]
+    async fn short_identities_are_refused_before_they_reach_the_backend() {
+        let (url, server) = serve(vec![
+            r#"{"isAllowed":true,"gatewayAppId":"gateway","reason":"well-formed"}"#,
+        ]);
+        let auth = webhook(url);
+
+        let mut aliasing_compose_hash = boot_info(1);
+        aliasing_compose_hash.compose_hash.truncate(31);
+        let err = auth
+            .is_app_allowed(&aliasing_compose_hash, false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("compose_hash must be 32 bytes"));
+
+        let mut aliasing_instance_id = boot_info(1);
+        aliasing_instance_id.instance_id.truncate(19);
+        let err = auth
+            .is_app_allowed(&aliasing_instance_id, false)
+            .await
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("instance_id must be 20 bytes or empty"));
+
+        // `--no-instance-id` deployments carry no instance id.
+        let mut no_instance_id = boot_info(1);
+        no_instance_id.instance_id.clear();
+        assert!(
+            auth.is_app_allowed(&no_instance_id, false)
+                .await
+                .unwrap()
+                .is_allowed
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[rocket::async_test]
@@ -403,5 +524,39 @@ mod tests {
         assert!(recovered.is_allowed);
         assert_eq!(recovered.reason, "recovered");
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    /// The auth backend's body is quoted into the error that reports a bad
+    /// response. Byte-slicing it at a fixed offset aborts the KMS when that
+    /// offset lands inside a multi-byte character, and this runs on every
+    /// response, including a successful one.
+    #[rocket::async_test]
+    async fn a_response_with_a_multibyte_character_on_the_quoting_bound_does_not_abort() {
+        let mut body = "A".repeat(MAX_QUOTED_BODY_BYTES - 1);
+        body.push('\u{e9}'); // occupies bytes 511..513, so 512 is mid-character
+        let (url, server) = serve(vec![body]);
+
+        let error = webhook(url)
+            .is_app_allowed(&boot_info(40), false)
+            .await
+            .unwrap_err();
+
+        assert!(format!("{error:#}").contains("failed to decode response"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_quoted_body_is_bounded_in_bytes_and_never_splits_a_character() {
+        assert_eq!(quoted_body("short"), "short");
+        assert_eq!(quoted_body(&"A".repeat(600)).len(), MAX_QUOTED_BODY_BYTES);
+        // Every alignment of a 2-, 3- and 4-byte character across the bound.
+        for pad in MAX_QUOTED_BODY_BYTES - 4..MAX_QUOTED_BODY_BYTES {
+            for wide in ['\u{e9}', '\u{4e2d}', '\u{1f600}'] {
+                let body = format!("{}{wide}{}", "A".repeat(pad), "B".repeat(16));
+                let quoted = quoted_body(&body);
+                assert!(quoted.len() <= MAX_QUOTED_BODY_BYTES);
+                assert!(body.starts_with(quoted));
+            }
+        }
     }
 }

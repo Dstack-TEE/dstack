@@ -376,6 +376,16 @@ async fn redirect(mut input: impl AsyncRead + Unpin, to: String) {
     }
 }
 
+/// inotify reports our own `write_all` as `Modify(Data)`, so only a removal or a
+/// rename (logrotate's default mode) means the path no longer names our file.
+fn is_rotation(kind: &notify::EventKind) -> bool {
+    use notify::event::{EventKind, ModifyKind};
+    matches!(
+        kind,
+        EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+    )
+}
+
 async fn try_redirect(input: &mut (impl AsyncRead + Unpin), to: String) -> Result<()> {
     let dst_path = Path::new(&to);
     let dst_path_buf = dst_path.to_path_buf();
@@ -386,9 +396,7 @@ async fn try_redirect(input: &mut (impl AsyncRead + Unpin), to: String) -> Resul
         notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
                 // Check if the event affects our specific file
-                if (event.kind.is_remove() || event.kind.is_modify())
-                    && event.paths.iter().any(|p| p == &dst_path_buf)
-                {
+                if is_rotation(&event.kind) && event.paths.iter().any(|p| p == &dst_path_buf) {
                     let _ = reopen_tx.blocking_send(());
                 }
             }
@@ -436,5 +444,22 @@ async fn try_redirect(input: &mut (impl AsyncRead + Unpin), to: String) -> Resul
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod log_rotation_tests {
+    use super::is_rotation;
+    use notify::event::{DataChange, EventKind, ModifyKind, RemoveKind, RenameMode};
+
+    #[test]
+    fn only_a_removal_or_a_rename_is_a_rotation() {
+        assert!(is_rotation(&EventKind::Remove(RemoveKind::File)));
+        assert!(is_rotation(&EventKind::Modify(ModifyKind::Name(
+            RenameMode::From
+        ))));
+        assert!(!is_rotation(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Any
+        ))));
     }
 }

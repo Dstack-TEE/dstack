@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::acpi::Tables;
 use crate::tdvf::Tdvf;
 use crate::util::debug_print_log;
 use crate::{kernel, OvmfVariant, RtmrLogs, TdxMeasurements};
@@ -115,7 +114,6 @@ pub struct VersionedOptions {
 pub struct TdxMeasurementDetails {
     pub measurements: TdxMeasurements,
     pub rtmr_logs: RtmrLogs,
-    pub acpi_tables: Tables,
 }
 
 impl Machine<'_> {
@@ -132,7 +130,7 @@ impl Machine<'_> {
 
         let mrtd = tdvf.mrtd(self).context("Failed to compute MR TD")?;
 
-        let (rtmr0_log, acpi_tables) = tdvf
+        let rtmr0_log = tdvf
             .rtmr0_log(self)
             .context("Failed to compute RTMR0 log")?;
         debug_print_log("RTMR0", &rtmr0_log);
@@ -163,7 +161,6 @@ impl Machine<'_> {
                 rtmr2,
             },
             rtmr_logs: [rtmr0_log, rtmr1_log, rtmr2_log],
-            acpi_tables,
         })
     }
 }

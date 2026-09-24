@@ -39,9 +39,9 @@ use crate::{
     cert_store::{CertResolver, CertStoreBuilder},
     config::{Config, TlsConfig},
     kv::{
-        fetch_peers_from_bootnode, import, AppIdValidator, CertData, HttpsClientConfig,
-        InstanceRecord, KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus,
-        PortPolicy, PortPolicyOverride, ReplicatedWrites, WaveKvSyncService,
+        fetch_peers_from_bootnode, import, AppIdValidator, HttpsClientConfig, InstanceRecord,
+        KvStore, LegacyOverrides, LoadedInstances, NodeData, NodeStatus, PortPolicy,
+        PortPolicyOverride, ReplicatedWrites, WaveKvSyncService,
     },
     models::{InstanceInfo, PortPolicyView, ReportedCapabilities, WgConf, WgPeer},
     proxy::{create_acceptor_with_cert_resolver, AddressGroup, AddressInfo, AppAddressResolver},
@@ -304,6 +304,47 @@ impl ProxyInner {
         self.handshake_cache.latest(stale_timeout)
     }
 
+    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
+        gateway_nodes(&self.kv_store, false)
+    }
+
+    /// Publish this node's WireGuard observations to the KV store.
+    ///
+    /// The KV writes wait on the store's write lock, which a sync merge holds,
+    /// so they must not run under the routing lock.
+    pub(crate) fn refresh_state(&self) -> Result<()> {
+        let handshakes = self.latest_handshakes(None)?;
+        let instance_ids: Vec<(String, u64)> = {
+            let state = self.lock();
+            state
+                .state
+                .instances
+                .iter()
+                .filter_map(|(id, info)| {
+                    let (timestamp, _) = handshakes.get(&info.public_key)?;
+                    Some((id.clone(), *timestamp))
+                })
+                .collect()
+        };
+
+        for (instance_id, timestamp) in &instance_ids {
+            if let Err(err) = self
+                .kv_store
+                .sync_instance_handshake(instance_id, *timestamp)
+            {
+                debug!("failed to sync instance handshake: {err:?}");
+            }
+        }
+
+        if let Err(err) = self
+            .kv_store
+            .sync_node_last_seen(self.config.sync.node_id, now_secs())
+        {
+            debug!("failed to sync node last_seen: {err:?}");
+        }
+        Ok(())
+    }
+
     pub async fn new(
         options: ProxyOptions,
         port_policy_tx: UnboundedSender<String>,
@@ -383,6 +424,7 @@ impl ProxyInner {
                 key_path: tls.key.clone(),
                 ca_cert_path: tls.mutual.ca_certs.clone(),
                 cert_validator,
+                timeout: config.sync.timeout,
             }
         };
 
@@ -474,29 +516,6 @@ impl ProxyInner {
                 all_cert_data.len()
             );
         }
-        if let (Some(base_domain), Some(cert_chain), Some(cert_key)) = (
-            &config.proxy.base_domain,
-            &config.proxy.cert_chain,
-            &config.proxy.cert_key,
-        ) {
-            let cert_pem = std::fs::read_to_string(cert_chain).with_context(|| {
-                format!("failed to read proxy cert_chain {}", cert_chain.display())
-            })?;
-            let key_pem = std::fs::read_to_string(cert_key)
-                .with_context(|| format!("failed to read proxy cert_key {}", cert_key.display()))?;
-            let now = now_secs();
-            let cert_data = CertData {
-                cert_pem,
-                key_pem,
-                not_after: now + 14 * 24 * 60 * 60,
-                issued_by: config.sync.node_id,
-                issued_at: now,
-            };
-            cert_resolver
-                .update_cert(base_domain, &cert_data)
-                .with_context(|| format!("failed to load static proxy cert for {base_domain}"))?;
-            info!("CertStore: loaded static proxy certificate for *.{base_domain}");
-        }
 
         // Create multi-domain certbot (uses KvStore configs for DNS credentials and domains)
         let certbot = Arc::new(DistributedCertBot::new(
@@ -506,10 +525,7 @@ impl ProxyInner {
                 .clone()
                 .map(|service| service as Arc<dyn crate::kv::PersistentWriteNotifier>),
         ));
-        // Initialize any configured domains
-        if let Err(err) = certbot.init_all().await {
-            warn!("Failed to initialize multi-domain certbot: {err:?}");
-        }
+        // Issuance runs in `start_certbot_task`, not here, so it cannot delay startup.
 
         // Create TLS acceptors with CertResolver for SNI-based resolution
         // CertResolver allows atomic certificate updates without recreating acceptors
@@ -833,14 +849,13 @@ fn report_new_rejections(
 /// the record is readable again. Instance-id routing is never gated, so the
 /// instance stays reachable for investigation either way.
 fn instance_info_from_record(
-    store: &KvStore,
+    overrides: Result<(Option<PortPolicy>, Option<bool>)>,
     instance_id: String,
     data: InstanceRecord,
-    legacy: Option<&LegacyOverrides>,
     known_gated: bool,
 ) -> (InstanceInfo, Option<String>) {
     let mut unreadable = None;
-    let (admin_port_policy, ready) = match read_overrides(store, &instance_id, legacy) {
+    let (admin_port_policy, ready) = match overrides {
         Ok(overrides) => overrides,
         Err(err) => {
             unreadable = Some(format!("{err:#}"));
@@ -936,8 +951,12 @@ fn build_state_from_kv_store(
         // Nothing is in memory yet to fall back on, unlike the reload path, so
         // a record predating the declaration reads as not gated: routable and
         // unpolled, and the CVM's next re-registration states it again.
-        let (info, unreadable) =
-            instance_info_from_record(store, instance_id.clone(), data, legacy, false);
+        let (info, unreadable) = instance_info_from_record(
+            read_overrides(store, &instance_id, legacy),
+            instance_id.clone(),
+            data,
+            false,
+        );
         if let Some(reason) = unreadable {
             error!(
                 "cannot read the operator overrides for instance {instance_id}, holding it \
@@ -963,6 +982,9 @@ fn start_recycle_thread(proxy: Proxy) {
     }
     std::thread::spawn(move || loop {
         std::thread::sleep(proxy.config.recycle.interval);
+        if let Err(err) = proxy.refresh_state() {
+            warn!("failed to refresh state: {err:?}");
+        }
         if let Err(err) = proxy.lock().recycle() {
             error!("failed to run recycle: {err:?}");
         };
@@ -1498,7 +1520,16 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
         .into_iter()
         .map(str::to_owned)
         .collect();
-    let instances = accepted.instances;
+    // Read the overrides before taking the routing lock: each read waits on the
+    // KV store's lock, which a sync merge holds.
+    let instances: BTreeMap<String, _> = accepted
+        .instances
+        .into_iter()
+        .map(|(id, data)| {
+            let overrides = read_overrides(store, &id, legacy_overrides.get(&id));
+            (id, (data, overrides))
+        })
+        .collect();
     let mut state = proxy.lock();
     report_new_rejections(&mut state.reported_rejections, &accepted.rejected);
     let mut wg_changed = false;
@@ -1528,8 +1559,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
     }
 
     let mut unreadable_overrides = BTreeMap::new();
-    for (instance_id, data) in instances {
-        let legacy = legacy_overrides.get(&instance_id);
+    for (instance_id, (data, overrides)) in instances {
         // What this node already believes the app declared, for a record that
         // predates the field. See `instance_info_from_record`.
         let known_gated = state
@@ -1538,7 +1568,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             .get(&instance_id)
             .is_some_and(|existing| existing.health_check());
         let (mut new_info, unreadable) =
-            instance_info_from_record(store, instance_id.clone(), data, legacy, known_gated);
+            instance_info_from_record(overrides, instance_id.clone(), data, known_gated);
         if let Some(reason) = unreadable {
             unreadable_overrides.insert(instance_id.clone(), reason);
         }
@@ -2514,12 +2544,9 @@ impl ProxyState {
         Ok(())
     }
 
+    /// Drop instances the cluster has stopped seeing. The caller runs
+    /// `ProxyInner::refresh_state` first, off this lock.
     fn recycle(&mut self) -> Result<()> {
-        // Refresh state: sync local handshakes to KvStore, update local last_seen from global
-        if let Err(err) = self.refresh_state() {
-            warn!("failed to refresh state: {err:?}");
-        }
-
         // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
 
         // Recycle stale CVM instances based on global last_seen (max across all nodes)
@@ -2581,53 +2608,11 @@ impl ProxyState {
         Ok(())
     }
 
-    pub(crate) fn refresh_state(&mut self) -> Result<()> {
-        // Get local WG handshakes and sync to KvStore
-        let handshakes = self.latest_handshakes(None)?;
-
-        // Build a map from public_key to instance_id for lookup
-        let pk_to_id: BTreeMap<&str, &str> = self
-            .state
-            .instances
-            .iter()
-            .map(|(id, info)| (info.public_key.as_str(), id.as_str()))
-            .collect();
-
-        // Sync local handshake observations to KvStore
-        for (pk, (ts, _)) in &handshakes {
-            if let Some(&instance_id) = pk_to_id.get(pk.as_str()) {
-                if let Err(err) = self.kv_store.sync_instance_handshake(instance_id, *ts) {
-                    debug!("failed to sync instance handshake: {err:?}");
-                }
-            }
-        }
-
-        // Update this node's last_seen in KvStore
-        let now = now_secs();
-        if let Err(err) = self
-            .kv_store
-            .sync_node_last_seen(self.config.sync.node_id, now)
-        {
-            debug!("failed to sync node last_seen: {err:?}");
-        }
-        Ok(())
-    }
-
     /// Sync connection count for an instance to KvStore
     pub(crate) fn sync_connections(&self, instance_id: &str, count: u64) {
         if let Err(err) = self.kv_store.sync_connections(instance_id, count) {
             debug!("Failed to sync connections: {err:?}");
         }
-    }
-
-    /// Get latest handshake for an instance from KvStore (max across all nodes)
-    pub(crate) fn get_instance_latest_handshake(&self, instance_id: &str) -> Option<u64> {
-        self.kv_store.get_instance_latest_handshake(instance_id)
-    }
-
-    /// Get all nodes from KvStore (for admin API - includes all nodes)
-    pub(crate) fn get_all_nodes(&self) -> Vec<GatewayNodeInfo> {
-        self.get_all_nodes_filtered(false)
     }
 
     /// Get nodes for CVM registration (excludes nodes with status "down")
@@ -2637,29 +2622,33 @@ impl ProxyState {
 
     /// Get all nodes from KvStore with optional filtering
     fn get_all_nodes_filtered(&self, exclude_down: bool) -> Vec<GatewayNodeInfo> {
-        let node_statuses = if exclude_down {
-            self.kv_store.load_all_node_statuses()
-        } else {
-            Default::default()
-        };
-
-        self.kv_store
-            .load_all_nodes()
-            .into_iter()
-            // Shared with the metrics sampler so the gauge and the routing
-            // table cannot disagree about what "active" means.
-            .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
-            .map(|(id, node)| GatewayNodeInfo {
-                id,
-                uuid: node.uuid,
-                wg_public_key: node.wg_public_key,
-                wg_ip: node.wg_ip,
-                wg_endpoint: node.wg_endpoint,
-                url: node.url,
-                last_seen: self.kv_store.get_node_latest_last_seen(id).unwrap_or(0),
-            })
-            .collect()
+        gateway_nodes(&self.kv_store, exclude_down)
     }
+}
+
+fn gateway_nodes(kv_store: &KvStore, exclude_down: bool) -> Vec<GatewayNodeInfo> {
+    let node_statuses = if exclude_down {
+        kv_store.load_all_node_statuses()
+    } else {
+        Default::default()
+    };
+
+    kv_store
+        .load_all_nodes()
+        .into_iter()
+        // Shared with the metrics sampler so the gauge and the routing
+        // table cannot disagree about what "active" means.
+        .filter(|(id, _)| !exclude_down || KvStore::node_is_active(node_statuses.get(id)))
+        .map(|(id, node)| GatewayNodeInfo {
+            id,
+            uuid: node.uuid,
+            wg_public_key: node.wg_public_key,
+            wg_ip: node.wg_ip,
+            wg_endpoint: node.wg_endpoint,
+            url: node.url,
+            last_seen: kv_store.get_node_latest_last_seen(id).unwrap_or(0),
+        })
+        .collect()
 }
 
 pub struct RpcHandler {

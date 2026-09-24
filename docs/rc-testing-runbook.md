@@ -362,7 +362,8 @@ start changing things.
 |---|---|---|---|
 | `[cvm] platform` | `vmm.toml` (host) | `"auto"` | `"auto"` picks SEV-SNP when the host CPU flags contain `sev_snp`; set `"amd-sev-snp"` to be explicit and to fail loudly on the wrong host |
 | `sev_snp_key_release` | `kms.toml`, `[core]` | `false` | **`true`**, or no AMD guest ever gets a key |
-| `aws_nitro_tpm_key_release` | `kms.toml`, `[core]` | `false` | leave off; listed because it is the only other gate of this shape |
+| `aws_nitro_tpm_key_release` | `kms.toml`, `[core]` | `false` | leave off; listed because it is another gate of this shape |
+| `nitro_enclave_key_release` | `kms.toml`, `[core]` | `false` | leave off; listed because it is another gate of this shape |
 | `[core.attestation.urls] amd_kds` | `kms.toml`, `dstack-verifier.toml` | `https://kdsintf.amd.com/vcek/v1` | override only to point at a cache or mirror |
 | `[core.attestation.root_ca] sev_snp_milan` / `_genoa` / `_turin` | same | unset — vendor ARK compiled in | leave unset unless you are testing against a non-production root |
 | `insecure_allow_external_trust_anchors` | same, `[core.attestation]` | `false` | must be `true` if *any* `root_ca` path above is set |

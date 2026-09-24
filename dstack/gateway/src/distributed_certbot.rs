@@ -20,7 +20,7 @@ use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
 
-use crate::cert_store::CertResolver;
+use crate::cert_store::{get_cert_expiry, CertResolver};
 use crate::kv::{
     AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsCredential, DnsProvider,
     KvStore, PersistentWriteNotifier, ZtDomainConfig,
@@ -165,18 +165,16 @@ impl DistributedCertBot {
         Ok(())
     }
 
-    fn try_acquire_cert_lock(&self, domain: &str) -> bool {
+    fn try_acquire_cert_lock(&self, domain: &str) -> Option<crate::kv::CertRenewLock> {
         let acquired = self
             .kv_store
-            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS);
-        if acquired {
-            self.notify_lock_write();
-        }
-        acquired
+            .try_acquire_cert_lock(domain, RENEW_LOCK_TIMEOUT_SECS)?;
+        self.notify_lock_write();
+        Some(acquired)
     }
 
-    fn release_cert_lock(&self, domain: &str) -> Result<()> {
-        self.kv_store.release_cert_lock(domain)?;
+    fn release_cert_lock(&self, domain: &str, lock: &crate::kv::CertRenewLock) -> Result<()> {
+        self.kv_store.release_cert_lock(domain, lock)?;
         self.notify_lock_write();
         Ok(())
     }
@@ -461,40 +459,6 @@ impl DistributedCertBot {
         Ok(config.acme_url)
     }
 
-    /// Initialize all ZT-Domain certificates
-    pub async fn init_all(&self) -> Result<()> {
-        let configs = self.kv_store.list_zt_domain_configs();
-        for config in configs {
-            if let Err(err) = self.init_domain(&config.domain).await {
-                error!("cert[{}]: failed to initialize: {err:?}", config.domain);
-            }
-        }
-        Ok(())
-    }
-
-    /// Initialize certificate for a specific domain
-    pub async fn init_domain(&self, domain: &str) -> Result<()> {
-        // First, try to load from KvStore (synced from other nodes)
-        if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
-            let now = now_secs();
-            if cert_data.not_after > now {
-                info!(
-                    domain,
-                    "loaded from KvStore (issued by node {}, expires in {} days)",
-                    cert_data.issued_by,
-                    (cert_data.not_after - now) / 86400
-                );
-                self.cert_resolver.update_cert(domain, &cert_data)?;
-                return Ok(());
-            }
-            info!(domain, "KvStore certificate expired, will request new one");
-        }
-
-        // No valid cert, need to request new one
-        info!(domain, "no valid certificate found, requesting from ACME");
-        self.request_new_cert(domain).await
-    }
-
     /// Set CAA records for every configured ZT domain.
     ///
     /// Runs under the shared ACME lock, so a rotation or another
@@ -664,10 +628,10 @@ impl DistributedCertBot {
         }
 
         // Try to acquire lock
-        if !self.try_acquire_cert_lock(domain) {
+        let Some(lock) = self.try_acquire_cert_lock(domain) else {
             info!("another node is renewing, skipping");
             return Ok(false);
-        }
+        };
 
         info!("acquired renew lock, starting renewal");
 
@@ -681,36 +645,7 @@ impl DistributedCertBot {
         };
 
         // Release lock regardless of result
-        if let Err(err) = self.release_cert_lock(domain) {
-            error!("failed to release lock: {err:?}");
-        }
-
-        result
-    }
-
-    /// Request new certificate for a domain
-    #[tracing::instrument(skip(self))]
-    async fn request_new_cert(&self, domain: &str) -> Result<()> {
-        let config = self
-            .kv_store
-            .get_zt_domain_config(domain)
-            .context("ZT-Domain config not found")?;
-
-        // Try to acquire lock first
-        if !self.try_acquire_cert_lock(domain) {
-            // Another node is requesting, wait for it
-            info!("another node is requesting, waiting...");
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
-                self.cert_resolver.update_cert(domain, &cert_data)?;
-                return Ok(());
-            }
-            bail!("failed to get certificate from KvStore after waiting");
-        }
-
-        let result = self.do_request_new(domain, &config).await;
-
-        if let Err(err) = self.release_cert_lock(domain) {
+        if let Err(err) = self.release_cert_lock(domain, &lock) {
             error!("failed to release lock: {err:?}");
         }
 
@@ -1085,13 +1020,6 @@ fn dns_credential_for(kv_store: &KvStore, config: &ZtDomainConfig) -> Result<Dns
     }
 }
 
-fn get_cert_expiry(cert_pem: &str) -> Option<u64> {
-    use x509_parser::prelude::*;
-    let pem = Pem::iter_from_buffer(cert_pem.as_bytes()).next()?.ok()?;
-    let cert = pem.parse_x509().ok()?;
-    Some(cert.validity().not_after.timestamp() as u64)
-}
-
 fn acme_url_matches(credentials_json: &str, expected_url: &str) -> Result<bool> {
     #[derive(serde::Deserialize)]
     struct Creds {
@@ -1208,16 +1136,18 @@ mod tests {
             .expect("rotation lock release should succeed");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 2);
 
-        assert!(certbot.try_acquire_cert_lock("example.com"));
+        let renewal = certbot
+            .try_acquire_cert_lock("example.com")
+            .expect("renewal lock should be free");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 3);
-        assert!(!certbot.try_acquire_cert_lock("example.com"));
+        assert!(certbot.try_acquire_cert_lock("example.com").is_none());
         assert_eq!(
             notifier.0.load(Ordering::Relaxed),
             3,
             "a rejected acquisition did not write and must not wake push"
         );
         certbot
-            .release_cert_lock("example.com")
+            .release_cert_lock("example.com", &renewal)
             .expect("renewal lock release should succeed");
         assert_eq!(notifier.0.load(Ordering::Relaxed), 4);
     }
@@ -1529,14 +1459,20 @@ mod tests {
             .release_rotation_lock(&stale)
             .expect("stale release should be a no-op, not an error");
         assert!(
-            certbot.kv_store.get_rotation_lock().is_some(),
+            certbot
+                .kv_store
+                .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+                .is_none(),
             "the newer holder's lock must remain in place"
         );
         certbot
             .kv_store
             .release_rotation_lock(&current)
             .expect("owner release should succeed");
-        assert!(certbot.kv_store.get_rotation_lock().is_none());
+        assert!(certbot
+            .kv_store
+            .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
+            .is_some());
     }
 
     #[test]

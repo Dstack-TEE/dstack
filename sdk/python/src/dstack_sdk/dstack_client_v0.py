@@ -262,6 +262,20 @@ class BaseClient:
     pass
 
 
+#: How much of a server response an exception may quote, in characters.
+#:
+#: An agent with no route for the path answers with an HTML page, and pasting a
+#: whole page into an exception helps nobody. Rust uses the same number for the
+#: same reason (``MAX_ERROR_BODY_CHARS``); JS uses 300.
+MAX_ERROR_BODY_CHARS = 512
+
+
+def _truncate(text: str) -> str:
+    if len(text) <= MAX_ERROR_BODY_CHARS:
+        return text
+    return text[:MAX_ERROR_BODY_CHARS] + "..."
+
+
 def raise_for_status(response: httpx.Response) -> None:
     """Raise on an error status, carrying the guest agent's message.
 
@@ -286,7 +300,7 @@ def raise_for_status(response: httpx.Response) -> None:
         if not message:
             raise
         raise httpx.HTTPStatusError(
-            f"{exc.args[0]}\nguest agent said: {message}",
+            f"{exc.args[0]}\nguest agent said: {_truncate(message)}",
             request=exc.request,
             response=response,
         ) from None

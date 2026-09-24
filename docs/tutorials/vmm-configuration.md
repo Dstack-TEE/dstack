@@ -97,6 +97,7 @@ address = "127.0.0.1:9080"
 reuse = true
 kms_url = "http://127.0.0.1:8081"
 event_buffer_size = 20
+max_event_name_len = 128
 node_name = ""
 image_path = "/var/lib/dstack/images"
 

@@ -59,7 +59,6 @@ mod image;
 mod mr_config;
 pub(crate) mod network;
 mod qemu;
-pub(crate) mod registry;
 mod vm_info;
 mod workdir;
 
@@ -87,7 +86,7 @@ fn signal_pidfd(pid: u32, signal: libc::c_int) -> std::io::Result<()> {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct PortMapping {
     pub address: IpAddr,
     pub protocol: Protocol,
@@ -209,6 +208,7 @@ impl GpuConfig {
 
 /// Round up a value to the nearest multiple of another value.
 /// If the value is already a multiple, it remains unchanged.
+/// Left unchanged if the next multiple overflows, rather than wrapping to a tiny value.
 pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
     if multiple <= 1 {
         return value;
@@ -219,7 +219,7 @@ pub(crate) fn round_up(value: u32, multiple: u32) -> u32 {
         return value;
     }
 
-    value + (multiple - remainder)
+    value.checked_add(multiple - remainder).unwrap_or(value)
 }
 
 /// Get the NUMA node associated with a PCI device.
@@ -302,12 +302,6 @@ pub struct GpuSpec {
     pub slot: String,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum PullStatus {
-    Pulling,
-    Failed(String),
-}
-
 /// First delay before a removal asks netd again to release a VM's interfaces.
 #[cfg(not(test))]
 const RELEASE_RETRY_INITIAL: Duration = Duration::from_secs(2);
@@ -321,8 +315,6 @@ pub struct App {
     pub config: Arc<Config>,
     pub supervisor: SupervisorClient,
     state: Arc<Mutex<AppState>>,
-    /// Pull status for registry images: tag → status.
-    pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
     /// One lock per VM, held across a launch or a teardown. See
     /// [`App::launch_lock`].
     launch_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
@@ -356,7 +348,6 @@ impl App {
                 removing: HashSet::new(),
             })),
             config: Arc::new(config),
-            pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
             launch_locks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -1507,11 +1498,16 @@ impl App {
     }
 
     pub(crate) fn vm_event_report(&self, cid: u32, event: &str, body: String) -> Result<()> {
+        if event.len() > self.config.max_event_name_len {
+            error!(cid, "event name too large, skipping");
+            return Ok(());
+        }
         info!(cid, event, "VM event");
         if body.len() > 1024 * 4 {
             error!("Event body too large, skipping");
             return Ok(());
         }
+        // Persist outside the global state lock so disk I/O does not stall other VMs.
         let mut state = self.lock();
         let Some(vm) = state.vms.values_mut().find(|vm| vm.config.cid == cid) else {
             bail!("VM not found");
@@ -1528,26 +1524,23 @@ impl App {
             vm.state.events.pop_front();
         }
         match event {
-            "boot.progress" => {
-                vm.state.boot_progress = body;
-            }
-            "boot.error" => {
-                vm.state.boot_error = body;
-            }
+            "boot.progress" => vm.state.boot_progress = body,
+            "boot.error" => vm.state.boot_error = body,
             "shutdown.progress" => {
-                if body == "powering off" {
-                    self.set_started(&vm.config.manifest.id, false)?;
-                }
+                let powering_off = body == "powering off";
                 vm.state.shutdown_progress = body;
+                let id = vm.config.manifest.id.clone();
+                drop(state);
+                if powering_off {
+                    self.set_started(&id, false)?;
+                }
             }
             "instance.info" => {
                 let workdir = VmWorkDir::new(vm.config.workdir.clone());
-                let instancd_info_path = workdir.instance_info_path();
-                safe_write::safe_write(&instancd_info_path, &body)?;
+                drop(state);
+                safe_write::safe_write(workdir.instance_info_path(), &body)?;
             }
-            _ => {
-                error!("Guest reported unknown event: {event}");
-            }
+            _ => error!("Guest reported unknown event: {event}"),
         }
         Ok(())
     }
@@ -1889,8 +1882,8 @@ fn append_boot_separator(path: &std::path::Path) {
 /// Logs a CVM writes into its work directory, subject to retention.
 ///
 /// stdout and stderr are written by the supervisor, which always opens them
-/// with `append(true)` and reopens them when they change, so they satisfy
-/// [`crate::logrotate`]'s contract no matter which VMM launched the VM.
+/// with `append(true)`, so they satisfy [`crate::logrotate`]'s contract no
+/// matter which VMM launched the VM.
 /// serial.log is written by QEMU, whose fd only appends when *we* passed
 /// `logappend=on`, so it is included only when `serial` says so.
 fn rotatable_logs(work_dir: &VmWorkDir, serial: bool) -> Vec<PathBuf> {
@@ -3261,6 +3254,11 @@ mod tests {
         // without a detectable one has to.
         config.cvm.qemu_version = Some("9.2.1".to_string());
         Ok(config)
+    }
+
+    #[test]
+    fn round_up_does_not_wrap() {
+        assert_eq!(round_up(u32::MAX, 2), u32::MAX);
     }
 
     #[test]
