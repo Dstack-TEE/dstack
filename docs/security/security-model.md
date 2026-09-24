@@ -264,6 +264,7 @@ Use this checklist to verify a workload running in a dstack CVM.
 - [ ] Launch event log replays correctly (RTMR3 on TDX-family platforms, PCR14 on AWS NitroTPM)
 - [ ] Config commitment matches the expected app/config target (on AWS: PCR14 replay; PCR8 is an optional shortcut — see the [AWS verifier runbook](../aws-ec2-production-verifier-runbook.md))
 - [ ] reportData contains your challenge (replay protection)
+- [ ] A `report_data` binding to a public key is treated as evidence only together with a live handshake or signature over that key — see [`report_data` domain tags are a parsing convention, not a capability](#report_data-domain-tags-are-a-parsing-convention-not-a-capability)
 - [ ] No security-relevant check depends on `pre_launch_script` running before the application; such checks belong in `init_script` or in the application itself
 
 **GPU verification (when required):**
@@ -384,6 +385,15 @@ This is deliberate: whether a non-current TCB (e.g. `OutOfDate`) is acceptable i
 The one case dstack does not leave to downstream is a genuinely invalid TCB: `dcap-qvl` rejects `Revoked` outright (its `is_valid()` returns false only for `Revoked`), so a revoked TCB never reaches the policy layer in the first place.
 
 > **Future work:** this will be refactored toward a grace-period model, where an out-of-date TCB is accepted for a bounded window after a new TCB level is published rather than being a binary downstream decision.
+
+### `report_data` domain tags are a parsing convention, not a capability
+
+Any container can choose `report_data` outright: `GetQuote` and `Attest` take up to 64 bytes verbatim, and the legacy `Tappd.TdxQuote` maps a `prefix` to a custom tag. So an app can obtain a quote whose `report_data` is `sha512("ratls-cert:" || K)` for a key *K* it does not hold. The tags only let a verifier parse `report_data` unambiguously; they are not an authorization boundary:
+
+- The identity in the quote (`app_id`, `compose_hash`, `instance_id`, MRs) comes from the system-owned RTMR3 log, so a minted quote always names the CVM that minted it.
+- Every dstack consumer that reads `ratls-cert:` as key possession also makes the peer use the key: `ra-rpc` checks it against the public key of a completed TLS handshake, and the KMS verifies the CSR signature first.
+
+A relying party must do the same: treat such a quote as evidence that the named CVM asked for the binding, not that anyone holds *K*, unless it is tied to a live handshake or a signature by *K*.
 
 ### Development modes are auditable, not production-safe
 
