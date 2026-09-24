@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-"""Run the request-contract matrix in ``api_contract_matrix`` against one service.
+r"""Run the request-contract matrix in ``api_contract_matrix`` against one service.
 
 ``api-contract-matrix-policy.json`` says how far each method may be driven:
 ``full`` runs every vector, ``rejection-only`` runs only the vectors a service
@@ -205,14 +205,14 @@ def service_policy(
 
 
 def wrong_type_for(field_def: dict[str, Any]) -> Any:
-    """A JSON value of the wrong type for this field."""
+    """Return a JSON value of the wrong type for this field."""
     if field_def["type"] in ("string", "bytes"):
         return 123
     return {"not": "a scalar"}
 
 
 def wrong_wiretype(target: Target, entry: dict[str, Any]) -> list[Call]:
-    """The first declared field number sent with the wrong wire type."""
+    """Send the first declared field number with the wrong wire type."""
     fields = entry.get("request_fields", [])
     if not fields:
         return []
@@ -285,7 +285,7 @@ def sweep_framing(target: Target, method: str) -> list[Call]:
 def sweep_full(
     target: Target, entry: dict[str, Any], markers: dict[str, str]
 ) -> list[Call]:
-    """The complete vector set for one method."""
+    """Build the complete vector set for one method."""
     service, method = entry["service"], entry["method"]
     key = f"{service}.{method}"
     fields = entry.get("request_fields", [])
