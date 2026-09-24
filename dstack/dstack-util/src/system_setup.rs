@@ -54,7 +54,7 @@ use crate::{
         deserialize_json_file, sha256, sha256_file, AppCompose, AppKeys, KeyProviderKind, SysConfig,
     },
 };
-use cert_client::CertRequestClient;
+use cert_client::{validate_kms_rpc_cert, CertRequestClient};
 use cmd_lib::run_fun as cmd;
 use dstack_gateway_rpc::{
     gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
@@ -2213,25 +2213,6 @@ pub async fn cmd_gateway_refresh(args: GatewayRefreshArgs) -> Result<()> {
     GatewayRefresher::load(&args.work_dir)?
         .refresh(args.force)
         .await
-}
-
-/// Accept only a certificate the KMS issued for its own RPC endpoint.
-///
-/// The attestation behind this certificate is already verified by the RA-TLS
-/// layer, and the KMS identity that matters to the guest is its CA public key,
-/// pinned separately by `verify_key_provider_id`. All that is left here is
-/// refusing a certificate minted for some other purpose.
-fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
-    let Some(cert) = cert else {
-        bail!("missing server cert");
-    };
-    let Some(usage) = cert.special_usage else {
-        bail!("missing server cert usage");
-    };
-    if usage != "kms:rpc" {
-        bail!("Invalid server cert usage: {usage}");
-    }
-    Ok(())
 }
 
 struct AppIdValidator {

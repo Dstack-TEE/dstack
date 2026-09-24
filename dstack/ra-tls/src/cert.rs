@@ -87,20 +87,26 @@ impl CaCert {
     }
 
     /// Sign a remote certificate signing request.
+    ///
+    /// `app_info` is the identity the signer established; the app id and app
+    /// info extensions are stamped from it, never from the CSR's own claims.
     pub fn sign_csr(
         &self,
         csr: &CertSigningRequestV2,
-        app_id: Option<&[u8]>,
+        app_info: Option<&AppInfo>,
         usage: &str,
     ) -> Result<Certificate> {
         let pki = rcgen::SubjectPublicKeyInfo::from_der(&csr.pubkey)
             .context("Failed to parse signature")?;
         let cfg = &csr.config;
-        let app_info = if cfg.ext_app_info {
-            Some(csr.attestation.clone().into_v1().decode_app_info(false)?)
-        } else {
-            None
-        };
+        if cfg.ext_app_info && app_info.is_none() {
+            bail!("cannot embed app info: the signer established none");
+        }
+        // An empty app id is not "unknown": it would match every other app lacking one.
+        let app_id = app_info
+            .map(|info| info.app_id.as_slice())
+            .filter(|app_id| !app_id.is_empty());
+        let ext_app_info = app_info.filter(|_| cfg.ext_app_info);
         let attestation = cfg.ext_quote.then_some(&csr.attestation);
         let req = CertRequest::builder()
             .key(&pki)
@@ -111,7 +117,7 @@ impl CaCert {
             .usage_client_auth(cfg.usage_client_auth)
             .maybe_attestation(attestation)
             .maybe_app_id(app_id)
-            .maybe_app_info(app_info.as_ref())
+            .maybe_app_info(ext_app_info)
             .special_usage(usage)
             .maybe_not_before(
                 cfg.not_before
@@ -963,5 +969,49 @@ mod tests {
             assert_eq!(decoded.key_provider_info, app_info.key_provider_info);
             assert_eq!(decoded.init_script_hashes, app_info.init_script_hashes);
         }
+    }
+
+    #[test]
+    fn sign_csr_refuses_app_info_the_signer_did_not_establish() {
+        let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let ca_cert = CertRequest::builder()
+            .subject("ca")
+            .key(&ca_key)
+            .ca_level(0)
+            .build()
+            .self_signed()
+            .unwrap();
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let csr = CertSigningRequestV2 {
+            confirm: "please sign cert:".to_string(),
+            pubkey: key.public_key_der(),
+            config: CertConfigV2 {
+                org_name: None,
+                subject: "app".to_string(),
+                subject_alt_names: vec![],
+                usage_server_auth: true,
+                usage_client_auth: false,
+                ext_quote: false,
+                ext_app_info: true,
+                not_before: None,
+                not_after: None,
+            },
+            attestation: Attestation {
+                quote: AttestationQuote::DstackTdx(TdxQuote {
+                    quote: vec![],
+                    event_log: vec![],
+                }),
+                runtime_events: vec![],
+                report_data: [0u8; 64],
+                config: "".into(),
+                report: (),
+            }
+            .into_versioned(),
+        };
+        let Err(err) = CaCert::from_parts(ca_key, ca_cert).sign_csr(&csr, None, "app:custom")
+        else {
+            panic!("app info must not be invented");
+        };
+        assert!(format!("{err:#}").contains("cannot embed app info"));
     }
 }

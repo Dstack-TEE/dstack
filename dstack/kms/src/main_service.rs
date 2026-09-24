@@ -605,8 +605,13 @@ impl KmsRpc for RpcHandler {
             .await?;
         ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
+        // Stamp the identity verified above, not the requester's own claims.
+        // Runtime measurements (`false`) are what certificates have always carried.
+        let cert_app_info = attestation
+            .decode_app_info_ex(false, &request.vm_config)
+            .context("Failed to decode the verified app info")?;
         let cert = app_ca
-            .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
+            .sign_csr(&csr, Some(&cert_app_info), "app:custom")
             .context("Failed to sign certificate")?;
         Ok(SignCertResponse {
             certificate_chain: vec![

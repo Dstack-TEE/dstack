@@ -850,8 +850,10 @@ dependencies = [
  "http-client",
  "ra-rpc",
  "ra-tls",
+ "rocket",
  "serde_json",
  "tdx-attest",
+ "tempfile",
  "tokio",
  "x509-parser 0.16.0",
 ]
