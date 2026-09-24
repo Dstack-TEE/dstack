@@ -14,12 +14,10 @@ use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
-    PullRegistryImageRequest, RegistryImageInfo, RegistryImageListResponse, ReloadVmsResponse,
-    ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse, SvListResponse,
-    SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
+    ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
+    SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
-use or_panic::ResultOrPanic;
 use path_absolutize::Absolutize;
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
@@ -1400,51 +1398,6 @@ impl VmmRpc for RpcHandler {
         Ok(())
     }
 
-    async fn list_registry_images(self) -> Result<RegistryImageListResponse> {
-        let registry = &self.app.config.image.registry;
-        if registry.is_empty() {
-            return Ok(RegistryImageListResponse { images: vec![] });
-        }
-
-        let tags = crate::app::registry::list_registry_tags(registry)
-            .await
-            .context("failed to list registry tags")?;
-
-        // Get local images to mark which are already downloaded
-        let local_images = self.app.list_images()?;
-        let local_names: std::collections::HashSet<String> =
-            local_images.into_iter().map(|(name, _)| name).collect();
-
-        let pull_status = self.app.pull_status.lock().or_panic("mutex poisoned");
-
-        // Filter to version-like tags (skip sha256-* hash tags)
-        let images = tags
-            .into_iter()
-            .filter(|tag| !tag.starts_with("sha256-"))
-            .map(|tag| {
-                let local_name = if tag.starts_with("dstack-") {
-                    tag.clone()
-                } else {
-                    format!("dstack-{tag}")
-                };
-                let is_local = local_names.contains(&local_name);
-                let (is_pulling, error) = match pull_status.get(&tag) {
-                    Some(crate::app::PullStatus::Pulling) => (true, String::new()),
-                    Some(crate::app::PullStatus::Failed(msg)) => (false, msg.clone()),
-                    None => (false, String::new()),
-                };
-                RegistryImageInfo {
-                    tag,
-                    local: is_local,
-                    pulling: is_pulling,
-                    error,
-                }
-            })
-            .collect();
-
-        Ok(RegistryImageListResponse { images })
-    }
-
     async fn delete_image(self, request: Id) -> Result<()> {
         let name = &request.id;
         if name.is_empty() || name.contains("..") || name.contains('/') {
@@ -1475,51 +1428,6 @@ impl VmmRpc for RpcHandler {
         })?;
 
         info!("deleted local image: {name}");
-        Ok(())
-    }
-
-    async fn pull_registry_image(self, request: PullRegistryImageRequest) -> Result<()> {
-        let registry = &self.app.config.image.registry;
-        if registry.is_empty() {
-            bail!("image registry is not configured");
-        }
-
-        // Check if already pulling
-        {
-            let mut status = self.app.pull_status.lock().or_panic("mutex poisoned");
-            if matches!(
-                status.get(&request.tag),
-                Some(crate::app::PullStatus::Pulling)
-            ) {
-                bail!("image {} is already being pulled", request.tag);
-            }
-            status.insert(request.tag.clone(), crate::app::PullStatus::Pulling);
-        }
-
-        // Spawn background task
-        let tag = request.tag.clone();
-        let registry = registry.clone();
-        let image_path = self.app.config.image.path.clone();
-        let pull_status = self.app.pull_status.clone();
-
-        info!("starting background pull for {tag}");
-        tokio::spawn(async move {
-            let result = crate::app::registry::pull_and_extract(&registry, &tag, &image_path).await;
-
-            let mut status = pull_status.lock().unwrap_or_else(|e| e.into_inner());
-            match result {
-                Ok(()) => {
-                    status.remove(&tag);
-                    info!("registry image {tag} pulled successfully");
-                }
-                Err(e) => {
-                    let msg = format!("{e:#}");
-                    tracing::error!("failed to pull registry image {tag}: {msg}");
-                    status.insert(tag, crate::app::PullStatus::Failed(msg));
-                }
-            }
-        });
-
         Ok(())
     }
 }
