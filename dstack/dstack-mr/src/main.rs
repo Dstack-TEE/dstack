@@ -134,11 +134,8 @@ fn inspect_measurement(kind: &str, path: &Path) -> Result<Value> {
             .map_err(anyhow::Error::msg),
         "gcp" => dstack_types::GcpOsImageMeasurement::cbor_json_value_from_slice(&cbor)
             .map_err(anyhow::Error::msg),
-        "aws" => {
-            let measurement = dstack_types::AwsOsImageMeasurement::from_cbor_slice(&cbor)
-                .map_err(anyhow::Error::msg)?;
-            serde_json::to_value(measurement).context("failed to convert AWS measurement to JSON")
-        }
+        "aws" => dstack_types::AwsOsImageMeasurement::cbor_json_value_from_slice(&cbor)
+            .map_err(anyhow::Error::msg),
         other => bail!("unknown measurement kind {other:?}; expected tdx, snp, gcp, or aws"),
     }
 }

@@ -240,6 +240,28 @@ describe('auth-simple', () => {
       expect(json.isAllowed).toBe(false);
       expect(json.reason).toContain('MR');
     });
+    it('rejects KMS boot with an empty device allowlist', async () => {
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        kms: {
+          mrAggregated: ['0xabc123'],
+          devices: [],
+          allowAnyDevice: false
+        }
+      });
+
+      const res = await app.fetch(new Request('http://localhost/bootAuth/kms', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(baseBootInfo)
+      }));
+      const json = await res.json();
+
+      expect(json.isAllowed).toBe(false);
+      expect(json.reason).toContain('device');
+    });
+
     it('allows KMS boot with allowAnyDevice', async () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',
@@ -352,6 +374,30 @@ describe('auth-simple', () => {
       expect(json.reason).toContain('device');
     });
 
+    it('rejects app boot with an empty device allowlist', async () => {
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: ['0x1fbb0cf9cc6cfbf23d6b779776fabad2c5403d643badb9e5e238615e4960a78a'],
+        apps: {
+          '0xapp123': {
+            composeHashes: ['0xcompose456'],
+            devices: [],
+            allowAnyDevice: false
+          }
+        }
+      });
+
+      const res = await app.fetch(new Request('http://localhost/bootAuth/app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(baseBootInfo)
+      }));
+      const json = await res.json();
+
+      expect(json.isAllowed).toBe(false);
+      expect(json.reason).toContain('device');
+    });
+
     it('allows app boot with allowAnyDevice', async () => {
       writeTestConfig({
         gatewayAppId: '0xgateway',
@@ -373,6 +419,30 @@ describe('auth-simple', () => {
       const json = await res.json();
 
       expect(json.isAllowed).toBe(true);
+    });
+
+    // Stricter than a legacy DstackApp by design; see DstackApp.t.sol
+    // test_IsAppAllowed_RejectsOutdatedTcbWhenRequired.
+    it('rejects app boot with out-of-date TCB or unallowlisted advisory ID', async () => {
+      writeTestConfig({
+        gatewayAppId: '0xgateway',
+        osImages: [baseBootInfo.osImageHash],
+        apps: { '0xapp123': { composeHashes: ['0xcompose456'], allowAnyDevice: true } }
+      });
+
+      for (const [patch, reason] of [
+        [{ tcbStatus: 'OutOfDate' }, 'TCB status is not allowed'],
+        [{ advisoryIds: ['INTEL-SA-00614'] }, 'advisory ID is not allowed'],
+      ] as const) {
+        const res = await app.fetch(new Request('http://localhost/bootAuth/app', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...baseBootInfo, ...patch })
+        }));
+        const json = await res.json();
+        expect(json.isAllowed).toBe(false);
+        expect(json.reason).toBe(reason);
+      }
     });
   });
 

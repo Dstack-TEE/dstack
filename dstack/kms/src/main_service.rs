@@ -8,9 +8,10 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
@@ -20,6 +21,7 @@ use dstack_kms_rpc::{
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
+use moka::future::Cache;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
@@ -28,8 +30,10 @@ use ra_tls::{
 };
 use scale::Decode;
 use tokio::sync::OnceCell;
-use tracing::{info, warn};
-use upgrade_authority::{build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo};
+use tracing::{debug, warn};
+use upgrade_authority::{
+    build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
+};
 
 use crate::{
     config::KmsConfig,
@@ -38,6 +42,13 @@ use crate::{
 
 pub(crate) mod amd_attest;
 pub(crate) mod upgrade_authority;
+
+/// How long the auth API's info and this KMS's own authorization are reused.
+///
+/// `GetMeta`, `GetAppEnvEncryptPubKey` and `GetTempCaCert` need no client certificate, and each
+/// would otherwise cost the auth API a round of chain RPC calls. Concurrent callers share one
+/// in-flight request. App authorization is never cached.
+const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -61,6 +72,8 @@ pub struct KmsStateInner {
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: OnceCell<BootInfo>,
+    self_allowed: Cache<(), ()>,
+    auth_api_info: Cache<(), GetInfoResponse>,
     metrics: KmsMetrics,
 }
 
@@ -93,6 +106,13 @@ impl KmsMetrics {
              dstack_kms_attestation_failures_total {attestation_failures_total}\n"
         )
     }
+}
+
+fn short_lived_cache<V: Clone + Send + Sync + 'static>() -> Cache<(), V> {
+    Cache::builder()
+        .max_capacity(1)
+        .time_to_live(AUTH_API_CACHE_TTL)
+        .build()
 }
 
 /// remove a single cache entry (a hex-named subdir/file) under `parent_dir`, or
@@ -158,6 +178,11 @@ impl KmsState {
                 "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
             );
         }
+        if !config.image.verify {
+            warn!(
+                "os image verification is disabled; os_image_hash is caller-supplied and unverified - do not use in production TEE deployments"
+            );
+        }
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
@@ -168,6 +193,8 @@ impl KmsState {
                 verifier,
                 attestation_verifier,
                 self_boot_info: OnceCell::new(),
+                self_allowed: short_lived_cache(),
+                auth_api_info: short_lived_cache(),
                 metrics: KmsMetrics::default(),
             }),
         })
@@ -197,31 +224,54 @@ pub(crate) fn build_boot_info_for_attestation(
     use_boottime_mr: bool,
     vm_config_str: &str,
 ) -> Result<BootInfo> {
-    if att.report.amd_snp_report().is_some() {
+    let boot_info = if att.report.amd_snp_report().is_some() {
         let vm_config_str = if vm_config_str.is_empty() {
             att.config.as_str()
         } else {
             vm_config_str
         };
-        return amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
+        amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
             att,
             vm_config_str,
-        );
-    }
-    build_boot_info(att, use_boottime_mr, vm_config_str)
+        )?
+    } else {
+        build_boot_info(att, use_boottime_mr, vm_config_str)?
+    };
+    ensure_app_id_len(&boot_info.app_id)?;
+    Ok(boot_info)
 }
 
-fn ensure_key_release_allowed(
-    boot_info: &BootInfo,
-    snp_enabled: bool,
-    aws_nitro_tpm_enabled: bool,
-) -> Result<()> {
+/// The per-platform local key-release opt-ins, read from `KmsConfig`.
+///
+/// Carried as a named struct rather than positional bools so that adding a
+/// platform does not silently reorder an existing call site.
+#[derive(Debug, Clone, Copy, Default)]
+struct KeyReleasePolicy {
+    snp: bool,
+    aws_nitro_tpm: bool,
+    nitro_enclave: bool,
+}
+
+impl From<&KmsConfig> for KeyReleasePolicy {
+    fn from(config: &KmsConfig) -> Self {
+        Self {
+            snp: config.sev_snp_key_release,
+            aws_nitro_tpm: config.aws_nitro_tpm_key_release,
+            nitro_enclave: config.nitro_enclave_key_release,
+        }
+    }
+}
+
+fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) -> Result<()> {
     match boot_info.tee_variant {
-        TeeVariant::DstackAmdSevSnp if !snp_enabled => {
+        TeeVariant::DstackAmdSevSnp if !policy.snp => {
             bail!("amd sev-snp key release is not enabled")
         }
-        TeeVariant::DstackAwsNitroTpm if !aws_nitro_tpm_enabled => {
+        TeeVariant::DstackAwsNitroTpm if !policy.aws_nitro_tpm => {
             bail!("aws nitro-tpm key release is not enabled")
+        }
+        TeeVariant::DstackNitroEnclave if !policy.nitro_enclave => {
+            bail!("aws nitro enclave key release is not enabled")
         }
         _ => Ok(()),
     }
@@ -229,11 +279,10 @@ fn ensure_key_release_allowed(
 
 fn ensure_self_key_release_allowed(
     self_boot_info: Option<&BootInfo>,
-    snp_enabled: bool,
-    aws_nitro_tpm_enabled: bool,
+    policy: KeyReleasePolicy,
 ) -> Result<()> {
     if let Some(boot_info) = self_boot_info {
-        ensure_key_release_allowed(boot_info, snp_enabled, aws_nitro_tpm_enabled)?;
+        ensure_key_release_allowed(boot_info, policy)?;
     }
     Ok(())
 }
@@ -249,16 +298,23 @@ impl RpcHandler {
             .get_or_try_init(|| local_kms_boot_info(&self.state.attestation_verifier))
             .await
             .context("Failed to load cached self boot info")?;
-        let response = self
-            .state
-            .config
-            .auth_api
-            .is_app_allowed(boot_info, true)
+        self.state
+            .self_allowed
+            .try_get_with((), async {
+                let response = self
+                    .state
+                    .config
+                    .auth_api
+                    .is_app_allowed(boot_info, true)
+                    .await
+                    .context("Failed to call self KMS auth check")?;
+                if !response.is_allowed {
+                    bail!("KMS is not allowed: {}", response.reason);
+                }
+                Ok(())
+            })
             .await
-            .context("Failed to call self KMS auth check")?;
-        if !response.is_allowed {
-            bail!("KMS is not allowed: {}", response.reason);
-        }
+            .map_err(|err| anyhow!("{err:#}"))?;
         Ok(Some(boot_info))
     }
 
@@ -288,13 +344,13 @@ impl RpcHandler {
         report: &VerifiedAttestation,
     ) -> Result<()> {
         if !self.state.config.image.verify {
-            info!("Image verification is disabled");
+            debug!("os image verification is disabled");
             return Ok(());
         }
         let mut detail = VerificationDetails::default();
         self.state
             .verifier
-            .verify_os_image_hash(vm_config, report, false, &mut detail)
+            .verify_os_image_hash(vm_config, report, &mut detail)
             .await
             .context("Failed to verify os image hash")?;
         Ok(())
@@ -367,11 +423,7 @@ impl KmsRpc for RpcHandler {
             .ensure_app_boot_allowed(&request.vm_config)
             .await
             .context("App not allowed")?;
-        ensure_key_release_allowed(
-            &boot_info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
         let app_id = boot_info.app_id;
         let instance_id = boot_info.instance_id;
         let os_image_hash = boot_info.os_image_hash;
@@ -455,7 +507,12 @@ impl KmsRpc for RpcHandler {
         let bootstrap_info = fs::read_to_string(self.state.config.bootstrap_info())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
-        let info = self.state.config.auth_api.get_info().await?;
+        let info = self
+            .state
+            .auth_api_info
+            .try_get_with((), self.state.config.auth_api.get_info())
+            .await
+            .map_err(|err| anyhow!("{err:#}"))?;
         Ok(GetMetaResponse {
             ca_cert: self.state.inner.root_ca.pem_cert.clone(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
@@ -472,6 +529,7 @@ impl KmsRpc for RpcHandler {
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
+            os_image_verification: Some(self.state.config.image.verify),
         })
     }
 
@@ -480,11 +538,7 @@ impl KmsRpc for RpcHandler {
             .await
             .context("KMS self authorization failed")?;
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
-        ensure_key_release_allowed(
-            &info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_key_release_allowed(&info, (&self.state.config).into())?;
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
             keys: vec![KmsKeys {
@@ -513,11 +567,7 @@ impl KmsRpc for RpcHandler {
             .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
-        ensure_self_key_release_allowed(
-            self_boot_info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_self_key_release_allowed(self_boot_info, (&self.state.config).into())?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
@@ -556,14 +606,15 @@ impl KmsRpc for RpcHandler {
         let app_info = self
             .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config)
             .await?;
-        ensure_key_release_allowed(
-            &app_info.boot_info,
-            self.state.config.sev_snp_key_release,
-            self.state.config.aws_nitro_tpm_key_release,
-        )?;
+        ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
         let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
+        // Stamp the identity verified above, not the requester's own claims.
+        // Runtime measurements (`false`) are what certificates have always carried.
+        let cert_app_info = attestation
+            .decode_app_info_ex(false, &request.vm_config)
+            .context("Failed to decode the verified app info")?;
         let cert = app_ca
-            .sign_csr(&csr, Some(&app_info.boot_info.app_id), "app:custom")
+            .sign_csr(&csr, Some(&cert_app_info), "app:custom")
             .context("Failed to sign certificate")?;
         Ok(SignCertResponse {
             certificate_chain: vec![
@@ -598,6 +649,18 @@ mod tests {
     };
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
+    use std::time::Duration;
+
+    const SNP_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
+        snp: true,
+        aws_nitro_tpm: false,
+        nitro_enclave: false,
+    };
+    const NITRO_ENCLAVE_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
+        snp: false,
+        aws_nitro_tpm: false,
+        nitro_enclave: true,
+    };
 
     #[test]
     fn remove_cache_only_deletes_the_named_hex_entry() {
@@ -938,14 +1001,21 @@ mod tests {
             .expect("aws nitrotpm attestation should produce KMS boot info");
 
         // disabled (the default) fails closed for the new AWS NitroTPM mode
-        let err = ensure_key_release_allowed(&boot_info, false, false).unwrap_err();
+        let err = ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default()).unwrap_err();
         assert!(err.to_string().contains("not enabled"));
         // explicitly enabled permits it
-        ensure_key_release_allowed(&boot_info, false, true).unwrap();
+        ensure_key_release_allowed(
+            &boot_info,
+            KeyReleasePolicy {
+                aws_nitro_tpm: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // A TDX boot info is unaffected by the AWS gate even when it is disabled.
         boot_info.tee_variant = TeeVariant::DstackTdx;
-        ensure_key_release_allowed(&boot_info, false, false).unwrap();
+        ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default()).unwrap();
     }
 
     #[test]
@@ -1039,7 +1109,10 @@ mod tests {
 
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
-        assert_eq!(boot_info.device_id, vec![0xab; 64]);
+        assert_eq!(
+            boot_info.device_id,
+            sha2::Sha256::digest([0xab; 64]).to_vec()
+        );
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
     }
 
@@ -1075,7 +1148,27 @@ mod tests {
         let boot_info = build_boot_info_for_attestation(&attestation, false, &vm_config)
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
-        assert_eq!(boot_info.device_id, vec![0xab; 64]);
+        assert_eq!(
+            boot_info.device_id,
+            sha2::Sha256::digest([0xab; 64]).to_vec()
+        );
+    }
+
+    #[test]
+    fn build_boot_info_for_attestation_rejects_snp_mr_config_without_app_id() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mut mr_config = valid_snp_mr_config();
+        mr_config.app_id = None;
+        let attestation = verified_snp_attestation_with_config(
+            measurement,
+            [0xab; 64],
+            String::new(),
+            &mr_config,
+        );
+        let vm_config = snp_vm_config(&input, &mr_config);
+        let err = build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap_err();
+        assert_eq!(err.to_string(), "app_id must be 20 bytes");
     }
 
     fn snp_boot_info() -> BootInfo {
@@ -1090,9 +1183,8 @@ mod tests {
     #[test]
     fn snp_key_release_requires_explicit_enablement() {
         let boot_info = snp_boot_info();
-        let enabled = false;
 
-        let err = ensure_key_release_allowed(&boot_info, enabled, false)
+        let err = ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
             .expect_err("snp boot info must not be key-release enabled by default");
         assert!(
             err.to_string()
@@ -1104,32 +1196,206 @@ mod tests {
     #[test]
     fn snp_key_release_accepts_auth_approved_boot_info_when_enabled() {
         let boot_info = snp_boot_info();
-        let enabled = true;
 
-        ensure_key_release_allowed(&boot_info, enabled, false)
+        ensure_key_release_allowed(&boot_info, SNP_ENABLED)
             .expect("explicitly enabled SNP key release should allow auth-approved boot info");
     }
 
     #[test]
     fn snp_key_release_leaves_tcb_and_advisory_policy_to_auth_api() {
         let mut boot_info = snp_boot_info();
-        let enabled = true;
 
         boot_info.tcb_status = "OutOfDate".to_string();
         boot_info.advisory_ids.push("SNP-TEST-ADVISORY".to_string());
-        ensure_key_release_allowed(&boot_info, enabled, false)
+        ensure_key_release_allowed(&boot_info, SNP_ENABLED)
             .expect("TCB/advisory policy should be decided by the auth API, not this local gate");
     }
 
     #[test]
     fn snp_self_boot_info_uses_same_release_policy_for_temp_ca() {
         let boot_info = snp_boot_info();
-        let disabled = false;
-        let enabled = true;
 
-        ensure_self_key_release_allowed(Some(&boot_info), disabled, false)
+        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default())
             .expect_err("disabled SNP self boot info must not receive temp CA key material");
-        ensure_self_key_release_allowed(Some(&boot_info), enabled, false)
+        ensure_self_key_release_allowed(Some(&boot_info), SNP_ENABLED)
             .expect("enabled clean SNP self boot info should pass the temp CA release gate");
+    }
+
+    #[test]
+    fn nitro_enclave_key_release_requires_explicit_enablement() {
+        let mut boot_info = snp_boot_info();
+        boot_info.tee_variant = TeeVariant::DstackNitroEnclave;
+
+        // disabled (the default) fails closed
+        let err = ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
+            .expect_err("nitro enclave boot info must not be key-release enabled by default");
+        assert!(
+            err.to_string()
+                .contains("aws nitro enclave key release is not enabled"),
+            "unexpected error: {err:?}"
+        );
+
+        // explicitly enabled permits it
+        ensure_key_release_allowed(&boot_info, NITRO_ENCLAVE_ENABLED)
+            .expect("explicitly enabled nitro enclave key release should allow the boot info");
+
+        // the temp CA path uses the same gate
+        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default()).expect_err(
+            "disabled nitro enclave self boot info must not receive temp CA key material",
+        );
+        ensure_self_key_release_allowed(Some(&boot_info), NITRO_ENCLAVE_ENABLED)
+            .expect("enabled nitro enclave self boot info should pass the temp CA release gate");
+    }
+
+    #[test]
+    fn key_release_gates_do_not_leak_across_platforms() {
+        let mut boot_info = snp_boot_info();
+
+        // Enabling one platform must not enable another.
+        boot_info.tee_variant = TeeVariant::DstackNitroEnclave;
+        ensure_key_release_allowed(&boot_info, SNP_ENABLED)
+            .expect_err("the SNP opt-in must not release keys to a nitro enclave");
+        boot_info.tee_variant = TeeVariant::DstackAmdSevSnp;
+        ensure_key_release_allowed(&boot_info, NITRO_ENCLAVE_ENABLED)
+            .expect_err("the nitro enclave opt-in must not release keys to an SNP guest");
+
+        // TDX and GCP TDX have no local gate and are unaffected by all of them.
+        for variant in [TeeVariant::DstackTdx, TeeVariant::DstackGcpTdx] {
+            boot_info.tee_variant = variant;
+            ensure_key_release_allowed(&boot_info, KeyReleasePolicy::default())
+                .expect("TDX key release has no local opt-in gate");
+        }
+    }
+
+    /// An auth API that counts requests and answers them all at once, so a
+    /// test can tell how many upstream calls a burst of concurrent RPCs cost.
+    fn serve_concurrent_auth_api(
+        body: &'static str,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counter = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                counter.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut chunk = [0u8; 4096];
+                    let _ = stream.read(&mut chunk);
+                    // Hold the response long enough that a burst of callers is
+                    // genuinely in flight together rather than serialized.
+                    std::thread::sleep(Duration::from_millis(200));
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                });
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    /// A `KmsState` backed by freshly generated root material in `cert_dir`,
+    /// with its auth API pointed at `webhook_url`.
+    fn kms_state(cert_dir: &Path, webhook_url: &str) -> KmsState {
+        use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
+        use rocket::figment::{
+            providers::{Format, Toml},
+            Figment,
+        };
+
+        let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let ca_cert = CertRequest::builder()
+            .org_name("Dstack")
+            .subject("Dstack KMS CA")
+            .ca_level(1)
+            .key(&ca_key)
+            .build()
+            .self_signed()
+            .unwrap();
+        let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let tmp_ca_cert = CertRequest::builder()
+            .org_name("Dstack")
+            .subject("Dstack Client Temp CA")
+            .ca_level(0)
+            .key(&tmp_ca_key)
+            .build()
+            .self_signed()
+            .unwrap();
+        fs::write(cert_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
+        fs::write(cert_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
+        fs::write(cert_dir.join("tmp-ca.key"), tmp_ca_key.serialize_pem()).unwrap();
+        fs::write(cert_dir.join("tmp-ca.crt"), tmp_ca_cert.pem()).unwrap();
+        fs::write(
+            cert_dir.join("root-k256.key"),
+            SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
+        )
+        .unwrap();
+
+        let overrides = format!(
+            r#"
+            [core]
+            cert_dir = "{}"
+            attest_rpc_cert = false
+            enforce_self_authorization = false
+
+            [core.image]
+            cache_dir = "{}"
+
+            [core.auth_api]
+            type = "webhook"
+
+            [core.auth_api.webhook]
+            url = "{webhook_url}"
+            "#,
+            cert_dir.display(),
+            cert_dir.display(),
+        );
+        let config: KmsConfig = Figment::from(rocket::Config::default())
+            .merge(Toml::string(crate::config::DEFAULT_CONFIG))
+            .merge(Toml::string(&overrides))
+            .focus("core")
+            .extract()
+            .unwrap();
+        KmsState::new(config).unwrap()
+    }
+
+    const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    #[rocket::async_test]
+    async fn concurrent_get_meta_calls_share_one_auth_api_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let (url, upstream_requests) = serve_concurrent_auth_api(AUTH_API_INFO);
+        let state = kms_state(dir.path(), &url);
+
+        let burst: Vec<_> = (0..24)
+            .map(|_| {
+                let state = state.clone();
+                rocket::tokio::spawn(async move {
+                    RpcHandler {
+                        state,
+                        attestation: None,
+                    }
+                    .get_meta()
+                    .await
+                })
+            })
+            .collect();
+        for handle in burst {
+            let meta = handle.await.unwrap().unwrap();
+            assert_eq!(meta.chain_id, Some(1));
+            assert_eq!(meta.gateway_app_id.as_deref(), Some("0xgateway"));
+        }
+        assert_eq!(
+            upstream_requests.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 }

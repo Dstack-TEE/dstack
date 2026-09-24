@@ -102,10 +102,10 @@ raw NitroTPM evidence by itself.
 | `allowedTcbStatuses` | No | Allowed verifier-derived TCB status strings. Defaults to `["UpToDate"]`; non-up-to-date SNP/TDX statuses remain fail-closed unless explicitly allowlisted for testing. |
 | `allowedAdvisoryIds` | No | Advisory IDs permitted in `advisoryIds`. Defaults to `[]`, which rejects any advisory. |
 | `kms.mrAggregated` | Yes | Allowed KMS early aggregate MR values (boot-mr-done). |
-| `kms.devices` | No | Allowed KMS device IDs |
+| `kms.devices` | No | Allowed KMS device IDs. Empty denies all unless `kms.allowAnyDevice` is true. |
 | `kms.allowAnyDevice` | No | If true, skip device ID check for KMS |
 | `apps.<appId>.composeHashes` | No | Allowed compose hashes for this app |
-| `apps.<appId>.devices` | No | Allowed device IDs for this app |
+| `apps.<appId>.devices` | No | Allowed device IDs for this app. Empty denies all unless `allowAnyDevice` is true. |
 | `apps.<appId>.allowAnyDevice` | No | If true, skip device ID check for this app |
 
 For experimental AMD SEV-SNP dry-run authorization, keep the default fail-closed TCB policy unless you intentionally want the auth webhook to accept non-up-to-date verifier-derived SNP `BootInfo`. To exercise the dry-run path without enabling key release, allowlist the recomputed SNP `mrAggregated`, `osImageHash`, app/compose identity, device/chip identity, and any non-default `allowedTcbStatuses`/`allowedAdvisoryIds` values explicitly. KMS still rejects SNP before returning app keys, KMS keys, or app certificates.

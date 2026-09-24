@@ -43,7 +43,8 @@ For a GPU launch, any `init-script-hash` events are followed by
 evaluation, `gpu-attestation`. The `gpu-policy-hash` payload is
 `SHA-256(JCS(requirements.gpu_policy))`, using `{}` when the field is omitted.
 The `gpu-attestation` payload is JSON containing the verified device count,
-CC/DevTools state, and `evidence_sha256`.
+CC/DevTools state, aggregate signed-claim `dbgstat` and `secboot`, and
+`evidence_sha256`.
 
 The guest-agent returns the complete `nvattest` record captured during boot from `/v1/Attest`, when the request sets `include_boottime_gpu_evidence`, so a verifier can fetch the quote and the GPU evidence in one round trip. `AttestResponse.boottime_gpu_evidence` is a list of `GpuEvidenceBundle` (`{vendor, format, evidence}`); the boot record is the bundle whose `vendor` is `nvidia` and whose `format` is `nvidia-nvattest-boottime-json-v1`, and its `evidence` is hex-encoded bytes that decode to the exact UTF-8 `nvattest` output. It is not trustworthy by itself. (`/v1/AttestGpu` runs a *fresh* attestation against a caller nonce and returns bundles tagged `nvidia-nvattest-collect-evidence-json-v1`, a deliberately distinct format that a boot-record verifier does not appraise; its result is not bound to the TD and must not be used as remote evidence; only the boot-time record below is.) After verifying the TDX quote and replaying the event log to RTMR3, hash the *decoded* bundle bytes — `SHA-256(hex_decode(bundle.evidence))`, never the JSON string as returned nor a re-serialized form — and require the result to equal the `gpu-attestation` event's `evidence_sha256`. See [GPU Security for AI Workloads](./security/security-model.md#gpu-security-for-ai-workloads) for the event schema, ordering, Rego example, and platform differences.
 

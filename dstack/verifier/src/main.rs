@@ -220,32 +220,20 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
         .await
         .map_err(|e| anyhow::anyhow!("failed to verify RA-TLS certificate: {:#}", e))?;
 
-    let app_info = verified.decode_app_info(false).ok();
+    let app_info = verified.decode_app_info(false);
     // Bind the reported os_image_hash to the attested boot measurement. For
     // every platform except TDX legacy this is a self-contained check (no image
     // download); relying parties should only trust `os_image_hash` when
     // `os_image_hash_verified` is true.
     let os_image_hash_verified =
         verify_cert_os_image_hash(&verified.attestation, config, &attestation_verifier).await;
-    let output = serde_json::json!({
-        "is_valid": true,
-        "details": {
-            "tee_variant": verified.attestation.quote.variant(),
-            "report_data": hex::encode(verified.attestation.report_data),
-            "public_key_der": hex::encode(&verified.public_key_der),
-            "app_info": app_info.map(|info| serde_json::json!({
-                "app_id": hex::encode(info.app_id),
-                "compose_hash": hex::encode(info.compose_hash),
-                "instance_id": hex::encode(info.instance_id),
-                "device_id": hex::encode(info.device_id),
-                "mr_system": hex::encode(info.mr_system),
-                "mr_aggregated": hex::encode(info.mr_aggregated),
-                "os_image_hash": hex::encode(info.os_image_hash),
-                "os_image_hash_verified": os_image_hash_verified,
-                "key_provider_info": hex::encode(info.key_provider_info),
-            })),
-        }
-    });
+    let output = cert_oneshot_result(
+        verified.attestation.quote.variant(),
+        &verified.attestation.report_data,
+        &verified.public_key_der,
+        app_info,
+        os_image_hash_verified,
+    );
 
     let output_path = format!("{file_path}.ratls-verification.json");
     fs::write(&output_path, serde_json::to_string_pretty(&output)?).map_err(|e| {
@@ -258,7 +246,51 @@ async fn run_cert_oneshot(file_path: &str, config: &Config) -> anyhow::Result<()
     info!("stored certificate verification result at {}", output_path);
     println!("{}", serde_json::to_string_pretty(&output)?);
 
+    if output["is_valid"] != serde_json::json!(true) {
+        anyhow::bail!("{}", output["reason"].as_str().unwrap_or("invalid"));
+    }
     Ok(())
+}
+
+/// Render the `--verify-cert` result.
+///
+/// `is_valid` is the one field a relying party reads, so it has to cover every
+/// step that ran, not just the signature check. App-info decoding is one of
+/// those steps: a certificate whose attested app identity does not decode has
+/// no `app_id`, `compose_hash` or `os_image_hash` to act on, and reporting it
+/// as valid with a null `app_info` puts the burden of noticing on the caller.
+/// Same shape as the HTTP `/verify` response: `is_valid` plus a `reason`.
+fn cert_oneshot_result(
+    tee_variant: ra_tls::attestation::TeeVariant,
+    report_data: &[u8],
+    public_key_der: &[u8],
+    app_info: Result<ra_tls::attestation::AppInfo>,
+    os_image_hash_verified: bool,
+) -> serde_json::Value {
+    let reason = app_info
+        .as_ref()
+        .err()
+        .map(|err| format!("failed to decode app info from the certificate: {err:#}"));
+    serde_json::json!({
+        "is_valid": reason.is_none(),
+        "reason": reason,
+        "details": {
+            "tee_variant": tee_variant,
+            "report_data": hex::encode(report_data),
+            "public_key_der": hex::encode(public_key_der),
+            "app_info": app_info.ok().map(|info| serde_json::json!({
+                "app_id": hex::encode(info.app_id),
+                "compose_hash": hex::encode(info.compose_hash),
+                "instance_id": hex::encode(info.instance_id),
+                "device_id": hex::encode(info.device_id),
+                "mr_system": hex::encode(info.mr_system),
+                "mr_aggregated": hex::encode(info.mr_aggregated),
+                "os_image_hash": hex::encode(info.os_image_hash),
+                "os_image_hash_verified": os_image_hash_verified,
+                "key_provider_info": hex::encode(info.key_provider_info),
+            })),
+        }
+    })
 }
 
 /// Verify that an RA-TLS certificate's `os_image_hash` is bound to its attested
@@ -293,7 +325,7 @@ async fn verify_cert_os_image_hash(
     );
     let mut details = VerificationDetails::default();
     verifier
-        .verify_os_image_hash(String::new(), attestation, false, &mut details)
+        .verify_os_image_hash(String::new(), attestation, &mut details)
         .await
         .is_ok()
 }
@@ -431,6 +463,64 @@ image_download_timeout_secs = 7
 
         std::fs::write(&path, valid_config("")).unwrap();
         assert_eq!(load_config(&config_figment(&path)).unwrap().port, 18080);
+    }
+}
+
+#[cfg(test)]
+mod cert_oneshot_result_tests {
+    use super::*;
+    use ra_tls::attestation::{AppInfo, TeeVariant};
+
+    fn app_info() -> AppInfo {
+        serde_json::from_value(serde_json::json!({
+            "app_id": "00".repeat(20),
+            "compose_hash": "11".repeat(32),
+            "instance_id": "22".repeat(20),
+            "device_id": "33".repeat(32),
+            "mr_system": "44".repeat(32),
+            "mr_aggregated": "55".repeat(32),
+            "os_image_hash": "66".repeat(32),
+            "key_provider_info": "",
+        }))
+        .unwrap()
+    }
+
+    /// `is_valid` is the field a relying party branches on, so it must not say
+    /// "valid" about a certificate whose app identity never decoded -- the
+    /// result then carries no app_id, compose_hash or os_image_hash at all.
+    #[test]
+    fn a_certificate_whose_app_info_does_not_decode_is_not_reported_valid() {
+        let valid = cert_oneshot_result(
+            TeeVariant::DstackTdx,
+            &[0u8; 64],
+            b"spki",
+            Ok(app_info()),
+            true,
+        );
+        assert_eq!(valid["is_valid"], serde_json::json!(true));
+        assert_eq!(valid["reason"], serde_json::Value::Null);
+        assert_eq!(
+            valid["details"]["app_info"]["compose_hash"],
+            "11".repeat(32)
+        );
+
+        let undecodable = cert_oneshot_result(
+            TeeVariant::DstackTdx,
+            &[0u8; 64],
+            b"spki",
+            Err(anyhow::anyhow!("no app-id event")),
+            true,
+        );
+        assert_eq!(undecodable["is_valid"], serde_json::json!(false));
+        assert!(undecodable["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no app-id event"));
+        assert_eq!(
+            undecodable["details"]["app_info"],
+            serde_json::Value::Null,
+            "there is no app info to report"
+        );
     }
 }
 

@@ -18,8 +18,6 @@ pub struct VerificationRequest {
     pub vm_config: Option<String>,
     #[serde(with = "serde_bytes", default)]
     pub attestation: Option<Vec<u8>>,
-    #[serde(default)]
-    pub debug: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,13 +77,25 @@ impl PolicyBootInfo {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct VerificationDetails {
     pub quote_verified: bool,
-    /// Indicates that the event log was verified against the quote.
+    /// Indicates that the app identity was decoded from evidence bound to the
+    /// quote.
     ///
-    /// For RTMR3 (runtime measurements), both the digest and payload integrity are verified
-    /// by replaying the event log and comparing against the quote. For RTMR 0-2 (boot-time
-    /// measurements), only the digests are verified through replay comparison with the quote;
-    /// the payload content is not validated. dstack does not define semantics for RTMR 0-2
-    /// event log payloads.
+    /// On dstack TDX, GCP TDX and AWS NitroTPM that evidence is the runtime
+    /// event log, already replayed during quote verification against RTMR3
+    /// (plus TPM PCR14 on GCP) or PCR14 on NitroTPM, so a replay mismatch fails
+    /// `quote_verified` rather than this flag. Digests and payloads are both
+    /// covered, because `app_id`, `compose_hash` and the rest are read out of
+    /// the payloads. SEV-SNP has no runtime event log and takes the identity
+    /// from `mr_config`, bound through HOST_DATA; Nitro Enclave derives it from
+    /// the PCRs.
+    ///
+    /// It says nothing about the RTMR 0-2 entries a TDX event log carries;
+    /// nothing replays them. On dstack TDX those registers are verified by
+    /// comparing the quoted values against measurements recomputed from the OS
+    /// image (see `os_image_hash_verified`), which does not depend on the
+    /// host's event log. The TDX lite path only reads the three named ACPI
+    /// digests from it and requires them to match the recomputed ones; dstack
+    /// defines no semantics for the other payloads.
     pub event_log_verified: bool,
     pub os_image_hash_verified: bool,
     /// Indicates that TDX ACPI table contents were verified.
@@ -115,48 +125,6 @@ pub struct VerificationDetails {
     /// Canonical auth-policy input matching the KMS bootAuth payload.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boot_info: Option<PolicyBootInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub acpi_tables: Option<AcpiTables>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rtmr_debug: Option<Vec<RtmrMismatch>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AcpiTables {
-    pub tables: String,
-    pub rsdp: String,
-    pub loader: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RtmrMismatch {
-    pub rtmr: String,
-    pub expected: String,
-    pub actual: String,
-    pub events: Vec<RtmrEventEntry>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub missing_expected_digests: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RtmrEventEntry {
-    pub index: usize,
-    pub event_type: u32,
-    pub event_name: String,
-    pub actual_digest: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expected_digest: Option<String>,
-    pub payload_len: usize,
-    pub status: RtmrEventStatus,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RtmrEventStatus {
-    Match,
-    Mismatch,
-    Extra,
-    Missing,
 }
 
 #[cfg(test)]
@@ -176,7 +144,6 @@ mod tests {
         assert_eq!(req.event_log.as_deref(), Some("[]"));
         assert_eq!(req.vm_config.as_deref(), Some("{}"));
         assert_eq!(req.attestation, None);
-        assert_eq!(req.debug, None);
     }
 
     #[test]
@@ -194,7 +161,6 @@ mod tests {
         let req: VerificationRequest = serde_json::from_str("{}").unwrap();
         assert_eq!(req.quote, None);
         assert_eq!(req.attestation, None);
-        assert_eq!(req.debug, None);
     }
 
     #[test]
