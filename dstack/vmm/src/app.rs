@@ -1516,6 +1516,7 @@ impl App {
             error!("Event body too large, skipping");
             return Ok(());
         }
+        // Persist outside the global state lock so disk I/O does not stall other VMs.
         let mut state = self.lock();
         let Some(vm) = state.vms.values_mut().find(|vm| vm.config.cid == cid) else {
             bail!("VM not found");
@@ -1532,26 +1533,23 @@ impl App {
             vm.state.events.pop_front();
         }
         match event {
-            "boot.progress" => {
-                vm.state.boot_progress = body;
-            }
-            "boot.error" => {
-                vm.state.boot_error = body;
-            }
+            "boot.progress" => vm.state.boot_progress = body,
+            "boot.error" => vm.state.boot_error = body,
             "shutdown.progress" => {
-                if body == "powering off" {
-                    self.set_started(&vm.config.manifest.id, false)?;
-                }
+                let powering_off = body == "powering off";
                 vm.state.shutdown_progress = body;
+                let id = vm.config.manifest.id.clone();
+                drop(state);
+                if powering_off {
+                    self.set_started(&id, false)?;
+                }
             }
             "instance.info" => {
                 let workdir = VmWorkDir::new(vm.config.workdir.clone());
-                let instancd_info_path = workdir.instance_info_path();
-                safe_write::safe_write(&instancd_info_path, &body)?;
+                drop(state);
+                safe_write::safe_write(workdir.instance_info_path(), &body)?;
             }
-            _ => {
-                error!("Guest reported unknown event: {event}");
-            }
+            _ => error!("Guest reported unknown event: {event}"),
         }
         Ok(())
     }
