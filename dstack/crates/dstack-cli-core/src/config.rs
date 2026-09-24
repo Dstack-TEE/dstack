@@ -102,6 +102,8 @@ pub struct HostConfig {
     pub verify_os_image: bool,
     /// confidential-computing platform (selects SNP-specific KMS settings).
     pub platform: Platform,
+    /// AMD KDS-compatible collateral mirror/cache URL as seen from CVMs.
+    pub sev_snp_kds_url: String,
 }
 
 impl Default for HostConfig {
@@ -113,6 +115,7 @@ impl Default for HostConfig {
             image_download_url: DEFAULT_IMAGE_DOWNLOAD_URL.to_string(),
             verify_os_image: true,
             platform: Platform::Tdx,
+            sev_snp_kds_url: String::new(),
         }
     }
 }
@@ -162,8 +165,14 @@ port = 8000
         // `sev_snp_key_release`, which defaults to false — so it must be set on
         // SNP or the KMS refuses to release keys. Harmless/ignored on TDX.
         sev_snp = match cfg.platform {
-            Platform::AmdSevSnp => "sev_snp_key_release = true\namd_kds_base_url = \"\"\n",
-            Platform::Tdx => "",
+            Platform::AmdSevSnp if cfg.sev_snp_kds_url.trim().is_empty() => {
+                "sev_snp_key_release = true\n".to_string()
+            }
+            Platform::AmdSevSnp => format!(
+                "sev_snp_key_release = true\n\n[core.attestation.urls]\namd_kds = {:?}\n",
+                cfg.sev_snp_kds_url
+            ),
+            Platform::Tdx => String::new(),
         },
         verify = cfg.verify_os_image,
         download_url = cfg.image_download_url,
@@ -272,6 +281,8 @@ pub struct VmmRender {
     pub key_provider_port: u32,
     /// KMS URLs injected into app CVMs (the guest-visible KMS address).
     pub kms_urls: Vec<String>,
+    /// AMD KDS-compatible collateral mirror/cache URL injected into app CVMs.
+    pub sev_snp_kds_url: String,
     /// confidential-computing platform (selects qemu/share-mode for the CVMs).
     pub platform: Platform,
     /// gate the management API behind a bearer/Basic token (`[auth] enabled`).
@@ -296,6 +307,7 @@ impl Default for VmmRender {
             key_provider_addr: "127.0.0.1".to_string(),
             key_provider_port: 3443,
             kms_urls: Vec::new(),
+            sev_snp_kds_url: String::new(),
             platform: Platform::Tdx,
             auth_enabled: false,
             auth_token: String::new(),
@@ -334,6 +346,7 @@ qemu_path = "{qemu_path}"
 kms_urls = [{kms_urls}]
 gateway_urls = []
 pccs_url = ""
+sev_snp_kds_url = "{sev_snp_kds_url}"
 docker_registry = ""
 cid_start = {cid_start}
 cid_pool_size = {cid_pool_size}
@@ -423,6 +436,7 @@ port = {kp_port}
             .map(|u| format!("\"{u}\""))
             .collect::<Vec<_>>()
             .join(", "),
+        sev_snp_kds_url = r.sev_snp_kds_url,
         cid_start = r.cid_start,
         cid_pool_size = r.cid_pool_size,
         supervisor_exe = r.supervisor_exe,
