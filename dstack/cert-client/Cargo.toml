@@ -26,4 +26,4 @@ hex.workspace = true
 rocket.workspace = true
 tempfile.workspace = true
 x509-parser.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }

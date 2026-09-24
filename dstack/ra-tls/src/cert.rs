@@ -106,7 +106,7 @@ impl CaCert {
         let app_id = app_info
             .map(|info| info.app_id.as_slice())
             .filter(|app_id| !app_id.is_empty());
-        let app_info = app_info.filter(|_| cfg.ext_app_info);
+        let ext_app_info = app_info.filter(|_| cfg.ext_app_info);
         let attestation = cfg.ext_quote.then_some(&csr.attestation);
         let req = CertRequest::builder()
             .key(&pki)
@@ -117,7 +117,7 @@ impl CaCert {
             .usage_client_auth(cfg.usage_client_auth)
             .maybe_attestation(attestation)
             .maybe_app_id(app_id)
-            .maybe_app_info(app_info)
+            .maybe_app_info(ext_app_info)
             .special_usage(usage)
             .maybe_not_before(cfg.not_before.map(unix_time_to_system_time))
             .maybe_not_after(cfg.not_after.map(unix_time_to_system_time))

@@ -63,6 +63,9 @@ fn kms_client(
         .tls_ca_cert(ca_cert)
         .tls_built_in_root_certs(false)
         .attestation_verifier(attestation_verifier)
+        // Root pin plus `kms:rpc` already identify the KMS; re-verifying its
+        // quote on every `SignCert` would only add a collateral fetch.
+        .verify_server_attestation(false)
         .cert_validator(Box::new(validate_kms_rpc_cert))
         .build()
         .into_client()
@@ -387,32 +390,30 @@ mod tests {
         let key_path = dir.path().join("server.key");
         std::fs::write(&cert_path, cert).expect("write cert");
         std::fs::write(&key_path, key).expect("write key");
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-        let port = listener.local_addr().expect("local addr").port();
-        drop(listener);
         let figment = rocket::Config::figment()
-            .merge(("port", port))
+            .merge(("port", 0))
             .merge(("address", "127.0.0.1"))
             .merge(("log_level", "off"))
             .merge(("shutdown.ctrlc", false))
             .merge(("tls.certs", cert_path))
             .merge(("tls.key", key_path));
+        let (port_tx, port_rx) = tokio::sync::oneshot::channel();
+        let port_tx = std::sync::Mutex::new(Some(port_tx));
         let rocket = rocket::custom(figment)
             .mount("/", rocket::routes![get_meta])
+            .attach(rocket::fairing::AdHoc::on_liftoff("port", move |rocket| {
+                let port = rocket.endpoints().find_map(|e| e.port());
+                if let Some(tx) = port_tx.lock().unwrap().take() {
+                    let _ = tx.send(port);
+                }
+                Box::pin(async {})
+            }))
             .ignite()
             .await
             .expect("ignite");
         let shutdown = rocket.shutdown();
         tokio::spawn(rocket.launch());
-        for _ in 0..250 {
-            if tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        let port = port_rx.await.ok().flatten().expect("bound port");
 
         let client_key = p256_key();
         let client_cert = CertRequest::builder()
