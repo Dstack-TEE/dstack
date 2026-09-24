@@ -39,6 +39,7 @@ pub struct RaClientConfig {
     tls_client_cert: Option<String>,
     tls_client_key: Option<String>,
     tls_ca_cert: Option<String>,
+    bearer_token: Option<String>,
     #[builder(default = true)]
     tls_built_in_root_certs: bool,
     attestation_verifier: Option<Arc<AttestationVerifier>>,
@@ -88,6 +89,7 @@ impl RaClientConfig {
             client,
             cert_validator: self.cert_validator,
             verify_server_attestation: self.verify_server_attestation,
+            bearer_token: self.bearer_token,
         })
     }
 }
@@ -98,6 +100,7 @@ pub struct RaClient {
     client: Client,
     cert_validator: Option<CertValidator>,
     verify_server_attestation: bool,
+    bearer_token: Option<String>,
 }
 
 impl RaClient {
@@ -209,13 +212,11 @@ impl RequestClient for RaClient {
     {
         let body = serde_json::to_vec(&body).context("Failed to serialize body")?;
         let url = format!("{}/{}?json", self.remote_uri, path);
-        let response = self
-            .client
-            .post(url)
-            .body(body)
-            .send()
-            .await
-            .context("Failed to send request")?;
+        let mut request = self.client.post(url).body(body);
+        if let Some(token) = &self.bearer_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.context("Failed to send request")?;
 
         // Name the direction explicitly: this validates the *server's* attestation,
         // not the client's own quote. Without it the error chain reads as if the

@@ -492,7 +492,7 @@ port = 9203                  # HTTP port for onboard UI
 ```bash
 curl -X POST http://<new-kms>:9203/prpc/Onboard.Onboard?json \
   -H "Content-Type: application/json" \
-  -d '{"source_url": "https://<existing-kms>:9201/prpc", "domain": "kms2.example.com"}'
+  -d '{"source_url": "https://<existing-kms-admin>:9202/prpc", "source_token": "<optional-admin-token>", "domain": "kms2.example.com"}'
 ```
 
 **Finish and restart:**
@@ -509,7 +509,9 @@ curl http://<new-kms>:9203/finish
 >
 > If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
 
-> **Admin authentication.** Onboarding itself is gated by attestation and the authorization backend above — not by a token. Separately, the KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+>
+> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`.
 
 ---
 

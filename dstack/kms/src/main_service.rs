@@ -214,6 +214,30 @@ pub struct RpcHandler {
     attestation: Option<VerifiedAttestation>,
 }
 
+impl RpcHandler {
+    pub(crate) fn from_context(context: CallContext<'_, KmsState>) -> Self {
+        Self {
+            state: context.state.clone(),
+            attestation: context.attestation,
+        }
+    }
+
+    pub(crate) async fn handover_keys(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
+        self.ensure_self_allowed()
+            .await
+            .context("KMS self authorization failed")?;
+        let info = self.ensure_kms_allowed(&request.vm_config).await?;
+        ensure_key_release_allowed(&info, (&self.state.config).into())?;
+        Ok(KmsKeyResponse {
+            temp_ca_key: self.state.inner.temp_ca_key.clone(),
+            keys: vec![KmsKeys {
+                ca_key: self.state.inner.root_ca.key.serialize_pem(),
+                k256_key: self.state.inner.k256_key.to_bytes().to_vec(),
+            }],
+        })
+    }
+}
+
 struct BootConfig {
     boot_info: BootInfo,
     gateway_app_id: String,
@@ -534,18 +558,10 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_kms_key(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
-        self.ensure_self_allowed()
-            .await
-            .context("KMS self authorization failed")?;
-        let info = self.ensure_kms_allowed(&request.vm_config).await?;
-        ensure_key_release_allowed(&info, (&self.state.config).into())?;
-        Ok(KmsKeyResponse {
-            temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            keys: vec![KmsKeys {
-                ca_key: self.state.inner.root_ca.key.serialize_pem(),
-                k256_key: self.state.inner.k256_key.to_bytes().to_vec(),
-            }],
-        })
+        if !self.state.config.onboard.public_key_handover {
+            bail!("public KMS key handover is disabled; use the admin listener");
+        }
+        self.handover_keys(request).await
     }
 
     /// Serve the temp CA certificate and key.
@@ -630,10 +646,7 @@ impl RpcCall<KmsState> for RpcHandler {
     type PrpcService = KmsServer<Self>;
 
     fn construct(context: CallContext<'_, KmsState>) -> Result<Self> {
-        Ok(RpcHandler {
-            state: context.state.clone(),
-            attestation: context.attestation,
-        })
+        Ok(RpcHandler::from_context(context))
     }
 }
 
