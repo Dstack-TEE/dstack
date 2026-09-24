@@ -106,6 +106,10 @@ struct CachedMeasurement {
     measurements: TdxMeasurements,
 }
 
+/// Cap on `<image_cache_dir>/measurements/` (~400 B per entry). Entries never go
+/// stale, but a caller varying the VM shape adds one per shape.
+const MEASUREMENT_CACHE_MAX_ENTRIES: usize = 1024;
+
 struct ImagePaths {
     image_dir: PathBuf,
     fw_path: PathBuf,
@@ -247,6 +251,39 @@ impl CvmVerifier {
             )
         })?;
         debug!("Stored measurement cache entry {}", cache_key);
+        if let Err(e) = Self::prune_measurement_cache(&cache_dir, MEASUREMENT_CACHE_MAX_ENTRIES) {
+            warn!("failed to prune the measurement cache: {e:?}");
+        }
+        Ok(())
+    }
+
+    /// Best effort: drop the oldest `.json` entries (not in-flight temp files)
+    /// until at most `max_entries` remain.
+    fn prune_measurement_cache(cache_dir: &Path, max_entries: usize) -> Result<()> {
+        let mut entries = Vec::new();
+        for entry in fs_err::read_dir(cache_dir).context("failed to read measurement cache")? {
+            let entry = entry.context("failed to read measurement cache entry")?;
+            let path = entry.path();
+            if path.extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            entries.push((modified, path));
+        }
+        if entries.len() <= max_entries {
+            return Ok(());
+        }
+        let excess = entries.len() - max_entries;
+        entries.sort();
+        for (_, path) in entries.iter().take(excess) {
+            if let Err(e) = fs_err::remove_file(path) {
+                debug!("failed to evict measurement cache entry: {e:?}");
+            }
+        }
+        debug!("evicted {excess} measurement cache entries");
         Ok(())
     }
 
@@ -1706,6 +1743,42 @@ mod tests {
             .load_measurements_from_cache(&key)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn measurement_cache_evicts_the_oldest_entries_and_spares_temporaries() {
+        let dir = tempfile::tempdir().expect("temp cache dir");
+        let cache_dir = dir.path();
+        let base = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for index in 0..8u64 {
+            let path = cache_dir.join(format!("{index:02}.json"));
+            fs_err::write(&path, b"{}").unwrap();
+            let file = fs_err::File::open(&path).unwrap();
+            file.set_times(
+                std::fs::FileTimes::new().set_modified(base + Duration::from_secs(index)),
+            )
+            .unwrap();
+        }
+        // An in-flight `NamedTempFile`: no extension until `persist`.
+        let in_flight = cache_dir.join(".tmpABCDEF");
+        fs_err::write(&in_flight, b"partial").unwrap();
+
+        CvmVerifier::prune_measurement_cache(cache_dir, 3).unwrap();
+
+        let mut remaining: Vec<String> = fs_err::read_dir(cache_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec![
+                ".tmpABCDEF".to_string(),
+                "05.json".to_string(),
+                "06.json".to_string(),
+                "07.json".to_string(),
+            ]
+        );
     }
 
     #[test]
