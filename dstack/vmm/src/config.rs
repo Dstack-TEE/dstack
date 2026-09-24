@@ -632,9 +632,6 @@ pub struct ImageConfig {
     /// Path to guest image directory
     #[serde(default)]
     pub path: PathBuf,
-    /// OCI image registry for guest images (e.g., "dstacktee/guest-image")
-    #[serde(default)]
-    pub registry: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

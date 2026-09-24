@@ -59,7 +59,6 @@ mod image;
 mod mr_config;
 pub(crate) mod network;
 mod qemu;
-pub(crate) mod registry;
 mod vm_info;
 mod workdir;
 
@@ -303,12 +302,6 @@ pub struct GpuSpec {
     pub slot: String,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum PullStatus {
-    Pulling,
-    Failed(String),
-}
-
 /// First delay before a removal asks netd again to release a VM's interfaces.
 #[cfg(not(test))]
 const RELEASE_RETRY_INITIAL: Duration = Duration::from_secs(2);
@@ -322,8 +315,6 @@ pub struct App {
     pub config: Arc<Config>,
     pub supervisor: SupervisorClient,
     state: Arc<Mutex<AppState>>,
-    /// Pull status for registry images: tag → status.
-    pub(crate) pull_status: Arc<Mutex<std::collections::HashMap<String, PullStatus>>>,
     /// One lock per VM, held across a launch or a teardown. See
     /// [`App::launch_lock`].
     launch_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
@@ -357,7 +348,6 @@ impl App {
                 removing: HashSet::new(),
             })),
             config: Arc::new(config),
-            pull_status: Arc::new(Mutex::new(std::collections::HashMap::new())),
             launch_locks: Arc::new(Mutex::new(HashMap::new())),
         }
     }
