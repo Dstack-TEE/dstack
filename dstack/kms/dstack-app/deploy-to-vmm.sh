@@ -45,6 +45,10 @@ VERIFY_IMAGE=true
 # The dstack OS image name to use for the KMS app
 OS_IMAGE=dstack-0.6.0
 
+# Optional user config overriding the light-client data sources
+# (see ../light-client/README.md)
+# USER_CONFIG=./kms-user-config
+
 # The dstack KMS image name to use for the KMS app
 # KMS_IMAGE=ghcr.io/dstack-tee/dstack-kms@sha256:<published-image-digest>
 
@@ -131,4 +135,5 @@ $CLI deploy \
   --port tcp:"$GUEST_AGENT_ADDR":8090 \
   --vcpu 8 \
   --memory 8G \
-  --disk 50G
+  --disk 50G \
+  --user-config "${USER_CONFIG:-<(echo '# KMS light-client data sources')}"
