@@ -144,7 +144,19 @@ pub async fn sync_store(
 ) -> Result<(ContentType, Vec<u8>), Status> {
     verify_gateway_peer(state, cert)?;
     let body = read_compressed_body(data).await?;
-    handle_sync(state, store, &body)
+    let (state, store) = (state.inner().clone(), store.to_string());
+    off_executor(move || handle_sync(&state, &store, &body)).await
+}
+
+/// Decompressing, decoding and merging an envelope (up to
+/// `MAX_DECOMPRESSED_SYNC_BYTES`) is blocking work; keep it off the async workers.
+async fn off_executor<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Status> + Send + 'static,
+) -> Result<T, Status> {
+    tokio::task::spawn_blocking(work).await.map_err(|err| {
+        warn!("sync task failed: {err}");
+        Status::InternalServerError
+    })?
 }
 
 /// Everything `sync_store` does once the caller is known to be a peer.
@@ -213,7 +225,8 @@ pub async fn push_store(
 ) -> Result<Status, Status> {
     verify_gateway_peer(state, cert)?;
     let body = read_compressed_body(data).await?;
-    handle_push(state, store, &body)
+    let (state, store) = (state.inner().clone(), store.to_string());
+    off_executor(move || handle_push(&state, &store, &body)).await
 }
 
 /// Everything `push_store` does once the caller is known to be a peer.
