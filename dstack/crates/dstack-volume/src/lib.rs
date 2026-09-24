@@ -38,24 +38,6 @@ pub fn parse_verity_root_hash(output: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-#[cfg(test)]
-mod root_hash_tests {
-    use super::parse_verity_root_hash;
-
-    #[test]
-    fn both_veritysetup_spellings_parse() {
-        assert_eq!(
-            parse_verity_root_hash("Salt:\t00\nRoot hash:      \tabc123\n").as_deref(),
-            Some("abc123")
-        );
-        assert_eq!(
-            parse_verity_root_hash("  type:  VERITY\n  root hash:   abc123\n").as_deref(),
-            Some("abc123")
-        );
-        assert_eq!(parse_verity_root_hash("Root hash:\n"), None);
-    }
-}
-
 /// A fixed dm-verity salt.
 ///
 /// The root is a function of the squashfs bytes and this salt, so keeping the
@@ -125,4 +107,22 @@ async fn verity_fs_image(fs_image: PathBuf, output: PathBuf) -> Result<VerityRes
         data_size: built.data_size,
         output,
     })
+}
+
+#[cfg(test)]
+mod root_hash_tests {
+    use super::parse_verity_root_hash;
+
+    #[test]
+    fn both_veritysetup_spellings_parse() {
+        assert_eq!(
+            parse_verity_root_hash("Salt:\t00\nRoot hash:      \tabc123\n").as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            parse_verity_root_hash("  type:  VERITY\n  root hash:   abc123\n").as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(parse_verity_root_hash("Root hash:\n"), None);
+    }
 }
