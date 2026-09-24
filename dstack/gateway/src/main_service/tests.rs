@@ -2483,10 +2483,7 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
         )
         .unwrap();
 
-    let removal = state
-        .proxy
-        .remove_cvm_with("peer-instance", || Ok(()))
-        .unwrap();
+    let removal = state.proxy.remove_cvm("peer-instance").unwrap();
     assert!(removal.record_existed);
     assert!(removal.removed_locally);
     assert!(!state.lock().state.instances.contains_key("peer-instance"));
@@ -2496,10 +2493,7 @@ async fn an_operator_can_remove_a_cvm_whose_kv_record_is_unreadable() {
 
     // The recovery operation is safe to retry after a timeout or lost reply,
     // and the retry tells the operator there was nothing left to remove.
-    let retry = state
-        .proxy
-        .remove_cvm_with("peer-instance", || Ok(()))
-        .unwrap();
+    let retry = state.proxy.remove_cvm("peer-instance").unwrap();
     assert!(!retry.record_existed);
     assert!(!retry.removed_locally);
 }
@@ -2521,7 +2515,7 @@ async fn removing_a_cvm_clears_its_telemetry_even_with_no_record_left() {
 
     // No `inst/` record exists, so the removal reports nothing was there --
     // and still deletes both telemetry records.
-    let removal = state.proxy.remove_cvm_with("orphan", || Ok(())).unwrap();
+    let removal = state.proxy.remove_cvm("orphan").unwrap();
     assert!(!removal.record_existed);
     assert!(!removal.removed_locally);
     let leaked = live_keys_naming(&state, "orphan");
@@ -2533,10 +2527,7 @@ async fn removing_an_unknown_cvm_reports_that_nothing_existed() {
     let state = create_test_state().await;
 
     // A mistyped instance_id must not be mistaken for a successful removal.
-    let removal = state
-        .proxy
-        .remove_cvm_with("no-such-instance", || Ok(()))
-        .unwrap();
+    let removal = state.proxy.remove_cvm("no-such-instance").unwrap();
     assert!(!removal.record_existed);
     assert!(!removal.removed_locally);
 }
@@ -2567,10 +2558,7 @@ async fn rejected_instance_records_are_visible_to_the_operator() {
     assert!(rejected[0].active_locally);
 
     // Once removed, the record no longer shows up as rejected.
-    state
-        .proxy
-        .remove_cvm_with("peer-instance", || Ok(()))
-        .unwrap();
+    state.proxy.remove_cvm("peer-instance").unwrap();
     assert!(state.proxy.rejected_instances().is_empty());
 }
 
@@ -2810,42 +2798,16 @@ fn tombstone_collection_triggers_on_write_count_boundaries_not_on_time() {
 }
 
 #[tokio::test]
-async fn wg_apply_releases_routing_lock_and_skips_identical_config() {
+async fn wg_apply_runs_off_the_routing_lock() {
     let state = create_test_state().await;
-    let proxy = state.proxy.clone();
-    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        proxy.reconfigure_wg_with(|_, _| {
-            entered_tx.send(()).unwrap();
-            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            Ok(())
-        })
-    });
-    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let unlocked = state.state.try_lock().is_ok();
-    release_tx.send(()).unwrap();
-    worker.join().unwrap().unwrap();
-    assert!(unlocked, "blocking apply retained the routing lock");
-    state
-        .reconfigure_wg_with(|_, _| panic!("identical config applied twice"))
-        .unwrap();
-}
-
-#[tokio::test]
-async fn failed_wg_apply_is_not_cached() {
-    let state = create_test_state().await;
-    assert!(state
-        .reconfigure_wg_with(|_, _| anyhow::bail!("injected failure"))
-        .is_err());
-    let mut applied = false;
+    let mut unlocked = false;
     state
         .reconfigure_wg_with(|_, _| {
-            applied = true;
+            unlocked = state.state.try_lock().is_ok();
             Ok(())
         })
         .unwrap();
-    assert!(applied);
+    assert!(unlocked, "the apply ran under the routing lock");
 }
 
 /// A sync merge holding the KV store must not stall routing via `refresh_state`.

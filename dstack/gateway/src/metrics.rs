@@ -107,9 +107,9 @@ pub(crate) fn record_decode_failure(key: &str) {
 ///
 /// Covers the whole of `reconfigure_wg()`, not just `wg syncconf`: rendering and
 /// writing the config can fail too, and all three leave the data plane on its
-/// previous routing table while the gateway keeps answering. `wg syncconf`
-/// failures are retried by the background worker. Identical configurations
-/// skipped without an apply do not increment this counter.
+/// previous routing table while the gateway keeps answering. The apply worker
+/// only logs and retries with backoff, so without a counter a gateway that
+/// stopped applying routing updates looks healthy.
 pub(crate) fn record_wg_reconfigure(ok: bool) {
     WG_RECONFIGURE_TOTAL.fetch_add(1, Ordering::Relaxed);
     if !ok {

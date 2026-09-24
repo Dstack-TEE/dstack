@@ -72,8 +72,6 @@ pub struct ProxyInner {
     pub(crate) certbot: Arc<DistributedCertBot>,
     my_app_id: Vec<u8>,
     state: Mutex<ProxyState>,
-    /// Serializes applies and remembers only the last successfully applied config.
-    wg_apply_lock: Mutex<Option<String>>,
     /// Capacity-one queue: each apply renders the latest state, so pending
     /// requests can be coalesced without losing a state change.
     wg_apply_tx: std::sync::mpsc::SyncSender<()>,
@@ -208,30 +206,18 @@ impl Proxy {
     /// would abort the routing cleanup an operator reached for this call to
     /// get.
     pub fn remove_cvm(&self, instance_id: &str) -> Result<CvmRemoval> {
-        self.remove_cvm_with(instance_id, || self.reconfigure_wg())
-    }
+        let mut state = self.lock();
+        let record_existed = state
+            .kv_store
+            .sync_delete_instance(instance_id)
+            .with_context(|| format!("failed to delete CVM {instance_id} from WaveKV"))?;
 
-    fn remove_cvm_with(
-        &self,
-        instance_id: &str,
-        apply: impl FnOnce() -> Result<()>,
-    ) -> Result<CvmRemoval> {
-        let (record_existed, removed_locally) = {
-            let mut state = self.lock();
-            let record_existed = state
-                .kv_store
-                .sync_delete_instance(instance_id)
-                .with_context(|| format!("failed to delete CVM {instance_id} from WaveKV"))?;
-
-            let removed_locally = state.forget_instance(instance_id).is_some();
-            (record_existed, removed_locally)
-        };
-        // Reconfigure unconditionally: the tombstone write and the in-memory
-        // removal are not repeated on a retry, so gating this on them would
-        // leave a failed reconfigure with no retry path and the removed CVM's
-        // WireGuard peer stuck on the interface. Applied outside the routing
-        // lock; see reconfigure_wg.
-        apply()?;
+        let removed_locally = state.forget_instance(instance_id).is_some();
+        drop(state);
+        // Reapply unconditionally: the tombstone write and the in-memory
+        // removal are not repeated on a retry, so the peer is only guaranteed
+        // to leave the interface if every call requests an apply.
+        self.request_wg_apply();
         Ok(CvmRemoval {
             record_existed,
             removed_locally,
@@ -321,40 +307,21 @@ impl ProxyInner {
     }
 
     /// Render the WireGuard config under the routing lock, then write and apply
-    /// it after releasing that lock. Callers must not hold `self.state`.
-    pub(crate) fn reconfigure_wg(&self) -> Result<()> {
+    /// it after releasing that lock. Only the apply worker calls this.
+    fn reconfigure_wg(&self) -> Result<()> {
         self.reconfigure_wg_with(apply_wg_config)
     }
 
     fn reconfigure_wg_with(&self, apply: impl FnOnce(&Config, &str) -> Result<()>) -> Result<()> {
-        let mut applied = self
-            .wg_apply_lock
-            .lock()
-            .or_panic("Failed to lock wg_apply_lock");
-        // Keep this a separate statement: chaining `and_then` onto `lock()`
-        // would retain the temporary guard across the blocking apply.
-        let rendered = { self.lock().generate_wg_config() };
-        let result = rendered.and_then(|rendered| {
-            if applied.as_ref() == Some(&rendered) {
-                return Ok(());
-            }
-            // A failed syncconf can partially change the interface. Do not
-            // treat the previous snapshot as known-good after that failure.
-            *applied = None;
-            apply(&self.config, &rendered)?;
-            *applied = Some(rendered);
-            crate::metrics::record_wg_reconfigure(true);
-            Ok(())
-        });
-        if result.is_err() {
-            crate::metrics::record_wg_reconfigure(false);
-        }
+        let rendered = self.lock().generate_wg_config();
+        let result = rendered.and_then(|rendered| apply(&self.config, &rendered));
+        crate::metrics::record_wg_reconfigure(result.is_ok());
         result
     }
 
-    /// Registration acknowledges local state; interface convergence is
-    /// asynchronous. Never wait for disk I/O or a subprocess on an RPC worker.
-    fn request_wg_apply(&self) {
+    /// Queue a full apply on the worker. Every caller goes through here, so
+    /// registrations, removals and reloads never wait on disk I/O or `wg`.
+    pub(crate) fn request_wg_apply(&self) {
         use std::sync::mpsc::TrySendError;
         match self.wg_apply_tx.try_send(()) {
             Ok(()) | Err(TrySendError::Full(())) => {}
@@ -708,7 +675,6 @@ impl ProxyInner {
             config,
             state,
             notify_state_updated: Notify::new(),
-            wg_apply_lock: Mutex::new(None),
             wg_apply_tx,
             registration_slot: Arc::new(Semaphore::new(1)),
             my_app_id,
@@ -920,11 +886,6 @@ impl Proxy {
         }
         import::validate_wg_public_key(client_public_key)
             .with_context(|| format!("[{instance_id}] invalid client public key"))?;
-        let previous_peer = state
-            .state
-            .instances
-            .get(instance_id)
-            .map(|info| (info.ip, info.public_key.clone()));
         let client_info = state
             .new_client_by_id(
                 instance_id,
@@ -939,8 +900,6 @@ impl Proxy {
         // compose_hash mismatch invalidated the cache), enqueue a
         // background fetch so the first proxied connection isn't the one
         // that triggers it. The fetcher dedupes, so this is safe.
-        let needs_wg_apply =
-            previous_peer.as_ref() != Some(&(client_info.ip, client_info.public_key.clone()));
         let needs_prewarm = client_info.port_policy.is_none();
         let gateways = state.get_active_nodes();
         let servers = gateways
@@ -966,9 +925,9 @@ impl Proxy {
             gateways,
         };
         drop(state);
-        if needs_wg_apply {
-            self.request_wg_apply();
-        }
+        // Apply even when the peer is unchanged: a re-registration is how a
+        // CVM repairs a tunnel the interface lost (see gateway_checker).
+        self.request_wg_apply();
         if needs_prewarm {
             let _ = self.port_policy_tx.send(instance_id.to_string());
         }
@@ -1544,7 +1503,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     });
 
     // Initial WireGuard configuration
-    proxy.reconfigure_wg()?;
+    proxy.request_wg_apply();
 
     // Watch for node changes and reconfigure WireGuard
     let mut rx = kv_store.watch_nodes();
@@ -1846,7 +1805,7 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 ///
 /// Blocking OS work (write + rename + fsync, fork/exec/wait); never call this
 /// with the routing lock held. Errors propagate so the worker retries even
-/// when no further registrations arrive. The caller records one outcome.
+/// when no further registrations arrive.
 fn apply_wg_config(config: &Config, wg_config: &str) -> Result<()> {
     // the rendered config carries the interface's WireGuard private key.
     safe_write_with_mode(&config.wg.config_path, wg_config, 0o600)

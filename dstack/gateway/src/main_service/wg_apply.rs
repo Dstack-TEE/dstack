@@ -4,25 +4,23 @@
 
 //! A bounded, coalescing worker for blocking WireGuard updates.
 
-use std::{
-    sync::mpsc::Receiver,
-    thread::{self, JoinHandle},
-    time::Duration,
-};
+use std::{sync::mpsc::Receiver, thread, time::Duration};
 
 use anyhow::{Context, Result};
 
 const BATCH_WINDOW: Duration = Duration::from_millis(25);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 pub(super) fn spawn(
     rx: Receiver<()>,
     apply: impl FnMut() -> Result<()> + Send + 'static,
-) -> Result<JoinHandle<()>> {
+) -> Result<()> {
     thread::Builder::new()
         .name("gateway-wg-apply".into())
-        .spawn(move || run(rx, apply, BATCH_WINDOW, RETRY_DELAY))
-        .context("failed to start WireGuard apply worker")
+        .spawn(move || run(rx, apply, BATCH_WINDOW, RETRY_DELAY, MAX_RETRY_DELAY))
+        .context("failed to start WireGuard apply worker")?;
+    Ok(())
 }
 
 fn run(
@@ -30,13 +28,14 @@ fn run(
     mut apply: impl FnMut() -> Result<()>,
     batch_window: Duration,
     retry_delay: Duration,
+    max_retry_delay: Duration,
 ) {
-    let mut retry = false;
+    let mut backoff: Option<Duration> = None;
     loop {
-        if retry {
+        if let Some(delay) = backoff {
             // Requests must not bypass the backoff when the interface or disk
             // is broken. Keep the capacity-one pending request while sleeping.
-            thread::sleep(retry_delay);
+            thread::sleep(delay);
         } else {
             if rx.recv().is_err() {
                 return;
@@ -51,11 +50,12 @@ fn run(
             Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             Ok(()) | Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
-        retry = match apply() {
-            Ok(()) => false,
+        backoff = match apply() {
+            Ok(()) => None,
             Err(err) => {
-                tracing::error!("failed to apply WireGuard config; retrying: {err:#}");
-                true
+                let delay = backoff.map_or(retry_delay, |d| (d * 2).min(max_retry_delay));
+                tracing::error!("failed to apply WireGuard config, retrying in {delay:?}: {err:#}");
+                Some(delay)
             }
         };
     }
@@ -87,6 +87,7 @@ mod tests {
                     release_rx.recv().unwrap();
                     Ok(())
                 },
+                Duration::ZERO,
                 Duration::ZERO,
                 Duration::ZERO,
             );
@@ -125,6 +126,7 @@ mod tests {
                     Ok(())
                 },
                 Duration::ZERO,
+                Duration::from_millis(10),
                 Duration::from_millis(10),
             );
         });
