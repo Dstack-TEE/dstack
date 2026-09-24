@@ -16,6 +16,149 @@ use super::Dns01Api;
 
 const DEFAULT_CLOUDFLARE_API_URL: &str = "https://api.cloudflare.com/client/v4";
 
+/// Token status and granted permissions reported by Cloudflare.
+///
+/// Collected from `GET /user/tokens/verify` (validity + token id) and
+/// `GET /user/tokens/{id}` (name, permission groups, usage timestamps).
+#[derive(Debug, Clone)]
+pub struct CloudflareTokenInfo {
+    /// Token status: "active", "expired" or "disabled".
+    pub status: String,
+    pub name: String,
+    /// RFC3339 timestamps as reported by Cloudflare.
+    pub not_before: Option<String>,
+    pub expires_on: Option<String>,
+    pub last_used_on: Option<String>,
+    /// Names of the permission groups granted with effect "allow",
+    /// e.g. "Zone Read", "DNS Write".
+    pub permission_groups: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct TokenVerifyResponse {
+    result: TokenVerifyResult,
+}
+
+#[derive(Deserialize)]
+struct TokenVerifyResult {
+    id: String,
+    not_before: Option<String>,
+    expires_on: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TokenDetailsResponse {
+    result: TokenDetails,
+}
+
+#[derive(Deserialize)]
+struct TokenDetails {
+    name: Option<String>,
+    status: String,
+    not_before: Option<String>,
+    expires_on: Option<String>,
+    last_used_on: Option<String>,
+    #[serde(default)]
+    policies: Vec<TokenPolicy>,
+}
+
+#[derive(Deserialize)]
+struct TokenPolicy {
+    effect: Option<String>,
+    #[serde(default)]
+    permission_groups: Vec<PermissionGroup>,
+}
+
+#[derive(Deserialize)]
+struct PermissionGroup {
+    name: String,
+}
+
+async fn authenticated_get(
+    api_url: &str,
+    path: &str,
+    api_token: &str,
+) -> Result<(reqwest::StatusCode, String)> {
+    let client = Client::new();
+    let url = format!("{api_url}{path}");
+    debug!(url = %url, "cloudflare request");
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {api_token}"))
+        .send()
+        .await
+        .with_context(|| format!("failed to send request to {url}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to read response body")?;
+    Ok((status, body))
+}
+
+/// Verify an API token and fetch its granted permission groups.
+///
+/// Returns `Ok(None)` when Cloudflare rejects the token itself (401/403 on the
+/// verify endpoint), `Err` when the check could not be performed.
+pub(crate) async fn verify_token(
+    api_token: &str,
+    api_url: Option<&str>,
+) -> Result<Option<CloudflareTokenInfo>> {
+    let api_url = api_url.unwrap_or(DEFAULT_CLOUDFLARE_API_URL);
+
+    let (status, body) = authenticated_get(api_url, "/user/tokens/verify", api_token).await?;
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        bail!("failed to verify token: {body}");
+    }
+    let verified: TokenVerifyResponse =
+        serde_json::from_str(&body).context("failed to parse token verify response")?;
+
+    let (status, body) = authenticated_get(
+        api_url,
+        &format!("/user/tokens/{}", verified.result.id),
+        api_token,
+    )
+    .await?;
+    if !status.is_success() {
+        bail!("failed to get token details: {body}");
+    }
+    let details: TokenDetailsResponse =
+        serde_json::from_str(&body).context("failed to parse token details response")?;
+
+    let token = details.result;
+    let permission_groups = token
+        .policies
+        .iter()
+        .filter(|p| p.effect.as_deref() != Some("deny"))
+        .flat_map(|p| p.permission_groups.iter().map(|g| g.name.clone()))
+        .collect();
+    Ok(Some(CloudflareTokenInfo {
+        status: token.status,
+        name: token.name.unwrap_or_default(),
+        not_before: token.not_before.or(verified.result.not_before),
+        expires_on: token.expires_on.or(verified.result.expires_on),
+        last_used_on: token.last_used_on,
+        permission_groups,
+    }))
+}
+
+/// Resolve the zone ID covering `base_domain` without constructing a client.
+pub(crate) async fn resolve_zone(
+    api_token: &str,
+    base_domain: &str,
+    api_url: Option<&str>,
+) -> Result<String> {
+    CloudflareClient::resolve_zone_id(
+        api_token,
+        base_domain,
+        api_url.unwrap_or(DEFAULT_CLOUDFLARE_API_URL),
+    )
+    .await
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CloudflareClient {
     zone_id: String,
