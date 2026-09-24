@@ -905,17 +905,18 @@ fn normalize_kernel_cert_table(auxblob: &[u8]) -> Result<(CertBytes, CertBytes)>
     let vcek = vcek.context("amd sev-snp certificate table missing VCEK certificate")?;
     Ok((
         CertBytes {
-            bytes: ask,
+            bytes: ask.to_vec(),
             encoding: CertEncoding::Der,
         },
         CertBytes {
-            bytes: vcek,
+            bytes: vcek.to_vec(),
             encoding: CertEncoding::Der,
         },
     ))
 }
 
-fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
+// Entries may overlap, so borrow them: copying each one lets a small blob decode to gigabytes.
+fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], &[u8])>> {
     if auxblob.len() < CERT_TABLE_ENTRY_SIZE {
         bail!("amd sev-snp certificate table is too short");
     }
@@ -947,7 +948,7 @@ fn parse_kernel_cert_table(auxblob: &[u8]) -> Result<Vec<([u8; 16], Vec<u8>)>> {
         if offset < CERT_TABLE_ENTRY_SIZE || end > auxblob.len() || length == 0 {
             bail!("amd sev-snp certificate table entry has invalid bounds");
         }
-        entries.push((guid, auxblob[offset..end].to_vec()));
+        entries.push((guid, &auxblob[offset..end]));
         pos = pos
             .checked_add(CERT_TABLE_ENTRY_SIZE)
             .context("amd sev-snp certificate table entry count overflows")?;
@@ -1195,6 +1196,24 @@ mod tests {
             err.to_string().contains("certificate table"),
             "unexpected error: {err:#}"
         );
+    }
+
+    /// Each entry names the whole blob; copying them would need about 46 GiB.
+    #[test]
+    fn overlapping_certificate_table_entries_are_not_copied() {
+        const LEN: usize = CERT_TABLE_ENTRY_SIZE * 43_690;
+
+        let mut auxblob = vec![0u8; LEN];
+        for at in (0..LEN - CERT_TABLE_ENTRY_SIZE).step_by(CERT_TABLE_ENTRY_SIZE) {
+            auxblob[at..at + 16].copy_from_slice(&[0x11u8; 16]);
+            auxblob[at + 16..at + 20]
+                .copy_from_slice(&(CERT_TABLE_ENTRY_SIZE as u32).to_le_bytes());
+            auxblob[at + 20..at + 24]
+                .copy_from_slice(&((LEN - CERT_TABLE_ENTRY_SIZE) as u32).to_le_bytes());
+        }
+
+        let err = normalize_kernel_cert_table(&auxblob).unwrap_err();
+        assert!(err.to_string().contains("missing ASK"), "{err:#}");
     }
 
     #[test]
