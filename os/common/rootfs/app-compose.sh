@@ -16,7 +16,11 @@ NERDCTL_NAMESPACE="${NERDCTL_NAMESPACE:-dstack}"
 COMPOSE_RUNTIME_FILE="${COMPOSE_RUNTIME_FILE:-/run/dstack/app-compose-runtime.json}"
 ACTION="${1:-start}"
 
-CFG_PCCS_URL=$([ -f "$SYS_CONFIG_FILE" ] && jq -r '.pccs_url//""' "$SYS_CONFIG_FILE" || echo "")
+CFG_PCCS_URL=""
+if [ -f "$SYS_CONFIG_FILE" ]; then
+    CFG_PCCS_URL=$(jq -r '.pccs_url // ""' "$SYS_CONFIG_FILE") ||
+        echo "warning: failed to read pccs_url from $SYS_CONFIG_FILE, continuing without it" >&2
+fi
 export PCCS_URL=${PCCS_URL:-$CFG_PCCS_URL}
 
 runner=$(jq -r '.runner' "$APP_COMPOSE_FILE")

@@ -80,8 +80,12 @@ fn read_compose(compose_path: &Path) -> Result<AppCompose> {
 }
 
 fn prepare_volumes() -> Result<Vec<VerityVolume>> {
-    let _ = run_cmd!(modprobe dm-verity);
-    let _ = run_cmd!(udevadm settle --timeout=5);
+    if let Err(err) = run_cmd!(modprobe dm-verity) {
+        warn!("could not load the dm-verity module, continuing: {err:#}");
+    }
+    if let Err(err) = run_cmd!(udevadm settle --timeout=5) {
+        warn!("udev did not settle, device nodes may be incomplete: {err:#}");
+    }
     discover_volumes()
 }
 
@@ -338,7 +342,13 @@ fn verify_first_block(path: &Path) -> Result<()> {
 }
 
 fn mount_volume(requested: &RequestedVolume, mapped: &Path) -> Result<()> {
-    let fs_type = run_fun!(blkid -o value -s TYPE $mapped).unwrap_or_default();
+    let fs_type = run_fun!(blkid -o value -s TYPE $mapped).unwrap_or_else(|err| {
+        warn!(
+            "blkid failed on {}, letting the kernel probe: {err:#}",
+            mapped.display()
+        );
+        String::new()
+    });
     let target = &requested.target;
     fs::create_dir_all(target)?;
     if is_mountpoint(target)? {

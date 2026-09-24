@@ -401,8 +401,17 @@ impl GatewayKeyStore {
     }
 
     fn load_from(path: &Path) -> Option<Self> {
-        let content = fs::read_to_string(path).ok()?;
-        serde_json::from_str(&content).ok()
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(err) => {
+                warn!("failed to read the gateway cache, re-registering: {err}");
+                return None;
+            }
+        };
+        serde_json::from_str(&content)
+            .inspect_err(|err| warn!("malformed gateway cache, re-registering: {err}"))
+            .ok()
     }
 
     fn load_from_default() -> Option<Self> {
