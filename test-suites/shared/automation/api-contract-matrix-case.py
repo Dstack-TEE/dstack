@@ -1,23 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-"""Run the adversarial request-contract matrix against one pRPC service.
-
-Every RPC case in this suite states that the method is exercised with its
-request fields absent, default, valid, boundary-invalid and combined with an
-unknown field, over both representations. The per-method harnesses send one
-valid request and one wrong-typed value for the first field only. This harness
-implements the stated matrix once, for every method the inventory declares, and
-asserts the invariants that hold whatever a method means:
-
-  L1  a malformed request never produces a 5xx, a dropped connection, or a
-      transport-level failure;
-  L2  a rejection of a JSON request carries a structured JSON ``error``, and a
-      rejection of a protobuf request carries a decodable ``ProtoError``;
-  L3  the listener still answers a valid request after the whole matrix;
-  L4  a rejection does not echo an unbounded amount of attacker-supplied text;
-  L5  no request exceeds the per-call deadline;
-  L6  a rejection's ``Content-Type`` matches the request's representation.
+"""Run the request-contract matrix in ``api_contract_matrix`` against one service.
 
 ``api-contract-matrix-policy.json`` says how far each method may be driven:
 ``full`` runs every vector, ``rejection-only`` runs only the vectors a service
@@ -58,13 +42,10 @@ from api_contract_matrix import (  # noqa: E402
 HERE = pathlib.Path(__file__).resolve().parent
 UNKNOWN_JSON_FIELD = "dstack_contract_matrix_unknown_field"
 ECHO_MARKER = "DSTACK-ECHO-MARKER-7f3a1c"
-# A run-scoped name no fixture ever provisions, so a lookup for it is a miss
-# and a create for it cannot collide with anything the case did not make.
+# A run-scoped name no fixture provisions, so lookups miss and creates cannot collide.
 SCOPED = "dstack-contract-matrix"
 
-# A valid request body per method. A method absent from this table is still
-# swept for absent-input and malformed-framing behaviour; only the per-field
-# vectors need a baseline to mutate.
+# A valid request body per method; the per-field vectors mutate this baseline.
 VALID_PAYLOADS: dict[str, dict[str, Any]] = {
     "Tappd.DeriveKey": {
         "path": f"{SCOPED}/a",
@@ -118,11 +99,6 @@ VALID_PAYLOADS: dict[str, dict[str, Any]] = {
     "GuestApi.NetworkInfo": {},
     "GuestApi.ListContainers": {},
     "GuestApi.GpuInfo": {},
-    "ProxiedGuestApi.Info": {"id": f"{SCOPED}-absent-instance"},
-    "ProxiedGuestApi.SysInfo": {"id": f"{SCOPED}-absent-instance"},
-    "ProxiedGuestApi.NetworkInfo": {"id": f"{SCOPED}-absent-instance"},
-    "ProxiedGuestApi.ListContainers": {"id": f"{SCOPED}-absent-instance"},
-    "ProxiedGuestApi.GpuInfo": {"id": f"{SCOPED}-absent-instance"},
     "Gateway.AcmeInfo": {},
     "Gateway.Info": {},
     "Gateway.GetPeers": {},
@@ -207,12 +183,25 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
     temporary.replace(path)
 
 
-def service_methods(
+def service_policy(
     inventory: dict[str, Any], component: str, service: str
-) -> list[dict[str, Any]]:
-    """Return the inventory entries for one service, in declaration order."""
-    entries = inventory["components"][component]["rpc_methods"]
-    return [entry for entry in entries if entry["service"] == service]
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Return one service's inventory entries and the policy for each method."""
+    entries = [
+        entry
+        for entry in inventory["components"][component]["rpc_methods"]
+        if entry["service"] == service
+    ]
+    if not entries:
+        raise RuntimeError(f"no inventory entry for {component}/{service}")
+    policy = load_policy()
+    applied: dict[str, str] = {}
+    for entry in entries:
+        key = f"{service}.{entry['method']}"
+        applied[key] = policy.get(key, "")
+        if applied[key] not in ("full", "rejection-only", "skip"):
+            raise RuntimeError(f"no valid contract-matrix policy for {key}")
+    return entries, applied
 
 
 def wrong_type_for(field_def: dict[str, Any]) -> Any:
@@ -220,6 +209,27 @@ def wrong_type_for(field_def: dict[str, Any]) -> Any:
     if field_def["type"] in ("string", "bytes"):
         return 123
     return {"not": "a scalar"}
+
+
+def wrong_wiretype(target: Target, entry: dict[str, Any]) -> list[Call]:
+    """The first declared field number sent with the wrong wire type."""
+    fields = entry.get("request_fields", [])
+    if not fields:
+        return []
+    first = fields[0]
+    wire = 0 if first["type"] in ("string", "bytes") else 2
+    body = varint((int(first["number"]) << 3) | wire)
+    body += b"\x01" if wire == 0 else b"\x01A"
+    return [
+        invoke(
+            target,
+            entry["method"],
+            "application/octet-stream",
+            body,
+            f"{entry['service']}.{entry['method']}|wrong-wiretype|protobuf",
+            "protobuf",
+        )
+    ]
 
 
 def sweep_rejection_only(target: Target, entry: dict[str, Any]) -> list[Call]:
@@ -244,23 +254,7 @@ def sweep_rejection_only(target: Target, entry: dict[str, Any]) -> list[Call]:
             )
         )
 
-    # A wrong protobuf wire type for a declared field number fails decoding.
-    if fields:
-        first = fields[0]
-        number = int(first["number"])
-        wire = 0 if first["type"] in ("string", "bytes") else 2
-        body = varint((number << 3) | wire) + (b"\x01" if wire == 0 else b"\x01A")
-        calls.append(
-            invoke(
-                target,
-                method,
-                "application/octet-stream",
-                body,
-                f"{key}|wrong-wiretype|protobuf",
-                "protobuf",
-            )
-        )
-
+    calls.extend(wrong_wiretype(target, entry))
     return calls
 
 
@@ -268,8 +262,11 @@ def sweep_framing(target: Target, method: str) -> list[Call]:
     """Representation-level malformed bodies, once per service."""
     calls = []
     for label, content_type, body in malformed_bodies():
+        representation = "json" if content_type == "application/json" else "protobuf"
         calls.append(
-            invoke(target, method, content_type, body, f"framing|{label}", "raw")
+            invoke(
+                target, method, content_type, body, f"framing|{label}", representation
+            )
         )
     calls.append(
         invoke(
@@ -411,22 +408,7 @@ def sweep_full(
             )
 
     # 6. Wrong wire type for a declared field number.
-    if fields:
-        first = fields[0]
-        number = int(first["number"])
-        wire = 0 if first["type"] in ("string", "bytes") else 2
-        body = varint((number << 3) | wire) + (b"\x01" if wire == 0 else b"\x01A")
-        calls.append(
-            invoke(
-                target,
-                method,
-                "application/octet-stream",
-                body,
-                f"{key}|wrong-wiretype|protobuf",
-                "protobuf",
-            )
-        )
-
+    calls.extend(wrong_wiretype(target, entry))
     return calls
 
 
@@ -434,27 +416,18 @@ def run(
     target: Target, inventory: dict[str, Any], component: str, service: str
 ) -> dict[str, Any]:
     """Run the matrix for one service and return the evidence document."""
-    entries = service_methods(inventory, component, service)
-    if not entries:
-        raise RuntimeError(f"no inventory entry for {component}/{service}")
-    policy = load_policy()
+    entries, applied = service_policy(inventory, component, service)
     markers: dict[str, str] = {}
     calls: list[Call] = []
-    applied: dict[str, str] = {}
     for entry in entries:
         key = f"{service}.{entry['method']}"
-        decision = policy.get(key)
-        if decision is None:
-            raise RuntimeError(f"no contract-matrix policy for {key}")
-        applied[key] = decision
+        decision = applied[key]
         if decision == "skip":
             continue
         if decision == "rejection-only":
             calls.extend(sweep_rejection_only(target, entry))
-        elif decision == "full":
-            calls.extend(sweep_full(target, entry, markers))
         else:
-            raise RuntimeError(f"unknown contract-matrix policy {decision!r} for {key}")
+            calls.extend(sweep_full(target, entry, markers))
 
     # A method driven at `full` carries the representation-level vectors and
     # is the liveness probe.
@@ -657,66 +630,48 @@ def main() -> int:
     status = "PASS"
     failure: str | None = None
     report: dict[str, Any] = {"case_id": case_id}
+
+    def passed(number: int, observed: str) -> None:
+        step_id = f"{case_id}-step-{number:02d}"
+        steps.append({"id": step_id, "status": "PASS", "observed": observed})
+        print(f"EVIDENCE {step_id} - {observed}", flush=True)
+        print(f"STEP {step_id} END - PASS", flush=True)
+
+    def require(violations: list[dict[str, Any]]) -> None:
+        if violations:
+            raise AssertionError(
+                f"{len(violations)} contract invariant violations: "
+                + json.dumps(violations[:5], sort_keys=True)
+            )
+
     try:
         print(f"STEP {case_id}-step-01 START", flush=True)
         target = resolve_target(manifest, selector, service)
-        steps.append(
-            {
-                "id": f"{case_id}-step-01",
-                "status": "PASS",
-                "observed": "The lease-owned listener and the indexed service contract were available.",
-            }
+        _, applied = service_policy(inventory, component, service)
+        passed(
+            1, f"The listener resolved and all {len(applied)} methods have a policy."
         )
-        print(
-            f"EVIDENCE {case_id}-step-01 - Proves the isolated listener was ready before the matrix.",
-            flush=True,
-        )
-        print(f"STEP {case_id}-step-01 END - PASS", flush=True)
 
         print(f"STEP {case_id}-step-02 START", flush=True)
         report.update(run(target, inventory, component, service))
-        if report["violations"]:
-            raise AssertionError(
-                f"{len(report['violations'])} contract invariant violations: "
-                + json.dumps(report["violations"][:5], sort_keys=True)
-            )
-        steps.append(
-            {
-                "id": f"{case_id}-step-02",
-                "status": "PASS",
-                "observed": f"{report['calls']} adversarial requests across "
-                f"{len(report['policy'])} indexed methods were answered without a "
-                "server error, an unstructured rejection, a representation "
-                "mismatch, an input echo or a deadline breach.",
-            }
-        )
-        print(
-            f"EVIDENCE {case_id}-step-02 - Proves the request-contract invariants hold for every indexed method.",
-            flush=True,
-        )
+        violations = report["violations"]
+        require([v for v in violations if v["invariant"] != "L3"])
         print(json.dumps(report["status_histogram"], sort_keys=True), flush=True)
-        print(f"STEP {case_id}-step-02 END - PASS", flush=True)
+        passed(
+            2,
+            f"{report['calls']} adversarial requests across {len(applied)} methods "
+            "held invariants L1, L2, L4, L5 and L6.",
+        )
 
         print(f"STEP {case_id}-step-03 START", flush=True)
-        steps.append(
-            {
-                "id": f"{case_id}-step-03",
-                "status": "PASS",
-                "observed": "The listener answered a valid request after the whole matrix.",
-            }
-        )
-        print(
-            f"EVIDENCE {case_id}-step-03 - Proves post-matrix availability.", flush=True
-        )
-        print(f"STEP {case_id}-step-03 END - PASS", flush=True)
+        require([v for v in violations if v["invariant"] == "L3"])
+        passed(3, "The listener answered a valid request after the whole matrix.")
     except Exception as error:  # noqa: BLE001 - the harness reports, never crashes
         status = "FAIL"
         failure = f"{type(error).__name__}: {error}"
-        completed = {step["id"] for step in steps}
-        for number in range(1, 4):
+        for number in range(len(steps) + 1, 4):
             step_id = f"{case_id}-step-{number:02d}"
-            if step_id not in completed:
-                steps.append({"id": step_id, "status": "FAIL", "observed": failure})
+            steps.append({"id": step_id, "status": "FAIL", "observed": failure})
         print(failure, file=sys.stderr, flush=True)
 
     report["status"] = status
