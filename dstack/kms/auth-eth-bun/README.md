@@ -63,6 +63,8 @@ bun run check
 - `ETH_RPC_URL` - ethereum RPC endpoint (default: http://localhost:8545)
 - `KMS_CONTRACT_ADDR` - KMS contract address (default: 0x0000000000000000000000000000000000000000)
 - `PORT` - server port (default: 3000)
+- `ETH_CHAIN_ID` - reject every decision if the RPC reports a different chain ID (default: unset, no check)
+- `ETH_FINALITY_CONFIRMATIONS` - read policy this many blocks behind the RPC head (default: 0, the head)
 
 ## API endpoints
 
