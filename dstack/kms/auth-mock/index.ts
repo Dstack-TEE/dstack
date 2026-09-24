@@ -46,8 +46,7 @@ function getPolicy(): MockPolicy {
   const policy = process.env.MOCK_POLICY || 'allow-all';
   const valid: MockPolicy[] = ['allow-all', 'deny-kms', 'deny-app', 'deny-all', 'allowlist-device', 'allowlist-mr'];
   if (!valid.includes(policy as MockPolicy)) {
-    console.warn(`unknown MOCK_POLICY "${policy}", falling back to allow-all`);
-    return 'allow-all';
+    throw new Error(`unknown MOCK_POLICY "${policy}"`);
   }
   return policy as MockPolicy;
 }
