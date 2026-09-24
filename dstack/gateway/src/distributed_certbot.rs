@@ -20,7 +20,7 @@ use ra_tls::attestation::QuoteContentType;
 use ra_tls::rcgen::KeyPair;
 use tracing::{error, info, warn};
 
-use crate::cert_store::CertResolver;
+use crate::cert_store::{get_cert_expiry, CertResolver};
 use crate::kv::{
     AcmeAttestation, CertAttestation, CertCredentials, CertData, DnsCredential, DnsProvider,
     KvStore, PersistentWriteNotifier, ZtDomainConfig,
@@ -1081,13 +1081,6 @@ fn dns_credential_for(kv_store: &KvStore, config: &ZtDomainConfig) -> Result<Dns
             .get_default_dns_credential()?
             .context("no default DNS credential configured")
     }
-}
-
-fn get_cert_expiry(cert_pem: &str) -> Option<u64> {
-    use x509_parser::prelude::*;
-    let pem = Pem::iter_from_buffer(cert_pem.as_bytes()).next()?.ok()?;
-    let cert = pem.parse_x509().ok()?;
-    Some(cert.validity().not_after.timestamp() as u64)
 }
 
 fn acme_url_matches(credentials_json: &str, expected_url: &str) -> Result<bool> {
