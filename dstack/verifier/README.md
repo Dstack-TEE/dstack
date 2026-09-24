@@ -38,11 +38,11 @@ against the returned evidence.
     "event_log_verified": true,  // app identity decoded; see "Verification Process"
     "os_image_hash_verified": true,
     "acpi_tables_verified": true,         // true only when TDX ACPI table contents are verified
-    "os_image_is_dev": false,             // true=dev image, false=prod, null=unknown/N/A
-    "os_image_version": "0.5.10",         // dstack OS version, null if unknown
+    "os_image_is_dev": false,             // true=dev, false=prod; null on every path but TDX legacy
+    "os_image_version": "0.5.10",         // dstack OS version; null on the same paths
     "tee_variant": "dstack-tdx",   // dstack-tdx | dstack-gcp-tdx | dstack-nitro-enclave | dstack-amd-sev-snp | dstack-aws-nitro-tpm
     "report_data": "hex-encoded-64-byte-report-data",
-    "tcb_status": "UpToDate",
+    "tcb_status": "UpToDate",             // surfaced, not gated: is_valid ignores it
     "advisory_ids": [],
     "key_provider": { "name": "kms", "id": "hex-string" },  // decoded; null if absent
     "app_info": {
@@ -290,11 +290,12 @@ keeps verifying; one that changes it surfaces as a digest mismatch.
 
 Beyond pass/fail, the result carries a few descriptive fields so a relying party can apply its own policy:
 
-- **`os_image_is_dev`** — `true` for a development OS image, `false` for production. Dev images are built for local testing and are not hardened for production use, so a relying party generally wants to reject them.
-- **`os_image_version`** — the dstack OS version (e.g. `0.5.10`), useful for enforcing a minimum version.
+- **`os_image_is_dev`** — `true` for a development OS image, `false` for production, `null` when unknown (see below). Dev images are built for local testing and are not hardened for production use.
+- **`os_image_version`** — the dstack OS version (e.g. `0.5.10`); `null` on the same paths.
 - **`tee_variant`** — the TEE variant that produced the verified quote, serialized as `TeeVariant`: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`, `dstack-amd-sev-snp`, or `dstack-aws-nitro-tpm`.
 - **`acpi_tables_verified`** — whether TDX ACPI table contents were verified. This is useful for relying parties that require `requirements.tdx_measure_acpi_tables = true`.
+- **`tcb_status`** and **`advisory_ids`** — the platform TCB status and its Intel advisories. `is_valid` does not depend on them (only `Revoked` is rejected, by `dcap-qvl`); a relying party that wants a current TCB must check `tcb_status == "UpToDate"` itself. See [TCB status is surfaced, not gated](../../docs/security/security-model.md#tcb-status-is-surfaced-not-gated-during-verification).
 - **`key_provider`** — the decoded `app_info.key_provider_info` (`{name, id}`); `name` is e.g. `kms` or `local`. A `local` key provider means the CVM is not KMS-backed, which is itself a dev/insecure posture signal. The raw bytes remain in `app_info.key_provider_info`.
 - **`boot_info`** — the policy object a relying party should feed to its auth/governance layer. For AWS EC2 NitroTPM this includes `teeVariant = dstack-aws-nitro-tpm`, PCR4/7/12-derived `osImageHash`, PCR14-bound `mrAggregated`, app identity, instance/device identity, and a `tcbStatus` normalized to `UpToDate`.
 
-`os_image_is_dev` and `os_image_version` are read from the image's `metadata.json`, which is part of `sha256sum.txt` and therefore bound to the `os_image_hash` that step 3 verifies against the quote — so they are as trustworthy as the os-image-hash check itself. They are `null` when the platform does not expose them (e.g. GCP TDX / Nitro Enclave) or when the image predates the field (images without `is_dev` are always production).
+`os_image_is_dev` and `os_image_version` are read from the image's `metadata.json`, which is part of `sha256sum.txt` and therefore bound to the `os_image_hash` that step 3 verifies against the quote — so they are as trustworthy as the os-image-hash check itself. Only the TDX legacy path downloads the image and sees `metadata.json`; the self-contained paths (TDX lite, SEV-SNP, GCP TDX, AWS NitroTPM, Nitro Enclave) carry only its digest, so both fields are `null` there. To reject dev images on every path, allowlist the `os_image_hash` values you have vetted instead of reading `os_image_is_dev`.
