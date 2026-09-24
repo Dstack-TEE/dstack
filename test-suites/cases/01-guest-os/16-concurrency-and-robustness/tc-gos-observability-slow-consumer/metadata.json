@@ -31,6 +31,6 @@
   "execution": {
     "entrypoint": "shared/automation/guest-agent-robustness-case.py",
     "args": [],
-    "timeout_seconds": 900
+    "timeout_seconds": 300
   }
 }
