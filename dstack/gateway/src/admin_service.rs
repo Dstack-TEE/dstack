@@ -144,8 +144,8 @@ impl AdminRpc for AdminRpcHandler {
             .kv_store()
             .get_best_zt_domain()
             .unwrap_or_default();
+        let handshakes = self.state.latest_handshakes(None)?;
         let state = self.state.lock();
-        let handshakes = state.latest_handshakes(None)?;
 
         if let Some(instance) = state.state.instances.get(&request.id) {
             let host_info = HostInfo {
@@ -177,11 +177,10 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn get_meta(self) -> Result<GetMetaResponse> {
-        let state = self.state.lock();
-        let handshakes = state.latest_handshakes(None)?;
+        let handshakes = self.state.latest_handshakes(None)?;
 
         // Total registered instances
-        let registered = state.state.instances.len();
+        let registered = self.state.lock().state.instances.len();
 
         // Get current timestamp
         let now = SystemTime::now()
