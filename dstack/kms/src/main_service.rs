@@ -224,18 +224,21 @@ pub(crate) fn build_boot_info_for_attestation(
     use_boottime_mr: bool,
     vm_config_str: &str,
 ) -> Result<BootInfo> {
-    if att.report.amd_snp_report().is_some() {
+    let boot_info = if att.report.amd_snp_report().is_some() {
         let vm_config_str = if vm_config_str.is_empty() {
             att.config.as_str()
         } else {
             vm_config_str
         };
-        return amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
+        amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
             att,
             vm_config_str,
-        );
-    }
-    build_boot_info(att, use_boottime_mr, vm_config_str)
+        )?
+    } else {
+        build_boot_info(att, use_boottime_mr, vm_config_str)?
+    };
+    ensure_app_id_len(&boot_info.app_id)?;
+    Ok(boot_info)
 }
 
 /// The per-platform local key-release opt-ins, read from `KmsConfig`.
@@ -1143,6 +1146,23 @@ mod tests {
             .expect("self-contained SNP vm_config should not require KMS-local sev_snp config");
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.device_id, vec![0xab; 64]);
+    }
+
+    #[test]
+    fn build_boot_info_for_attestation_rejects_snp_mr_config_without_app_id() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mut mr_config = valid_snp_mr_config();
+        mr_config.app_id = None;
+        let attestation = verified_snp_attestation_with_config(
+            measurement,
+            [0xab; 64],
+            String::new(),
+            &mr_config,
+        );
+        let vm_config = snp_vm_config(&input, &mr_config);
+        let err = build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap_err();
+        assert_eq!(err.to_string(), "app_id must be 20 bytes");
     }
 
     fn snp_boot_info() -> BootInfo {

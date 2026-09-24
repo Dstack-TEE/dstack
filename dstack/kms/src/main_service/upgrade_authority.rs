@@ -27,7 +27,6 @@ pub(crate) fn build_boot_info(
     let variant = att.quote.variant();
     let (tcb_status, advisory_ids) = dstack_verifier::policy_tcb_fields(att);
     let app_info = att.decode_app_info_ex(use_boottime_mr, vm_config_str)?;
-    ensure_app_id_len(&app_info.app_id)?;
     Ok(BootInfo {
         tee_variant: variant,
         mr_aggregated: app_info.mr_aggregated.to_vec(),
