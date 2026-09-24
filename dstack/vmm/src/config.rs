@@ -81,7 +81,7 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config("vmm", DEFAULT_CONFIG, config_file, false)
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
     Tcp,

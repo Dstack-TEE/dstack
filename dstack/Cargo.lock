@@ -271,6 +271,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
 
 [[package]]
+name = "async-lock"
+version = "3.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "290f7f2596bd5b78a9fec8088ccd89180d7f9f55b94b0576823bbbdc72ee8311"
+dependencies = [
+ "event-listener",
+ "event-listener-strategy",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -839,8 +850,10 @@ dependencies = [
  "http-client",
  "ra-rpc",
  "ra-tls",
+ "rocket",
  "serde_json",
  "tdx-attest",
+ "tempfile",
  "tokio",
  "x509-parser 0.16.0",
 ]
@@ -2110,6 +2123,7 @@ dependencies = [
  "http-client",
  "k256",
  "load_config",
+ "moka",
  "parity-scale-codec",
  "ra-rpc",
  "ra-tls",
@@ -2667,6 +2681,26 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "event-listener"
+version = "5.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
+dependencies = [
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "event-listener-strategy"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
+dependencies = [
+ "event-listener",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -4514,10 +4548,13 @@ version = "0.12.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "957228ad12042ee839f93c8f257b62b4c0ab5eaae1d4fa60de53b27c9d7c5046"
 dependencies = [
+ "async-lock",
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
  "equivalent",
+ "event-listener",
+ "futures-util",
  "parking_lot 0.12.5",
  "portable-atomic",
  "smallvec",
@@ -4722,7 +4759,7 @@ dependencies = [
  "nsm-attest",
  "p384",
  "pem",
- "reqwest",
+ "pki-fetch",
  "rustls-pki-types",
  "serde",
  "sha2 0.10.9",
@@ -5128,6 +5165,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "parking"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
+
+[[package]]
 name = "parking_lot"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5369,6 +5412,18 @@ checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der",
  "spki",
+]
+
+[[package]]
+name = "pki-fetch"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "pem",
+ "reqwest",
+ "tokio",
+ "tracing",
+ "x509-parser 0.16.0",
 ]
 
 [[package]]
@@ -8063,13 +8118,12 @@ dependencies = [
  "nom",
  "p256",
  "pem",
- "reqwest",
+ "pki-fetch",
  "rsa",
  "rustls-pki-types",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "tokio",
  "tpm-types",
  "tracing",
  "x509-parser 0.16.0",

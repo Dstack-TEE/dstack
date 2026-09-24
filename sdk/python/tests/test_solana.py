@@ -2,77 +2,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import warnings
-
 import pytest
 from solders.keypair import Keypair
 
-from dstack_sdk import AsyncDstackClientV0
-from dstack_sdk import DstackClientV0
 from dstack_sdk import GetKeyResponse
+from dstack_sdk import GetTlsKeyResponse
 from dstack_sdk.solana import to_keypair
 from dstack_sdk.solana import to_keypair_secure
 
 
-@pytest.mark.asyncio
-async def test_async_to_keypair():
-    client = AsyncDstackClientV0()
-    result = await client.get_key("test")
-    assert isinstance(result, GetKeyResponse)
-    keypair = to_keypair(result)
-    assert isinstance(keypair, Keypair)
+@pytest.mark.parametrize("adapter", [to_keypair, to_keypair_secure])
+def test_keypair_adapters_accept_derived_keys(adapter):
+    response = GetKeyResponse(key="01" * 32, signature_chain=[])
+    assert isinstance(adapter(response), Keypair)
 
 
-def test_sync_to_keypair():
-    client = DstackClientV0()
-    result = client.get_key("test")
-    assert isinstance(result, GetKeyResponse)
-    keypair = to_keypair(result)
-    assert isinstance(keypair, Keypair)
-
-
-@pytest.mark.asyncio
-async def test_async_to_keypair_secure():
-    client = AsyncDstackClientV0()
-    result = await client.get_key("test")
-    assert isinstance(result, GetKeyResponse)
-    keypair = to_keypair_secure(result)
-    assert isinstance(keypair, Keypair)
-
-
-def test_sync_to_keypair_secure():
-    client = DstackClientV0()
-    result = client.get_key("test")
-    assert isinstance(result, GetKeyResponse)
-    keypair = to_keypair_secure(result)
-    assert isinstance(keypair, Keypair)
-
-
-def test_to_keypair_with_tls_key():
-    """Test to_keypair with TLS key response (should show warning)."""
-    client = DstackClientV0()
-    result = client.get_tls_key()
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        keypair = to_keypair(result)
-
-        assert isinstance(keypair, Keypair)
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-        assert "Please don't use getTlsKey method" in str(w[0].message)
-
-
-def test_to_keypair_secure_with_tls_key():
-    """Test to_keypair_secure with TLS key response (should show warning)."""
-    client = DstackClientV0()
-    result = client.get_tls_key()
-
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        keypair = to_keypair_secure(result)
-
-        assert isinstance(keypair, Keypair)
-        assert len(w) == 1
-        assert issubclass(w[0].category, DeprecationWarning)
-        assert "Please don't use getTlsKey method" in str(w[0].message)
+@pytest.mark.parametrize("adapter", [to_keypair, to_keypair_secure])
+def test_keypair_adapters_reject_tls_keys(adapter):
+    response = GetTlsKeyResponse(key="not used", certificate_chain=[])
+    with pytest.raises(TypeError, match="TLS keys cannot be used"):
+        adapter(response)  # type: ignore[arg-type]

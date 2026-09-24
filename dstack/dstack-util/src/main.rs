@@ -104,6 +104,18 @@ enum Commands {
     Encrypt(EncryptArgs),
     /// Sample NVIDIA GPU telemetry through NVML and print it as JSON
     GpuInfo,
+    /// Exec a command with extra environment variables from a JSON object file
+    ExecWithEnv(ExecWithEnvArgs),
+}
+
+#[derive(Parser)]
+struct ExecWithEnvArgs {
+    /// JSON object mapping variable names to values
+    #[arg(long)]
+    env_file: PathBuf,
+    /// Command to exec, with its arguments
+    #[arg(last = true, required = true)]
+    command: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -719,6 +731,20 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn cmd_exec_with_env(args: ExecWithEnvArgs) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let envs: std::collections::BTreeMap<String, String> =
+        utils::deserialize_json_file(&args.env_file)
+            .with_context(|| format!("failed to load env from {}", args.env_file.display()))?;
+    let (program, program_args) = args.command.split_first().context("no command given")?;
+    let err = std::process::Command::new(program)
+        .args(program_args)
+        .envs(envs)
+        .exec();
+    Err(err).with_context(|| format!("failed to exec {program}"))
 }
 
 fn cmd_decrypt(args: DecryptArgs) -> Result<()> {
@@ -1667,6 +1693,7 @@ async fn main() -> Result<()> {
         Commands::GpuInfo => {
             gpu_info::cmd_gpu_info()?;
         }
+        Commands::ExecWithEnv(args) => cmd_exec_with_env(args)?,
     }
 
     Ok(())

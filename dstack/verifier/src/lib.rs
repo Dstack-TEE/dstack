@@ -15,8 +15,5 @@ mod verification;
 // Re-export TdxMeasurements from dstack-mr for convenience
 pub use dstack_mr::TdxMeasurements;
 
-pub use types::{
-    AcpiTables, PolicyBootInfo, RtmrEventEntry, RtmrEventStatus, RtmrMismatch, VerificationDetails,
-    VerificationRequest, VerificationResponse,
-};
+pub use types::{PolicyBootInfo, VerificationDetails, VerificationRequest, VerificationResponse};
 pub use verification::{policy_tcb_fields, CvmVerifier};

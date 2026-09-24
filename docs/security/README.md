@@ -6,6 +6,7 @@ Use these resources to understand dstack's trust model, production requirements,
 
 - [Security Model](./security-model.md) - threat model, trust boundaries, and verifier checklist
 - [Security Best Practices](./security-best-practices.md) - production hardening for KMS, gateway, and VMM deployments
+- [App Key Compromise Recovery](./app-key-compromise-recovery.md) - containment and identity replacement when app keys may be disclosed
 - [Security Audit](./dstack-audit.pdf) - zkSecurity audit report
 - [Public Security Reports](./public-security-reports.md) - status of already-public reports and findings
 - [CVM Boundaries](./cvm-boundaries.md) - data exchanged across the CVM, host, KMS, and gateway

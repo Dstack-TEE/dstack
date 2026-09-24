@@ -53,6 +53,17 @@ pub(crate) struct KmsConfig {
     /// mirroring `sev_snp_key_release`.
     #[serde(default)]
     pub aws_nitro_tpm_key_release: bool,
+    /// Whether to enable the additional local release gate for AWS Nitro Enclave
+    /// key/cert material. The NSM document measures the enclave image (PCR0/1/2),
+    /// which is what `os_image_hash` and `compose_hash` are built from, but the
+    /// AWS hypervisor is in the TCB and dstack extends no runtime measurement
+    /// register on this platform — so `app_id` and `instance_id` are read from an
+    /// event list nothing replays against hardware. Production deployments
+    /// therefore need an explicit KMS opt-in as well as a successful external
+    /// policy decision — mirroring `sev_snp_key_release` and
+    /// `aws_nitro_tpm_key_release`.
+    #[serde(default)]
+    pub nitro_enclave_key_release: bool,
     #[serde(default)]
     pub site_name: String,
     /// Whether the KMS embeds an attestation in its own RPC certificate.
@@ -112,6 +123,13 @@ fn default_true() -> bool {
 }
 
 impl KmsConfig {
+    /// The root keys are the last files a bootstrap writes, so both existing
+    /// marks a completed one. Anything short of that is left over from an
+    /// interrupted bootstrap and may be overwritten.
+    pub fn root_keys_exist(&self) -> bool {
+        self.root_ca_key().exists() && self.k256_key().exists()
+    }
+
     pub fn keys_exists(&self) -> bool {
         self.tmp_ca_cert().exists()
             && self.tmp_ca_key().exists()

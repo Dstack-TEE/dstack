@@ -10,11 +10,11 @@ use anyhow::{bail, Context, Result};
 use dstack_types::{
     version::Version, AwsOsImageMeasurementDocument, AwsPcrReplay, GcpOsImageMeasurementDocument,
     GcpTpmReplay, SevOsImageMeasurementDocument, TdxOsImageMeasurementDocument,
-    GCP_MEASUREMENT_FILENAME, SNP_MEASUREMENT_FILENAME, TDX_MEASUREMENT_FILENAME,
+    AWS_MEASUREMENT_FILENAME, GCP_MEASUREMENT_FILENAME, SNP_MEASUREMENT_FILENAME,
+    TDX_MEASUREMENT_FILENAME,
 };
 use serde::{Deserialize, Serialize};
 
-const AWS_MEASUREMENT_FILENAME: &str = "measurement.aws.cbor";
 const AWS_PCR_REPLAY_FILENAME: &str = "measurement.aws.replay.json";
 const GCP_TPM_EVENT_LOG_FILENAME: &str = "measurement.gcp.eventlog.bin";
 

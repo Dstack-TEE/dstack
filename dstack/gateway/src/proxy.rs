@@ -657,7 +657,7 @@ mod tests {
     }
 
     /// A ClientHello whose `server_name` sits behind `filler` bytes of key share.
-    pub(crate) fn client_hello(sni: &str, filler: usize) -> Vec<u8> {
+    fn client_hello(sni: &str, filler: usize) -> Vec<u8> {
         fn u16_prefixed(body: &[u8]) -> Vec<u8> {
             let mut out = (body.len() as u16).to_be_bytes().to_vec();
             out.extend_from_slice(body);
