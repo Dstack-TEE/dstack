@@ -100,6 +100,9 @@ const MEASUREMENT_CACHE_VERSION: u32 = 3;
 /// Measurement images carry no rootfs; released ones are under 25 MB extracted.
 const MAX_IMAGE_SIZE: u64 = 100 << 20;
 
+/// Tries per image download; only transport failures and 5xx responses retry.
+const IMAGE_DOWNLOAD_ATTEMPTS: u32 = 3;
+
 #[derive(Clone, Serialize, Deserialize)]
 struct CachedMeasurement {
     version: u32,
@@ -1095,42 +1098,8 @@ impl CvmVerifier {
             .context("Failed to create temporary directory")?;
         let tmp_dir = auto_delete_temp_dir.path();
 
-        info!("Downloading image from {}", url);
-        let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to download image")?;
-
-        if !response.status().is_success() {
-            bail!(
-                "Failed to download image: HTTP status {}, url: {url}",
-                response.status(),
-            );
-        }
-
-        // Save the tarball to a temporary file using streaming
-        let tarball_path = tmp_dir.join("image.tar.gz");
-        let mut file = tokio::fs::File::create(&tarball_path)
-            .await
-            .context("Failed to create tarball file")?;
-        let mut response = response;
-        let mut downloaded = 0u64;
-        while let Some(chunk) = response.chunk().await? {
-            downloaded += chunk.len() as u64;
-            if downloaded > MAX_IMAGE_SIZE {
-                bail!("image archive exceeds {MAX_IMAGE_SIZE} bytes");
-            }
-            file.write_all(&chunk)
-                .await
-                .context("Failed to write chunk to file")?;
-        }
-
-        file.flush()
-            .await
-            .context("Failed to flush image archive")?;
-        drop(file);
+        info!("Downloading image from {url}");
+        Self::fetch_image_archive(&url, &tmp_dir.join("image.tar.gz")).await?;
 
         let hex_os_image_hash = hex_os_image_hash.to_owned();
         let dst_dir = dst_dir.to_owned();
@@ -1144,6 +1113,43 @@ impl CvmVerifier {
         })
         .await
         .context("image install task failed")?
+    }
+
+    async fn fetch_image_archive(url: &str, path: &Path) -> Result<()> {
+        let client = reqwest::Client::new();
+        let mut attempt = 1;
+        loop {
+            match Self::try_fetch_image_archive(&client, url, path).await {
+                Err(err) if attempt < IMAGE_DOWNLOAD_ATTEMPTS && is_transient(&err) => {
+                    warn!("image download attempt {attempt} failed, retrying: {err:#}");
+                    tokio::time::sleep(Duration::from_secs(attempt.into())).await;
+                    attempt += 1;
+                }
+                result => return result.context("Failed to download image"),
+            }
+        }
+    }
+
+    async fn try_fetch_image_archive(
+        client: &reqwest::Client,
+        url: &str,
+        path: &Path,
+    ) -> Result<()> {
+        let mut response = client.get(url).send().await?.error_for_status()?;
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .context("Failed to create tarball file")?;
+        let mut downloaded = 0u64;
+        while let Some(chunk) = response.chunk().await? {
+            downloaded += chunk.len() as u64;
+            if downloaded > MAX_IMAGE_SIZE {
+                bail!("image archive exceeds {MAX_IMAGE_SIZE} bytes");
+            }
+            file.write_all(&chunk)
+                .await
+                .context("Failed to write chunk to file")?;
+        }
+        file.flush().await.context("Failed to flush image archive")
     }
 
     fn install_image(tmp_dir: &Path, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
@@ -1160,6 +1166,12 @@ impl CvmVerifier {
         fs_err::rename(extracted_dir, dst_dir)
             .context("Failed to move extracted files to destination directory")
     }
+}
+
+/// A dropped connection, a truncated body or a 5xx may succeed on a retry.
+fn is_transient(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<reqwest::Error>()
+        .is_some_and(|err| err.status().is_none_or(|status| status.is_server_error()))
 }
 
 /// MRTD and RTMR0-2 from the verified TD report.
@@ -1961,8 +1973,8 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn concurrent_requests_download_an_image_once() {
+    /// A valid image archive and its `os_image_hash`.
+    fn test_image_archive() -> (String, Vec<u8>) {
         let metadata = br#"{"cmdline":"","kernel":"bzImage","initrd":"initrd","bios":"ovmf.fd"}"#;
         let files: &[(&str, &[u8])] = &[
             ("metadata.json", metadata),
@@ -1988,39 +2000,63 @@ mod tests {
             header.set_mode(0o644);
             archive.append_data(&mut header, name, *payload).unwrap();
         }
-        let tarball = archive.into_inner().unwrap().finish().unwrap();
+        (hash, archive.into_inner().unwrap().finish().unwrap())
+    }
+
+    /// Serves `tarball` to every request, cutting the body in half for the
+    /// first `truncated` of them. Returns the download URL and a request count.
+    async fn serve_image_archive(
+        tarball: Vec<u8>,
+        truncated: usize,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncReadExt;
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!(
             "http://{}/{{OS_IMAGE_HASH}}",
             listener.local_addr().unwrap()
         );
-        let served = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let served = Arc::new(AtomicUsize::new(0));
         tokio::spawn({
             let served = served.clone();
             async move {
-                use tokio::io::AsyncReadExt;
                 while let Ok((mut stream, _)) = listener.accept().await {
-                    served.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let request = served.fetch_add(1, Ordering::SeqCst);
                     let _ = stream.read(&mut [0; 4096]).await;
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     let head = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         tarball.len()
                     );
+                    let body = if request < truncated {
+                        &tarball[..tarball.len() / 2]
+                    } else {
+                        &tarball[..]
+                    };
                     let _ = stream.write_all(head.as_bytes()).await;
-                    let _ = stream.write_all(&tarball).await;
+                    let _ = stream.write_all(body).await;
                 }
             }
         });
+        (url, served)
+    }
 
-        let cache = tempfile::tempdir().unwrap();
-        let verifier = Arc::new(CvmVerifier::new(
-            cache.path().to_str().unwrap().into(),
+    fn test_download_verifier(cache: &Path, url: String) -> Arc<CvmVerifier> {
+        Arc::new(CvmVerifier::new(
+            cache.to_str().unwrap().into(),
             url,
             Duration::from_secs(10),
             test_attestation_verifier(),
-        ));
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_download_an_image_once() {
+        let (hash, tarball) = test_image_archive();
+        let (url, served) = serve_image_archive(tarball, 0).await;
+        let cache = tempfile::tempdir().unwrap();
+        let verifier = test_download_verifier(cache.path(), url);
         let dst_dir = verifier.images_dir().join(&hash);
         let downloads: Vec<_> = (0..8)
             .map(|_| {
@@ -2032,6 +2068,18 @@ mod tests {
             download.await.unwrap().unwrap();
         }
         assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(fs_err::read(dst_dir.join("bzImage")).unwrap(), b"kernel");
+    }
+
+    #[tokio::test]
+    async fn truncated_image_download_is_retried() {
+        let (hash, tarball) = test_image_archive();
+        let (url, served) = serve_image_archive(tarball, 1).await;
+        let cache = tempfile::tempdir().unwrap();
+        let verifier = test_download_verifier(cache.path(), url);
+        let dst_dir = verifier.images_dir().join(&hash);
+        verifier.download_image(&hash, &dst_dir).await.unwrap();
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(fs_err::read(dst_dir.join("bzImage")).unwrap(), b"kernel");
     }
 
