@@ -55,13 +55,16 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         .await
         .map_err(|e| format!("Failed to get worker info: {}", e))?;
 
-    let handler = GuestApiHandler::construct(context)
-        .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
-    let system_info = handler.sys_info().await.unwrap_or_default();
-    // Only sampled when the page will actually render it. Asking otherwise
-    // would spawn a collector on guests that keep their sysinfo private.
-    let gpu_info = if public_sysinfo {
-        crate::gpu_info::gpu_info()
+    // Only collected when the page will actually render it. Collecting
+    // otherwise would scan every process and disk, and spawn a GPU collector,
+    // on guests that keep their sysinfo private.
+    let (system_info, gpu_info) = if public_sysinfo {
+        let handler = GuestApiHandler::construct(context)
+            .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
+        (
+            handler.sys_info().await.unwrap_or_default(),
+            crate::gpu_info::gpu_info(),
+        )
     } else {
         Default::default()
     };
