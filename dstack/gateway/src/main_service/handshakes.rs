@@ -51,37 +51,13 @@ impl LatestHandshakesCache {
         self.cell.set(timestamps);
     }
 
+    /// The cached snapshot, stale if need be; never runs `wg show`. Callers
+    /// hold the routing lock, and a host where `wg show` always fails would
+    /// otherwise fork once per connection.
     pub(crate) fn latest(&self, stale_timeout: Option<Duration>) -> Result<HandshakesWithAge> {
-        // Admin/public status paths call this synchronously. On fixture hosts the
-        // first successful `wg show` may not have completed yet (or the interface
-        // may be absent), so a hard Empty error collapses many Admin.* RPCs with
-        // "cached cell is empty". Prefer:
-        // 1) fresh TTL value
-        // 2) stale last-known value
-        // 3) one synchronous producer refresh
-        // 4) empty map so callers can still report registered hosts/meta
-        let timestamps = match self.cell.get() {
+        let timestamps = match self.cell.get_allow_stale() {
             Ok(snapshot) => snapshot.into_value(),
-            Err(cached_cell::GetError::Expired { .. }) | Err(cached_cell::GetError::Empty) => {
-                match self.cell.get_allow_stale() {
-                    Ok(snapshot) => snapshot.into_value(),
-                    Err(_) => {
-                        let interface = self.interface.clone();
-                        match fetch_latest_handshake_timestamps(&interface) {
-                            Ok(value) => {
-                                self.cell.set(value.clone());
-                                std::sync::Arc::new(value)
-                            }
-                            Err(err) => {
-                                warn!(
-                                    "WireGuard latest-handshakes unavailable; returning empty map: {err}"
-                                );
-                                std::sync::Arc::new(BTreeMap::new())
-                            }
-                        }
-                    }
-                }
-            }
+            Err(_) => Arc::new(BTreeMap::new()),
         };
         add_elapsed_time(timestamps.as_ref(), stale_timeout)
     }
@@ -154,6 +130,33 @@ fn add_elapsed_time(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cold_cache_does_not_shell_out_on_the_routing_path() {
+        const CONNECTIONS: usize = 500;
+        let cache = LatestHandshakesCache::new(
+            "dstack-no-such-iface0".to_string(),
+            Duration::from_secs(30),
+        );
+
+        let started = std::time::Instant::now();
+        for _ in 0..CONNECTIONS {
+            assert!(
+                cache
+                    .latest(None)
+                    .expect("a cold cache still answers")
+                    .is_empty(),
+                "a host with no WireGuard data knows of no fresh handshake"
+            );
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "{CONNECTIONS} cold reads took {elapsed:?}: the routing path is spawning \
+             a process per connection"
+        );
+    }
 
     #[test]
     fn parses_latest_handshake_timestamps() {

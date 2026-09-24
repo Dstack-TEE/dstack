@@ -20,9 +20,6 @@ CERBOT_WORKDIR=$RUN_DIR/certbot
 KMS_UPGRADE_REGISTRY_DIR=$RUN_DIR/kms/upgrade_registry
 KMS_CERT_LOG_DIR=$RUN_DIR/kms/cert_log/
 
-GATEWAY_CERT=${GATEWAY_CERT:-$CERTS_DIR/live/cert.pem}
-GATEWAY_KEY=${GATEWAY_KEY:-$CERTS_DIR/live/key.pem}
-
 CONFIG_FILE=./build-config.sh
 
 check_config() {
@@ -80,8 +77,6 @@ GATEWAY_WG_INTERFACE=dgw-$USER
 GATEWAY_WG_LISTEN_PORT=$(($BASE_PORT + 3))
 GATEWAY_WG_IP=10.$SUBNET_INDEX.3.1
 GATEWAY_SERVE_PORT=$(($BASE_PORT + 4))
-GATEWAY_CERT=$CERBOT_WORKDIR/live/cert.pem
-GATEWAY_KEY=$CERBOT_WORKDIR/live/key.pem
 
 BIND_PUBLIC_IP=0.0.0.0
 
@@ -246,9 +241,6 @@ interface = "$GATEWAY_WG_INTERFACE"
 endpoint = "10.0.2.2:$GATEWAY_WG_LISTEN_PORT"
 
 [core.proxy]
-cert_chain = "$GATEWAY_CERT"
-cert_key = "$GATEWAY_KEY"
-base_domain = "$GATEWAY_PUBLIC_DOMAIN"
 listen_addr = "$BIND_PUBLIC_IP"
 listen_port = $GATEWAY_SERVE_PORT
 agent_port = $AGENT_PORT

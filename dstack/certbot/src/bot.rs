@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
+use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -83,11 +84,14 @@ async fn create_new_account(
             .set_caa_records(&config.cert_subject_alt_names)
             .await?;
     }
-    if let Some(credential_dir) = config.credentials_file.parent() {
-        fs::create_dir_all(credential_dir).context("failed to create credential directory")?;
-    }
-    fs::write(&config.credentials_file, credentials).context("failed to write credentials")?;
+    store_credentials(&config.credentials_file, &credentials)?;
     Ok(client)
+}
+
+/// The account key can reissue every domain the account has authorized.
+fn store_credentials(path: &Path, credentials: &str) -> Result<()> {
+    safe_write::safe_write_with_mode(path, credentials, 0o600)
+        .context("failed to write credentials")
 }
 
 impl CertBot {
@@ -153,15 +157,7 @@ impl CertBot {
             return Ok(true);
         };
         info!("running renewed hook");
-        match std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(hook)
-            .status()
-        {
-            Ok(status) if status.success() => {}
-            Ok(status) => error!("renewed hook failed with status: {status}"),
-            Err(error) => error!("failed to run renewed hook: {error:?}"),
-        }
+        run_hook(hook, self.config.renew_timeout).await;
         Ok(true)
     }
 
@@ -254,6 +250,21 @@ impl CertBot {
     pub fn required_dns_records(&self) -> Vec<RequiredRecord> {
         self.acme_client
             .required_dns_records(&self.config.cert_subject_alt_names)
+    }
+}
+
+/// Run the post-renewal hook without blocking the runtime, killed after `timeout`.
+async fn run_hook(hook: &str, timeout: Duration) {
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(hook)
+        .kill_on_drop(true)
+        .status();
+    match tokio::time::timeout(timeout, status).await {
+        Ok(Ok(status)) if status.success() => {}
+        Ok(Ok(status)) => error!("renewed hook failed with status: {status}"),
+        Ok(Err(error)) => error!("failed to run renewed hook: {error:?}"),
+        Err(_) => error!("renewed hook did not finish within {timeout:?}"),
     }
 }
 
@@ -374,6 +385,57 @@ pub fn list_cert_public_keys(workdir: impl AsRef<Path>) -> Result<BTreeSet<Vec<u
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hook_tests {
+    use super::run_hook;
+    use std::time::{Duration, Instant};
+    use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn a_hook_that_never_returns_gives_the_renewal_loop_back() {
+        let ticking = tokio::spawn(async {
+            sleep(Duration::from_millis(50)).await;
+            "ticked"
+        });
+
+        let started = Instant::now();
+        run_hook("sleep 30", Duration::from_millis(200)).await;
+
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the hook held the renewal loop for {elapsed:?}"
+        );
+        assert_eq!(
+            ticking.await.unwrap(),
+            "ticked",
+            "the hook parked the runtime it was waited on from"
+        );
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::store_credentials;
+    use fs_err as fs;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    #[test]
+    fn stored_account_credentials_are_owner_only() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("acme/credentials.json");
+
+        store_credentials(&path, "{}").unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "the ACME account key is readable by anyone on the host"
+        );
+    }
+}
 
 #[cfg(test)]
 mod listing_tests {

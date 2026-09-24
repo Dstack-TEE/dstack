@@ -141,6 +141,12 @@ async fn async_main(args: Args) -> Result<()> {
         .await
         .map_err(|err| anyhow!("{err:?}"))
         .context(format!("Failed to bind on {endpoint}"))?;
+    #[cfg(unix)]
+    if let Some(socket) = endpoint.unix() {
+        // `/deploy` runs arbitrary commands unauthenticated; only the owner (the VMM) may connect.
+        use std::os::unix::fs::PermissionsExt;
+        fs_err::set_permissions(socket, std::fs::Permissions::from_mode(0o600))?;
+    }
     if let Some(pid_file) = &args.pid_file {
         mk_parents(pid_file)?;
         let pid = std::process::id();

@@ -23,6 +23,21 @@ pub mod volume_format;
 
 pub use volume::Compression;
 
+/// Read the root hash from `veritysetup format` (`Root hash:`) or
+/// `veritysetup status` (indented `root hash:`) output.
+pub fn parse_verity_root_hash(output: &str) -> Option<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            line.strip_prefix("Root hash:")
+                .or_else(|| line.strip_prefix("root hash:"))
+        })
+        .map(str::trim)
+        .find(|root| !root.is_empty() && root.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .map(str::to_string)
+}
+
 /// A fixed dm-verity salt.
 ///
 /// The root is a function of the squashfs bytes and this salt, so keeping the
@@ -92,4 +107,22 @@ async fn verity_fs_image(fs_image: PathBuf, output: PathBuf) -> Result<VerityRes
         data_size: built.data_size,
         output,
     })
+}
+
+#[cfg(test)]
+mod root_hash_tests {
+    use super::parse_verity_root_hash;
+
+    #[test]
+    fn both_veritysetup_spellings_parse() {
+        assert_eq!(
+            parse_verity_root_hash("Salt:\t00\nRoot hash:      \tabc123\n").as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(
+            parse_verity_root_hash("  type:  VERITY\n  root hash:   abc123\n").as_deref(),
+            Some("abc123")
+        );
+        assert_eq!(parse_verity_root_hash("Root hash:\n"), None);
+    }
 }

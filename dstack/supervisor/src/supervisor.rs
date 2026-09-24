@@ -109,8 +109,22 @@ impl Supervisor {
         self.processes.get(id).map(|process| process.info())
     }
 
-    pub fn clear(&self) {
-        self.processes.clear();
+    /// Forget finished processes. Running ones are kept: dropping a handle SIGKILLs its child.
+    pub fn clear(&self) -> Result<()> {
+        let mut running = vec![];
+        self.processes.retain(|id, process| {
+            let state = process.lock();
+            let keep = state.is_started() || state.is_running();
+            if keep {
+                running.push(id.clone());
+            }
+            keep
+        });
+        if !running.is_empty() {
+            bail!("processes are still running: {}", running.join(", "));
+        }
+        info!("cleared stopped processes");
+        Ok(())
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -134,5 +148,26 @@ impl Supervisor {
             tokio::time::sleep(Duration::from_millis(50 + 200 * i)).await;
         }
         bail!("Failed to stop {n_running} processes");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn clear_keeps_a_running_process() {
+        let supervisor = Supervisor::new();
+        let config = r#"{"id": "one", "command": "sleep", "args": ["60"]}"#;
+        supervisor
+            .deploy(serde_json::from_str(config).unwrap())
+            .unwrap();
+
+        let err = supervisor.clear().unwrap_err();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        assert!(err.to_string().contains("one"), "{err}");
+        let info = supervisor.info("one").expect("the handle was dropped");
+        assert!(info.state.status.is_running(), "the child was killed");
     }
 }

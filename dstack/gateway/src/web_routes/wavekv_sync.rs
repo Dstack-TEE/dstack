@@ -144,7 +144,19 @@ pub async fn sync_store(
 ) -> Result<(ContentType, Vec<u8>), Status> {
     verify_gateway_peer(state, cert)?;
     let body = read_compressed_body(data).await?;
-    handle_sync(state, store, &body)
+    let (state, store) = (state.inner().clone(), store.to_string());
+    off_executor(move || handle_sync(&state, &store, &body)).await
+}
+
+/// Decompressing, decoding and merging an envelope (up to
+/// `MAX_DECOMPRESSED_SYNC_BYTES`) is blocking work; keep it off the async workers.
+async fn off_executor<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Status> + Send + 'static,
+) -> Result<T, Status> {
+    tokio::task::spawn_blocking(work).await.map_err(|err| {
+        warn!("sync task failed: {err}");
+        Status::InternalServerError
+    })?
 }
 
 /// Everything `sync_store` does once the caller is known to be a peer.
@@ -158,10 +170,7 @@ pub(crate) fn handle_sync(
     };
 
     let env = decode_envelope(body)?;
-    if env.sender_id == 0 {
-        warn!("rejected sync from invalid node_id 0");
-        return Err(Status::BadRequest);
-    }
+    ensure_plausible_sender(state, env.sender_id)?;
     refuse_removed_sender(state, env.sender_id)?;
 
     let Some(result) = wavekv_sync.handle_envelope(store, env) else {
@@ -180,6 +189,20 @@ pub(crate) fn handle_sync(
         ContentType::new("application", "x-msgpack-gz"),
         gzip(&encoded)?,
     ))
+}
+
+/// Refuse node id 0 and this node's own id: nothing syncs to itself, so such an
+/// envelope is a misconfigured peer or a forged ack for us.
+fn ensure_plausible_sender(state: &Proxy, sender_id: u32) -> Result<(), Status> {
+    if sender_id == 0 {
+        warn!("rejected an envelope from invalid node_id 0");
+        return Err(Status::BadRequest);
+    }
+    if sender_id == state.config.sync.node_id {
+        warn!("rejected an envelope claiming this node's own id {sender_id}");
+        return Err(Status::BadRequest);
+    }
+    Ok(())
 }
 
 /// Refuse an envelope from a node an operator has removed.
@@ -213,7 +236,8 @@ pub async fn push_store(
 ) -> Result<Status, Status> {
     verify_gateway_peer(state, cert)?;
     let body = read_compressed_body(data).await?;
-    handle_push(state, store, &body)
+    let (state, store) = (state.inner().clone(), store.to_string());
+    off_executor(move || handle_push(&state, &store, &body)).await
 }
 
 /// Everything `push_store` does once the caller is known to be a peer.
@@ -223,10 +247,7 @@ pub(crate) fn handle_push(state: &Proxy, store: &str, body: &[u8]) -> Result<Sta
     };
 
     let env = decode_envelope(body)?;
-    if env.sender_id == 0 {
-        warn!("rejected push from invalid node_id 0");
-        return Err(Status::BadRequest);
-    }
+    ensure_plausible_sender(state, env.sender_id)?;
     refuse_removed_sender(state, env.sender_id)?;
 
     let Some(result) = wavekv_sync.handle_push(store, env) else {
@@ -608,6 +629,7 @@ mod tests {
             cert_validator: std::sync::Arc::new(crate::kv::AppIdValidator::new(
                 TEST_APP_ID.to_vec(),
             )),
+            timeout: std::time::Duration::from_secs(5),
         })
         .expect("HTTPS client");
         let base = format!("https://127.0.0.1:{port}");
@@ -864,6 +886,28 @@ mod tests {
 
         let one_over = gzip(&vec![7u8; MAX_DECOMPRESSED_SYNC_BYTES + 1]).expect("gzip");
         assert!(gunzip_bounded(&one_over, MAX_DECOMPRESSED_SYNC_BYTES).is_err());
+    }
+
+    #[tokio::test]
+    async fn an_envelope_claiming_this_nodes_own_id_is_refused() {
+        let (proxy, _tmp) = serving_gateway(true).await;
+
+        let mut env = SyncEnvelope::new(ME, proxy.kv_store().get_peer_uuid(ME).unwrap_or_default());
+        env.acks.insert(ME, 999);
+        let (sync_status, _) = post_sync(&proxy, "persistent", body(&env));
+        assert_eq!(
+            sync_status,
+            Status::BadRequest,
+            "sync must refuse a sender claiming our own id"
+        );
+
+        let mut push = push_envelope(peer_uuid(), "node/9");
+        push.sender_id = ME;
+        assert_eq!(
+            post_push(&proxy, "persistent", body(&push)),
+            Status::BadRequest,
+            "push must refuse a sender claiming our own id"
+        );
     }
 
     #[tokio::test]

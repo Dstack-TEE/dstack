@@ -71,8 +71,10 @@ the digests to match. The printed digest is what the registry reports for
 docker buildx imagetools inspect ghcr.io/dstack-tee/dstack-kms:0.6.0 --format '{{.Manifest.Digest}}'
 ```
 
-This is the digest that `deploy-to-vmm.sh` pins in `KMS_IMAGE`, and that in turn
-feeds the compose hash registered on chain.
+`deploy-to-vmm.sh` pins `KMS_IMAGE` by digest, and that digest feeds the compose
+hash registered on chain. Its default is still a 0.5.x Docker Hub digest matching
+`OS_IMAGE=dstack-0.5.5`; to deploy 0.6.0 or later, set `KMS_IMAGE` to the GHCR
+digest verified above.
 
 ## Image metadata
 

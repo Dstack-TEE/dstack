@@ -195,8 +195,9 @@ pub fn auth_allowlist_json(cfg: &HostConfig) -> String {
     format!("{allowlist:#}")
 }
 
-/// default pinned, reproducibly-built KMS image (Docker Hub).
-pub const DEFAULT_KMS_IMAGE: &str = "dstacktee/dstack-kms:0.5.11";
+/// default reproducibly-built KMS image, digest-pinned since it is measured into the
+/// compose hash.
+pub const DEFAULT_KMS_IMAGE: &str = "dstacktee/dstack-kms:0.5.11@sha256:84b793feed825a5b5e70d04386e931e0e110461492793f17ab2128e39808d989";
 
 /// build the KMS-in-CVM app-compose manifest. An init script writes the
 /// rendered `kms.toml` into the guest and the KMS container mounts it. On TDX

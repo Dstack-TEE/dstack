@@ -552,6 +552,9 @@ service Admin {
   rpc ForceReleaseCertLock(ForceReleaseCertLockRequest) returns (google.protobuf.Empty) {}
   // List certificate attestations for a domain
   rpc ListCertAttestations(ListCertAttestationsRequest) returns (ListCertAttestationsResponse) {}
+  // Install a certificate issued outside the gateway, replicated to every node.
+  // The gateway serves it as-is and does not renew it.
+  rpc ImportCert(ImportCertRequest) returns (google.protobuf.Empty) {}
 
   // ==================== Global Certbot Configuration ====================
   // Get global certbot configuration (includes ACME URL)
@@ -822,6 +825,15 @@ message RenewZtDomainCertResponse {
   bool renewed = 1;
   // New certificate expiry (if renewed)
   uint64 not_after = 2;
+}
+
+// Import certificate request
+message ImportCertRequest {
+  // Served for `*.<domain>`
+  string domain = 1;
+  // PEM chain, leaf first
+  string cert_pem = 2;
+  string key_pem = 3;
 }
 
 // Force release certificate lock request

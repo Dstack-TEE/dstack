@@ -195,6 +195,14 @@ impl AuthApi {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Webhook {
     pub url: String,
+    /// Per-call timeout. Defaulted so an existing section with only `url` still parses.
+    #[serde(default = "default_webhook_timeout", with = "serde_duration")]
+    pub timeout: Duration,
+}
+
+/// Matches the `ra_rpc::client` request timeout.
+fn default_webhook_timeout() -> Duration {
+    Duration::from_secs(60)
 }
 
 #[derive(Debug, Clone, Deserialize)]

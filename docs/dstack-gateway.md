@@ -23,14 +23,11 @@ records that pin issuance to its own ACME account.
 
 Focus on these fields in the `core.proxy` section:
 
-- `base_domain`: the wildcard domain for the proxy
 - `listen_addr` & `listen_port`: listen on `0.0.0.0` and preferably `443` in production. If using another port, specify it in the URL (see [URL Format](#url-format))
 
 For example, if your base domain is `gateway.example.com`, app ID is `<app_id>`, listening on `80`, and dstack-gateway is on port 7777, the URL would be `https://<app_id>-80.gateway.example.com:7777`
 
-Leave `cert_chain` and `cert_key` unset. They load a certificate you already
-have from disk at startup, for the case where something else issues it; the
-gateway's own issuance does not use them and does not write them.
+The base domain is not set here: it is the ZT domain you add in Step 3.
 
 Two more sections matter for certificates:
 
@@ -103,6 +100,16 @@ curl -sf "${AUTH[@]}" "http://$ADMIN_ADDR/prpc/ListZtDomains" \
 served. `POST /prpc/RenewCert` forces a round immediately instead of waiting for
 `renew_interval_secs`.
 
+If something else issues the certificate, import it instead of adding a ZT
+domain. It is replicated like an issued one, but the gateway never renews it:
+
+```bash
+jq -n --arg cert "$(cat fullchain.pem)" --arg key "$(cat privkey.pem)" \
+  '{domain: "gateway.example.com", cert_pem: $cert, key_pem: $key}' \
+  | curl -sf -X POST "${AUTH[@]}" "http://$ADMIN_ADDR/prpc/ImportCert" \
+      -H "Content-Type: application/json" -d @-
+```
+
 Pin issuance with `POST /prpc/SetCaa`, which writes CAA records naming Let's
 Encrypt and the gateway's ACME account URI for every configured domain, so no
 other account can have a certificate issued for them.
@@ -117,7 +124,7 @@ ACME URL disagree, so do not skip the rotation.
 
 Open `vmm.toml` and adjust dstack-gateway configuration in the `gateway` section:
 
-- `base_domain`: Same as `base_domain` from `gateway.toml`'s `core.proxy` section
+- `base_domain`: The ZT domain added in Step 3
 - `port`: Same as `listen_port` from `gateway.toml`'s `core.proxy` section
 
 ## URL Format

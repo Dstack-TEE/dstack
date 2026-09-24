@@ -35,14 +35,11 @@ use dstack_guest_agent_rpc::v1::worker_client::WorkerClient as WorkerV1Client;
 use futures::StreamExt;
 use http_client::ConnectionReuse;
 use tokio::time::MissedTickBehavior;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::config::HealthCheckConfig;
 use crate::main_service::Proxy;
 use crate::models::HealthState;
-
-/// How long to wait before restarting the poll loop after it dies.
-const RESTART_DELAY: Duration = Duration::from_secs(5);
 
 /// One poll's verdict, plus why, for the line logged when the verdict changes.
 pub(crate) struct Observation {
@@ -111,21 +108,8 @@ pub(crate) fn spawn_poller(state: Proxy) {
         "polling application health every {:?} (timeout {:?})",
         config.interval, config.timeout
     );
-    tokio::spawn(async move {
-        // Supervised rather than a bare spawn. If the loop ever dies -- a
-        // poisoned `ProxyState` mutex is enough, since locking it panics --
-        // polling would otherwise stop for the life of the process with nothing
-        // logged, and every instance registered after that point would sit at
-        // `Unknown` forever while the stale verdicts around it kept serving.
-        loop {
-            let task = tokio::spawn(poll_forever(state.clone(), config.clone()));
-            match task.await {
-                Ok(()) => error!("health poller returned unexpectedly; restarting"),
-                Err(err) => error!("health poller died: {err}; restarting"),
-            }
-            tokio::time::sleep(RESTART_DELAY).await;
-        }
-    });
+    // Unsupervised: the release profile aborts on panic, so nothing could restart it.
+    tokio::spawn(poll_forever(state, config));
 }
 
 async fn poll_forever(state: Proxy, config: HealthCheckConfig) {

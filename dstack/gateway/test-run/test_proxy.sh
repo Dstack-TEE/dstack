@@ -182,6 +182,16 @@ stop_gateway() {
   done
 }
 
+# The data dir is wiped per arm, so the wildcard certificate goes back in each time.
+import_cert() {
+  python3 -c 'import json, sys; print(json.dumps({"domain": sys.argv[1],
+    "cert_pem": open(sys.argv[2]).read(), "key_pem": open(sys.argv[3]).read()}))' \
+    "$BASE_DOMAIN" "$WORK/certs/cert.pem" "$WORK/certs/key.pem" \
+    | curl -sf -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+        -H "Content-Type: application/json" -d @- \
+        "http://127.0.0.1:$ADMIN_PORT/prpc/Admin.ImportCert" >/dev/null
+}
+
 # start_gateway <label> [gwconfig key=value ...]
 start_gateway() {
   local label="$1"; shift
@@ -191,12 +201,14 @@ start_gateway() {
   python3 "$PROXY_DIR/gwconfig.py" "$WORK" \
     proxy_port="$PROXY_PORT" rpc_port="$RPC_PORT" admin_port="$ADMIN_PORT" \
     wg_port="$WG_PORT" wg_iface="$WG_IFACE" admin_token="$ADMIN_TOKEN" \
-    base_domain="$BASE_DOMAIN" "$@" >"$WORK/gw.toml" || return 1
+    "$@" >"$WORK/gw.toml" || return 1
   RUST_LOG="${RUST_LOG:-warn}" "$GATEWAY_BIN" -c "$WORK/gw.toml" \
     >"$GW_LOG" 2>&1 &
   GW_PID=$!
+  local imported=""
   for _ in $(seq 100); do
-    if probe fetch --port "$PROXY_PORT" --sni "$SNI_TERMINATE" --size 64 \
+    [ -n "$imported" ] || { import_cert && imported=1; }
+    if [ -n "$imported" ] && probe fetch --port "$PROXY_PORT" --sni "$SNI_TERMINATE" --size 64 \
         >/dev/null 2>&1; then
       return 0
     fi

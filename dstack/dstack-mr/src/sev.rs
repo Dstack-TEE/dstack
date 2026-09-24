@@ -29,8 +29,9 @@ const ZEROS_LD: [u8; LD_BYTES] = [0u8; LD_BYTES];
 pub const MAX_VCPUS: u32 = 512;
 /// Maximum number of OVMF metadata sections accepted in a measurement input.
 pub const MAX_OVMF_SECTIONS: usize = 64;
-/// 64 GiB worth of 4 KiB pages — upper bound on measured OVMF metadata pages.
-pub const MAX_OVMF_METADATA_PAGES: u64 = 16_777_216;
+/// Upper bound on measured OVMF metadata pages, the same as `tdvf::MAX_MEASURED_PAGES`.
+/// Each page costs a SHA-384 before the result is compared; real firmware uses 31 pages.
+pub const MAX_OVMF_METADATA_PAGES: u64 = 0x1_0000;
 // VMSA page GPA: (u64)(-1) page-aligned, bits >51 cleared.
 const VMSA_GPA: u64 = 0x0000_FFFF_FFFF_F000;
 
@@ -1263,6 +1264,36 @@ mod tests {
             "7c0f80f0a8d0ab1ee23fe763b255b8b210bb71113febcda60d76c00e84512f0cc141ffaa61be7bd22164736e85ec52d3",
             "synthetic OVMF launch digest vector should not drift"
         );
+    }
+
+    /// The old 16M-page ceiling cost 11.3 s of CPU per request; the shipped
+    /// dstack-0.6.0 table (31 pages) must still be accepted.
+    #[test]
+    fn page_budget_rejects_old_ceiling_and_admits_real_table() {
+        let mut input = valid_input();
+        input.ovmf_sections = [
+            (0x800000u64, 0x9000u64, 1u32),
+            (0x80a000, 0x3000, 1),
+            (0x80d000, 0x1000, 2),
+            (0x80e000, 0x1000, 3),
+            (0x80f000, 0x1000, 4),
+            (0x811000, 0xf000, 1),
+            (0x810000, 0x1000, 0x10),
+        ]
+        .map(|(gpa, size, section_type)| OvmfSectionParam {
+            gpa,
+            size,
+            section_type,
+        })
+        .to_vec();
+        validate_measurement_input(&input).expect("the shipped metadata must be accepted");
+
+        input.ovmf_sections.push(OvmfSectionParam {
+            gpa: 0x1000_0000,
+            size: 16_000_000 * 4096,
+            section_type: 1,
+        });
+        assert!(validate_measurement_input(&input).is_err());
     }
 
     fn valid_input() -> MeasurementInput {
