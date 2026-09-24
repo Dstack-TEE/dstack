@@ -29,7 +29,6 @@ use ra_tls::{
     kdf,
 };
 use scale::Decode;
-use tokio::sync::OnceCell;
 use tracing::{debug, warn};
 use upgrade_authority::{
     build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
@@ -49,6 +48,12 @@ pub(crate) mod upgrade_authority;
 /// would otherwise cost the auth API a round of chain RPC calls. Concurrent callers share one
 /// in-flight request. App authorization is never cached.
 const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
+
+/// How long this KMS's own verified boot info is reused.
+///
+/// Its measurements do not change while the KMS runs, but the TCB status and advisories do when
+/// the platform's collateral is updated, and the auth API judges them on every self check.
+const SELF_BOOT_INFO_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct KmsState {
@@ -71,7 +76,7 @@ pub struct KmsStateInner {
     temp_ca_key: String,
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
-    self_boot_info: OnceCell<BootInfo>,
+    self_boot_info: Cache<(), BootInfo>,
     self_allowed: Cache<(), ()>,
     auth_api_info: Cache<(), GetInfoResponse>,
     metrics: KmsMetrics,
@@ -192,7 +197,10 @@ impl KmsState {
                 temp_ca_key,
                 verifier,
                 attestation_verifier,
-                self_boot_info: OnceCell::new(),
+                self_boot_info: Cache::builder()
+                    .max_capacity(1)
+                    .time_to_live(SELF_BOOT_INFO_TTL)
+                    .build(),
                 self_allowed: short_lived_cache(),
                 auth_api_info: short_lived_cache(),
                 metrics: KmsMetrics::default(),
@@ -312,15 +320,16 @@ fn ensure_self_key_release_allowed(
 }
 
 impl RpcHandler {
-    async fn ensure_self_allowed(&self) -> Result<Option<&BootInfo>> {
+    async fn ensure_self_allowed(&self) -> Result<Option<BootInfo>> {
         if !self.state.config.enforce_self_authorization {
             return Ok(None);
         }
         let boot_info = self
             .state
             .self_boot_info
-            .get_or_try_init(|| local_kms_boot_info(&self.state.attestation_verifier))
+            .try_get_with((), local_kms_boot_info(&self.state.attestation_verifier))
             .await
+            .map_err(|err| anyhow!("{err:#}"))
             .context("Failed to load cached self boot info")?;
         self.state
             .self_allowed
@@ -329,7 +338,7 @@ impl RpcHandler {
                     .state
                     .config
                     .auth_api
-                    .is_app_allowed(boot_info, true)
+                    .is_app_allowed(&boot_info, true)
                     .await
                     .context("Failed to call self KMS auth check")?;
                 if !response.is_allowed {
@@ -583,7 +592,7 @@ impl KmsRpc for RpcHandler {
             .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
-        ensure_self_key_release_allowed(self_boot_info, (&self.state.config).into())?;
+        ensure_self_key_release_allowed(self_boot_info.as_ref(), (&self.state.config).into())?;
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
             temp_ca_key: self.state.inner.temp_ca_key.clone(),
