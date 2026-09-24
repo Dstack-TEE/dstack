@@ -185,6 +185,46 @@ async fn test_port_policy_restrict_mode_allows_listed_only() {
     assert!(is_port_allowed(&state.proxy, "inst-allow", 7070).is_err());
 }
 
+/// A sync merge holding the KV store must not stall routing via the periodic
+/// connection-count sync.
+#[tokio::test]
+async fn syncing_connections_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store() {
+    use std::sync::atomic::AtomicBool;
+
+    let state = create_test_state().await;
+    state
+        .lock()
+        .new_client_by_id(
+            "inst-conn",
+            "app-conn",
+            &test_pubkey("pubkey-conn"),
+            "hash-conn",
+            Default::default(),
+        )
+        .unwrap();
+
+    // Stand in for a sync merge holding the store.
+    let _store_held = state.kv_store().ephemeral().write();
+
+    let finished = std::sync::Arc::new(AtomicBool::new(false));
+    let proxy = state.proxy.clone();
+    let done = finished.clone();
+    std::thread::spawn(move || {
+        proxy.sync_connections();
+        done.store(true, Ordering::SeqCst);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert!(
+        !finished.load(Ordering::SeqCst),
+        "test is vacuous: the sync never reached a KV write"
+    );
+    assert!(
+        state.proxy.state.try_lock().is_ok(),
+        "the routing lock is held while the sync waits on the KV store"
+    );
+}
+
 #[tokio::test]
 async fn test_port_policy_disabled_allows_all() {
     let state = create_test_state().await;
