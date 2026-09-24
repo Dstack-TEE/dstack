@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 # SPDX-License-Identifier: Apache-2.0
-"""Drive the live guest agent under concurrent load and a stalled log reader.
+r"""Drive the live guest agent under concurrent load and a stalled log reader.
 
 Head-of-line blocking (tc-gos-concurrency-002) only means something where a
 quote costs real work, so that case reports BLOCKED instead of PASS when one
@@ -94,7 +94,7 @@ class Reply:
         return self.status == 200 and self.error is None
 
     def json(self) -> dict[str, Any]:
-        """The decoded response body."""
+        """Decode the response body."""
         value = json.loads(self.body)
         if not isinstance(value, dict):
             raise AssertionError("response body was not a JSON object")
@@ -155,7 +155,7 @@ def parallel(count: int, work: Callable[[int], Any]) -> list[Any]:
 
 
 def digest(value: Any) -> str:
-    """A digest of one response field, so key material never reaches an artifact."""
+    """Digest one response field, so key material never reaches an artifact."""
     if isinstance(value, str):
         return hashlib.sha256(value.encode()).hexdigest()
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -227,7 +227,7 @@ AGENT_STATE_COMMAND = (
 
 
 def guest_agent_state(values: dict[str, Any]) -> dict[str, Any] | None:
-    """The in-guest agent's (pid, start time), size and restart count."""
+    """Return the in-guest agent's (pid, start time), size and restart count."""
     output = guest_command(values, AGENT_STATE_COMMAND)
     if output is None:
         return None
@@ -251,7 +251,7 @@ def guest_agent_state(values: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def guest_agent_journal(values: dict[str, Any]) -> list[str]:
-    """The last few lines the agent's unit logged, for a run that lost it."""
+    """Return the last few lines the agent's unit logged, for a run that lost it."""
     output = guest_command(
         values, f"journalctl -u {AGENT_UNIT} --no-pager -n 12 -o short-unix"
     )
@@ -271,7 +271,7 @@ def guest_agent_restarted(
 
 
 def process_identity(pid: int) -> dict[str, Any]:
-    """The agent's (pid, start time); a restart onto the same pid changes it."""
+    """Return the agent's (pid, start time); a restart onto the same pid changes it."""
     with open(f"/proc/{pid}/stat", encoding="utf-8") as stat:
         fields = stat.read().rsplit(") ", 1)[1].split()
     return {"pid": pid, "starttime_ticks": int(fields[19])}
@@ -416,7 +416,7 @@ def latency_samples(target: Target, count: int) -> list[float]:
 
 
 def percentile(values: list[float], fraction: float) -> float:
-    """The `fraction` percentile of a sample, nearest rank."""
+    """Return the `fraction` percentile of a sample, nearest rank."""
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -612,7 +612,7 @@ def docker(*args: str, timeout: int = 60) -> subprocess.CompletedProcess[str]:
 
 
 def container_runtime() -> str:
-    """The reachable container runtime, or the reason there is none."""
+    """Find the reachable container runtime, or the reason there is none."""
     probe = docker("version", "--format", "{{.Server.Version}}", timeout=30)
     if probe.returncode != 0:
         raise Blocked(
@@ -669,7 +669,7 @@ def open_log_stream(target: Target, container: str) -> tuple[socket.socket, byte
 def slow_consumer(
     targets: dict[str, Target], pid: int, _values: dict[str, Any]
 ) -> dict[str, Any]:
-    """A reader that stops draining must not become the agent's problem."""
+    """Check that a reader that stops draining does not become the agent's problem."""
     worker = targets["Worker"]
     chatty = f"{LOG_SOURCE_PREFIX}-chatty-{os.getpid()}"
     observations: dict[str, Any] = {}
@@ -963,7 +963,7 @@ def resolve_targets(values: dict[str, Any], services: list[str]) -> dict[str, Ta
 
 
 def resolve_pid(values: dict[str, Any]) -> int:
-    """The lease-owned agent process, for the checks that need /proc."""
+    """Resolve the lease-owned agent process, for the checks that need /proc."""
     pid = values.get("pid")
     if not isinstance(pid, int):
         raise Blocked(
