@@ -61,8 +61,8 @@ const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 ///
 /// Costs a quote and an event-log replay, which is why its result is cached for
 /// the life of the process.
-fn decode_identity(inner: &AppStateInner) -> Result<AppIdentity> {
-    let attestation = inner.info_attestation()?.into_v1();
+fn decode_identity(platform: &dyn PlatformBackend) -> Result<AppIdentity> {
+    let attestation = platform.attestation_for_info()?.into_v1();
     let app_info = attestation
         .decode_app_info(false)
         .context("failed to decode app info")?;
@@ -113,7 +113,8 @@ struct AppStateInner {
     /// it is written only on the degraded path, and read only when the cache
     /// is empty.
     identity_last_failure: Mutex<Option<Instant>>,
-    identity_refresh: Arc<tokio::sync::Mutex<()>>,
+    /// Queues platform calls; see [`AppStateInner::attest`].
+    attest_lock: Arc<tokio::sync::Mutex<()>>,
     /// `sys_vendor` and `product_name`, read once. Neither changes while the
     /// VM is running.
     cloud_vendor: String,
@@ -139,34 +140,27 @@ pub(crate) struct AppIdentity {
     pub(crate) key_provider_info: String,
 }
 
-/// Run one blocking platform attestation off the async executor.
-///
-/// `get_quote` in `dstack/tdx-attest/src/linux.rs` takes a process-global
-/// `std::sync::Mutex` and then blocks -- on configfs/TSM, or on a vsock
-/// connection to the host's QGS opened with no connect, read or write timeout.
-/// Called straight from an `async fn` that parks a runtime worker thread for
-/// the whole quote, and the runtime `#[rocket::main]` builds has one worker per
-/// vCPU rather than the `workers` this crate's `dstack.toml` asks for.
-///
-/// Measured on TDX hardware, one quote costs about a second, so concurrent
-/// callers on a 2-vCPU CVM stall every other connection the agent serves.
-/// `/var/run/dstack.sock` is bind-mounted into application containers by
-/// design, which makes that reachable by any container in the CVM; and the
-/// stall reaches the agent's own systemd watchdog, whose heartbeat is a
-/// `Worker.Version` request to the external listener, so the service is
-/// SIGABRTed and restarted at `WatchdogSec=30s`.
-async fn attest_off_executor<T: Send + 'static>(
-    platform: Arc<dyn PlatformBackend>,
-    work: impl FnOnce(&dyn PlatformBackend) -> Result<T> + Send + 'static,
-) -> Result<T> {
-    tokio::task::spawn_blocking(move || work(platform.as_ref()))
+impl AppStateInner {
+    /// Run a platform call on the blocking pool, one at a time.
+    ///
+    /// Platform calls block on the hardware quote (about a second on TDX), so
+    /// running one on the executor stalls every connection the agent serves,
+    /// including the systemd watchdog heartbeat. Callers queue here rather than
+    /// on `dstack-attest`'s quote lock, so a flood of requests holds no threads.
+    /// The guard moves into the task, so a cancelled caller cannot let the
+    /// next call in while its own is still running.
+    async fn attest<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&dyn PlatformBackend) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let guard = self.attest_lock.clone().lock_owned().await;
+        let platform = self.platform.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            work(platform.as_ref())
+        })
         .await
         .context("the attestation task panicked")?
-}
-
-impl AppStateInner {
-    fn info_attestation(&self) -> Result<VersionedAttestation> {
-        self.platform.attestation_for_info()
     }
 
     async fn issue_cert(
@@ -178,11 +172,9 @@ impl AppStateInner {
         let pubkey = key.public_key_der();
         let attested = pubkey.clone();
         let attestation = wire.apply(
-            attest_off_executor(self.platform.clone(), move |platform| {
-                platform.certificate_attestation(&attested)
-            })
-            .await
-            .context("Failed to get certificate attestation")?,
+            self.attest(move |platform| platform.certificate_attestation(&attested))
+                .await
+                .context("Failed to get certificate attestation")?,
         );
         let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),
@@ -300,7 +292,7 @@ impl AppState {
                 app_root_signing_key,
                 identity: RwLock::new(None),
                 identity_last_failure: Mutex::new(None),
-                identity_refresh: Arc::default(),
+                attest_lock: Arc::default(),
                 cloud_vendor: read_dmi_file("sys_vendor"),
                 cloud_product: read_dmi_file("product_name"),
             }),
@@ -331,10 +323,9 @@ impl AppState {
 
     pub(crate) async fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
         let vm_config = self.inner.vm_config.clone();
-        attest_off_executor(self.inner.platform.clone(), move |platform| {
-            platform.quote_response(report_data, &vm_config)
-        })
-        .await
+        self.inner
+            .attest(move |platform| platform.quote_response(report_data, &vm_config))
+            .await
     }
 
     /// Encoded attestation bytes for `Attest`, in the wire form the calling
@@ -344,10 +335,9 @@ impl AppState {
         report_data: [u8; 64],
         wire: AttestationWire,
     ) -> Result<Vec<u8>> {
-        attest_off_executor(self.inner.platform.clone(), move |platform| {
-            wire.apply(platform.attest_cvm(report_data)?).to_bytes()
-        })
-        .await
+        self.inner
+            .attest(move |platform| wire.apply(platform.attest_cvm(report_data)?).to_bytes())
+            .await
     }
 
     /// The application's root secp256k1 key, the root of every derived key and
@@ -389,28 +379,40 @@ impl AppState {
     /// identity is unavailable and when the next attempt is, and the platform
     /// is not touched at all.
     pub(crate) async fn identity(&self) -> Result<Arc<AppIdentity>> {
-        if let Some(identity) = self
-            .inner
-            .identity
-            .read()
-            .or_panic("lock should never fail")
-            .as_ref()
-        {
-            return Ok(identity.clone());
+        if let Some(identity) = self.cached_identity()? {
+            return Ok(identity);
         }
-        let refresh = self.inner.identity_refresh.clone().lock_owned().await;
         let state = self.clone();
-        tokio::task::spawn_blocking(move || {
-            // The task owns exclusion through cache publication, even if its
-            // requester disconnects while the platform is still quoting.
-            let _refresh = refresh;
-            state.identity_blocking()
-        })
-        .await
-        .context("identity refresh task failed")?
+        self.inner
+            .attest(move |platform| {
+                // Callers queued behind a decode pick up its outcome here.
+                if let Some(identity) = state.cached_identity()? {
+                    return Ok(identity);
+                }
+                let identity = match decode_identity(platform) {
+                    Ok(identity) => Arc::new(identity),
+                    Err(err) => {
+                        *state
+                            .inner
+                            .identity_last_failure
+                            .lock()
+                            .or_panic("lock should never fail") = Some(Instant::now());
+                        return Err(err);
+                    }
+                };
+                *state
+                    .inner
+                    .identity
+                    .write()
+                    .or_panic("lock should never fail") = Some(identity.clone());
+                Ok(identity)
+            })
+            .await
     }
 
-    fn identity_blocking(&self) -> Result<Arc<AppIdentity>> {
+    /// The cached identity, or `None` if a decode may be attempted now. Fails
+    /// while the last failed decode is still throttled.
+    fn cached_identity(&self) -> Result<Option<Arc<AppIdentity>>> {
         if let Some(identity) = self
             .inner
             .identity
@@ -418,7 +420,7 @@ impl AppState {
             .or_panic("lock should never fail")
             .as_ref()
         {
-            return Ok(identity.clone());
+            return Ok(Some(identity.clone()));
         }
         if let Some(failed_at) = *self
             .inner
@@ -434,23 +436,7 @@ impl AppState {
                 );
             }
         }
-        let identity = match decode_identity(&self.inner) {
-            Ok(identity) => Arc::new(identity),
-            Err(err) => {
-                *self
-                    .inner
-                    .identity_last_failure
-                    .lock()
-                    .or_panic("lock should never fail") = Some(Instant::now());
-                return Err(err);
-            }
-        };
-        *self
-            .inner
-            .identity
-            .write()
-            .or_panic("lock should never fail") = Some(identity.clone());
-        Ok(identity)
+        Ok(None)
     }
 
     /// The VM's hardware configuration, as the VMM produced it.
@@ -584,9 +570,10 @@ impl InternalRpcHandler {
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let hide_tcb_info = external && !state.config().app_compose.public_tcbinfo;
-    let platform = state.inner.platform.clone();
-    let versioned_attestation =
-        attest_off_executor(platform, |platform| platform.attestation_for_info()).await?;
+    let versioned_attestation = state
+        .inner
+        .attest(|platform| platform.attestation_for_info())
+        .await?;
     let attestation = versioned_attestation.into_v1();
     let app_info = attestation
         .decode_app_info(false)
@@ -1145,67 +1132,6 @@ pub(crate) mod tests {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    /// A platform whose quote blocks the calling thread, as the real one does.
-    struct BlockingPlatform;
-
-    impl PlatformBackend for BlockingPlatform {
-        fn attestation_for_info(&self) -> Result<VersionedAttestation> {
-            unimplemented!("only the quote path blocks in this fixture")
-        }
-
-        fn certificate_attestation(&self, _pubkey: &[u8]) -> Result<VersionedAttestation> {
-            unimplemented!("only the quote path blocks in this fixture")
-        }
-
-        fn quote_response(
-            &self,
-            _report_data: [u8; 64],
-            _vm_config: &str,
-        ) -> Result<GetQuoteResponse> {
-            std::thread::sleep(Duration::from_millis(50));
-            Ok(GetQuoteResponse::default())
-        }
-
-        fn attest_cvm(&self, _report_data: [u8; 64]) -> Result<VersionedAttestation> {
-            unimplemented!("only the quote path blocks in this fixture")
-        }
-    }
-
-    /// The whole point of the hop: a quote must not park the runtime.
-    ///
-    /// A single-threaded runtime is the sharpest form of the production
-    /// arrangement, where the runtime has one worker per vCPU. If the platform
-    /// call ran on the executor the ticker below could never be polled while
-    /// the quote was in flight, which is how 24 concurrent callers used to
-    /// stall every other connection -- including the `Worker.Version` request
-    /// the systemd watchdog uses as its heartbeat, so the agent was SIGABRTed
-    /// and restarted at `WatchdogSec=30s`.
-    #[tokio::test(flavor = "current_thread")]
-    async fn a_blocking_quote_does_not_park_the_runtime() {
-        let platform: Arc<dyn PlatformBackend> = Arc::new(BlockingPlatform);
-        let ticks = Arc::new(AtomicUsize::new(0));
-        let counter = ticks.clone();
-        let quote =
-            attest_off_executor(platform, |platform| platform.quote_response([0u8; 64], ""));
-        tokio::pin!(quote);
-        tokio::select! {
-            result = &mut quote => {
-                result.expect("the quote must be answered");
-            }
-            _ = async move {
-                loop {
-                    counter.fetch_add(1, Ordering::Relaxed);
-                    tokio::task::yield_now().await;
-                }
-            } => unreachable!("the ticker runs until the quote completes"),
-        }
-        assert!(
-            ticks.load(Ordering::Relaxed) > 1,
-            "the runtime was parked for the whole quote: the executor ran {} times",
-            ticks.load(Ordering::Relaxed)
-        );
-    }
-
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
             .iter()
@@ -1243,7 +1169,8 @@ pub(crate) mod tests {
     /// How many times the fixture platform was asked to attest for `Info`, and
     /// whether it should refuse. Counting the calls is the only way to see the
     /// identity throttle work: what it changes is how often the platform is
-    /// touched, not what any single call returns.
+    /// touched, not what any single call returns. The gate holds the next
+    /// `Info` or quote call inside the platform, as a slow quote does.
     #[derive(Default)]
     struct InfoAttestationProbe {
         calls: AtomicUsize,
@@ -1259,9 +1186,8 @@ pub(crate) mod tests {
     impl InfoAttestationProbe {
         fn failing() -> Self {
             Self {
-                calls: AtomicUsize::new(0),
                 failing: AtomicBool::new(true),
-                gate: Mutex::new(None),
+                ..Self::default()
             }
         }
 
@@ -1271,6 +1197,27 @@ pub(crate) mod tests {
 
         fn set_failing(&self, failing: bool) {
             self.failing.store(failing, Ordering::Relaxed);
+        }
+
+        /// Arm the gate: the receiver fires once a platform call is blocked
+        /// in it, and sending on the sender lets that call finish.
+        fn arm_gate(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Receiver<()>,
+            std::sync::mpsc::Sender<()>,
+        ) {
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            *self.gate.lock().unwrap() = Some((entered_tx, release_rx));
+            (entered_rx, release_tx)
+        }
+
+        fn pass_gate(&self) {
+            if let Some((entered, release)) = self.gate.lock().unwrap().take() {
+                entered.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
         }
     }
 
@@ -1448,10 +1395,7 @@ pNs85uhOZE8z2jr8Pg==
         impl PlatformBackend for TestSimulatorPlatform {
             fn attestation_for_info(&self) -> Result<VersionedAttestation> {
                 self.probe.calls.fetch_add(1, Ordering::Relaxed);
-                if let Some((entered, release)) = self.probe.gate.lock().unwrap().take() {
-                    entered.send(()).unwrap();
-                    release.recv_timeout(Duration::from_secs(5)).unwrap();
-                }
+                self.probe.pass_gate();
                 if self.probe.failing.load(Ordering::Relaxed) {
                     anyhow::bail!("the platform cannot attest right now");
                 }
@@ -1474,6 +1418,7 @@ pNs85uhOZE8z2jr8Pg==
                 report_data: [u8; 64],
                 vm_config: &str,
             ) -> Result<GetQuoteResponse> {
+                self.probe.pass_gate();
                 let attestation = patch_report_data(&self.attestation, report_data);
                 let Some(quote) = attestation.platform.tdx_quote().map(ToOwned::to_owned) else {
                     return Err(anyhow::anyhow!(
@@ -1536,7 +1481,7 @@ pNs85uhOZE8z2jr8Pg==
             app_root_signing_key: SigningKey::from_slice(&DUMMY_K256_KEY).ok(),
             identity: RwLock::new(None),
             identity_last_failure: Mutex::new(None),
-            identity_refresh: Arc::default(),
+            attest_lock: Arc::default(),
             // Read the same way production does, so a test comparing v1 `Info`
             // against v0 `get_info` compares like with like.
             cloud_vendor: read_dmi_file("sys_vendor"),
@@ -2137,6 +2082,22 @@ pNs85uhOZE8z2jr8Pg==
         assert!(err.contains("removed in dstack 0.6.0"), "{err}");
     }
 
+    /// A quote must not park the runtime. On a single-threaded runtime the
+    /// test only sees the quote enter the platform if it left the executor.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_blocking_quote_does_not_park_the_runtime() {
+        let probe = Arc::new(InfoAttestationProbe::default());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        let (entered_rx, release_tx) = probe.arm_gate();
+        let quote = tokio::spawn(async move { state.quote_response([0u8; 64]).await });
+        tokio::time::timeout(Duration::from_secs(2), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        release_tx.send(()).unwrap();
+        quote.await.unwrap().unwrap();
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn identity_retry_is_off_executor_singleflight_and_cancellation_safe() {
         let probe = Arc::new(InfoAttestationProbe::failing());
@@ -2145,9 +2106,7 @@ pNs85uhOZE8z2jr8Pg==
         *state.inner.identity_last_failure.lock().unwrap() =
             Some(Instant::now() - IDENTITY_RETRY_INTERVAL);
         probe.set_failing(false);
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        *probe.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        let (entered_rx, release_tx) = probe.arm_gate();
         let first_state = state.clone();
         let first = tokio::spawn(async move { first_state.identity().await });
         tokio::time::timeout(Duration::from_secs(2), entered_rx)

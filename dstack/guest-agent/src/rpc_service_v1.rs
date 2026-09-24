@@ -206,8 +206,6 @@ impl DstackGuestRpc for V1RpcHandler {
 
     async fn attest(self, request: AttestRequest) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("report data is too long")?;
-        // `attest_cvm` takes the blocking hop itself, for every caller. See
-        // `attest_off_executor` in `rpc_service.rs`.
         let attestation = self
             .state
             .attest_cvm(report_data, AttestationWire::MsgpackV1)
