@@ -459,40 +459,6 @@ impl DistributedCertBot {
         Ok(config.acme_url)
     }
 
-    /// Initialize all ZT-Domain certificates
-    pub async fn init_all(&self) -> Result<()> {
-        let configs = self.kv_store.list_zt_domain_configs();
-        for config in configs {
-            if let Err(err) = self.init_domain(&config.domain).await {
-                error!("cert[{}]: failed to initialize: {err:?}", config.domain);
-            }
-        }
-        Ok(())
-    }
-
-    /// Initialize certificate for a specific domain
-    pub async fn init_domain(&self, domain: &str) -> Result<()> {
-        // First, try to load from KvStore (synced from other nodes)
-        if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
-            let now = now_secs();
-            if cert_data.not_after > now {
-                info!(
-                    domain,
-                    "loaded from KvStore (issued by node {}, expires in {} days)",
-                    cert_data.issued_by,
-                    (cert_data.not_after - now) / 86400
-                );
-                self.cert_resolver.update_cert(domain, &cert_data)?;
-                return Ok(());
-            }
-            info!(domain, "KvStore certificate expired, will request new one");
-        }
-
-        // No valid cert, need to request new one
-        info!(domain, "no valid certificate found, requesting from ACME");
-        self.request_new_cert(domain).await
-    }
-
     /// Set CAA records for every configured ZT domain.
     ///
     /// Runs under the shared ACME lock, so a rotation or another
@@ -679,35 +645,6 @@ impl DistributedCertBot {
         };
 
         // Release lock regardless of result
-        if let Err(err) = self.release_cert_lock(domain, &lock) {
-            error!("failed to release lock: {err:?}");
-        }
-
-        result
-    }
-
-    /// Request new certificate for a domain
-    #[tracing::instrument(skip(self))]
-    async fn request_new_cert(&self, domain: &str) -> Result<()> {
-        let config = self
-            .kv_store
-            .get_zt_domain_config(domain)
-            .context("ZT-Domain config not found")?;
-
-        // Try to acquire lock first
-        let Some(lock) = self.try_acquire_cert_lock(domain) else {
-            // Another node is requesting, wait for it
-            info!("another node is requesting, waiting...");
-            tokio::time::sleep(Duration::from_secs(30)).await;
-            if let Some(cert_data) = self.kv_store.get_cert_data(domain) {
-                self.cert_resolver.update_cert(domain, &cert_data)?;
-                return Ok(());
-            }
-            bail!("failed to get certificate from KvStore after waiting");
-        };
-
-        let result = self.do_request_new(domain, &config).await;
-
         if let Err(err) = self.release_cert_lock(domain, &lock) {
             error!("failed to release lock: {err:?}");
         }

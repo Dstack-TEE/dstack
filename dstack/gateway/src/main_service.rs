@@ -524,10 +524,7 @@ impl ProxyInner {
                 .clone()
                 .map(|service| service as Arc<dyn crate::kv::PersistentWriteNotifier>),
         ));
-        // Initialize any configured domains
-        if let Err(err) = certbot.init_all().await {
-            warn!("Failed to initialize multi-domain certbot: {err:?}");
-        }
+        // Issuance runs in `start_certbot_task`, not here, so it cannot delay startup.
 
         // Create TLS acceptors with CertResolver for SNI-based resolution
         // CertResolver allows atomic certificate updates without recreating acceptors
