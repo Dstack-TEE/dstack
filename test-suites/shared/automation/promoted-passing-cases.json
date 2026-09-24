@@ -362,7 +362,7 @@
       "source_status": "PASS",
       "entrypoint": "shared/automation/guest-agent-robustness-case.py",
       "environment": "INTEGRATION",
-      "notes": "a reader that stopped draining a follow stream left the agent's resident memory unchanged over 30s and recovered 256KB on resume, ten stalled readers against workers = 8 did not stop a Version call, and an idle follow stream ended after exactly 600s Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "notes": "a reader that stopped draining a follow stream left the agent's resident memory unchanged over 30s and recovered 256KB on resume, and ten stalled readers against workers = 8 did not stop a Version call. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
       "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
