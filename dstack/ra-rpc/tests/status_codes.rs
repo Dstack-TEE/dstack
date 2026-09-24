@@ -52,6 +52,7 @@ impl prpc::server::Service for DemoServer {
             "Forbidden",
             "Unavailable",
             "DeeplyBuried",
+            "Typed",
         ]
     }
 
@@ -68,6 +69,15 @@ impl prpc::server::Service for DemoServer {
                 // generic bad request, exactly as the generated code does.
                 let value: serde_json::Value = serde_json::from_slice(data.as_ref())?;
                 Ok(serde_json::to_vec(&value)?)
+            }
+            "Typed" => {
+                #[derive(serde::Deserialize)]
+                struct Typed {
+                    #[allow(dead_code)]
+                    items: Vec<String>,
+                }
+                let value: Typed = serde_json::from_slice(data.as_ref())?;
+                Ok(serde_json::to_vec(&value.items.len())?)
             }
             "PlainFail" => Err(anyhow!("something went wrong")),
             "Forbidden" => Err(anyhow!("caller is not authorized").with_code(403)),
@@ -200,4 +210,61 @@ async fn a_body_over_the_limit_is_reported_as_payload_too_large() {
     // A body within the limit still succeeds.
     let (status, _) = post(&client, "Demo.Echo", "{}").await;
     assert_eq!(status, 200);
+}
+
+/// Pre-dispatch failures are encoded outside the dispatcher and must still honour the content type.
+#[tokio::test]
+async fn a_json_request_is_refused_in_json_before_the_dispatcher_runs() {
+    let figment = rocket::Config::figment().merge((
+        "limits",
+        rocket::data::Limits::default().limit("Echo", rocket::data::ToByteUnit::bytes(8u64)),
+    ));
+    let rocket = rocket::custom(figment).manage(AppState).mount(
+        "/",
+        ra_rpc::prpc_routes!(AppState, DemoHandler, trim: "Demo."),
+    );
+    let client = Client::tracked(rocket)
+        .await
+        .expect("failed to build the test client");
+
+    let oversized = format!(r#"{{"text":"{}"}}"#, "x".repeat(64));
+    let response = client
+        .post("/Demo.Echo")
+        .header(rocket::http::ContentType::JSON)
+        .body(oversized)
+        .dispatch()
+        .await;
+
+    assert_eq!(response.status().code, 413);
+    assert_eq!(
+        response.content_type(),
+        Some(rocket::http::ContentType::JSON),
+        "a JSON request must be refused with a JSON content type"
+    );
+    let body = response.into_string().await.unwrap_or_default();
+    let value: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or_else(|error| panic!("{error}: {body:?}"));
+    assert!(
+        value["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("payload too large"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_rejection_does_not_echo_the_whole_offending_value() {
+    let client = client().await;
+    let huge = "x".repeat(1 << 20);
+    let (status, body) = post(&client, "Demo.Typed", &format!(r#"{{"items":"{huge}"}}"#)).await;
+
+    assert_eq!(status, 400, "{}", &body[..body.len().min(200)]);
+    assert!(
+        body.len() <= ra_rpc::MAX_ERROR_TEXT + 256,
+        "a rejection echoed {} bytes",
+        body.len()
+    );
+    assert!(body.contains("invalid type"), "{body}");
+    assert!(body.contains("expected a sequence"), "{body}");
 }

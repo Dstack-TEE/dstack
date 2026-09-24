@@ -132,10 +132,10 @@ fn is_mounted(path: &Path) -> Result<bool> {
 
 fn decode_mountinfo_path(value: &str) -> String {
     value
-        .replace(r"\134", "\\")
         .replace(r"\040", " ")
         .replace(r"\011", "\t")
         .replace(r"\012", "\n")
+        .replace(r"\134", "\\")
 }
 
 fn main() -> Result<()> {

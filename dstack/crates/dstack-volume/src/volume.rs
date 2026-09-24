@@ -146,8 +146,8 @@ fn seal_data_image(
             $data_path $hash_path
     )
     .context("running veritysetup format")?;
-    let verity_root =
-        parse_root_hash(&out).context("could not find the root hash in veritysetup output")?;
+    let verity_root = crate::parse_verity_root_hash(&out)
+        .context("could not find the root hash in veritysetup output")?;
 
     // Wrap the two blobs in a deterministic GPT disk image. Partition 1 is the
     // generic volume envelope, partition 2 is data, and partition 3 is verity.
@@ -383,13 +383,6 @@ fn copy_into(src: &Path, out: &mut fs::File, offset: u64) -> Result<()> {
     Ok(())
 }
 
-fn parse_root_hash(output: &str) -> Option<String> {
-    output
-        .lines()
-        .find_map(|l| l.strip_prefix("Root hash:"))
-        .map(|v| v.trim().to_string())
-}
-
 fn require_tool(name: &str) -> Result<()> {
     let present = run_cmd!(which $name >/dev/null 2>&1).is_ok();
     if !present {
@@ -401,13 +394,6 @@ fn require_tool(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_veritysetup_root() {
-        let sample = "VERITY header information for x\nUUID:  \nHash type:  1\n\
-                      Data blocks:  10\nRoot hash:      abc123def\n";
-        assert_eq!(parse_root_hash(sample).as_deref(), Some("abc123def"));
-    }
 
     #[test]
     fn uuid_is_deterministic_and_content_specific() {

@@ -632,9 +632,6 @@ pub struct ImageConfig {
     /// Path to guest image directory
     #[serde(default)]
     pub path: PathBuf,
-    /// OCI image registry for guest images (e.g., "dstacktee/guest-image")
-    #[serde(default)]
-    pub registry: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -657,6 +654,9 @@ pub struct Config {
 
     /// The buffer size in VMM process for guest events
     pub event_buffer_size: usize,
+
+    /// Maximum length in bytes of a guest-reported event name
+    pub max_event_name_len: usize,
 
     /// CVM configuration
     pub cvm: CvmConfig,

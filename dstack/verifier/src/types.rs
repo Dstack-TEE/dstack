@@ -110,9 +110,10 @@ pub struct VerificationDetails {
     /// It stays false where the check does not apply: GCP TDX, which measures
     /// through the vTPM instead, and the SEV-SNP and Nitro Enclave paths.
     pub acpi_tables_verified: bool,
-    /// dev vs prod OS image, from metadata.json (bound to os_image_hash). None if not exposed.
+    /// dev vs prod OS image, from metadata.json (bound to os_image_hash). Only the
+    /// TDX legacy path downloads the image, so this is None on every other path.
     pub os_image_is_dev: Option<bool>,
-    /// dstack OS version, from the same metadata.json.
+    /// dstack OS version, from the same metadata.json; None on the same paths.
     pub os_image_version: Option<String>,
     /// TEE variant that produced the verified quote.
     pub tee_variant: Option<TeeVariant>,

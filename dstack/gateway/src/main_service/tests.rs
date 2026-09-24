@@ -2731,3 +2731,32 @@ async fn failed_wg_apply_is_not_cached() {
         .unwrap();
     assert!(applied);
 }
+
+/// A sync merge holding the KV store must not stall routing via `refresh_state`.
+#[tokio::test]
+async fn refreshing_state_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store() {
+    use std::sync::atomic::AtomicBool;
+
+    let state = create_test_state().await;
+
+    // Stand in for a sync merge holding the store.
+    let _store_held = state.kv_store().ephemeral().write();
+
+    let finished = std::sync::Arc::new(AtomicBool::new(false));
+    let proxy = state.proxy.clone();
+    let done = finished.clone();
+    std::thread::spawn(move || {
+        let _ = proxy.refresh_state();
+        done.store(true, Ordering::SeqCst);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    assert!(
+        !finished.load(Ordering::SeqCst),
+        "test is vacuous: the refresh never reached a KV write"
+    );
+    assert!(
+        state.proxy.state.try_lock().is_ok(),
+        "the routing lock is held while the refresh waits on the KV store"
+    );
+}

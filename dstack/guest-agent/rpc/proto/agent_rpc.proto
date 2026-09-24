@@ -204,7 +204,8 @@ message TdxQuoteArgs {
   // - `keccak256`
   // - `keccak384`
   // - `keccak512`
-  // - `raw`: Passes the report_data directly to the driver without any processing
+  // - `raw`: Passes the report_data directly to the driver without any
+  //   processing, so it must be exactly 64 bytes
   string hash_algorithm = 2;
 
   // Custom prefix to prepend to report data before hashing.
@@ -214,7 +215,8 @@ message TdxQuoteArgs {
 
 // The request to get a raw TDX quote
 message RawQuoteArgs {
-  // 64 bytes of report data
+  // Report data, at most 64 bytes. `GetQuote` and `Attest` zero-pad shorter
+  // input; `Tappd.RawQuote` requires exactly 64 bytes.
   bytes report_data = 1;
 
   // Between v0.5.11 and 0.6.0, `Attest` briefly took its own `AttestArgs`

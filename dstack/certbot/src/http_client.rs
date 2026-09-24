@@ -13,6 +13,11 @@ use reqwest::Client;
 use std::error::Error as StdError;
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
+
+/// reqwest's async client has no default timeout; ACME account calls run under the
+/// cluster ACME lock with no outer bound.
+const ACME_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A HTTP client that supports both HTTP and HTTPS connections.
 /// This is needed because the default instant_acme client only supports HTTPS.
@@ -26,6 +31,7 @@ impl ReqwestHttpClient {
     pub fn new() -> Result<Self> {
         let client = Client::builder()
             .user_agent("dstack-certbot/0.1")
+            .timeout(ACME_REQUEST_TIMEOUT)
             .build()
             .context("failed to build reqwest client")?;
         Ok(Self { client })
