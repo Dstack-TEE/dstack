@@ -1507,9 +1507,7 @@ impl App {
     }
 
     pub(crate) fn vm_event_report(&self, cid: u32, event: &str, body: String) -> Result<()> {
-        // Guest-chosen and kept in the event ring, so bound it like the body.
-        const MAX_EVENT_NAME_LEN: usize = 64;
-        if event.len() > MAX_EVENT_NAME_LEN {
+        if event.len() > self.config.max_event_name_len {
             error!(cid, "event name too large, skipping");
             return Ok(());
         }
@@ -3639,8 +3637,8 @@ mod tests {
         std::fs::create_dir_all(&config.workdir).unwrap();
         app.lock().add(VmState::new(config));
 
-        app.vm_event_report(3, &"x".repeat(1024), "body".into())
-            .unwrap();
+        let too_long = "x".repeat(app.config.max_event_name_len + 1);
+        app.vm_event_report(3, &too_long, "body".into()).unwrap();
         assert!(app.lock().get("vm-1").unwrap().state.events.is_empty());
     }
 }
