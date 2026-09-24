@@ -294,19 +294,19 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn get_global_connections(self) -> Result<GlobalConnectionsStats> {
-        let state = self.state.lock();
-        let kv_store = self.state.kv_store();
+        // KV reads can wait behind a sync merge, so do them after releasing
+        // the routing lock.
+        let instance_ids: Vec<String> = self.state.lock().state.instances.keys().cloned().collect();
+        let ephemeral = self.state.kv_store().ephemeral().read();
 
         let mut node_connections = std::collections::HashMap::new();
         let mut total_connections = 0u64;
 
         // Iterate through all instances and sum up connections per node
-        for instance_id in state.state.instances.keys() {
+        for instance_id in &instance_ids {
             // Get connection counts from ephemeral KV for this instance
             let conn_prefix = format!("conn/{}/", instance_id);
-            for (key, count) in kv_store
-                .ephemeral()
-                .read()
+            for (key, count) in ephemeral
                 .iter_by_prefix(&conn_prefix)
                 .filter_map(|(k, entry)| {
                     let value = entry.value.as_ref()?;
