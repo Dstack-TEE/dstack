@@ -80,10 +80,6 @@ fn read_compose(compose_path: &Path) -> Result<AppCompose> {
 }
 
 fn prepare_volumes() -> Result<Vec<VerityVolume>> {
-    // Neither step is required -- dm-verity is usually built in, and the scan
-    // can win the race against udev -- so a failure here is not fatal. It is
-    // still the first thing to look at when the scan then finds nothing, so
-    // say it happened instead of discarding it.
     if let Err(err) = run_cmd!(modprobe dm-verity) {
         warn!("could not load the dm-verity module, continuing: {err:#}");
     }
@@ -346,36 +342,22 @@ fn verify_first_block(path: &Path) -> Result<()> {
 }
 
 fn mount_volume(requested: &RequestedVolume, mapped: &Path) -> Result<()> {
-    let fs_type = probe_fs_type(mapped);
+    let fs_type = run_fun!(blkid -o value -s TYPE $mapped).unwrap_or_else(|err| {
+        warn!(
+            "blkid failed on {}, letting the kernel probe: {err:#}",
+            mapped.display()
+        );
+        String::new()
+    });
     let target = &requested.target;
     fs::create_dir_all(target)?;
     if is_mountpoint(target)? {
         ensure_mounted_from(target, mapped)?;
     } else {
-        mount_read_only(mapped, target, &fs_type)?;
+        mount_read_only(mapped, target, fs_type.trim())?;
     }
     info!(root = %hex::encode(requested.verity_root), target = %target.display(), "mounted verity volume");
     Ok(())
-}
-
-/// Ask `blkid` what filesystem the mapped device carries.
-///
-/// An empty answer means "unknown", and the caller then lets the kernel probe.
-/// That is a worse mount than a typed one -- an ext4 volume mounted without
-/// `noload` makes the kernel want to replay the journal onto a read-only
-/// dm-verity device -- so a failed probe is reported rather than folded into
-/// the same empty string a blank device produces.
-fn probe_fs_type(device: &Path) -> String {
-    match run_fun!(blkid -o value -s TYPE $device) {
-        Ok(fs_type) => fs_type.trim().to_string(),
-        Err(err) => {
-            warn!(
-                device = %device.display(),
-                "blkid could not identify the filesystem, letting the kernel probe: {err:#}"
-            );
-            String::new()
-        }
-    }
 }
 
 fn mount_read_only(device: &Path, target: &Path, fs_type: &str) -> Result<()> {

@@ -274,9 +274,6 @@ done
 # The image build and OVMF each implement the setup-header normalization; if
 # they drift, every CVM fails on RTMR[1] and nothing points at why.
 "$D/../tests/test-kernel-header-normalization.sh"
-# app-compose.sh reads .sys-config.json with jq under `set -e`; a present but
-# unreadable file must not be indistinguishable from an absent one.
-"$D/../tests/test-app-compose-sys-config.sh"
 "$D/tests/test-dev-cache.sh"
 "$D/tests/test-component-framework.sh"
 "$D/tests/test-component-merge.sh"

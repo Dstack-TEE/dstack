@@ -395,27 +395,18 @@ impl GatewayKeyStore {
         })
     }
 
-    /// Read the cached gateway registration, or `None` when there isn't one.
-    ///
-    /// A cache that cannot be read is not the same thing as a cache that isn't
-    /// there: the boot recovers from both by re-registering, but only one of
-    /// them means something went wrong earlier in this boot. Say which.
     fn load_from(path: &Path) -> Option<Self> {
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
             Err(err) => {
-                warn!("could not read the gateway cache, re-registering: {err}");
+                warn!("failed to read the gateway cache, re-registering: {err}");
                 return None;
             }
         };
-        match serde_json::from_str(&content) {
-            Ok(store) => Some(store),
-            Err(err) => {
-                warn!("gateway cache is malformed, re-registering: {err}");
-                None
-            }
-        }
+        serde_json::from_str(&content)
+            .inspect_err(|err| warn!("malformed gateway cache, re-registering: {err}"))
+            .ok()
     }
 
     fn load_from_default() -> Option<Self> {
