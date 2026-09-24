@@ -708,3 +708,12 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-int-mixed-005"></a><a id="risk-int-mixed-005"></a>| `req-int-mixed-005` | `risk-int-mixed-005` | [tc-int-mixed-005](../cases/06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-005/case.md#tc-int-mixed-005) — Verifier evidence compatibility for pinned releases | P0 |
 <a id="req-int-mixed-006"></a><a id="risk-int-mixed-006"></a>| `req-int-mixed-006` | `risk-int-mixed-006` | [tc-int-mixed-006](../cases/06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-006/case.md#tc-int-mixed-006) — Rolling restart under four-version online mix | P0 |
 <a id="req-int-mixed-007"></a><a id="risk-int-mixed-007"></a>| `req-int-mixed-007` | `risk-int-mixed-007` | [tc-int-mixed-007](../cases/06-integration/04-pinned-mixed-version-matrix/tc-int-mixed-007/case.md#tc-int-mixed-007) — Optional and unknown protobuf fields across pinned versions | P0 |
+
+## Guest-agent concurrency and robustness
+
+| Requirement | Risk | Case | Priority |
+|---|---|---|---|
+<a id="req-gos-concurrency-001"></a><a id="risk-gos-concurrency-001"></a>| `req-gos-concurrency-001` | `risk-gos-concurrency-001` | [tc-gos-concurrency-001](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-001/case.md#tc-gos-concurrency-001) — Concurrent derivation determinism and per-call quote binding | P0 |
+<a id="req-gos-concurrency-002"></a><a id="risk-gos-concurrency-002"></a>| `req-gos-concurrency-002` | `risk-gos-concurrency-002` | [tc-gos-concurrency-002](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-002/case.md#tc-gos-concurrency-002) — Head-of-line blocking on the quote path | P0 |
+<a id="req-gos-concurrency-003"></a><a id="risk-gos-concurrency-003"></a>| `req-gos-concurrency-003` | `risk-gos-concurrency-003` | [tc-gos-concurrency-003](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-concurrency-003/case.md#tc-gos-concurrency-003) — Agent survival and process identity after concurrent load | P0 |
+<a id="req-gos-observability-slow-consumer"></a><a id="risk-gos-observability-slow-consumer"></a>| `req-gos-observability-slow-consumer` | `risk-gos-observability-slow-consumer` | [tc-gos-observability-slow-consumer](../cases/01-guest-os/16-concurrency-and-robustness/tc-gos-observability-slow-consumer/case.md#tc-gos-observability-slow-consumer) — Log streaming backpressure with a stalled consumer | P1 |

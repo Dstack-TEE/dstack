@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-concurrency-001",
+  "title": "Concurrent derivation determinism and per-call quote binding",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-concurrency-001"
+  ],
+  "risks": [
+    "risk-gos-concurrency-001"
+  ],
+  "tags": [
+    "guest",
+    "concurrency-and-robustness"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "DstackGuest.GetKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/guest-agent-robustness-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

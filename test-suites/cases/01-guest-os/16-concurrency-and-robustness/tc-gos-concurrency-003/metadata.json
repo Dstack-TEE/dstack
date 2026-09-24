@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-concurrency-003",
+  "title": "Agent survival and process identity after concurrent load",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-concurrency-003"
+  ],
+  "risks": [
+    "risk-gos-concurrency-003"
+  ],
+  "tags": [
+    "guest",
+    "concurrency-and-robustness"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "DstackGuest.Version"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/guest-agent-robustness-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}
