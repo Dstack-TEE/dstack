@@ -87,7 +87,7 @@ need_bin() {
 
 pull_released_image() {
   local image=$1 component=$2
-  log "pulling released $component image from Docker Hub: $image"
+  log "pulling released $component image: $image"
   docker pull "$image" || die "cannot pull released $component image $image"
 }
 

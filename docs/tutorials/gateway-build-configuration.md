@@ -51,7 +51,7 @@ Before starting, ensure you have:
 
 | Artifact | Purpose |
 |----------|---------|
-| **Gateway Docker image** | Locally-built image pushed to local registry (v0.5.7 not on Docker Hub) |
+| **Gateway Docker image** | Locally-built image pushed to local registry (no gateway 0.5.7 release exists) |
 | **docker-compose.yaml** | Container definition with gateway image and environment variables |
 | **.env** | Host-side environment variables for deployment |
 | **.app_env** | CVM-side environment variables passed into the container |
@@ -108,7 +108,7 @@ mkdir -p ~/gateway-deploy
 
 ### Step 3: Build Gateway Docker Image
 
-The `dstacktee/dstack-gateway:0.5.7` image isn't published on Docker Hub, so we build it locally from the dstack source you cloned in [Build dstack from Source](/tutorial/clone-build-dstack-vmm). This follows the same pattern as the [KMS image build](/tutorial/kms-build-configuration/#step-7-create-docker-image-for-cvm-deployment).
+There is no `gateway-v0.5.7` release, so we build it locally from the dstack source you cloned in [Build dstack from Source](/tutorial/clone-build-dstack-vmm). This follows the same pattern as the [KMS image build](/tutorial/kms-build-configuration/#step-7-create-docker-image-for-cvm-deployment).
 
 #### Build the gateway binary
 
