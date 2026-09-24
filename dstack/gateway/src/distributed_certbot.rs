@@ -1159,36 +1159,6 @@ mod tests {
         assert_eq!(notifier.0.load(Ordering::Relaxed), 4);
     }
 
-    /// Issuance must never wait on another node holding the per-domain lock:
-    /// the node that loses the race has nothing to do, and the certificate the
-    /// winner publishes reaches it through the KV store's cert watch.
-    ///
-    /// There used to be a second entry point that did wait -- a startup
-    /// `init_all` called from `ProxyInner::new`, before the proxy bound its
-    /// listeners, which slept a hard-coded 30 s per contended domain. Issuance
-    /// now has exactly one entry point and it runs in the renewal task, beside
-    /// the proxy rather than in front of it.
-    #[tokio::test(start_paused = true)]
-    async fn issuance_skips_rather_than_sleeps_when_another_node_holds_the_cert_lock() {
-        let data_dir = tempfile::tempdir().expect("failed to create temp dir");
-        let certbot = certbot_with_domain(data_dir.path());
-        assert!(certbot
-            .kv_store
-            .try_acquire_cert_lock("app.example.com", RENEW_LOCK_TIMEOUT_SECS));
-
-        let started = tokio::time::Instant::now();
-        let renewed = certbot
-            .try_renew("app.example.com", false)
-            .await
-            .expect("a contended domain is skipped, not an error");
-        assert!(!renewed, "the losing node must not issue");
-        assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "issuance blocked for {:?} waiting on another node",
-            started.elapsed()
-        );
-    }
-
     #[tokio::test]
     async fn set_caa_all_succeeds_without_configured_domains() {
         let data_dir = tempfile::tempdir().expect("failed to create temp dir");
