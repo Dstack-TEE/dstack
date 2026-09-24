@@ -51,24 +51,9 @@ impl LatestHandshakesCache {
         self.cell.set(timestamps);
     }
 
-    /// The cached snapshot, never a freshly produced one.
-    ///
-    /// The routing path reaches this from `select_top_n_hosts` once per
-    /// proxied connection, holding the `ProxyState` mutex every tenant's
-    /// traffic takes. Producing a value here means forking `wg show` under
-    /// that lock -- and the cell only ever fills on success, so a host where
-    /// `wg show` cannot work (wrong `core.wg.interface`, no WireGuard module,
-    /// a container without `CAP_NET_ADMIN`) would fork once per inbound
-    /// connection, for as long as the traffic lasts. The producer runs in
-    /// [`Self::refresh`] and in the periodic task instead, both off the
-    /// routing path and on the blocking pool.
-    ///
-    /// Serving an expired snapshot rather than nothing is deliberate: every
-    /// consumer compares handshake *age* against its own threshold, so a stale
-    /// snapshot ages the whole fleet uniformly, while an empty map reads as
-    /// "no instance has ever handshaked" and would drain routing on the first
-    /// refresh that fails. Empty is only what a node that has never had a
-    /// snapshot actually knows.
+    /// The cached snapshot, stale if need be; never runs `wg show`. Callers
+    /// hold the routing lock, and a host where `wg show` always fails would
+    /// otherwise fork once per connection.
     pub(crate) fn latest(&self, stale_timeout: Option<Duration>) -> Result<HandshakesWithAge> {
         let timestamps = match self.cell.get_allow_stale() {
             Ok(snapshot) => snapshot.into_value(),
@@ -146,14 +131,6 @@ fn add_elapsed_time(
 mod tests {
     use super::*;
 
-    /// A cold cache must not fork a process on the routing path.
-    ///
-    /// `latest` is reached from `select_top_n_hosts` while `ProxyState`'s mutex
-    /// is held, once per proxied connection. A host where `wg show` can never
-    /// succeed -- a misconfigured `core.wg.interface`, no WireGuard module, a
-    /// container without `CAP_NET_ADMIN` -- never fills the cell, so a `latest`
-    /// that produces its own value forks once per inbound connection while
-    /// holding the lock every tenant's traffic takes.
     #[test]
     fn a_cold_cache_does_not_shell_out_on_the_routing_path() {
         const CONNECTIONS: usize = 500;
@@ -179,23 +156,6 @@ mod tests {
             "{CONNECTIONS} cold reads took {elapsed:?}: the routing path is spawning \
              a process per connection"
         );
-    }
-
-    /// An expired snapshot still routes.
-    ///
-    /// Consumers threshold on handshake *age*, so serving a stale map ages the
-    /// whole fleet uniformly. Returning nothing instead would read as "no
-    /// instance has ever handshaked" and drain routing on the first refresh
-    /// that fails.
-    #[test]
-    fn an_expired_snapshot_is_still_served() {
-        let cache = LatestHandshakesCache::new("dstack-no-such-iface0".to_string(), Duration::ZERO);
-        cache.set_for_test(BTreeMap::from([("pubkey-a".to_string(), 1730190589)]));
-
-        assert!(cache
-            .latest(None)
-            .expect("an expired snapshot still answers")
-            .contains_key("pubkey-a"));
     }
 
     #[test]

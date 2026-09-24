@@ -61,8 +61,8 @@ impl AdminRpcHandler {
             .kv_store()
             .get_best_zt_domain()
             .unwrap_or_default();
-        // Snapshot routing fields only. KV readers can wait behind a sync merge;
-        // neither those waits nor a cold wg query may hold the routing mutex.
+        // KV reads can wait behind a sync merge, so do them after releasing
+        // the routing lock.
         let mut hosts = {
             let state = self.state.lock();
             state
@@ -97,6 +97,8 @@ impl AdminRpcHandler {
             nodes: self.state.get_all_nodes(),
             hosts,
             num_connections: NUM_CONNECTIONS.load(Ordering::Relaxed),
+            // Reads the post-probe config, so this is what the data path is
+            // running rather than what the file asked for.
             accel: Some(accel_status(&config.proxy)),
             health_gating: config.proxy.health_check.enabled,
         })

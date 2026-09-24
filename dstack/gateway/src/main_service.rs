@@ -291,13 +291,6 @@ impl ProxyInner {
         self.state.lock().or_panic("Failed to lock AppState")
     }
 
-    /// For tests that assert a handler does its slow work off this lock: the
-    /// only way to observe how long it is held is to compete for it.
-    #[cfg(test)]
-    pub(crate) fn routing_lock_is_free(&self) -> bool {
-        self.state.try_lock().is_ok()
-    }
-
     /// WireGuard handshake ages, without taking the routing lock.
     ///
     /// The cache is its own synchronization, so a caller that only needs
@@ -317,13 +310,8 @@ impl ProxyInner {
 
     /// Publish this node's WireGuard observations to the KV store.
     ///
-    /// The routing lock is taken only to copy the public-key-to-instance-id
-    /// map, never to write. Each write takes the KV store's own write lock,
-    /// which a sync round holds for as long as it takes to merge an inbound
-    /// envelope; composing the two would let one peer's merge stall every
-    /// proxied connection for the length of it. `Admin.Status` calls this, and
-    /// `web_routes::route_index` calls `Admin.Status`, so the composition is
-    /// reachable from a dashboard page load.
+    /// The KV writes wait on the store's write lock, which a sync merge holds,
+    /// so they must not run under the routing lock.
     pub(crate) fn refresh_state(&self) -> Result<()> {
         let handshakes = self.latest_handshakes(None)?;
         let instance_ids: Vec<(String, u64)> = {
@@ -2570,11 +2558,8 @@ impl ProxyState {
         Ok(())
     }
 
-    /// Drop instances the cluster has stopped seeing.
-    ///
-    /// Reads the handshake observations `ProxyInner::refresh_state` publishes,
-    /// so the caller refreshes first -- off this lock, because the refresh
-    /// writes to the KV store.
+    /// Drop instances the cluster has stopped seeing. The caller runs
+    /// `ProxyInner::refresh_state` first, off this lock.
     fn recycle(&mut self) -> Result<()> {
         // Note: Gateway nodes are not removed from KvStore, only marked offline/retired
 
@@ -2804,4 +2789,4 @@ impl RpcCall<Proxy> for RpcHandler {
 }
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
