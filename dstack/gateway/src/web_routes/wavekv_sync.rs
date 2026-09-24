@@ -621,6 +621,7 @@ mod tests {
             cert_validator: std::sync::Arc::new(crate::kv::AppIdValidator::new(
                 TEST_APP_ID.to_vec(),
             )),
+            timeout: std::time::Duration::from_secs(5),
         })
         .expect("HTTPS client");
         let base = format!("https://127.0.0.1:{port}");

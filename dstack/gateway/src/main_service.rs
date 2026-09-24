@@ -424,6 +424,7 @@ impl ProxyInner {
                 key_path: tls.key.clone(),
                 ca_cert_path: tls.mutual.ca_certs.clone(),
                 cert_validator,
+                timeout: config.sync.timeout,
             }
         };
 
