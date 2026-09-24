@@ -30,6 +30,28 @@ later); older images hang at boot ([#745](https://github.com/Dstack-TEE/dstack/i
 
 Only the KMS port is published.
 
+### Data sources
+
+Helios and the relay read their endpoints from the unmeasured
+[user config](../../../docs/vmm-cli-user-guide.md), so they can be changed
+without a new compose hash. The file holds `KEY=value` lines; other keys are
+ignored and unset keys use the defaults in the Compose file:
+
+| Key | Default |
+|-----|---------|
+| `PHALA_RPC_URL` | `https://rpc.phala.network` |
+| `ETHEREUM_CONSENSUS_RPC` | `https://ethereum.operationsolarstorm.org` |
+| `ETHEREUM_EXECUTION_RPC` | `https://eth.drpc.org` |
+| `OP_NODE_P2P_STATIC` | Phala's public op-node |
+
+Set it with `USER_CONFIG` in `deploy-to-vmm.sh`, or later with
+`vmm-cli.py update-user-config <vm-id> <file>` and a restart. Always deploy
+with a non-empty user config (a comment is enough): the VMM skips empty ones,
+and Docker then mounts a directory in its place. These sources are
+untrusted: every response is checked against signatures or proofs, so a
+malicious endpoint can only stall authorization. The Ethereum checkpoint stays
+in Compose because it anchors that verification.
+
 ## Trust and verification
 
 Reads use **sequencer-authenticated state, not L1-settled state**:
