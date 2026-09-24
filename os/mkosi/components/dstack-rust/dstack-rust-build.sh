@@ -21,6 +21,8 @@ install -m0644 "$ROOT/os/common/rootfs/"*.service \
 install -m0644 "$ROOT/os/common/rootfs/journald.conf" "$DEST/etc/systemd/journald.conf.d/dstack.conf"
 install -m0644 "$ROOT/os/common/rootfs/llmnr.conf" "$DEST/etc/systemd/resolved.conf.d/dstack.conf"
 install -m0644 "$ROOT/os/common/rootfs/tdx-attest.conf" "$DEST/etc/"
+install -Dm0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/chrony/files/chrony.conf" \
+  "$DEST/etc/chrony/chrony.conf"
 install -m0644 "$ROOT/os/common/rootfs/sysctl.d/99-dstack.conf" "$DEST/etc/sysctl.d/"
 # Vendor drop-ins go beside the units, not into the operator's /etc layer.
 install -m0644 "$ROOT/os/common/rootfs/docker.service.d/"* \
