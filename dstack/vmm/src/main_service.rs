@@ -110,7 +110,28 @@ pub fn resolve_gpus_with_config(
     if !cvm_config.gpu.allow_attach_all && gpus.attach_mode.is_all() {
         bail!("Attaching all GPUs is not allowed");
     }
+    if !gpus.gpus.is_empty() && !gpus.attach_mode.is_all() {
+        let offered: Vec<_> = cvm_config
+            .gpu
+            .list_devices()?
+            .into_iter()
+            .map(|dev| dev.slot)
+            .collect();
+        ensure_gpus_offered(&gpus.gpus, &offered)?;
+    }
     Ok(gpus)
+}
+
+/// Listed slots must be among the GPUs `ListGpus` offers, i.e. pass
+/// `cvm.gpu.listing`, `include` and `exclude`; otherwise any host PCI device
+/// (or a string carrying QEMU option separators) reaches `-device vfio-pci`.
+fn ensure_gpus_offered(requested: &[GpuSpec], offered: &[String]) -> Result<()> {
+    for gpu in requested {
+        if !offered.contains(&gpu.slot) {
+            bail!("GPU {} is not offered by this node", gpu.slot);
+        }
+    }
+    Ok(())
 }
 
 pub fn resolve_gpus(gpu_cfg: &rpc::GpuConfig) -> Result<GpuConfig> {
@@ -2824,6 +2845,16 @@ mod tests {
             tmp.path().join("volume.img").display().to_string()
         );
         Ok(())
+    }
+
+    #[test]
+    fn listed_gpus_must_be_offered_by_node() {
+        let offered = ["0000:0f:00.0".to_string()];
+        let gpu = |slot: &str| GpuSpec { slot: slot.into() };
+        assert!(ensure_gpus_offered(&[gpu("0000:0f:00.0")], &offered).is_ok());
+        for slot in ["0000:10:00.0", "0000:0f:00.0,romfile=/tmp/rom"] {
+            assert!(ensure_gpus_offered(&[gpu(slot)], &offered).is_err());
+        }
     }
 
     #[test]
