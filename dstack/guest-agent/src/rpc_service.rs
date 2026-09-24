@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -57,6 +57,10 @@ use crate::{
 /// momentarily unable to attest recover on its own.
 const IDENTITY_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Same floor as [`IDENTITY_RETRY_INTERVAL`], for the demo-cert request that
+/// every `Info` may start: a quote plus an RA-TLS round trip to the KMS.
+const DEMO_CERT_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Decode the immutable identity fields out of a boot attestation.
 ///
 /// Costs a quote and an event-log replay, which is why its result is cached for
@@ -93,7 +97,9 @@ struct AppStateInner {
     keys: AppKeys,
     vm_config: String,
     cert_client: CertRequestClient,
-    demo_cert: RwLock<String>,
+    demo_cert: tokio::sync::OnceCell<String>,
+    /// When the last demo-cert request failed; held while one is running.
+    demo_cert_last_failure: tokio::sync::Mutex<Option<Instant>>,
     platform: Arc<dyn PlatformBackend>,
     /// Present only when the app opted into health gating; see `health`.
     health: Option<Arc<crate::health::HealthMonitor>>,
@@ -214,23 +220,28 @@ impl AppStateInner {
 }
 
 impl AppState {
+    /// Start the demo-cert request in the background: one at a time, and at
+    /// most once per [`DEMO_CERT_RETRY_INTERVAL`] after a failure, since the
+    /// anonymous `Info` calls this.
     fn maybe_request_demo_cert(&self) {
-        let state = self.inner.clone();
-        if !state
-            .demo_cert
-            .read()
-            .or_panic("lock shoud never fail")
-            .is_empty()
-        {
+        if self.inner.demo_cert.initialized() {
             return;
         }
+        let state = self.inner.clone();
         tokio::spawn(async move {
+            let Ok(mut last_failure) = state.demo_cert_last_failure.try_lock() else {
+                return;
+            };
+            if state.demo_cert.initialized()
+                || last_failure.is_some_and(|t| t.elapsed() < DEMO_CERT_RETRY_INTERVAL)
+            {
+                return;
+            }
             match state.request_demo_cert().await {
-                Ok(demo_cert) => {
-                    *state.demo_cert.write().or_panic("lock shoud never fail") = demo_cert;
-                }
+                Ok(demo_cert) => _ = state.demo_cert.set(demo_cert),
                 Err(e) => {
-                    error!("Failed to request demo cert: {e}");
+                    error!("failed to request demo cert: {e:?}");
+                    *last_failure = Some(Instant::now());
                 }
             }
         });
@@ -282,7 +293,8 @@ impl AppState {
                 config,
                 keys,
                 cert_client,
-                demo_cert: RwLock::new(String::new()),
+                demo_cert: Default::default(),
+                demo_cert_last_failure: Default::default(),
                 vm_config,
                 platform,
                 health,
@@ -532,19 +544,15 @@ impl InternalRpcHandler {
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let hide_tcb_info = external && !state.config().app_compose.public_tcbinfo;
-    let versioned_attestation = state
-        .inner
-        .attest(|platform| platform.attestation_for_info())
-        .await?;
-    let attestation = versioned_attestation.into_v1();
-    let app_info = attestation
-        .decode_app_info(false)
-        .context("Failed to decode app info")?;
-    let event_log = attestation.tdx_event_log().unwrap_or_default();
-    let tcb_info = if hide_tcb_info {
-        "".to_string()
+    let identity = state.identity().await?;
+    let (tcb_info, vm_config) = if hide_tcb_info {
+        Default::default()
     } else {
-        let app_compose = state.config().app_compose.raw.clone();
+        let attestation = state
+            .inner
+            .attest(|platform| platform.attestation_for_info())
+            .await?
+            .into_v1();
         let td_report = match attestation.td10_report() {
             Some(report) => json!({
                 "mrtd": hex::encode(report.mr_td),
@@ -555,42 +563,33 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
             }),
             None => json!({}),
         };
-        serde_json::to_string_pretty(&json!({
+        let tcb_info = serde_json::to_string_pretty(&json!({
             "mrtd": td_report["mrtd"],
             "rtmr0": td_report["rtmr0"],
             "rtmr1": td_report["rtmr1"],
             "rtmr2": td_report["rtmr2"],
             "rtmr3": td_report["rtmr3"],
-            "mr_aggregated": hex::encode(app_info.mr_aggregated),
-            "os_image_hash": hex::encode(&app_info.os_image_hash),
-            "compose_hash": hex::encode(&app_info.compose_hash),
-            "device_id": hex::encode(&app_info.device_id),
-            "event_log": event_log,
-            "app_compose": app_compose,
+            "mr_aggregated": hex::encode(&identity.mr_aggregated),
+            "os_image_hash": hex::encode(&identity.os_image_hash),
+            "compose_hash": hex::encode(&identity.compose_hash),
+            "device_id": hex::encode(&identity.device_id),
+            "event_log": attestation.tdx_event_log().unwrap_or_default(),
+            "app_compose": state.config().app_compose.raw,
         }))
-        .unwrap_or_default()
-    };
-    let vm_config = if hide_tcb_info {
-        "".to_string()
-    } else {
-        state.inner.vm_config.clone()
+        .unwrap_or_default();
+        (tcb_info, state.inner.vm_config.clone())
     };
     state.maybe_request_demo_cert();
     Ok(AppInfo {
         app_name: state.config().app_compose.name.clone(),
-        app_id: app_info.app_id,
-        instance_id: app_info.instance_id,
-        device_id: app_info.device_id,
-        mr_aggregated: app_info.mr_aggregated.to_vec(),
-        os_image_hash: app_info.os_image_hash.clone(),
-        key_provider_info: String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
-        compose_hash: app_info.compose_hash.clone(),
-        app_cert: state
-            .inner
-            .demo_cert
-            .read()
-            .or_panic("lock should not fail")
-            .clone(),
+        app_id: identity.app_id.clone(),
+        instance_id: identity.instance_id.clone(),
+        device_id: identity.device_id.clone(),
+        mr_aggregated: identity.mr_aggregated.clone(),
+        os_image_hash: identity.os_image_hash.clone(),
+        key_provider_info: identity.key_provider_info.clone(),
+        compose_hash: identity.compose_hash.clone(),
+        app_cert: state.inner.demo_cert.get().cloned().unwrap_or_default(),
         tcb_info,
         vm_config,
         cloud_vendor: read_dmi_file("sys_vendor"),
@@ -1136,6 +1135,7 @@ pub(crate) mod tests {
     #[derive(Default)]
     struct InfoAttestationProbe {
         calls: AtomicUsize,
+        cert_calls: AtomicUsize,
         failing: AtomicBool,
         gate: Mutex<
             Option<(
@@ -1364,6 +1364,11 @@ pNs85uhOZE8z2jr8Pg==
             }
 
             fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
+                self.probe.cert_calls.fetch_add(1, Ordering::Relaxed);
+                self.probe.pass_gate();
+                if self.probe.failing.load(Ordering::Relaxed) {
+                    anyhow::bail!("the platform cannot attest right now");
+                }
                 let report_data =
                     ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
                 let attestation = patch_report_data(&self.attestation, report_data);
@@ -1414,7 +1419,8 @@ pNs85uhOZE8z2jr8Pg==
             keys: dummy_keys,
             vm_config: String::new(),
             cert_client: dummy_cert_client,
-            demo_cert: RwLock::new(String::new()),
+            demo_cert: Default::default(),
+            demo_cert_last_failure: Default::default(),
             platform: Arc::new(TestSimulatorPlatform {
                 attestation: {
                     let fixture = VersionedAttestation::from_bytes(
@@ -2127,5 +2133,39 @@ pNs85uhOZE8z2jr8Pg==
             2,
             "a success must be cached, not re-decoded per call"
         );
+    }
+
+    #[tokio::test]
+    async fn an_external_info_answers_from_the_identity_cache() {
+        let probe = Arc::new(InfoAttestationProbe::default());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        for _ in 0..8 {
+            get_info(&state, true).await.expect("Info answers");
+        }
+        assert_eq!(probe.calls(), 1, "only the identity decode attests");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn info_requests_the_demo_cert_one_at_a_time_and_throttles_failures() {
+        let probe = Arc::new(InfoAttestationProbe::default());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        state.identity().await.expect("identity decodes");
+        probe.set_failing(true);
+        let (entered_rx, release_tx) = probe.arm_gate();
+
+        get_info(&state, true).await.expect("Info answers");
+        entered_rx.await.expect("the demo-cert request started");
+        for _ in 0..8 {
+            get_info(&state, true).await.expect("Info answers");
+        }
+        release_tx.send(()).unwrap();
+        while state.inner.demo_cert_last_failure.lock().await.is_none() {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..8 {
+            get_info(&state, true).await.expect("Info answers");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(probe.cert_calls.load(Ordering::Relaxed), 1);
     }
 }
