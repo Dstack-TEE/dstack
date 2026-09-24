@@ -3346,11 +3346,6 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         // Pin where the encrypted key material is read from. The binary area
         // must sit between the two header copies and the encrypted payload;
         // otherwise a host with raw disk access could redirect it elsewhere.
-        //
-        // `checked_add`, because both numbers come from the host-supplied
-        // header: `offset + size` wraps past `u64::MAX` back under
-        // `PAYLOAD_OFFSET` and passes this check in the release profile, which
-        // has overflow checks off. A wrapping sum is an out-of-range area.
         let area_end = area.offset().checked_add(area.size());
         if area.offset() < 2 * hdr_size || area_end.is_none_or(|end| end > PAYLOAD_OFFSET) {
             bail!(
@@ -3468,19 +3463,7 @@ fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
     // so the surrounding header stays intact; "00768" parses to 768, which is
     // inside the header copies (< 2 * hdr_size) rather than the metadata gap.
     let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    let needle = br#""offset":"32768""#;
-    let replacement = br#""offset":"00768""#;
-    let mut patched = 0;
-    let mut i = 0;
-    while i + needle.len() <= header.len() {
-        if &header[i..i + needle.len()] == needle {
-            header[i..i + needle.len()].copy_from_slice(replacement);
-            patched += 1;
-            i += needle.len();
-        } else {
-            i += 1;
-        }
-    }
+    let patched = patch_luks_json(&mut header, br#""offset":"32768""#, br#""offset":"00768""#);
     assert_eq!(patched, 2, "expected to patch both header copies");
     let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
     assert!(error.to_string().contains("Invalid LUKS keyslot area"));
@@ -3510,12 +3493,6 @@ fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usiz
     patched
 }
 
-/// The keyslot-area bound exists so a host with raw disk access cannot point
-/// `cryptsetup` at key material outside the metadata gap. `offset + size` is
-/// u64 arithmetic on two numbers the header supplies, so a size that wraps
-/// past `u64::MAX` lands back under `PAYLOAD_OFFSET` and passes the check --
-/// silently in release, where overflow checks are off and `panic = "abort"`
-/// means an arithmetic panic would take the whole boot down anyway.
 #[test]
 fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
     let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
