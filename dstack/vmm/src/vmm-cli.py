@@ -15,6 +15,7 @@ import re
 import socket
 import ssl
 import sys
+import tempfile
 import urllib.parse
 from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
 
@@ -205,13 +206,27 @@ def vmm_address_to_url(instance: Dict[str, Any]) -> str:
         return f"http://{host}:{port}"
 
 
+def write_private_json(path: str, data: Any) -> None:
+    """Atomically replace a JSON file with an owner-only (0600) copy."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
+
+
 def save_active_vmm(vmm_id: str):
     """Save the active VMM instance ID to the config file."""
     config = load_config()
     config["active_vmm"] = vmm_id
-    os.makedirs(os.path.dirname(DEFAULT_CONFIG_PATH), exist_ok=True)
-    with open(DEFAULT_CONFIG_PATH, "w") as f:
-        json.dump(config, f, indent=2)
+    write_private_json(DEFAULT_CONFIG_PATH, config)
 
 
 def cmd_ls_vmm(args):
@@ -1690,7 +1705,9 @@ def load_whitelist() -> List[str]:
 
     """
     if not os.path.exists(DEFAULT_KMS_WHITELIST_PATH):
-        os.makedirs(os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), exist_ok=True)
+        os.makedirs(
+            os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), mode=0o700, exist_ok=True
+        )
         return []
 
     try:
@@ -1708,9 +1725,7 @@ def save_whitelist(whitelist: List[str]) -> None:
         whitelist: List of trusted Ethereum addresses
 
     """
-    os.makedirs(os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), exist_ok=True)
-    with open(DEFAULT_KMS_WHITELIST_PATH, "w") as f:
-        json.dump({"trusted_signers": whitelist}, f, indent=2)
+    write_private_json(DEFAULT_KMS_WHITELIST_PATH, {"trusted_signers": whitelist})
 
 
 def queue_count(value: str) -> Union[int, str]:
