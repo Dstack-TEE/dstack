@@ -20,6 +20,7 @@
 - Runtime state and evidence remain case-scoped even though immutable build outputs are shared.
 - The `kms-onboard` fixture provides a bootstrapped source KMS (`values.kms`, with its admin listener and token file), an attested simulator client (`values.kms_attested_client`), and a clean onboarding target whose configuration is the template for a third, case-owned target on the unused substrate ports `verifier` (RPC), `aux4` (onboarding), and `vmm` (admin).
 - PR #1307 added `Admin.GetKmsKey`, optional `[core.admin.tls]` (which makes the admin listener accept RA-TLS client certificates), `core.onboard.public_key_handover` (default `true`), and `OnboardRequest.source_token`, which the onboarding client sends as `Authorization: Bearer`.
+- With `source_token`, the target mints a self-issued RA-TLS client certificate and calls `Admin.GetKmsKey` with the bearer token; it does not call `GetTempCaCert`. Before PR #1406, onboarding with a token failed with `Service not found: GetTempCaCert`.
 - Keep key responses in memory. Record status codes, bounded redacted errors, and fingerprint or public-key equality only.
 
 ## Objective
