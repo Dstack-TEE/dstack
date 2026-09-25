@@ -67,6 +67,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1356)
+
+- `ListCertAttestations` normalizes the domain before it reads attestation records. The valid request uses the spelling `*.DSTACK-TEST-UNATTESTED.invalid.` and returns the same deterministic empty history in both representations.
+- An empty domain and `bad..dstack-test.invalid` are refused with an HTTP 4xx structured JSON error. The request `{}` (empty domain) is therefore no longer a valid baseline.
+- A configured domain listed under a non-normalized spelling returns the same history as its normalized name in `tc-gw-certificat-007`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

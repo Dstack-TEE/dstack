@@ -67,6 +67,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1356)
+
+- `ForceReleaseCertLock` normalizes the domain like `AddZtDomain` before it deletes the lock, so the lock a renewal took under the normalized name is the one released. The valid request uses the spelling `*.DSTACK-TEST-UNLOCKED.invalid.` (wildcard prefix, upper case, trailing dot) and succeeds in both representations.
+- An empty domain and `bad..dstack-test.invalid` are refused with an HTTP 4xx structured JSON error instead of reporting a release that deleted nothing. The request `{}` (empty domain) is therefore no longer a valid baseline.
+- The end-to-end effect, releasing a crashed node's lock with a non-normalized spelling so a peer can renew, is exercised in `tc-gw-certificat-002`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
