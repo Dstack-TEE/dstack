@@ -108,6 +108,7 @@ def main() -> int:
             "quote_ecc",
             "quote_rsa",
             "verify",
+            "unlisted_host_rejected",
             "wrong_root_rejected",
             "pcr_rejected",
             "signature_rejected",

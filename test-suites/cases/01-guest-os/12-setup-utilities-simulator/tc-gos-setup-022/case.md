@@ -64,6 +64,10 @@ Repeat under another app/device identity and after restart; inspect outputs, log
 
 - Deterministic values are stable only within documented identity scope, random values do not repeat, cross-identity evidence/keys fail, permissions are restrictive, and no private material is logged.
 
+## Post-baseline regression coverage (PR #1404)
+
+- Issuer certificates and CRLs named by the AK certificate are fetched only from allowlisted hosts. Every `tpm-verify` in the matrix passes `--allowed-collateral-host 127.0.0.1` for the simulator's collateral service, and one extra run with the default allowlist must fail with `collateral host 127.0.0.1 is not allowed` (`unlisted_host_rejected`).
+
 ## Postconditions
 
 Securely remove generated private material and restore device, mount, network and filesystem state.
