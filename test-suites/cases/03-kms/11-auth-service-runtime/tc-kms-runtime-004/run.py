@@ -110,6 +110,7 @@ def main() -> int:
     runs = {}
     checks = {}
     retained = {}
+    failure = ""
     dockerfile = root / "Dockerfile"
     dockerfile.write_text(
         """FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci\nCOPY tsconfig.json ./\nCOPY src ./src\nRUN npm run build && npm prune --omit=dev\nUSER node\nCMD ["node", "dist/main.js"]\n"""
@@ -124,8 +125,11 @@ def main() -> int:
         'ThreadingHTTPServer(("127.0.0.1", port)',
         'ThreadingHTTPServer(("0.0.0.0", port)',
     )
+    # The excerpt is the helper's mock without its module header, so this
+    # header has to import whatever the excerpt uses: `record_call` reads
+    # `os.environ`.
     mock.write_text(
-        "#!/usr/bin/env python3\nimport http.server,json\nfrom typing import Any\n"
+        "#!/usr/bin/env python3\nimport http.server,json,os\nfrom typing import Any\n"
         + mock_source
         + "\nrun_mock_rpc(8545)\n"
     )
@@ -256,6 +260,10 @@ def main() -> int:
             and "PRIVATE_KEY" not in log_text
             and "WALLET" not in inspect_text,
         }
+    except Exception as error:  # noqa: BLE001
+        # Report it as this case's failure, not as a harness error with no
+        # result: the retained resources below are what debugging needs.
+        failure = f"{type(error).__name__}: {error}"
     finally:
         preliminary = bool(checks) and all(checks.values())
         if preliminary:
@@ -322,6 +330,7 @@ def main() -> int:
                 "groups": groups,
                 "checks": checks,
                 "runs": runs,
+                "failure": failure,
                 "retained_debug": retained,
             },
             indent=2,
@@ -339,6 +348,8 @@ def main() -> int:
     )
     passed = sum(groups.values())
     summary = f"{passed}/{len(groups)} authorization container groups passed"
+    if failure:
+        summary += f"; {failure}"
     result = {
         "schema_version": "1.0",
         "case_id": CASE_ID,
