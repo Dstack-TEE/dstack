@@ -333,4 +333,24 @@ describe('Mock Behavior Verification', () => {
     expect(appData.reason).toBe('mock app always allowed');
     expect(kmsData.reason).toBe('mock KMS always allowed');
   });
+
+  it('denies both routes on an unknown MOCK_POLICY', async () => {
+    process.env.MOCK_POLICY = 'deny_all';
+    try {
+      for (const path of ['app', 'kms']) {
+        const response = await appFetch(new Request(`http://localhost:3002/bootAuth/${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mrAggregated: '', osImageHash: '', appId: '', composeHash: '', instanceId: '', deviceId: '',
+          }),
+        }));
+        const data = await response.json();
+        expect(data.isAllowed).toBe(false);
+        expect(data.reason).toBe('unknown MOCK_POLICY "deny_all"');
+      }
+    } finally {
+      delete process.env.MOCK_POLICY;
+    }
+  });
 });
