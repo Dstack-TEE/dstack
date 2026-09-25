@@ -39,6 +39,21 @@ path.write_text(text.replace(marker, marker + f'\nmock_attestation_seed = "{seed
 PY
 fi
 
+# The app compose's `public_tcbinfo` choice, for cases that observe how a
+# consumer of the agent honors an opt-out.
+if [[ -n ${DSTACK_TEST_SIMULATOR_PUBLIC_TCBINFO:-} ]]; then
+  python3 - "$runtime/app-compose.json" "$DSTACK_TEST_SIMULATOR_PUBLIC_TCBINFO" <<'PY'
+from pathlib import Path
+import json, sys
+path, value = Path(sys.argv[1]), sys.argv[2]
+if value not in {"true", "false"}:
+    raise SystemExit("DSTACK_TEST_SIMULATOR_PUBLIC_TCBINFO must be true or false")
+compose = json.loads(path.read_text())
+compose["public_tcbinfo"] = value == "true"
+path.write_text(json.dumps(compose, separators=(",", ":")))
+PY
+fi
+
 # GuestApi.Shutdown must never power off the physical development host. Record
 # the requested systemd action as a simulator side effect instead.
 install -d -m 700 "$runtime/test-bin"

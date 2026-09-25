@@ -293,6 +293,12 @@ def main() -> int:
         wrong_code = send(sync_url, valid_empty, generate_wrong_identity(wrong_dir))
         malformed_code = send(sync_url, b"not-gzip", identity)
         invalid_node_code = send(sync_url, gzip.compress(sync_message(0, [])), identity)
+        # PR #1380: nothing syncs to itself, so this node's own id is refused
+        # on both routes, like node id 0.
+        own_id = int(node["node_id"])
+        own_body = gzip.compress(sync_message(own_id, []))
+        own_sync_code = send(sync_url, own_body, identity)
+        own_push_code = send(f"{origin}/wavekv/push/persistent", own_body, identity)
         invalid_store_code = send(
             f"{origin}/wavekv/sync/invalid", valid_empty, identity
         )
@@ -303,6 +309,8 @@ def main() -> int:
             and (wrong_code is None or wrong_code in {401, 403})
             and malformed_code == 400
             and invalid_node_code == 400
+            and own_sync_code == 400
+            and own_push_code == 400
             and invalid_store_code == 404
             and oversize_code in {400, 413}
         )
@@ -330,7 +338,7 @@ def main() -> int:
 
         if not all(checks.values()):
             raise AssertionError(
-                f"WaveKV checks failed: identity_app_id_present={leaf_app_id is not None}; {sorted(k for k, value in checks.items() if not value)}; auth={no_identity_code}/{wrong_code}; malformed={malformed_code}; node={invalid_node_code}; store={invalid_store_code}; oversize={oversize_code}; gap={gap_code}:{after_gap - baseline_keys}; valid={valid_code}:{after_valid - baseline_keys}; replay={replay_code}:{after_replay - after_valid}; recovery={recovery_code}"
+                f"WaveKV checks failed: identity_app_id_present={leaf_app_id is not None}; {sorted(k for k, value in checks.items() if not value)}; auth={no_identity_code}/{wrong_code}; malformed={malformed_code}; node={invalid_node_code}; own={own_sync_code}/{own_push_code}; store={invalid_store_code}; oversize={oversize_code}; gap={gap_code}:{after_gap - baseline_keys}; valid={valid_code}:{after_valid - baseline_keys}; replay={replay_code}:{after_replay - after_valid}; recovery={recovery_code}"
             )
         steps = [
             {
@@ -341,7 +349,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-02",
                 "status": "PASS",
-                "observed": "Malformed compression, invalid sender/store, and oversized input failed within bounded limits; an unrestricted application key synchronized successfully.",
+                "observed": "Malformed compression, invalid sender/store, an envelope claiming the target's own node id, and oversized input failed within bounded limits; an unrestricted application key synchronized successfully.",
             },
             {
                 "id": f"{CASE_ID}-step-03",
@@ -359,6 +367,8 @@ def main() -> int:
             "wrong_identity_http": wrong_code,
             "malformed_http": malformed_code,
             "invalid_node_http": invalid_node_code,
+            "own_node_sync_http": own_sync_code,
+            "own_node_push_http": own_push_code,
             "invalid_store_http": invalid_store_code,
             "oversize_http": oversize_code,
             "gap_http": gap_code,

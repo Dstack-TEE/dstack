@@ -9,12 +9,24 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import socket
+import subprocess
 import sys
 import time
 from typing import Any
 
 CASE_ID = "tc-gw-cluster-ad-004"
+# PRs #1253, #1385 and #1386: the connection sync, Admin.Status refresh, recycle
+# and reload touch the KV store, and routing reads handshakes, without holding
+# or forking under the routing lock that every proxied connection takes.
+ROUTING_LOCK_TESTS = (
+    "main_service::tests::syncing_connections_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store",
+    "main_service::tests::refreshing_state_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store",
+    "main_service::tests::recycling_reads_last_seen_off_the_routing_lock",
+    "main_service::tests::a_remote_deletion_withdraws_observations_off_the_routing_lock",
+    "main_service::handshakes::tests::a_cold_cache_does_not_shell_out_on_the_routing_path",
+)
 
 
 def load_support() -> Any:
@@ -56,6 +68,32 @@ def rpc(
     return code, decoded(body)
 
 
+def routing_lock_tests(runtime: dict[str, Any]) -> tuple[int, int]:
+    """Run the focused routing-lock tests and return (returncode, passed)."""
+    completed = subprocess.run(
+        [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "-p",
+            "dstack-gateway",
+            "--",
+            "--exact",
+            *ROUTING_LOCK_TESTS,
+        ],
+        cwd=pathlib.Path(str(runtime["repository"])) / "dstack",
+        env={**os.environ, "CARGO_TARGET_DIR": str(runtime["cargo_target_dir"])},
+        text=True,
+        capture_output=True,
+        timeout=600,
+        check=False,
+    )
+    output = completed.stdout + completed.stderr
+    passed = sum(int(value) for value in re.findall(r"(\d+) passed; 0 failed", output))
+    return completed.returncode, passed
+
+
 def main() -> int:
     """Run handshake replication, online status, counters, and last-seen checks."""
     if os.environ["DSTACK_TEST_CASE_ID"] != CASE_ID:
@@ -63,6 +101,9 @@ def main() -> int:
     result_dir = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     manifest = json.loads(
         pathlib.Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text()
+    )
+    runtime = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
     )
     cluster = manifest["values"]["gateway_cluster"]
     nodes = list(cluster["nodes"])
@@ -169,6 +210,11 @@ def main() -> int:
             and any(int(row.get("timestamp", 0)) > 0 for row in last_seen)
         )
 
+        unit_returncode, unit_passed = routing_lock_tests(runtime)
+        checks["routing_lock_discipline"] = unit_returncode == 0 and unit_passed == len(
+            ROUTING_LOCK_TESTS
+        )
+
         if not all(checks.values()):
             raise AssertionError(
                 f"observability checks failed: {sorted(k for k, value in checks.items() if not value)}; online={int(meta.get('online', 0))}; host_matches={sum(row.get('instance_id') == instance_id and int(row.get('latest_handshake', 0)) == timestamp for row in status_view.get('hosts', []))}"
@@ -187,7 +233,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-03",
                 "status": "PASS",
-                "observed": "Rejected proxy probes returned counters to baseline and WaveKV node status/last-seen observations remained current.",
+                "observed": "Rejected proxy probes returned counters to baseline, WaveKV node status/last-seen observations remained current, and the candidate routing-lock tests passed.",
             },
         ]
         observation = {
@@ -202,6 +248,7 @@ def main() -> int:
             "final_total_connections": int(final_global.get("total_connections", 0)),
             "node_status_count": len(node_statuses),
             "last_seen_entry_count": len(last_seen),
+            "routing_lock_tests_passed": unit_passed,
         }
         path = result_dir / "artifacts/gateway-cluster-observability.json"
         SUPPORT.atomic_json(path, observation)

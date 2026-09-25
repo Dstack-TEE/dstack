@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1356 and #1357)
+
+- After node 1 is killed while it holds the renew lock, `Admin.ForceReleaseCertLock` on node 2 is called with the non-normalized spelling `*.<DOMAIN>.` (wildcard prefix, upper case, trailing dot). The release must free the lock taken under the normalized name, so the forced renewal on node 2 that follows reports `renewed = true`.
+- Within one node the renew lock is now taken and released atomically, and a release deletes only its own lock; the concurrent same-node forced and non-forced renewals in the shared matrix still admit exactly one renewal, and `tc-gw-kv-009` pins the lock unit tests by name.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

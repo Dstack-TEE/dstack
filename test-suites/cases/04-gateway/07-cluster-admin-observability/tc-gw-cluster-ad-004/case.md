@@ -68,6 +68,18 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 Scrape the admin metrics listener before and after valid, invalid, corrupt, future-dated, and recovered KV observations. Assert stable names, escaping, aggregation, no self-increment on scrape, one-shot stuck-record reporting, and no high-cardinality instance labels.
 
+## Routing-lock regression coverage (PRs #1253, #1265, #1385, #1386)
+
+The periodic connection sync, `Admin.GetGlobalConnections`, the `Admin.Status` refresh, recycle and the instance reload now snapshot under the routing lock and touch the KV store after releasing it, and routing reads WireGuard handshakes from the cache without running `wg show`. The effect is latency under contention, which a black-box run cannot bound reliably, so after the live matrix the harness runs exactly these candidate tests through the shared Cargo target and requires all five to pass:
+
+- `main_service::tests::syncing_connections_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store`
+- `main_service::tests::refreshing_state_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store`
+- `main_service::tests::recycling_reads_last_seen_off_the_routing_lock`
+- `main_service::tests::a_remote_deletion_withdraws_observations_off_the_routing_lock`
+- `main_service::handshakes::tests::a_cold_cache_does_not_shell_out_on_the_routing_path`
+
+The live handshake, status and counter assertions above are unchanged by these refactors and continue to hold.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

@@ -73,6 +73,11 @@ Restart the owning service where permitted and inspect state for this and an adj
 
 - Persisted and transient state follow policy, adjacent identities are unchanged, and no private material or credential appears in output.
 
+## Post-baseline regression coverage (PR #1400)
+
+- The fixture starts this case's guest simulator with `public_tcbinfo = false` in its app compose (`DSTACK_TEST_SIMULATOR_PUBLIC_TCBINFO=false` for `shared/automation/start-simulator.sh`). The agent's internal `Info` call still returns the TCB info, and the harness confirms the opt-out from the `app_compose` it carries.
+- `GET /.dstack/app-info` through the proxy with SNI `gateway.localhost` returns HTTP 200 with the app identity, but `tcb_info` and `vm_config` are empty strings. The public-by-default arm is covered by the candidate `proxy::tls_terminate::tests` module the case already runs.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.

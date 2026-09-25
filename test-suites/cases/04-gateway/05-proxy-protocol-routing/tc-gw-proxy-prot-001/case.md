@@ -64,6 +64,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1278)
+
+- The `pp::tests` matrix has nine tests and must report `pp::tests::representative_v2_header_lengths_do_not_abort` and `pp::tests::a_v1_header_ending_on_a_bare_cr_does_not_abort` as passed by name: every v2 address family at lengths on both sides of the fixed-buffer cutoff, with the body absent, truncated and complete, and a v1 header ending on a bare CR, return an answer instead of reaching an unchecked advance that aborts a release build.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

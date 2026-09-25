@@ -74,6 +74,10 @@ Inject corrupt global and per-record values, future timestamps, key/value identi
 - Verify tombstones survive the compatibility window, are garbage-collected only after the configured safety condition, and cannot resurrect deleted state.
 - Confirm the retired admission path is absent and no caller can bypass the current synchronization policy through its old route.
 
+## Post-baseline regression coverage (PRs #1357 and #1374)
+
+- The `kv::` unit matrix must report these tests as passed by name: `kv::https_client::transport_tests::a_peer_that_never_answers_does_not_hang_the_client` (every peer HTTPS exchange is bounded by `core.sync.timeout`), and `kv::cert_lock_tests::two_tasks_on_one_node_cannot_both_acquire` and `kv::cert_lock_tests::a_holder_that_was_taken_over_does_not_release_the_new_holder_lock` (the renew and rotation lease locks are acquired and released atomically within a node, and a release deletes only the holder's own lock).
+
 ## Postconditions
 
 Remove run-scoped evidence/state and restore trust, cache, routing and dependency baselines.

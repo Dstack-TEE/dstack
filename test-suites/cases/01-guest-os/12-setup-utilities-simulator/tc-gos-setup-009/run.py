@@ -86,8 +86,9 @@ def gateway_config(
     octet: int,
     interface: str,
     agent_url: str,
-) -> tuple[Path, str]:
+) -> tuple[Path, str, str]:
     rpc, admin, debug, proxy, wgport = ports
+    admin_token = secrets.token_hex(32)
     private = run(["wg", "genkey"], timeout=10).stdout.strip()
     public = run(["wg", "pubkey"], input=private + "\n", timeout=10).stdout.strip()
     if not private or not public:
@@ -101,7 +102,7 @@ def gateway_config(
         "set_ulimit = true": "set_ulimit = false",
         'rpc_domain = ""': 'rpc_domain = "10.0.2.2"',
         '[core.admin]\nenabled = false\naddress = "127.0.0.1:8011"': f'[core.admin]\nenabled = true\naddress = "127.0.0.1:{admin}"',
-        'auth_token = ""': f'auth_token = "{secrets.token_hex(32)}"',
+        'auth_token = ""': f'auth_token = "{admin_token}"',
         "insecure_enable_debug_rpc = false": "insecure_enable_debug_rpc = true",
         'address = "127.0.0.1:8012"': f'address = "127.0.0.1:{debug}"',
         'public_key = ""': f'public_key = "{public}"',
@@ -120,16 +121,60 @@ def gateway_config(
         if old not in text:
             raise RuntimeError(f"Gateway template missing {old}")
         text = text.replace(old, new, 1)
-    text = text.replace(
-        "[core.proxy]\n",
-        f'[core.proxy]\nbase_domain = "localhost"\ncert_chain = "{node}/certs/server.crt"\ncert_key = "{node}/certs/server.key"\n',
-        1,
-    )
     text += f'\n[tls]\nkey = "{node}/certs/server.key"\ncerts = "{node}/certs/server.crt"\n[tls.mutual]\nca_certs = "{node}/certs/ca.crt"\n'
     config = node / "gateway.toml"
     config.write_text(text)
     config.chmod(0o600)
-    return config, public
+    return config, public, admin_token
+
+
+def import_proxy_cert(directory: Path, admin_port: int, admin_token: str) -> None:
+    """Serve a case-owned certificate for `*.localhost` through Admin.ImportCert."""
+    key = directory / "proxy.key"
+    cert = directory / "proxy.crt"
+    generated = run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost,DNS:*.localhost",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+        ],
+        timeout=30,
+    )
+    if generated.returncode:
+        raise RuntimeError("failed to generate the case proxy certificate")
+    import urllib.request
+
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{admin_port}/prpc/Admin.ImportCert",
+        data=json.dumps(
+            {
+                "domain": "localhost",
+                "cert_pem": cert.read_text(),
+                "key_pem": key.read_text(),
+            }
+        ).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {admin_token}",
+            "Content-Type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        response.read(4096)
+    key.unlink()
 
 
 def main() -> int:
@@ -147,6 +192,7 @@ def main() -> int:
     root = Path(tempfile.mkdtemp(prefix="dstack-multicluster-"))
     processes = []
     configs = []
+    admin_tokens: list[str] = []
     interfaces = ["dtmc-p", "dtmc-s"]
     observations = {}
     status = "FAIL"
@@ -177,10 +223,11 @@ def main() -> int:
             ("primary", ports[:5], octets[0], interfaces[0]),
             ("secondary", ports[5:], octets[1], interfaces[1]),
         ):
-            config, _ = gateway_config(
+            config, _, admin_token = gateway_config(
                 repo / "dstack/gateway/gateway.toml", root, *row, guest_url
             )
             configs.append(config)
+            admin_tokens.append(admin_token)
             log = (config.parent / "logs/gateway.log").open("w")
             p = subprocess.Popen(
                 [
@@ -202,6 +249,13 @@ def main() -> int:
             if p.poll() is not None:
                 raise RuntimeError(f"{row[0]} Gateway exited during startup")
         time.sleep(5)
+        # PR #1239: the proxy certificate is no longer read from the config;
+        # it is installed through the admin API and kept in WaveKV.
+        certificate_root = Path(tempfile.mkdtemp(prefix="proxy-cert-", dir=root))
+        for index, admin_token in enumerate(admin_tokens):
+            directory = certificate_root / str(index)
+            directory.mkdir()
+            import_proxy_cert(directory, ports[index * 5 + 1], admin_token)
         primary_rpc, primary_proxy = ports[0], ports[3]
         secondary_rpc, secondary_proxy = ports[5], ports[8]
         sysconfig = json.dumps(
