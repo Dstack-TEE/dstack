@@ -11,6 +11,8 @@ const SOURCE_DIR = path.join(ROOT, 'src');
 const TS_OUT_DIR = path.join(ROOT, 'build', 'ts');
 const DIST_DIR = path.join(ROOT, 'dist');
 const ENTRY = 'main.js';
+const VUE_CDN_SCRIPT =
+  '<script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js" integrity="sha384-6pS1WSZJY7wOk6qQTa9C9U2W1/qzqL7iYoMil7qn9KFeN5fZDAwIExgCd7U5AH+X" crossorigin="anonymous"></script>';
 const PBJS = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'pbjs.cmd' : 'pbjs');
 const PBTS = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'pbts.cmd' : 'pbts');
 const TSC = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
@@ -188,10 +190,7 @@ async function build({ watch = false } = {}) {
     console.warn('Warning: vendor/vue.global.prod.js not found – using CDN fallback.');
   }
   if (!vueInlined) {
-    html = html.replace(
-      vuePlaceholder,
-      '<script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js"></script>',
-    );
+    html = html.replace(vuePlaceholder, VUE_CDN_SCRIPT);
   }
 
   html = await inlineScripts(html, [
@@ -229,10 +228,7 @@ async function build({ watch = false } = {}) {
           console.warn('Warning: vendor/vue.global.prod.js not found – using CDN fallback.');
         }
         if (!vueEmbedded) {
-          rehtml = rehtml.replace(
-            vuePlaceholder,
-            '<script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js"></script>',
-          );
+          rehtml = rehtml.replace(vuePlaceholder, VUE_CDN_SCRIPT);
         }
         rehtml = await inlineScripts(rehtml, [
           {
