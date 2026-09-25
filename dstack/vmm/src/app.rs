@@ -309,6 +309,11 @@ const RELEASE_RETRY_INITIAL: Duration = Duration::from_secs(2);
 const RELEASE_RETRY_INITIAL: Duration = Duration::from_millis(20);
 /// Longest delay between those attempts.
 const RELEASE_RETRY_MAX: Duration = Duration::from_secs(60);
+/// How long a start waits for a VM that is still stopping to exit. Tearing
+/// down a large TD takes seconds; this only bounds a wedged one.
+const STOPPING_EXIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// How often a wait for a VM to exit asks the supervisor.
+const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct App {
@@ -489,12 +494,20 @@ impl App {
             debug!(id, "skipping automatic restart: the VM was stopped");
             return Ok(());
         }
-        self.sync_dynamic_config(id)?;
-        let is_running = self
-            .supervisor
-            .info(id)
-            .await?
+        let process = self.supervisor.info(id).await?;
+        let mut is_running = process
+            .as_ref()
             .is_some_and(|info| info.state.status.is_running());
+        // A stop only signals QEMU, which exits some time later. Treating a VM
+        // told to stop as running would make this start a silent no-op that
+        // leaves the VM down once QEMU is gone, so wait for the exit instead.
+        if is_running && process.is_some_and(|info| !info.state.started) {
+            if !self.wait_for_exit(id, STOPPING_EXIT_TIMEOUT).await? {
+                bail!("VM is still stopping, try again once it has exited");
+            }
+            is_running = false;
+        }
+        self.sync_dynamic_config(id)?;
         self.set_started(id, true)?;
         let vm_config = {
             let mut state = self.lock();
@@ -638,6 +651,26 @@ impl App {
         // removal, whichever comes first.
         self.release_vm_interfaces(id).await;
         Ok(())
+    }
+
+    /// Waits until the supervisor no longer reports the VM running. Returns
+    /// whether it exited within `timeout`.
+    async fn wait_for_exit(&self, id: &str, timeout: Duration) -> Result<bool> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let running = self
+                .supervisor
+                .info(id)
+                .await?
+                .is_some_and(|info| info.state.status.is_running());
+            if !running {
+                return Ok(true);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(EXIT_POLL_INTERVAL).await;
+        }
     }
 
     async fn prepare_netd_networks(
@@ -947,18 +980,10 @@ impl App {
                 warn!(id, %pid, %error, "failed to signal VM launcher gracefully; forcing shutdown");
                 return self.supervisor.stop(id).await;
             }
-            for _ in 0..150 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                let running = self
-                    .supervisor
-                    .info(id)
-                    .await?
-                    .is_some_and(|info| info.state.status.is_running());
-                if !running {
-                    // Synchronize Supervisor's `started` flag after the launcher
-                    // completed its graceful child cleanup.
-                    return self.supervisor.stop(id).await;
-                }
+            if self.wait_for_exit(id, Duration::from_secs(15)).await? {
+                // Synchronize Supervisor's `started` flag after the launcher
+                // completed its graceful child cleanup.
+                return self.supervisor.stop(id).await;
             }
             warn!(id, "VM launcher did not stop gracefully; forcing shutdown");
         }
@@ -2603,6 +2628,115 @@ mod tests {
         assert!(
             app.refuse_if_removing("vm-1").is_ok(),
             "the mark is cleared however the removal ends"
+        );
+    }
+
+    /// A supervisor whose one process is running until it has been stopped and
+    /// then asked about `exit_after` more times -- a killed QEMU that takes a
+    /// while to go. Counts the `info` requests that still saw it running.
+    async fn exiting_supervisor(
+        exit_after: usize,
+    ) -> (SupervisorClient, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use supervisor_client::supervisor::{
+            ProcessConfig, ProcessInfo, ProcessState, ProcessStatus, Response,
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let seen_running = Arc::new(AtomicUsize::new(0));
+        let counter = seen_running.clone();
+        tokio::spawn(async move {
+            let stopped = AtomicBool::new(false);
+            let mut polls_after_stop = 0;
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).await.unwrap();
+                let mut header = String::new();
+                loop {
+                    header.clear();
+                    assert!(reader.read_line(&mut header).await.unwrap() > 0);
+                    if header == "\r\n" {
+                        break;
+                    }
+                }
+                let body = if request_line.contains("/stop/") {
+                    stopped.store(true, Ordering::SeqCst);
+                    serde_json::to_string(&Response::Data(())).unwrap()
+                } else {
+                    let is_stopped = stopped.load(Ordering::SeqCst);
+                    if is_stopped {
+                        polls_after_stop += 1;
+                    }
+                    let running = !is_stopped || polls_after_stop <= exit_after;
+                    if running {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let info = ProcessInfo {
+                        config: serde_json::from_value::<ProcessConfig>(
+                            serde_json::json!({ "id": "vm-1", "command": "qemu" }),
+                        )
+                        .unwrap(),
+                        state: ProcessState {
+                            status: if running {
+                                ProcessStatus::Running
+                            } else {
+                                ProcessStatus::Stopped
+                            },
+                            started: !is_stopped,
+                            pid: running.then_some(1),
+                            started_at: None,
+                            stopped_at: None,
+                        },
+                    };
+                    serde_json::to_string(&Response::Data(Some(info))).unwrap()
+                };
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body,
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        (
+            SupervisorClient::new(&format!("http://{address}")),
+            seen_running,
+        )
+    }
+
+    /// The supervisor only signals QEMU, so a stop returns while it is still
+    /// up. A start landing in that window used to launch nothing and leave the
+    /// VM down until the auto-restart check; it must wait for the exit and
+    /// then launch.
+    #[tokio::test]
+    async fn a_start_waits_for_a_vm_that_is_still_stopping() {
+        let dir = tempfile::tempdir().unwrap();
+        let (supervisor, seen_running) = exiting_supervisor(3).await;
+        let app = App::new(
+            test_config(Path::new("/nonexistent/netd.sock"), dir.path()),
+            supervisor.clone(),
+        );
+        std::fs::create_dir_all(app.work_dir("vm-1").unwrap().path()).unwrap();
+        supervisor.stop("vm-1").await.unwrap();
+
+        // The work dir holds no VM, so the launch itself fails once reached.
+        let error = app.start_vm("vm-1").await.unwrap_err();
+        assert!(
+            format!("{error:#}").contains("manifest"),
+            "the start must go on to launch: {error:#}"
+        );
+        assert_eq!(
+            seen_running.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "the start must keep asking until QEMU is gone"
         );
     }
 
