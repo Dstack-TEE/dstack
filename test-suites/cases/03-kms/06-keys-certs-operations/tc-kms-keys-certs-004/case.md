@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1255)
+
+- `SignCert` stamps the app identity the KMS verified, not the requester's own claims. Decode the leaf's RA-TLS extensions: the special usage (`1.3.6.1.4.1.62397.1.4`) is `app:custom`, and the MessagePack app info (`1.3.6.1.4.1.62397.1.9`) carries a 32-byte `device_id` that is not `sha256("")` (the value every leaf carried before) and an `os_image_hash` equal to the `os_image_hash` of the request `vm_config` the KMS authorized.
+- Guests now accept the KMS only through a certificate with usage `kms:rpc`, so an app leaf for the KMS hostname is refused; that client-side check is covered by the `cert-client` unit tests.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

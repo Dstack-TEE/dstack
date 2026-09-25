@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import ssl
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 SUPPORTED_CASES = {"tc-kms-kms-006", "tc-kms-keys-certs-004"}
+CERT_USAGE_OID = "1.3.6.1.4.1.62397.1.4"
+APP_INFO_OID = "1.3.6.1.4.1.62397.1.9"
 
 
 def tls_context(identity: dict[str, Any] | None) -> ssl.SSLContext:
@@ -107,6 +110,57 @@ def chain_shape(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def octet_string(der: bytes) -> bytes:
+    """Unwrap the DER OCTET STRING that carries an RA-TLS extension value."""
+    if len(der) < 2 or der[0] != 0x04:
+        raise AssertionError("RA-TLS extension is not a DER OCTET STRING")
+    length, offset = der[1], 2
+    if length & 0x80:
+        width = length & 0x7F
+        length = int.from_bytes(der[2 : 2 + width], "big")
+        offset = 2 + width
+    if offset + length != len(der):
+        raise AssertionError("RA-TLS extension length is inconsistent")
+    return der[offset:]
+
+
+def leaf_identity(chain: list[str], vm_config: str) -> dict[str, Any]:
+    """Check the usage and app identity the KMS stamped into the leaf (PR #1255)."""
+    from cryptography import x509
+
+    spec = importlib.util.spec_from_file_location(
+        "passed_rpc_case", Path(__file__).with_name("passed-rpc-case.py")
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("MessagePack helper cannot be loaded")
+    helpers = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helpers)
+    leaf = x509.load_pem_x509_certificate(chain[0].encode())
+    extensions = {
+        extension.oid.dotted_string: octet_string(extension.value.value)
+        for extension in leaf.extensions
+        if extension.oid.dotted_string in {CERT_USAGE_OID, APP_INFO_OID}
+    }
+    if extensions.get(CERT_USAGE_OID) != b"app:custom":
+        raise AssertionError("SignCert leaf does not carry the app:custom usage")
+    if APP_INFO_OID not in extensions:
+        raise AssertionError("SignCert leaf omitted the requested app info")
+    app_info, consumed = helpers.msgpack_decode(extensions[APP_INFO_OID])
+    if consumed != len(extensions[APP_INFO_OID]) or not isinstance(app_info, dict):
+        raise AssertionError("app info extension is not one MessagePack map")
+    device_id = helpers.as_bytes(app_info.get("device_id"))
+    os_image_hash = helpers.as_bytes(app_info.get("os_image_hash"))
+    if len(device_id) != 32 or device_id == hashlib.sha256(b"").digest():
+        raise AssertionError("SignCert leaf device_id is not the verified device")
+    if os_image_hash != bytes.fromhex(json.loads(vm_config)["os_image_hash"]):
+        raise AssertionError("SignCert leaf os_image_hash differs from vm_config")
+    return {
+        "usage": "app:custom",
+        "device_id_sha256": hashlib.sha256(device_id).hexdigest(),
+        "os_image_hash_matches_vm_config": True,
+    }
+
+
 def emit(step: str, status: str, observed: str) -> dict[str, str]:
     """Emit one runner-protocol step."""
     print(f"STEP {step} START", flush=True)
@@ -159,7 +213,9 @@ def main() -> int:
         if code != 200:
             diagnostic = raw[:500].decode(errors="replace").replace("\n", " ")
             raise AssertionError(f"valid SignCert returned HTTP {code}: {diagnostic}")
-        shape = chain_shape(json.loads(raw))
+        payload = json.loads(raw)
+        shape = chain_shape(payload)
+        identity_ext = leaf_identity(payload["certificate_chain"], vm_config)
         evidence.update(
             {
                 "attestation_mode": identity.get("attestation_mode"),
@@ -170,13 +226,14 @@ def main() -> int:
                 "subject": generated["subject"],
                 "alt_name": generated["alt_name"],
                 "chain": shape,
+                "leaf_identity": identity_ext,
             }
         )
         steps.append(
             emit(
                 f"{case_id}-step-01",
                 "PASS",
-                "The case-owned generator produced a signed v2 CSR with fresh key-bound simulated TDX evidence, and KMS returned a three-entry certificate chain.",
+                "The case-owned generator produced a signed v2 CSR with fresh key-bound simulated TDX evidence, and KMS returned a three-entry certificate chain whose leaf carries app:custom, the verified device_id, and the authorized vm_config os_image_hash.",
             )
         )
 
