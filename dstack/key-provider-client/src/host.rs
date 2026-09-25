@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Context, Result};
+use dstack_types::KEY_PROVIDER_MAX_FRAME_SIZE;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use tokio::{
@@ -45,8 +46,11 @@ pub async fn get_key(quote: Vec<u8>, address: IpAddr, port: u16) -> Result<Quote
         .read_exact(&mut response_length)
         .await
         .context("Failed to read response length")?;
-    let response_length = u32::from_be_bytes(response_length);
-    let mut response = vec![0; response_length as usize];
+    let response_length = u32::from_be_bytes(response_length) as usize;
+    if response_length > KEY_PROVIDER_MAX_FRAME_SIZE {
+        bail!("key provider response is {response_length} bytes; maximum is {KEY_PROVIDER_MAX_FRAME_SIZE}");
+    }
+    let mut response = vec![0; response_length];
     tcp_stream
         .read_exact(&mut response)
         .await

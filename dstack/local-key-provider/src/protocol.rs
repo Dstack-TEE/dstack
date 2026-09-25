@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use dstack_types::KEY_PROVIDER_MAX_FRAME_SIZE;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -10,7 +11,6 @@ use crate::error::ProviderError;
 // The existing client caps the binary quote at 1 MiB. JSON represents every
 // byte as a decimal number, so its framed representation can approach 4 MiB.
 const MAX_QUOTE_SIZE: usize = 1024 * 1024;
-const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct QuoteRequest {
@@ -30,9 +30,9 @@ where
     let mut length = [0_u8; 4];
     reader.read_exact(&mut length).await?;
     let length = u32::from_be_bytes(length) as usize;
-    if length == 0 || length > MAX_FRAME_SIZE {
+    if length == 0 || length > KEY_PROVIDER_MAX_FRAME_SIZE {
         return Err(ProviderError::InvalidRequest(format!(
-            "frame length {length} is outside 1..={MAX_FRAME_SIZE}"
+            "frame length {length} is outside 1..={KEY_PROVIDER_MAX_FRAME_SIZE}"
         )));
     }
 
@@ -79,7 +79,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_oversized_frames_before_allocating_them() {
-        let bytes = ((MAX_FRAME_SIZE + 1) as u32).to_be_bytes();
+        let bytes = ((KEY_PROVIDER_MAX_FRAME_SIZE + 1) as u32).to_be_bytes();
         let mut wire = bytes.as_slice();
         let error = read_request(&mut wire).await.unwrap_err();
         assert!(matches!(error, ProviderError::InvalidRequest(_)));

@@ -15,6 +15,7 @@ description = "SGX-backed local sealing-key provider for dstack TDX guests"
 [dependencies]
 blake2.workspace = true
 dcap-qvl.workspace = true
+dstack-types.workspace = true
 rand_core.workspace = true
 salsa20.workspace = true
 serde = { workspace = true, features = ["derive"] }
