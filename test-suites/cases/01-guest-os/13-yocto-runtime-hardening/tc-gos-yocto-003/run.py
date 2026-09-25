@@ -110,6 +110,7 @@ def main() -> int:
         }
         evidence["matrix"] = matrix
         required = (
+            "nts_only_policy",
             "baseline_active",
             "stop_observed",
             "unreachable_source_observed",

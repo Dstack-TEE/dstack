@@ -67,6 +67,18 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1354)
+
+- mkosi images now ship dstack's chrony configuration at
+  `/etc/chrony/chrony.conf` instead of Debian's default. Before any fault, the
+  lifecycle script requires that file to be the effective configuration, to
+  contain `authselectmode require`, to mark every `server` or `pool` line
+  `nts`, and to have no `sourcedir /run/chrony-dhcp`;
+  `/etc/systemd/network/20-wired.network` must carry `UseNTP=no` for both
+  DHCPv4 and DHCPv6.
+- `chronyc -n authdata` must list no source whose mode is not `NTS`.
+- The result row `nts_only_policy` must be `true`.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
