@@ -167,6 +167,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
         key_provider_addr: kp_addr,
         key_provider_port: kp_port as u32,
         kms_urls: kms_urls.clone(),
+        sev_snp_kds_url: o.sev_snp_kds_url.clone().unwrap_or_default(),
         platform,
         auth_enabled: true,
         auth_token: vmm_token.clone(),
@@ -186,6 +187,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
         os_image_hash: os_image_hash.unwrap_or_default(),
         verify_os_image: false,
         platform,
+        sev_snp_kds_url: o.sev_snp_kds_url.clone().unwrap_or_default(),
         ..Default::default()
     };
     let kms = config::kms_toml(&host_cfg);

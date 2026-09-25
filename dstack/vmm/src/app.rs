@@ -2017,7 +2017,10 @@ pub(crate) fn make_sys_config(
         "gateway_urls": gateway_urls,
         "gateway_clusters": gateway_clusters,
         "pccs_url": cfg.cvm.pccs_url,
-        "collateral_urls": { "pccs": cfg.cvm.pccs_url },
+        "collateral_urls": {
+            "pccs": cfg.cvm.pccs_url,
+            "amd_kds": cfg.cvm.sev_snp_kds_url,
+        },
         "nvidia_attestation_proxy_url": cfg.cvm.nvidia_attestation_proxy_url,
         "docker_registry": cfg.cvm.docker_registry,
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
@@ -3558,6 +3561,10 @@ mod tests {
         }
         assert_eq!(sys_config["pccs_url"], config.cvm.pccs_url);
         assert_eq!(sys_config["collateral_urls"]["pccs"], config.cvm.pccs_url);
+        assert_eq!(
+            sys_config["collateral_urls"]["amd_kds"],
+            config.cvm.sev_snp_kds_url
+        );
         let vm_config: serde_json::Value = serde_json::from_str(
             sys_config["vm_config"]
                 .as_str()
