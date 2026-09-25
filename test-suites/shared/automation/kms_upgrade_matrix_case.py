@@ -3445,32 +3445,58 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         if before_info.get("id") != after_info.get("id"):
             raise RuntimeError("in-place Gateway upgrade changed the VM identity")
 
-        dashboard_code, dashboard = http(f"http://127.0.0.1:{old_gateway['log_port']}/")
-        if dashboard_code != 200:
-            raise RuntimeError(
-                f"candidate Gateway log dashboard returned HTTP {dashboard_code}"
-            )
-        links = re.findall(rb'href="([^"]*gateway[^"]*\?text[^"]*)', dashboard)
-        if not links:
-            raise RuntimeError("candidate Gateway dashboard omitted its log link")
-        log_code, startup_log = http(
-            f"http://127.0.0.1:{old_gateway['log_port']}"
-            + links[0].decode().split("?", 1)[0]
-            + "?text&bare&timestamps&tail=500"
+        # On boot dockerd first restarts the stopped v0.5.11 container, and only
+        # then does compose recreate it from the candidate image. Both the TLS
+        # listener and any wavekv v1 "Node status" line can therefore come from
+        # the legacy binary. Only the candidate logs the WaveKV load summary
+        # with an unreadable count, so wait for that line and read the legacy
+        # rows from it.
+        loaded_pattern = re.compile(
+            rb"Loaded state from WaveKV: (\d+) instances \((\d+) unreadable\), "
+            rb"(\d+) nodes"
         )
-        loaded_rows = [
-            int(value)
-            for value in re.findall(
-                rb"Node status after bootstrap: NodeStatus \{.*?n_kvs: (\d+),",
-                startup_log,
-                re.DOTALL,
+        deadline = time.monotonic() + 180
+        log_code = 0
+        loaded: list[tuple[int, int, int]] = []
+        while time.monotonic() < deadline:
+            dashboard_code, dashboard = http(
+                f"http://127.0.0.1:{old_gateway['log_port']}/", timeout=30
             )
-        ]
-        if log_code != 200 or not any(value > 0 for value in loaded_rows):
+            links = re.findall(rb'href="([^"]*gateway[^"]*\?text[^"]*)', dashboard)
+            if dashboard_code == 200 and links:
+                log_code, startup_log = http(
+                    f"http://127.0.0.1:{old_gateway['log_port']}"
+                    + links[0].decode().split("?", 1)[0]
+                    + "?text&bare&timestamps&tail=500",
+                    timeout=30,
+                )
+                loaded = [
+                    (int(instances), int(unreadable), int(nodes))
+                    for instances, unreadable, nodes in loaded_pattern.findall(
+                        startup_log
+                    )
+                ]
+                if log_code == 200 and loaded:
+                    break
+            time.sleep(2)
+        if not loaded:
             raise RuntimeError(
-                "candidate Gateway did not prove legacy WaveKV rows were loaded "
-                f"before client restart: http={log_code} n_kvs={loaded_rows}"
+                "candidate Gateway never logged its WaveKV load summary: "
+                f"http={log_code}"
             )
+        loaded_rows = {
+            "instances": loaded[-1][0],
+            "unreadable": loaded[-1][1],
+            "nodes": loaded[-1][2],
+        }
+        # The v0.5.11 Gateway persisted the baseline client's registration.
+        if loaded_rows["instances"] < 1 or loaded_rows["unreadable"]:
+            raise RuntimeError(
+                "candidate Gateway did not load the legacy WaveKV rows before "
+                f"client restart: {loaded_rows}"
+            )
+        if wait_http(old_gateway["url"], tls=True, timeout=180) <= 0:
+            raise RuntimeError("candidate Gateway did not serve after loading state")
         # After proving that the candidate loaded the legacy on-disk WaveKV rows,
         # exercise a fresh registration without assuming cross-version sync APIs.
         post_upgrade_client = matrix.deploy_client(
