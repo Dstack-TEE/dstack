@@ -277,8 +277,34 @@ class MatrixRun:
             guest = self.values["version_matrix"]["guest_images"]["0.6.0-candidate"]
         return image, guest, family
 
+    def claim_port(self, port: int) -> bool:
+        """Reserve a host port for this case's lifetime across concurrent cases.
+
+        Every case runs its own VMM over the same host port range, so one
+        case's `lsvm` cannot see the ports another case's VMs forward. A port
+        whose VM is stopped, or not yet started by QEMU, is bindable, and a
+        concurrent case would take it. Whichever QEMU binds first then wins,
+        and the other case reaches a foreign guest (a KMS 404 on the client
+        observer) or nothing at all after a restart. The marker names the
+        owning case workspace, which the provider removes on lease release.
+        Callers hold the port allocation lock.
+        """
+        marker = self.workspace.parent.parent / "kms-upgrade-ports" / f"{port}"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            owner = pathlib.Path(marker.read_text().strip())
+        except FileNotFoundError:
+            owner = None
+        if owner is not None:
+            if owner.exists():
+                return False
+            marker.unlink(missing_ok=True)
+        marker.write_text(f"{self.workspace}\n")
+        return True
+
     def free_ports(self, count: int) -> list[int]:
-        """Allocate ports absent from both listeners and retained VMM configurations."""
+        """Allocate ports absent from listeners, retained VMM configurations,
+        and every live case's reservations."""
         configured = json.loads(run([*self.cli, "lsvm", "--json"]))
         reserved = {
             int(port["host_port"])
@@ -296,6 +322,8 @@ class MatrixRun:
                     listener.bind(("127.0.0.1", port))
                 except OSError:
                     continue
+            if not self.claim_port(port):
+                continue
             selected.append(port)
             if len(selected) == count:
                 return selected
