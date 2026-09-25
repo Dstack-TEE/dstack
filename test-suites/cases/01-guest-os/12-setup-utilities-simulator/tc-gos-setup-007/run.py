@@ -87,7 +87,15 @@ check_discard() {
     cryptsetup status dstack_data_disk | grep -E '^[[:space:]]*flags:.*discards' >/dev/null || { echo "product dm-crypt mapping does not allow discards" >&2; exit 95; }
     findmnt -n -o OPTIONS /dstack/persistent | tr ',' '\n' | grep -x discard >/dev/null || { echo "product ext4 data mount lacks the discard option" >&2; exit 95; }
 }
+# A completed initialization clears the "dstack-initializing" LUKS label
+# (PR #1339); a disk still carrying it is re-initialized on the next boot.
+check_luks_label() {
+    device=$(cryptsetup status dstack_data_disk | sed -n 's/^[[:space:]]*device:[[:space:]]*//p')
+    label=$(cryptsetup luksDump "$device" | sed -n 's/^Label:[[:space:]]*//p')
+    test "$label" = "(no label)" || { echo "product data disk LUKS label is $label" >&2; exit 96; }
+}
 check_discard
+check_luks_label
 mkdir -p "$CASE_DIR"
 chmod 700 "$CASE_DIR"
 volume="$CASE_DIR/volume.img"
@@ -144,7 +152,7 @@ umount "$mountpoint"
 cryptsetup luksClose "$MAPPER"
 losetup -d "$loop"
 sync
-printf "phase1_ok fsck_rc=%s capacity_rc=%s discard=1\n" "$fsck_rc" "$fill_rc"
+printf "phase1_ok fsck_rc=%s capacity_rc=%s discard=1 luks_label=cleared\n" "$fsck_rc" "$fill_rc"
 """
 
 PHASE_TWO = r"""
@@ -154,6 +162,14 @@ set -euo pipefail
 test "$(cat /sys/block/vdb/queue/discard_max_bytes)" -gt 0 || { echo "data disk virtio-blk lost discard after reboot" >&2; exit 95; }
 cryptsetup status dstack_data_disk | grep -E '^[[:space:]]*flags:.*discards' >/dev/null || { echo "product dm-crypt mapping lost discards after reboot" >&2; exit 95; }
 findmnt -n -o OPTIONS /dstack/persistent | tr ',' '\n' | grep -x discard >/dev/null || { echo "product ext4 data mount lost discard after reboot" >&2; exit 95; }
+# A completed initialization clears the "dstack-initializing" LUKS label
+# (PR #1339); a disk still carrying it is re-initialized on the next boot.
+check_luks_label() {
+    device=$(cryptsetup status dstack_data_disk | sed -n 's/^[[:space:]]*device:[[:space:]]*//p')
+    label=$(cryptsetup luksDump "$device" | sed -n 's/^Label:[[:space:]]*//p')
+    test "$label" = "(no label)" || { echo "product data disk LUKS label is $label" >&2; exit 96; }
+}
+check_luks_label
 mountpoint="$CASE_DIR/mnt"
 volume="$CASE_DIR/volume.img"
 test -f "$volume"
@@ -166,7 +182,7 @@ umount "$mountpoint"
 cryptsetup luksClose "$MAPPER"
 losetup -d "$loop"
 rm -rf "$CASE_DIR"
-printf "phase2_ok continuity=1 cleanup=1 discard=1\n"
+printf "phase2_ok continuity=1 cleanup=1 discard=1 luks_label=cleared\n"
 """
 
 CLEANUP = r"""

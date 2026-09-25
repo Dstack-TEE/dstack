@@ -81,6 +81,21 @@ The lease compose selects `storage_fs: "ext4"` and omits `storage_discard`, so d
 - Before the first mutation and again after the lease reboot (existing-disk mount path), `/sys/block/vdb/queue/discard_max_bytes` is greater than 0, `cryptsetup status dstack_data_disk` reports `flags: discards`, and the `/dstack/persistent` mount options include `discard`. Automated in `run.py` (exit 95 on mismatch).
 - Not automated (needs a second lease guest): an app compose with `storage_discard: false` must open the LUKS volume without `--allow-discards`, mount ext4 without `discard`, and change the compose hash relative to the default manifest; the VMM side of the opt-out (`discard=ignore`) is covered in the VMM chapter.
 
+## Post-baseline regression coverage (PR #1339)
+
+- `luksFormat` now labels a new data disk `dstack-initializing`, and setup
+  clears the label only after the filesystem exists; a disk that still carries
+  it is treated as interrupted and initialized again instead of failing header
+  validation. Before the first mutation and after the lease reboot, the LUKS
+  header behind `dstack_data_disk` must report `Label: (no label)` (exit 96
+  otherwise), and the case-owned files under `/dstack/persistent` must survive
+  the reboot.
+- Not automated: interrupting the first-boot initialization between
+  `luksFormat` and filesystem creation needs a guest killed mid-setup. The
+  header parser's acceptance of the label is exercised by the `system_setup`
+  unit filter in
+  [tc-gos-setup-004](../tc-gos-setup-004/case.md#tc-gos-setup-004).
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
