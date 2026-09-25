@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1334 and #1369)
+
+- #1334: the cache key covers the measured VM shape only. `image` and the `tdx_measurement`, `gcp_measurement` and `aws_measurement` documents are cleared before hashing, so changing them reuses the entry, while changing `cpu_count` still misses (`measurement_cache_key_ignores_unmeasured_fields`).
+- #1369: `<image_cache_dir>/measurements/` is capped at 1024 entries. After each store the oldest `.json` entries by mtime are evicted, and in-flight temporaries without an extension are left alone (`measurement_cache_evicts_the_oldest_entries_and_spares_temporaries`).
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

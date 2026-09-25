@@ -20,9 +20,23 @@ REQUIRED_TESTS = (
     "verification::tests::image_archive_accepts_dot_prefixed_members",
     "verification::tests::image_archive_reads_every_gzip_member",
     "verification::tests::image_cache_pruning_keeps_checksum_identity",
-    "verification::tests::image_paths_must_be_confined_and_manifest_paths_must_be_flat",
     "verification::tests::corrupt_measurement_cache_entry_is_ignored",
     "verification::tests::concurrent_measurement_cache_writes_are_atomic",
+    # The manifest is checked in-process with one strict sha256sum grammar,
+    # and every listed file is hashed before the image is accepted (PR #1251).
+    "verification::tests::every_manifest_entry_is_checked_before_the_image_is_accepted",
+    "verification::tests::image_archive_paths_must_be_confined",
+    # os_image_hash is checked first, the files metadata.json measures must be
+    # manifest entries, and concurrent requests download an image once (PR #1337).
+    "verification::tests::extracted_image_binds_the_files_metadata_measures",
+    "verification::tests::concurrent_requests_download_an_image_once",
+    # A truncated download is retried (PR #1388).
+    "verification::tests::truncated_image_download_is_retried",
+)
+MANIFEST_PACKAGE = "dstack-types"
+MANIFEST_TESTS = (
+    "sha256sum::tests::accepts_sha256sum_output",
+    "sha256sum::tests::rejects_anything_else",
 )
 
 
@@ -94,6 +108,40 @@ def main() -> int:
             raise AssertionError(
                 f"{PACKAGE} image suite failed with rc={completed.returncode}"
             )
+        grammar = subprocess.run(
+            [
+                find_command(environment, "cargo"),
+                "test",
+                "-p",
+                MANIFEST_PACKAGE,
+                "--lib",
+                "--",
+                "--exact",
+                *MANIFEST_TESTS,
+            ],
+            cwd=repository / "dstack",
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=300,
+            check=False,
+        )
+        grammar_output = grammar.stdout + grammar.stderr
+        grammar_passed = f"test result: ok. {len(MANIFEST_TESTS)} passed; 0 failed" in (
+            grammar_output
+        ) and all(f"test {test} ... ok" in grammar_output for test in MANIFEST_TESTS)
+        row["manifest_grammar"] = {
+            "package": MANIFEST_PACKAGE,
+            "tests": MANIFEST_TESTS,
+            "returncode": grammar.returncode,
+            "passed": grammar_passed,
+            "output_sha256": hashlib.sha256(grammar_output.encode()).hexdigest(),
+        }
+        if grammar.returncode or not grammar_passed:
+            raise AssertionError(
+                f"{MANIFEST_PACKAGE} sha256sum grammar failed with rc={grammar.returncode}"
+            )
     except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
         status = "FAIL"
         summary = str(error)
@@ -108,6 +156,12 @@ def main() -> int:
             "dot_prefixed_member_normalization",
             "unlisted_file_pruning",
             "manifest_path_confinement",
+            "strict_sha256sum_grammar",
+            "in_process_manifest_digest_check",
+            "image_hash_checked_before_manifest",
+            "measured_files_must_be_listed",
+            "single_download_per_image",
+            "truncated_download_retried",
             "corrupt_cache_recovery",
             "concurrent_cache_write_atomicity",
         ],
@@ -137,7 +191,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "Archive extraction, link and path confinement, gzip members, pruning, corrupt-cache recovery, and concurrent cache writes were exercised.",
+                    "observed": "Archive extraction, link and path confinement, gzip members, the sha256sum grammar and in-process digest check, measured-file binding, pruning, single download per image, truncated-download retry, corrupt-cache recovery, and concurrent cache writes were exercised.",
                 },
                 {
                     "id": f"{case_id}-step-03",
