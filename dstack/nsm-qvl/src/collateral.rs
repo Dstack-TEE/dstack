@@ -8,7 +8,7 @@
 //! downloads CRLs for revocation checking, similar to dcap-qvl/tpm-qvl.
 
 use anyhow::{Context, Result};
-use pki_fetch::Fetcher;
+use pki_fetch::{AllowedHosts, Fetcher};
 use tracing::debug;
 
 use crate::{
@@ -18,20 +18,25 @@ use crate::{
 pub async fn get_collateral_and_verify(
     cose_sign1_bytes: &[u8],
     root_ca_pem: &str,
+    allowed_hosts: &AllowedHosts,
     now: Option<std::time::SystemTime>,
 ) -> Result<crate::NsmVerifiedReport> {
-    let collateral = get_collateral(cose_sign1_bytes, root_ca_pem).await?;
+    let collateral = get_collateral(cose_sign1_bytes, root_ca_pem, allowed_hosts).await?;
     verify_attestation_with_collateral(cose_sign1_bytes, root_ca_pem, &collateral, now)
 }
 
-pub async fn get_collateral(cose_sign1_bytes: &[u8], root_ca_pem: &str) -> Result<NsmCollateral> {
+pub async fn get_collateral(
+    cose_sign1_bytes: &[u8],
+    root_ca_pem: &str,
+    allowed_hosts: &AllowedHosts,
+) -> Result<NsmCollateral> {
     debug!("fetching NSM collateral (intermediate CRLs + root CA CRL)");
 
     let cose = CoseSign1::from_bytes(cose_sign1_bytes).context("failed to parse COSE Sign1")?;
     let doc =
         AttestationDocument::from_cbor(&cose.payload).context("failed to parse attestation doc")?;
 
-    let mut fetcher = Fetcher::new()?;
+    let mut fetcher = Fetcher::new(allowed_hosts)?;
     let crls = fetcher.crls(&build_chain_from_doc(&doc)).await?;
     let root_ca_crl = fetcher.root_ca_crl(root_ca_pem).await?;
 

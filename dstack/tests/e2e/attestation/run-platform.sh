@@ -197,6 +197,7 @@ image_download_timeout_secs = 1
 
 [attestation]
 insecure_allow_external_trust_anchors = true
+allowed_collateral_hosts = ["127.0.0.1"]
 
 [attestation.urls]
 pccs = "http://127.0.0.1:18088"

@@ -73,8 +73,10 @@ impl QuoteVerifier {
     pub async fn fetch_and_verify(
         &self,
         quote: &tpm_types::TpmQuote,
+        allowed_hosts: &AllowedHosts,
     ) -> Result<verify::VerifiedReport> {
-        let collateral = collateral::get_collateral(quote, &self.root_ca_pem).await?;
+        let collateral =
+            collateral::get_collateral(quote, &self.root_ca_pem, allowed_hosts).await?;
         self.verify(quote, &collateral).map_err(Into::into)
     }
 }
@@ -117,6 +119,8 @@ pub struct VerificationStatus {
 
 #[cfg(feature = "crl-download")]
 pub use collateral::{get_collateral, get_collateral_and_verify};
+#[cfg(feature = "crl-download")]
+pub use pki_fetch::AllowedHosts;
 
 pub use verify::verify_quote;
 

@@ -25,6 +25,7 @@ use serde::Deserialize;
 use std::{collections::BTreeMap, io::Cursor};
 
 pub use collateral::{get_collateral, get_collateral_and_verify};
+pub use pki_fetch::AllowedHosts;
 
 mod verify;
 
@@ -84,9 +85,16 @@ impl QuoteVerifier {
     pub async fn fetch_and_verify(
         &self,
         cose_sign1_bytes: &[u8],
+        allowed_hosts: &AllowedHosts,
         now: Option<std::time::SystemTime>,
     ) -> Result<NsmVerifiedReport> {
-        collateral::get_collateral_and_verify(cose_sign1_bytes, &self.root_ca_pem, now).await
+        collateral::get_collateral_and_verify(
+            cose_sign1_bytes,
+            &self.root_ca_pem,
+            allowed_hosts,
+            now,
+        )
+        .await
     }
 }
 

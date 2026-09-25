@@ -153,6 +153,7 @@ mod tests {
             insecure_allow_external_trust_anchors: true,
             urls: Default::default(),
             root_ca,
+            allowed_collateral_hosts: None,
         })
     }
 

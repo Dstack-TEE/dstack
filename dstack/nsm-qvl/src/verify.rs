@@ -124,7 +124,8 @@ pub async fn verify_attestation_with_crl(
     now: Option<SystemTime>,
 ) -> Result<NsmVerifiedReport> {
     if enable_crl {
-        let collateral = crate::get_collateral(cose_sign1_bytes, root_ca_pem).await?;
+        let collateral =
+            crate::get_collateral(cose_sign1_bytes, root_ca_pem, &Default::default()).await?;
         verify_attestation(cose_sign1_bytes, root_ca_pem, Some(&collateral), now)
     } else {
         verify_attestation(cose_sign1_bytes, root_ca_pem, None, now)

@@ -19,6 +19,9 @@ rpc_domain = ""
 # production should retain vendor roots.
 [core.attestation]
 insecure_allow_external_trust_anchors = false
+# Hosts certificate-named collateral (GCP TPM AK issuers, Nitro/TPM CRLs) may be
+# fetched from; `*` matches within one DNS label. Unset keeps the vendor hosts.
+# allowed_collateral_hosts = ["privateca-content-*.storage.googleapis.com", "aws-nitro-enclaves-crl.s3.amazonaws.com", "crl-*-aws-nitro-enclaves.s3.*.amazonaws.com"]
 
 [core.attestation.urls]
 # pccs = "https://pccs.phala.network"

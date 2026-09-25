@@ -8,7 +8,7 @@
 //! extracting certificate chain information and downloading CRLs.
 
 use anyhow::{Context, Result};
-use pki_fetch::Fetcher;
+use pki_fetch::{AllowedHosts, Fetcher};
 use tracing::debug;
 use x509_parser::prelude::*;
 
@@ -16,15 +16,22 @@ use tpm_types::TpmQuote;
 
 use crate::{get_root_ca, verify::VerifiedReport, QuoteCollateral};
 
-pub async fn get_collateral_and_verify(quote: &TpmQuote) -> Result<VerifiedReport> {
+pub async fn get_collateral_and_verify(
+    quote: &TpmQuote,
+    allowed_hosts: &AllowedHosts,
+) -> Result<VerifiedReport> {
     let root_ca_pem = get_root_ca(quote.platform).context("failed to get root CA")?;
-    let collateral = get_collateral(quote, root_ca_pem).await?;
+    let collateral = get_collateral(quote, root_ca_pem, allowed_hosts).await?;
     crate::verify::verify_quote_with_ca(quote, &collateral, root_ca_pem).map_err(Into::into)
 }
 
-pub async fn get_collateral(quote: &TpmQuote, root_ca_pem: &str) -> Result<QuoteCollateral> {
+pub async fn get_collateral(
+    quote: &TpmQuote,
+    root_ca_pem: &str,
+    allowed_hosts: &AllowedHosts,
+) -> Result<QuoteCollateral> {
     debug!("fetching quote collateral (intermediate cert chain + CRLs)");
-    let mut fetcher = Fetcher::new()?;
+    let mut fetcher = Fetcher::new(allowed_hosts)?;
     let chain_ders = build_cert_chain(&mut fetcher, &quote.ak_cert).await?;
     let crls = fetcher.crls(&chain_ders).await?;
     let root_ca_crl = fetcher.root_ca_crl(root_ca_pem).await?;

@@ -369,7 +369,10 @@ mod tests {
         let task = tokio::spawn(serve_listener(listener, state.clone()));
         let quote = state.tpm.attest(&[0x42; 32]).unwrap();
         let root = state.tpm.root_ca_pem();
-        let collateral = tpm_qvl::get_collateral(&quote, &root).await.unwrap();
+        let hosts = tpm_qvl::AllowedHosts::new([addr.ip().to_string()]);
+        let collateral = tpm_qvl::get_collateral(&quote, &root, &hosts)
+            .await
+            .unwrap();
         tpm_qvl::QuoteVerifier::new(state.tpm.root_ca_pem())
             .verify(&quote, &collateral)
             .unwrap();

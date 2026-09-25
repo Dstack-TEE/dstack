@@ -38,6 +38,7 @@ nsm-qvl.workspace = true
 tpm-qvl.workspace = true
 tpm-types.workspace = true
 tracing.workspace = true
+url.workspace = true
 x509-parser.workspace = true
 insta.workspace = true
 errify.workspace = true
