@@ -308,6 +308,35 @@ def main() -> int:
         require_rejection(row, completed, "unknown field")
         rows.append(row)
 
+        stage = "collateral host allowlist"
+        hosts_config = workspace / "collateral-hosts.toml"
+        write_config(hosts_config, allocate_port(), cache)
+        with hosts_config.open("a") as stream:
+            stream.write(
+                'allowed_collateral_hosts = ["127.0.0.1", '
+                '"privateca-content-*.storage.googleapis.com"]\n'
+            )
+        row, completed = run_command(
+            "collateral-hosts-file",
+            [str(binary), "--config", str(hosts_config), "--verify", str(request)],
+            workspace,
+            environment,
+        )
+        require_valid_verification(row, completed)
+        rows.append(row)
+
+        env = environment | {
+            "DSTACK_VERIFIER_ATTESTATION__ALLOWED_COLLATERAL_HOSTS": "127.0.0.1"
+        }
+        row, completed = run_command(
+            "collateral-hosts-env-not-a-list",
+            [str(binary), "--config", str(config), "--verify", str(request)],
+            workspace,
+            env,
+        )
+        require_rejection(row, completed, "expected a sequence")
+        rows.append(row)
+
         stage = "verify-cert mode"
         invalid_cert = workspace / "invalid-cert.pem"
         invalid_cert.write_text(
@@ -374,7 +403,8 @@ def main() -> int:
         stage = "dependency outage and recovery"
         recovery_cache = workspace / "recovery-cache"
         recovery_config = workspace / "recovery.toml"
-        write_config(recovery_config, allocate_port(), recovery_cache, 1)
+        # Long enough for the image download to exhaust its retries (PR #1388).
+        write_config(recovery_config, allocate_port(), recovery_cache, 10)
         outage_request = workspace / "outage-request.json"
         shutil.copy2(request_source, outage_request)
         row, completed = run_command(
@@ -429,6 +459,7 @@ def main() -> int:
         "covered_behaviors": [
             "embedded_file_environment_precedence",
             "nested_attestation_environment_override",
+            "collateral_host_allowlist_config",
             "unknown_and_invalid_config_rejection",
             "verify_and_verify_cert_mode_selection",
             "service_environment_port_restart_and_adjacent_isolation",

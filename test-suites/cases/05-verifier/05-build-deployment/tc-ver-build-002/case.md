@@ -74,6 +74,11 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PRs #1388 and #1404)
+
+- #1404 added `attestation.allowed_collateral_hosts`, the hosts the issuer certificates and CRLs named by a GCP TPM AK certificate may be fetched from. A file that sets it to a list is accepted and the full-TDX request still verifies; `DSTACK_VERIFIER_ATTESTATION__ALLOWED_COLLATERAL_HOSTS` set to a bare string is rejected with `expected a sequence`. Which hosts are contacted is covered in TC-VER-INPUT-PLAT-006.
+- #1388 retries a transient image download failure, sleeping 1 s and 2 s between three attempts. The outage row uses a 10-second download timeout, so it fails with `Failed to download image` after the retries instead of with `Download image timeout`.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
