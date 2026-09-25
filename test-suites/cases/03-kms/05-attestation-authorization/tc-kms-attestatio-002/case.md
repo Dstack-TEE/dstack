@@ -64,6 +64,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1247, #1343)
+
+- On the SEV-SNP key-release path `BootInfo.device_id` is now `sha256(chip_id)` over the verified 64-byte `chip_id`, the same 32-byte value `Onboard.GetAttestationInfo` reports and operators register. A device allowlist entry copied from `GetAttestationInfo` must therefore authorize the same SNP guest; a raw 64-byte `chip_id` entry no longer matches (#1247).
+- An SNP boot whose measured config carries no 20-byte `app_id` is refused with `app_id must be 20 bytes` before any policy call (#1343).
+- Both are covered by `dstack-kms` unit tests; this case stays capability-blocked until the cross-platform fixture provides key-bound SEV-SNP evidence.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
