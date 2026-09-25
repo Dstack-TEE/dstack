@@ -2550,15 +2550,6 @@
       "promoted_at": "2026-07-28T04:51:45Z"
     },
     {
-      "case_id": "tc-vmm-compute-ne-006",
-      "source_run": "vmm-registry-interruption-004",
-      "source_status": "PASS",
-      "entrypoint": "cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-006/run.py",
-      "promoted_at": "2026-07-29T03:54:53Z",
-      "notes": "seven case-owned HTTPS registry rows cover bearer/public multilayer extraction, interrupted transfer retry, size/digest integrity, traversal rejection, token denial recovery, invalid-tag confinement, service availability, and complete atomic cleanup without starting a VM or building an image",
-      "environment": "ISOLATED_COMPONENT_FAULT_INJECTION"
-    },
-    {
       "case_id": "tc-vmm-compute-ne-007",
       "source_run": "vmm-qemu-platform-002",
       "source_status": "PASS",
@@ -2975,21 +2966,6 @@
       "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
       "environment": "ISOLATED_COMPONENT",
       "notes": "stopped supervisor record removal transition"
-    },
-    {
-      "case_id": "tc-vmm-vmm-021",
-      "source_run": "central-fixtures-20260724T032131Z",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
-      "environment": "ISOLATED_COMPONENT"
-    },
-    {
-      "case_id": "tc-vmm-vmm-022",
-      "source_run": "registry-pull-001",
-      "source_status": "PASS",
-      "entrypoint": "cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-022/run.py",
-      "environment": "ISOLATED_COMPONENT",
-      "notes": "case-owned mock OCI registry pull lifecycle"
     },
     {
       "case_id": "tc-vmm-vmm-023",

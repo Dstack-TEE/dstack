@@ -138,7 +138,8 @@
       "component": "gateway",
       "source": "dstack/ct_monitor/src/main.rs",
       "case_ids": [
-        "tc-gw-certificat-007"
+        "tc-gw-certificat-007",
+        "tc-kms-build-001"
       ],
       "rationale": "certificate transparency monitoring"
     },
@@ -171,7 +172,8 @@
       "component": "gateway",
       "source": "dstack/gateway/dstack-app/builder/Dockerfile",
       "case_ids": [
-        "tc-int-mixed-004"
+        "tc-int-mixed-004",
+        "tc-kms-build-001"
       ],
       "rationale": "direct source reference; gateway packaging and deployment"
     },
@@ -502,7 +504,8 @@
         "tc-gw-certificat-004",
         "tc-gw-certificat-005",
         "tc-gw-cluster-ad-003",
-        "tc-gw-cluster-ad-004"
+        "tc-gw-cluster-ad-004",
+        "tc-gw-admin-037"
       ],
       "rationale": "direct source reference"
     },
@@ -510,7 +513,8 @@
       "component": "gateway",
       "source": "dstack/gateway/src/cert_store.rs",
       "case_ids": [
-        "tc-gw-certificat-006"
+        "tc-gw-certificat-006",
+        "tc-gw-admin-037"
       ],
       "rationale": "direct source reference"
     },
@@ -707,7 +711,8 @@
       "component": "gateway",
       "source": "dstack/gateway/src/proxy/sni.rs",
       "case_ids": [
-        "tc-gw-internal-004"
+        "tc-gw-internal-004",
+        "tc-gw-proxy-prot-003"
       ],
       "rationale": "direct source reference"
     },
@@ -982,7 +987,8 @@
         "tc-gos-setup-023",
         "tc-gos-setup-019",
         "tc-gos-setup-022",
-        "tc-gos-setup-025"
+        "tc-gos-setup-025",
+        "tc-gos-boot-and-i-003"
       ],
       "rationale": "direct source reference"
     },
@@ -1003,7 +1009,9 @@
         "tc-gos-setup-006",
         "tc-gos-setup-007",
         "tc-gos-setup-011",
-        "tc-gos-setup-009"
+        "tc-gos-setup-009",
+        "tc-gos-boot-and-i-001",
+        "tc-gos-boot-and-i-003"
       ],
       "rationale": "direct source reference"
     },
@@ -1362,7 +1370,9 @@
         "tc-gos-attestatio-003",
         "tc-gos-attestatio-001",
         "tc-gos-attestatio-004",
-        "tc-gos-attestatio-005"
+        "tc-gos-attestatio-005",
+        "tc-gos-worker-001",
+        "tc-gos-dstackguest-001"
       ],
       "rationale": "direct source reference"
     },
@@ -1371,7 +1381,8 @@
       "source": "dstack/guest-agent/src/rpc_service_v1.rs",
       "case_ids": [
         "tc-gos-dstackguest-001",
-        "tc-gos-attestatio-002"
+        "tc-gos-attestatio-002",
+        "tc-gos-worker-001"
       ],
       "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
     },
@@ -1920,7 +1931,8 @@
       "component": "guest-os",
       "source": "dstack/supervisor/src/main.rs",
       "case_ids": [
-        "tc-gos-storage-an-004"
+        "tc-gos-storage-an-004",
+        "tc-gos-setup-012"
       ],
       "rationale": "direct source reference"
     },
@@ -1928,7 +1940,8 @@
       "component": "guest-os",
       "source": "dstack/supervisor/src/process.rs",
       "case_ids": [
-        "tc-gos-storage-an-004"
+        "tc-gos-storage-an-004",
+        "tc-gos-setup-012"
       ],
       "rationale": "direct source reference"
     },
@@ -1936,7 +1949,8 @@
       "component": "guest-os",
       "source": "dstack/supervisor/src/supervisor.rs",
       "case_ids": [
-        "tc-gos-storage-an-004"
+        "tc-gos-storage-an-004",
+        "tc-gos-setup-012"
       ],
       "rationale": "direct source reference"
     },
@@ -1944,7 +1958,8 @@
       "component": "guest-os",
       "source": "dstack/supervisor/src/web_api.rs",
       "case_ids": [
-        "tc-gos-storage-an-004"
+        "tc-gos-storage-an-004",
+        "tc-gos-setup-012"
       ],
       "rationale": "direct source reference"
     },
@@ -2226,7 +2241,8 @@
       "component": "guest-os",
       "source": "os/common/rootfs/app-compose.service",
       "case_ids": [
-        "tc-gos-platform-006"
+        "tc-gos-platform-006",
+        "tc-gos-boot-and-i-003"
       ],
       "rationale": "direct source reference"
     },
@@ -2383,7 +2399,8 @@
       "source": "os/mkosi/mkosi.finalize",
       "case_ids": [
         "tc-gos-dstackguest-001",
-        "tc-gos-boot-and-i-001"
+        "tc-gos-boot-and-i-001",
+        "tc-gos-platform-005"
       ],
       "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
     },
@@ -2865,7 +2882,8 @@
         "tc-gos-yocto-002",
         "tc-gos-yocto-003",
         "tc-gos-yocto-004",
-        "tc-gos-yocto-006"
+        "tc-gos-yocto-006",
+        "tc-gos-platform-005"
       ],
       "rationale": "direct source reference; Yocto image/runtime/hardening"
     },
@@ -3021,7 +3039,8 @@
         "tc-gos-yocto-003",
         "tc-gos-yocto-004",
         "tc-gos-yocto-005",
-        "tc-gos-yocto-006"
+        "tc-gos-yocto-006",
+        "tc-gos-platform-005"
       ],
       "rationale": "direct source reference; Yocto image/runtime/hardening"
     },
@@ -3592,7 +3611,8 @@
         "tc-gos-yocto-003",
         "tc-gos-yocto-004",
         "tc-gos-yocto-005",
-        "tc-gos-yocto-006"
+        "tc-gos-yocto-006",
+        "tc-gos-platform-005"
       ],
       "rationale": "direct source reference; Yocto image/runtime/hardening"
     },
@@ -4714,7 +4734,8 @@
         "tc-kms-auth-007",
         "tc-kms-auth-009",
         "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
+        "tc-kms-runtime-005",
+        "tc-kms-runtime-002"
       ],
       "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
     },
@@ -5210,7 +5231,8 @@
         "tc-kms-kms-005",
         "tc-kms-kms-002",
         "tc-kms-kms-003",
-        "tc-kms-kms-004"
+        "tc-kms-kms-004",
+        "tc-kms-onboard-005"
       ],
       "rationale": "direct source reference; KMS RPC generated contract"
     },
@@ -5285,7 +5307,8 @@
       "source": "dstack/kms/src/admin_service.rs",
       "case_ids": [
         "tc-kms-keys-certs-006",
-        "tc-kms-build-001"
+        "tc-kms-build-001",
+        "tc-kms-onboard-005"
       ],
       "rationale": "direct source reference"
     },
@@ -5398,7 +5421,17 @@
       "case_ids": [
         "tc-kms-build-001",
         "tc-kms-kms-001",
-        "tc-kms-onboard-002"
+        "tc-kms-onboard-002",
+        "tc-kms-onboard-005",
+        "tc-gos-contract-001",
+        "tc-gos-contract-002",
+        "tc-gos-contract-003",
+        "tc-gos-contract-004",
+        "tc-kms-contract-001",
+        "tc-kms-contract-002",
+        "tc-gw-contract-001",
+        "tc-gw-contract-002",
+        "tc-gw-contract-003"
       ],
       "rationale": "RA RPC transport and attested channel"
     },
@@ -5408,7 +5441,16 @@
       "case_ids": [
         "tc-kms-build-001",
         "tc-kms-kms-001",
-        "tc-kms-onboard-002"
+        "tc-kms-onboard-002",
+        "tc-gos-contract-001",
+        "tc-gos-contract-002",
+        "tc-gos-contract-003",
+        "tc-gos-contract-004",
+        "tc-kms-contract-001",
+        "tc-kms-contract-002",
+        "tc-gw-contract-001",
+        "tc-gw-contract-002",
+        "tc-gw-contract-003"
       ],
       "rationale": "RA RPC transport and attested channel"
     },
@@ -5418,7 +5460,16 @@
       "case_ids": [
         "tc-kms-build-001",
         "tc-kms-kms-001",
-        "tc-kms-onboard-002"
+        "tc-kms-onboard-002",
+        "tc-gos-contract-001",
+        "tc-gos-contract-002",
+        "tc-gos-contract-003",
+        "tc-gos-contract-004",
+        "tc-kms-contract-001",
+        "tc-kms-contract-002",
+        "tc-gw-contract-001",
+        "tc-gw-contract-002",
+        "tc-gw-contract-003"
       ],
       "rationale": "RA RPC transport and attested channel"
     },
@@ -5426,7 +5477,16 @@
       "component": "kms",
       "source": "dstack/ra-rpc/src/ratls_client_verifier.rs",
       "case_ids": [
-        "tc-ver-cli-cert-o-002"
+        "tc-ver-cli-cert-o-002",
+        "tc-gos-contract-001",
+        "tc-gos-contract-002",
+        "tc-gos-contract-003",
+        "tc-gos-contract-004",
+        "tc-kms-contract-001",
+        "tc-kms-contract-002",
+        "tc-gw-contract-001",
+        "tc-gw-contract-002",
+        "tc-gw-contract-003"
       ],
       "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
     },
@@ -5436,7 +5496,16 @@
       "case_ids": [
         "tc-kms-build-001",
         "tc-kms-kms-001",
-        "tc-kms-onboard-002"
+        "tc-kms-onboard-002",
+        "tc-gos-contract-001",
+        "tc-gos-contract-002",
+        "tc-gos-contract-003",
+        "tc-gos-contract-004",
+        "tc-kms-contract-001",
+        "tc-kms-contract-002",
+        "tc-gw-contract-001",
+        "tc-gw-contract-002",
+        "tc-gw-contract-003"
       ],
       "rationale": "RA RPC transport and attested channel"
     },
@@ -5587,7 +5656,8 @@
       "source": "dstack/dstack-attest/src/attestation.rs",
       "case_ids": [
         "tc-ver-tools-003",
-        "tc-gos-attestatio-002"
+        "tc-gos-attestatio-002",
+        "tc-kms-platform-006"
       ],
       "rationale": "direct source reference"
     },
@@ -5860,7 +5930,9 @@
       "case_ids": [
         "tc-ver-cli-cert-o-002",
         "tc-kms-upgrade-002",
-        "tc-gos-attestatio-004"
+        "tc-gos-attestatio-004",
+        "tc-gos-dstackguest-001",
+        "tc-kms-keys-certs-004"
       ],
       "rationale": "RA-TLS certificate/evidence binding"
     },
@@ -6266,8 +6338,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6299,8 +6369,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6335,8 +6403,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023"
       ],
       "rationale": "direct source reference; host API contract and clients"
@@ -6365,8 +6431,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6398,8 +6462,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6431,8 +6493,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6473,8 +6533,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6506,8 +6564,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6539,8 +6595,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6554,7 +6608,6 @@
       "case_ids": [
         "tc-vmm-vmm-023",
         "tc-vmm-vmm-016",
-        "tc-vmm-vmm-021",
         "tc-vmm-vmm-006",
         "tc-vmm-vmm-010",
         "tc-vmm-vmm-003",
@@ -6574,10 +6627,10 @@
         "tc-vmm-vmm-009",
         "tc-vmm-vmm-017",
         "tc-vmm-vmm-011",
-        "tc-vmm-vmm-022",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
-        "tc-vmm-hostapi-003"
+        "tc-vmm-hostapi-003",
+        "tc-vmm-compute-ne-005"
       ],
       "rationale": "direct source reference; VMM RPC generated contract"
     },
@@ -6605,8 +6658,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6638,8 +6689,6 @@
         "tc-vmm-vmm-018",
         "tc-vmm-vmm-019",
         "tc-vmm-vmm-020",
-        "tc-vmm-vmm-021",
-        "tc-vmm-vmm-022",
         "tc-vmm-vmm-023",
         "tc-vmm-hostapi-001",
         "tc-vmm-hostapi-002",
@@ -6709,14 +6758,6 @@
       "case_ids": [
         "tc-vmm-compute-ne-007",
         "tc-vmm-compute-ne-003"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "vmm",
-      "source": "dstack/vmm/src/app/registry.rs",
-      "case_ids": [
-        "tc-vmm-compute-ne-006"
       ],
       "rationale": "direct source reference"
     },
@@ -6807,7 +6848,8 @@
         "tc-vmm-ui-observa-004",
         "tc-vmm-vmm-001",
         "tc-vmm-compute-ne-002",
-        "tc-vmm-vmm-015"
+        "tc-vmm-vmm-015",
+        "tc-vmm-compute-ne-005"
       ],
       "rationale": "direct source reference"
     },
@@ -7587,7 +7629,8 @@
       "case_ids": [
         "tc-vmm-compute-ne-001",
         "tc-vmm-compute-ne-002",
-        "tc-vmm-vmm-001"
+        "tc-vmm-vmm-001",
+        "tc-vmm-configurat-002"
       ],
       "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
     },
@@ -7614,6 +7657,222 @@
         "tc-vmm-compute-ne-002"
       ],
       "rationale": "Post-baseline source change mapped to focused candidate regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/common/rootfs/dstack-boot-error@.service",
+      "case_ids": [
+        "tc-gos-platform-006"
+      ],
+      "rationale": "Post-baseline source change (#1322) mapped to focused regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/mkosi/rootfs.tmpfiles",
+      "case_ids": [
+        "tc-gos-platform-005"
+      ],
+      "rationale": "Post-baseline source change (#1331) mapped to focused regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/mkosi/mkosi.postinst",
+      "case_ids": [
+        "tc-gos-platform-005"
+      ],
+      "rationale": "Post-baseline source change (#1321) mapped to focused regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/mkosi/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset",
+      "case_ids": [
+        "tc-gos-platform-005"
+      ],
+      "rationale": "Post-baseline source change (#1321, #1331) mapped to focused regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/mkosi/mkosi.skeleton/etc/systemd/network/20-wired.network",
+      "case_ids": [
+        "tc-gos-yocto-003"
+      ],
+      "rationale": "Post-baseline source change (#1354) mapped to focused regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/mkosi/components/dstack-rust/dstack-rust.sh",
+      "case_ids": [
+        "tc-gos-yocto-003"
+      ],
+      "rationale": "Post-baseline source change (#1354) mapped to focused regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "os/mkosi/components/dstack-rust/dstack-rust-build.sh",
+      "case_ids": [
+        "tc-gos-yocto-003",
+        "tc-gos-platform-007"
+      ],
+      "rationale": "Post-baseline source change (#1354) mapped to focused regression coverage."
+    },
+    {
+      "component": "guest-os",
+      "source": "dstack/dstack-types/src/sha256sum.rs",
+      "case_ids": [
+        "tc-ver-image-meas-001",
+        "tc-ver-cli-cert-o-003"
+      ],
+      "rationale": "Post-baseline source change (#1251) mapped to focused regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/qemu-acpi/src/topology.rs",
+      "case_ids": [
+        "tc-ver-tools-001",
+        "tc-ver-tools-002"
+      ],
+      "rationale": "Post-baseline source change (#1387) mapped to focused regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/qemu-acpi/src/golden_tests.rs",
+      "case_ids": [
+        "tc-ver-tools-001",
+        "tc-ver-tools-002"
+      ],
+      "rationale": "Post-baseline source change (#1387) mapped to focused regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/qemu-acpi/scripts/differential-random.py",
+      "case_ids": [
+        "tc-ver-tools-001",
+        "tc-ver-tools-002"
+      ],
+      "rationale": "Post-baseline source change (#1387) mapped to focused regression coverage."
+    },
+    {
+      "component": "vmm",
+      "source": "dstack/crates/dstackup/src/install.rs",
+      "case_ids": [
+        "tc-vmm-install-007"
+      ],
+      "rationale": "Post-baseline source change (#1393) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/verifier/builder/Dockerfile",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "Post-baseline source change (#1403) mapped to focused regression coverage."
+    },
+    {
+      "component": "kms",
+      "source": "dstack/build/shared/build-lib.sh",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "Post-baseline source change (#1395) mapped to focused regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/main_service/wg_apply.rs",
+      "case_ids": [
+        "tc-gw-registrati-002",
+        "tc-gw-cluster-ad-004"
+      ],
+      "rationale": "Post-baseline source change (#1308) mapped to focused regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy/adaptive_ktls.rs",
+      "case_ids": [
+        "tc-gw-proxy-prot-006"
+      ],
+      "rationale": "Post-baseline source change (#1245) mapped to focused regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/gateway/src/proxy/splice.rs",
+      "case_ids": [
+        "tc-gw-proxy-prot-006"
+      ],
+      "rationale": "Post-baseline source change (#1245) mapped to focused regression coverage."
+    },
+    {
+      "component": "gateway",
+      "source": "dstack/certbot/Cargo.toml",
+      "case_ids": [
+        "tc-gw-certbot-006"
+      ],
+      "rationale": "Post-baseline source change (#1241) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/crates/pki-fetch/Cargo.toml",
+      "case_ids": [
+        "tc-ver-input-plat-006",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "Post-baseline source change (#1238, #1404) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/crates/pki-fetch/src/lib.rs",
+      "case_ids": [
+        "tc-ver-input-plat-006",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "Post-baseline source change (#1238, #1404) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/src/trust_anchors.rs",
+      "case_ids": [
+        "tc-ver-input-plat-006",
+        "tc-ver-build-002",
+        "tc-gos-setup-022"
+      ],
+      "rationale": "Post-baseline source change (#1404) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/tests/sev_snp_verify.rs",
+      "case_ids": [
+        "tc-ver-input-plat-005",
+        "tc-ver-tools-003"
+      ],
+      "rationale": "Post-baseline source change (#1279) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/tests/nitro_verify.rs",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-kms-platform-006"
+      ],
+      "rationale": "Post-baseline source change (#1302) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/dstack-attest/tests/snapshots/nitro_verify__nitro_report.snap",
+      "case_ids": [
+        "tc-ver-tools-003",
+        "tc-kms-platform-006"
+      ],
+      "rationale": "Post-baseline source change (#1302) mapped to focused regression coverage."
+    },
+    {
+      "component": "verifier",
+      "source": "dstack/tests/e2e/attestation/run-platform.sh",
+      "case_ids": [
+        "tc-ver-input-plat-005",
+        "tc-ver-input-plat-006",
+        "tc-ver-input-plat-007",
+        "tc-ver-nitro-008"
+      ],
+      "rationale": "Post-baseline source change (#1332, #1404) mapped to focused regression coverage."
     }
   ]
 }

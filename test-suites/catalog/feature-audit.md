@@ -217,8 +217,6 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-vmm-vmm-018"></a><a id="risk-vmm-vmm-018"></a>| `req-vmm-vmm-018` | `risk-vmm-vmm-018` | [tc-vmm-vmm-018](../cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-018/case.md#tc-vmm-vmm-018) — Vmm.SvList | P1 |
 <a id="req-vmm-vmm-019"></a><a id="risk-vmm-vmm-019"></a>| `req-vmm-vmm-019` | `risk-vmm-vmm-019` | [tc-vmm-vmm-019](../cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-019/case.md#tc-vmm-vmm-019) — Vmm.SvStop | P1 |
 <a id="req-vmm-vmm-020"></a><a id="risk-vmm-vmm-020"></a>| `req-vmm-vmm-020` | `risk-vmm-vmm-020` | [tc-vmm-vmm-020](../cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-020/case.md#tc-vmm-vmm-020) — Vmm.SvRemove | P1 |
-<a id="req-vmm-vmm-021"></a><a id="risk-vmm-vmm-021"></a>| `req-vmm-vmm-021` | `risk-vmm-vmm-021` | [tc-vmm-vmm-021](../cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-021/case.md#tc-vmm-vmm-021) — Vmm.ListRegistryImages | P1 |
-<a id="req-vmm-vmm-022"></a><a id="risk-vmm-vmm-022"></a>| `req-vmm-vmm-022` | `risk-vmm-vmm-022` | [tc-vmm-vmm-022](../cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-022/case.md#tc-vmm-vmm-022) — Vmm.PullRegistryImage | P1 |
 <a id="req-vmm-vmm-023"></a><a id="risk-vmm-vmm-023"></a>| `req-vmm-vmm-023` | `risk-vmm-vmm-023` | [tc-vmm-vmm-023](../cases/02-vmm/01-rpc-vmm/tc-vmm-vmm-023/case.md#tc-vmm-vmm-023) — Vmm.DeleteImage | P1 |
 
 <a id="audit-section-vmm-rpc-hostapi"></a>
@@ -263,7 +261,6 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-vmm-compute-ne-003"></a><a id="risk-vmm-compute-ne-003"></a>| `req-vmm-compute-ne-003` | `risk-vmm-compute-ne-003` | [tc-vmm-compute-ne-003](../cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-003/case.md#tc-vmm-compute-ne-003) — NUMA pinning hugepages and resource isolation | P0 |
 <a id="req-vmm-compute-ne-004"></a><a id="risk-vmm-compute-ne-004"></a>| `req-vmm-compute-ne-004` | `risk-vmm-compute-ne-004` | [tc-vmm-compute-ne-004](../cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-004/case.md#tc-vmm-compute-ne-004) — GPU discovery attach modes and ownership | P0 |
 <a id="req-vmm-compute-ne-005"></a><a id="risk-vmm-compute-ne-005"></a>| `req-vmm-compute-ne-005` | `risk-vmm-compute-ne-005` | [tc-vmm-compute-ne-005](../cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-005/case.md#tc-vmm-compute-ne-005) — Local image discovery metadata and deletion | P1 |
-<a id="req-vmm-compute-ne-006"></a><a id="risk-vmm-compute-ne-006"></a>| `req-vmm-compute-ne-006` | `risk-vmm-compute-ne-006` | [tc-vmm-compute-ne-006](../cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-006/case.md#tc-vmm-compute-ne-006) — Registry authentication pull and extraction | P1 |
 <a id="req-vmm-compute-ne-007"></a><a id="risk-vmm-compute-ne-007"></a>| `req-vmm-compute-ne-007` | `risk-vmm-compute-ne-007` | [tc-vmm-compute-ne-007](../cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-007/case.md#tc-vmm-compute-ne-007) — QEMU command and platform matrix | P0 |
 <a id="req-vmm-volume-008"></a><a id="risk-vmm-volume-008"></a>| `req-vmm-volume-008` | `risk-vmm-volume-008` | [tc-vmm-volume-008](../cases/02-vmm/05-compute-network-image/tc-vmm-volume-008/case.md#tc-vmm-volume-008) — Measured verity volume extraction resolution and path safety | P0 |
 <a id="req-vmm-compute-ne-009"></a><a id="risk-vmm-compute-ne-009"></a>| `req-vmm-compute-ne-009` | `risk-vmm-compute-ne-009` | [tc-vmm-compute-ne-009](../cases/02-vmm/05-compute-network-image/tc-vmm-compute-ne-009/case.md#tc-vmm-compute-ne-009) — Macvtap simulator launch and external connectivity | P1 |
@@ -334,6 +331,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-kms-onboard-002"></a><a id="risk-kms-onboard-002"></a>| `req-kms-onboard-002` | `risk-kms-onboard-002` | [tc-kms-onboard-002](../cases/03-kms/03-rpc-onboard/tc-kms-onboard-002/case.md#tc-kms-onboard-002) — Onboard.Onboard | P1 |
 <a id="req-kms-onboard-003"></a><a id="risk-kms-onboard-003"></a>| `req-kms-onboard-003` | `risk-kms-onboard-003` | [tc-kms-onboard-003](../cases/03-kms/03-rpc-onboard/tc-kms-onboard-003/case.md#tc-kms-onboard-003) — Onboard.GetAttestationInfo | P1 |
 <a id="req-kms-onboard-004"></a><a id="risk-kms-onboard-004"></a>| `req-kms-onboard-004` | `risk-kms-onboard-004` | [tc-kms-onboard-004](../cases/03-kms/03-rpc-onboard/tc-kms-onboard-004/case.md#tc-kms-onboard-004) — Onboard.Finish | P1 |
+<a id="req-kms-onboard-005"></a><a id="risk-kms-onboard-005"></a>| `req-kms-onboard-005` | `risk-kms-onboard-005` | [tc-kms-onboard-005](../cases/03-kms/03-rpc-onboard/tc-kms-onboard-005/case.md#tc-kms-onboard-005) — Admin-listener KMS key handover | P1 |
 
 <a id="audit-section-kms-bootstrap-onboard"></a>
 ### Bootstrap Onboard
@@ -505,6 +503,7 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-gw-admin-034"></a><a id="risk-gw-admin-034"></a>| `req-gw-admin-034` | `risk-gw-admin-034` | [tc-gw-admin-034](../cases/04-gateway/03-rpc-admin/tc-gw-admin-034/case.md#tc-gw-admin-034) — Admin.RemoveCvm | P0 |
 <a id="req-gw-admin-035"></a><a id="risk-gw-admin-035"></a>| `req-gw-admin-035` | `risk-gw-admin-035` | [tc-gw-admin-035](../cases/04-gateway/03-rpc-admin/tc-gw-admin-035/case.md#tc-gw-admin-035) — Admin.ListRejectedInstances | P0 |
 <a id="req-gw-admin-036"></a><a id="risk-gw-admin-036"></a>| `req-gw-admin-036` | `risk-gw-admin-036` | [tc-gw-admin-036](../cases/04-gateway/03-rpc-admin/tc-gw-admin-036/case.md#tc-gw-admin-036) — Admin.RemoveNode | P0 |
+<a id="req-gw-admin-037"></a><a id="risk-gw-admin-037"></a>| `req-gw-admin-037` | `risk-gw-admin-037` | [tc-gw-admin-037](../cases/04-gateway/03-rpc-admin/tc-gw-admin-037/case.md#tc-gw-admin-037) — Admin.ImportCert | P1 |
 
 <a id="audit-section-gateway-registration-wireguard-policy"></a>
 ### Registration Wireguard Policy

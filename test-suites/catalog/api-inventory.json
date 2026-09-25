@@ -204,7 +204,8 @@
               "name": "report_data",
               "number": 1,
               "optional": false,
-              "repeated": false
+              "repeated": false,
+              "constraints": "exactly 64 bytes; shorter or longer input is rejected"
             }
           ],
           "response_fields": [
@@ -512,7 +513,8 @@
               "name": "report_data",
               "number": 1,
               "optional": false,
-              "repeated": false
+              "repeated": false,
+              "constraints": "at most 64 bytes; shorter input is zero-padded, longer input is rejected"
             }
           ],
           "response_fields": [
@@ -560,7 +562,8 @@
               "name": "report_data",
               "number": 1,
               "optional": false,
-              "repeated": false
+              "repeated": false,
+              "constraints": "at most 64 bytes; shorter input is zero-padded, longer input is rejected"
             }
           ],
           "response_fields": [
@@ -820,7 +823,7 @@
           "request": "google.protobuf.Empty",
           "response": "AppInfo",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 324,
+          "line": 326,
           "case_id": "tc-gos-worker-001",
           "request_fields": [],
           "response_fields": [
@@ -923,7 +926,7 @@
           "request": "google.protobuf.Empty",
           "response": "WorkerVersion",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 326,
+          "line": 328,
           "case_id": "tc-gos-worker-002",
           "request_fields": [],
           "response_fields": [
@@ -949,7 +952,7 @@
           "request": "GetAttestationForAppKeyRequest",
           "response": "GetQuoteResponse",
           "source": "dstack/guest-agent/rpc/proto/agent_rpc.proto",
-          "line": 336,
+          "line": 338,
           "case_id": "tc-gos-worker-003",
           "request_fields": [
             {
@@ -1892,7 +1895,8 @@
               "name": "report_data",
               "number": 1,
               "optional": false,
-              "repeated": false
+              "repeated": false,
+              "constraints": "at most 64 bytes; GetQuote and Attest zero-pad shorter input, Tappd.RawQuote requires exactly 64 bytes; longer input is rejected"
             }
           ]
         },
@@ -2738,7 +2742,7 @@
           "request": "VmConfiguration",
           "response": "Id",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 386,
+          "line": 392,
           "case_id": "tc-vmm-vmm-001",
           "request_fields": [
             {
@@ -2880,6 +2884,13 @@
               "number": 21,
               "optional": true,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "disk_prealloc",
+              "number": 22,
+              "optional": true,
+              "repeated": false
             }
           ],
           "response_fields": [
@@ -2898,7 +2909,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 388,
+          "line": 394,
           "case_id": "tc-vmm-vmm-002",
           "request_fields": [
             {
@@ -2917,7 +2928,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 390,
+          "line": 396,
           "case_id": "tc-vmm-vmm-003",
           "request_fields": [
             {
@@ -2936,7 +2947,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 392,
+          "line": 398,
           "case_id": "tc-vmm-vmm-004",
           "request_fields": [
             {
@@ -2955,7 +2966,7 @@
           "request": "UpdateVmRequest",
           "response": "Id",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 394,
+          "line": 400,
           "case_id": "tc-vmm-vmm-005",
           "request_fields": [
             {
@@ -3101,7 +3112,7 @@
           "request": "UpdateVmRequest",
           "response": "Id",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 396,
+          "line": 402,
           "case_id": "tc-vmm-vmm-006",
           "request_fields": [
             {
@@ -3247,7 +3258,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 398,
+          "line": 404,
           "case_id": "tc-vmm-vmm-007",
           "request_fields": [
             {
@@ -3266,7 +3277,7 @@
           "request": "ResizeVmRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 400,
+          "line": 406,
           "case_id": "tc-vmm-vmm-008",
           "request_fields": [
             {
@@ -3313,7 +3324,7 @@
           "request": "VmConfiguration",
           "response": "ComposeHash",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 402,
+          "line": 408,
           "case_id": "tc-vmm-vmm-009",
           "request_fields": [
             {
@@ -3455,6 +3466,13 @@
               "number": 21,
               "optional": true,
               "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "disk_prealloc",
+              "number": 22,
+              "optional": true,
+              "repeated": false
             }
           ],
           "response_fields": [
@@ -3473,7 +3491,7 @@
           "request": "StatusRequest",
           "response": "StatusResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 405,
+          "line": 411,
           "case_id": "tc-vmm-vmm-010",
           "request_fields": [
             {
@@ -3549,7 +3567,7 @@
           "request": "google.protobuf.Empty",
           "response": "ImageListResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 407,
+          "line": 413,
           "case_id": "tc-vmm-vmm-011",
           "request_fields": [],
           "response_fields": [
@@ -3568,7 +3586,7 @@
           "request": "AppId",
           "response": "PublicKeyResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 410,
+          "line": 416,
           "case_id": "tc-vmm-vmm-012",
           "request_fields": [
             {
@@ -3616,7 +3634,7 @@
           "request": "Id",
           "response": "GetInfoResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 413,
+          "line": 419,
           "case_id": "tc-vmm-vmm-013",
           "request_fields": [
             {
@@ -3650,7 +3668,7 @@
           "request": "google.protobuf.Empty",
           "response": "VersionResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 416,
+          "line": 422,
           "case_id": "tc-vmm-vmm-014",
           "request_fields": [],
           "response_fields": [
@@ -3676,7 +3694,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetMetaResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 419,
+          "line": 425,
           "case_id": "tc-vmm-vmm-015",
           "request_fields": [],
           "response_fields": [
@@ -3716,7 +3734,7 @@
           "request": "google.protobuf.Empty",
           "response": "ListGpusResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 422,
+          "line": 428,
           "case_id": "tc-vmm-vmm-016",
           "request_fields": [],
           "response_fields": [
@@ -3742,7 +3760,7 @@
           "request": "google.protobuf.Empty",
           "response": "ReloadVmsResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 425,
+          "line": 431,
           "case_id": "tc-vmm-vmm-017",
           "request_fields": [],
           "response_fields": [
@@ -3775,7 +3793,7 @@
           "request": "google.protobuf.Empty",
           "response": "SvListResponse",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 428,
+          "line": 434,
           "case_id": "tc-vmm-vmm-018",
           "request_fields": [],
           "response_fields": [
@@ -3794,7 +3812,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 430,
+          "line": 436,
           "case_id": "tc-vmm-vmm-019",
           "request_fields": [
             {
@@ -3813,7 +3831,7 @@
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 432,
+          "line": 438,
           "case_id": "tc-vmm-vmm-020",
           "request_fields": [
             {
@@ -3828,49 +3846,11 @@
         },
         {
           "service": "Vmm",
-          "method": "ListRegistryImages",
-          "request": "google.protobuf.Empty",
-          "response": "RegistryImageListResponse",
-          "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 435,
-          "case_id": "tc-vmm-vmm-021",
-          "request_fields": [],
-          "response_fields": [
-            {
-              "type": "RegistryImageInfo",
-              "name": "images",
-              "number": 1,
-              "optional": false,
-              "repeated": true
-            }
-          ]
-        },
-        {
-          "service": "Vmm",
-          "method": "PullRegistryImage",
-          "request": "PullRegistryImageRequest",
-          "response": "google.protobuf.Empty",
-          "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 437,
-          "case_id": "tc-vmm-vmm-022",
-          "request_fields": [
-            {
-              "type": "string",
-              "name": "tag",
-              "number": 1,
-              "optional": false,
-              "repeated": false
-            }
-          ],
-          "response_fields": []
-        },
-        {
-          "service": "Vmm",
           "method": "DeleteImage",
           "request": "Id",
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 439,
+          "line": 441,
           "case_id": "tc-vmm-vmm-023",
           "request_fields": [
             {
@@ -4418,6 +4398,13 @@
               "type": "string",
               "name": "simulated_tee",
               "number": 21,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "disk_prealloc",
+              "number": 22,
               "optional": true,
               "repeated": false
             }
@@ -5185,66 +5172,6 @@
           ]
         },
         {
-          "name": "RegistryImageListResponse",
-          "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "fields": [
-            {
-              "type": "RegistryImageInfo",
-              "name": "images",
-              "number": 1,
-              "optional": false,
-              "repeated": true
-            }
-          ]
-        },
-        {
-          "name": "RegistryImageInfo",
-          "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "fields": [
-            {
-              "type": "string",
-              "name": "tag",
-              "number": 1,
-              "optional": false,
-              "repeated": false
-            },
-            {
-              "type": "bool",
-              "name": "local",
-              "number": 2,
-              "optional": false,
-              "repeated": false
-            },
-            {
-              "type": "bool",
-              "name": "pulling",
-              "number": 3,
-              "optional": false,
-              "repeated": false
-            },
-            {
-              "type": "string",
-              "name": "error",
-              "number": 4,
-              "optional": false,
-              "repeated": false
-            }
-          ]
-        },
-        {
-          "name": "PullRegistryImageRequest",
-          "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "fields": [
-            {
-              "type": "string",
-              "name": "tag",
-              "number": 1,
-              "optional": false,
-              "repeated": false
-            }
-          ]
-        },
-        {
           "name": "SvProcessInfo",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
           "fields": [
@@ -5302,7 +5229,7 @@
           "request": "GetAppKeyRequest",
           "response": "AppKeyResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 102,
+          "line": 105,
           "case_id": "tc-kms-kms-001",
           "request_fields": [
             {
@@ -5385,7 +5312,7 @@
           "request": "GetKmsKeyRequest",
           "response": "KmsKeyResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 104,
+          "line": 107,
           "case_id": "tc-kms-kms-002",
           "request_fields": [
             {
@@ -5419,7 +5346,7 @@
           "request": "AppId",
           "response": "PublicKeyResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 106,
+          "line": 109,
           "case_id": "tc-kms-kms-003",
           "request_fields": [
             {
@@ -5467,7 +5394,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetMetaResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 108,
+          "line": 111,
           "case_id": "tc-kms-kms-004",
           "request_fields": [],
           "response_fields": [
@@ -5533,6 +5460,13 @@
               "number": 9,
               "optional": true,
               "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "os_image_verification",
+              "number": 10,
+              "optional": true,
+              "repeated": false
             }
           ]
         },
@@ -5542,7 +5476,7 @@
           "request": "google.protobuf.Empty",
           "response": "GetTempCaCertResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 122,
+          "line": 125,
           "case_id": "tc-kms-kms-005",
           "request_fields": [],
           "response_fields": [
@@ -5575,7 +5509,7 @@
           "request": "SignCertRequest",
           "response": "SignCertResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 124,
+          "line": 127,
           "case_id": "tc-kms-kms-006",
           "request_fields": [
             {
@@ -5623,7 +5557,7 @@
           "request": "ClearImageCacheRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 133,
+          "line": 136,
           "case_id": "tc-kms-admin-001",
           "request_fields": [
             {
@@ -5649,7 +5583,7 @@
           "request": "BootstrapRequest",
           "response": "BootstrapResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 184,
+          "line": 191,
           "case_id": "tc-kms-onboard-001",
           "request_fields": [
             {
@@ -5690,7 +5624,7 @@
           "request": "OnboardRequest",
           "response": "OnboardResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 186,
+          "line": 193,
           "case_id": "tc-kms-onboard-002",
           "request_fields": [
             {
@@ -5704,6 +5638,13 @@
               "type": "string",
               "name": "domain",
               "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "source_token",
+              "number": 3,
               "optional": false,
               "repeated": false
             }
@@ -5724,7 +5665,7 @@
           "request": "google.protobuf.Empty",
           "response": "AttestationInfoResponse",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 188,
+          "line": 195,
           "case_id": "tc-kms-onboard-003",
           "request_fields": [],
           "response_fields": [
@@ -5792,10 +5733,44 @@
           "request": "google.protobuf.Empty",
           "response": "google.protobuf.Empty",
           "source": "dstack/kms/rpc/proto/kms_rpc.proto",
-          "line": 190,
+          "line": 197,
           "case_id": "tc-kms-onboard-004",
           "request_fields": [],
           "response_fields": []
+        },
+        {
+          "service": "Admin",
+          "method": "GetKmsKey",
+          "request": "GetKmsKeyRequest",
+          "response": "KmsKeyResponse",
+          "source": "dstack/kms/rpc/proto/kms_rpc.proto",
+          "line": 138,
+          "case_id": "tc-kms-onboard-005",
+          "request_fields": [
+            {
+              "type": "string",
+              "name": "vm_config",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ],
+          "response_fields": [
+            {
+              "type": "string",
+              "name": "temp_ca_key",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "KmsKeys",
+              "name": "keys",
+              "number": 2,
+              "optional": false,
+              "repeated": true
+            }
+          ]
         }
       ],
       "message_schemas": [
@@ -5992,6 +5967,13 @@
               "type": "string",
               "name": "app_auth_implementation",
               "number": 9,
+              "optional": true,
+              "repeated": false
+            },
+            {
+              "type": "bool",
+              "name": "os_image_verification",
+              "number": 10,
               "optional": true,
               "repeated": false
             }
@@ -6199,6 +6181,13 @@
               "type": "string",
               "name": "domain",
               "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "source_token",
+              "number": 3,
               "optional": false,
               "repeated": false
             }
@@ -7732,7 +7721,7 @@
           "request": "google.protobuf.Empty",
           "response": "CertbotConfigResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 558,
+          "line": 561,
           "case_id": "tc-gw-admin-029",
           "request_fields": [],
           "response_fields": [
@@ -7779,7 +7768,7 @@
           "request": "SetCertbotConfigRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 560,
+          "line": 563,
           "case_id": "tc-gw-admin-030",
           "request_fields": [
             {
@@ -7826,7 +7815,7 @@
           "request": "SetInstancePortPolicyRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 583,
+          "line": 586,
           "case_id": "tc-gw-admin-031",
           "request_fields": [
             {
@@ -7852,7 +7841,7 @@
           "request": "ClearInstancePortPolicyRequest",
           "response": "google.protobuf.Empty",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 586,
+          "line": 589,
           "case_id": "tc-gw-admin-032",
           "request_fields": [
             {
@@ -7871,7 +7860,7 @@
           "request": "GetInstancePortPolicyRequest",
           "response": "GetInstancePortPolicyResponse",
           "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
-          "line": 589,
+          "line": 592,
           "case_id": "tc-gw-admin-033",
           "request_fields": [
             {
@@ -7999,6 +7988,39 @@
               "repeated": false
             }
           ]
+        },
+        {
+          "service": "Admin",
+          "method": "ImportCert",
+          "request": "ImportCertRequest",
+          "response": "google.protobuf.Empty",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "line": 557,
+          "case_id": "tc-gw-admin-037",
+          "request_fields": [
+            {
+              "type": "string",
+              "name": "domain",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "cert_pem",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "key_pem",
+              "number": 3,
+              "optional": false,
+              "repeated": false
+            }
+          ],
+          "response_fields": []
         }
       ],
       "message_schemas": [
@@ -9983,6 +10005,33 @@
               "type": "bool",
               "name": "force",
               "number": 1,
+              "optional": false,
+              "repeated": false
+            }
+          ]
+        },
+        {
+          "name": "ImportCertRequest",
+          "source": "dstack/gateway/rpc/proto/gateway_rpc.proto",
+          "fields": [
+            {
+              "type": "string",
+              "name": "domain",
+              "number": 1,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "cert_pem",
+              "number": 2,
+              "optional": false,
+              "repeated": false
+            },
+            {
+              "type": "string",
+              "name": "key_pem",
+              "number": 3,
               "optional": false,
               "repeated": false
             }
