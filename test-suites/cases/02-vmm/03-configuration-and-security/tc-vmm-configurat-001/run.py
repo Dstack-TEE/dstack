@@ -188,6 +188,23 @@ def main() -> int:
             replace_once(base, 'instance_id = ""', 'instance_id = "dtest:bad"'),
             False,
         ),
+        # PR #1282: the registry pull is gone and a leftover key is ignored.
+        "leftover-image-registry": (
+            replace_once(
+                base, "[image]\n", '[image]\nregistry = "dstacktee/guest-image"\n'
+            ),
+            True,
+        ),
+        # PR #1230: the node default data-disk preallocation takes qemu-img's
+        # own mode names and nothing else.
+        "disk-prealloc-falloc": (
+            replace_once(base, 'disk_prealloc = "off"', 'disk_prealloc = "falloc"'),
+            True,
+        ),
+        "disk-prealloc-unknown-mode": (
+            replace_once(base, 'disk_prealloc = "off"', 'disk_prealloc = "sparse"'),
+            False,
+        ),
         "invalid-host-listener": (
             replace_once(base, 'address = "vsock:2"', 'address = "127.0.0.1"'),
             False,
@@ -214,12 +231,20 @@ def main() -> int:
         "max_net_queues": parsed.get("cvm", {}).get("max_net_queues"),
         "networking_vhost": parsed.get("cvm", {}).get("networking", {}).get("vhost"),
         "tdx_attestation_variant": parsed.get("cvm", {}).get("tdx_attestation_variant"),
+        "qemu_hotplug_off": parsed.get("cvm", {}).get("qemu_hotplug_off"),
+        "disk_prealloc": parsed.get("cvm", {}).get("disk_prealloc"),
+        "max_event_name_len": parsed.get("max_event_name_len"),
+        "image_registry_absent": "registry" not in parsed.get("image", {}),
     }
     defaults_matched = (
         not defaults["gpu_listing_missing"]
         and defaults["max_net_queues"] == 16
         and defaults["networking_vhost"] is False
         and defaults["tdx_attestation_variant"] == "auto"
+        and defaults["qemu_hotplug_off"] is True
+        and defaults["disk_prealloc"] == "off"
+        and defaults["max_event_name_len"] == 128
+        and defaults["image_registry_absent"]
     )
     passed = (
         defaults_matched
