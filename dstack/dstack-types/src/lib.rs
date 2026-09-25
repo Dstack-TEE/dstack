@@ -2329,6 +2329,9 @@ pub struct AppKeys {
     pub key_provider: KeyProvider,
 }
 
+/// Maximum length of a framed message exchanged with the local key provider.
+pub const KEY_PROVIDER_MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum KeyProvider {
     None {

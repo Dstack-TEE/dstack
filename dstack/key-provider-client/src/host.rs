@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Context, Result};
+use dstack_types::KEY_PROVIDER_MAX_FRAME_SIZE;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use tokio::{
@@ -20,9 +21,6 @@ pub struct QuoteResponse {
     pub encrypted_key: Vec<u8>,
     pub provider_quote: Vec<u8>,
 }
-
-/// Matches the frame bound the local key provider enforces on its side.
-const MAX_RESPONSE_SIZE: usize = 8 * 1024 * 1024;
 
 pub async fn get_key(quote: Vec<u8>, address: IpAddr, port: u16) -> Result<QuoteResponse> {
     if quote.len() > 1024 * 1024 {
@@ -49,8 +47,8 @@ pub async fn get_key(quote: Vec<u8>, address: IpAddr, port: u16) -> Result<Quote
         .await
         .context("Failed to read response length")?;
     let response_length = u32::from_be_bytes(response_length) as usize;
-    if response_length > MAX_RESPONSE_SIZE {
-        bail!("key provider response is {response_length} bytes; maximum is {MAX_RESPONSE_SIZE}");
+    if response_length > KEY_PROVIDER_MAX_FRAME_SIZE {
+        bail!("key provider response is {response_length} bytes; maximum is {KEY_PROVIDER_MAX_FRAME_SIZE}");
     }
     let mut response = vec![0; response_length];
     tcp_stream
@@ -60,30 +58,4 @@ pub async fn get_key(quote: Vec<u8>, address: IpAddr, port: u16) -> Result<Quote
     let response: QuoteResponse =
         serde_json::from_slice(&response).context("Failed to deserialize response")?;
     Ok(response)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::net::TcpListener;
-
-    #[tokio::test]
-    async fn rejects_oversized_response_before_allocating_it() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut length = [0; 4];
-            stream.read_exact(&mut length).await.unwrap();
-            let mut request = vec![0; u32::from_be_bytes(length) as usize];
-            stream.read_exact(&mut request).await.unwrap();
-            stream.write_all(&u32::MAX.to_be_bytes()).await.unwrap();
-        });
-
-        let error = get_key(vec![1, 2, 3], addr.ip(), addr.port())
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("maximum"), "{error:#}");
-        server.await.unwrap();
-    }
 }

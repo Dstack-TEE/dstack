@@ -4125,6 +4125,7 @@ name = "key-provider-client"
 version = "0.6.0"
 dependencies = [
  "anyhow",
+ "dstack-types",
  "serde",
  "serde_json",
  "tokio",
@@ -4281,6 +4282,7 @@ version = "0.6.0"
 dependencies = [
  "blake2",
  "dcap-qvl",
+ "dstack-types",
  "rand_core 0.6.4",
  "salsa20",
  "serde",
