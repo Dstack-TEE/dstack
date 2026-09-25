@@ -71,7 +71,7 @@ services:
             cd dstack && \
             git checkout 78057c975fe4b9e21f557fb888d72eeecfb21178
         WORKDIR /app/dstack
-        RUN cargo build --release -p dstack-kms
+        RUN cargo build --release --locked -p dstack-kms
         CMD ["./target/release/dstack-kms"]
     volumes:
       - kms-volume:/etc/kms
