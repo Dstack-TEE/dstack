@@ -68,6 +68,24 @@ def wait_exit(pid: int, timeout: float = 10) -> None:
         raise AssertionError("Supervisor did not exit after shutdown")
 
 
+def status_of(info: Any) -> Any:
+    """Return the tagged ProcessStatus of one client info response."""
+    if not isinstance(info, dict) or not isinstance(info.get("state"), dict):
+        raise AssertionError("info response lacked a process state")
+    return info["state"].get("status")
+
+
+def wait_status(base: list[str], process_id: str, expected: Any) -> dict[str, Any]:
+    """Wait for one process to reach an exact ProcessStatus."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        info = parsed(call([*base, "info", process_id]))
+        if status_of(info) == expected:
+            return info
+        time.sleep(0.05)
+    raise AssertionError(f"{process_id} did not reach {expected}")
+
+
 def main() -> int:
     """Run the complete Supervisor client matrix."""
     result_dir = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
@@ -124,6 +142,9 @@ def main() -> int:
             raise AssertionError("failed to launch case-owned Supervisor")
         pid = wait_pid(pid_file)
         owned_pids.add(pid)
+        socket_mode = socket.stat().st_mode & 0o777
+        if socket_mode != 0o600:
+            raise AssertionError(f"control socket mode was {socket_mode:o}")
 
         if parsed(call([*base, "ping"])) != "pong":
             raise AssertionError("ping response mismatch")
@@ -156,6 +177,43 @@ def main() -> int:
             == 0
         ):
             raise AssertionError("duplicate deploy unexpectedly succeeded")
+        for process_id, script in (("exit3", "exit 3"), ("killed", "kill -9 $$")):
+            parsed(
+                call(
+                    [
+                        *base,
+                        "deploy",
+                        "--id",
+                        process_id,
+                        "--command",
+                        "/bin/sh",
+                        "--arg=-c",
+                        f"--arg={script}",
+                    ]
+                )
+            )
+        wait_status(base, "exit3", {"exited": 3})
+        wait_status(base, "killed", {"exited": 137})
+        child_pid = info["state"]["pid"]
+        refused = call([*base, "clear"])
+        if refused.returncode == 0 or "child" not in refused.stderr:
+            raise AssertionError("clear did not refuse the running child by name")
+        kept = parsed(call([*base, "info", "child"]))
+        if (
+            status_of(kept) != "running"
+            or kept["state"]["pid"] != child_pid
+            or not pathlib.Path(f"/proc/{child_pid}").exists()
+        ):
+            raise AssertionError("clear killed or replaced the running child")
+        parsed(call([*base, "stop", "exit3"]))
+        parsed(call([*base, "stop", "killed"]))
+        if call([*base, "clear"]).returncode == 0:
+            raise AssertionError("clear succeeded while the child was running")
+        remaining = parsed(call([*base, "list"]))
+        if not isinstance(remaining, list) or [
+            item.get("config", {}).get("id") for item in remaining
+        ] != ["child"]:
+            raise AssertionError("clear did not forget exactly the stopped processes")
         parsed(call([*base, "stop", "child"]))
         parsed(call([*base, "start", "child"]))
         parsed(call([*base, "stop", "child"]))
@@ -182,6 +240,10 @@ def main() -> int:
                     "shutdown",
                 ],
                 "duplicate_rejected": True,
+                "socket_mode": "600",
+                "exit_codes": {"exit3": 3, "killed": 137},
+                "clear_kept_running_child": True,
+                "clear_forgot_stopped_processes": True,
                 "unknown_id_rejected": True,
                 "shutdown_response_received": True,
                 "log_sha256": hashlib.sha256(log_file.read_bytes()).hexdigest()

@@ -83,6 +83,16 @@ def wait_status(
     raise AssertionError(f"{process_id} did not reach {expected}")
 
 
+def wait_lines(path: pathlib.Path) -> None:
+    """Wait until a redirected log path receives fresh child output."""
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if path.exists() and path.read_text().count("line-") >= 3:
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"supervisor did not reopen {path.name}")
+
+
 def main() -> int:
     """Run Supervisor lifecycle acceptance."""
     case_id = os.environ["DSTACK_TEST_CASE_ID"]
@@ -236,6 +246,37 @@ def main() -> int:
             if code != 200 or not success(body):
                 raise AssertionError("stopped child removal failed")
 
+            rotating_path = log_dir / "rotating.stdout"
+            rotated_path = log_dir / "rotating.stdout.1"
+            rotating = {
+                "id": "rotating",
+                "command": "/bin/sh",
+                "args": [
+                    "-c",
+                    "i=0; while :; do i=$((i+1)); echo line-$i; sleep 0.1; done",
+                ],
+                "stdout": str(rotating_path),
+            }
+            code, body = http(base, "POST", "/deploy", rotating)
+            if code != 200 or not success(body):
+                raise AssertionError("rotating ProcessConfig deploy failed")
+            wait_status(base, "rotating", "running")
+
+            wait_lines(rotating_path)
+            rotating_path.rename(rotated_path)
+            wait_lines(rotating_path)
+            renamed_size = rotated_path.stat().st_size
+            rotating_path.unlink()
+            wait_lines(rotating_path)
+            time.sleep(0.5)
+            if rotated_path.stat().st_size != renamed_size:
+                raise AssertionError("output kept going to the rotated file")
+            code, body = http(base, "POST", "/stop/rotating")
+            if code != 200 or not success(body):
+                raise AssertionError("rotating child stop failed")
+            wait_status(base, "rotating", "stopped")
+            http(base, "DELETE", "/remove/rotating")
+
             code, unknown = http(base, "POST", "/start/unknown")
             if code != 200 or success(unknown):
                 raise AssertionError("unknown process start was accepted")
@@ -282,6 +323,7 @@ def main() -> int:
                     "pidfile_present": pidfile.is_file(),
                     "started_at": running.get("started_at"),
                     "stopped_at": stopped.get("stopped_at"),
+                    "log_reopened_after_rename_and_removal": True,
                     "unknown_id_rejected": True,
                     "unknown_sibling_accepted_and_ignored": unknown_field_accepted,
                     "empty_before_shutdown": True,
