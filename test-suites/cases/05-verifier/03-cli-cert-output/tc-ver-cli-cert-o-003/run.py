@@ -19,6 +19,12 @@ from typing import Any
 
 CASE_ID = "tc-ver-cli-cert-o-003"
 IMAGE_HASH = "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
+# The verifier fetches an image up to three times on transport errors and 5xx
+# responses, sleeping 1 s and then 2 s between attempts (PR #1388). The
+# download timeout has to outlast all three for their outcome to be observed.
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_TIMEOUT_SECS = 10
+RETRY_MARKER = "failed, retrying"
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -46,7 +52,7 @@ def write_config(path: pathlib.Path, cache: pathlib.Path, download_url: str) -> 
                 "port = 1",
                 f'image_cache_dir = "{cache}"',
                 f'image_download_url = "{download_url}"',
-                "image_download_timeout_secs = 2",
+                f"image_download_timeout_secs = {DOWNLOAD_TIMEOUT_SECS}",
                 "[attestation]",
                 "insecure_allow_external_trust_anchors = false",
                 "",
@@ -94,14 +100,34 @@ def run_verifier(
         ),
         "event_log_verified": response.get("details", {}).get("event_log_verified"),
         "acpi_tables_verified": response.get("details", {}).get("acpi_tables_verified"),
+        "download_retries": completed.stderr.count(RETRY_MARKER),
         "output_sha256": hashlib.sha256(completed.stdout.encode()).hexdigest(),
         "stderr_sha256": hashlib.sha256(completed.stderr.encode()).hexdigest(),
     }
     return row, response
 
 
+class ImageServer(http.server.ThreadingHTTPServer):
+    """Loopback server that answers the first requests with scripted errors."""
+
+    def __init__(self, handler: Any, errors: list[int]) -> None:
+        super().__init__(("127.0.0.1", 0), handler)
+        self.errors = errors
+        self.requests = 0
+
+
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
     """Serve the controlled image archive without console logging."""
+
+    server: ImageServer
+
+    def do_GET(self) -> None:  # noqa: N802 - http.server dispatch name
+        """Answer with the next scripted error, then serve the directory."""
+        self.server.requests += 1
+        if self.server.errors:
+            self.send_error(self.server.errors.pop(0))
+            return
+        super().do_GET()
 
     def log_message(self, _format: str, *_args: object) -> None:
         """Suppress loopback HTTP request logs."""
@@ -109,20 +135,28 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def image_server(directory: pathlib.Path):
+def image_server(directory: pathlib.Path, errors: tuple[int, ...] = ()):
     """Serve a case-owned directory on an ephemeral loopback port."""
     handler = lambda *args, **kwargs: QuietHandler(  # noqa: E731
         *args, directory=str(directory), **kwargs
     )
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server = ImageServer(handler, list(errors))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/{{OS_IMAGE_HASH}}.tar.gz"
+        yield server, f"http://127.0.0.1:{server.server_port}/{{OS_IMAGE_HASH}}.tar.gz"
     finally:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+def pack_image(image: pathlib.Path, archive: pathlib.Path) -> None:
+    """Write the files of an image directory into a flat tar.gz archive."""
+    with tarfile.open(archive, "w:gz") as bundle:
+        for path in sorted(image.iterdir()):
+            if path.is_file():
+                bundle.add(path, arcname=path.name, recursive=False)
 
 
 def expect_valid(row: dict[str, Any], response: dict[str, Any]) -> None:
@@ -218,18 +252,68 @@ def main() -> int:
             raise AssertionError("missing offline image did not fail closed")
         if "Failed to download image" not in reason:
             raise AssertionError("missing offline image lacked a download diagnostic")
+        if row["download_retries"] != DOWNLOAD_ATTEMPTS - 1:
+            raise AssertionError(
+                f"a refused connection was retried {row['download_retries']} times, "
+                f"not {DOWNLOAD_ATTEMPTS - 1}"
+            )
+        row["expected_rejection"] = True
+        rows.append(row)
+
+        stage = "manifest digest mismatch"
+        tampered_dir = workspace / "tampered-server"
+        tampered_dir.mkdir(parents=True, exist_ok=True)
+        tampered_image = workspace / "tampered-image"
+        shutil.copytree(fixture, tampered_image, dirs_exist_ok=True)
+        with (tampered_image / "bzImage").open("r+b") as stream:
+            original = stream.read(1)
+            stream.seek(0)
+            stream.write(bytes([original[0] ^ 1]))
+        pack_image(tampered_image, tampered_dir / f"{IMAGE_HASH}.tar.gz")
+        tampered_cache = workspace / "tampered-cache"
+        with image_server(tampered_dir) as (server, url):
+            row, response = run_verifier(
+                binary,
+                request,
+                workspace,
+                "manifest-digest-mismatch",
+                tampered_cache,
+                url,
+            )
+        reason = response.get("reason") or ""
+        if row["returncode"] == 0 or response.get("is_valid") is not False:
+            raise AssertionError("an archive with a tampered listed file was accepted")
+        if "bzImage does not match its digest in sha256sum.txt" not in reason:
+            raise AssertionError("the tampered archive lacked a manifest diagnostic")
+        if (tampered_cache / "images" / IMAGE_HASH).exists():
+            raise AssertionError("the tampered archive left an installed image")
+        row["expected_rejection"] = True
+        rows.append(row)
+
+        stage = "client error is not retried"
+        server_dir = workspace / "server"
+        server_dir.mkdir(parents=True, exist_ok=True)
+        client_error_cache = workspace / "client-error-cache"
+        with image_server(server_dir) as (server, url):
+            row, response = run_verifier(
+                binary,
+                request,
+                workspace,
+                "client-error-not-retried",
+                client_error_cache,
+                url,
+            )
+            requests = server.requests
+        if row["returncode"] == 0 or response.get("is_valid") is not False:
+            raise AssertionError("a missing archive was accepted")
+        if requests != 1 or row["download_retries"]:
+            raise AssertionError(f"a 404 was requested {requests} times, not once")
         row["expected_rejection"] = True
         rows.append(row)
 
         stage = "controlled download recovery"
-        server_dir = workspace / "server"
-        server_dir.mkdir(parents=True, exist_ok=True)
-        archive = server_dir / f"{IMAGE_HASH}.tar.gz"
-        with tarfile.open(archive, "w:gz") as bundle:
-            for path in sorted(fixture.iterdir()):
-                if path.is_file():
-                    bundle.add(path, arcname=path.name, recursive=False)
-        with image_server(server_dir) as url:
+        pack_image(fixture, server_dir / f"{IMAGE_HASH}.tar.gz")
+        with image_server(server_dir, errors=(503,)) as (server, url):
             row, response = run_verifier(
                 binary,
                 request,
@@ -238,7 +322,12 @@ def main() -> int:
                 recovery_cache,
                 url,
             )
+            requests = server.requests
         expect_valid(row, response)
+        if requests != 2 or row["download_retries"] != 1:
+            raise AssertionError(
+                f"a transient 503 took {requests} requests, not one retry"
+            )
         if not (recovery_cache / "images" / IMAGE_HASH / "metadata.json").is_file():
             raise AssertionError(
                 "successful recovery did not atomically promote the image"
@@ -283,6 +372,10 @@ def main() -> int:
             "verified_hash_allowlist_accept_and_reject",
             "pre_cached_offline_without_download",
             "missing_offline_image_fails_closed",
+            "refused_download_retried_then_fails_closed",
+            "listed_file_digest_mismatch_rejected_in_process",
+            "client_error_not_retried",
+            "transient_server_error_retried",
             "controlled_download_after_failure",
             "atomic_cache_promotion",
             "measured_image_mutation_rejection",

@@ -65,6 +65,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1332 and #1388)
+
+- #1332 removed the debug verification path: no result, valid or failed, carries `details.acpi_tables` or `details.rtmr_debug`.
+- #1388 retries an image download up to three times on transport errors and 5xx responses, sleeping 1 s and 2 s in between. The schema configuration uses a 10-second download timeout, so the image-download row fails after the retries with `Failed to download image` rather than with `Download image timeout`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
