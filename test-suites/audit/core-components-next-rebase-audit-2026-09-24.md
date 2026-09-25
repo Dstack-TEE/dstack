@@ -30,7 +30,8 @@ PR 841 was rebased from `e2cf39ae01` onto `next` at `0fb3b24bbd`. The 131 merged
 
 ## Product findings
 
-- #1331: `mkosi.finalize` runs on the host as the invoking user in a rootless build, so `systemd-tmpfiles` cannot `chown` the rootfs directories to root, fails with `EINVAL` and aborts every rootless image build. The fix (run it through `mkosi-chroot`) is on branch `fix/mkosi-rootless-tmpfiles`; PR number pending.
+- #1331: `mkosi.finalize` runs on the host as the invoking user in a rootless build, so `systemd-tmpfiles` cannot `chown` the rootfs directories to root, fails with `EINVAL` and aborts every rootless image build. Fixed by #1409, which runs it through `mkosi-chroot`.
 - #1387: the `dstack-mr` CLI still defaults `--hotplug-off` to false, so it measures a different RTMR0 than a VMM running with the new default. Fix: PR #1405.
 - #1307: onboarding with `source_token` still calls `GetTempCaCert`, which the admin listener does not serve, and fails with `Service not found: GetTempCaCert`. `tc-kms-onboard-005` depends on the fix, PR #1406.
 - #1401: a percent-encoded line break in the method segment can still forge a log line through the request span's method field. The L7 check in `tc-gw-contract-001`..`003` looks for this and is expected to fail on `next` until the fix merges. Fix: PR #1407.
+- #1308: the detached WireGuard apply thread can be cut off by process exit between writing and renaming its temporary config, leaving `.wireguard.conf.*.tmp` with the interface private key behind; `tc-gw-internal-001` caught it intermittently. Fix: PR #1408.
