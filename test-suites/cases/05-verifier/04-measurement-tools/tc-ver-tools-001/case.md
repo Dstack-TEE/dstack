@@ -80,6 +80,10 @@ Repeat measurement from an adjacent isolated image copy and compare it byte-for-
 - `dstack-mr tdx-measurement-cbor` is deterministic and emits measurement document version 4 whose `image.cmdline` is the bare metadata cmdline, with `kernel_header_normalized` omitted for the historical image and `true` for the zeroed-header copy; the document kernel digest and cmdline replay to the CLI RTMR1 and RTMR2, the firmware (`tdvf`) material is unchanged by the header form, and a cmdline without `dstack.rootfs_hash` is rejected by name.
 - Native vectors `image_info_tests::metadata_declares_whether_the_kernel_header_is_normalized`, `tdx_measurement_cbor_tests::the_kernel_header_flag_round_trips`, `tdx_measurement_cbor_tests::a_pre_normalization_document_does_not_drift`, `tdx_measurement_cbor_tests::unknown_versions_are_rejected`, and `tdx_measurement_cbor_tests::an_oversized_command_line_is_rejected_by_name` in `dstack-types` pass by exact name.
 
+## Post-baseline regression coverage (PR #1387)
+
+- ACPI generation models GPU and NVSwitch root ports only with PCI hotplug off. The shared matrix measures `--num-gpus 1 --num-nvswitches 1 --pci-hole64-size 16T` with `--hotplug-off true` (only RTMR0 changes against the baseline) and rejects the same topology with the CLI default `--hotplug-off false` with `PCI hotplug on root ports is not modeled`. The VMM default `qemu_hotplug_off = true` is asserted in `tc-vmm-configurat-001`.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.
