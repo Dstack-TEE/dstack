@@ -66,6 +66,13 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1230)
+
+In Step 3 a second stopped VM is created with `disk_prealloc="falloc"` and a compose file that sets `storage_discard: false`:
+
+- `UpgradeApp` with the same compose but `storage_discard: true` is rejected with an error naming `storage_discard = false`, and `GetInfo` still returns the original compose file and `disk_prealloc="falloc"`.
+- `UpgradeApp` with a compose that keeps `storage_discard: false` is accepted.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
