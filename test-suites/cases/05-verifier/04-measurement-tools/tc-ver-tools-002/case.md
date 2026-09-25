@@ -83,6 +83,11 @@ Repeat measurement from an adjacent isolated image copy and compare it byte-for-
 - Declaring the flag without normalizing measures the file exactly as shipped (dstack-mr does not rewrite the header). Writing the QEMU loader values into `type_of_loader`, `loadflags.CAN_USE_HEAP`, `ramdisk_image`, `ramdisk_size`, `heap_end_ptr`, and `cmd_line_ptr` of a normalized kernel changes exactly RTMR1; zeroing them again restores the identical file and all four registers.
 - Native golden vectors `kernel::tests::the_normalized_flag_selects_which_kernel_bytes_are_measured`, `kernel::tests::only_the_patched_digest_moves_with_guest_memory`, `kernel::tests::tdx_kernel_patch_uses_precomputed_digest_at_2g_and_high_memory`, `tdx::tests::measured_kernel_cmdline_appends_the_ovmf_suffix`, `tdx::tests::rtmr2_command_line_event_digest_is_stable`, `tdx::tests::rtmr2_replay_is_stable`, and `tdx::tests::tdx_measurement_document_cbor_is_stable` pass by exact name.
 
+## Post-baseline regression coverage (PRs #1229, #1231, and #1236)
+
+- Initrd ceiling (#1229): only `XLF_CAN_BE_LOADED_ABOVE_4G` (XLF bit 1) raises the initrd ceiling in the canonical layout. An isolated copy whose kernel keeps `XLF_5LEVEL_ENABLED` (bit 6) and clears bit 1 measures the RTMR1 of the layout with the default `0x37ffffff` ceiling, computed in the harness, and not the one with the raised ceiling. The harness oracle reads bit 1 as well. `kernel::tests::only_xlf_bit_1_raises_the_initrd_ceiling` passes by exact name.
+- Host-supplied bytes are bounded before they are measured: `kernel::tests::a_malformed_pe_header_is_rejected_instead_of_panicking` (#1231), the six `tdvf::tests::parse_*` vectors for the TDVF metadata table, and `tdx::tests::read_varuint_rejects_values_larger_than_u64` plus the two `tdx::tests::measure_td_hob_from_witness_data_*` vectors for the TD HOB witness (#1236) pass by exact name.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.
