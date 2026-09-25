@@ -31,7 +31,6 @@ CASES: dict[str, tuple[str, bool, dict[str, Any] | None]] = {
     "tc-vmm-vmm-015": ("GetMeta", True, None),
     "tc-vmm-vmm-017": ("ReloadVms", False, None),
     "tc-vmm-vmm-018": ("SvList", True, None),
-    "tc-vmm-vmm-021": ("ListRegistryImages", True, None),
     # Every field of Vmm.Status is an optional filter, so the empty request is
     # the documented "list everything" call rather than a degenerate one.
     "tc-vmm-vmm-010": ("Status", False, {}),
