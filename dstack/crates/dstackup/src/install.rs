@@ -612,6 +612,7 @@ fn build_managed_binaries(source: &Path, target_dir: &Path) -> Result<()> {
     cmd.current_dir(&source).args([
         "build",
         "--release",
+        "--locked",
         "--target-dir",
         &target_dir_arg,
         "-p",

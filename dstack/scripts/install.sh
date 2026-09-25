@@ -268,7 +268,7 @@ fi
 info "building dstackup from $checkout"
 (
     cd "$core_checkout"
-    cargo build --release \
+    cargo build --release --locked \
         -p dstackup
 )
 
