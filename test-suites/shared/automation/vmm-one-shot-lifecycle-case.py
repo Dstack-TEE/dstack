@@ -13,6 +13,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 CASE_IDS = {"tc-vmm-internal-006", "tc-vmm-manifest-002"}
+# Valid JSON that is not an AppCompose, and whose byte 200 falls inside a
+# three-byte character.
+MULTIBYTE_COMPOSE = json.dumps(
+    {"manifest_version": 1, "name": "\u4e2d" * 250, "runner": 7},
+    ensure_ascii=False,
+)
+MULTIBYTE_PREVIEW = MULTIBYTE_COMPOSE[:200] + "..."
 
 
 def write_qemu(path: Path, exit_code: int) -> None:
@@ -76,16 +83,21 @@ def main() -> int:
     )
 
     def execute(
-        name: str, qemu: Path, *, dry_run: bool = False, malformed: bool = False
+        name: str,
+        qemu: Path,
+        *,
+        dry_run: bool = False,
+        malformed: bool = False,
+        compose_file: str | None = None,
     ) -> dict[str, object]:
         row = root / name
         row.mkdir()
         config = row / "vmm.toml"
         config.write_text(config_text(source_config, image_store, qemu))
         request = row / "vm.json"
-        request.write_text(
-            json.dumps(vm_json(image, "{invalid" if malformed else compose))
-        )
+        if compose_file is None:
+            compose_file = "{invalid" if malformed else compose
+        request.write_text(json.dumps(vm_json(image, compose_file)))
         work = row / "work"
         argv = [
             str(binary),
@@ -99,7 +111,13 @@ def main() -> int:
         if dry_run:
             argv.append("--dry-run")
         process = subprocess.run(
-            argv, text=True, capture_output=True, timeout=90, check=False
+            argv,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=90,
+            check=False,
         )
         generated = (
             sorted(
@@ -156,6 +174,8 @@ def main() -> int:
                 if path.is_file()
             },
             "failure_returned_to_caller": process.returncode != 0,
+            "panicked": "panicked" in combined,
+            "multibyte_preview_truncated": MULTIBYTE_PREVIEW in combined,
             "diagnostic_tail": combined[-1000:].replace(str(root), "<case-root>"),
         }
 
@@ -164,6 +184,14 @@ def main() -> int:
         execute("success", success_qemu),
         execute("workload-failure", failure_qemu),
         execute("malformed-compose", success_qemu, dry_run=True, malformed=True),
+        # PR #1362: the parse-error preview of a multi-byte compose is cut by
+        # character, where slicing at byte 200 panicked mid-character.
+        execute(
+            "malformed-multibyte-compose",
+            success_qemu,
+            dry_run=True,
+            compose_file=MULTIBYTE_COMPOSE,
+        ),
     ]
     with ThreadPoolExecutor(max_workers=2) as executor:
         rows.extend(
@@ -191,6 +219,9 @@ def main() -> int:
         and by_name["workload-failure"]["returncode"] != 0
         and by_name["workload-failure"]["failure_returned_to_caller"]
         and by_name["malformed-compose"]["returncode"] != 0
+        and by_name["malformed-multibyte-compose"]["returncode"] not in (0, 101)
+        and not by_name["malformed-multibyte-compose"]["panicked"]
+        and by_name["malformed-multibyte-compose"]["multibyte_preview_truncated"]
         and all(
             by_name[name]["returncode"] == 0
             for name in ("concurrent-a", "concurrent-b")
@@ -220,7 +251,7 @@ def main() -> int:
     artifact = result_dir / "artifacts/vmm-one-shot-lifecycle.json"
     artifact.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
     status = "PASS" if passed else "FAIL"
-    observed = f"{sum((row['returncode'] == 0) == (row['name'] not in {'workload-failure', 'malformed-compose'}) for row in rows)}/{len(rows)} one-shot outcome rows matched"
+    observed = f"{sum((row['returncode'] == 0) == (row['name'] not in {'workload-failure', 'malformed-compose', 'malformed-multibyte-compose'}) for row in rows)}/{len(rows)} one-shot outcome rows matched"
     result = {
         "schema_version": "1.0",
         "case_id": case_id,
