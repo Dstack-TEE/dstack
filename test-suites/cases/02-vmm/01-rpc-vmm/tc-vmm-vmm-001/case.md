@@ -79,6 +79,16 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 - Each of these is rejected with a structured error and leaves no VM behind: explicit user mode with `vhost=true` (`no vhost data plane`), explicit user mode with `queues=2` (`does not support multiple queues`), an explicit `queues=0` (`must be at least 1`), and `queues=17` above the node ceiling (`must not exceed 16`).
 - The protobuf representation row keeps sending `NetworkingConfig` without fields 5 and 6, proving an old client that omits them still deploys the node default.
 
+## Post-baseline regression coverage (PR #1364, PR #1230)
+
+- PR #1364: `vcpu=0`, `memory=0`, and `disk_size=0` are each rejected with `<field> must be greater than zero` and create no VM.
+- PR #1230: `VmConfiguration.disk_prealloc` (field 22) selects the data-disk preallocation. The fixture node keeps the default `cvm.disk_prealloc = "off"` and the fixture compose leaves `storage_discard` at its default (`true`).
+  - The template row without the field and a row with `disk_prealloc=""` persist `disk_prealloc="off"` in `GetInfo`.
+  - `metadata` is accepted with discard on, over JSON and over protobuf field 22, and persists `metadata`.
+  - `falloc` with a compose that sets `storage_discard: false` is accepted and persists `falloc`.
+  - `falloc` and `full` with discard on are rejected with an error naming `storage_discard = false`; `sparse` is rejected with `invalid disk_prealloc`. None of them creates a VM.
+  - The VMs are created stopped, so no data disk is built; `qemu-img` preallocation arguments and resize are covered by the `dstack-vmm` unit tests.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
