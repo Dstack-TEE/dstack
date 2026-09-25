@@ -53,6 +53,11 @@ pub struct AttestationVerifierConfig {
     pub urls: CollateralUrls,
     #[serde(default)]
     pub root_ca: RootCaPaths,
+    /// Hosts the GCP TPM AK issuer certificates and CRLs may be fetched from;
+    /// `*` matches within one DNS label. Unset keeps
+    /// the vendor hosts in `pki_fetch::DEFAULT_ALLOWED_HOSTS`.
+    #[serde(default)]
+    pub allowed_collateral_hosts: Option<Vec<String>>,
 }
 
 pub struct AttestationVerifier {
@@ -63,6 +68,7 @@ pub struct AttestationVerifier {
     aws_nitro_tpm: nsm_qvl::QuoteVerifier,
     sev_snp: sev_snp_qvl::QuoteVerifier,
     amd_kds: AmdKdsClient,
+    allowed_collateral_hosts: tpm_qvl::AllowedHosts,
 }
 
 impl AttestationVerifier {
@@ -150,6 +156,11 @@ impl AttestationVerifier {
             aws_nitro_tpm: nsm(aws_nitro_tpm.as_deref(), "AWS NitroTPM")?,
             sev_snp,
             amd_kds: AmdKdsClient::with_base_url(amd_kds)?,
+            allowed_collateral_hosts: config
+                .allowed_collateral_hosts
+                .as_ref()
+                .map(tpm_qvl::AllowedHosts::new)
+                .unwrap_or_default(),
         })
     }
 
@@ -175,6 +186,7 @@ impl AttestationVerifier {
                     .filter(|url| !url.trim().is_empty())
                     .unwrap_or(sev_snp_qvl::AMD_KDS_DEFAULT_BASE_URL),
             )?,
+            allowed_collateral_hosts: Default::default(),
         })
     }
 
@@ -1087,7 +1099,7 @@ impl AttestationV1 {
                         .await?;
                 let tpm_report = verifier
                     .gcp_tpm
-                    .fetch_and_verify(tpm_quote)
+                    .fetch_and_verify(tpm_quote, &verifier.allowed_collateral_hosts)
                     .await
                     .context("failed to verify TPM quote")?;
                 let qualifying_data = sha256(quote);
@@ -2504,7 +2516,10 @@ impl Attestation {
         quote: &TpmQuote,
         qualifying_data: &[u8],
     ) -> Result<TpmVerifiedReport> {
-        let report = verifier.gcp_tpm.fetch_and_verify(quote).await?;
+        let report = verifier
+            .gcp_tpm
+            .fetch_and_verify(quote, &verifier.allowed_collateral_hosts)
+            .await?;
         let pcr_ind = self
             .quote
             .variant()

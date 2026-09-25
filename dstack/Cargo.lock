@@ -1875,6 +1875,7 @@ dependencies = [
  "tpm-types",
  "tpm2",
  "tracing",
+ "url",
  "x509-parser 0.16.0",
 ]
 

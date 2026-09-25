@@ -299,6 +299,11 @@ struct TpmVerifyArgs {
     /// path to TPM quote JSON file
     #[arg(short, long)]
     quote: PathBuf,
+
+    /// host the AK issuer certificates and CRLs may be fetched from (`*`
+    /// matches within one DNS label); repeatable, replaces the default list
+    #[arg(long = "allowed-collateral-host")]
+    allowed_collateral_hosts: Vec<String>,
 }
 
 #[derive(Parser)]
@@ -1524,7 +1529,11 @@ async fn cmd_tpm_verify(args: TpmVerifyArgs) -> Result<()> {
 
     // Step 1: Get collateral (certificates + CRLs)
     println!("[Step 1] Fetching quote collateral (certificates + CRLs)...");
-    let collateral = tpm_qvl::get_collateral(&tpm_quote, &root_ca_pem)
+    let allowed_hosts = match args.allowed_collateral_hosts.as_slice() {
+        [] => Default::default(),
+        hosts => tpm_qvl::AllowedHosts::new(hosts),
+    };
+    let collateral = tpm_qvl::get_collateral(&tpm_quote, &root_ca_pem, &allowed_hosts)
         .await
         .context("failed to get TPM collateral")?;
     let crl_count = collateral.crls.len()

@@ -102,6 +102,7 @@ You usually don't need to edit the config file. Just using the default is fine, 
 - `image_download_timeout_secs`: Download timeout in seconds (default: 300)
 - `attestation.urls.pccs`: PCCS URL (default: production PCCS)
 - `attestation.urls.amd_kds`: AMD KDS URL (default: AMD production KDS)
+- `attestation.allowed_collateral_hosts`: hosts that the issuer certificates and CRLs named by a GCP TPM AK certificate may be fetched from; `*` matches within one DNS label (default: `privateca-content-*.storage.googleapis.com`, where Google's Private CA publishes them)
 
 ### Example Configuration File
 

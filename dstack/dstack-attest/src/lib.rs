@@ -56,6 +56,15 @@ pub fn default_verifier(
         insecure_allow_external_trust_anchors: true,
         urls: collateral_urls.clone(),
         root_ca,
+        // The simulator's collateral service also serves the certificates and
+        // CRLs its development roots name.
+        allowed_collateral_hosts: Some(
+            [&collateral_urls.pccs, &collateral_urls.amd_kds]
+                .into_iter()
+                .flatten()
+                .filter_map(|url| Some(url::Url::parse(url).ok()?.host_str()?.to_owned()))
+                .collect(),
+        ),
     })
 }
 

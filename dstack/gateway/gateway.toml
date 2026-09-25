@@ -19,6 +19,9 @@ rpc_domain = ""
 # production should retain vendor roots.
 [core.attestation]
 insecure_allow_external_trust_anchors = false
+# Hosts the GCP TPM AK issuer certificates and CRLs may be fetched from; `*`
+# matches within one DNS label. Unset keeps Google's Private CA hosts.
+# allowed_collateral_hosts = ["privateca-content-*.storage.googleapis.com"]
 
 [core.attestation.urls]
 # pccs = "https://pccs.phala.network"

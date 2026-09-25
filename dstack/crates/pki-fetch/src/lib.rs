@@ -8,11 +8,13 @@
 //! whoever supplies the certificate chooses them. The endpoints are untrusted
 //! transport: everything they serve still has to chain to a pinned root CA.
 //! What they must not decide is how much work one verification does, so a
-//! [`Fetcher`] spends a fixed budget of time, requests and bytes.
+//! [`Fetcher`] spends a fixed budget of time, requests and bytes, nor where the
+//! verifier connects to, so it only contacts [`AllowedHosts`].
 
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
+use reqwest::{redirect, Url};
 use tracing::{debug, warn};
 use x509_parser::{
     extensions::{DistributionPointName, GeneralName, ParsedExtension},
@@ -24,21 +26,92 @@ const TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REQUESTS: usize = 16;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
+const MAX_REDIRECTS: usize = 5;
+
+/// Where the vendors publish the collateral their certificates point to.
+pub const DEFAULT_ALLOWED_HOSTS: &[&str] = &[
+    // GCP vTPM: Google Private CA serves the AK chain and its CRLs.
+    "privateca-content-*.storage.googleapis.com",
+    // AWS Nitro Enclaves and NitroTPM CRLs.
+    "aws-nitro-enclaves-crl.s3.amazonaws.com",
+    "crl-*-aws-nitro-enclaves.s3.*.amazonaws.com",
+];
+
+/// Host patterns collateral may be fetched from. A `*` matches one or more
+/// characters within a single DNS label.
+#[derive(Debug, Clone)]
+pub struct AllowedHosts(Vec<String>);
+
+impl AllowedHosts {
+    pub fn new(patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        Self(
+            patterns
+                .into_iter()
+                .map(|p| p.as_ref().to_ascii_lowercase())
+                .collect(),
+        )
+    }
+
+    fn check(&self, url: &Url) -> Result<()> {
+        ensure!(
+            matches!(url.scheme(), "http" | "https"),
+            "unsupported URL scheme in {url}"
+        );
+        let host = url.host_str().context("URL has no host")?;
+        ensure!(
+            self.0.iter().any(|pattern| host_matches(pattern, host)),
+            "collateral host {host} is not allowed"
+        );
+        Ok(())
+    }
+}
+
+impl Default for AllowedHosts {
+    fn default() -> Self {
+        Self::new(DEFAULT_ALLOWED_HOSTS)
+    }
+}
+
+fn host_matches(pattern: &str, host: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == host,
+        Some((prefix, rest)) => {
+            let Some(host) = host.strip_prefix(prefix) else {
+                return false;
+            };
+            let label_len = host.find('.').unwrap_or(host.len());
+            (1..=label_len).any(|n| host_matches(rest, &host[n..]))
+        }
+    }
+}
 
 /// Downloads collateral for one verification within a fixed budget.
 pub struct Fetcher {
     client: reqwest::Client,
+    allowed_hosts: AllowedHosts,
     deadline: Instant,
     requests_left: usize,
     bytes_left: usize,
 }
 
 impl Fetcher {
-    pub fn new() -> Result<Self> {
+    pub fn new(allowed_hosts: &AllowedHosts) -> Result<Self> {
+        let redirect_hosts = allowed_hosts.clone();
+        let redirects = redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() > MAX_REDIRECTS {
+                attempt.error("too many redirects")
+            } else if let Err(e) = redirect_hosts.check(attempt.url()) {
+                attempt.error(e)
+            } else {
+                attempt.follow()
+            }
+        });
         Ok(Self {
             client: reqwest::Client::builder()
+                .redirect(redirects)
                 .build()
                 .context("failed to build HTTP client")?,
+            allowed_hosts: allowed_hosts.clone(),
             deadline: Instant::now() + TOTAL_TIMEOUT,
             requests_left: MAX_REQUESTS,
             bytes_left: MAX_BYTES,
@@ -47,6 +120,8 @@ impl Fetcher {
 
     /// GET `url`, charging the request, its time and its body to the budget.
     pub async fn download(&mut self, url: &str) -> Result<Vec<u8>> {
+        let url = Url::parse(url).with_context(|| format!("invalid URL {url}"))?;
+        self.allowed_hosts.check(&url)?;
         ensure!(
             self.requests_left > 0,
             "collateral fetch exceeded {MAX_REQUESTS} requests"
@@ -60,7 +135,7 @@ impl Fetcher {
         debug!("downloading {url}");
         let mut response = self
             .client
-            .get(url)
+            .get(url.clone())
             .timeout(remaining.min(REQUEST_TIMEOUT))
             .send()
             .await
@@ -145,6 +220,10 @@ mod tests {
         net::TcpListener,
     };
 
+    fn local() -> AllowedHosts {
+        AllowedHosts::new(["127.0.0.1"])
+    }
+
     #[derive(Clone, Copy)]
     enum Reply {
         NotFound,
@@ -189,7 +268,7 @@ mod tests {
     #[tokio::test]
     async fn request_count_is_bounded() {
         let url = serve(Reply::NotFound).await;
-        let mut fetcher = Fetcher::new().unwrap();
+        let mut fetcher = Fetcher::new(&local()).unwrap();
         for _ in 0..MAX_REQUESTS {
             fetcher.download(&url).await.unwrap_err();
         }
@@ -200,7 +279,11 @@ mod tests {
     #[tokio::test]
     async fn downloaded_bytes_are_bounded() {
         let url = serve(Reply::Endless).await;
-        let err = Fetcher::new().unwrap().download(&url).await.unwrap_err();
+        let err = Fetcher::new(&local())
+            .unwrap()
+            .download(&url)
+            .await
+            .unwrap_err();
         assert!(format!("{err:#}").contains("bytes"), "{err:#}");
     }
 
@@ -209,10 +292,59 @@ mod tests {
         let url = serve(Reply::Drip).await;
         let mut fetcher = Fetcher {
             deadline: Instant::now() + Duration::from_secs(1),
-            ..Fetcher::new().unwrap()
+            ..Fetcher::new(&local()).unwrap()
         };
         let started = Instant::now();
         fetcher.download(&url).await.unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn only_allowed_hosts_are_contacted() {
+        let url = serve(Reply::NotFound).await;
+        let mut fetcher = Fetcher::new(&AllowedHosts::default()).unwrap();
+        let err = fetcher.download(&url).await.unwrap_err();
+        assert!(format!("{err:#}").contains("not allowed"), "{err:#}");
+        assert_eq!(fetcher.requests_left, MAX_REQUESTS);
+    }
+
+    #[test]
+    fn host_patterns_match_within_one_label() {
+        let hosts = AllowedHosts::default();
+        for (url, allowed) in [
+            (
+                "http://privateca-content-62d7.storage.googleapis.com/a/ca.crt",
+                true,
+            ),
+            (
+                "http://crl-us-east-1-aws-nitro-enclaves.s3.us-east-1.amazonaws.com/c",
+                true,
+            ),
+            (
+                "http://aws-nitro-enclaves-crl.s3.amazonaws.com/crl/x.crl",
+                true,
+            ),
+            ("http://privateca-content-.storage.googleapis.com/", false),
+            (
+                "http://privateca-content-x.evil.com.storage.googleapis.com/",
+                false,
+            ),
+            (
+                "http://privateca-content-x.storage.googleapis.com.evil.com/",
+                false,
+            ),
+            (
+                "http://evil.com/privateca-content-x.storage.googleapis.com",
+                false,
+            ),
+            ("http://169.254.169.254/latest/meta-data/", false),
+            ("file:///etc/passwd", false),
+        ] {
+            assert_eq!(
+                hosts.check(&Url::parse(url).unwrap()).is_ok(),
+                allowed,
+                "{url}"
+            );
+        }
     }
 }
