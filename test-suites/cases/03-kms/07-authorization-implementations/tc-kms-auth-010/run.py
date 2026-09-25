@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 CASE_ID = "tc-kms-auth-010"
-EXACT_TESTS = 4
+EXACT_TESTS = 8
 FILTER = "main_service::upgrade_authority::tests"
 
 
@@ -136,6 +136,8 @@ def main() -> int:
             "malformed-backend-response-fails-closed",
             "next-request-recovers-without-retained-decision",
             "no-decision-state-across-process-restart",
+            "multibyte-backend-body-on-quoting-bound-does-not-abort",
+            "quoted-backend-body-bounded-in-bytes-on-a-character-boundary",
         ],
         "decision_cache_present": False,
         "private_material_exported": False,

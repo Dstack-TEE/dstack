@@ -73,6 +73,10 @@ Execute the exact Rust matrix in a second fresh test process and compare bounded
 
 - Both processes pass every exact row; no authorization decision survives restart, and evidence retains only counts, durations, coverage labels, and hashes.
 
+## Post-baseline regression coverage (PR #1278, with #1310 and #1365)
+
+- The exact `main_service::upgrade_authority::tests` matrix now has eight rows. PR #1278 adds a backend body whose multi-byte character straddles the 512-byte quoting bound, which must fail as an undecodable response instead of aborting the KMS, and a byte-bounded, character-safe quoting row; the other two new rows come from PRs #1310 (short identities are refused before the backend) and #1365 (a backend that never answers does not hold the request open).
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.
