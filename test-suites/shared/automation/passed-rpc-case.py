@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import os
@@ -458,7 +459,11 @@ def check_certificate_validity_bounds(
         leaf = x509.load_pem_x509_certificate(
             json.loads(body)["certificate_chain"][0].encode()
         )
-        if int(leaf.not_valid_after_utc.timestamp()) != MAX_CERT_VALIDITY_SECS:
+        # cryptography < 42 has only the naive UTC accessor.
+        not_after = getattr(leaf, "not_valid_after_utc", None) or (
+            leaf.not_valid_after.replace(tzinfo=datetime.timezone.utc)
+        )
+        if int(not_after.timestamp()) != MAX_CERT_VALIDITY_SECS:
             raise AssertionError(
                 f"{surface} certificate notAfter was not 9999-12-31T23:59:59Z"
             )
