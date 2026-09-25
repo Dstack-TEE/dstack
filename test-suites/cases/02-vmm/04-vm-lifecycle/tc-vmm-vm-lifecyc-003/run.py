@@ -70,6 +70,7 @@ def main() -> int:
     nonce = hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:12]
     template.update({"name": f"dtest-{nonce}-update", "ports": [], "stopped": True})
     vm_id: str | None = None
+    prealloc_id: str | None = None
     failures: list[str] = []
     steps: list[dict[str, str]] = []
     evidence: dict[str, Any] = {}
@@ -155,6 +156,63 @@ def main() -> int:
             or repeated.get("id") != expected_id
         ):
             raise AssertionError("negative or repeat update behavior failed")
+        # PR #1230: a VM deployed with a block-reserving preallocation keeps
+        # its mode for life, so an update may not turn guest discard back on.
+        # The refusal comes before the compose file is written.
+        no_discard = json.loads(template["compose_file"])
+        no_discard["storage_discard"] = False
+        prealloc_code, prealloc = call(
+            base,
+            headers,
+            "CreateVm",
+            {
+                **template,
+                "name": f"dtest-{nonce}-prealloc",
+                "compose_file": json.dumps(no_discard),
+                "disk_prealloc": "falloc",
+            },
+        )
+        prealloc_id = prealloc.get("id") if isinstance(prealloc, dict) else None
+        if prealloc_code != 200 or not prealloc_id:
+            raise AssertionError("falloc VM without discard was refused")
+        discard_on = {**no_discard, "storage_discard": True}
+        discard_code, discard_body = call(
+            base,
+            headers,
+            "UpgradeApp",
+            {"id": prealloc_id, "compose_file": json.dumps(discard_on)},
+        )
+        discard_error = str(discard_body.get("error", ""))[:300]
+        _, prealloc_info = call(base, headers, "GetInfo", {"id": prealloc_id})
+        prealloc_config = prealloc_info.get("info", {}).get("configuration", {})
+        kept_code, _ = call(
+            base,
+            headers,
+            "UpgradeApp",
+            {
+                "id": prealloc_id,
+                "compose_file": json.dumps({**no_discard, "promotion_nonce": nonce}),
+            },
+        )
+        evidence["prealloc_update"] = {
+            "create": prealloc_code,
+            "discard_on_update": discard_code,
+            "discard_on_error": discard_error,
+            "compose_unchanged": prealloc_config.get("compose_file")
+            == json.dumps(no_discard),
+            "persisted_mode": prealloc_config.get("disk_prealloc"),
+            "discard_off_update": kept_code,
+        }
+        if (
+            discard_code < 400
+            or "storage_discard = false" not in discard_error
+            or not evidence["prealloc_update"]["compose_unchanged"]
+            or prealloc_config.get("disk_prealloc") != "falloc"
+            or kept_code != 200
+        ):
+            raise AssertionError(
+                f"preallocated VM update was not gated: {evidence['prealloc_update']}"
+            )
         evidence["matrix"] = {
             "create": create_code,
             "baseline": baseline_code,
@@ -169,7 +227,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-03",
                 "status": "PASS",
-                "observed": "Malformed and missing-VM updates failed closed; repeated update converged to the same id.",
+                "observed": "Malformed and missing-VM updates failed closed; repeated update converged to the same id; a falloc VM refused a compose that re-enabled discard and kept its stored compose.",
             }
         )
     except Exception as error:
@@ -181,9 +239,11 @@ def main() -> int:
                     {"id": step_id, "status": "FAIL", "observed": failures[-1]}
                 )
     finally:
-        if vm_id:
-            remove, _ = call(base, headers, "RemoveVm", {"id": vm_id})
-            evidence["cleanup"] = {"remove": remove}
+        evidence["cleanup"] = {
+            name: call(base, headers, "RemoveVm", {"id": created_id})[0]
+            for name, created_id in (("update", vm_id), ("prealloc", prealloc_id))
+            if created_id
+        }
     artifact = {
         "path": "artifacts/vmm-update-matrix.json",
         "step_id": f"{case_id}-step-02",

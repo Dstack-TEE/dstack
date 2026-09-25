@@ -73,6 +73,10 @@ Restart the owning service where permitted and inspect state for this and an adj
 
 - Persisted and transient state follow policy, adjacent identities are unchanged, and no private material or credential appears in output.
 
+## Post-baseline regression coverage (PR #1362)
+
+- A dry run whose `compose_file` is valid JSON but not an `AppCompose` (`runner` is an integer) and whose `name` is 250 copies of `中`, so byte 200 of the document falls inside a three-byte character, exits non-zero without a panic (not exit code 101, no `panicked` in the output), and the error prints the first 200 characters of the compose followed by `...`. Before the fix the preview sliced at byte 200 and the VMM panicked.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.

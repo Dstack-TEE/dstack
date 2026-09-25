@@ -86,6 +86,34 @@ ROW_TESTS = {
         "gpu_reset::tests::finds_a_dedicated_upstream_bridge",
         "gpu_reset::tests::rejects_a_bridge_shared_with_another_device",
     },
+    # PR #1364: resource arithmetic cannot wrap and a zero resource is refused.
+    "resource-bounds": {
+        "app::tests::round_up_does_not_wrap",
+        "main_service::tests::deployment_rejects_zero_resources",
+    },
+    # PR #1346: a listed GPU slot must be one ListGpus offers.
+    "listed-gpu-policy": {
+        "main_service::tests::listed_gpus_must_be_offered_by_node",
+    },
+    # PR #1286 and PR #1351: UpdateVm enforces the port policy on new mappings
+    # only, and a rejected update writes nothing.
+    "update-validation": {
+        "main_service::tests::port_map_enforces_node_policy_on_new_mappings_only",
+        "main_service::tests::a_rejected_update_writes_nothing",
+    },
+    # PR #1230: data-disk preallocation arguments, the backing-file case, the
+    # partial-disk rename, and the discard conflict.
+    "disk-preallocation": {
+        "app::qemu::tests::disk_creation_args_carry_preallocation_only_when_requested",
+        "app::qemu::tests::preallocated_disk_reserves_host_space_on_top_of_a_backing_file",
+        "app::qemu::tests::a_half_written_data_disk_is_never_taken_for_a_finished_one",
+        "config::tests::disk_prealloc_names_round_trip_through_every_encoding",
+        "main_service::tests::disk_prealloc_defaults_to_node_config_and_accepts_request_override",
+        "main_service::tests::create_rejects_unknown_disk_prealloc_mode",
+        "main_service::tests::preallocation_is_rejected_while_the_guest_may_discard",
+        "main_service::tests::metadata_preallocation_coexists_with_discard",
+        "main_service::tests::a_malformed_compose_is_reported_as_such",
+    },
 }
 
 

@@ -174,11 +174,10 @@ def main() -> int:
             and cargo_dirs[0].endswith("/source/dstack")
             and installed(prefix)
         )
-        # Recorded, not gated: the candidate assigns `tmp_src` inside the
-        # `$(resolve_source)` subshell, so the EXIT trap in the parent shell
-        # sees it empty and the temporary checkout is left behind. Reported as
-        # a suspected product defect; gate on it once the installer is fixed.
+        # PR #1227: `resolve_source` runs in the installer's own shell, so the
+        # EXIT trap sees `tmp_src` and removes the temporary checkout.
         row["temporary_checkout_removed"] = not list(tmpdir.glob("dstack-install.*"))
+        row["matched"] = row["matched"] and row["temporary_checkout_removed"]
 
         # An existing --src that is not a checkout fails before building.
         not_checkout = root / "not-checkout"

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 import urllib.error
@@ -18,6 +19,7 @@ CASE_ID = "tc-vmm-ui-observa-005"
 EXPECTED_ROWS = {
     "healthy-ui",
     "unset-defaults",
+    "disk-prealloc-select",
     "semantic-form",
     "simulated-platform",
     "network-selection",
@@ -30,6 +32,7 @@ EXPECTED_ROWS = {
     "ui-log-view",
     "status-filter",
     "cross-session-isolation",
+    "local-images-only",
 }
 
 
@@ -67,6 +70,35 @@ def rpc(base: str, route: str, vm_id: str) -> int:
     except urllib.error.HTTPError as error:
         error.read()
         return error.code
+
+
+def pinned_supply_chain(ui_url: str, lockfile: pathlib.Path) -> dict[str, Any]:
+    """Check that served external scripts and locked packages are pinned by hash."""
+    with urllib.request.urlopen(ui_url, timeout=60) as response:
+        html = response.read().decode("utf-8", "replace")
+    external = [
+        tag
+        for tag in re.findall(r"<script\b[^>]*>", html)
+        if re.search(r'src="https?://', tag)
+    ]
+    packages = json.loads(lockfile.read_text())["packages"]
+    unpinned = sorted(
+        name
+        for name, entry in packages.items()
+        if name
+        and not entry.get("link")
+        and not (entry.get("resolved") and entry.get("integrity"))
+    )
+    return {
+        "external_scripts": len(external),
+        "external_scripts_without_sri": [
+            re.sub(r"\s+", " ", tag)[:200]
+            for tag in external
+            if 'integrity="sha384-' not in tag or 'crossorigin="anonymous"' not in tag
+        ],
+        "locked_packages": len(packages) - 1,
+        "unpinned_packages": unpinned,
+    }
 
 
 def main() -> int:
@@ -120,6 +152,15 @@ def main() -> int:
     )
     if health.returncode:
         raise RuntimeError("VMM health probe failed before browser workflow")
+    # PR #1398: a CDN script served with the console carries SRI, and every
+    # package in the console lockfile is pinned by resolved URL and integrity.
+    runtime = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
+    )
+    supply_chain = pinned_supply_chain(
+        str(fixture["ui_url"]),
+        pathlib.Path(runtime["repository"]) / "dstack/vmm/ui/package-lock.json",
+    )
     command = [str(x) for x in fixture["browser_session_argv"]]
     if command and command[0] == "npx" and "--offline" not in command:
         command.insert(1, "--offline")
@@ -141,6 +182,7 @@ def main() -> int:
         "browser_diagnostic_tail": (browser.stdout + browser.stderr)[-5000:],
         "vm_processes_started": 1,
         "image_build_tested": False,
+        "supply_chain": supply_chain,
     }
     failures: list[str] = []
     steps: list[dict[str, Any]] = []
@@ -153,6 +195,11 @@ def main() -> int:
             raise AssertionError(browser_timeout)
         if browser.returncode or not output.is_file():
             raise AssertionError("case-owned browser workflow failed")
+        if (
+            supply_chain["external_scripts_without_sri"]
+            or supply_chain["unpinned_packages"]
+        ):
+            raise AssertionError(f"console dependencies are not pinned: {supply_chain}")
         observed = json.loads(output.read_text())
         rows = {key for key, value in observed.get("rows", {}).items() if value is True}
         if rows != EXPECTED_ROWS:
@@ -181,6 +228,7 @@ def main() -> int:
         if (
             configuration.get("disk_size") not in (21, "21")
             or configuration.get("user_config") != "ui-updated=true"
+            or configuration.get("disk_prealloc") != "off"
         ):
             raise AssertionError(
                 "UI update/resize was not reflected in public configuration"
@@ -195,6 +243,7 @@ def main() -> int:
                     "status": vm.get("status"),
                     "disk_size": configuration.get("disk_size"),
                     "user_config": configuration.get("user_config"),
+                    "disk_prealloc": configuration.get("disk_prealloc"),
                 },
             }
         )

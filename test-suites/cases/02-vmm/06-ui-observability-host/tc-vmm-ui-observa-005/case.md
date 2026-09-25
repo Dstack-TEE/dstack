@@ -84,6 +84,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 - PR #1145: an added network row still offers the mode select first. While the row follows the node default it also offers the `vhost-net data plane` select and the `virtio-net queue pairs` input (bounded by `GetMeta.networking.max_queues`); selecting `user` hides both, and the `network-selection` row fails otherwise.
 - PR #1213: the port-mapping editor shows a NIC index input only when the VM has more than one NIC; the single-NIC browser deployment sends no `nic_index`, so its mappings keep the unpinned default. The pinned-NIC RPC contract is covered by `tc-vmm-compute-ne-002`.
 
+## Post-baseline regression coverage (PR #1230, PR #1282)
+
+- PR #1230: the create dialog's `Disk Preallocation` select (`#diskPrealloc`) starts at `Default (host setting)` (empty value). Selecting `falloc` while `Storage Discard` is on shows the `Turn Storage Discard off` hint, `metadata` hides it, and the form is returned to the default before submission, so the UI-created VM persists the node default `disk_prealloc="off"` in the public listing.
+- PR #1282: the System menu's `Images` panel lists the fixture image and has no `Registry` section.
+- PR #1398: every external `<script src="http(s)://...">` in the served console (the unpkg Vue fallback when `vendor/vue.global.prod.js` is absent) carries `integrity="sha384-..."` and `crossorigin="anonymous"`, so the browser refuses altered CDN code; the page still renders, so the pinned hash matches what the CDN serves. Every non-root entry in `dstack/vmm/ui/package-lock.json` has `resolved` and `integrity`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

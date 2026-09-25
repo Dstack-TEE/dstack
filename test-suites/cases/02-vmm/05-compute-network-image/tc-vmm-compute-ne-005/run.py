@@ -151,12 +151,32 @@ def main() -> int:
         if invalid in final or unused in final or in_use not in final:
             raise AssertionError("final image inventory violated isolation")
         evidence["final_names"] = sorted(final)
+        # PR #1282: the OCI registry pull was removed; the image surface is
+        # local discovery and deletion only.
+        template = str(vmm["json_prpc_route_template"])
+        removed = {}
+        for method in ("ListRegistryImages", "PullRegistryImage", "NoSuchMethod"):
+            code, raw = call(
+                base, headers, template.replace("<Method>", method), {"tag": "x"}
+            )
+            removed[method] = {
+                "http": code,
+                "not_found": "not found" in raw.decode("utf-8", "replace").lower(),
+            }
+        evidence["removed_registry_routes"] = removed
+        unknown = removed["NoSuchMethod"]
+        if unknown["http"] < 400 or not unknown["not_found"]:
+            raise AssertionError(f"unknown method baseline was not rejected: {unknown}")
+        if any(
+            removed[m] != unknown for m in ("ListRegistryImages", "PullRegistryImage")
+        ):
+            raise AssertionError(f"removed registry RPC is still served: {removed}")
         evidence["sensitive_values_persisted"] = False
         steps.append(
             {
                 "id": f"{CASE_ID}-step-03",
                 "status": "PASS",
-                "observed": "Traversal and wrong-typed IDs failed closed; final inventory retained the in-use image, excluded invalid metadata, and the public service remained available.",
+                "observed": "Traversal and wrong-typed IDs failed closed; final inventory retained the in-use image, excluded invalid metadata, the removed registry RPCs answered like an unknown method, and the public service remained available.",
             }
         )
     except Exception as error:

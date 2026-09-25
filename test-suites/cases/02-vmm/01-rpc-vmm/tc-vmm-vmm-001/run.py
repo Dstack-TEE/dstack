@@ -111,6 +111,8 @@ def encode_config(value: dict[str, Any]) -> bytes:
         output.extend(length_field(19, encode_network(item)))
     if value.get("simulated_tee") is not None:
         output.extend(length_field(21, str(value["simulated_tee"]).encode()))
+    if value.get("disk_prealloc") is not None:
+        output.extend(length_field(22, str(value["disk_prealloc"]).encode()))
     return bytes(output)
 
 
@@ -209,6 +211,9 @@ def main() -> int:
         config = info.get("configuration") if isinstance(info, dict) else None
         if not isinstance(config, dict):
             raise AssertionError("GetInfo omitted persisted configuration")
+        # PR #1230: an unset or empty disk_prealloc resolves to the node
+        # default, which the fixture leaves at "off".
+        expected = {**expected, "disk_prealloc": expected.get("disk_prealloc") or "off"}
         for key in (
             "name",
             "image",
@@ -218,6 +223,7 @@ def main() -> int:
             "disk_size",
             "stopped",
             "no_tee",
+            "disk_prealloc",
         ):
             if config.get(key) != expected.get(key):
                 raise AssertionError(
@@ -380,6 +386,97 @@ def main() -> int:
             "tuned_persisted_modes": [item.get("mode") for item in tuned_networks],
             "rejections": data_plane,
         }
+
+        def create_row(label: str, overrides: dict[str, Any]) -> dict[str, Any]:
+            config = {**template, "name": f"dtest-{nonce}-{label}", **overrides}
+            code, body = call(
+                base + create_path,
+                json.dumps(config).encode(),
+                "application/json",
+                headers,
+            )
+            try:
+                value = json.loads(body or b"{}") or {}
+            except json.JSONDecodeError:
+                value = {}
+            if code == 200 and value.get("id"):
+                created.append(str(value["id"]))
+                persisted(str(value["id"]), config)
+            return {"http": code, "error": str(value.get("error", ""))[:300]}
+
+        # PR #1364: a deployment with no vCPU, memory, or disk is refused
+        # instead of reaching the resource arithmetic.
+        zero_rows = {
+            field: create_row(f"zero-{field.replace('_', '-')}", {field: 0})
+            for field in ("vcpu", "memory", "disk_size")
+        }
+        for field, row in zero_rows.items():
+            if (
+                row["http"] < 400
+                or f"{field} must be greater than zero" not in row["error"]
+            ):
+                raise AssertionError(f"zero {field} was not refused: {row}")
+
+        # PR #1230: disk_prealloc (field 22) picks the data-disk preallocation
+        # per VM. Modes that reserve host blocks need storage_discard=false in
+        # the compose file; the fixture compose leaves discard at its default.
+        no_discard = json.dumps(
+            {**json.loads(template["compose_file"]), "storage_discard": False}
+        )
+        prealloc_rows = {
+            "metadata-with-discard": create_row(
+                "prealloc-metadata", {"disk_prealloc": "metadata"}
+            ),
+            "empty-is-node-default": create_row(
+                "prealloc-empty", {"disk_prealloc": ""}
+            ),
+            "falloc-without-discard": create_row(
+                "prealloc-falloc",
+                {"disk_prealloc": "falloc", "compose_file": no_discard},
+            ),
+            "falloc-with-discard": create_row(
+                "prealloc-falloc-discard", {"disk_prealloc": "falloc"}
+            ),
+            "full-with-discard": create_row(
+                "prealloc-full-discard", {"disk_prealloc": "full"}
+            ),
+            "unknown-mode": create_row("prealloc-unknown", {"disk_prealloc": "sparse"}),
+        }
+        for label in (
+            "metadata-with-discard",
+            "empty-is-node-default",
+            "falloc-without-discard",
+        ):
+            if prealloc_rows[label]["http"] != 200:
+                raise AssertionError(f"disk_prealloc row {label} was refused")
+        for label, fragment in {
+            "falloc-with-discard": "storage_discard = false",
+            "full-with-discard": "storage_discard = false",
+            "unknown-mode": "invalid disk_prealloc",
+        }.items():
+            row = prealloc_rows[label]
+            if row["http"] < 400 or fragment not in row["error"]:
+                raise AssertionError(f"disk_prealloc row {label} lacked '{fragment}'")
+        protobuf_prealloc = json.loads(json.dumps(template))
+        protobuf_prealloc["name"] = f"dtest-{nonce}-prealloc-protobuf"
+        protobuf_prealloc["disk_prealloc"] = "metadata"
+        prealloc_code, prealloc_body = call(
+            base + create_path,
+            encode_config(protobuf_prealloc),
+            "application/octet-stream",
+            headers,
+        )
+        if prealloc_code != 200:
+            raise AssertionError(
+                f"protobuf CreateVm with disk_prealloc returned HTTP {prealloc_code}"
+            )
+        created.append(decode_id(prealloc_body))
+        persisted(created[-1], protobuf_prealloc)
+        evidence["resources_and_prealloc"] = {
+            "zero_resources": zero_rows,
+            "disk_prealloc": prealloc_rows,
+            "protobuf_disk_prealloc_http": prealloc_code,
+        }
         if set(list_ids(manifest)) != baseline | set(created):
             raise AssertionError("rejected CreateVm probe left partial VM state")
         unauthenticated: int | None = None
@@ -404,7 +501,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-03",
                 "status": "PASS",
-                "observed": "Missing, wrong-typed, malformed-protobuf, invalid-route, and applicable unauthenticated requests failed without partial VM state.",
+                "observed": "Missing, wrong-typed, malformed-protobuf, invalid-route, zero-resource, conflicting or unknown disk_prealloc, and applicable unauthenticated requests failed without partial VM state.",
             }
         )
     except Exception as error:  # noqa: BLE001

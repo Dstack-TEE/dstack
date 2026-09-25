@@ -160,7 +160,6 @@ run_path = "${VM_DIR}"
 
 [image]
 path = "${IMAGE_ROOT}"
-registry = ""
 
 [cvm]
 platform = "${PLATFORM}"

@@ -77,6 +77,15 @@ The fixture node uses the default user-mode networking, so every stopped VM belo
 - Mappings without `nic_index` keep landing on the first user-mode NIC, so every pre-existing row of this case is unchanged. Pins to bridge, macvtap, or custom NICs are rejected with `cannot publish a host port`; that path needs a bridge-capable node and is covered by the `validate_port_mapping_nics` and `ingress_nic` unit tests (`a_pin_is_checked_against_the_backend_and_not_only_the_count`, `a_pin_to_a_backend_with_no_ingress_resolves_to_nothing`).
 - `vmm-cli.py` accepts a trailing `@<nic>` on `--port` and sends it as `nic_index`.
 
+## Post-baseline regression coverage (PR #1286, PR #1351)
+
+The fixture policy allows TCP and UDP host ports `20000..=65535` on `127.0.0.1`. After the Step 2 port reset, the primary VM holds no mapping:
+
+- PR #1286: `UpdateVm` with `update_ports=true`, a new compose file, and a TCP mapping from host port `min - 1` is rejected with `Port mapping is not allowed for tcp:<min - 1>`. Before the fix an update skipped the node policy that `CreateVm` enforced.
+- PR #1351: after that rejection `Status` still reports no ports and the original `compose_file`; the rejected update wrote nothing.
+- PR #1286: `UpdateVm` with a mapping whose `host_address` is empty is accepted and persists the policy address `127.0.0.1`, as `CreateVm` does. The ports are then reset to empty again.
+- A mapping the VM already holds stays accepted after the node narrows its policy; that needs a policy change on a running VMM and is covered by the `port_map_enforces_node_policy_on_new_mappings_only` and `a_rejected_update_writes_nothing` unit tests in `tc-vmm-compute-ne-007`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
