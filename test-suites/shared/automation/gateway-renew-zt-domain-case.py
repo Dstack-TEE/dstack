@@ -150,6 +150,9 @@ def main() -> int:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     created_credential: str | None = None
     configured = False
+    stall_domain = f"stall-{lease}.test"
+    stall_configured = False
+    silent_acme: socket.socket | None = None
     original_config: dict[str, Any] | None = None
     cleanup_errors: list[str] = []
     restarted_gateway: subprocess.Popen[str] | None = None
@@ -654,6 +657,35 @@ def main() -> int:
                 else False
             )
 
+            # PR #1262: startup no longer issues for configured domains before
+            # it listens. Point the cluster at an ACME directory that accepts
+            # connections and never answers, and configure a domain without a
+            # certificate, so the old startup path would wait on it forever.
+            silent_acme = socket.socket()
+            silent_acme.bind(("127.0.0.1", 0))
+            silent_acme.listen(64)
+            silent_config_code = SUPPORT.rpc(
+                base,
+                token,
+                "Admin.SetCertbotConfig",
+                {
+                    **configured_values,
+                    "acme_url": f"http://127.0.0.1:{silent_acme.getsockname()[1]}/dir",
+                },
+            )[0]
+            stall_code = SUPPORT.rpc(
+                base,
+                token,
+                "Admin.AddZtDomain",
+                {
+                    "domain": stall_domain,
+                    "dns_cred_id": created_credential,
+                    "port": 443,
+                    "priority": 0,
+                },
+            )[0]
+            stall_configured = stall_code == 200
+
             primary = cluster_nodes[0]
             os.killpg(int(primary["pid"]), signal.SIGTERM)
             stop_deadline = time.monotonic() + 10
@@ -684,6 +716,7 @@ def main() -> int:
                 env=restart_env,
             )
             rpc_port = int(str(primary["rpc_url"]).split(":")[-1].split("/")[0])
+            restart_started = time.monotonic()
             restart_deadline = time.monotonic() + 15
             while time.monotonic() < restart_deadline:
                 if restarted_gateway.poll() is not None:
@@ -696,7 +729,24 @@ def main() -> int:
                 except OSError:
                     time.sleep(0.1)
             else:
-                raise RuntimeError("restarted Gateway did not listen")
+                raise RuntimeError(
+                    "restarted Gateway did not listen while ACME was unresponsive"
+                )
+            restart_listen_seconds = round(time.monotonic() - restart_started, 3)
+            restored_after_stall_code = SUPPORT.rpc(
+                base, token, "Admin.SetCertbotConfig", configured_values
+            )[0]
+            stall_deleted_code = SUPPORT.rpc(
+                base, token, "Admin.DeleteZtDomain", {"domain": stall_domain}
+            )[0]
+            if stall_deleted_code == 200:
+                stall_configured = False
+            checks["startup_not_blocked_by_acme"] = (
+                silent_config_code == 200
+                and stall_code == 200
+                and restored_after_stall_code == 200
+                and stall_deleted_code == 200
+            )
             restart_code, restart_body = case_owned_public_rpc(
                 f"{str(primary['rpc_url']).rstrip('/')}/AcmeInfo"
             )
@@ -746,6 +796,9 @@ def main() -> int:
                 "restore_config_http": restore_config_code,
                 "recovery_http": recovery_account_code,
                 "recovery_renewed": recovery_account_renewed,
+                "silent_acme_config_http": silent_config_code,
+                "uncertified_domain_http": stall_code,
+                "restart_listen_seconds": restart_listen_seconds,
                 "restart_http": restart_code,
                 "restart_account_matches": bool(restart_uri)
                 and hashlib.sha256(str(restart_uri).encode()).hexdigest()
@@ -876,11 +929,14 @@ def main() -> int:
                 pass
             crash_executor.shutdown(wait=True, cancel_futures=True)
             base = node_admin_urls[1]
+            # PR #1356: the release normalizes the domain, so a spelling the
+            # operator did not normalize still frees the lock the crashed node
+            # took; the renewal below depends on it.
             force_release_code = SUPPORT.rpc(
                 base,
                 token,
                 "Admin.ForceReleaseCertLock",
-                {"domain": domain},
+                {"domain": f"*.{domain.upper()}."},
             )[0]
             stale_recovery_code, stale_recovery_body = SUPPORT.rpc(
                 base,
@@ -973,6 +1029,18 @@ def main() -> int:
                 "Admin.ListCertAttestations",
                 {"domain": domain, "limit": 1},
             )
+            spelled_code, spelled_body = SUPPORT.rpc(
+                base,
+                token,
+                "Admin.ListCertAttestations",
+                {"domain": f"*.{domain.upper()}.", "limit": 0},
+            )
+            malformed_history_code = SUPPORT.rpc(
+                base,
+                token,
+                "Admin.ListCertAttestations",
+                {"domain": f"bad..{domain}", "limit": 0},
+            )[0]
             missing_history_code = SUPPORT.rpc(
                 base,
                 token,
@@ -1017,6 +1085,9 @@ def main() -> int:
                 and len(limited_history) == 1
                 and missing_history_code == 200
                 and unauthorized_history_code == 401
+                and spelled_code == 200
+                and json.loads(spelled_body) == history_value
+                and 400 <= malformed_history_code < 500
             )
             checks["public_acme_info"] = (
                 acme_code == 200
@@ -1038,6 +1109,10 @@ def main() -> int:
                 "quotes_present": bool(quotes) and all(bool(value) for value in quotes),
                 "limited_history_count": len(limited_history),
                 "missing_domain_http": missing_history_code,
+                "non_normalized_spelling_http": spelled_code,
+                "non_normalized_spelling_matches": spelled_code == 200
+                and json.loads(spelled_body) == history_value,
+                "malformed_domain_http": malformed_history_code,
                 "unauthorized_http": unauthorized_history_code,
                 "acme_info_http": acme_code,
                 "account_uri_present": bool(account_uri),
@@ -1120,6 +1195,15 @@ def main() -> int:
                 }
             )
     finally:
+        if stall_configured:
+            try:
+                SUPPORT.rpc(
+                    base, token, "Admin.DeleteZtDomain", {"domain": stall_domain}
+                )
+            except Exception as error:  # noqa: BLE001
+                cleanup_errors.append(f"stall_domain:{type(error).__name__}")
+        if silent_acme is not None:
+            silent_acme.close()
         if configured:
             try:
                 SUPPORT.rpc(base, token, "Admin.DeleteZtDomain", {"domain": domain})
