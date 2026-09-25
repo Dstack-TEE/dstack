@@ -74,6 +74,17 @@ Restart the affected service, re-query state, and check adjacent app/instance/no
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PR #1325)
+
+- The image's journald policy is volatile: before the case-scoped drop-in is
+  installed, the effective `systemd-analyze cat-config systemd/journald.conf`
+  must contain `Storage=volatile`, `RuntimeMaxFileSize=10M`, and
+  `RuntimeMaxFiles=10`, and no uncommented `SystemMaxUse`, `SystemKeepFree`,
+  `SystemMaxFileSize`, `SystemMaxFiles`, or `RuntimeMaxUse` line, so the runtime
+  budget keeps its memory-relative default. `/var/log/journal` must not exist
+  and journal files must be under `/run/log/journal`.
+- The result row `image_policy` must be `true`.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.

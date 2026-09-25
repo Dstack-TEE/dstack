@@ -107,6 +107,7 @@ def main() -> int:
             raise RuntimeError("recovery VM inventory query failed")
         matrix["inventory_stable"] = vm_ids(before.stdout) == vm_ids(after.stdout)
         required = (
+            "image_policy",
             "baseline",
             "rotation",
             "redacted",
