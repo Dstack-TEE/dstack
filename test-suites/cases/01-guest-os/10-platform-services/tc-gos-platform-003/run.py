@@ -98,6 +98,7 @@ def main() -> int:
         required = (
             "disk_source",
             "disk_read_only",
+            "nosuid_nodev_noexec",
             "invalid_disk_fallback_9p",
             "nine_p_content_hash_matched",
             "duplicate_unmount_rejected",
@@ -106,7 +107,7 @@ def main() -> int:
             "invalid_target_rejected",
             "mount_count_restored",
         )
-        if evidence.get("checks", 0) < 24 or not all(
+        if evidence.get("checks", 0) < 26 or not all(
             evidence.get(key) is True for key in required
         ):
             raise RuntimeError("host-shared evidence omitted a required row")
