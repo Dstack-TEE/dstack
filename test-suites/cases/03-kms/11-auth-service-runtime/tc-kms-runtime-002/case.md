@@ -65,6 +65,10 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1314)
+
+- Both implementations read one decision from one block: the mock RPC records every `eth_call`, and one `/bootAuth/app` and one `/bootAuth/kms` request on each listener must each issue exactly two calls (the decision and `gatewayAppId`), both at the block number that `eth_blockNumber` reported (`0x100`) and neither at `latest`. Before #1314 the Node/Fastify backend read both at `latest`.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
