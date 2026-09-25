@@ -31,13 +31,14 @@
 
 set -euo pipefail
 
-BUILDKIT_VERSION="v0.20.2"
+# The builder produces the published layers, so pin it by digest, not by tag.
+BUILDKIT_IMAGE="moby/buildkit:v0.20.2@sha256:c457984bd29f04d6acc90c8d9e717afe3922ae14665f3187e0096976fe37b1c8"
 BUILDKIT_BUILDER="buildkit_20"
 BUILD_SHARED_DIR="$REPO_ROOT/dstack/build/shared"
 
 ensure_buildkit() {
     if ! docker buildx inspect "$BUILDKIT_BUILDER" &>/dev/null; then
-        docker buildx create --use --driver-opt "image=moby/buildkit:$BUILDKIT_VERSION" --name "$BUILDKIT_BUILDER"
+        docker buildx create --use --driver-opt "image=$BUILDKIT_IMAGE" --name "$BUILDKIT_BUILDER"
     fi
 }
 
