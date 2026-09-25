@@ -19,6 +19,8 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -283,15 +285,7 @@ def write_gateway_config(
         if app_address_dns_servers
         else ""
     )
-    text = text.replace(
-        proxy_anchor,
-        proxy_anchor
-        + 'base_domain = "localhost"\n'
-        + app_address_dns_line
-        + f'cert_chain = "{tls_identity["cert"]}"\n'
-        + f'cert_key = "{tls_identity["key"]}"\n',
-        1,
-    )
+    text = text.replace(proxy_anchor, proxy_anchor + app_address_dns_line, 1)
     text += (
         f'\n[tls]\nkey = "{tls_identity["key"]}"\n'
         f'certs = "{tls_identity["cert"]}"\n'
@@ -515,6 +509,41 @@ def register_gateway_fixture(
     if not client_ip:
         fail("gateway registration response lacks an assigned client address")
     return {**identity, "client_ip": client_ip, "client_public_key": client_public_key}
+
+
+def import_gateway_proxy_cert(
+    admin_url: str, admin_token: str, identity: dict[str, str], domain: str
+) -> None:
+    """Serve the fixture identity for `*.<domain>` through Admin.ImportCert."""
+    body = json.dumps(
+        {
+            "domain": domain,
+            "cert_pem": Path(identity["cert"]).read_text(encoding="utf-8"),
+            "key_pem": Path(identity["key"]).read_text(encoding="utf-8"),
+        }
+    ).encode()
+    detail = ""
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        call = urllib.request.Request(
+            f"{admin_url}/Admin.ImportCert",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {admin_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(call, timeout=10) as response:
+                response.read(4096)
+                return
+        except urllib.error.HTTPError as error:
+            detail = f"HTTP {error.code}: {error.read(1000)!r}"
+        except OSError as error:
+            detail = type(error).__name__
+        time.sleep(0.2)
+    fail(f"failed to import the Gateway proxy certificate: {detail}")
 
 
 def request() -> dict[str, Any]:
@@ -1877,6 +1906,11 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             stderr=subprocess.PIPE,
             timeout=180,
             check=False,
+            env=(
+                {**os.environ, "DSTACK_TEST_SIMULATOR_PUBLIC_TCBINFO": "false"}
+                if case_id == "tc-gw-internal-005"
+                else None
+            ),
         )
         if simulator.returncode:
             shutil.rmtree(workspace, ignore_errors=True)
@@ -2046,6 +2080,12 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 env=gateway_env,
             )
             pids.append(gateway.pid)
+            import_gateway_proxy_cert(
+                f"http://127.0.0.1:{ports_for_node['admin']}/prpc",
+                admin_token,
+                registration_client,
+                "localhost",
+            )
             node = {
                 "node_id": node_id,
                 "rpc_url": f"https://127.0.0.1:{ports_for_node['rpc']}/prpc",
@@ -2069,6 +2109,8 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 "tc-gw-select-007",
             }:
                 node["handshake_fixture"] = str(handshake_fixture)
+            if case_id == "tc-gw-registrati-002":
+                node["wireguard_applied_config"] = str(applied_config)
             nodes.append(node)
             if node_id == 1:
                 bootnode = (
