@@ -51,18 +51,23 @@ def node20_bin() -> pathlib.Path:
     raise RuntimeError("Node 20 or newer is unavailable")
 
 
-def run(command: list[str], cwd: pathlib.Path, env: dict[str, str]) -> dict[str, Any]:
+def run(
+    command: list[str], cwd: pathlib.Path, env: dict[str, str], timeout: int = 180
+) -> dict[str, Any]:
     """Run one bounded command and retain a bounded output tail."""
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=180,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return skipped(command, f"still running after {timeout}s")
     tail = completed.stdout[-12000:]
     return {
         "command": command,
@@ -113,23 +118,29 @@ def main() -> int:
         tests = run(test_command, package, env)
         production_env = dict(env, NODE_ENV="production", PORT="0")
         production = run(production_command, package, production_env)
+        unknown_policy_env = dict(env, MOCK_POLICY="deny_all", PORT="0")
+        unknown_policy = run(production_command, package, unknown_policy_env, 30)
     else:
         reason = "skipped because frozen dependency installation failed"
         tests = skipped(test_command, reason)
         production = skipped(production_command, reason)
+        unknown_policy = skipped(production_command, reason)
     checks = {
         "frozen_install": install["returncode"] == 0,
         "native_tests": tests["returncode"] == 0,
         "production_rejected": production["returncode"] != 0
         and "must not run with NODE_ENV=production" in production["output_tail"],
+        "unknown_policy_rejected": unknown_policy["returncode"] != 0
+        and 'unknown MOCK_POLICY "deny_all"' in unknown_policy["output_tail"]
+        and "starting mock auth server" not in unknown_policy["output_tail"],
     }
     status = "PASS" if all(checks.values()) else "FAIL"
-    evidence = {"checks": checks, "runs": [install, tests, production]}
+    evidence = {"checks": checks, "runs": [install, tests, production, unknown_policy]}
     artifact = {
         "path": "artifacts/auth-mock-safety.json",
         "step_id": f"{case_id}-step-02",
         "name": "Auth mock safety regression",
-        "description": "Frozen dependency install, native test suite, and production fail-closed gate.",
+        "description": "Frozen dependency install, native test suite, and production and unknown-policy fail-closed gates.",
     }
     atomic_json(result_dir / artifact["path"], evidence)
     result = {
@@ -149,9 +160,11 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-02",
                 "status": "PASS"
-                if checks["native_tests"] and checks["production_rejected"]
+                if checks["native_tests"]
+                and checks["production_rejected"]
+                and checks["unknown_policy_rejected"]
                 else "FAIL",
-                "observed": "Native decisions passed and production startup failed closed.",
+                "observed": "Native decisions passed, and production startup and an unknown MOCK_POLICY failed closed.",
             },
             {
                 "id": f"{case_id}-step-03",

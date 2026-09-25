@@ -78,6 +78,10 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PR #1391)
+
+- An unknown `MOCK_POLICY` no longer falls back to `allow-all`. Starting `bun run index.ts` outside production with `MOCK_POLICY=deny_all` (a misspelling of `deny-all`) must exit non-zero with `unknown MOCK_POLICY "deny_all"` before it logs `starting mock auth server`; a policy changed at runtime to an unknown value denies both `/bootAuth/app` and `/bootAuth/kms` with that reason (native test).
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.
