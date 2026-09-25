@@ -82,6 +82,15 @@ Confirm the live matching-ID guest reaches ready, re-query its identity, and ver
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1323)
+
+- A v3 MR config that omits `instance_id` is now checked as an empty instance
+  ID instead of skipping the check, because a relying party cannot tell an
+  omitted value from `no_instance_id`. Such a document must be rejected on a
+  guest with a non-empty instance ID and accepted on one without. The
+  candidate filter includes
+  `mr_config_v3_treats_missing_instance_id_as_empty`.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
