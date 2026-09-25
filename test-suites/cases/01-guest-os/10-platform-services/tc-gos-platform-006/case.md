@@ -42,6 +42,16 @@
   only the observation transport. Interrupt `dstack-guest-agent.service` while
   leaving socket activation intact, or temporarily stop/continue its process,
   then verify service recovery through the unchanged socket.
+- Since PR #1324, `app-compose.service` has
+  `Requires=dstack-guest-agent.service`, and systemd propagates an explicit
+  `systemctl restart` of the agent to it. Its `ExecStop` stops the app's
+  containers, including the fixture bridge that carries the Tappd and
+  DstackGuest routes, and its `ExecStart` recreates them after the fixture's
+  pre-launch script reloads its images (about 25 s on an idle host, longer
+  under a parallel sweep). After restarting the
+  agent, wait until `app-compose.service` is `active` with no job queued, and
+  only then repeat the RPC. Connection resets in between come from the bridge
+  being down, not from the agent.
 - During the process interruption, a filesystem socket existence check or a
   repeated `systemctl start` is not the failed operation: both can succeed
   while the service process is stopped. Issue one bounded Tappd or DstackGuest
