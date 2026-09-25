@@ -223,6 +223,24 @@ def main() -> int:
             raise AssertionError("failed to read guest boot identity")
         if run([*cli, "stop", "--force", vm_id], 180).returncode:
             raise AssertionError("failed to stop lease guest")
+        # StopVm returns once the supervisor is told to kill QEMU, not once it
+        # has exited. A StartVm that lands in between sees the VM running and
+        # launches nothing, leaving the guest down until the VMM's periodic
+        # automatic restart picks it up.
+        stop_converged = False
+        for _ in range(60):
+            state = run([*cli, "info", "--json", vm_id], 30)
+            if state.returncode == 0:
+                try:
+                    stopped_info = json.loads(state.stdout)
+                except json.JSONDecodeError:
+                    stopped_info = {}
+                if stopped_info.get("status") != "running":
+                    stop_converged = True
+                    break
+            time.sleep(1)
+        if not stop_converged:
+            raise AssertionError("lease guest stop did not converge before restart")
         if run([*cli, "start", vm_id], 180).returncode:
             raise AssertionError("failed to restart lease guest")
         after: dict[str, Any] | None = None
