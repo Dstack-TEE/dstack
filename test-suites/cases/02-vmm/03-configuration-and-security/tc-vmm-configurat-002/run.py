@@ -5,12 +5,16 @@
 
 from __future__ import annotations
 
+import http.server
 import json
 import os
 import pathlib
 import secrets
+import ssl
+import stat
 import subprocess
 import tempfile
+import threading
 import urllib.error
 import urllib.request
 from typing import Any
@@ -61,10 +65,228 @@ def structure(body: bytes) -> dict[str, Any]:
     return {"kind": type(value).__name__}
 
 
+def issue_certificate(
+    directory: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+    """Issue a run-scoped CA and a server certificate for IP 127.0.0.1 only."""
+    ca_key, ca = directory / "ca.key", directory / "ca.crt"
+    key, csr, cert = (
+        directory / "server.key",
+        directory / "server.csr",
+        directory / "server.crt",
+    )
+    extensions = directory / "server.ext"
+    extensions.write_text(
+        "subjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n"
+        "extendedKeyUsage=serverAuth\n"
+    )
+    for argv in (
+        ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1"]
+        + ["-subj", "/CN=dtest-vmm-cli-ca", "-keyout", str(ca_key), "-out", str(ca)]
+        + ["-addext", "basicConstraints=critical,CA:TRUE"],
+        ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=127.0.0.1"]
+        + ["-keyout", str(key), "-out", str(csr)],
+        ["x509", "-req", "-days", "1", "-in", str(csr), "-CA", str(ca)]
+        + ["-CAkey", str(ca_key), "-CAcreateserial", "-extfile", str(extensions)]
+        + ["-out", str(cert)],
+    ):
+        process = subprocess.run(
+            ["openssl", *argv], capture_output=True, text=True, timeout=30, check=False
+        )
+        if process.returncode:
+            raise RuntimeError(f"openssl {argv[0]} failed: {process.stderr[-300:]}")
+    return ca, cert, key
+
+
+def start_tls_proxy(
+    upstream: str, cert: pathlib.Path, key: pathlib.Path
+) -> tuple[http.server.ThreadingHTTPServer, list[str]]:
+    """Terminate TLS on an ephemeral loopback port and forward to the VMM."""
+    seen: list[str] = []
+
+    class Proxy(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            seen.append(self.path)
+            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            forward = {
+                name: value
+                for name, value in self.headers.items()
+                if name.lower() in {"authorization", "content-type"}
+            }
+            status, _, payload = request(
+                upstream + self.path, method="POST", body=body, headers=forward
+            )
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        do_GET = do_POST
+
+        def log_message(self, *_: Any) -> None:
+            return
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+def run_cli(
+    argv: list[str], env: dict[str, str], timeout: int = 60
+) -> subprocess.CompletedProcess[str]:
+    """Run vmm-cli under a permissive umask so file modes come from the CLI."""
+    return subprocess.run(
+        argv,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+        preexec_fn=lambda: os.umask(0o022),
+    )
+
+
+def mode(path: pathlib.Path) -> str:
+    """Return the permission bits of a path."""
+    return oct(stat.S_IMODE(path.stat().st_mode))
+
+
 def list_ids(vmm: dict[str, Any]) -> set[str]:
     """List VM work directories inside the case-owned VMM run path."""
     run_path = pathlib.Path(vmm["run_path"])
     return {entry.name for entry in run_path.iterdir() if entry.is_dir()}
+
+
+def cli_matrix(vmm: dict[str, Any], token: str, base: str) -> dict[str, Any]:
+    """Exercise vmm-cli TLS verification and its owner-only local state."""
+    cli = [str(part) for part in vmm["cli_argv"][:2]]
+    rows: dict[str, Any] = {}
+    with tempfile.TemporaryDirectory(prefix="dtest-vmm-cli-") as temporary:
+        root = pathlib.Path(temporary)
+        ca, cert, key = issue_certificate(root)
+        server, seen = start_tls_proxy(base, cert, key)
+        port = server.server_address[1]
+        home = root / "home"
+        home.mkdir()
+        env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(home),
+            "XDG_RUNTIME_DIR": str(root / "xdg"),
+            "DSTACK_VMM_TOKEN": token,
+        }
+        try:
+            # PR #1402: an https URL is verified against the system store or
+            # SSL_CERT_FILE, and a failed handshake sends no request, so the
+            # token never reaches an unverified peer.
+            for name, url, extra_env, flags, succeeds in (
+                ("untrusted-ca", f"https://127.0.0.1:{port}", {}, [], False),
+                (
+                    "trusted-ca",
+                    f"https://127.0.0.1:{port}",
+                    {"SSL_CERT_FILE": str(ca)},
+                    [],
+                    True,
+                ),
+                (
+                    "hostname-mismatch",
+                    f"https://localhost:{port}",
+                    {"SSL_CERT_FILE": str(ca)},
+                    [],
+                    False,
+                ),
+                (
+                    "insecure-opt-out",
+                    f"https://127.0.0.1:{port}",
+                    {},
+                    ["--insecure"],
+                    True,
+                ),
+            ):
+                before = len(seen)
+                process = run_cli(
+                    [*cli, "--url", url, *flags, "lsvm", "--json"],
+                    {**env, **extra_env},
+                )
+                listed = None
+                if process.returncode == 0:
+                    listed = json.loads(process.stdout or "null")
+                row = {
+                    "exit": process.returncode,
+                    "requests_reaching_proxy": len(seen) - before,
+                    "certificate_error": "CERTIFICATE_VERIFY_FAILED" in process.stderr
+                    or "certificate verify failed" in process.stderr,
+                    "listed_array": isinstance(listed, list),
+                }
+                rows[name] = row
+                if succeeds and (row["exit"] or not row["listed_array"]):
+                    raise AssertionError(f"vmm-cli {name} over https failed: {row}")
+                if not succeeds and (
+                    row["exit"] == 0
+                    or row["requests_reaching_proxy"]
+                    or not row["certificate_error"]
+                ):
+                    raise AssertionError(f"vmm-cli {name} was not refused: {row}")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        # PR #1390: the config file and the KMS whitelist are replaced
+        # atomically with mode 0600, in a 0700 directory when the CLI creates it.
+        state = home / ".dstack-vmm"
+        state.mkdir()
+        config = state / "config.json"
+        config.write_text(json.dumps({"dtest_preserved": True}))
+        config.chmod(0o644)
+        registration = root / "xdg/dstack-vmm"
+        registration.mkdir(parents=True)
+        instance = f"dtest-{secrets.token_hex(6)}"
+        (registration / f"{instance}.json").write_text(
+            json.dumps({"id": instance, "pid": os.getpid(), "address": base})
+        )
+        switched = run_cli([*cli, "vmm", "switch", instance], env)
+        saved = json.loads(config.read_text())
+        rows["switch-config"] = {
+            "exit": switched.returncode,
+            "mode": mode(config),
+            "active_vmm_saved": saved.get("active_vmm") == instance,
+            "existing_key_kept": saved.get("dtest_preserved") is True,
+            "temporary_files": sorted(p.name for p in state.glob(".tmp-*")),
+        }
+        fresh_home = root / "fresh-home"
+        fresh_home.mkdir()
+        added = run_cli(
+            [*cli, "kms", "add", "02" + "11" * 32], {**env, "HOME": str(fresh_home)}
+        )
+        whitelist = fresh_home / ".dstack-vmm/kms-whitelist.json"
+        rows["kms-whitelist"] = {
+            "exit": added.returncode,
+            "directory_mode": mode(whitelist.parent)
+            if whitelist.parent.exists()
+            else None,
+            "mode": mode(whitelist) if whitelist.exists() else None,
+        }
+    switch_row, whitelist_row = rows["switch-config"], rows["kms-whitelist"]
+    if (
+        switch_row["exit"]
+        or switch_row["mode"] != "0o600"
+        or not switch_row["active_vmm_saved"]
+        or not switch_row["existing_key_kept"]
+        or switch_row["temporary_files"]
+    ):
+        raise AssertionError(f"vmm-cli config was not written owner-only: {switch_row}")
+    if (
+        whitelist_row["exit"]
+        or whitelist_row["directory_mode"] != "0o700"
+        or whitelist_row["mode"] != "0o600"
+    ):
+        raise AssertionError(
+            f"vmm-cli whitelist was not written owner-only: {whitelist_row}"
+        )
+    return rows
 
 
 def main() -> int:
@@ -192,6 +414,12 @@ def main() -> int:
                 "status": "PASS",
                 "observed": "VMM, UI, resource, and log surfaces enforced authentication while HostApi.Info was absent from external HTTP.",
             }
+        )
+
+        evidence["vmm_cli"] = cli_matrix(vmm, token, base)
+        steps[-1]["observed"] += (
+            " vmm-cli verified the HTTPS certificate before sending credentials and"
+            " wrote its config and whitelist owner-only."
         )
 
         private = subprocess.run(

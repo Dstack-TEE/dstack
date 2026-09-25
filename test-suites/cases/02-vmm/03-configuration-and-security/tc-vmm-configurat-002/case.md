@@ -70,6 +70,13 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1402, PR #1390)
+
+Step 2 also drives `vmm-cli.py` (the first two elements of `values.vmm.cli_argv`) with the token in `DSTACK_VMM_TOKEN`, never in argv, and with `HOME` and `XDG_RUNTIME_DIR` inside a case temporary directory. A harness-owned TLS proxy on an ephemeral loopback port presents a certificate for `IP:127.0.0.1` issued by a run-scoped CA and forwards to `values.vmm.rpc_url`.
+
+- PR #1402: `lsvm --json` against `https://127.0.0.1:<port>` fails with a certificate verification error when the CA is not trusted, and against `https://localhost:<port>` (name not in the certificate) even with `SSL_CERT_FILE=<ca>`; in both rows no request reaches the proxy, so the token is never sent. With `SSL_CERT_FILE=<ca>` the same call succeeds and lists VMs, and `--insecure` succeeds without the CA.
+- PR #1390: with a pre-existing world-readable `~/.dstack-vmm/config.json`, `vmm switch <id>` for a registration under `XDG_RUNTIME_DIR` leaves the file at mode `0600`, keeps its other keys, records `active_vmm`, and leaves no `.tmp-*` file behind. In a fresh `HOME`, `kms add <33-byte key>` creates `~/.dstack-vmm` with mode `0700` and `kms-whitelist.json` with mode `0600`. The CLI runs under umask `022`, so these modes come from the CLI itself.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
