@@ -78,6 +78,50 @@ def target_from_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("fixture manifest does not contain a case-owned hardware target")
 
 
+def measured_setup_events(target: dict[str, Any]) -> dict[str, Any]:
+    """PR #1326 and #1320: storage encryption and os-image-hash are each measured once."""
+    cmdline = ssh(target, "cat /proc/cmdline").split()
+    encrypted = b"1"
+    for parameter in cmdline:
+        if parameter.startswith("dstack.storage_encrypted="):
+            value = parameter.split("=", 1)[1]
+            encrypted = b"0" if value in ("0", "false", "no", "off") else b"1"
+    quote = rpc(target, "GetQuote", {"report_data": "00" * 64})
+    runtime = [
+        event for event in json.loads(quote["event_log"]) if event.get("imr") == 3
+    ]
+    names = [str(event.get("event")) for event in runtime]
+    if names.count("storage-encrypted") != 1 or names.count("storage-fs") != 1:
+        raise AssertionError(f"storage events were not measured once: {names}")
+    index = names.index("storage-encrypted")
+    if names[index - 1] != "storage-fs":
+        raise AssertionError("storage-encrypted did not follow storage-fs")
+    measured = bytes.fromhex(runtime[index]["event_payload"])
+    if measured != encrypted:
+        raise AssertionError(
+            f"storage-encrypted measured {measured!r} for a {encrypted!r} boot"
+        )
+    providers = [
+        json.loads(bytes.fromhex(event["event_payload"]))
+        for event in runtime
+        if event.get("event") == "key-provider"
+    ]
+    if len(providers) != 1:
+        raise AssertionError(f"key-provider was measured {len(providers)} times")
+    expected_image_hash = 1 if providers[0].get("name") == "kms" else 0
+    if names.count("os-image-hash") != expected_image_hash:
+        raise AssertionError(
+            f"os-image-hash measured {names.count('os-image-hash')} times "
+            f"with key provider {providers[0].get('name')}"
+        )
+    return {
+        "runtime_events": names,
+        "storage_encrypted": measured.decode(),
+        "key_provider": providers[0].get("name"),
+        "os_image_hash_events": expected_image_hash,
+    }
+
+
 def boot_case(
     case_id: str, target: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -141,11 +185,17 @@ def boot_case(
         and prepare < timestamps["app-compose.service"]
     ):
         raise AssertionError("monotonic ordering changed")
+    measured = measured_setup_events(target)
     print(
-        f"EVIDENCE {case_id}-step-02 - Proves prepare completed before its Docker and compose consumers.",
+        f"EVIDENCE {case_id}-step-02 - Proves prepare completed before its Docker and compose consumers and measured its storage and key-provider decisions once.",
         flush=True,
     )
-    print(json.dumps({"start_monotonic": timestamps}, sort_keys=True), flush=True)
+    print(
+        json.dumps(
+            {"start_monotonic": timestamps, "measured": measured}, sort_keys=True
+        ),
+        flush=True,
+    )
     print(f"STEP {case_id}-step-02 END - PASS", flush=True)
     print(f"STEP {case_id}-step-03 START", flush=True)
     after = ssh(
@@ -169,7 +219,7 @@ def boot_case(
         {
             "id": f"{case_id}-step-02",
             "status": "PASS",
-            "observed": "Systemd monotonic timestamps proved prepare completed before Docker and app-compose.",
+            "observed": "Systemd monotonic timestamps proved prepare completed before Docker and app-compose; RTMR3 measured storage-encrypted once after storage-fs, matching the boot command line, and os-image-hash once for a KMS key provider.",
         },
         {
             "id": f"{case_id}-step-03",
@@ -181,6 +231,7 @@ def boot_case(
         "environment": "HARDWARE",
         "start_monotonic": timestamps,
         "identity_and_ccel": True,
+        "measured_setup_events": measured,
     }
 
 
