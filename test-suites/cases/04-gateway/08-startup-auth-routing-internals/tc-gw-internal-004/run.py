@@ -10,8 +10,10 @@ import json
 import os
 import pathlib
 import shutil
+import socket
 import subprocess
 import tempfile
+import time
 from typing import Any
 
 CASE_ID = "tc-gw-internal-004"
@@ -24,7 +26,8 @@ edition = "2021"
 parcelona = "0.4"
 tracing = "0.1"
 """
-RUST_MAIN = '\nmod sni { include!("__SNI_SOURCE__"); }\nfn client_hello(names: Vec<(u8, &[u8])>, ext_prefix: Vec<(u16, Vec<u8>)>, record_ver: [u8;2], hello_ver: [u8;2]) -> Vec<u8> {\n    let mut body=Vec::new(); body.extend_from_slice(&hello_ver); body.extend_from_slice(&[0x11;32]); body.push(0);\n    body.extend_from_slice(&(2u16).to_be_bytes()); body.extend_from_slice(&[0x13,0x01]); body.push(1); body.push(0);\n    let mut exts=Vec::new();\n    for (t,d) in ext_prefix { exts.extend_from_slice(&t.to_be_bytes()); exts.extend_from_slice(&(d.len() as u16).to_be_bytes()); exts.extend_from_slice(&d); }\n    let mut list=Vec::new(); for (typ,name) in names { list.push(typ); list.extend_from_slice(&(name.len() as u16).to_be_bytes()); list.extend_from_slice(name); }\n    let mut sni_ext=Vec::new(); sni_ext.extend_from_slice(&(list.len() as u16).to_be_bytes()); sni_ext.extend_from_slice(&list);\n    exts.extend_from_slice(&0u16.to_be_bytes()); exts.extend_from_slice(&(sni_ext.len() as u16).to_be_bytes()); exts.extend_from_slice(&sni_ext);\n    body.extend_from_slice(&(exts.len() as u16).to_be_bytes()); body.extend_from_slice(&exts);\n    let mut hs=Vec::new(); hs.push(1); let l=body.len() as u32; hs.extend_from_slice(&[((l>>16)&0xff) as u8, ((l>>8)&0xff) as u8, (l&0xff) as u8]); hs.extend_from_slice(&body);\n    let mut rec=Vec::new(); rec.push(22); rec.extend_from_slice(&record_ver); rec.extend_from_slice(&(hs.len() as u16).to_be_bytes()); rec.extend_from_slice(&hs); rec\n}\nfn expect(label:&str, got:Option<&[u8]>, want:Option<&[u8]>) -> bool { let ok=got==want; println!("{} got={:?} want={:?} ok={}", label, got.map(|v|String::from_utf8_lossy(v).to_string()), want.map(|v|String::from_utf8_lossy(v).to_string()), ok); ok }\nfn main(){\n let normal=client_hello(vec![(0,b"alpha.example")], vec![], [3,3], [3,3]);\n let dup=client_hello(vec![(0,b"first.example"),(0,b"second.example")], vec![], [3,3], [3,3]);\n let nonhost_then_host=client_hello(vec![(1,b"ignored"),(0,b"host.example")], vec![], [3,1], [3,4]);\n let ipv4=client_hello(vec![(0,b"127.0.0.1")], vec![], [3,3], [3,3]);\n let ipv6=client_hello(vec![(0,b"2001:db8::1")], vec![], [3,3], [3,3]);\n let empty=client_hello(vec![(0,b"")], vec![], [3,3], [3,3]);\n let prefixed=client_hello(vec![(0,b"after-pad.example")], vec![(23, vec![1,2,3,4])], [3,3], [3,3]);\n let mut ok=true;\n ok &= expect("normal", sni::extract_sni(&normal), Some(&b"alpha.example"[..]));\n ok &= expect("duplicate_first", sni::extract_sni(&dup), Some(&b"first.example"[..]));\n ok &= expect("nonhost_then_host", sni::extract_sni(&nonhost_then_host), Some(&b"host.example"[..]));\n ok &= expect("ipv4_literal", sni::extract_sni(&ipv4), Some(&b"127.0.0.1"[..]));\n ok &= expect("ipv6_literal", sni::extract_sni(&ipv6), Some(&b"2001:db8::1"[..]));\n ok &= expect("empty_host", sni::extract_sni(&empty), Some(&b""[..]));\n ok &= expect("coalesced_padding_ext", sni::extract_sni(&prefixed), Some(&b"after-pad.example"[..]));\n ok &= expect("non_tls", sni::extract_sni(b"GET / HTTP/1.1\\r\\nHost: evil\\r\\n\\r\\n"), None);\n for cut in [0usize,1,5,9,20,normal.len()-1] { ok &= expect(&format!("truncated_{}", cut), sni::extract_sni(&normal[..cut]), None); }\n let mut bad=normal.clone(); bad[3]=0xff; bad[4]=0xff; ok &= expect("oversized_record_len", sni::extract_sni(&bad), Some(&b"alpha.example"[..]));\n let mut badext=normal.clone(); let name_len=badext.len()-b"alpha.example".len()-2; badext[name_len]=0xff; badext[name_len+1]=0xff; ok &= expect("oversized_name_len", sni::extract_sni(&badext), None);\n std::process::exit(if ok {0} else {1});\n}\n'
+# `#[path]` rather than `include!`: the module opens with an inner doc comment.
+RUST_MAIN = '\n#[path = "__SNI_SOURCE__"]\nmod sni;\nfn client_hello(names: Vec<(u8, &[u8])>, ext_prefix: Vec<(u16, Vec<u8>)>, record_ver: [u8;2], hello_ver: [u8;2]) -> Vec<u8> {\n    let mut body=Vec::new(); body.extend_from_slice(&hello_ver); body.extend_from_slice(&[0x11;32]); body.push(0);\n    body.extend_from_slice(&(2u16).to_be_bytes()); body.extend_from_slice(&[0x13,0x01]); body.push(1); body.push(0);\n    let mut exts=Vec::new();\n    for (t,d) in ext_prefix { exts.extend_from_slice(&t.to_be_bytes()); exts.extend_from_slice(&(d.len() as u16).to_be_bytes()); exts.extend_from_slice(&d); }\n    let mut list=Vec::new(); for (typ,name) in names { list.push(typ); list.extend_from_slice(&(name.len() as u16).to_be_bytes()); list.extend_from_slice(name); }\n    let mut sni_ext=Vec::new(); sni_ext.extend_from_slice(&(list.len() as u16).to_be_bytes()); sni_ext.extend_from_slice(&list);\n    exts.extend_from_slice(&0u16.to_be_bytes()); exts.extend_from_slice(&(sni_ext.len() as u16).to_be_bytes()); exts.extend_from_slice(&sni_ext);\n    body.extend_from_slice(&(exts.len() as u16).to_be_bytes()); body.extend_from_slice(&exts);\n    let mut hs=Vec::new(); hs.push(1); let l=body.len() as u32; hs.extend_from_slice(&[((l>>16)&0xff) as u8, ((l>>8)&0xff) as u8, (l&0xff) as u8]); hs.extend_from_slice(&body);\n    let mut rec=Vec::new(); rec.push(22); rec.extend_from_slice(&record_ver); rec.extend_from_slice(&(hs.len() as u16).to_be_bytes()); rec.extend_from_slice(&hs); rec\n}\nfn expect(label:&str, got:Option<&[u8]>, want:Option<&[u8]>) -> bool { let ok=got==want; println!("{} got={:?} want={:?} ok={}", label, got.map(|v|String::from_utf8_lossy(v).to_string()), want.map(|v|String::from_utf8_lossy(v).to_string()), ok); ok }\nfn main(){\n let normal=client_hello(vec![(0,b"alpha.example")], vec![], [3,3], [3,3]);\n let dup=client_hello(vec![(0,b"first.example"),(0,b"second.example")], vec![], [3,3], [3,3]);\n let nonhost_then_host=client_hello(vec![(1,b"ignored"),(0,b"host.example")], vec![], [3,1], [3,4]);\n let ipv4=client_hello(vec![(0,b"127.0.0.1")], vec![], [3,3], [3,3]);\n let ipv6=client_hello(vec![(0,b"2001:db8::1")], vec![], [3,3], [3,3]);\n let empty=client_hello(vec![(0,b"")], vec![], [3,3], [3,3]);\n let prefixed=client_hello(vec![(0,b"after-pad.example")], vec![(23, vec![1,2,3,4])], [3,3], [3,3]);\n let mut ok=true;\n ok &= expect("normal", sni::extract_sni(&normal), Some(&b"alpha.example"[..]));\n ok &= expect("duplicate_first", sni::extract_sni(&dup), Some(&b"first.example"[..]));\n ok &= expect("nonhost_then_host", sni::extract_sni(&nonhost_then_host), Some(&b"host.example"[..]));\n ok &= expect("ipv4_literal", sni::extract_sni(&ipv4), Some(&b"127.0.0.1"[..]));\n ok &= expect("ipv6_literal", sni::extract_sni(&ipv6), Some(&b"2001:db8::1"[..]));\n ok &= expect("empty_host", sni::extract_sni(&empty), Some(&b""[..]));\n ok &= expect("coalesced_padding_ext", sni::extract_sni(&prefixed), Some(&b"after-pad.example"[..]));\n ok &= expect("non_tls", sni::extract_sni(b"GET / HTTP/1.1\\r\\nHost: evil\\r\\n\\r\\n"), None);\n for cut in [0usize,1,5,9,20,normal.len()-1] { ok &= expect(&format!("truncated_{}", cut), sni::extract_sni(&normal[..cut]), None); }\n let mut bad=normal.clone(); bad[3]=0xff; bad[4]=0xff; ok &= expect("oversized_record_len", sni::extract_sni(&bad), Some(&b"alpha.example"[..]));\n let mut badext=normal.clone(); let name_len=badext.len()-b"alpha.example".len()-2; badext[name_len]=0xff; badext[name_len+1]=0xff; ok &= expect("oversized_name_len", sni::extract_sni(&badext), None);\n let mut own_session=normal[..44].to_vec(); own_session[43]=10; own_session.extend_from_slice(&[0u8;9]); ok &= expect("session_id_len_covers_own_byte", sni::extract_sni(&own_session), None);\n let mut own_compression=normal[..49].to_vec(); own_compression[48]=5; own_compression.extend_from_slice(&[0u8;4]); ok &= expect("compression_len_covers_own_byte", sni::extract_sni(&own_compression), None);\n let mut not_handshake=normal.clone(); not_handshake[0]=0x17; ok &= expect("non_handshake_record", sni::extract_sni(&not_handshake), None);\n std::process::exit(if ok {0} else {1});\n}\n'
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -35,6 +38,33 @@ def atomic_json(path: pathlib.Path, value: Any) -> None:
         output.write("\n")
         temporary = pathlib.Path(output.name)
     temporary.replace(path)
+
+
+# PR #1278: 53 bytes whose session-id length byte (offset 43) counts itself.
+# The unguarded parser indexed past the slice and aborted the whole gateway.
+ABORT_PROBE = (
+    b"\x16\x03\x01\x00\x30\x01\x00\x00\x2c\x03\x03" + bytes(32) + b"\x0a" + bytes(9)
+)
+
+
+def survives_abort_probe(gateway: dict[str, Any]) -> bool:
+    """Send the abort probe to the live proxy and require the process to live."""
+    host, port = str(gateway["proxy_address"]).rsplit(":", 1)
+    for _ in range(3):
+        with socket.create_connection((host, int(port)), timeout=5) as stream:
+            stream.settimeout(5)
+            stream.sendall(ABORT_PROBE)
+            try:
+                stream.recv(64)
+            except OSError:
+                pass
+    time.sleep(1)
+    try:
+        os.kill(int(gateway["pid"]), 0)
+    except ProcessLookupError:
+        return False
+    with socket.create_connection((host, int(port)), timeout=5):
+        return True
 
 
 def main() -> int:
@@ -66,13 +96,21 @@ def main() -> int:
             check=False,
         )
     output = completed.stdout[-12000:]
-    status = "PASS" if completed.returncode == 0 else "FAIL"
+    manifest = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_CASE_MANIFEST"]).read_text()
+    )
+    try:
+        live_survived = survives_abort_probe(manifest["values"]["gateway"])
+    except OSError:
+        live_survived = False
+    status = "PASS" if completed.returncode == 0 and live_survived else "FAIL"
     evidence = {
         "returncode": completed.returncode,
         "output_bytes": len(completed.stdout.encode()),
         "output_sha256": hashlib.sha256(completed.stdout.encode()).hexdigest(),
         "output_tail": output,
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "live_gateway_survived_abort_probe": live_survived,
     }
     artifact = {
         "path": "artifacts/sni-boundary-regression.json",
@@ -98,7 +136,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-02",
                 "status": status,
-                "observed": "Valid SNI inputs passed and malformed or oversized nested lengths failed closed.",
+                "observed": "Valid SNI inputs passed; malformed, oversized and self-counting nested lengths and a non-handshake record failed closed, and the live proxy survived the 53-byte abort probe.",
             },
             {
                 "id": f"{case_id}-step-03",
@@ -107,7 +145,7 @@ def main() -> int:
             },
         ],
         "artifacts": [artifact],
-        "remarks": "Offline temporary Cargo harness; no service, image, network, or host mutation.",
+        "remarks": "Offline temporary Cargo harness plus three 53-byte probes to the lease-owned proxy listener; no image or host mutation.",
     }
     atomic_json(result_dir / "result.json", result)
     atomic_json(result_dir / "artifacts/manifest.json", {"artifacts": [artifact]})
