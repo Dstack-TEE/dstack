@@ -73,6 +73,12 @@ Restart the owning service where permitted and inspect state for this and an adj
 
 - Persisted and transient state follow policy, adjacent identities are unchanged, and no private material or credential appears in output.
 
+## Post-baseline regression coverage (PRs #1245 and #1278)
+
+- The parser program now loads `dstack/gateway/src/proxy/sni.rs` with `#[path]` instead of `include!`, because the module opens with an inner doc comment (PR #1245).
+- A session-id length byte, and a compression-methods length byte, that count their own byte return no name instead of indexing past the slice; the unguarded `take_record_be_u8` panicked, which a release build turns into a gateway abort (PR #1278). A record whose content type is not handshake (`0x17`) returns no name (PR #1245).
+- Live: three connections each send the 53-byte probe whose byte 43 is `0x0a` to the fixture's proxy listener. The gateway process must still be running a second later and still accept connections.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.

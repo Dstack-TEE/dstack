@@ -53,6 +53,40 @@ def client_hello(server_name: str) -> bytes:
     return data
 
 
+def raw_client_hello(server_name: bytes, filler: int = 0) -> bytes:
+    """Build a ClientHello whose server_name follows `filler` padding bytes."""
+
+    def u16(body: bytes) -> bytes:
+        return len(body).to_bytes(2, "big") + body
+
+    extensions = b"\x00\x15" + u16(bytes(filler)) if filler else b""
+    extensions += b"\x00\x00" + u16(u16(b"\x00" + u16(server_name)))
+    body = (
+        b"\x03\x03"
+        + bytes(32)
+        + b"\x00"
+        + u16(b"\x13\x01")
+        + b"\x01\x00"
+        + u16(extensions)
+    )
+    handshake = b"\x01" + len(body).to_bytes(3, "big") + body
+    return b"\x16\x03\x01" + u16(handshake)
+
+
+def refused_oversize(proxy: tuple[str, int], payload: bytes) -> bool:
+    """Require the listener to close on a ClientHello past its read bound."""
+    with socket.create_connection(proxy, timeout=5) as stream:
+        stream.settimeout(5)
+        try:
+            stream.sendall(payload)
+            stream.shutdown(socket.SHUT_WR)
+            return stream.recv(64) == b""
+        except (ConnectionResetError, BrokenPipeError):
+            return True
+        except socket.timeout:
+            return False
+
+
 def receive_record(stream: socket.socket) -> bytes:
     """Read one bounded TLS record."""
     data = bytearray()
@@ -113,7 +147,8 @@ def main() -> int:
     failure_name = f"{app_id}-{int(fixture['failure_port'])}s.{base_domain}"
     replacement = "0" if not app_id.startswith("0") else "1"
     unknown_name = f"{replacement}{app_id[1:]}-{backend[1]}s.{base_domain}"
-    markers = [b"dstack-sni-route-1", b"dstack-sni-route-2"]
+    markers = [b"dstack-sni-route-1", b"dstack-sni-route-2", b"dstack-sni-route-3"]
+    forged_marker = f"dstack-sni-forged-{app_id[:12]}"
     admin_token = (
         Path(manifest["values"]["gateway"]["admin_auth_token_file"]).read_text().strip()
     )
@@ -257,11 +292,27 @@ def main() -> int:
             proxy, client_hello(failure_name)
         )
         checks["valid_app_route_recovers"] = routed_probe(proxy, app_name, markers[1])
-        worker.join(5)
-        checks["backend_exactly_two_routes"] = (
-            len(backend_records) == 2 and not worker.is_alive()
+        # PR #1284: an SNI that is not a DNS name is refused before it can
+        # reach a DNS query or a log line.
+        checks["non_dns_sni_rejected"] = rejected_probe(
+            proxy, raw_client_hello(f"not a dns name {forged_marker}".encode())
         )
-        checks["backend_received_tls"] = len(backend_records) == 2 and all(
+        # PR #1245: a ClientHello larger than the first read (a post-quantum
+        # key share) still routes, and one past a whole TLS record is refused.
+        with socket.create_connection(proxy, timeout=5) as stream:
+            stream.settimeout(5)
+            stream.sendall(raw_client_hello(instance_name.encode(), 6000))
+            checks["sni_past_first_read_routed"] = (
+                stream.recv(len(markers[2])) == markers[2]
+            )
+        checks["oversized_client_hello_refused"] = refused_oversize(
+            proxy, raw_client_hello(instance_name.encode(), 20000)
+        )
+        worker.join(5)
+        checks["backend_exactly_three_routes"] = (
+            len(backend_records) == 3 and not worker.is_alive()
+        )
+        checks["backend_received_tls"] = len(backend_records) == 3 and all(
             bool(row["tls_record"]) for row in backend_records
         )
     except Exception as error:  # noqa: BLE001
@@ -294,6 +345,7 @@ def main() -> int:
             name: log_text.count(pattern) for name, pattern in patterns.items()
         }
         checks["no_policy_denials"] = log_categories["policy_denied"] == 0
+        checks["non_dns_sni_not_logged"] = forged_marker.lower() not in log_text
     passed = all(checks.values()) and not backend_error
     status = "PASS" if passed else "FAIL"
     evidence = {

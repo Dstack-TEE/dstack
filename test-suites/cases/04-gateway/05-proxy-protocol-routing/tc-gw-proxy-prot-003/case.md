@@ -64,6 +64,14 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1245 and #1284)
+
+- A ClientHello whose `server_name` is not a DNS name (it contains spaces and a run-scoped marker) is closed without reaching a backend, and the marker never appears in the Gateway log: the refusal reports only the name's length.
+- A ClientHello whose `server_name` follows 6000 bytes of padding, past the listener's first 4096-byte read, is still routed to the instance backend, which receives the whole record and answers with a third marker.
+- A ClientHello that puts its `server_name` behind 20000 bytes of padding, past one TLS record (16389 bytes), is refused without reaching a backend.
+- The backend therefore sees exactly three routed connections.
+- The `*.localhost` routing domain now comes from the certificate the fixture installs through `Admin.ImportCert` (PR #1239); without it every name here would be treated as a custom domain.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
