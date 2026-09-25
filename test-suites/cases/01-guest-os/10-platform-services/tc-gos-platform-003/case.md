@@ -73,6 +73,13 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PR #1254)
+
+- Both the labeled-disk and the 9p fallback mount carry `ro`, `nosuid`,
+  `nodev`, and `noexec`, because the host composes the share. The lifecycle
+  script requires all four options on each path, and an executable file seeded
+  on the disk share must fail to execute.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.

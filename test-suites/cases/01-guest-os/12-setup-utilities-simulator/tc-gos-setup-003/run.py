@@ -179,6 +179,42 @@ volumes:
                 if invalid.returncode == 0:
                     raise AssertionError("malformed compose input was accepted")
 
+                included_compose = root / "included.yaml"
+                included_compose.write_text(
+                    f"name: {project}\ninclude:\n  - sidecar.yaml\n"
+                    f"services:\n  web:\n    image: {IMAGE}\n",
+                    encoding="utf-8",
+                )
+                for identifier, service in (
+                    ("included00001", "sidecar"),
+                    ("orphan000002", "obsolete"),
+                ):
+                    path = containers / identifier
+                    path.mkdir(parents=True)
+                    (path / "config.v2.json").write_text(
+                        json.dumps(labels(project, service)), encoding="utf-8"
+                    )
+                included = subprocess.run(
+                    [
+                        str(utility),
+                        "remove-orphans",
+                        "--no-dockerd",
+                        "-f",
+                        str(included_compose),
+                        "-d",
+                        str(root / "docker"),
+                    ],
+                    text=True,
+                    capture_output=True,
+                    timeout=60,
+                    check=False,
+                )
+                if included.returncode == 0 or "include" not in included.stderr:
+                    raise AssertionError("compose with include: was not refused")
+                for preserved in ("included00001", "orphan000002"):
+                    if not (containers / preserved).exists():
+                        raise AssertionError(f"include: refusal removed {preserved}")
+
                 run = docker(
                     "run",
                     "-d",
@@ -227,6 +263,7 @@ volumes:
                     "offline_dry_run": dry.returncode,
                     "offline_active": active.returncode,
                     "malformed_rejected": invalid.returncode != 0,
+                    "include_refused_without_removal": True,
                     "online_dry_run": online_dry.returncode,
                     "online_active": online_active.returncode,
                     "preserved_fixture_count": 3,

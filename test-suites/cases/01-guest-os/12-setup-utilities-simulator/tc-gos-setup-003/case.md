@@ -64,6 +64,14 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1254)
+
+- A compose file with `include:` merges services this parser cannot see, so
+  `remove-orphans` refuses it instead of treating an included service's live
+  container as an orphan. Offline mode with such a file exits non-zero with an
+  error naming `include`, and neither the included service's container nor a
+  genuine orphan in the same project is removed.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

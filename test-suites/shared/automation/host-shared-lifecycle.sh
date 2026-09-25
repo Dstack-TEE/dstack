@@ -10,6 +10,13 @@ GOOD_LOOP=
 BAD_LOOP=
 checks=0
 check() { "$@"; checks=$((checks + 1)); }
+hardened() {
+  local options
+  options=",$(findmnt -no OPTIONS "$MOUNT_POINT"),"
+  for option in ro nosuid nodev noexec; do
+    [[ $options == *",$option,"* ]] || return 1
+  done
+}
 # shellcheck disable=SC2317
 cleanup() {
   set +e
@@ -30,13 +37,16 @@ GOOD_LOOP=$(losetup --find --show "$DISK")
 mkdir -p "$ROOT/seed"
 check mount "$GOOD_LOOP" "$ROOT/seed"
 printf 'disk-source-ok\n' >"$ROOT/seed/source-marker"
+printf '#!/bin/sh\nexit 0\n' >"$ROOT/seed/host-program"
+chmod 0755 "$ROOT/seed/host-program"
 sync
 check umount "$ROOT/seed"
 ln -sfn "$GOOD_LOOP" "$LABEL_LINK"
 check dstack-util host-shared mount --mount-point "$MOUNT_POINT"
 check mountpoint -q "$MOUNT_POINT"
 check test "$(cat "$MOUNT_POINT/source-marker")" = disk-source-ok
-check sh -c "findmnt -no OPTIONS '$MOUNT_POINT' | grep -Eq '(^|,)ro(,|$)'"
+check hardened
+check sh -c "! '$MOUNT_POINT/host-program'"
 check test "$(findmnt -no SOURCE "$MOUNT_POINT")" = "$GOOD_LOOP"
 check dstack-util host-shared unmount --mount-point "$MOUNT_POINT"
 check sh -c "! mountpoint -q '$MOUNT_POINT'"
@@ -54,6 +64,7 @@ BAD_LOOP=$(losetup --find --show "$BAD_DISK")
 ln -sfn "$BAD_LOOP" "$LABEL_LINK"
 check dstack-util host-shared mount --mount-point "$MOUNT_POINT"
 check test "$(findmnt -no FSTYPE "$MOUNT_POINT")" = 9p
+check hardened
 check test "$(sha256sum "$MOUNT_POINT/.sys-config.json" | awk '{print $1}')" = "$share_hash"
 check dstack-util host-shared unmount --mount-point "$MOUNT_POINT"
 
@@ -90,4 +101,4 @@ mkdir -p "$MOUNT_POINT"
 after_mounts=$(awk '$3=="9p" && $2 ~ /dstack-test-host-shared/{n++} END{print n+0}' /proc/mounts)
 check test "$after_mounts" -eq "$before_mounts"
 check sh -c "! losetup -j '$DISK' | grep -q ."
-printf '{"checks":%d,"disk_source":true,"disk_read_only":true,"invalid_disk_fallback_9p":true,"nine_p_content_hash_matched":true,"duplicate_unmount_rejected":true,"dependency_fault_rejected":true,"dependency_recovery":true,"invalid_target_rejected":true,"mount_count_restored":true}\n' "$checks"
+printf '{"checks":%d,"disk_source":true,"disk_read_only":true,"nosuid_nodev_noexec":true,"invalid_disk_fallback_9p":true,"nine_p_content_hash_matched":true,"duplicate_unmount_rejected":true,"dependency_fault_rejected":true,"dependency_recovery":true,"invalid_target_rejected":true,"mount_count_restored":true}\n' "$checks"
