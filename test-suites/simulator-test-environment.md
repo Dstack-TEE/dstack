@@ -28,6 +28,9 @@ Development verification requires both custom roots and:
 ```toml
 [attestation]
 insecure_allow_external_trust_anchors = true
+# The GCP TPM AK certificate names issuer certificates and CRLs on the local
+# collateral service; the default allowlist names only Google's hosts.
+allowed_collateral_hosts = ["127.0.0.1"]
 ```
 
 Every accepted result must contain:
