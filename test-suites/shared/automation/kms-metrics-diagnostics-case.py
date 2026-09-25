@@ -4,12 +4,17 @@
 
 from __future__ import annotations
 
+import concurrent.futures
+import http.server
 import json
 import os
 import signal
+import socket as socketlib
 import ssl
 import subprocess
+import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -84,6 +89,54 @@ def start(binary: str, config: str, socket: str, log: Path) -> subprocess.Popen[
     )
 
 
+class AuthInfoHandler(http.server.BaseHTTPRequestHandler):
+    """Answer the webhook info route slowly and count every request."""
+
+    protocol_version = "HTTP/1.1"
+    requests = 0
+    lock = threading.Lock()
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def do_GET(self) -> None:  # noqa: N802
+        with AuthInfoHandler.lock:
+            AuthInfoHandler.requests += 1
+        time.sleep(0.3)
+        body = json.dumps(
+            {
+                "status": "ok",
+                "kmsContractAddr": "0x" + "11" * 20,
+                "ethRpcUrl": "",
+                "gatewayAppId": "0x" + "22" * 20,
+                "chainId": 31337,
+                "appImplementation": "0x" + "33" * 20,
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def hold_connections(listener: socketlib.socket, held: list[socketlib.socket]) -> None:
+    """Accept connections and never answer them."""
+    while True:
+        try:
+            held.append(listener.accept()[0])
+        except OSError:
+            return
+
+
+def webhook_config(original: str, url: str, timeout: str) -> str:
+    """Point the lease-owned KMS at one webhook authorization backend."""
+    return (
+        original.replace('type = "dev"', 'type = "webhook"', 1)
+        + f'\n[core.auth_api.webhook]\nurl = "{url}"\ntimeout = "{timeout}"\n'
+    )
+
+
 def wait_metrics(url: str) -> tuple[int, int]:
     """Wait until the replacement KMS metrics endpoint is ready."""
     deadline = time.monotonic() + 30
@@ -127,7 +180,28 @@ def main() -> int:
         required_meta = ("ca_cert", "allow_any_upgrade", "k256_pubkey", "is_dev")
         if meta_code != 200 or any(name not in meta for name in required_meta):
             raise AssertionError("GetMeta omitted documented public fields")
-        rows.append({"name": "metadata", "status": "PASS", "field_count": len(meta)})
+        image_verify = tomllib.loads(original_config)["core"]["image"]["verify"]
+        if meta.get("os_image_verification") is not image_verify:
+            raise AssertionError(
+                f"GetMeta os_image_verification {meta.get('os_image_verification')!r} "
+                f"does not match [core.image] verify = {image_verify}"
+            )
+        disabled_warning = "os image verification is disabled" in Path(
+            kms["log"]
+        ).read_text(errors="replace")
+        if disabled_warning is image_verify:
+            raise AssertionError(
+                "the startup warning for disabled os image verification does not match the config"
+            )
+        rows.append(
+            {
+                "name": "metadata",
+                "status": "PASS",
+                "field_count": len(meta),
+                "os_image_verification": image_verify,
+                "disabled_verification_warned": disabled_warning,
+            }
+        )
 
         first_code, first_raw = call(url, "KMS.GetAppKey", app_body, identity)
         second_code, second_raw = call(url, "KMS.GetAppKey", app_body, identity)
@@ -207,6 +281,96 @@ def main() -> int:
         if any(secret and secret in log_text for secret in secrets):
             raise AssertionError("KMS log disclosed case-owned credential material")
         rows.append({"name": "redaction", "status": "PASS"})
+        if case_id == "tc-kms-keys-certs-008":
+            stop(replacement.pid)
+            replacement.wait(timeout=5)
+            replacement = None
+            silent = socketlib.socket()
+            silent.bind(("127.0.0.1", 0))
+            silent.listen(16)
+            held: list[socketlib.socket] = []
+            threading.Thread(
+                target=hold_connections, args=(silent, held), daemon=True
+            ).start()
+            config_path.write_text(
+                webhook_config(
+                    original_config,
+                    f"http://127.0.0.1:{silent.getsockname()[1]}",
+                    "2s",
+                )
+            )
+            replacement = start(
+                binary, str(config_path), socket, artifacts / "kms-silent-backend.log"
+            )
+            wait_metrics(metrics_url)
+            started_at = time.monotonic()
+            try:
+                silent_code, _ = call(url, "KMS.GetMeta", b"{}", None)
+            except OSError as error:
+                raise AssertionError(
+                    f"GetMeta was held open by a silent auth API: {error}"
+                ) from error
+            silent_seconds = round(time.monotonic() - started_at, 3)
+            silent.close()
+            for connection in held:
+                connection.close()
+            if silent_code < 400 or silent_seconds > 10:
+                raise AssertionError(
+                    f"silent auth API: GetMeta returned {silent_code} after {silent_seconds}s"
+                )
+            stop(replacement.pid)
+            replacement.wait(timeout=5)
+            replacement = None
+
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AuthInfoHandler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            config_path.write_text(
+                webhook_config(
+                    original_config,
+                    f"http://127.0.0.1:{server.server_address[1]}",
+                    "10s",
+                )
+            )
+            replacement = start(
+                binary, str(config_path), socket, artifacts / "kms-shared-info.log"
+            )
+            wait_metrics(metrics_url)
+            AuthInfoHandler.requests = 0
+            burst = 16
+            with concurrent.futures.ThreadPoolExecutor(max_workers=burst) as pool:
+                codes = list(
+                    pool.map(
+                        lambda _n: call(url, "KMS.GetMeta", b"{}", None)[0],
+                        range(burst),
+                    )
+                )
+            burst_requests = AuthInfoHandler.requests
+            time.sleep(1.5)
+            after_code, _ = call(url, "KMS.GetMeta", b"{}", None)
+            refreshed_requests = AuthInfoHandler.requests - burst_requests
+            server.shutdown()
+            server.server_close()
+            if (
+                any(code != 200 for code in codes)
+                or after_code != 200
+                or burst_requests > 2
+                or refreshed_requests != 1
+            ):
+                raise AssertionError(
+                    f"auth API info sharing: codes={codes}, burst upstream={burst_requests}, "
+                    f"after expiry status={after_code} upstream={refreshed_requests}"
+                )
+            rows.append(
+                {
+                    "name": "auth_api_bounds",
+                    "status": "PASS",
+                    "silent_backend_status": silent_code,
+                    "silent_backend_seconds": silent_seconds,
+                    "burst_calls": burst,
+                    "burst_upstream_requests": burst_requests,
+                    "upstream_requests_after_expiry": refreshed_requests,
+                }
+            )
         if case_id == "tc-kms-release-010":
             gate_tests = subprocess.run(
                 [
@@ -231,11 +395,24 @@ def main() -> int:
                 raise AssertionError(
                     f"platform release gate matrix failed: {gate_tests.stdout[-500:]} {gate_tests.stderr[-500:]}"
                 )
+            missing_gates = [
+                name
+                for name in (
+                    "nitro_enclave_key_release_requires_explicit_enablement",
+                    "key_release_gates_do_not_leak_across_platforms",
+                )
+                if f"{name} ... ok" not in gate_tests.stdout
+            ]
+            if missing_gates:
+                raise AssertionError(
+                    f"platform release gate matrix omitted {', '.join(missing_gates)}"
+                )
             rows.append(
                 {
                     "name": "platform_release_gates",
                     "status": "PASS",
                     "filter": "key_release_",
+                    "nitro_enclave_gate_rows": 2,
                     "physical_origin_claimed": False,
                 }
             )
