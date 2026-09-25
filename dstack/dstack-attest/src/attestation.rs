@@ -53,8 +53,8 @@ pub struct AttestationVerifierConfig {
     pub urls: CollateralUrls,
     #[serde(default)]
     pub root_ca: RootCaPaths,
-    /// Hosts that certificate-named collateral (TPM AK issuer certificates,
-    /// CRLs) may be fetched from; `*` matches within one DNS label. Unset keeps
+    /// Hosts the GCP TPM AK issuer certificates and CRLs may be fetched from;
+    /// `*` matches within one DNS label. Unset keeps
     /// the vendor hosts in `pki_fetch::DEFAULT_ALLOWED_HOSTS`.
     #[serde(default)]
     pub allowed_collateral_hosts: Option<Vec<String>>,

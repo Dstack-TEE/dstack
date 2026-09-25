@@ -98,7 +98,7 @@ impl Fetcher {
     pub fn new(allowed_hosts: &AllowedHosts) -> Result<Self> {
         let redirect_hosts = allowed_hosts.clone();
         let redirects = redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= MAX_REDIRECTS {
+            if attempt.previous().len() > MAX_REDIRECTS {
                 attempt.error("too many redirects")
             } else if let Err(e) = redirect_hosts.check(attempt.url()) {
                 attempt.error(e)

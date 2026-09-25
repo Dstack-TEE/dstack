@@ -244,6 +244,9 @@ image_cache_dir = "$WORK/production-image-cache"
 image_download_url = "http://127.0.0.1:9/mr_{OS_IMAGE_HASH}.tar.gz"
 image_download_timeout_secs = 1
 
+[attestation]
+allowed_collateral_hosts = ["127.0.0.1"]
+
 [attestation.urls]
 pccs = "http://127.0.0.1:18088"
 amd_kds = "http://127.0.0.1:18088/vcek/v1"
