@@ -69,6 +69,19 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 - Assert `/etc/os-release` identifies the image as dstack for both production and development mkosi images, including the expected flavor-specific identity fields.
 - Boot must not inherit the Debian builder identity, and the reported identity must agree with image metadata.
 
+## Post-baseline regression coverage (PRs #1320 and #1326)
+
+- System setup measures whether the data disk is encrypted, because the
+  kernel command line is not measured on every platform. In the RTMR3 runtime
+  events returned by `DstackGuest.GetQuote`, `storage-encrypted` appears exactly
+  once, immediately after `storage-fs`, with payload `1`, or `0` when the booted
+  command line carries `dstack.storage_encrypted=0|false|no|off`.
+- `os-image-hash` is extended after the KMS request succeeds, outside the
+  per-URL attempt, so a KMS failover cannot measure it twice. Step 2 requires
+  exactly one `key-provider` event and exactly one `os-image-hash` event when
+  that provider is `kms` (none otherwise). The lease has a single KMS URL, so
+  the failover path itself is not exercised here.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
