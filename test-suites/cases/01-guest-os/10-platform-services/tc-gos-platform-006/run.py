@@ -66,9 +66,9 @@ def identity_hash(value: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(selected, sort_keys=True).encode()).hexdigest()
 
 
-def wait_rpc(url: str) -> dict[str, Any]:
+def wait_rpc(url: str, budget: float = 45) -> dict[str, Any]:
     """Wait for the unchanged socket bridge to serve Tappd.Info again."""
-    deadline = time.monotonic() + 45
+    deadline = time.monotonic() + budget
     last: Exception | None = None
     while time.monotonic() < deadline:
         try:
@@ -169,6 +169,31 @@ def boot_unit_edges(argv: list[str]) -> dict[str, Any]:
         "docker_start_timeout": docker.get("TimeoutStartUSec"),
         "boot_error_reporters": [SERVICE, "app-compose.service", "docker.service"],
     }
+
+
+def wait_app_settled(argv: list[str], budget: float = 240) -> dict[str, str]:
+    """Wait until app-compose.service is active with no job queued or running.
+
+    `app-compose.service` has `Requires=dstack-guest-agent.service` (PR #1324),
+    so an explicit restart of the agent is propagated to it as a restart: its
+    `ExecStop` stops the app's containers, including the fixture bridge that
+    carries the Tappd route, and its `ExecStart` brings them back up.
+    """
+    deadline = time.monotonic() + budget
+    last: dict[str, str] = {}
+    while time.monotonic() < deadline:
+        last = unit_properties(argv, "app-compose.service", "ActiveState,InvocationID")
+        jobs = ssh(
+            argv, "systemctl list-jobs --no-legend app-compose.service", check=False
+        ).stdout.strip()
+        if last.get("ActiveState") == "failed":
+            raise AssertionError("app-compose.service failed after the agent restart")
+        if last.get("ActiveState") == "active" and not jobs:
+            return last
+        time.sleep(2)
+    raise AssertionError(
+        f"app-compose.service did not settle after the agent restart: {last}"
+    )
 
 
 def emit(step: str, state: str) -> None:
@@ -320,20 +345,29 @@ def main() -> int:
             ).stdout
             if "Id=dstack-prepare.service" not in graph_after_invalid:
                 raise AssertionError("graph became unavailable after invalid operation")
+            app_before = unit_properties(
+                ssh_argv, "app-compose.service", "InvocationID"
+            )
+            restart_started = time.monotonic()
             ssh(ssh_argv, f"systemctl restart {shlex.quote(SERVICE)}")
+            app_after = wait_app_settled(ssh_argv)
             restarted = wait_rpc(primary_url)
+            recovery_seconds = round(time.monotonic() - restart_started, 1)
             if identity_hash(restarted) != primary_hash:
                 raise AssertionError("primary identity changed after service restart")
             observations["failure_recovery"] = {
                 "invalid_unit_rejected": True,
                 "graph_remained_queryable": True,
                 "leaf_restart_recovered": True,
+                "app_compose_restarted_with_agent": app_before.get("InvocationID")
+                != app_after.get("InvocationID"),
+                "recovery_seconds": recovery_seconds,
             }
             steps.append(
                 {
                     "id": f"{CASE_ID}-step-03",
                     "status": "PASS",
-                    "observed": "Systemd rejected a syntactically valid nonexistent case-scoped unit, the dependency graph remained queryable, and the documented leaf service restarted with the same identity.",
+                    "observed": "Systemd rejected a syntactically valid nonexistent case-scoped unit, the dependency graph remained queryable, and the guest agent restarted with the same identity once app-compose.service, which requires it, had settled again.",
                 }
             )
             emit("step-03", "PASS")
