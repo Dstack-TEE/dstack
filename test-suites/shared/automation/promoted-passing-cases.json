@@ -141,6 +141,51 @@
       "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
+      "case_id": "tc-gw-contract-001",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Gateway method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-gw-contract-002",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Debug method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-gw-contract-003",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Admin method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-kms-contract-001",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every KMS method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
+      "case_id": "tc-kms-contract-002",
+      "source_run": "cov841v-all-5860e60a4",
+      "source_status": "PASS",
+      "entrypoint": "shared/automation/api-contract-matrix-case.py",
+      "environment": "INTEGRATION",
+      "notes": "The full adversarial request-contract matrix over every Onboard method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
+      "promoted_at": "2026-09-20T05:20:00Z"
+    },
+    {
       "case_id": "tc-gos-concurrency-001",
       "source_run": "cov841v-all-5860e60a4",
       "source_status": "PASS",
@@ -1278,33 +1323,6 @@
       "environment": "INTEGRATION"
     },
     {
-      "case_id": "tc-gw-contract-001",
-      "source_run": "cov841v-all-5860e60a4",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/api-contract-matrix-case.py",
-      "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Gateway method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
-      "promoted_at": "2026-09-20T05:20:00Z"
-    },
-    {
-      "case_id": "tc-gw-contract-002",
-      "source_run": "cov841v-all-5860e60a4",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/api-contract-matrix-case.py",
-      "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Debug method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
-      "promoted_at": "2026-09-20T05:20:00Z"
-    },
-    {
-      "case_id": "tc-gw-contract-003",
-      "source_run": "cov841v-all-5860e60a4",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/api-contract-matrix-case.py",
-      "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Admin method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
-      "promoted_at": "2026-09-20T05:20:00Z"
-    },
-    {
       "case_id": "tc-gw-debug-001",
       "source_run": "debug-register-001",
       "source_status": "PASS",
@@ -1937,24 +1955,6 @@
       "source_status": "PASS",
       "entrypoint": "cases/03-kms/12-kms-build/tc-kms-build-001/run.py",
       "environment": "UNIT"
-    },
-    {
-      "case_id": "tc-kms-contract-001",
-      "source_run": "cov841v-all-5860e60a4",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/api-contract-matrix-case.py",
-      "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every KMS method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
-      "promoted_at": "2026-09-20T05:20:00Z"
-    },
-    {
-      "case_id": "tc-kms-contract-002",
-      "source_run": "cov841v-all-5860e60a4",
-      "source_status": "PASS",
-      "entrypoint": "shared/automation/api-contract-matrix-case.py",
-      "environment": "INTEGRATION",
-      "notes": "The full adversarial request-contract matrix over every Onboard method the inventory declares, under the policy in api-contract-matrix-policy.json. Executed on the tdxlab physical host against a lease-owned fixture; 18 of 18 scheduled cases passed in run cov841v-all-5860e60a4.",
-      "promoted_at": "2026-09-20T05:20:00Z"
     },
     {
       "case_id": "tc-kms-ct-001",
