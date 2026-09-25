@@ -54,7 +54,7 @@ ROWS = (
     ),
     (
         "dstack-verifier",
-        "image_paths_must_be_confined_and_manifest_paths_must_be_flat",
+        "every_manifest_entry_is_checked_before_the_image_is_accepted",
         "image-manifest-policy",
     ),
     (

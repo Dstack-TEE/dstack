@@ -64,6 +64,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1251)
+
+- The image-manifest policy row runs `verification::tests::every_manifest_entry_is_checked_before_the_image_is_accepted`, which replaced `image_paths_must_be_confined_and_manifest_paths_must_be_flat` when the verifier moved the `sha256sum.txt` check in-process.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
