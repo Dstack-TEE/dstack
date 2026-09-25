@@ -73,6 +73,10 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PR #1344)
+
+- An empty `apps.<appId>.devices` or `kms.devices` list now denies every device instead of allowing all of them. Against the live listener, with both lists empty, `/bootAuth/app` returns `isAllowed: false` with `app is not allowed to boot on this device` and `/bootAuth/kms` returns `isAllowed: false` with `KMS is not allowed to boot on this device`; setting `allowAnyDevice: true` on both allows the same boot again. The configuration file is re-read per request, so no restart is involved.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.
