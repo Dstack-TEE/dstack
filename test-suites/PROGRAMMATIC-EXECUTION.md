@@ -96,8 +96,8 @@ directories, since `PATH` is always set and cannot use the set-when-unset rule.
 
 ## Script coverage
 
-The suite currently contains 361 cases. Distributed case metadata declares a
-checked-in execution entrypoint for 360 of them. The remaining macvtap
+The suite currently contains 373 cases. Distributed case metadata declares a
+checked-in execution entrypoint for 372 of them. The remaining macvtap
 connectivity case is agent-driven until it has a reproducible harness.
 
 ## Known substrate defect
@@ -162,11 +162,11 @@ line 1126):
         value = run_agent_case(...)
 
 So running the full plan today spawns an agent only for the single case without
-an execution entrypoint. The other 360 cases execute deterministically.
+an execution entrypoint. The other 372 cases execute deterministically.
 
 Two consequences worth keeping in mind:
 
-- Quote the scripted count alongside any "programmatic" claim. "360 of 361 cases
+- Quote the scripted count alongside any "programmatic" claim. "372 of 373 cases
   run deterministically" is true; "the entire plan runs without AI" is not yet.
 - `run-plan --driver=program --require-script` refuses the first case without
   an entrypoint instead of falling back, which makes the boundary enforceable
