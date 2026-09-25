@@ -193,6 +193,7 @@ async fn main() -> Result<()> {
         tls_config,
     })
     .await?;
+    let _stop_wg_apply = StopWgApplyOnExit(state.clone());
     info!("Starting background tasks");
     state.start_bg_tasks().await?;
 
@@ -279,6 +280,16 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Lets an in-flight WireGuard apply finish before the process exits, on every
+/// return path out of `main` (a failed listener bind as much as a shutdown).
+struct StopWgApplyOnExit(Proxy);
+
+impl Drop for StopWgApplyOnExit {
+    fn drop(&mut self) {
+        self.0.stop_wg_apply();
+    }
 }
 
 #[cfg(test)]

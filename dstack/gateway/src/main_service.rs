@@ -75,6 +75,10 @@ pub struct ProxyInner {
     /// Capacity-one queue: each apply renders the latest state, so pending
     /// requests can be coalesced without losing a state change.
     wg_apply_tx: std::sync::mpsc::SyncSender<()>,
+    /// Held for the whole of an apply; `true` once the process is exiting.
+    /// The apply writes the interface's private key through a temporary file,
+    /// and exiting mid-write would leave that file behind.
+    wg_apply_stopped: Mutex<bool>,
     /// Only one registration mutates the routing table at a time anyway.
     /// Wait asynchronously rather than parking all RPC/blocking workers on it.
     registration_slot: Arc<Semaphore>,
@@ -309,10 +313,26 @@ impl ProxyInner {
     /// Render the WireGuard config under the routing lock, then write and apply
     /// it after releasing that lock. Only the apply worker calls this.
     fn reconfigure_wg(&self) -> Result<()> {
+        let stopped = self
+            .wg_apply_stopped
+            .lock()
+            .or_panic("Failed to lock wg apply");
+        if *stopped {
+            return Ok(());
+        }
         let rendered = self.lock().generate_wg_config();
         let result = rendered.and_then(|rendered| apply_wg_config(&self.config, &rendered));
         crate::metrics::record_wg_reconfigure(result.is_ok());
         result
+    }
+
+    /// Wait for an apply in progress to finish and refuse any later one.
+    /// Called on the way out of `main`, which does not join the worker thread.
+    pub(crate) fn stop_wg_apply(&self) {
+        *self
+            .wg_apply_stopped
+            .lock()
+            .or_panic("Failed to lock wg apply") = true;
     }
 
     /// Queue a full apply on the worker. Every caller goes through here, so
@@ -672,6 +692,7 @@ impl ProxyInner {
             state,
             notify_state_updated: Notify::new(),
             wg_apply_tx,
+            wg_apply_stopped: Mutex::new(false),
             registration_slot: Arc::new(Semaphore::new(1)),
             my_app_id,
             auth_client,
