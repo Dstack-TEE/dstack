@@ -16,6 +16,21 @@ from typing import Any
 
 CASE_ID = "tc-gos-observabil-004"
 UNKNOWN_ID = "00000000-0000-4000-8000-000000000000"
+STORAGE_SETTLE = """set -u
+for _ in $(seq 1 40); do
+  systemctl is-active -q app-compose.service && break
+  sleep 1
+done
+systemctl is-active -q app-compose.service || exit 1
+command -v zpool >/dev/null || exit 0
+zpool sync
+for _ in $(seq 1 40); do
+  pending=$(zpool get -Hpo value freeing | awk '{s += $1} END {print s + 0}')
+  [ "$pending" = 0 ] && exit 0
+  sleep 1
+done
+exit 1
+"""
 
 
 def ssh(
@@ -76,6 +91,7 @@ def main() -> int:
     marker_dir = f"/run/dstack-telemetry-{lease}"
     cleanup_errors: list[str] = []
     checks: dict[str, bool] = {}
+    counts: dict[str, int] = {}
     status = "FAIL"
     summary = "telemetry lifecycle did not complete"
     started = time.monotonic()
@@ -84,6 +100,14 @@ def main() -> int:
         return rpc(base.format(method=method), target)
 
     try:
+        # app-compose.service ends by pruning the images the fixture's
+        # pre-launch script loaded (about 570 MB), and ZFS can return freed
+        # blocks after the prune has returned. A baseline taken while such
+        # frees are pending can gain more free space than the 128 MiB write
+        # below takes, so let app-compose finish, sync the pool, and wait for
+        # its `freeing` to drain first. The byte delta is kept in `counts`.
+        settled = ssh(ssh_argv, STORAGE_SETTLE, check=False)
+        checks["storage_settled_before_baseline"] = settled.returncode == 0
         baseline_codes_values = {
             method: call(method)
             for method in ("SysInfo", "NetworkInfo", "ListContainers")
@@ -202,6 +226,9 @@ sleep 2
             int(changed_sys.get("total_swap", baseline_swap)) > baseline_swap
         )
         checks["disk_row_visible"] = bool(changed_disk)
+        counts["disk_free_delta_bytes"] = int(changed_disk.get("free_size", 0)) - int(
+            baseline_disk.get("free_size", 0)
+        )
         checks["disk_free_space_decreased"] = bool(changed_disk) and int(
             changed_disk.get("free_size", 0)
         ) < int(baseline_disk.get("free_size", 0))
@@ -278,6 +305,7 @@ rm -rf {marker_dir}
             {
                 "candidate_commit": runtime["candidate_commit"],
                 "checks": checks,
+                "counts": counts,
                 "cleanup_error_count": len(cleanup_errors),
                 "retained_addresses_dns_container_names_paths_or_native_responses": False,
             },
