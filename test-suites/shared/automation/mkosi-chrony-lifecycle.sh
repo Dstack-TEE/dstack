@@ -7,6 +7,14 @@ for candidate in /etc/chrony/chrony.conf /etc/chrony.conf; do
   test -f "$candidate" && { CONFIG=$candidate; break; }
 done
 test -n "$CONFIG"
+# The image ships dstack's NTS-only configuration and keeps DHCP from adding servers.
+test "$CONFIG" = /etc/chrony/chrony.conf
+grep -qx 'authselectmode require' "$CONFIG"
+SERVERS=$(grep -Ec '^(server|pool)[[:space:]]' "$CONFIG")
+test "$SERVERS" -gt 0
+test "$(grep -E '^(server|pool)[[:space:]]' "$CONFIG" | grep -Ec '[[:space:]]nts([[:space:]]|$)')" -eq "$SERVERS"
+if grep -Eq '^sourcedir[[:space:]]+/run/chrony-dhcp' "$CONFIG"; then exit 1; fi
+test "$(grep -cx 'UseNTP=no' /etc/systemd/network/20-wired.network)" -eq 2
 mkdir -p "$ROOT"
 cp -a "$CONFIG" "$ROOT/chrony.conf"
 BASE_HASH=$(sha256sum "$CONFIG" | cut -d' ' -f1)
@@ -20,6 +28,9 @@ trap cleanup EXIT
 systemctl is-active --quiet chrony.service
 chronyc tracking >"$ROOT/tracking.before" 2>&1
 chronyc sources -n >"$ROOT/sources.before" 2>&1
+chronyc -n authdata >"$ROOT/authdata.before"
+if awk 'NR > 2 && NF && $2 != "NTS"' "$ROOT/authdata.before" | grep -q .; then exit 1; fi
+NTS_ONLY=true
 BASELINE_ACTIVE=true
 systemctl stop chrony.service
 if systemctl is-active --quiet chrony.service; then exit 1; fi
@@ -52,4 +63,4 @@ RECOVERED=true
 RESTORED_HASH=$(sha256sum "$CONFIG" | cut -d' ' -f1)
 test "$BASE_HASH" = "$RESTORED_HASH"
 CONFIG_RESTORED=true
-printf '{"baseline_active":%s,"stop_observed":%s,"unreachable_source_observed":%s,"concurrent_restart":%s,"recovered_active":%s,"config_restored":%s,"cleanup":true}\n' "$BASELINE_ACTIVE" "$STOP_OBSERVED" "$UNREACHABLE" "$CONCURRENT" "$RECOVERED" "$CONFIG_RESTORED"
+printf '{"nts_only_policy":%s,"baseline_active":%s,"stop_observed":%s,"unreachable_source_observed":%s,"concurrent_restart":%s,"recovered_active":%s,"config_restored":%s,"cleanup":true}\n' "$NTS_ONLY" "$BASELINE_ACTIVE" "$STOP_OBSERVED" "$UNREACHABLE" "$CONCURRENT" "$RECOVERED" "$CONFIG_RESTORED"
