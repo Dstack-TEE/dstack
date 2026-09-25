@@ -17,6 +17,15 @@ trap cleanup EXIT
 systemctl is-active --quiet systemd-journald.service
 BASE_BOOT=$(journalctl --list-boots --no-pager | wc -l)
 BASE_USAGE=$(journalctl --disk-usage --no-pager | sed -n 's/.*take up \([^ ]*\).*/\1/p')
+# The image keeps the journal in /run with a budget that scales with memory.
+systemd-analyze cat-config systemd/journald.conf >"$ROOT/image.conf"
+for setting in Storage=volatile RuntimeMaxFileSize=10M RuntimeMaxFiles=10; do
+  grep -qx "$setting" "$ROOT/image.conf"
+done
+if grep -Eq '^(SystemMaxUse|SystemKeepFree|SystemMaxFileSize|SystemMaxFiles|RuntimeMaxUse)=' "$ROOT/image.conf"; then exit 37; fi
+test ! -e /var/log/journal
+find /run/log/journal -type f -name '*.journal' -print -quit | grep -q .
+IMAGE_POLICY=true
 cat >"$DROPIN" <<'CONF'
 [Journal]
 RuntimeMaxUse=8M
@@ -80,5 +89,5 @@ journalctl -t dstack-journal-recovery --no-pager -o cat | grep -Fq "marker=$MARK
 RECOVERED=true
 AFTER_BOOT=$(journalctl --list-boots --no-pager | wc -l)
 AFTER_USAGE=$(journalctl --disk-usage --no-pager | sed -n 's/.*take up \([^ ]*\).*/\1/p')
-printf '{"baseline":%s,"rotation":%s,"redacted":%s,"unprivileged_denied":%s,"invalid_closed":%s,"outage":%s,"recovered":%s,"cleanup":true,"boot_rows_before":%s,"boot_rows_after":%s,"usage_before":"%s","usage_after":"%s"}\n' \
- "$BASELINE" "$ROTATION" "$REDACTED" "$UNPRIVILEGED_DENIED" "$INVALID_CLOSED" "$OUTAGE" "$RECOVERED" "$BASE_BOOT" "$AFTER_BOOT" "$BASE_USAGE" "$AFTER_USAGE"
+printf '{"image_policy":%s,"baseline":%s,"rotation":%s,"redacted":%s,"unprivileged_denied":%s,"invalid_closed":%s,"outage":%s,"recovered":%s,"cleanup":true,"boot_rows_before":%s,"boot_rows_after":%s,"usage_before":"%s","usage_after":"%s"}\n' \
+ "$IMAGE_POLICY" "$BASELINE" "$ROTATION" "$REDACTED" "$UNPRIVILEGED_DENIED" "$INVALID_CLOSED" "$OUTAGE" "$RECOVERED" "$BASE_BOOT" "$AFTER_BOOT" "$BASE_USAGE" "$AFTER_USAGE"
