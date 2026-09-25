@@ -120,6 +120,15 @@ grep -q '^WatchdogSec=' "$gw_unit" || {
   echo 'dstack-gateway-checker.service must set WatchdogSec'; exit 1; }
 test ! -e "$D/../common/rootfs/wg-checker.sh"
 test ! -e "$D/../common/rootfs/wg-checker.service"
+# systemd-tpm2-setup writes the SRK public key to /var/lib/systemd before the
+# /var overlays exist, so on a measured-UKI boot it fails on the read-only root
+# and leaves the system degraded. Nothing in dstack uses systemd's SRK (the TPM
+# key provider has its own primary key), and the Yocto systemd has no TPM
+# support, so both SRK units are masked instead of given a writable path.
+for unit in systemd-tpm2-setup.service systemd-tpm2-setup-early.service; do
+  [[ $(readlink "$D/mkosi.skeleton/etc/systemd/system/$unit") == /dev/null ]] || {
+    echo "$unit must be masked in the image skeleton"; exit 1; }
+done
 # systemd enables any unit that matches no preset rule, so the enable list is
 # only meaningful with a terminal disable. Without it, every package pulled in
 # by Packages= would start at boot with no diff to 80-dstack.preset.
