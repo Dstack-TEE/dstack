@@ -125,7 +125,7 @@ CASES = {
         "admin",
         "ListCertAttestations",
         True,
-        None,
+        {"domain": "*.DSTACK-TEST-UNATTESTED.invalid."},
     ),
     "tc-gw-admin-030": (
         "Admin",
@@ -141,7 +141,7 @@ CASES = {
         "admin",
         "ForceReleaseCertLock",
         False,
-        None,
+        {"domain": "*.DSTACK-TEST-UNLOCKED.invalid."},
     ),
     "tc-gw-gateway-004": ("Gateway", "GetPeers", "rpc", "GetPeers", True, None),
     "tc-gw-gateway-002": ("Gateway", "AcmeInfo", "rpc", "AcmeInfo", True, None),
@@ -170,6 +170,14 @@ CASES = {
 # harness presents the fixture's simulator-issued identity and separately checks
 # that the same call without a client certificate is refused.
 CLIENT_AUTH_CASES = {"tc-gw-gateway-004": b"Client authentication is required"}
+
+# PR #1356: these methods normalize the ZT domain like the rest of the
+# ZT-Domain surface, so the valid payloads above use a wildcard, upper-case,
+# trailing-dot spelling, and a name that is not a DNS name is refused.
+REFUSED_PAYLOADS = {
+    case_id: [{"domain": ""}, {"domain": "bad..dstack-test.invalid"}]
+    for case_id in ("tc-gw-admin-027", "tc-gw-admin-028")
+}
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -535,6 +543,23 @@ def main() -> int:
             raise AssertionError(
                 f"extraneous Empty JSON rejected with HTTP {extra_code}"
             )
+        refused_codes: list[int] = []
+        for refused in REFUSED_PAYLOADS.get(case_id, []):
+            refused_code, refused_body, _ = http_call(
+                route,
+                body=json.dumps(refused).encode(),
+                content_type="application/json",
+                verify_tls=verify_tls,
+                headers=headers,
+                identity=identity,
+            )
+            refused_codes.append(refused_code)
+            if not 400 <= refused_code < 500 or not isinstance(
+                json.loads(refused_body or b"{}").get("error"), str
+            ):
+                raise AssertionError(
+                    f"invalid domain was not refused with a structured error: HTTP {refused_code}"
+                )
         anonymous_code: int | None = None
         anonymous_refused: bool | None = None
         if case_id in CLIENT_AUTH_CASES:
@@ -567,6 +592,7 @@ def main() -> int:
             "client_identity_presented": identity is not None,
             "anonymous_http": anonymous_code,
             "anonymous_refused": anonymous_refused,
+            "refused_invalid_input_http": refused_codes,
         }
         atomic_json(artifacts_dir / "step02-contract.json", contract)
         (artifacts_dir / "step02-json.body").write_bytes(json_body)
