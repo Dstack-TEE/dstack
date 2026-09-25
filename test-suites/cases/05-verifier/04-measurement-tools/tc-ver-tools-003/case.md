@@ -77,6 +77,10 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 
 - v1 `Attest` and `IssueCert` always use the MessagePack V1 schema while v0 keeps the content-dependent SCALE form. `verification::tests::msgpack_and_scale_encodings_verify_identically` re-encodes the legacy TDX-lite, normalized TDX-lite, and SEV-SNP fixtures as V1 and requires identical verification responses; `verification::tests::verifies_real_v1_attest_identically_to_v0_from_the_same_boot` does the same for a real same-boot `/v1/Attest` and `/Attest` capture. Both pass by exact name.
 
+## Post-baseline regression coverage (PRs #1279 and #1302)
+
+- The `dstack-attest` library suite now has 41 tests (#1302 added `nitro_enclave_device_id_is_parent_instance_pcr4`), and the SEV-SNP integration suite has 10. The new one, `an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed` (#1279), decodes a `/verify` body whose SNP report and certificate chain are empty and requires `invalid amd sev-snp report length` instead of a parser panic.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.

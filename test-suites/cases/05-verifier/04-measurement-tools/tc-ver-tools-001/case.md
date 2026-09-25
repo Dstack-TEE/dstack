@@ -80,9 +80,11 @@ Repeat measurement from an adjacent isolated image copy and compare it byte-for-
 - `dstack-mr tdx-measurement-cbor` is deterministic and emits measurement document version 4 whose `image.cmdline` is the bare metadata cmdline, with `kernel_header_normalized` omitted for the historical image and `true` for the zeroed-header copy; the document kernel digest and cmdline replay to the CLI RTMR1 and RTMR2, the firmware (`tdvf`) material is unchanged by the header form, and a cmdline without `dstack.rootfs_hash` is rejected by name.
 - Native vectors `image_info_tests::metadata_declares_whether_the_kernel_header_is_normalized`, `tdx_measurement_cbor_tests::the_kernel_header_flag_round_trips`, `tdx_measurement_cbor_tests::a_pre_normalization_document_does_not_drift`, `tdx_measurement_cbor_tests::unknown_versions_are_rejected`, and `tdx_measurement_cbor_tests::an_oversized_command_line_is_rejected_by_name` in `dstack-types` pass by exact name.
 
-## Post-baseline regression coverage (PR #1387)
+## Post-baseline regression coverage (PRs #1275, #1367, and #1387)
 
-- ACPI generation models GPU and NVSwitch root ports only with PCI hotplug off. The shared matrix measures `--num-gpus 1 --num-nvswitches 1 --pci-hole64-size 16T` with `--hotplug-off true` (only RTMR0 changes against the baseline) and rejects the same topology with the CLI default `--hotplug-off false` with `PCI hotplug on root ports is not modeled`. The VMM default `qemu_hotplug_off = true` is asserted in `tc-vmm-configurat-001`.
+- `dstack-mr diagnose` (#1367) rebuilds the machine from a VmConfig the way the verifier does. For `{cpu_count: 2, memory_size: 2 GiB, qemu_version: "9.2.1", num_nics: 3, num_verity_volumes: 2}` with `--image-dir` it reports exactly the four registers `measure --num-nics 3 --num-verity-volumes 2` reports, which differ from the baseline in RTMR0; the same VmConfig with `swtpm: true` is rejected with `swtpm measurement is not supported`.
+- GPU passthrough (#1387): the GPU/NVSwitch topology is rejected with `set hotplug_off for GPU passthrough` under `--hotplug-off false`, and measured under `--hotplug-off true`, and with it changes exactly RTMR0.
+- Measurement documents (#1275): native vectors `cbor_canonicalization_tests::cbor_decoders_reject_trailing_bytes`, `cbor_canonicalization_tests::the_aws_measurement_document_names_and_checks_its_version`, and `mr_config::tests::a_document_without_a_version_is_not_a_v3_document` in `dstack-types` pass by exact name.
 
 ## Postconditions
 

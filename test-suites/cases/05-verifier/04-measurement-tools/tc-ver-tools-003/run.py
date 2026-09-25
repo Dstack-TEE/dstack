@@ -28,6 +28,7 @@ REQUIRED_TESTS = (
     "rejects_conflicting_runtime_event_version ... ok",
     "verify_nitro_attestation_bin ... ok",
     "verify_sev_snp_attestation_bin ... ok",
+    "an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed ... ok",
 )
 # The v1 guest surface always returns MessagePack V1 while v0 keeps legacy
 # SCALE (PR #1207). The verifier must reach the same verdict and details for
@@ -103,9 +104,9 @@ def main() -> int:
     output = completed.stdout
     checks = {
         "command_passed": completed.returncode == 0,
-        "library_count": "40 passed; 0 failed" in output,
+        "library_count": "41 passed; 0 failed" in output,
         "nitro_count": "1 passed; 0 failed" in output,
-        "sev_snp_count": "9 passed; 0 failed" in output,
+        "sev_snp_count": "10 passed; 0 failed" in output,
         "required_tests": all(name in output for name in REQUIRED_TESTS),
         "no_panic": "panicked at" not in output,
         "verifier_encoding_equivalence": verifier.returncode == 0

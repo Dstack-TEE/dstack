@@ -66,6 +66,14 @@ Confirm successful download promotion, bounded diagnostics for both expected rej
 
 - The controlled download is atomically promoted only after manifest validation, negative rows expose no secrets, and the verifier remains usable after the failed offline attempt.
 
+## Post-baseline regression coverage (PRs #1251, #1337, and #1388)
+
+- Every row uses a 10-second download timeout, long enough for the retries in #1388 to finish.
+- Missing offline image: the refused connection is retried twice (three attempts), and the result still fails closed naming `Failed to download image`.
+- Manifest digest mismatch (#1251, #1337): the server returns the image archive with one byte of `bzImage` flipped and the original `sha256sum.txt`, so `os_image_hash` still matches. The verification fails with `bzImage does not match its digest in sha256sum.txt`, and nothing is installed under `images/<hash>`.
+- Client error: a 404 from the image server is requested once and not retried.
+- Controlled download recovery: the server answers the first request with 503. The verifier retries once, the second request downloads the image, and the verification passes in the cache that failed before.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

@@ -17,7 +17,7 @@ from typing import Any
 
 CASE_IDS = {"tc-ver-tools-001", "tc-ver-tools-002"}
 IMAGE_HASH = "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
-MATRIX_VERSION = 3
+MATRIX_VERSION = 4
 BASE_ARGS = ["--cpu", "2", "--memory", "2G", "--qemu-version", "9.2.1"]
 REGISTERS = ("mrtd", "rtmr0", "rtmr1", "rtmr2")
 # OVMF's QemuKernelLoaderFsDxe appends this to the image-provided command line
@@ -74,13 +74,20 @@ CANONICAL_LOW_MEMORY_SPLIT = 0x80000000
 CANONICAL_ACPI_DATA_SIZE = 0x28000
 CANONICAL_INITRD_ADDR_MAX_DEFAULT = 0x37FFFFFF
 CANONICAL_INITRD_ALIGNMENT = 0x1000
+# XLF_CAN_BE_LOADED_ABOVE_4G raises QEMU's initrd ceiling. Bit 6 is
+# XLF_5LEVEL_ENABLED and must not be read as it (PR #1229).
+XLF_CAN_BE_LOADED_ABOVE_4G = 0x02
+XLF_5LEVEL_ENABLED = 0x40
+XLF_OFFSET = 0x236
 NORMALIZED_INDEPENDENCE_ROWS = tuple(
     (memory, qemu)
     for memory in ("1G", "2G", "3G", "8G")
     for qemu in ("8.2.2", "9.2.1", "10.2.1")
 )
 # Native golden vectors that pin the measured byte layout. A change to any of
-# them silently invalidates every deployed os_image_hash.
+# them silently invalidates every deployed os_image_hash. The bound vectors
+# pin how host-supplied firmware, kernel, and measurement-document bytes are
+# rejected before they reach a measurement.
 NATIVE_TESTS = (
     (
         "dstack-mr",
@@ -88,10 +95,21 @@ NATIVE_TESTS = (
             "kernel::tests::the_normalized_flag_selects_which_kernel_bytes_are_measured",
             "kernel::tests::only_the_patched_digest_moves_with_guest_memory",
             "kernel::tests::tdx_kernel_patch_uses_precomputed_digest_at_2g_and_high_memory",
+            "kernel::tests::only_xlf_bit_1_raises_the_initrd_ceiling",
+            "kernel::tests::a_malformed_pe_header_is_rejected_instead_of_panicking",
             "tdx::tests::measured_kernel_cmdline_appends_the_ovmf_suffix",
             "tdx::tests::rtmr2_command_line_event_digest_is_stable",
             "tdx::tests::rtmr2_replay_is_stable",
             "tdx::tests::tdx_measurement_document_cbor_is_stable",
+            "tdx::tests::read_varuint_rejects_values_larger_than_u64",
+            "tdx::tests::measure_td_hob_from_witness_data_rejects_more_ranges_than_a_firmware_has_sections",
+            "tdx::tests::measure_td_hob_from_witness_data_rejects_ranges_whose_addresses_wrap",
+            "tdvf::tests::parse_rejects_a_zero_length_guid_table_entry",
+            "tdvf::tests::parse_reports_a_table_without_the_metadata_entry",
+            "tdvf::tests::parse_rejects_more_sections_than_the_blob_holds",
+            "tdvf::tests::parse_rejects_a_section_whose_data_runs_past_the_blob",
+            "tdvf::tests::parse_rejects_a_section_larger_than_any_real_firmware_measures",
+            "tdvf::tests::parse_rejects_a_section_whose_guest_address_wraps",
         ),
     ),
     (
@@ -102,6 +120,9 @@ NATIVE_TESTS = (
             "tdx_measurement_cbor_tests::a_pre_normalization_document_does_not_drift",
             "tdx_measurement_cbor_tests::unknown_versions_are_rejected",
             "tdx_measurement_cbor_tests::an_oversized_command_line_is_rejected_by_name",
+            "cbor_canonicalization_tests::cbor_decoders_reject_trailing_bytes",
+            "cbor_canonicalization_tests::the_aws_measurement_document_names_and_checks_its_version",
+            "mr_config::tests::a_document_without_a_version_is_not_a_v3_document",
         ),
     ),
 )
@@ -232,8 +253,12 @@ def canonical_setup_header(kernel: bytes, initrd_size: int) -> bytes:
     out[0x228:0x22C] = cmdline_addr.to_bytes(4, "little")
     if initrd_size:
         if protocol >= 0x020C:
-            xlf = int.from_bytes(out[0x236:0x238], "little")
-            initrd_max = 0xFFFFFFFF if xlf & 0x40 else CANONICAL_INITRD_ADDR_MAX_DEFAULT
+            xlf = int.from_bytes(out[XLF_OFFSET : XLF_OFFSET + 2], "little")
+            initrd_max = (
+                0xFFFFFFFF
+                if xlf & XLF_CAN_BE_LOADED_ABOVE_4G
+                else CANONICAL_INITRD_ADDR_MAX_DEFAULT
+            )
         elif protocol >= 0x0203:
             declared = int.from_bytes(out[0x22C:0x230], "little")
             initrd_max = declared or CANONICAL_INITRD_ADDR_MAX_DEFAULT
@@ -315,6 +340,47 @@ def run_cli(
     output = None
     if completed.returncode == 0:
         output = json.loads(completed.stdout)
+    row = {
+        "name": name,
+        "returncode": completed.returncode,
+        "stdout_sha256": hashlib.sha256(completed.stdout.encode()).hexdigest(),
+        "stderr_sha256": hashlib.sha256(completed.stderr.encode()).hexdigest(),
+    }
+    return row, output, completed.stderr
+
+
+def run_diagnose(
+    binary: pathlib.Path,
+    image: pathlib.Path,
+    vm_config: dict[str, Any],
+    workspace: pathlib.Path,
+    name: str,
+) -> tuple[dict[str, Any], dict[str, str] | None, str]:
+    """Run one `diagnose` row from a VmConfig and keep only its registers."""
+    config = workspace / f"{name}.vm-config.json"
+    config.write_text(json.dumps(vm_config))
+    completed = subprocess.run(
+        [
+            str(binary),
+            "diagnose",
+            "--vm-config",
+            str(config),
+            "--image-dir",
+            str(image),
+            "--json",
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+        check=False,
+    )
+    (workspace / f"{name}.stdout").write_text(completed.stdout)
+    (workspace / f"{name}.stderr").write_text(completed.stderr)
+    output = None
+    if completed.returncode == 0:
+        document = json.loads(completed.stdout)
+        output = {register: document[register] for register in REGISTERS}
     row = {
         "name": name,
         "returncode": completed.returncode,
@@ -464,9 +530,40 @@ def execute_matrix(
         ],
         None,
     )
-    # PR #1387: GPU and NVSwitch root ports are modelled only with PCI
-    # hotplug off, which is also the VMM default now.
-    gpu_args = [
+    # `diagnose` rebuilds the machine from a VmConfig the way the verifier does,
+    # so it must honour every measured field `measure` does (PR #1367).
+    diagnose_shape = {
+        "cpu_count": 2,
+        "memory_size": 2 << 30,
+        "qemu_version": "9.2.1",
+        "num_nics": 3,
+        "num_verity_volumes": 2,
+    }
+    measured_shape = accepted(
+        "diagnose-shape-measure",
+        fixture / "metadata.json",
+        [*BASE_ARGS, "--num-nics", "3", "--num-verity-volumes", "2"],
+        ["rtmr0"],
+    )
+    row, diagnosed, _ = run_diagnose(
+        binary, fixture, diagnose_shape, workspace, "diagnose-matches-measure"
+    )
+    require_success(row, diagnosed, None)
+    if diagnosed != measured_shape:
+        raise AssertionError(
+            "diagnose predicted other registers than measure for the same VM shape"
+        )
+    rows.append(row)
+    row, _, diagnostic = run_diagnose(
+        binary,
+        fixture,
+        {**diagnose_shape, "swtpm": True},
+        workspace,
+        "diagnose-swtpm-unsupported",
+    )
+    require_rejection(row, diagnostic, "swtpm measurement is not supported")
+    rows.append(row)
+    gpu_topology = [
         *BASE_ARGS,
         "--num-gpus",
         "1",
@@ -475,17 +572,19 @@ def execute_matrix(
         "--pci-hole64-size",
         "16T",
     ]
+    # Root-port hotplug AML is not modeled, so GPU passthrough is measured only
+    # with PCI hotplug off (PR #1387).
+    rejected(
+        "gpu-topology-requires-hotplug-off",
+        fixture / "metadata.json",
+        [*gpu_topology, "--hotplug-off", "false"],
+        "set hotplug_off for GPU passthrough",
+    )
     accepted(
         "gpu-topology-functional",
         fixture / "metadata.json",
-        [*gpu_args, "--hotplug-off", "true"],
+        [*gpu_topology, "--hotplug-off", "true"],
         ["rtmr0"],
-    )
-    rejected(
-        "gpu-topology-hotplug-on",
-        fixture / "metadata.json",
-        gpu_args,
-        "PCI hotplug on root ports is not modeled",
     )
     accepted(
         "hugepage-numa-topology",
@@ -699,6 +798,37 @@ def normalization_rows(
             "passed": True,
         }
     )
+
+    # Only XLF_CAN_BE_LOADED_ABOVE_4G raises the initrd ceiling. A kernel that
+    # sets XLF_5LEVEL_ENABLED alone gets the default ceiling (PR #1229).
+    shipped = (fixture / kernel_name).read_bytes()
+    xlf = int.from_bytes(shipped[XLF_OFFSET : XLF_OFFSET + 2], "little")
+    if not xlf & XLF_CAN_BE_LOADED_ABOVE_4G or not xlf & XLF_5LEVEL_ENABLED:
+        raise AssertionError(f"the historical kernel XLF {xlf:#06x} lacks bit 1 or 6")
+    five_level = workspace / "xlf-5level-only"
+    copy_fixture(fixture, five_level)
+    five_level_kernel = bytearray(shipped)
+    five_level_kernel[XLF_OFFSET : XLF_OFFSET + 2] = (
+        xlf & ~XLF_CAN_BE_LOADED_ABOVE_4G
+    ).to_bytes(2, "little")
+    (five_level / kernel_name).write_bytes(bytes(five_level_kernel))
+    five_level_output = measure("xlf-5level-only", five_level, [*BASE_ARGS])
+    default_ceiling = canonical_setup_header(bytes(five_level_kernel), initrd_size)
+    raised_ceiling = bytearray(default_ceiling)
+    raised_ceiling[0x218:0x21C] = canonical_kernel[0x218:0x21C]
+    if raised_ceiling == bytearray(default_ceiling):
+        raise AssertionError("the raised and default initrd ceilings coincide")
+    if five_level_output["rtmr1"] != rtmr1_from_kernel_digest(
+        authenticode_sha384(default_ceiling)
+    ):
+        raise AssertionError(
+            "RTMR[1] of a 5-level-only kernel is not the default initrd ceiling"
+        )
+    if five_level_output["rtmr1"] == rtmr1_from_kernel_digest(
+        authenticode_sha384(bytes(raised_ceiling))
+    ):
+        raise AssertionError("XLF_5LEVEL_ENABLED raised the initrd ceiling")
+    rows.append({"name": "xlf-5level-does-not-raise-initrd-ceiling", "passed": True})
 
     # The image build writes the canonical layout into the kernel it ships and
     # declares the flag, so the declared digest of that file must equal the

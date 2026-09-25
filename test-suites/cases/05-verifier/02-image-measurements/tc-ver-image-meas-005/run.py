@@ -18,6 +18,10 @@ TESTS = (
     "measurement_cache_version_mismatch_is_ignored_and_replaced",
     "corrupt_measurement_cache_entry_is_ignored",
     "concurrent_measurement_cache_writes_are_atomic",
+    # Only the measured VM shape keys an entry (PR #1334).
+    "measurement_cache_key_ignores_unmeasured_fields",
+    # The directory is capped, oldest entries first, sparing temporaries (PR #1369).
+    "measurement_cache_evicts_the_oldest_entries_and_spares_temporaries",
 )
 
 
@@ -45,7 +49,7 @@ def main() -> int:
     environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
     rows: list[dict[str, Any]] = []
     status = "PASS"
-    summary = "Measurement cache version rejection, corruption recovery, and atomic concurrency passed."
+    summary = "Measurement cache version rejection, corruption recovery, atomic concurrency, shape-only keying, and bounded eviction passed."
     stage = "baseline"
     try:
         cargo = shutil_which(environment, "cargo")
@@ -90,6 +94,13 @@ def main() -> int:
         "row_count": len(rows),
         "all_passed": status == "PASS",
         "cache_key_inputs": ["vm_config"],
+        "cache_key_excludes": [
+            "image",
+            "tdx_measurement",
+            "gcp_measurement",
+            "aws_measurement",
+        ],
+        "eviction": "oldest .json entries beyond the cap; temporaries spared",
         "entry_compatibility_guard": "embedded_measurement_cache_version",
         "recovery_inputs": ["malformed_json", "stale_embedded_version"],
         "concurrency_property": "one complete entry and no temporary files",
@@ -119,7 +130,7 @@ def main() -> int:
                 {
                     "id": f"{case_id}-step-02",
                     "status": status,
-                    "observed": "Embedded-version rejection and replacement, corrupt-entry recovery, and concurrent atomic writes were exercised.",
+                    "observed": "Embedded-version rejection and replacement, corrupt-entry recovery, concurrent atomic writes, keying on the measured VM shape only, and oldest-first eviction were exercised.",
                 },
                 {
                     "id": f"{case_id}-step-03",
