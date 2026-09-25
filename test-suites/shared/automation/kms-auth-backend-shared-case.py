@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Any
 
 CASES = {
-    "tc-kms-auth-001": ["simple_native", "simple_recovery", "simple_restart_redaction"],
+    "tc-kms-auth-001": [
+        "simple_native",
+        "simple_recovery",
+        "simple_empty_device_allowlist",
+        "simple_restart_redaction",
+    ],
     "tc-kms-attestatio-005": [
         "simple_native",
         "ethereum_native",
@@ -171,6 +176,28 @@ def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
             denied_status, denied = request(port, "/bootAuth/app", boot)
             config.write_text(json.dumps(valid) + "\n")
             recovered_status, recovered = request(port, "/bootAuth/app", boot)
+            app_id = boot["appId"]
+            empty = {
+                **valid,
+                "kms": {**valid["kms"], "devices": []},
+                "apps": {app_id: {**valid["apps"][app_id], "devices": []}},
+            }
+            config.write_text(json.dumps(empty) + "\n")
+            empty_rows = {
+                route: request(port, f"/bootAuth/{route}", boot)
+                for route in ("app", "kms")
+            }
+            any_device = {
+                **empty,
+                "kms": {**empty["kms"], "allowAnyDevice": True},
+                "apps": {app_id: {**empty["apps"][app_id], "allowAnyDevice": True}},
+            }
+            config.write_text(json.dumps(any_device) + "\n")
+            any_rows = {
+                route: request(port, f"/bootAuth/{route}", boot)
+                for route in ("app", "kms")
+            }
+            config.write_text(json.dumps(valid) + "\n")
             proc.send_signal(signal.SIGTERM)
             proc.wait(timeout=10)
             output.close()
@@ -193,6 +220,28 @@ def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
             and denied.get("isAllowed") is False,
             "recovered_without_restart": recovered_status == 200
             and recovered.get("isAllowed") is True,
+            "empty_device_allowlist_denied": empty_rows["app"]
+            == (
+                200,
+                {
+                    "isAllowed": False,
+                    "reason": "app is not allowed to boot on this device",
+                    "gatewayAppId": valid["gatewayAppId"],
+                },
+            )
+            and empty_rows["kms"]
+            == (
+                200,
+                {
+                    "isAllowed": False,
+                    "reason": "KMS is not allowed to boot on this device",
+                    "gatewayAppId": valid["gatewayAppId"],
+                },
+            ),
+            "allow_any_device_overrides_empty_allowlist": all(
+                status == 200 and payload.get("isAllowed") is True
+                for status, payload in any_rows.values()
+            ),
             "restart_healthy": health.get("status") == "ok"
             and restart_status == 200
             and restarted.get("isAllowed") is True,
@@ -271,6 +320,13 @@ def run_matrix(repo: Path, cache: Path) -> dict[str, Any]:
                     "recovered_without_restart",
                 )
             )
+            else "FAIL",
+            "evidence": life["checks"],
+        },
+        "simple_empty_device_allowlist": {
+            "status": "PASS"
+            if life["checks"]["empty_device_allowlist_denied"]
+            and life["checks"]["allow_any_device_overrides_empty_allowlist"]
             else "FAIL",
             "evidence": life["checks"],
         },
