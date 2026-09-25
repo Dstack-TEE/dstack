@@ -214,6 +214,31 @@ def audit_image_content(argv: list[str]) -> dict[str, Any]:
     for token in ("no-modules-load-options", "no-kernel-devel", "tdx-guest-tune"):
         if token not in layout:
             failures.append(f"rootfs layout check failed: {token}")
+    # PR #1321: only dstack's presets remain, so `disable *` is terminal.
+    presets = ssh(
+        argv,
+        "ls -1 /usr/lib/systemd/system-preset /etc/systemd/system-preset "
+        "2>/dev/null | grep '\\.preset$' || true",
+    ).stdout.split()
+    foreign = [name for name in presets if "dstack" not in name]
+    if not presets or foreign:
+        failures.append(f"system presets {presets}")
+    wait_online = ssh(
+        argv, "systemctl is-enabled systemd-networkd-wait-online.service", check=False
+    ).stdout.strip()
+    if wait_online != "enabled":
+        failures.append(f"systemd-networkd-wait-online.service is {wait_online!r}")
+    # PR #1331: rootfs tmpfiles are applied at build time, not on every boot.
+    rootfs = ssh(
+        argv,
+        "test ! -e /usr/lib/tmpfiles.d/dstack-image.conf && echo no-boot-tmpfiles; "
+        "systemctl show dstack-firstboot.service --property=LoadState --value; "
+        "test ! -e /var/mail/.dstack-keep "
+        "-a ! -e /var/lib/tpm2-tss/system/keystore/.dstack-keep && echo no-keep-files; "
+        "stat -c %a /var/lib/tpm2-tss/system/keystore; readlink /tapp",
+    ).stdout.split()
+    if rootfs != ["no-boot-tmpfiles", "not-found", "no-keep-files", "755", "dstack"]:
+        failures.append(f"build-time rootfs tmpfiles state {rootfs}")
     if failures:
         raise AssertionError("; ".join(failures))
     return {
@@ -227,6 +252,8 @@ def audit_image_content(argv: list[str]) -> dict[str, Any]:
         "generated_module_options": options,
         "kernel_devel_absent": True,
         "tdx_guest_tune_installed": True,
+        "system_presets": presets,
+        "build_time_tmpfiles": True,
     }
 
 
@@ -477,7 +504,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-05",
                     "status": "PASS",
-                    "observed": "The booted kernel ran with MMCONFIG enabled and the declared Incus, SWIOTLB and driver-removal configuration; the NVIDIA userspace matched the candidate driver pin, resolved through the linker cache, and was held back from udev autoload behind topology-derived module options; the kernel build tree was absent from the measured rootfs.",
+                    "observed": "The booted kernel ran with MMCONFIG enabled and the declared Incus, SWIOTLB and driver-removal configuration; the NVIDIA userspace matched the candidate driver pin, resolved through the linker cache, and was held back from udev autoload behind topology-derived module options; the kernel build tree was absent from the measured rootfs; only dstack presets shipped with networkd-wait-online enabled; and rootfs tmpfiles were applied at build time without a boot-time tmpfiles.d entry, first-boot unit, or keep files.",
                 }
             )
             emit("step-05", "PASS")

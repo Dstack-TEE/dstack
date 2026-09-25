@@ -116,6 +116,14 @@ The assertions are static image content and hold on a guest without a GPU.
   and `modinfo` resolves it as a module.
 - `/etc/modules-load.d/nvidia.conf` and `/usr/lib/dstack/kernel-devel` are
   absent, and `/usr/lib/dstack/tdx-guest-tune.sh` is executable.
+- Every `*.preset` file under `/usr/lib/systemd/system-preset` and
+  `/etc/systemd/system-preset` has `dstack` in its name, and
+  `systemd-networkd-wait-online.service` is `enabled`.
+- `/usr/lib/tmpfiles.d/dstack-image.conf` is absent, `dstack-firstboot.service`
+  is `not-found`, `/var/mail/.dstack-keep` and
+  `/var/lib/tpm2-tss/system/keystore/.dstack-keep` are absent,
+  `/var/lib/tpm2-tss/system/keystore` has mode `755`, and `/tapp` links to
+  `dstack`.
 
 ## Post-baseline regression coverage (PR #1156, #1157, #1160, #1173, #1177, #1181, #1182, #1191, #1192, #1220, #1226)
 
@@ -134,6 +142,18 @@ The assertions are static image content and hold on a guest without a GPU.
   halt polling as an opt-in module, and installs
   `/usr/lib/dstack/tdx-guest-tune.sh`; PR #1226 moves the kernel build tree out
   of the measured rootfs.
+
+## Post-baseline regression coverage (PRs #1321 and #1331)
+
+- PR #1321 deletes every non-dstack preset file at image build time, so a
+  distribution preset such as Debian's `90-systemd.preset` cannot shadow the
+  terminal `disable *` in `99-dstack-default.preset`, and enables
+  `systemd-networkd-wait-online.service`, the unit behind the
+  `network-online.target` that `dstack-prepare` waits on.
+- PR #1331 applies `rootfs.tmpfiles` once in `mkosi.finalize` instead of
+  shipping it in `tmpfiles.d`, where it re-ran against the read-only root on
+  every boot, and drops the `dstack-firstboot.service` and `.dstack-keep`
+  placeholders. Step 5 checks the booted result.
 
 ## Post-baseline regression matrix
 
