@@ -14,11 +14,18 @@ case "$runtime" in
 esac
 test ! -L "$runtime"
 
-if kill -0 "$pid" 2>/dev/null; then
-  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
-  for _ in $(seq 1 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.05; done
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -KILL -- "-$pid" 2>/dev/null || true
+# start-simulator.sh runs the simulator under `setsid sg`, and sg forks: the
+# recorded pid is the sg leader of a new process group and the simulator is its
+# child. TERM ends sg at once while the simulator is still unlinking its own
+# sockets and lock files, so wait for the whole group before deleting the
+# runtime, or find races the simulator for the same entries.
+alive() { kill -0 -- "-$pid" 2>/dev/null || kill -0 "$pid" 2>/dev/null; }
+if alive; then
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  for _ in $(seq 1 100); do alive || break; sleep 0.05; done
+  if alive; then
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    for _ in $(seq 1 100); do alive || break; sleep 0.05; done
   fi
 fi
 
