@@ -76,6 +76,10 @@ Run the installer with an existing `--src` directory that is not a dstack checko
 - Before PR #1162 the progress messages and git output of `resolve_source` went to stdout, so `checkout=$(resolve_source)` captured them with the path and the build directory was wrong. Against the pre-fix script, the Step 1 row and both Step 2 rows fail; against the candidate they pass.
 - Known candidate issue, recorded but not gated: `tmp_src` is assigned inside the `$(resolve_source)` subshell, so the `EXIT` trap in the parent shell sees it empty and the temporary checkout under `TMPDIR` is not removed. The evidence field `temporary_checkout_removed` records it; gate on it once the installer is fixed.
 
+## Post-baseline regression coverage (PR #1393)
+
+- The installer builds `dstackup` with `cargo build --release --locked`. The stub `cargo` also records its arguments, and every row that builds (Steps 1 and 2) must pass `--locked`. `dstackup` itself adds `--locked` when it builds the managed binaries (`dstack/crates/dstackup/src/install.rs`); that path needs a real source build and is not exercised here.
+
 ## Postconditions
 
 The case-scoped temporary directory, including the local origin, checkouts, prefixes, and any leaked temporary checkout under its private `TMPDIR`, is removed when the harness exits. Nothing outside it is modified.

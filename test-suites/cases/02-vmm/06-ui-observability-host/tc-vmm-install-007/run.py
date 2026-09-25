@@ -27,6 +27,7 @@ REF = "dtest-install"
 FAKE_CARGO = """#!/bin/sh
 set -eu
 printf '%s\\n' "$PWD" >> "$DTEST_CARGO_LOG"
+printf '%s\\n' "$*" >> "$DTEST_CARGO_ARGS_LOG"
 mkdir -p target/release
 printf '#!/bin/sh\\necho dstackup-stub\\n' > target/release/dstackup
 chmod 0755 target/release/dstackup
@@ -86,6 +87,7 @@ def main() -> int:
         work = root / "work"
         work.mkdir()
         cargo_log = root / "cargo.log"
+        cargo_args_log = root / "cargo-args.log"
         env = {
             "PATH": f"{stub_bin}:/usr/local/bin:/usr/bin:/bin",
             "HOME": str(root / "home"),
@@ -98,11 +100,17 @@ def main() -> int:
             "GIT_COMMITTER_NAME": "dstack test",
             "GIT_COMMITTER_EMAIL": "test@example.invalid",
             "DTEST_CARGO_LOG": str(cargo_log),
+            "DTEST_CARGO_ARGS_LOG": str(cargo_args_log),
         }
         origin = make_origin(root, env)
 
         def install(name: str, *args: str) -> dict[str, Any]:
             before = cargo_log.read_text().splitlines() if cargo_log.exists() else []
+            args_before = (
+                cargo_args_log.read_text().splitlines()
+                if cargo_args_log.exists()
+                else []
+            )
             process = run(
                 ["sh", "-s", "--", "--repo", str(origin), "--ref", REF, *args],
                 cwd=work,
@@ -110,6 +118,11 @@ def main() -> int:
                 stdin=script,
             )
             after = cargo_log.read_text().splitlines() if cargo_log.exists() else []
+            args_after = (
+                cargo_args_log.read_text().splitlines()
+                if cargo_args_log.exists()
+                else []
+            )
             stdout = process.stdout.decode(errors="replace")
             stderr = process.stderr.decode(errors="replace")
             row = {
@@ -118,6 +131,7 @@ def main() -> int:
                     line.replace(str(root), "<case-root>")
                     for line in after[len(before) :]
                 ],
+                "cargo_args": args_after[len(args_before) :],
                 "stdout_tail": stdout[-600:].replace(str(root), "<case-root>"),
                 "stderr_tail": stderr[-600:].replace(str(root), "<case-root>"),
                 "stdout": stdout,
@@ -207,7 +221,13 @@ def main() -> int:
             and "--prefix must be an absolute path" in row["stderr"]
         )
 
+    # PR #1393: every build the installer runs must be locked to Cargo.lock.
     for row in rows.values():
+        if row.get("matched") and row["cargo_dirs"]:
+            row["locked"] = all(
+                "--locked" in args.split() for args in row["cargo_args"]
+            )
+            row["matched"] = row["locked"]
         row.pop("stdout", None)
         row.pop("stderr", None)
     failures = [name for name, row in rows.items() if not row.get("matched")]
