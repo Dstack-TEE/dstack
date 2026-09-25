@@ -70,6 +70,12 @@ Restart the primary candidate Gateway from its case-owned configuration, re-quer
 - With the case-owned Cloudflare API blocked, call `Admin.RotateAcmeCredentials` on node 1 and wait until its DNS-provider preflight reaches the API. After 3 seconds, which covers WaveKV replication at the fixture's 1-second sync interval, call `Admin.SetCaa` on node 2. Expected: node 2 answers with HTTP status 400 or higher naming the `shared ACME lock`, and sends no Cloudflare API request. After the block is released, the rotation completes, and the existing rotation expectations hold: every node reports the new account and the CAA records are re-pinned to it.
 - Every node still reports the same `account_uri` after the initial issuance, which shows the cluster registered a single shared account.
 
+## Post-baseline regression coverage (PR #1262)
+
+- Startup no longer issues certificates for configured domains before the listeners bind; issuance runs in the background certbot task, and every ACME request is bounded to 30 seconds.
+- Before the primary restart, point the cluster's certbot configuration at a case-owned ACME directory that accepts TCP connections and never answers, and add a second run-scoped ZT domain (`stall-<lease>.test`) that has no certificate. The restarted primary must accept connections on its RPC port within 15 seconds. The old startup path would wait on that directory indefinitely.
+- Then restore the case ACME URL and delete the second domain; both calls return HTTP 200 and the persisted account check below is unchanged.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

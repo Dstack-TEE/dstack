@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1356)
+
+- `Admin.ListCertAttestations` normalizes the domain: the spelling `*.<DOMAIN>.` returns HTTP 200 and exactly the same `latest` and `history` as the normalized name.
+- The name `bad..<domain>` is refused with an HTTP 4xx.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
