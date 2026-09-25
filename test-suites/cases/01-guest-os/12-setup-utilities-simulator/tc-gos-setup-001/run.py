@@ -118,6 +118,7 @@ anyhow = "1"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"
 tracing = "0.1"
 """
 
@@ -141,10 +142,21 @@ mod acceptance {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed["A"], "new $`\\\" 世界");
         let output = convert_env_to_str(&parsed);
-        assert_eq!(output, "A=\"new \\$\\`\\\\\" 世界\"\nZ=\"line1\\nline2\"\n");
+        assert_eq!(output, "A=\"new \\$\\`\\\\\\\" 世界\"\nZ=\"line1\\nline2\"\n");
         assert!(!output.contains("NO"));
         assert!(!output.contains("sentinel-denied"));
         assert_eq!(convert_env_to_str(&parsed), output);
+    }
+
+    #[test]
+    fn backslashes_cannot_end_the_quoted_value() {
+        let input = r#"{"env":[{"key":"A","value":"trail\\"},{"key":"B","value":"a\\\"b"},{"key":"C","value":"x\\y"}]}"#;
+        let parsed = parse_env(input.as_bytes(), &allowed(&["A", "B", "C"])).unwrap();
+        assert_eq!(parsed["A"], r"trail\");
+        assert_eq!(
+            convert_env_to_str(&parsed),
+            concat!(r#"A="trail\\""#, "\n", r#"B="a\\\"b""#, "\n", r#"C="x\\y""#, "\n"),
+        );
     }
 
     #[test]
