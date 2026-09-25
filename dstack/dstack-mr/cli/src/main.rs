@@ -81,8 +81,8 @@ struct MachineConfig {
     #[arg(long, default_value = "false")]
     swtpm: bool,
 
-    /// Disable hotplug
-    #[arg(long, default_value = "false")]
+    /// Disable hotplug; matches the VMM default (`qemu_hotplug_off = true`)
+    #[arg(long, default_value = "true")]
     hotplug_off: Bool,
 
     /// Enable root verity
