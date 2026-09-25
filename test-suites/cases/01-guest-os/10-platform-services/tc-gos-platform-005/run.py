@@ -42,6 +42,13 @@ LDCONFIG_SONAMES = (
     "libnvidia-container.so.1",
     "libnvidia-container-go.so.1",
 )
+# Options the initramfs mounts carry into systemd (PR #1274).
+EARLY_MOUNT_OPTIONS = {
+    "/proc": ("nosuid", "nodev", "noexec"),
+    "/sys": ("nosuid", "nodev", "noexec"),
+    "/run": ("nosuid", "nodev"),
+    "/dev": ("nosuid",),
+}
 RUNTIME_LINK_PATHS = (
     "/usr/bin/nvattest",
     "/usr/bin/nvidia-smi",
@@ -239,9 +246,36 @@ def audit_image_content(argv: list[str]) -> dict[str, Any]:
     ).stdout.split()
     if rootfs != ["no-boot-tmpfiles", "not-found", "no-keep-files", "755", "dstack"]:
         failures.append(f"build-time rootfs tmpfiles state {rootfs}")
+    # PR #1274: the initramfs applies systemd's options to the API mounts it
+    # hands over, and a dm-verity mismatch panics instead of returning EIO.
+    for target, wanted in EARLY_MOUNT_OPTIONS.items():
+        options = set(
+            ssh(argv, f"findmnt -no OPTIONS {target}").stdout.strip().split(",")
+        )
+        if not set(wanted) <= options:
+            failures.append(f"{target} mounted with {sorted(options)}")
+    verity = ssh(
+        argv, "dmsetup table rootfs 2>/dev/null || veritysetup status rootfs"
+    ).stdout
+    if "panic_on_corruption" not in verity.replace("-", "_"):
+        failures.append("rootfs dm-verity does not panic on corruption")
+    # PR #1327 and #1329: no sysctl the kernel lacks, and no debug-level
+    # NVIDIA container runtime log.
+    shipped = ssh(
+        argv,
+        "grep -rhs unprivileged_userns_clone /etc/sysctl.d /usr/lib/sysctl.d; "
+        "systemctl show systemd-sysctl.service --property=Result --value; "
+        "grep -E '^[[:space:]]*log-level[[:space:]]*=' "
+        "/etc/nvidia-container-runtime/config.toml",
+    ).stdout.splitlines()
+    if shipped != ["success", 'log-level = "info"']:
+        failures.append(f"sysctl and NVIDIA runtime log configuration {shipped}")
     if failures:
         raise AssertionError("; ".join(failures))
     return {
+        "early_mount_options": EARLY_MOUNT_OPTIONS,
+        "verity_panic_on_corruption": True,
+        "nvidia_runtime_log_level": "info",
         "cmdline_mmconfig_enabled": True,
         "kernel_config_pins": sorted(KERNEL_CONFIG_PINS),
         "kernel_config_disabled": list(KERNEL_CONFIG_DISABLED),
@@ -504,7 +538,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-05",
                     "status": "PASS",
-                    "observed": "The booted kernel ran with MMCONFIG enabled and the declared Incus, SWIOTLB and driver-removal configuration; the NVIDIA userspace matched the candidate driver pin, resolved through the linker cache, and was held back from udev autoload behind topology-derived module options; the kernel build tree was absent from the measured rootfs; only dstack presets shipped with networkd-wait-online enabled; and rootfs tmpfiles were applied at build time without a boot-time tmpfiles.d entry, first-boot unit, or keep files.",
+                    "observed": "The booted kernel ran with MMCONFIG enabled and the declared Incus, SWIOTLB and driver-removal configuration; the NVIDIA userspace matched the candidate driver pin, resolved through the linker cache, and was held back from udev autoload behind topology-derived module options; the kernel build tree was absent from the measured rootfs; only dstack presets shipped with networkd-wait-online enabled; and rootfs tmpfiles were applied at build time without a boot-time tmpfiles.d entry, first-boot unit, or keep files; the initramfs API mounts carried nosuid/nodev/noexec, dm-verity panicked on corruption, no unknown sysctl shipped, and the NVIDIA container runtime logged at info.",
                 }
             )
             emit("step-05", "PASS")

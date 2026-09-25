@@ -124,6 +124,13 @@ The assertions are static image content and hold on a guest without a GPU.
   `/var/lib/tpm2-tss/system/keystore/.dstack-keep` are absent,
   `/var/lib/tpm2-tss/system/keystore` has mode `755`, and `/tapp` links to
   `dstack`.
+- `/proc` and `/sys` are mounted `nosuid,nodev,noexec`, `/run` `nosuid,nodev`,
+  and `/dev` `nosuid`; the `rootfs` dm-verity mapping carries
+  `panic_on_corruption`.
+- No file under `/etc/sysctl.d` or `/usr/lib/sysctl.d` sets
+  `kernel.unprivileged_userns_clone`, `systemd-sysctl.service` finished with
+  `success`, and `/etc/nvidia-container-runtime/config.toml` sets
+  `log-level = "info"`.
 
 ## Post-baseline regression coverage (PR #1156, #1157, #1160, #1173, #1177, #1181, #1182, #1191, #1192, #1220, #1226)
 
@@ -154,6 +161,18 @@ The assertions are static image content and hold on a guest without a GPU.
   shipping it in `tmpfiles.d`, where it re-ran against the read-only root on
   every boot, and drops the `dstack-firstboot.service` and `.dstack-keep`
   placeholders. Step 5 checks the booted result.
+
+## Post-baseline regression coverage (PRs #1274, #1327, and #1329)
+
+The mkosi build ships these files from the Yocto layer, so the Yocto-path
+changes reach every image:
+
+- PR #1274: the initramfs `init` mounts `/proc`, `/sys`, `/run`, and `/dev`
+  with the options systemd would use, since systemd keeps them as handed over,
+  and opens the verity rootfs with `--panic-on-corruption`.
+- PR #1327 drops `kernel.unprivileged_userns_clone`, which the dstack kernel
+  does not have, from `99-sysbox-sysctl.conf`.
+- PR #1329 stops the NVIDIA container runtime from logging at `debug`.
 
 ## Post-baseline regression matrix
 
