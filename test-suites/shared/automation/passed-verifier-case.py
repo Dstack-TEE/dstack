@@ -2702,6 +2702,8 @@ RESULT_DETAIL_FIELDS = (
     "key_provider",
     "app_info",
 )
+# Removed with the debug verification path (PR #1332); no result may carry them.
+REMOVED_DETAIL_FIELDS = ("acpi_tables", "rtmr_debug")
 # The stages a verification passes through, in the order they are decided, and
 # the diagnostic each one produces when it is the stage that failed.
 STAGE_ORDER = ("quote_verified", "event_log_verified", "os_image_hash_verified")
@@ -2744,6 +2746,8 @@ def check_schema(label: str, document: dict[str, Any]) -> None:
     details = document["details"]
     missing = sorted(set(RESULT_DETAIL_FIELDS) - set(details))
     require(not missing, f"{label} result omitted {missing}")
+    removed = sorted(set(REMOVED_DETAIL_FIELDS) & set(details))
+    require(not removed, f"{label} result still carried {removed}")
     require(
         isinstance(details["advisory_ids"], list),
         f"{label} advisory_ids was {type(details['advisory_ids']).__name__}, not a list",
@@ -2790,8 +2794,13 @@ def cli004_step01(ctx: Context) -> tuple[str, dict[str, Any]]:
         ctx.binary.is_file(), f"the prepared verifier binary is absent: {ctx.binary}"
     )
     ctx.load_corpus()
+    # Long enough for the image download to exhaust its retries (PR #1388),
+    # so the download row fails on the download, not on the timeout.
     ctx.config = write_config(  # type: ignore[attr-defined]
-        ctx.workdir / "schema.toml", ctx.port("aux1"), ctx.workdir / "schema-cache"
+        ctx.workdir / "schema.toml",
+        ctx.port("aux1"),
+        ctx.workdir / "schema-cache",
+        timeout_secs=10,
     )
     ctx.rows = schema_rows(ctx)  # type: ignore[attr-defined]
     existing = sorted(
@@ -2802,6 +2811,7 @@ def cli004_step01(ctx: Context) -> tuple[str, dict[str, Any]]:
         "binary": str(ctx.binary),
         "documented_top_fields": list(RESULT_TOP_FIELDS),
         "documented_detail_fields": list(RESULT_DETAIL_FIELDS),
+        "removed_detail_fields": list(REMOVED_DETAIL_FIELDS),
         "outcome_inputs": {label: path.name for label, path in ctx.rows.items()},  # type: ignore[attr-defined]
         "preexisting_results": existing,
     }
@@ -2969,6 +2979,14 @@ def input001_step02(ctx: Context) -> tuple[str, dict[str, Any]]:
         "conflicting top-level fields changed the authenticated attestation result",
     )
 
+    debug_path = ctx.workdir / "precedence-debug.json"
+    debug_path.write_text(json.dumps(dict(source, debug=True)), encoding="utf-8")
+    debug_row = run_oneshot(ctx, config, debug_path)
+    require(
+        debug_row["document"] == base["document"],
+        "the removed debug request field changed the verification result",
+    )
+
     reordered_path = ctx.workdir / "precedence-reordered.json"
     reordered_path.write_text(
         '{\n  "vm_config": "{not valid json",\n  "attestation": '
@@ -3011,11 +3029,13 @@ def input001_step02(ctx: Context) -> tuple[str, dict[str, Any]]:
     ctx.input001_base_sha = base["stdout_sha256"]  # type: ignore[attr-defined]
     return (
         "Authenticated attestation fields took precedence over conflicting top-level fields, "
+        "the removed debug field was ignored, "
         "JSON ordering did not change the result, raw and self-contained encodings projected the "
         "same identity, and duplicate attestation keys were rejected.",
         {
             "base_sha256": base["stdout_sha256"],
             "conflict_same_document": True,
+            "debug_field_ignored": True,
             "reordered_same_document": True,
             "raw_same_identity_fields": True,
             "duplicate": {
