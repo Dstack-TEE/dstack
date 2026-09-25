@@ -26,8 +26,7 @@ def machine_args(
     qemu: str = "9.2.1",
     hotplug_off: bool = True,
 ) -> list[str]:
-    """Spell out a measured VM shape, including every RTMR[0] input the
-    `measure` CLI defaults.
+    """Spell out a measured VM shape, including every defaulted RTMR[0] input.
 
     `--hotplug-off` reaches the ACPI tables, and its CLI default follows the
     VMM default (true since PR #1405, false before). Every row passes it

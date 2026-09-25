@@ -303,8 +303,7 @@ class MatrixRun:
         return True
 
     def free_ports(self, count: int) -> list[int]:
-        """Allocate ports absent from listeners, retained VMM configurations,
-        and every live case's reservations."""
+        """Allocate ports no listener, retained VM or live case holds."""
         configured = json.loads(run([*self.cli, "lsvm", "--json"]))
         reserved = {
             int(port["host_port"])
