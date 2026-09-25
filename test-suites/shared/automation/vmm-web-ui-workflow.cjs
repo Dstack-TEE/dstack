@@ -32,11 +32,24 @@ const fs = require('fs');
       key_provider: await page.locator('#keyProviderSelect').inputValue(),
       simulated_tee: await page.locator('#simulatedTeeSelect').inputValue(),
       event_log: await page.locator('#eventLogVersion').inputValue(),
+      disk_prealloc: await page.locator('#diskPrealloc').inputValue(),
     };
-    if (JSON.stringify(defaults) !== JSON.stringify({vcpu:'1',memory:'2',disk:'20',key_provider:'kms',simulated_tee:'',event_log:'1'})) {
+    if (JSON.stringify(defaults) !== JSON.stringify({vcpu:'1',memory:'2',disk:'20',key_provider:'kms',simulated_tee:'',event_log:'1',disk_prealloc:''})) {
       throw new Error(`unexpected defaults ${JSON.stringify(defaults)}`);
     }
     rows['unset-defaults'] = true;
+    // PR #1230: a block-reserving preallocation warns while Storage Discard is
+    // on, since the VMM rejects that pair; the default leaves the host setting.
+    const preallocHint = page.getByText('Turn Storage Discard off');
+    await page.locator('#diskPrealloc').selectOption('falloc');
+    const hintShown = await preallocHint.isVisible();
+    await page.locator('#diskPrealloc').selectOption('metadata');
+    const hintHiddenForMetadata = await preallocHint.count() === 0;
+    await page.locator('#diskPrealloc').selectOption('');
+    if (!hintShown || !hintHiddenForMetadata) {
+      throw new Error(`disk preallocation hint shown=${hintShown} hiddenForMetadata=${hintHiddenForMetadata}`);
+    }
+    rows['disk-prealloc-select'] = true;
     await page.locator('#vmName').fill(name);
     await page.locator('#vmImage').selectOption(image);
     await page.locator('#memory').fill('1');
@@ -132,6 +145,17 @@ const fs = require('fs');
     if (await peer.getByRole('heading', {name:'Deploy a new instance'}).count()) throw new Error('form leaked into second session');
     await peer.locator('.vm-row').filter({hasText:name}).waitFor({timeout:15000});
     rows['cross-session-isolation'] = true;
+
+    // PR #1282: the Images panel lists local images only; the registry
+    // section went with the OCI pull. The fresh page carries no toasts from
+    // the lifecycle actions above.
+    await peer.locator('.system-menu-btn').click();
+    await peer.locator('.system-dropdown').getByRole('button', {name: 'Images'}).click();
+    const imagesPanel = peer.locator('.process-manager-overlay').filter({has: peer.getByRole('heading', {name: 'Images', exact: true})});
+    await imagesPanel.waitFor({timeout: 10000});
+    await imagesPanel.locator('td').filter({hasText: image}).first().waitFor({timeout: 10000});
+    if (await imagesPanel.getByRole('heading', {name: 'Registry'}).count()) throw new Error('images panel still has a registry section');
+    rows['local-images-only'] = true;
     await second.close();
     await context.close();
     fs.writeFileSync(output, JSON.stringify({rows, defaults, alerts: alertMessages, vm_name:name}, null, 2));

@@ -18,6 +18,7 @@ CASE_ID = "tc-vmm-ui-observa-005"
 EXPECTED_ROWS = {
     "healthy-ui",
     "unset-defaults",
+    "disk-prealloc-select",
     "semantic-form",
     "simulated-platform",
     "network-selection",
@@ -30,6 +31,7 @@ EXPECTED_ROWS = {
     "ui-log-view",
     "status-filter",
     "cross-session-isolation",
+    "local-images-only",
 }
 
 
@@ -181,6 +183,7 @@ def main() -> int:
         if (
             configuration.get("disk_size") not in (21, "21")
             or configuration.get("user_config") != "ui-updated=true"
+            or configuration.get("disk_prealloc") != "off"
         ):
             raise AssertionError(
                 "UI update/resize was not reflected in public configuration"
@@ -195,6 +198,7 @@ def main() -> int:
                     "status": vm.get("status"),
                     "disk_size": configuration.get("disk_size"),
                     "user_config": configuration.get("user_config"),
+                    "disk_prealloc": configuration.get("disk_prealloc"),
                 },
             }
         )
