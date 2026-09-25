@@ -15,6 +15,32 @@ from pathlib import Path
 CASE_ID = "tc-ver-input-plat-006"
 MATRIX_TEST = "generated_quote_passes_real_qvl_and_negative_cases_fail"
 SERVICES = ("gcp-tdx", "aws-nitro-tpm")
+# TPM quotes and the collateral their certificates name are host-supplied:
+# PCR values must match the attested bank (PR #1275), duplicate PCR indices
+# are rejected before replay (PR #1267), only replayed entries of quoted PCRs
+# reach the report (PR #1338), and collateral fetching is bounded (PR #1238)
+# and limited to allowlisted hosts (PR #1404).
+NATIVE_ROWS = (
+    (
+        "tpm-qvl",
+        (
+            "verify::tests::rejects_pcr_values_whose_lengths_do_not_match_the_attested_bank",
+            "verify::tests::rejects_pcr_values_that_misname_the_attested_bank",
+            "verify::tests::rejects_duplicate_pcr_indices",
+            "verify::tests::event_log_keeps_only_quoted_pcrs",
+        ),
+    ),
+    (
+        "pki-fetch",
+        (
+            "tests::request_count_is_bounded",
+            "tests::downloaded_bytes_are_bounded",
+            "tests::total_time_is_bounded",
+            "tests::only_allowed_hosts_are_contacted",
+            "tests::host_patterns_match_within_one_label",
+        ),
+    ),
+)
 
 
 def run_docker_shell(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -66,6 +92,45 @@ def run_native_matrix(repository: Path) -> subprocess.CompletedProcess[str]:
         timeout=300,
         check=False,
     )
+
+
+def run_native_bounds(repository: Path) -> list[str]:
+    """Run each exact bound test; return the failures, or nothing."""
+    environment = os.environ.copy()
+    runtime = json.loads(Path(environment["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
+    environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
+    failures = []
+    for package, tests in NATIVE_ROWS:
+        completed = subprocess.run(
+            [
+                str(Path.home() / ".cargo/bin/cargo"),
+                "test",
+                "-p",
+                package,
+                "--lib",
+                "--",
+                "--exact",
+                *tests,
+            ],
+            cwd=repository / "dstack",
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=600,
+            check=False,
+        )
+        output = completed.stdout + completed.stderr
+        if (
+            completed.returncode
+            or f"test result: ok. {len(tests)} passed; 0 failed" not in output
+        ):
+            failures.append(f"{package} rc={completed.returncode}")
+        failures.extend(
+            f"{package}::{test}"
+            for test in tests
+            if f"test {test} ... ok" not in output
+        )
+    return failures
 
 
 def emit(step_id: str, status: str, observed: str) -> dict[str, str]:
@@ -139,11 +204,14 @@ def main() -> int:
             raise RuntimeError(
                 f"cloud TPM matrix failed with rc={matrix_run.returncode}"
             )
+        failures = run_native_bounds(repository)
+        if failures:
+            raise RuntimeError(f"TPM input bound tests failed: {failures}")
         steps.append(
             emit(
                 f"{CASE_ID}-step-02",
                 "PASS",
-                "The current source-defined TPM and TDX QVL tests accepted valid signed evidence and rejected wrong roots, tampered quotes, and mismatched report-data bindings.",
+                "The current source-defined TPM and TDX QVL tests accepted valid signed evidence and rejected wrong roots, tampered quotes, and mismatched report-data bindings; the exact bound tests rejected mislabelled, re-split, and duplicate PCR values, kept only quoted PCRs in the verified event log, bounded collateral fetching, and refused hosts outside the allowlist.",
             )
         )
         steps.append(

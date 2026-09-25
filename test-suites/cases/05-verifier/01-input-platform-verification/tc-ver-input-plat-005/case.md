@@ -65,6 +65,15 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1248, #1252, #1275, and #1279)
+
+Step 2 also runs these exact tests; each must pass by name:
+
+- #1248: `sev-snp-qvl` `tests::overlapping_certificate_table_entries_are_not_copied` -- kernel certificate-table entries are borrowed and overlapping entries are rejected rather than copied.
+- #1279: `sev-snp-qvl` `tests::a_short_report_without_a_cert_chain_is_rejected_rather_than_parsed`, and the `dstack-attest` integration test `sev_snp_verify::an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed`. An empty SNP report in a `/verify` body fails with `invalid amd sev-snp report length` instead of aborting the verifier process.
+- #1275: `dstack-mr` `sev::tests::verify_sev_launch_rejects_a_consistent_debugswap_guest`, `sev::tests::rejects_guest_features_outside_the_launch_allowlist`, and `sev::tests::a_duplicated_rootfs_hash_is_not_silently_resolved`. Only `SNPActive` is accepted in `SEV_FEATURES`, and a command line with two `dstack.rootfs_hash` values is rejected.
+- #1252: `dstack-mr` `sev::tests::page_budget_rejects_old_ceiling_and_admits_real_table`. The SEV-SNP metadata page budget is 65536 pages.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

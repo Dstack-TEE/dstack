@@ -14,6 +14,35 @@ from pathlib import Path
 
 CASE_ID = "tc-ver-input-plat-005"
 MATRIX_TEST = "generated_report_passes_real_qvl_and_negative_cases_fail"
+# Host-supplied SEV-SNP evidence and launch inputs are bounded before use:
+# overlapping certificate-table entries (PR #1248), an empty or short report
+# in a /verify body (PR #1279), guest features beyond SNPActive and duplicated
+# rootfs hashes (PR #1275), and the metadata page budget (PR #1252).
+NATIVE_ROWS = (
+    (
+        "sev-snp-qvl",
+        ("--lib",),
+        (
+            "tests::overlapping_certificate_table_entries_are_not_copied",
+            "tests::a_short_report_without_a_cert_chain_is_rejected_rather_than_parsed",
+        ),
+    ),
+    (
+        "dstack-attest",
+        ("--test", "sev_snp_verify"),
+        ("an_empty_snp_report_from_the_verify_body_is_rejected_rather_than_parsed",),
+    ),
+    (
+        "dstack-mr",
+        ("--lib",),
+        (
+            "sev::tests::verify_sev_launch_rejects_a_consistent_debugswap_guest",
+            "sev::tests::rejects_guest_features_outside_the_launch_allowlist",
+            "sev::tests::a_duplicated_rootfs_hash_is_not_silently_resolved",
+            "sev::tests::page_budget_rejects_old_ceiling_and_admits_real_table",
+        ),
+    ),
+)
 
 
 def run_docker_shell(command: str, timeout: int) -> subprocess.CompletedProcess[str]:
@@ -59,6 +88,37 @@ def run_native_matrix(repository: Path) -> subprocess.CompletedProcess[str]:
         timeout=300,
         check=False,
     )
+
+
+def run_native_bounds(repository: Path) -> list[str]:
+    """Run each exact bound test; return the failures, or nothing."""
+    cargo = Path.home() / ".cargo/bin/cargo"
+    environment = os.environ.copy()
+    runtime = json.loads(Path(environment["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
+    environment["CARGO_TARGET_DIR"] = str(runtime["cargo_target_dir"])
+    failures = []
+    for package, target, tests in NATIVE_ROWS:
+        completed = subprocess.run(
+            [str(cargo), "test", "-p", package, *target, "--", "--exact", *tests],
+            cwd=repository / "dstack",
+            env=environment,
+            text=True,
+            capture_output=True,
+            timeout=600,
+            check=False,
+        )
+        output = completed.stdout + completed.stderr
+        if (
+            completed.returncode
+            or f"test result: ok. {len(tests)} passed; 0 failed" not in output
+        ):
+            failures.append(f"{package} rc={completed.returncode}")
+        failures.extend(
+            f"{package}::{test}"
+            for test in tests
+            if f"test {test} ... ok" not in output
+        )
+    return failures
 
 
 def emit(step_id: str, status: str, observed: str) -> dict[str, str]:
@@ -128,11 +188,14 @@ def main() -> int:
             raise RuntimeError(
                 f"SEV-SNP mutation matrix failed with rc={matrix_run.returncode}"
             )
+        failures = run_native_bounds(repository)
+        if failures:
+            raise RuntimeError(f"SEV-SNP input bound tests failed: {failures}")
         steps.append(
             emit(
                 f"{CASE_ID}-step-02",
                 "PASS",
-                "The current source-defined QVL test accepted valid signed evidence and rejected a wrong VCEK root, a tampered authenticated report, and a mismatched report-data binding.",
+                "The current source-defined QVL test accepted valid signed evidence and rejected a wrong VCEK root, a tampered authenticated report, and a mismatched report-data binding; the exact bound tests rejected overlapping certificate-table entries, empty and short reports, unsupported guest features, duplicated rootfs hashes, and an oversized metadata page budget.",
             )
         )
         steps.append(
