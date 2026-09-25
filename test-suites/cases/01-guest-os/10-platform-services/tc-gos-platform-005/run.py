@@ -249,11 +249,11 @@ def audit_image_content(argv: list[str]) -> dict[str, Any]:
     # PR #1274: the initramfs applies systemd's options to the API mounts it
     # hands over, and a dm-verity mismatch panics instead of returning EIO.
     for target, wanted in EARLY_MOUNT_OPTIONS.items():
-        options = set(
+        mounted = set(
             ssh(argv, f"findmnt -no OPTIONS {target}").stdout.strip().split(",")
         )
-        if not set(wanted) <= options:
-            failures.append(f"{target} mounted with {sorted(options)}")
+        if not set(wanted) <= mounted:
+            failures.append(f"{target} mounted with {sorted(mounted)}")
     verity = ssh(
         argv, "dmsetup table rootfs 2>/dev/null || veritysetup status rootfs"
     ).stdout
