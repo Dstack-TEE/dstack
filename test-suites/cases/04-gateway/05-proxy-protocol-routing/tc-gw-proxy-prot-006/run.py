@@ -7,13 +7,25 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import select
 import socket
+import subprocess
 import ssl
 import threading
 import time
 from pathlib import Path
 
 CASE_ID = "tc-gw-proxy-prot-006"
+BURST = 6
+# PR #1245: a relay whose client stops reading is reaped by the idle timeout
+# on both offload paths, and a writer that accepts no bytes is an error.
+RELAY_TESTS = (
+    "proxy::splice::tests::a_client_that_stops_reading_is_reaped_by_the_idle_timeout",
+    "proxy::adaptive_ktls::tests::a_client_that_stops_reading_is_reaped_by_the_idle_timeout",
+    "proxy::io_bridge::tests::a_writer_that_accepts_no_bytes_is_an_error_not_a_spin",
+    "proxy::tls_passthough::tests::the_connection_limit_check_takes_the_slot",
+)
 
 
 def client_hello(server_name: str) -> bytes:
@@ -67,6 +79,32 @@ def closed_without_data(stream: socket.socket, timeout: float = 2.0) -> bool:
         return True
     except socket.timeout:
         return False
+
+
+def closed_within(streams: list[socket.socket], window: float) -> list[bool]:
+    """Classify which streams reach EOF or reset within one short window.
+
+    Admitted relays stay open; the window is kept below the 1 s idle timeout
+    so they are not reaped while they are classified.
+    """
+    closed = [False] * len(streams)
+    deadline = time.monotonic() + window
+    pending = set(range(len(streams)))
+    while pending and time.monotonic() < deadline:
+        ready, _, _ = select.select(
+            [streams[index] for index in pending],
+            [],
+            [],
+            max(0.0, deadline - time.monotonic()),
+        )
+        for stream in ready:
+            index = streams.index(stream)
+            pending.discard(index)
+            try:
+                closed[index] = stream.recv(64) == b""
+            except (ConnectionResetError, BrokenPipeError):
+                closed[index] = True
+    return closed
 
 
 def main() -> int:
@@ -175,18 +213,39 @@ def main() -> int:
     }
     streams: list[socket.socket] = []
     try:
-        streams = [routed_socket(proxy, route_name), routed_socket(proxy, route_name)]
+        # PR #1245: the limit check and the slot are taken in one atomic step,
+        # so a simultaneous burst cannot all pass on the same total.
+        start_line = threading.Barrier(BURST)
+        burst: list[socket.socket | None] = [None] * BURST
+
+        def open_one(index: int) -> None:
+            start_line.wait(5)
+            try:
+                burst[index] = routed_socket(proxy, route_name)
+            except OSError:
+                burst[index] = None
+
+        openers = [
+            threading.Thread(target=open_one, args=(index,)) for index in range(BURST)
+        ]
+        for opener in openers:
+            opener.start()
+        for opener in openers:
+            opener.join(10)
+        streams = [stream for stream in burst if stream is not None]
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline and len(handler_threads) < 2:
             time.sleep(0.02)
-        checks["two_connections_admitted"] = len(handler_threads) == 2
-        excess = routed_socket(proxy, route_name)
-        checks["third_connection_rejected"] = closed_without_data(excess)
-        excess.close()
         time.sleep(0.1)
+        checks["two_connections_admitted"] = len(handler_threads) == 2
+        outcomes = closed_within(streams, 0.4)
+        admitted = [stream for stream, closed in zip(streams, outcomes) if not closed]
+        checks["third_connection_rejected"] = (
+            len(streams) == BURST and sum(outcomes) == BURST - 2
+        )
         checks["excess_not_forwarded"] = len(handler_threads) == 2
         release_holds.set()
-        hold_markers = [stream.recv(16) for stream in streams]
+        hold_markers = [stream.recv(16) for stream in admitted]
         checks["admitted_connections_drained"] = sorted(hold_markers) == [
             b"hold-1",
             b"hold-2",
@@ -262,6 +321,32 @@ def main() -> int:
     checks["backend_observed_total_traffic"] = (
         int(by_mode.get("total-timeout", {}).get("echoed_bytes", 0)) >= 5
     )
+    unit = subprocess.run(
+        [
+            "cargo",
+            "test",
+            "--locked",
+            "--offline",
+            "-p",
+            "dstack-gateway",
+            "--",
+            "--exact",
+            *RELAY_TESTS,
+        ],
+        cwd=Path(runtime["repository"]) / "dstack",
+        env={**os.environ, "CARGO_TARGET_DIR": str(runtime["cargo_target_dir"])},
+        text=True,
+        capture_output=True,
+        timeout=600,
+        check=False,
+    )
+    unit_passed = sum(
+        int(value)
+        for value in re.findall(r"(\d+) passed; 0 failed", unit.stdout + unit.stderr)
+    )
+    checks["relay_unit_matrix"] = unit.returncode == 0 and unit_passed == len(
+        RELAY_TESTS
+    )
     passed = all(checks.values()) and not backend_errors
     status = "PASS" if passed else "FAIL"
     evidence = {
@@ -270,6 +355,8 @@ def main() -> int:
         "backend_session_count": len(handler_threads),
         "backend_observations": observations,
         "backend_error_types": backend_errors,
+        "burst_size": BURST,
+        "relay_unit_passed": unit_passed,
         "retained_identifiers_or_endpoints": False,
     }
     artifact = result_dir / "artifacts/gateway-proxy-lifecycle.json"
