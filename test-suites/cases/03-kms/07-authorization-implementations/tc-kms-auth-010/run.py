@@ -139,6 +139,8 @@ def main() -> int:
             "silent-backend-bounded-by-request-timeout",
             "multibyte-backend-response-bounded-without-abort",
             "no-decision-state-across-process-restart",
+            "multibyte-backend-body-on-quoting-bound-does-not-abort",
+            "quoted-backend-body-bounded-in-bytes-on-a-character-boundary",
         ],
         "decision_cache_present": False,
         "private_material_exported": False,
