@@ -74,6 +74,15 @@ Generate ACPI for every supported QEMU profile and version clamp, compare seeded
 - PR #1145 and PR #1214: every bridge NIC uses the netd-built TAP as `-netdev tap,...,ifname=<tap>,script=no,downscript=no` (no `qemu-bridge-helper`), vhost-net is `on`/`off` per the resolved setting, multiqueue bridge and macvtap NICs derive `queues=` and MSI-X vectors from vCPU count capped at 16, macvtap takes one inherited descriptor per queue, user mode keeps its netdev and a single queue whatever vhost says, custom netdevs are passed through unmodified, and a node that never enabled vhost keeps the pre-change device shape.
 - PR #1065: GPU sanitization issues a VFIO PCI hot reset instead of writing Bridge Control through sysfs. The unit rows prove slot normalization, dedicated-upstream-bridge detection, refusal when the bridge is shared with another device, and skipping when passthrough or sanitization is disabled. Two mandatory CPU-only CLI rows run `dstack-vmm sanitize-gpu` with no slot (usage error) and with a PCI slot absent from the host (`failed to resolve PCI device`), and require a non-zero exit before any hot reset is issued. A real hot reset of an attached GPU requires GPU hardware and stays in the hardware-gated `tc-vmm-compute-ne-004`.
 
+## Post-baseline regression coverage (PR #1364, PR #1346, PR #1286, PR #1351, PR #1230)
+
+Each row passes only when every named `dstack-vmm` unit test reports `ok`.
+
+- `resource-bounds` (PR #1364): `round_up` saturates instead of wrapping, and a deployment with zero memory is refused. The zero vCPU/memory/disk refusals over pRPC are in `tc-vmm-vmm-001`.
+- `listed-gpu-policy` (PR #1346): a listed slot that `ListGpus` does not offer, including one carrying QEMU option separators (`0000:0f:00.0,romfile=...`), is refused before it reaches `-device vfio-pci`. The fixture node has GPU passthrough disabled, so the pRPC path stops at `GPU is not enabled`; the offered-device check on a GPU host belongs to `tc-vmm-compute-ne-004`.
+- `update-validation` (PR #1286, PR #1351): a mapping the VM already holds stays accepted after the node disables or narrows port mapping, a new one is refused, and a rejected update leaves the stored compose file untouched. The pRPC rows are in `tc-vmm-compute-ne-002`.
+- `disk-preallocation` (PR #1230): `off` builds the pre-change `qemu-img create` arguments; `metadata`/`falloc`/`full` add `preallocation=` and, on a backing file, `extended_l2=on`; a `falloc` disk on a backing file reserves its size (skipped by the test itself where `qemu-img` is absent); a leftover `hda.img.partial` is never booted; the node default applies when the request is unset or empty; and `falloc`/`full` are refused while the compose file lets the guest discard. The pRPC rows are in `tc-vmm-vmm-001` and `tc-vmm-vm-lifecyc-003`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
