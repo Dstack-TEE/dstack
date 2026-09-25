@@ -12,7 +12,11 @@ Invariants asserted for every method, whatever it means:
   L4  a rejection neither echoes an unbounded amount of input nor grows with
       the field it refused;
   L5  no request exceeds the per-call deadline;
-  L6  a rejection's ``Content-Type`` matches the request's representation.
+  L6  a rejection's ``Content-Type`` matches the request's representation;
+  L7  caller-supplied text cannot start a line in the service log.
+
+L4 also bounds the error text itself: ra-rpc caps it at 2 KiB, eliding the
+middle, whatever the size of the value it quotes.
 """
 
 from __future__ import annotations
@@ -27,6 +31,8 @@ CALL_TIMEOUT = 20
 # A rejection may quote the value it refused, but must not scale with it.
 MAX_ECHO = 8192
 MAX_ECHO_SCALING = 256
+# ra-rpc's `MAX_ERROR_TEXT` plus the "... N bytes elided ..." marker.
+MAX_ERROR_TEXT = 2048 + 64
 
 
 @dataclass
@@ -396,6 +402,14 @@ def check_invariants(calls: list[Call], echoed_markers: dict[str, str]) -> list[
                         **base,
                         "invariant": "L4",
                         "detail": f"rejection body is {len(call.body)} bytes",
+                    }
+                )
+            elif len((detail or "").encode()) > MAX_ERROR_TEXT:
+                violations.append(
+                    {
+                        **base,
+                        "invariant": "L4",
+                        "detail": f"error text is {len((detail or '').encode())} bytes",
                     }
                 )
             if (

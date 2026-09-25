@@ -67,9 +67,11 @@ and elapsed time of each call.
 - **L2** A rejected JSON request gets a JSON `error` string; a rejected
   protobuf request gets a decodable `ProtoError`.
 - **L4** No rejection echoes the unknown-field marker or grows with the size
-  of the field it refused.
+  of the field it refused, and no error text exceeds 2 KiB plus the elision
+  marker: ra-rpc bounds it and drops the middle (PR #1234).
 - **L5** No request exceeds the per-call deadline.
 - **L6** A rejection's `Content-Type` matches the request's representation.
+  Since PR #1234 this includes a JSON request refused before dispatch.
 
 <a id="tc-gos-contract-001-step-03"></a>
 ### Step 3: Verify the listener survived

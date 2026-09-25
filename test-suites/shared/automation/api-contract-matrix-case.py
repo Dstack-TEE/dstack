@@ -24,6 +24,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -42,6 +43,8 @@ from api_contract_matrix import (  # noqa: E402
 HERE = pathlib.Path(__file__).resolve().parent
 UNKNOWN_JSON_FIELD = "dstack_contract_matrix_unknown_field"
 ECHO_MARKER = "DSTACK-ECHO-MARKER-7f3a1c"
+# Sent after a percent-encoded line break in the method segment (L7).
+FORGED_MARKER = "DSTACK-FORGED-LOG-LINE-4c2e9b"
 # A run-scoped name no fixture provisions, so lookups miss and creates cannot collide.
 SCOPED = "dstack-contract-matrix"
 
@@ -412,8 +415,60 @@ def sweep_full(
     return calls
 
 
+def probe_log_forging(
+    target: Target, method: str, log_path: pathlib.Path
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Send a method name carrying a line break and inspect the service log."""
+    baseline = log_path.stat().st_size if log_path.is_file() else 0
+    call = invoke(
+        target,
+        method,
+        "application/json",
+        b"{}",
+        "log-forging|method-line-break",
+        "json",
+        route_override=target.route(method) + f"%0A{FORGED_MARKER}%20INFO%20forged",
+    )
+    logged: list[str] = []
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        with log_path.open("rb") as stream:
+            stream.seek(baseline)
+            text = stream.read().decode("utf-8", errors="replace")
+        logged = [line for line in text.splitlines() if FORGED_MARKER in line]
+        if logged:
+            break
+        time.sleep(0.2)
+    forged = [line for line in logged if line.lstrip().startswith(FORGED_MARKER)]
+    observation = {
+        "http": call.http,
+        "marker_lines": len(logged),
+        "forged_lines": len(forged),
+    }
+    violations = []
+    if not logged or forged:
+        violations.append(
+            {
+                "label": call.label,
+                "method": method,
+                "representation": "json",
+                "http": call.http,
+                "seconds": round(call.seconds, 3),
+                "invariant": "L7",
+                "detail": "the probe was not logged"
+                if not logged
+                else f"{len(forged)} log lines began with caller-supplied text",
+            }
+        )
+    return observation, violations
+
+
 def run(
-    target: Target, inventory: dict[str, Any], component: str, service: str
+    target: Target,
+    inventory: dict[str, Any],
+    component: str,
+    service: str,
+    log_path: pathlib.Path | None = None,
 ) -> dict[str, Any]:
     """Run the matrix for one service and return the evidence document."""
     entries, applied = service_policy(inventory, component, service)
@@ -444,6 +499,10 @@ def run(
         calls.extend(sweep_framing(target, live))
 
     violations = check_invariants(calls, markers)
+    log_forging: dict[str, Any] | None = None
+    if live is not None and log_path is not None:
+        log_forging, forging_violations = probe_log_forging(target, live, log_path)
+        violations.extend(forging_violations)
 
     if live is not None:
         liveness = invoke(
@@ -481,6 +540,7 @@ def run(
         "liveness_method": live,
         "status_histogram": histogram,
         "max_seconds": round(max((c.seconds for c in calls), default=0.0), 3),
+        "log_forging": log_forging,
         "violations": violations,
         "observations": [
             {
@@ -561,6 +621,14 @@ def resolve_target(manifest: dict[str, Any], selector: str, service: str) -> Tar
         headers=headers,
         curl_extra=["--insecure"],
     )
+
+
+def resolve_log(manifest: dict[str, Any], selector: str) -> pathlib.Path | None:
+    """Return the service log a selector's listener writes to, where published."""
+    if not selector.startswith("gateway-"):
+        return None
+    log = (manifest["values"].get("gateway") or {}).get("log")
+    return pathlib.Path(str(log)) if log else None
 
 
 def standalone() -> int:
@@ -653,14 +721,23 @@ def main() -> int:
         )
 
         print(f"STEP {case_id}-step-02 START", flush=True)
-        report.update(run(target, inventory, component, service))
+        report.update(
+            run(
+                target,
+                inventory,
+                component,
+                service,
+                resolve_log(manifest, selector),
+            )
+        )
         violations = report["violations"]
         require([v for v in violations if v["invariant"] != "L3"])
         print(json.dumps(report["status_histogram"], sort_keys=True), flush=True)
         passed(
             2,
             f"{report['calls']} adversarial requests across {len(applied)} methods "
-            "held invariants L1, L2, L4, L5 and L6.",
+            "held invariants L1, L2, L4, L5, L6"
+            + (" and L7." if report.get("log_forging") is not None else "."),
         )
 
         print(f"STEP {case_id}-step-03 START", flush=True)
