@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import atexit
 import base64
-import hashlib
-import io
 import json
 import os
 import secrets
@@ -17,7 +15,6 @@ import shutil
 import socket
 import subprocess
 import sys
-import tarfile
 import time
 from pathlib import Path
 from typing import Any
@@ -776,232 +773,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     list(Path("/sys/devices/system/node").glob("node[0-9]*"))
                 ),
             }
-        registry_actions = {
-            "Vmm.PullRegistryImage",
-            "Registry authentication pull and extraction",
-        }
-        image_registry = ""
-        registry_tag = "fixture"
-        registry_ca = ""
-        if registry_actions & actions:
-            registry_helper = (
-                plan_root / "shared/fixtures/providers/mock-oci-registry.py"
-            )
-            if not registry_helper.is_file():
-                fail("mock OCI registry helper is unavailable")
-            registry_dir = workspace / "data/oci-registry"
-            registry_dir.mkdir()
-            metadata_layer = registry_dir / "metadata-layer.tar.gz"
-            payload_layer = registry_dir / "payload-layer.tar.gz"
-            traversal_layer = registry_dir / "traversal-layer.tar.gz"
-            control = registry_dir / "control.json"
-            metadata = source_image_store / test_image / "metadata.json"
-            if not metadata.is_file():
-                fail("prepared image metadata is unavailable for OCI fixture")
-            fixture_metadata = json.loads(metadata.read_text(encoding="utf-8"))
-            fixture_metadata.update(
-                {
-                    "kernel": "fixture.bin",
-                    "initrd": "fixture.bin",
-                    "hda": None,
-                    "rootfs": None,
-                    "bios": None,
-                    "bios-sev": None,
-                }
-            )
-            registry_metadata = registry_dir / "metadata.json"
-            registry_metadata.write_text(
-                json.dumps(fixture_metadata, separators=(",", ":")),
-                encoding="utf-8",
-            )
-            fixture_blob = registry_dir / "fixture.bin"
-            fixture_blob.write_bytes(b"dstack-test-registry-image" + bytes([10]))
-            with tarfile.open(metadata_layer, "w:gz") as archive:
-                archive.add(registry_metadata, arcname="metadata.json")
-            with tarfile.open(payload_layer, "w:gz") as archive:
-                archive.add(fixture_blob, arcname="fixture.bin")
-            traversal_info = tarfile.TarInfo("../registry-escape")
-            traversal_data = b"must-not-escape" + bytes([10])
-            traversal_info.size = len(traversal_data)
-            with tarfile.open(traversal_layer, "w:gz") as archive:
-                archive.addfile(traversal_info, io.BytesIO(traversal_data))
-
-            def descriptor(path: Path) -> dict[str, object]:
-                return {
-                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
-                    "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
-                    "size": path.stat().st_size,
-                }
-
-            metadata_descriptor = descriptor(metadata_layer)
-            payload_descriptor = descriptor(payload_layer)
-            traversal_descriptor = descriptor(traversal_layer)
-            manifest_base = {
-                "schemaVersion": 2,
-                "mediaType": "application/vnd.oci.image.manifest.v1+json",
-                "config": {
-                    "mediaType": "application/vnd.oci.image.config.v1+json",
-                    "digest": "sha256:" + "0" * 64,
-                    "size": 2,
-                },
-            }
-            normal_manifest = {
-                **manifest_base,
-                "layers": [metadata_descriptor, payload_descriptor],
-            }
-            traversal_manifest = {
-                **manifest_base,
-                "layers": [metadata_descriptor, traversal_descriptor],
-            }
-            control.write_text(
-                json.dumps(
-                    {"variant": "normal", "auth_required": True, "fault": "none"}
-                ),
-                encoding="utf-8",
-            )
-            registry_tag = f"dstack-fixture-{lease_id[-12:]}"
-            registry_config = registry_dir / "registry.json"
-            registry_config.write_text(
-                json.dumps(
-                    {
-                        "repo": "dstack/guest-image",
-                        "tag": registry_tag,
-                        "control": str(control),
-                        "variants": {
-                            "normal": {
-                                "manifest": normal_manifest,
-                                "blobs": {
-                                    metadata_descriptor["digest"]: str(metadata_layer),
-                                    payload_descriptor["digest"]: str(payload_layer),
-                                },
-                            },
-                            "traversal": {
-                                "manifest": traversal_manifest,
-                                "blobs": {
-                                    metadata_descriptor["digest"]: str(metadata_layer),
-                                    traversal_descriptor["digest"]: str(
-                                        traversal_layer
-                                    ),
-                                },
-                            },
-                        },
-                    },
-                    separators=(",", ":"),
-                ),
-                encoding="utf-8",
-            )
-            ca_cert = registry_dir / "ca.crt"
-            ca_key = registry_dir / "ca.key"
-            cert = registry_dir / "server.crt"
-            key = registry_dir / "server.key"
-            csr = registry_dir / "server.csr"
-            extensions = registry_dir / "server.ext"
-            extensions.write_text(
-                "subjectAltName=IP:127.0.0.1\n"
-                "basicConstraints=critical,CA:FALSE\n"
-                "keyUsage=digitalSignature,keyEncipherment\n"
-                "extendedKeyUsage=serverAuth\n",
-                encoding="utf-8",
-            )
-            generated_ca = subprocess.run(
-                [
-                    "openssl",
-                    "req",
-                    "-x509",
-                    "-newkey",
-                    "rsa:2048",
-                    "-nodes",
-                    "-days",
-                    "1",
-                    "-subj",
-                    "/CN=dstack-test-oci-ca",
-                    "-addext",
-                    "basicConstraints=critical,CA:TRUE,pathlen:0",
-                    "-keyout",
-                    str(ca_key),
-                    "-out",
-                    str(ca_cert),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            generated_server = subprocess.run(
-                [
-                    "openssl",
-                    "req",
-                    "-new",
-                    "-newkey",
-                    "rsa:2048",
-                    "-nodes",
-                    "-subj",
-                    "/CN=127.0.0.1",
-                    "-keyout",
-                    str(key),
-                    "-out",
-                    str(csr),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            signed = subprocess.run(
-                [
-                    "openssl",
-                    "x509",
-                    "-req",
-                    "-days",
-                    "1",
-                    "-in",
-                    str(csr),
-                    "-CA",
-                    str(ca_cert),
-                    "-CAkey",
-                    str(ca_key),
-                    "-CAcreateserial",
-                    "-extfile",
-                    str(extensions),
-                    "-out",
-                    str(cert),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            if (
-                generated_ca.returncode
-                or generated_server.returncode
-                or signed.returncode
-            ):
-                detail = generated_ca.stderr + generated_server.stderr + signed.stderr
-                fail(f"failed to generate OCI registry certificate: {detail[-500:]}")
-            ca_key.chmod(0o600)
-            key.chmod(0o600)
-            registry = start_component(
-                [
-                    sys.executable,
-                    str(registry_helper),
-                    "--port",
-                    str(port_map["aux2"]),
-                    "--cert",
-                    str(cert),
-                    "--key",
-                    str(key),
-                    "--config",
-                    str(registry_config),
-                ],
-                workspace / "logs/oci-registry.log",
-                port_map["aux2"],
-            )
-            pids.append(registry.pid)
-            image_registry = f"127.0.0.1:{port_map['aux2']}/dstack/guest-image"
-            registry_ca = str(ca_cert)
         auth_token = (
             secrets.token_hex(32)
             if "External API authentication and listener separation" in actions
@@ -1130,18 +901,17 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             port_map["rpc"],
             port_map["aux1"],
             cid_start,
-            image_registry,
-            auth_token,
-            kms_url,
-            bool(
+            auth_token=auth_token,
+            kms_url=kms_url,
+            disable_auto_restart=bool(
                 {"Vmm.SvStop", "Vmm.SvRemove", "Supervisor passthrough operations"}
                 & actions
             ),
-            simulator_seed,
-            host_sealing,
-            "Port mapping protocols and conflicts" in actions,
-            volumes_dir,
-            4096
+            simulator_seed=simulator_seed,
+            enable_key_provider=host_sealing,
+            enable_port_mapping="Port mapping protocols and conflicts" in actions,
+            volumes_dir=volumes_dir,
+            log_max_bytes=4096
             if "CVM log rotation retention and follow continuity" in actions
             else 0,
             supervisor_socket=supervisor_socket,
@@ -1162,7 +932,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 [str(binary), "--config", str(config)],
                 workspace / "logs/vmm.log",
                 port_map["rpc"],
-                env={"SSL_CERT_FILE": registry_ca} if registry_ca else None,
                 cwd=workspace,
             )
         except BaseException:
@@ -1220,8 +989,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "SvList",
             "SvStop",
             "SvRemove",
-            "ListRegistryImages",
-            "PullRegistryImage",
             "DeleteImage",
         )
         values["vmm"] = {
@@ -1306,15 +1073,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                 "created_vms_registry": str(created_vms),
                 "deletable_image": deletable_images[0] if deletable_images else "",
                 "deletable_images": deletable_images,
-                "registry": image_registry,
-                "registry_tag": registry_tag,
-                "registry_control": str(control) if "control" in locals() else "",
-                "registry_workspace": (
-                    str(registry_dir) if "registry_dir" in locals() else ""
-                ),
-                "registry_image_store": (
-                    str(case_image_store) if "case_image_store" in locals() else ""
-                ),
                 "port_mapping": (
                     {"protocols": ["tcp", "udp"], "min": 20000, "max": 65535}
                     if "Port mapping protocols and conflicts" in actions
