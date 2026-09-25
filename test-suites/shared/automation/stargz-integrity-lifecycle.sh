@@ -193,14 +193,65 @@ blob_size=$(stat -c %s "$blob")
 check test "$blob_size" -gt 128
 original_blob_sha=$(sha256sum "$blob" | awk '{print $1}')
 check test "sha256:$original_blob_sha" = "$corrupt_layer"
-python3 - "$blob" <<'PY'
+# Corrupt the marker's own payload. A lazy mount reads a file only through its
+# TOC entry, so a flip elsewhere (the prefetch landmark, a tar header member)
+# is never read and proves nothing; the blob midpoint landed there at times.
+check python3 - "$blob" <<'PY'
+import io
+import json
 import pathlib
+import re
 import sys
+import tarfile
+import zlib
 
 path = pathlib.Path(sys.argv[1])
 data = bytearray(path.read_bytes())
-offset = len(data) // 2
-data[offset] ^= 0xFF
+footer = re.search(rb"([0-9a-f]{16})STARGZ", bytes(data[-51:]))
+if footer is None:
+    sys.exit("layer has no eStargz footer")
+
+
+def member(start):
+    """Decompress one gzip member and return its bytes and end offset."""
+    inflater = zlib.decompressobj(31)
+    plain = inflater.decompress(bytes(data[start:]))
+    if not inflater.eof:
+        raise SystemExit("truncated gzip member")
+    return plain, len(data) - len(inflater.unused_data)
+
+
+toc_tar, _ = member(int(footer.group(1), 16))
+with tarfile.open(fileobj=io.BytesIO(toc_tar)) as archive:
+    toc = json.load(archive.extractfile("stargz.index.json"))
+entries = [
+    entry
+    for entry in toc["entries"]
+    if entry.get("type") in {"reg", "chunk"}
+    and entry.get("name", "").lstrip("./") == "integrity-marker"
+]
+if len(entries) != 1:
+    sys.exit(f"expected one integrity-marker payload entry, found {len(entries)}")
+marker = b"integrity-marker"
+start = int(entries[0]["offset"])
+original, end = member(start)
+# The payload member starts with the payload; tar padding and the next
+# entry's header can follow it in the same member.
+if not original.startswith(marker):
+    sys.exit("integrity-marker entry does not start with the marker payload")
+# Flip the first deflate byte (after the 10-byte gzip header) that changes
+# the marker bytes a lazy read would return.
+for position in range(start + 10, end - 8):
+    data[position] ^= 0xFF
+    try:
+        corrupted, _ = member(start)
+    except (SystemExit, zlib.error):
+        corrupted = b""
+    if not corrupted.startswith(marker):
+        break
+    data[position] ^= 0xFF
+else:
+    sys.exit("no single-byte flip changed the marker payload")
 path.write_bytes(data)
 PY
 mutated_blob_sha=$(sha256sum "$blob" | awk '{print $1}')
