@@ -114,6 +114,63 @@ def vendor_dropin_locations(argv: list[str]) -> dict[str, list[str]]:
     return {unit: effective.get(unit, []) for unit in expected}
 
 
+def unit_properties(argv: list[str], unit: str, properties: str) -> dict[str, str]:
+    """Read one unit's properties as a name-to-value map."""
+    shown = ssh(
+        argv,
+        f"systemctl show {shlex.quote(unit)} --property={properties} --no-pager",
+    ).stdout
+    return dict(line.split("=", 1) for line in shown.splitlines() if "=" in line)
+
+
+def boot_unit_edges(argv: list[str]) -> dict[str, Any]:
+    """Require the boot-chain edges added after the baseline (PRs #1322, #1324, #1328, #1341)."""
+    problems = []
+    agent = unit_properties(argv, SERVICE, "After,OnFailure")
+    after = agent.get("After", "").split()
+    if "dstack-prepare.service" not in after or "tboot.service" in after:
+        problems.append("guest agent is not ordered after dstack-prepare alone")
+    app = unit_properties(
+        argv, "app-compose.service", "Requires,OnFailure,ExecStart,EnvironmentFiles"
+    )
+    requires = app.get("Requires", "").split()
+    for unit in ("dstack-prepare.service", "dstack-guest-agent.service"):
+        if unit not in requires:
+            problems.append(f"app-compose does not require {unit}")
+    if "exec-with-env" not in app.get("ExecStart", "") or ".decrypted-env.json" not in (
+        app.get("ExecStart", "")
+    ):
+        problems.append("app-compose does not start through dstack-util exec-with-env")
+    if app.get("EnvironmentFiles"):
+        problems.append("app-compose still loads an EnvironmentFile")
+    docker = unit_properties(argv, "docker.service", "OnFailure,TimeoutStartUSec")
+    if docker.get("TimeoutStartUSec") in (None, "", "infinity", "0"):
+        problems.append("docker waits for the guest agent without a start timeout")
+    for unit, properties in (
+        (SERVICE, agent),
+        ("app-compose.service", app),
+        ("docker.service", docker),
+    ):
+        if f"dstack-boot-error@{unit}.service" not in properties.get("OnFailure", ""):
+            problems.append(f"{unit} does not report failure through dstack-boot-error")
+    reporter = unit_properties(
+        argv, "dstack-boot-error@app-compose.service.service", "LoadState,ExecStart"
+    )
+    if reporter.get("LoadState") != "loaded" or "boot.error" not in reporter.get(
+        "ExecStart", ""
+    ):
+        problems.append("dstack-boot-error@.service does not notify boot.error")
+    if problems:
+        raise AssertionError("; ".join(problems))
+    return {
+        "agent_after_prepare": True,
+        "app_requires_prepare_and_agent": True,
+        "app_exec_with_env": True,
+        "docker_start_timeout": docker.get("TimeoutStartUSec"),
+        "boot_error_reporters": [SERVICE, "app-compose.service", "docker.service"],
+    }
+
+
 def emit(step: str, state: str) -> None:
     """Emit one live step transition."""
     print(f"STEP {CASE_ID}-{step} {state}", flush=True)
@@ -176,6 +233,7 @@ def main() -> int:
                     f"runtime graph omitted declared tokens: {missing}"
                 )
             dropins = vendor_dropin_locations(ssh_argv)
+            edges = boot_unit_edges(ssh_argv)
             primary_before = wait_rpc(primary_url)
             peer_before = wait_rpc(peer_url)
             peer_state_before = ssh(
@@ -190,6 +248,7 @@ def main() -> int:
             observations["baseline"] = {
                 "declared_graph_tokens_present": True,
                 "vendor_dropins": dropins,
+                "boot_unit_edges": edges,
                 "primary_peer_distinct": True,
                 "peer_system_state": peer_state_before,
                 "graph_sha256": hashlib.sha256(graph.encode()).hexdigest(),
@@ -198,7 +257,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-01",
                     "status": "PASS",
-                    "observed": "Runtime unit properties contained the checked-in prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and gateway-checker node; image-shipped drop-ins loaded from /usr/lib/systemd/system rather than /etc; primary and peer identities were distinct and healthy.",
+                    "observed": "Runtime unit properties contained the checked-in prepare failure action, guest-agent socket/watchdog/restart edges, app-compose Docker/containerd ordering, and gateway-checker node; image-shipped drop-ins loaded from /usr/lib/systemd/system rather than /etc; the guest agent followed dstack-prepare, app-compose required prepare and the agent and started through exec-with-env, docker had a bounded start, and each reported failure through dstack-boot-error@; primary and peer identities were distinct and healthy.",
                 }
             )
             emit("step-01", "PASS")
