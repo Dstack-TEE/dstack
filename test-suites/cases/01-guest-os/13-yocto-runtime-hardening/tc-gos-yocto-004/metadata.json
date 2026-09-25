@@ -31,6 +31,6 @@
   "execution": {
     "entrypoint": "run.py",
     "args": [],
-    "timeout_seconds": 60
+    "timeout_seconds": 360
   }
 }
