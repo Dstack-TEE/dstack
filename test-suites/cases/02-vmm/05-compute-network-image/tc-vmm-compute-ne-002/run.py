@@ -112,14 +112,16 @@ def main() -> int:
             ports.append(vm_id)
         return code, vm_id
 
-    def persisted_ports(vm_id: str) -> list[dict[str, Any]]:
+    def persisted_config(vm_id: str) -> dict[str, Any]:
         code, raw = call(base, headers, "Status", {"ids": [vm_id]})
         value = json.loads(raw or b"null") if code == 200 else None
         vms = value.get("vms", []) if isinstance(value, dict) else []
         if len(vms) != 1:
             raise AssertionError(f"Status did not return VM {vm_id}")
-        config = vms[0].get("configuration") or {}
-        return list(config.get("ports") or [])
+        return vms[0].get("configuration") or {}
+
+    def persisted_ports(vm_id: str) -> list[dict[str, Any]]:
+        return list(persisted_config(vm_id).get("ports") or [])
 
     try:
         minimum = int(policy["min"])
@@ -177,6 +179,75 @@ def main() -> int:
                 "existing_status": conflict,
                 "update_status": update_code,
                 "reset_status": reset_code,
+            }
+        )
+        # PR #1286: UpdateVm applies the node's port-mapping policy to every
+        # mapping the VM does not already hold, and an empty host address
+        # takes the policy address as CreateVm does. PR #1351: the rejected
+        # update writes nothing, including the compose file sent with it.
+        compose_before = persisted_config(primary).get("compose_file")
+        changed_compose = json.loads(template["compose_file"])
+        changed_compose["name"] = f"dtest-{nonce}-rejected-update"
+        below = minimum - 1
+        policy_code, policy_raw = call(
+            base,
+            headers,
+            "UpdateVm",
+            {
+                "id": primary,
+                "compose_file": json.dumps(changed_compose),
+                "update_ports": True,
+                "ports": [tcp(below, 8090)],
+            },
+        )
+        policy_error = str((json.loads(policy_raw or b"{}") or {}).get("error", ""))
+        if (
+            policy_code < 400
+            or f"Port mapping is not allowed for tcp:{below}" not in policy_error
+        ):
+            raise AssertionError(
+                f"UpdateVm accepted a mapping outside the node policy: {policy_code}"
+            )
+        after = persisted_config(primary)
+        if after.get("ports") or after.get("compose_file") != compose_before:
+            raise AssertionError(
+                "rejected UpdateVm changed the stored ports or compose"
+            )
+        default_code, _ = call(
+            base,
+            headers,
+            "UpdateVm",
+            {
+                "id": primary,
+                "update_ports": True,
+                "ports": [dict(tcp(p3, 8091), host_address="")],
+            },
+        )
+        default_ports = persisted_ports(primary)
+        if (
+            default_code != 200
+            or len(default_ports) != 1
+            or default_ports[0].get("host_address") != "127.0.0.1"
+        ):
+            raise AssertionError(
+                f"empty host address did not take the policy address: {default_code}"
+            )
+        clear_code, _ = call(
+            base,
+            headers,
+            "UpdateVm",
+            {"id": primary, "update_ports": True, "ports": []},
+        )
+        if clear_code != 200 or persisted_ports(primary):
+            raise AssertionError("port reset after the policy rows failed")
+        observations["operations"].append(
+            {
+                "operation": "update_policy_matrix",
+                "below_policy_update_status": policy_code,
+                "below_policy_update_error": policy_error[:300],
+                "rejected_update_left_compose_and_ports": True,
+                "empty_host_address_update_status": default_code,
+                "empty_host_address_persisted": default_ports[0].get("host_address"),
             }
         )
         # PR #1213: a mapping may name the NIC its traffic enters through.
@@ -242,7 +313,7 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-02",
                 "status": "PASS",
-                "observed": "Duplicate and existing-VM conflicts were rejected; replacement and reset succeeded; NIC-pinned mappings persisted and pins to a missing NIC were refused at create and update without mutation.",
+                "observed": "Duplicate and existing-VM conflicts were rejected; replacement and reset succeeded; UpdateVm enforced the node port policy without partial writes and defaulted an empty host address; NIC-pinned mappings persisted and pins to a missing NIC were refused at create and update without mutation.",
             }
         )
         print(f"STEP {case_id}-step-02 END - PASS", flush=True)
