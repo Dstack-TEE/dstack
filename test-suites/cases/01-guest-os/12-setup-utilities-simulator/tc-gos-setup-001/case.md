@@ -74,6 +74,18 @@ Repeat the pure conversion, verify deterministic ordering and output isolation, 
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1243)
+
+- A backslash in a value is escaped as `\\` and forces quoting, so a value
+  ending in `\` or containing `\"` can no longer close the quoted systemd
+  `EnvironmentFile=` value early. The probe requires `trail\` to convert to
+  `A="trail\\"`, `a\"b` to `B="a\\\"b"`, and the mixed Unicode value to keep
+  its escaped backslash before the escaped quote.
+- The candidate module's own tests now run in the probe crate, including the
+  round trip through `systemd-run --user --property=EnvironmentFile=`, which
+  skips itself on a host without a systemd user manager. The probe crate
+  therefore declares `tempfile`.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
