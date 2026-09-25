@@ -68,6 +68,26 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid routing or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1263)
+
+- Both external `Info` methods now serve identity from the cache decoded at
+  startup, and the frozen one quotes only to build `tcb_info` when the app set
+  `public_tcbinfo`. The harness starts a second case-owned simulator from the
+  same fixtures with `public_tcbinfo=false` and calls the frozen
+  `/prpc/Info` three times and `/prpc/v1/Info` once.
+- Frozen `Info` returns empty `tcb_info` and `vm_config`, still serves
+  `key_provider_info`, and its `app_id`, `instance_id`, `device_id`,
+  `mr_aggregated`, `os_image_hash`, `compose_hash`, and `app_name` equal the
+  public fixture's. v1 `Info` returns empty `app_compose`, `vm_config`, and
+  `key_provider_info` (all non-empty on the public fixture) with the same
+  identity fields as the public v1 answer.
+- The saved quote and the demo-certificate throttle are not observable on the
+  simulator; the quote-path load on hardware is owned by
+  [tc-gos-concurrency-002](../../16-concurrency-and-robustness/tc-gos-concurrency-002/case.md#tc-gos-concurrency-002).
+- Automated in `shared/automation/passed-rpc-case.py`
+  (`check_private_tcbinfo_info`); the second simulator is stopped and its
+  runtime directory removed before the case ends.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

@@ -497,6 +497,113 @@ def check_tls_key(**kwargs: Any) -> dict[str, Any]:
     }
 
 
+def json_call(socket: str, route: str) -> dict[str, Any]:
+    """Call one Empty-input route and require a JSON object."""
+    code, body = call(socket, route, "application/json", b"{}")
+    value = json.loads(body) if code == 200 else None
+    if not isinstance(value, dict):
+        raise AssertionError(f"{route} returned HTTP {code}")
+    return value
+
+
+def check_private_tcbinfo_info(
+    socket: str, route: str, json_value: dict[str, Any], **_: Any
+) -> dict[str, Any]:
+    """PR #1263: with public_tcbinfo off, both Info surfaces answer from the identity cache."""
+    runtime = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
+    )
+    helpers = pathlib.Path(os.environ["DSTACK_TEST_PLAN_DIR"]) / "shared/automation"
+    public_v1 = json_call(socket, route.replace("/prpc/Info", "/prpc/v1/Info"))
+    for name in ("app_compose", "vm_config", "key_provider_info"):
+        if not public_v1.get(name):
+            raise AssertionError(f"public v1 Info omitted {name}")
+    identity = ("app_id", "instance_id", "device_id", "mr_aggregated", "os_image_hash")
+    identity += ("compose_hash", "app_name")
+    with tempfile.TemporaryDirectory(prefix="dstack-private-tcbinfo-") as directory:
+        work = pathlib.Path(directory)
+        fixtures = work / "fixtures"
+        fixtures.mkdir()
+        for name in (
+            "appkeys.json",
+            "attestation.bin",
+            "sys-config.json",
+            "dstack.toml",
+        ):
+            (fixtures / name).write_bytes(
+                (pathlib.Path(runtime["simulator_fixtures"]) / name).read_bytes()
+            )
+        compose = json.loads(
+            (
+                pathlib.Path(runtime["simulator_fixtures"]) / "app-compose.json"
+            ).read_text()
+        )
+        compose["public_tcbinfo"] = False
+        (fixtures / "app-compose.json").write_text(json.dumps(compose))
+        manifest = work / "runtime-manifest.json"
+        manifest.write_text(
+            json.dumps({**runtime, "simulator_fixtures": str(fixtures)})
+        )
+        simulator = pathlib.Path(
+            tempfile.mkdtemp(prefix="dstack-test-case-", dir="/tmp")
+        )
+        fixture = work / "simulator-fixture.json"
+        started = subprocess.run(
+            [
+                str(helpers / "start-simulator.sh"),
+                str(manifest),
+                str(simulator),
+                str(fixture),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        try:
+            if started.returncode:
+                raise AssertionError(
+                    f"private-tcbinfo simulator failed to start: {started.stderr[-500:]}"
+                )
+            private_socket = json.loads(fixture.read_text())["services"]["Worker"][
+                "socket"
+            ]
+            frozen = [json_call(private_socket, route) for _ in range(3)]
+            v1 = json_call(private_socket, "/prpc/v1/Info")
+        finally:
+            if fixture.is_file():
+                subprocess.run(
+                    [str(helpers / "stop-simulator.sh"), str(fixture)],
+                    capture_output=True,
+                    timeout=60,
+                    check=False,
+                )
+            else:
+                simulator.rmdir()
+    for value in frozen:
+        if value.get("tcb_info") != "" or value.get("vm_config") != "":
+            raise AssertionError(
+                "frozen Info served tcb_info or vm_config while private"
+            )
+        if value.get("key_provider_info") != json_value.get("key_provider_info"):
+            raise AssertionError("frozen Info stopped serving key_provider_info")
+        changed = [name for name in identity if value.get(name) != json_value.get(name)]
+        if changed:
+            raise AssertionError(f"frozen private Info identity differed: {changed}")
+    for name in ("app_compose", "vm_config", "key_provider_info"):
+        if v1.get(name) != "":
+            raise AssertionError(f"v1 Info served {name} while private")
+    changed = [name for name in identity if v1.get(name) != public_v1.get(name)]
+    if changed:
+        raise AssertionError(f"v1 private Info identity differed: {changed}")
+    return {
+        "frozen_calls": len(frozen),
+        "frozen_hidden": ["tcb_info", "vm_config"],
+        "v1_hidden": ["app_compose", "vm_config", "key_provider_info"],
+        "identity_fields_equal": list(identity),
+    }
+
+
 def host_nvidia_display_devices() -> int:
     """Count NVIDIA display-class PCI devices the way lspci::sysfs does."""
     count = 0
@@ -579,6 +686,7 @@ EXTRA_CHECKS = {
     "tc-gos-dstackguest-001": check_tls_key,
     "tc-gos-dstackguest-004": check_attest_wire,
     "tc-gos-guestapi-006": check_gpu_info_contract,
+    "tc-gos-worker-001": check_private_tcbinfo_info,
 }
 
 
