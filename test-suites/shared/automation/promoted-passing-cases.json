@@ -1141,6 +1141,15 @@
       "notes": "Candidate admin recovery RPC smoke and authorization/idempotency contract for Admin.RemoveNode; replicated recovery matrix remains in the case execution."
     },
     {
+      "case_id": "tc-gw-admin-037",
+      "source_run": "pr841-0924-full-ea75d8809",
+      "source_status": "PASS",
+      "entrypoint": "cases/04-gateway/03-rpc-admin/tc-gw-admin-037/run.py",
+      "environment": "HARDWARE",
+      "notes": "Admin.ImportCert installs, replaces and refuses proxy certificates on a lease-owned gateway; executed on the tdxlab physical host.",
+      "promoted_at": "2026-09-25T13:20:00Z"
+    },
+    {
       "case_id": "tc-gw-certbot-001",
       "source_run": "certbot-account-official-001",
       "source_status": "PASS",

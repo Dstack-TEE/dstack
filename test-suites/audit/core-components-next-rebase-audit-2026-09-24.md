@@ -40,3 +40,11 @@ PR 841 was rebased from `e2cf39ae01` onto `next` at `0fb3b24bbd`. The 131 merged
 - `systemd-tpm2-setup` fails on the read-only root and leaves the guest degraded. Fix: PR #1411.
 - 0828cb45df: the pooled Unix-socket HTTP client outlives the supervisor's 15s keep-alive, so a VMM request can fail with `EPIPE` (`tc-kms-upgrade-010`). Fix: PR #1412.
 - `Vmm.StopVm` returns before QEMU exits and a `StartVm` in that window is silently skipped (`tc-gos-setup-008`). Fix: PR #1414.
+
+## Hardware validation
+
+- Host: tdxlab physical TDX; exact-revision prod, dev and identity-variant images built rootless with mkosi 26; `sweep --workers 4` over all 372 scripted cases.
+- Suite on next alone (`pr841-0924-full-0e6b070c1`, plus #1409 so the images build): 351 PASS, 7 BLOCKED, 12 FAIL, 2 ERROR. The failures were the product findings above and harness defects since fixed.
+- Suite plus #1405–#1414 (`pr841-0924-full-ea75d8809`): 365 PASS, 7 BLOCKED, 0 FAIL. The BLOCKED cases need an NVIDIA confidential-computing GPU on the TDX host (`tc-gos-attestatio-006`, `tc-gos-gpupolicy-007`, `tc-gos-platform-009`, `tc-gos-setup-011`, `tc-vmm-vmm-016`, `tc-vmm-compute-ne-004`) or a Yocto image (`tc-gos-yocto-006`).
+- The guest-side GPU cases were run by hand on a GCP a3-highgpu-1g (H100, driver 595.91.07, CC on) CVM booting the candidate dev image: event v3 `dbgstat`/`secboot`, boot-time and on-demand GPU evidence, `GpuInfo`, `dstack-util gpu-info`, the NVLink module option and runtime log level passed; the reboot row failed and led to #1410, which was then validated on the same machine type.
+- `tc-kms-onboard-005` passes only with #1406 and stays unpromoted until it merges.
