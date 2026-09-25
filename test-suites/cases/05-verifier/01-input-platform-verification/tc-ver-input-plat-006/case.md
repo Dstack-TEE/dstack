@@ -65,6 +65,17 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1238, #1267, #1275, #1338, and #1404)
+
+- The container controls run the product e2e attestation suite, whose verifier configuration now sets `attestation.allowed_collateral_hosts = ["127.0.0.1"]` for its local collateral service. The GCP control therefore also shows that an allowlisted host is fetched from.
+- Step 2 also runs these exact tests; each must pass by name:
+  - `tpm-qvl` `verify::tests::rejects_pcr_values_whose_lengths_do_not_match_the_attested_bank` and `verify::tests::rejects_pcr_values_that_misname_the_attested_bank` (#1275): every quoted PCR value must be a 32-byte `sha256` value.
+  - `tpm-qvl` `verify::tests::rejects_duplicate_pcr_indices` (#1267).
+  - `tpm-qvl` `verify::tests::event_log_keeps_only_quoted_pcrs` (#1338): the verified report exposes only event-log entries of quoted PCRs, all of which were replayed, and the GCP image check reads from that report.
+  - `pki-fetch` `tests::request_count_is_bounded`, `tests::downloaded_bytes_are_bounded`, and `tests::total_time_is_bounded` (#1238): collateral fetching from certificate-named URLs has a fixed request, byte, and time budget.
+  - `pki-fetch` `tests::only_allowed_hosts_are_contacted` and `tests::host_patterns_match_within_one_label` (#1404): a host outside the allowlist is refused before any request is made, and `*` matches within one DNS label only.
+- The CLI side of #1404 (`dstack-util tpm-verify --allowed-collateral-host`) is covered in TC-GOS-SETUP-022, and the configuration key in TC-VER-BUILD-002.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
