@@ -63,6 +63,34 @@ def http_request(method: str, path: str, host: str) -> bytes:
     ).encode()
 
 
+def simulator_tcb_info(simulator: dict[str, Any]) -> str:
+    """Read the TCB info the agent returns on its internal Info call."""
+    service = simulator["services"]["DstackGuest"]
+    completed = subprocess.run(
+        [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--fail-with-body",
+            "--unix-socket",
+            str(service["socket"]),
+            "--request",
+            "POST",
+            "--header",
+            "Content-Type: application/json",
+            "--data-binary",
+            "{}",
+            "http://localhost" + str(service["route"]).replace("<Method>", "Info"),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=30,
+        check=True,
+    )
+    return str(json.loads(completed.stdout).get("tcb_info", ""))
+
+
 def main() -> int:
     """Run candidate unit and real local-route matrices."""
     if os.environ["DSTACK_TEST_CASE_ID"] != CASE_ID:
@@ -139,10 +167,22 @@ def main() -> int:
             "legacy_health": tls_request(
                 proxy_address, health_name, http_request("GET", "/", health_name)
             ),
+            "app_info": tls_request(
+                proxy_address,
+                gateway_name,
+                http_request("GET", "/.dstack/app-info", gateway_name),
+            ),
         }
         codes = {name: value[0] for name, value in probes.items()}
         bodies = {name: value[1] for name, value in probes.items()}
         index_body = bodies["index"].split(b"\r\n\r\n", 1)[-1]
+        app_info = json.loads(bodies["app_info"].split(b"\r\n\r\n", 1)[-1] or b"{}")
+        # PR #1400: the fixture's app compose sets `public_tcbinfo = false`,
+        # which the agent honors only on its external surface.
+        agent_tcb_info = simulator_tcb_info(
+            manifest["values"]["gateway_guest_simulator"]
+        )
+        agent_compose = json.loads(json.loads(agent_tcb_info)["app_compose"])
         checks = {
             "candidate_stream_matrix": unit_passed >= 1,
             "local_index_exact": codes["index"] == 200
@@ -153,6 +193,14 @@ def main() -> int:
             "missing_route_rejected": codes["missing"] == 404,
             "legacy_health_available": codes["legacy_health"] == 200,
             "bounded_responses": all(len(value) <= 65536 for value in bodies.values()),
+            "agent_reports_private_tcbinfo": agent_compose.get("public_tcbinfo")
+            is False,
+            "app_info_available": codes["app_info"] == 200
+            and "tcb_info" in app_info
+            and "vm_config" in app_info
+            and bool(app_info.get("app_id")),
+            "app_info_withholds_tcbinfo": app_info.get("tcb_info") == ""
+            and app_info.get("vm_config") == "",
         }
         if not all(checks.values()):
             raise AssertionError(
@@ -190,7 +238,7 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-03",
                 "status": "PASS",
-                "observed": "Unsupported methods and paths failed with exact bounded status codes while non-EOF stream errors remained visible in the candidate matrix.",
+                "observed": "Unsupported methods and paths failed with exact bounded status codes while non-EOF stream errors remained visible in the candidate matrix; the public app-info route withheld the TCB info and VM config of an app that opted out of publishing them.",
             },
             {
                 "id": f"{CASE_ID}-step-04",
