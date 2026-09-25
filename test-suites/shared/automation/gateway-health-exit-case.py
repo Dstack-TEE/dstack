@@ -185,7 +185,14 @@ def main() -> int:
             env=environment,
         )
         ready = wait_port(str(node["rpc_url"]).split("//", 1)[1].split("/", 1)[0])
-        sync_code, sync_body = rpc(debug, None, "Debug.GetSyncData", {})
+        # The main, admin, and debug listeners bind independently, so the
+        # RPC port being up does not mean the debug one is yet.
+        sync_code, sync_body = None, b""
+        for _ in range(50):
+            sync_code, sync_body = rpc(debug, None, "Debug.GetSyncData", {})
+            if sync_code is not None:
+                break
+            time.sleep(0.2)
         instances = decoded(sync_body).get("instances", [])
         retained = [
             row
