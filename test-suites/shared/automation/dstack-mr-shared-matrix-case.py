@@ -17,8 +17,35 @@ from typing import Any
 
 CASE_IDS = {"tc-ver-tools-001", "tc-ver-tools-002"}
 IMAGE_HASH = "14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67"
-MATRIX_VERSION = 4
-BASE_ARGS = ["--cpu", "2", "--memory", "2G", "--qemu-version", "9.2.1"]
+MATRIX_VERSION = 5
+
+
+def machine_args(
+    cpu: str = "2",
+    memory: str = "2G",
+    qemu: str = "9.2.1",
+    hotplug_off: bool = True,
+) -> list[str]:
+    """Spell out a measured VM shape, including every RTMR[0] input the
+    `measure` CLI defaults.
+
+    `--hotplug-off` reaches the ACPI tables, and its CLI default follows the
+    VMM default (true since PR #1405, false before). Every row passes it
+    explicitly so the matrix measures the same machine on either CLI.
+    """
+    return [
+        "--cpu",
+        cpu,
+        "--memory",
+        memory,
+        "--qemu-version",
+        qemu,
+        "--hotplug-off",
+        "true" if hotplug_off else "false",
+    ]
+
+
+BASE_ARGS = machine_args()
 REGISTERS = ("mrtd", "rtmr0", "rtmr1", "rtmr2")
 # OVMF's QemuKernelLoaderFsDxe appends this to the image-provided command line
 # before measuring it into RTMR[2] (PR #1199 made it a named constant).
@@ -477,13 +504,13 @@ def execute_matrix(
     accepted(
         "cpu-count",
         fixture / "metadata.json",
-        ["--cpu", "4", "--memory", "2G", "--qemu-version", "9.2.1"],
+        machine_args(cpu="4"),
         ["rtmr0"],
     )
     high_memory = accepted(
         "memory-size",
         fixture / "metadata.json",
-        ["--cpu", "2", "--memory", "4G", "--qemu-version", "9.2.1"],
+        machine_args(memory="4G"),
         ["rtmr0"],
     )
     # A pre-normalization image keeps modelling QEMU's setup-header rewrite, so
@@ -491,26 +518,26 @@ def execute_matrix(
     low_memory = accepted(
         "legacy-kernel-digest-low-memory",
         fixture / "metadata.json",
-        ["--cpu", "2", "--memory", "1G", "--qemu-version", "9.2.1"],
+        machine_args(memory="1G"),
         ["rtmr0", "rtmr1"],
     )
     accepted(
         "qemu-8-compatibility",
         fixture / "metadata.json",
-        ["--cpu", "2", "--memory", "2G", "--qemu-version", "8.2.2"],
+        machine_args(qemu="8.2.2"),
         ["mrtd", "rtmr0"],
     )
     accepted(
         "qemu-10-compatibility",
         fixture / "metadata.json",
-        ["--cpu", "2", "--memory", "2G", "--qemu-version", "10.0.0"],
+        machine_args(qemu="10.0.0"),
         ["rtmr0"],
     )
     accepted(
         "advanced-machine-fields",
         fixture / "metadata.json",
         [
-            *BASE_ARGS,
+            *machine_args(hotplug_off=False),
             "--two-pass-add-pages",
             "true",
             "--pic",
@@ -523,8 +550,6 @@ def execute_matrix(
             "3",
             "--num-verity-volumes",
             "2",
-            "--hotplug-off",
-            "true",
             "--root-verity",
             "false",
         ],
@@ -538,6 +563,7 @@ def execute_matrix(
         "qemu_version": "9.2.1",
         "num_nics": 3,
         "num_verity_volumes": 2,
+        "hotplug_off": True,
     }
     measured_shape = accepted(
         "diagnose-shape-measure",
@@ -564,7 +590,6 @@ def execute_matrix(
     require_rejection(row, diagnostic, "swtpm measurement is not supported")
     rows.append(row)
     gpu_topology = [
-        *BASE_ARGS,
         "--num-gpus",
         "1",
         "--num-nvswitches",
@@ -577,13 +602,13 @@ def execute_matrix(
     rejected(
         "gpu-topology-requires-hotplug-off",
         fixture / "metadata.json",
-        [*gpu_topology, "--hotplug-off", "false"],
+        [*machine_args(hotplug_off=False), *gpu_topology],
         "set hotplug_off for GPU passthrough",
     )
     accepted(
         "gpu-topology-functional",
         fixture / "metadata.json",
-        [*gpu_topology, "--hotplug-off", "true"],
+        [*machine_args(hotplug_off=True), *gpu_topology],
         ["rtmr0"],
     )
     accepted(
@@ -601,7 +626,7 @@ def execute_matrix(
     rejected(
         "unsupported-qemu-version",
         fixture / "metadata.json",
-        ["--cpu", "2", "--memory", "2G", "--qemu-version", "7.2.0"],
+        machine_args(qemu="7.2.0"),
         "Unsupported QEMU version",
     )
 
@@ -855,7 +880,7 @@ def normalization_rows(
         varied = measure(
             f"shipped-canonical-{memory}",
             shipped_canonical,
-            ["--cpu", "2", "--memory", memory, "--qemu-version", "9.2.1"],
+            machine_args(memory=memory),
         )
         if varied["rtmr1"] != shipped_output["rtmr1"]:
             raise AssertionError(
@@ -911,7 +936,7 @@ def normalization_rows(
     for memory, qemu in NORMALIZED_INDEPENDENCE_ROWS:
         name = f"normalized-{memory}-qemu-{qemu}"
         output = measure(
-            name, normalized, ["--cpu", "2", "--memory", memory, "--qemu-version", qemu]
+            name, normalized, machine_args(memory=memory, qemu=qemu)
         )
         for register in ("rtmr1", "rtmr2"):
             if output[register] != normalized_output[register]:
