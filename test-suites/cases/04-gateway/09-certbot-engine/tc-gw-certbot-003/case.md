@@ -64,6 +64,10 @@ Inspect both modeled zones after the recovery run, stop the case-owned API serve
 
 - Both modeled zones are empty, the adjacent zone remains untouched, the API server is reaped, and retained evidence contains no credential, domain, record, or endpoint values.
 
+## Post-baseline regression coverage (PR #1241)
+
+- Zone discovery stops at its 100-page cap instead of following a provider-supplied `total_pages`, and every Cloudflare API call has a 30-second timeout. The harness runs the candidate `dns01_client::cloudflare::zone_discovery_tests::` module, whose stand-in provider claims a million pages, and requires it to pass.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

@@ -93,6 +93,16 @@ def run_subcommand(
     )
 
 
+def file_mode(path: Path) -> int:
+    """Return the permission bits of a file, following symlinks."""
+    return path.stat().st_mode & 0o777 if path.exists() else -1
+
+
+def digest(path: Path) -> str:
+    """Hash a file without retaining its content."""
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
+
+
 def certificate_names(path: Path) -> set[str]:
     """Return the DNS subject alternative names of a live certificate."""
     completed = subprocess.run(
@@ -201,6 +211,20 @@ def main() -> int:
                 and key_path.exists()
                 and hook_marker.read_text() == "x"
             )
+            # PR #1241: the account key and every certificate key are
+            # owner-only, and the live pair resolves through one `.current`
+            # link that is swapped with a single rename.
+            current = workdir / "live/.current"
+            first_key_digest = digest(key_path)
+            checks["account_and_key_owner_only"] = (
+                file_mode(workdir / "credentials.json") == 0o600
+                and file_mode(key_path) == 0o600
+            )
+            checks["live_pair_published_through_one_link"] = (
+                current.is_symlink()
+                and os.readlink(cert_path) == ".current/cert.pem"
+                and os.readlink(key_path) == ".current/key.pem"
+            )
             write_config(config, workdir, acme_url, api_url, domain, "exit 7")
             failed_hook = run_cli(binary, config, "--once", "--force")
             second_target = cert_path.resolve() if cert_path.exists() else Path()
@@ -209,6 +233,24 @@ def main() -> int:
                 and second_target != first_target
                 and cert_path.exists()
                 and key_path.exists()
+            )
+            checks["renewal_rotates_key"] = (
+                bool(first_key_digest)
+                and digest(key_path) not in {"", first_key_digest}
+                and file_mode(key_path) == 0o600
+                and current.is_symlink()
+            )
+            # A renewed hook that never exits is killed at `renew_timeout`
+            # (20 s here) instead of holding the renewal loop.
+            write_config(config, workdir, acme_url, api_url, domain, "exec sleep 600")
+            hung_started = time.monotonic()
+            try:
+                hung_hook = run_cli(binary, config, "--once", "--force")
+                hung_returncode: int | None = hung_hook.returncode
+            except subprocess.TimeoutExpired:
+                hung_returncode = None
+            checks["hung_hook_bounded_by_renew_timeout"] = (
+                hung_returncode == 0 and time.monotonic() - hung_started < 50
             )
             malformed.write_text("workdir = [\n")
             bad = run_cli(binary, malformed, "--once")
@@ -391,7 +433,7 @@ def main() -> int:
             ] and all(not records for records in state.snapshot().values())
             status = "PASS" if all(checks.values()) else "FAIL"
             summary = (
-                "Certbot CLI once, hook, daemon pacing, graceful SIGTERM (steady state and startup), malformed config, persisted restart, outage, recovery, domain-change reissue, name-plus-wildcard challenges, dns-persist-01 records, and cleanup passed."
+                "Certbot CLI once, owner-only keys, atomic live pair, key rotation, hook and hung-hook bound, daemon pacing, graceful SIGTERM (steady state and startup), malformed config, persisted restart, outage, recovery, domain-change reissue, name-plus-wildcard challenges, dns-persist-01 records, and cleanup passed."
                 if status == "PASS"
                 else f"Certbot CLI checks failed: {sorted(k for k, v in checks.items() if not v)}"
             )

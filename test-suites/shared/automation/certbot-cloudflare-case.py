@@ -53,9 +53,12 @@ def cleanup_test_repository(repository: Path, test_repository: Path) -> None:
 
 
 def run_tests(
-    repository: Path, runtime: dict[str, object], env: dict[str, str]
+    repository: Path,
+    runtime: dict[str, object],
+    env: dict[str, str],
+    test_filter: str = "dns01_client::cloudflare::tests::",
 ) -> subprocess.CompletedProcess[str]:
-    """Run the three candidate Cloudflare client tests against the local model."""
+    """Run the candidate Cloudflare client tests against the local model."""
     return subprocess.run(
         [
             "cargo",
@@ -64,7 +67,7 @@ def run_tests(
             "--offline",
             "-p",
             "certbot",
-            "dns01_client::cloudflare::tests::",
+            test_filter,
             "--",
             "--nocapture",
         ],
@@ -158,6 +161,15 @@ def main() -> int:
         state.failure = False
     recovery = run_tests(test_repository, runtime, base_env)
     recovery_passed = passed_count(recovery)
+    # PR #1241: zone discovery stops at its page cap instead of following a
+    # provider-supplied `total_pages`, and every API call has a timeout.
+    zone_cap = run_tests(
+        test_repository,
+        runtime,
+        base_env,
+        "dns01_client::cloudflare::zone_discovery_tests::",
+    )
+    zone_cap_passed = passed_count(zone_cap)
     snapshot = state.snapshot()
     operation_count = len(state.operations)
     server.shutdown()
@@ -170,6 +182,7 @@ def main() -> int:
         "wrong_token_rejected": wrong.returncode != 0,
         "provider_outage_rejected": outage.returncode != 0,
         "recovery_matrix": recovery.returncode == 0 and recovery_passed >= 3,
+        "zone_discovery_bounded": zone_cap.returncode == 0 and zone_cap_passed >= 1,
         "all_records_cleaned": all(not records for records in snapshot.values()),
         "bounded_api_activity": 10 <= operation_count < 100,
         "server_reaped": not worker.is_alive(),
@@ -181,6 +194,7 @@ def main() -> int:
         "checks": checks,
         "valid_passed": valid_passed,
         "recovery_passed": recovery_passed,
+        "zone_discovery_passed": zone_cap_passed,
         "wrong_token_nonzero": wrong.returncode != 0,
         "outage_nonzero": outage.returncode != 0,
         "operation_count": operation_count,
