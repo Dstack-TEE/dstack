@@ -40,11 +40,11 @@ Use a decision table containing every condition in Step 1, relevant conflicting 
 <a id="tc-kms-release-010-step-01"></a>
 ### Step 1: Execute the decision table
 
-For SEV-SNP and AWS Nitro TPM app, KMS and temp-CA requests, toggle `sev_snp_key_release` and `aws_nitro_tpm_key_release` independently; include TDX, GCP TDX and Nitro Enclave controls.
+For SEV-SNP, AWS Nitro TPM, and AWS Nitro Enclave app, KMS and temp-CA requests, toggle `sev_snp_key_release`, `aws_nitro_tpm_key_release`, and `nitro_enclave_key_release` independently; include TDX and GCP TDX controls.
 
 **Expected results:**
 
-- SNP and Nitro-TPM private material is released only when its explicit gate and all authorization checks pass; one platform gate never affects another and disabling never returns partial key fields.
+- SNP, Nitro-TPM, and Nitro Enclave private material is released only when its explicit gate and all authorization checks pass; one platform gate never affects another and disabling never returns partial key fields.
 
 <a id="tc-kms-release-010-step-02"></a>
 ### Step 2: Verify independent trust bindings and side effects
@@ -63,6 +63,11 @@ Interrupt the external verifier/auth/image/network dependency, restart after acc
 **Expected results:**
 
 - Uncertainty fails closed, recovery does not reuse stale decisions, accepted state survives only as documented, and cross-identity replay or substitution fails.
+
+## Post-baseline regression coverage (PR #1303)
+
+- `nitro_enclave_key_release` (default `false`) is a third local gate, alongside `sev_snp_key_release` and `aws_nitro_tpm_key_release`. With it off, app, KMS, and temp-CA release to a `DstackNitroEnclave` boot fails with `aws nitro enclave key release is not enabled`; enabling it or either other gate never enables another platform, and TDX and GCP TDX have no local gate.
+- The `key_release_` Rust matrix must include and pass `nitro_enclave_key_release_requires_explicit_enablement` and `key_release_gates_do_not_leak_across_platforms`. A live Nitro Enclave row stays with `tc-kms-platform-006`, which needs the cross-platform attestation fixture.
 
 ## Postconditions
 

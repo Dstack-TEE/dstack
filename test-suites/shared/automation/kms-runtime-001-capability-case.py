@@ -58,6 +58,22 @@ def encoded_decision(allowed: bool, reason: str) -> str:
     )
 
 
+def record_call(request: dict[str, Any]) -> None:
+    """Append the method, selector, and block tag of one call when asked to."""
+    path = os.environ.get("DSTACK_TEST_MOCK_RPC_LOG")
+    if not path:
+        return
+    params = request.get("params") or []
+    first = params[0] if params and isinstance(params[0], dict) else {}
+    entry = {
+        "method": request.get("method"),
+        "selector": str(first.get("data", ""))[:10],
+        "block": params[1] if len(params) > 1 else None,
+    }
+    with open(path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry) + "\n")
+
+
 class RpcHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -70,6 +86,7 @@ class RpcHandler(http.server.BaseHTTPRequestHandler):
 
         def respond(request: dict[str, Any]) -> dict[str, Any]:
             method = request.get("method")
+            record_call(request)
             if method == "eth_chainId":
                 result = "0x7a69"
             elif method == "eth_blockNumber":

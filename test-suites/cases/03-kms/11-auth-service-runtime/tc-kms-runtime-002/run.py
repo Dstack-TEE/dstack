@@ -30,6 +30,27 @@ def load_helpers(path: Path) -> Any:
     return module
 
 
+def node20_bin() -> Path:
+    candidates = []
+    current = shutil.which("node")
+    if current:
+        candidates.append(Path(current))
+    candidates.extend(
+        Path.home().glob(".local/share/fnm/node-versions/v*/installation/bin/node")
+    )
+    for candidate in sorted(candidates, reverse=True):
+        probe = subprocess.run(
+            [str(candidate), "--version"], text=True, capture_output=True, check=False
+        )
+        try:
+            major = int(probe.stdout.strip().lstrip("v").split(".", 1)[0])
+        except (ValueError, IndexError):
+            continue
+        if probe.returncode == 0 and major >= 20:
+            return candidate.parent
+    raise RuntimeError("Node 20 or newer is unavailable")
+
+
 def command(argv: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
     started = time.monotonic()
     completed = subprocess.run(
@@ -60,7 +81,7 @@ def main() -> int:
     helper = load_helpers(helper_path)
     node_package = repo / "dstack/kms/auth-eth"
     bun_package = repo / "dstack/kms/auth-eth-bun"
-    node_bin = Path.home() / ".local/share/fnm/node-versions/v20.19.6/installation/bin"
+    node_bin = node20_bin()
     bun_command = shutil.which("bun")
     if bun_command is None:
         raise RuntimeError("missing required command: bun")
@@ -96,6 +117,7 @@ def main() -> int:
     root = Path(tempfile.mkdtemp(prefix="dstack-auth-parity-"))
     sentinel = "RPC_CREDENTIAL_SENTINEL_runtime_002"
     logs = {"node": root / "node.log", "bun": root / "bun.log"}
+    rpc_log = root / "rpc-calls.jsonl"
     rpc: subprocess.Popen[str] | None = None
     services: dict[str, tuple[subprocess.Popen[str], Any]] = {}
     checks: dict[str, bool] = {}
@@ -108,6 +130,7 @@ def main() -> int:
     def start_rpc() -> subprocess.Popen[str]:
         proc = subprocess.Popen(
             [sys.executable, str(helper_path), "--mock-rpc", str(rpc_port)],
+            env={**os.environ, "DSTACK_TEST_MOCK_RPC_LOG": str(rpc_log)},
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -184,6 +207,16 @@ def main() -> int:
             }
             rows[name]["equal"] = values["node"] == values["bun"]
 
+        decision_blocks: dict[str, list[Any]] = {}
+        for impl, port in ports.items():
+            for route in ("app", "kms"):
+                rpc_log.write_text("")
+                helper.request(port, f"/bootAuth/{route}", valid)
+                decision_blocks[f"{impl}_{route}"] = [
+                    entry["block"]
+                    for entry in map(json.loads, rpc_log.read_text().splitlines())
+                    if entry["method"] == "eth_call"
+                ]
         health = {impl: helper.request(port, "/") for impl, port in ports.items()}
         with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
             concurrent_rows = {
@@ -226,6 +259,9 @@ def main() -> int:
                 for impl in ports
             ),
             "health_equal": health["node"] == health["bun"],
+            "single_block_decisions": all(
+                blocks == ["0x100", "0x100"] for blocks in decision_blocks.values()
+            ),
             "concurrency_equal": concurrent_rows["node"] == concurrent_rows["bun"]
             and all(
                 status == 200 and payload.get("isAllowed") is True
@@ -243,6 +279,7 @@ def main() -> int:
         observations.update(
             rows=rows,
             health=health,
+            decision_blocks=decision_blocks,
             outage=outage,
             recovery=recovery,
             concurrent_counts={
@@ -276,6 +313,7 @@ def main() -> int:
                 "valid_allowed",
                 "invalid_status_equal",
                 "health_equal",
+                "single_block_decisions",
             )
         ),
         "concurrency_parity": checks.get("concurrency_equal", False),

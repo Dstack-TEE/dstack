@@ -73,6 +73,11 @@ Restart the affected service or VM when permitted, re-query state, and check adj
 
 - Documented state persists, transient state disappears, adjacent identities are unchanged, and no private key, credential, or plaintext sentinel appears in APIs, metrics, dashboards, journals, or artifacts.
 
+## Post-baseline regression coverage (PR #1310)
+
+- `DstackApp.addComposeHash(bytes32(0))` reverts with `invalid compose hash` and `addDevice(bytes32(0))` reverts with `invalid device ID`, so a zero value can no longer be allowlisted and alias a short, left-padded identity. The shared Foundry policy run includes `test_AddZeroValuedPolicyEntriesIsRejected`.
+- On the KMS side, a `compose_hash` that is not 32 bytes or an `instance_id` that is neither 20 bytes nor empty is refused before the policy backend is called; that path is covered by the exact Rust matrix in `tc-kms-auth-010`.
+
 ## Postconditions
 
 Remove run-scoped state, undo fault injection, and verify services and devices returned to their recorded baseline.

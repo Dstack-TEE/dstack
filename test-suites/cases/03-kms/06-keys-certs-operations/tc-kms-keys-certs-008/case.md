@@ -64,6 +64,12 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1311, #1312, #1365)
+
+- `GetMetaResponse.os_image_verification` (field 10, optional bool) reports `[core.image] verify`. The fixture sets `verify = false`, so it must be `false`, and the KMS log must carry the startup warning `os image verification is disabled; os_image_hash is caller-supplied and unverified`. Clients must not treat an unset field (an older KMS) as `true` (#1312).
+- `core.auth_api.webhook.timeout` (default `60s`, connect timeout fixed at 5s) bounds every auth API call. Restart the KMS with a webhook that accepts the connection and never answers and `timeout = "2s"`: an unauthenticated `GetMeta` must fail within 10 seconds instead of hanging (#1365).
+- The auth API info behind `GetMeta` is reused for one second and concurrent callers share one upstream request. Restart the KMS with a counting webhook that answers `GET /` after 300 ms, send 16 concurrent unauthenticated `GetMeta` calls, and expect all 16 to succeed with at most 2 upstream requests; after 1.5 s one more `GetMeta` must reach the webhook exactly once (#1311).
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

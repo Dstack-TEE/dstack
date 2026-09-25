@@ -26,7 +26,7 @@ COMMANDS = {
     "ownership": r"TransferOwnership|AcceptOwnership|OnlyOwner|OwnerOnlyFunctionsFollowOwnership",
     "upgrade": r"CannotUpgradeWhenDisabled|OnlyOwnerCanUpgrade|Upgrade(Kms|App)Proxy|UpgradeWithInitialization|ComplexUpgradeScenario|ValidationChecks",
     "registration": r"RegisterApp|DeployAndRegisterApp|SetKmsInfo|AddAndRemoveKmsDevice|IsKmsAllowed",
-    "policy": r"IsAppAllowed|RejectUnallowedComposeHash|AddComposeHash|RemoveComposeHash|AddDevice|RemoveDevice|SetAllowAnyDevice|AddAndRemoveOsImageHash|RequireTcbUpToDate|FactoryDeploysApp",
+    "policy": r"IsAppAllowed|RejectUnallowedComposeHash|AddComposeHash|RemoveComposeHash|AddDevice|RemoveDevice|SetAllowAnyDevice|AddAndRemoveOsImageHash|RequireTcbUpToDate|FactoryDeploysApp|AddZeroValuedPolicyEntries",
 }
 
 
