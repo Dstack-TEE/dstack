@@ -9,12 +9,20 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
 from typing import Any
 
 CASE_ID = "tc-kms-build-001"
+IMAGE_BUILD_FILES = (
+    "dstack/kms/dstack-app/builder/Dockerfile",
+    "dstack/gateway/dstack-app/builder/Dockerfile",
+    "dstack/verifier/builder/Dockerfile",
+    "dstack/kms/dstack-app/docker-compose.yaml",
+)
+ONBOARD_PAGE = "dstack/kms/src/www/onboard.html"
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -49,6 +57,43 @@ def run(command: list[str], cwd: pathlib.Path, env: dict[str, str]) -> dict[str,
     }
 
 
+def packaging_pins(repository: pathlib.Path) -> dict[str, Any]:
+    """Check that image builds are locked and remote page scripts are pinned."""
+    unlocked = [
+        f"{name}:{number}"
+        for name in IMAGE_BUILD_FILES
+        for number, line in enumerate(
+            (repository / name).read_text().splitlines(), start=1
+        )
+        if re.search(r"cargo build .*-p dstack-", line) and "--locked" not in line
+    ]
+    locked_builds = sum(
+        bool(re.search(r"cargo build .*--locked.*-p dstack-", line))
+        for name in IMAGE_BUILD_FILES
+        for line in (repository / name).read_text().splitlines()
+    )
+    tags = re.findall(
+        r"<script\b[^>]*\bsrc=[^>]*>", (repository / ONBOARD_PAGE).read_text()
+    )
+    unpinned = [
+        tag
+        for tag in tags
+        if not re.search(r'src="https://[^"]+@\d+\.\d+\.\d+/', tag)
+        or not re.search(r'integrity="sha384-[A-Za-z0-9+/]{64}"', tag)
+        or 'crossorigin="anonymous"' not in tag
+    ]
+    return {
+        "locked_image_builds": locked_builds,
+        "unlocked_image_builds": unlocked,
+        "remote_scripts": len(tags),
+        "unpinned_remote_scripts": unpinned,
+        "passed": locked_builds == len(IMAGE_BUILD_FILES)
+        and not unlocked
+        and bool(tags)
+        and not unpinned,
+    }
+
+
 def main() -> int:
     """Run the promoted KMS build case."""
     case_id = os.environ["DSTACK_TEST_CASE_ID"]
@@ -74,11 +119,18 @@ def main() -> int:
         [cargo, "build", "--locked", "-p", "dstack-kms"],
         [cargo, "test", "--locked", "-p", "dstack-kms"],
         [cargo, "build", "--locked", "--offline", "-p", "dstack-kms"],
+        [cargo, "test", "--locked", "-p", "ct_monitor"],
         [cargo, "check", "--locked", "-p", "definitely-not-a-kms-package"],
     ]
     observations = [run(command, workspace, env) for command in commands]
-    positive = all(item["returncode"] == 0 for item in observations[:3])
-    negative = observations[3]["returncode"] != 0
+    positive = all(item["returncode"] == 0 for item in observations[:4])
+    negative = observations[4]["returncode"] != 0
+    ct_monitor = re.search(
+        r"test result: ok\. (\d+) passed", observations[3]["output_tail"]
+    )
+    ct_monitor_passed = bool(ct_monitor) and int(ct_monitor.group(1)) >= 6
+    pins = packaging_pins(repository)
+    positive = positive and ct_monitor_passed and pins["passed"]
     # PR #1190: the shared image build library that the KMS, gateway, and
     # verifier release images use now generates OCI metadata and an export
     # phase. Its checked-in orchestration tests run with a mock Docker and no
@@ -104,9 +156,12 @@ def main() -> int:
         "workspace": "dstack",
         "target_directory": env.get("CARGO_TARGET_DIR", "cargo-default"),
         "observations": observations,
+        "packaging_pins": pins,
         "checks": {
             "locked_build_test_offline": positive,
             "image_build_library_tests": build_lib_passed,
+            "ct_monitor_tests": ct_monitor_passed,
+            "packaging_pins": pins["passed"],
             "failure_gate": negative,
         },
     }
@@ -125,9 +180,9 @@ def main() -> int:
             {
                 "id": f"{case_id}-step-01",
                 "status": "PASS" if positive else "FAIL",
-                "observed": "Locked build/test, offline rebuild, and image build library tests completed."
+                "observed": "Locked build/test, offline rebuild, ct_monitor tests, image build library tests, and packaging pins passed."
                 if positive
-                else "A locked build/test/offline command or the image build library tests failed.",
+                else "A locked build/test/offline command, the ct_monitor or image build library tests, or a packaging pin failed.",
             },
             {
                 "id": f"{case_id}-step-02",
