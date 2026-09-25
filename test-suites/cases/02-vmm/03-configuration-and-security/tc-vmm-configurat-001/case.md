@@ -77,6 +77,13 @@ Each row runs `dstack-vmm --config <row> check-config` against a copy of the can
 - PR #1214: an explicit `[netd.network_filter]` policy is accepted; `netd.socket_mode` with non-permission bits and a `cvm.instance_id` containing `:` are rejected before serving.
 - PR #1200: the shipped `tdx_attestation_variant` default remains `auto`.
 
+## Post-baseline regression coverage (PR #1282, PR #1387, PR #1363, PR #1230)
+
+- PR #1282: the shipped `[image]` table no longer carries `registry`, and a leftover `registry = "dstacktee/guest-image"` line still passes `check-config` because the key is ignored.
+- PR #1387: the shipped `qemu_hotplug_off` default is `true`.
+- PR #1363: the shipped `max_event_name_len` default is `128`.
+- PR #1230: the shipped `[cvm] disk_prealloc` default is `off`; `falloc` is accepted and an unknown mode (`sparse`) fails before serving.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
