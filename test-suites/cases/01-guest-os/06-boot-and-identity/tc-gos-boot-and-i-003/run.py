@@ -61,6 +61,12 @@ consumers=$(jq -cn \
     --argjson agent "$(metadata /dstack/agent.json)" \
     --argjson docker "$(metadata /dstack/docker-compose.yaml)" \
     '{"/dstack/app-compose.json":$compose,"/dstack/user_config":$user,"/dstack/agent.json":$agent,"/dstack/docker-compose.yaml":$docker}')
+phase=secret_metadata
+secrets=$(jq -cn \
+    --argjson keys "$(metadata "$root/.appkeys.json")" \
+    --argjson env "$(metadata "$root/.decrypted-env")" \
+    --argjson env_json "$(metadata "$root/.decrypted-env.json")" \
+    '{".appkeys.json":$keys,".decrypted-env":$env,".decrypted-env.json":$env_json}')
 
 json_keys() {
     jq -c 'if type == "object" then keys else null end' "$1" 2>/dev/null || printf 'null'
@@ -73,6 +79,18 @@ if [ -f "$root/.decrypted-env.json" ]; then
         marker_hash=$(printf %s "$marker_value" | sha256sum | awk '{print $1}')
     fi
 fi
+phase=exec_with_env
+exec_hash=
+exec_value=$(dstack-util exec-with-env --env-file "$root/.decrypted-env.json" -- printenv "$marker_name")
+exec_hash=$(printf %s "$exec_value" | sha256sum | awk '{print $1}')
+exec_missing_rejected=false
+dstack-util exec-with-env --env-file "$root/.dstack-test-absent-env.json" -- true 2>/dev/null ||
+    exec_missing_rejected=true
+malformed=$(mktemp /run/dstack-test-env.XXXXXX)
+printf '["%s"]' "$marker_name" >"$malformed"
+exec_malformed_rejected=false
+dstack-util exec-with-env --env-file "$malformed" -- true 2>/dev/null || exec_malformed_rejected=true
+rm -f "$malformed"
 phase=service_state
 service=$(systemctl show dstack-prepare.service --property=ActiveState \
     --property=SubState --property=Result --property=ExecMainStatus --no-pager |
@@ -80,13 +98,15 @@ service=$(systemctl show dstack-prepare.service --property=ActiveState \
 phase=final_json
 absent=true
 [ -e "$root/.dstack-test-absent-optional" ] && absent=false
-jq -cn --argjson host "$host" --argjson consumers "$consumers" \
+jq -cn --argjson host "$host" --argjson consumers "$consumers" --argjson secrets "$secrets" \
     --argjson compose_keys "$(json_keys /dstack/app-compose.json)" \
     --argjson user_keys "$(json_keys /dstack/user_config)" \
     --argjson agent_keys "$(json_keys /dstack/agent.json)" \
     --argjson decrypted_env_keys "$(json_keys "$root/.decrypted-env.json")" \
     --arg marker_hash "$marker_hash" --argjson service "$service" --argjson absent "$absent" \
-    '{host_inputs:$host,consumer_files:$consumers,compose_keys:$compose_keys,user_config_keys:$user_keys,agent_keys:$agent_keys,decrypted_env_keys:$decrypted_env_keys,environment_marker_sha256:$marker_hash,service:$service,absent_optional_preserved:$absent}'
+    --arg exec_hash "$exec_hash" --argjson exec_missing "$exec_missing_rejected" \
+    --argjson exec_malformed "$exec_malformed_rejected" \
+    '{host_inputs:$host,consumer_files:$consumers,secret_files:$secrets,compose_keys:$compose_keys,user_config_keys:$user_keys,agent_keys:$agent_keys,decrypted_env_keys:$decrypted_env_keys,environment_marker_sha256:$marker_hash,exec_with_env:{marker_sha256:$exec_hash,missing_rejected:$exec_missing,malformed_rejected:$exec_malformed},service:$service,absent_optional_preserved:$absent}'
 """
 
 
@@ -169,6 +189,16 @@ def main() -> int:
             ]
             if unsafe:
                 raise AssertionError(f"configuration file metadata is unsafe: {unsafe}")
+            exposed = [
+                path
+                for path, metadata in probe["secret_files"].items()
+                if not metadata["exists"]
+                or not metadata["regular"]
+                or metadata["uid"] != 0
+                or metadata["mode"] & 0o077
+            ]
+            if exposed:
+                raise AssertionError(f"boot-time secrets are not owner-only: {exposed}")
             invalid_json = [
                 name
                 for name in ["compose_keys", "user_config_keys", "agent_keys"]
@@ -198,6 +228,17 @@ def main() -> int:
                 != capability["environment_marker_sha256"]
             ):
                 raise AssertionError("decrypted environment marker hash mismatched")
+            exec_with_env = probe["exec_with_env"]
+            if (
+                exec_with_env["marker_sha256"]
+                != capability["environment_marker_sha256"]
+            ):
+                raise AssertionError("exec-with-env did not deliver the marker")
+            if not (
+                exec_with_env["missing_rejected"]
+                and exec_with_env["malformed_rejected"]
+            ):
+                raise AssertionError("exec-with-env ran without a valid env object")
             service = probe["service"]
             if (
                 service.get("Result") != "success"
@@ -225,10 +266,12 @@ def main() -> int:
                 {
                     "host_inputs": probe["host_inputs"],
                     "consumer_files": probe["consumer_files"],
+                    "secret_files": probe["secret_files"],
                     "compose_keys": probe["compose_keys"],
                     "user_config_keys": probe["user_config_keys"],
                     "agent_keys": probe["agent_keys"],
                     "environment_marker_matches": True,
+                    "exec_with_env": exec_with_env,
                     "service": service,
                     "absent_optional_preserved": True,
                     "source_guards": len(guards),

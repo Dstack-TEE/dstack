@@ -90,6 +90,21 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1233 and #1341)
+
+- System setup writes `.appkeys.json`, `.decrypted-env`, and
+  `.decrypted-env.json` under `/dstack/.host-shared` owner-only. Step 2
+  requires each to be a regular root-owned file with no group or other
+  permission bits; only their metadata is recorded.
+- `app-compose.service` no longer uses `EnvironmentFile=`; it runs
+  `dstack-util exec-with-env --env-file /dstack/.host-shared/.decrypted-env.json`.
+  The probe runs the same command with `printenv` for the marker and requires
+  the SHA-256 of the delivered value to equal the fixture marker hash. It also
+  requires the command to refuse a nonexistent env file and a JSON array
+  instead of an object, in a temporary file under `/run` that is removed
+  afterwards. The unit's `ExecStart` is checked by
+  [tc-gos-platform-006](../../10-platform-services/tc-gos-platform-006/case.md#tc-gos-platform-006).
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
