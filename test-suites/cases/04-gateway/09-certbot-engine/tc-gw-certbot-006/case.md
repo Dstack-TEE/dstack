@@ -73,6 +73,12 @@ After the existing outage and recovery checks, reuse the same workdir, Pebble, a
 - **#1132 (`dns-persist-01`):** write a configuration with `challenge = "dns-persist-01"`, an empty `cf_api_token`, and `domains = ["<domain>", "*.<domain>"]`, then run `certbot dns-records`. Expected: exit 0, zero Cloudflare API requests, one `_validation-persist.<domain>. IN TXT` line naming `accounturi=` with `policy=wildcard`, and exactly two `<domain>. IN CAA` lines carrying `validationmethods=dns-persist-01`. With `challenge` left at `dns-01` and an empty token, the same command exits non-zero and names `cf_api_token is required`.
 - Every DNS zone, including the adjacent zone, is empty at the end.
 
+## Post-baseline regression coverage (PR #1241)
+
+- After the first issuance, `credentials.json` and the live key are mode `0600`; `live/cert.pem` and `live/key.pem` are symlinks to `.current/cert.pem` and `.current/key.pem`, and `live/.current` is itself a symlink to the current archive generation, so one rename publishes both.
+- The forced renewal that follows issues under a new key: the live key content changes and stays mode `0600`.
+- A forced renewal whose renewed hook is `exec sleep 600` still exits 0, within 50 seconds, because the hook is killed at `renew_timeout` (20 seconds in the case config).
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.
