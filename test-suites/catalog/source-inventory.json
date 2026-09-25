@@ -41,6 +41,7 @@
         "dstack/dstack-types/Cargo.toml",
         "dstack/dstack-types/src/lib.rs",
         "dstack/dstack-types/src/mr_config.rs",
+        "dstack/dstack-types/src/sha256sum.rs",
         "dstack/dstack-types/src/shared_filenames.rs",
         "dstack/dstack-types/src/version.rs",
         "dstack/dstack-types/tests/sdk_canonical_json.rs",
@@ -198,6 +199,7 @@
         "os/common/rootfs/containerd.service.d/dstack-prepare.conf",
         "os/common/rootfs/docker.service.d/dstack-guest-agent.conf",
         "os/common/rootfs/docker.service.d/dstack-prepare.conf",
+        "os/common/rootfs/dstack-boot-error@.service",
         "os/common/rootfs/dstack-gateway-checker.service",
         "os/common/rootfs/dstack-guest-agent.service",
         "os/common/rootfs/dstack-guest-agent.socket",
@@ -214,12 +216,17 @@
         "os/image/README.md",
         "os/image/assemble.sh",
         "os/image/authenticode_hash.py",
-        "os/image/dstack-image-oci.sh",
         "os/image/kernel-builder/Dockerfile",
         "os/image/kernel-builder/build.sh",
         "os/image/mk-image-mr.sh",
+        "os/mkosi/components/dstack-rust/dstack-rust-build.sh",
+        "os/mkosi/components/dstack-rust/dstack-rust.sh",
         "os/mkosi/mkosi.conf",
         "os/mkosi/mkosi.finalize",
+        "os/mkosi/mkosi.postinst",
+        "os/mkosi/mkosi.skeleton/etc/systemd/network/20-wired.network",
+        "os/mkosi/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset",
+        "os/mkosi/rootfs.tmpfiles",
         "os/mkosi/scripts/write-os-release.sh",
         "os/mkosi/tests/acceptance.sh",
         "os/mkosi/versions.env",
@@ -2340,6 +2347,7 @@
         "dstack/crates/dstack-auth/Cargo.toml",
         "dstack/crates/dstack-auth/src/main.rs",
         "dstack/crates/dstack-cli-core/src/ports.rs",
+        "dstack/crates/dstackup/src/install.rs",
         "dstack/crates/mock-attestation/Cargo.toml",
         "dstack/crates/mock-attestation/README.md",
         "dstack/crates/mock-attestation/src/lib.rs",
@@ -2349,6 +2357,9 @@
         "dstack/crates/mock-attestation/src/sev_snp.rs",
         "dstack/crates/mock-attestation/src/tdx.rs",
         "dstack/crates/mock-attestation/src/tpm.rs",
+        "dstack/crates/qemu-acpi/scripts/differential-random.py",
+        "dstack/crates/qemu-acpi/src/golden_tests.rs",
+        "dstack/crates/qemu-acpi/src/topology.rs",
         "dstack/host-api/Cargo.toml",
         "dstack/host-api/build.rs",
         "dstack/host-api/proto/host_api.proto",
@@ -2378,7 +2389,6 @@
         "dstack/vmm/src/app/mr_config.rs",
         "dstack/vmm/src/app/network.rs",
         "dstack/vmm/src/app/qemu.rs",
-        "dstack/vmm/src/app/registry.rs",
         "dstack/vmm/src/app/vm_info.rs",
         "dstack/vmm/src/app/workdir.rs",
         "dstack/vmm/src/config.rs",
@@ -2583,22 +2593,6 @@
           "response": "google.protobuf.Empty",
           "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
           "line": 385
-        },
-        {
-          "service": "Vmm",
-          "method": "ListRegistryImages",
-          "request": "google.protobuf.Empty",
-          "response": "RegistryImageListResponse",
-          "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 388
-        },
-        {
-          "service": "Vmm",
-          "method": "PullRegistryImage",
-          "request": "PullRegistryImageRequest",
-          "response": "google.protobuf.Empty",
-          "source": "dstack/vmm/rpc/proto/vmm_rpc.proto",
-          "line": 390
         },
         {
           "service": "Vmm",
@@ -3005,10 +2999,6 @@
           "source": "dstack/vmm/vmm.toml"
         },
         {
-          "key": "registry",
-          "source": "dstack/vmm/vmm.toml"
-        },
-        {
           "key": "platform",
           "source": "dstack/vmm/vmm.toml"
         },
@@ -3321,22 +3311,6 @@
         {
           "name": "test_tdx_config",
           "source": "dstack/vmm/src/app.rs"
-        },
-        {
-          "name": "test_parse_image_ref_private_registry",
-          "source": "dstack/vmm/src/app/registry.rs"
-        },
-        {
-          "name": "test_parse_image_ref_docker_hub",
-          "source": "dstack/vmm/src/app/registry.rs"
-        },
-        {
-          "name": "test_parse_image_ref_with_scheme",
-          "source": "dstack/vmm/src/app/registry.rs"
-        },
-        {
-          "name": "test_parse_www_authenticate",
-          "source": "dstack/vmm/src/app/registry.rs"
         }
       ]
     },
@@ -3348,6 +3322,7 @@
         "dstack/cached-cell"
       ],
       "files": [
+        "dstack/build/shared/build-lib.sh",
         "dstack/build/shared/tests/test_build_lib.py",
         "dstack/cached-cell/Cargo.toml",
         "dstack/cached-cell/src/lib.rs",
@@ -4145,14 +4120,17 @@
         "dstack/gateway/src/main_service/snapshots/dstack_gateway__main_service__tests__config.snap",
         "dstack/gateway/src/main_service/snapshots/dstack_gateway__main_service__tests__empty_config.snap",
         "dstack/gateway/src/main_service/tests.rs",
+        "dstack/gateway/src/main_service/wg_apply.rs",
         "dstack/gateway/src/metrics.rs",
         "dstack/gateway/src/models.rs",
         "dstack/gateway/src/pp.rs",
         "dstack/gateway/src/proxy.rs",
+        "dstack/gateway/src/proxy/adaptive_ktls.rs",
         "dstack/gateway/src/proxy/health_check.rs",
         "dstack/gateway/src/proxy/io_bridge.rs",
         "dstack/gateway/src/proxy/port_policy.rs",
         "dstack/gateway/src/proxy/sni.rs",
+        "dstack/gateway/src/proxy/splice.rs",
         "dstack/gateway/src/proxy/tls_passthough.rs",
         "dstack/gateway/src/proxy/tls_terminate.rs",
         "dstack/gateway/src/web_routes.rs",
@@ -4976,10 +4954,6 @@
           "source": "dstack/gateway/gateway.toml"
         },
         {
-          "key": "external_port",
-          "source": "dstack/gateway/gateway.toml"
-        },
-        {
           "key": "max_connections_per_app",
           "source": "dstack/gateway/gateway.toml"
         },
@@ -5288,14 +5262,6 @@
           "source": "dstack/gateway/test-run/e2e/configs/gateway-1.toml"
         },
         {
-          "key": "tappd_port",
-          "source": "dstack/gateway/test-run/e2e/configs/gateway-1.toml"
-        },
-        {
-          "key": "external_port",
-          "source": "dstack/gateway/test-run/e2e/configs/gateway-1.toml"
-        },
-        {
           "key": "log_level",
           "source": "dstack/gateway/test-run/e2e/configs/gateway-2.toml"
         },
@@ -5436,14 +5402,6 @@
           "source": "dstack/gateway/test-run/e2e/configs/gateway-2.toml"
         },
         {
-          "key": "tappd_port",
-          "source": "dstack/gateway/test-run/e2e/configs/gateway-2.toml"
-        },
-        {
-          "key": "external_port",
-          "source": "dstack/gateway/test-run/e2e/configs/gateway-2.toml"
-        },
-        {
           "key": "log_level",
           "source": "dstack/gateway/test-run/e2e/configs/gateway-3.toml"
         },
@@ -5581,14 +5539,6 @@
         },
         {
           "key": "listen_port",
-          "source": "dstack/gateway/test-run/e2e/configs/gateway-3.toml"
-        },
-        {
-          "key": "tappd_port",
-          "source": "dstack/gateway/test-run/e2e/configs/gateway-3.toml"
-        },
-        {
-          "key": "external_port",
           "source": "dstack/gateway/test-run/e2e/configs/gateway-3.toml"
         },
         {
@@ -5870,12 +5820,15 @@
         "dstack/cc-eventlog/src/tcg.rs",
         "dstack/cc-eventlog/src/tdx.rs",
         "dstack/cc-eventlog/src/tpm.rs",
+        "dstack/crates/pki-fetch/Cargo.toml",
+        "dstack/crates/pki-fetch/src/lib.rs",
         "dstack/dstack-attest/Cargo.toml",
         "dstack/dstack-attest/src/amd_sev_snp.rs",
         "dstack/dstack-attest/src/attestation.rs",
         "dstack/dstack-attest/src/aws_nitro_tpm.rs",
         "dstack/dstack-attest/src/lib.rs",
         "dstack/dstack-attest/src/sev_snp.rs",
+        "dstack/dstack-attest/src/trust_anchors.rs",
         "dstack/dstack-attest/src/v1.rs",
         "dstack/dstack-attest/tests/nitro_attestation.bin",
         "dstack/dstack-attest/tests/nitro_attestation_dbg.bin",
@@ -5923,6 +5876,7 @@
         "dstack/ra-tls/src/traits.rs",
         "dstack/sev-snp-qvl/Cargo.toml",
         "dstack/sev-snp-qvl/src/lib.rs",
+        "dstack/tests/e2e/attestation/run-platform.sh",
         "dstack/tpm-qvl/Cargo.toml",
         "dstack/tpm-qvl/certs/AWS_NitroEnclaves_Root-G1.pem",
         "dstack/tpm-qvl/certs/gcp-root-ca.pem",
