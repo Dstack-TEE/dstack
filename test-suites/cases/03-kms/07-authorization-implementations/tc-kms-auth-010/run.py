@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 CASE_ID = "tc-kms-auth-010"
-EXACT_TESTS = 4
+EXACT_TESTS = 8
 FILTER = "main_service::upgrade_authority::tests"
 
 
@@ -135,6 +135,9 @@ def main() -> int:
             "all-boot-identity-fields-preserved",
             "malformed-backend-response-fails-closed",
             "next-request-recovers-without-retained-decision",
+            "short-identity-fields-refused-before-backend",
+            "silent-backend-bounded-by-request-timeout",
+            "multibyte-backend-response-bounded-without-abort",
             "no-decision-state-across-process-restart",
         ],
         "decision_cache_present": False,
@@ -150,7 +153,7 @@ def main() -> int:
     atomic_json(detail, observation)
     atomic_json(result_dir / "artifacts/manifest.json", {"artifacts": [artifact]})
     observed = (
-        "Every request reached the configured authorization backend; no decision cache, TTL, or cross-identity reuse exists."
+        "Every app authorization request reached the configured backend; no app decision cache, TTL, or cross-identity reuse exists."
         if status == "PASS"
         else summary
     )
@@ -175,7 +178,7 @@ def main() -> int:
                 "sha256": hashlib.sha256(detail.read_bytes()).hexdigest(),
             }
         ],
-        "remarks": "The product intentionally has no authorization decision cache, so revocation freshness is bounded by the backend/chain snapshot rather than a KMS-local TTL.",
+        "remarks": "App authorization decisions are never cached, so revocation freshness is bounded by the backend/chain snapshot rather than a KMS-local TTL. Only the auth API info and the KMS self-authorization are reused for one second (PR #1311).",
     }
     atomic_json(result_dir / "result.json", result)
     return 0 if status == "PASS" else 1

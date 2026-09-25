@@ -53,7 +53,7 @@ Send identical requests across an allow-to-deny backend transition, then send di
 
 **Expected results:**
 
-- Both identical requests reach the backend and observe its current decision; app/KMS routes and every identity field remain distinct, with no KMS-local cache key, TTL, or cross-identity reuse.
+- Both identical requests reach the backend and observe its current decision; app/KMS routes and every identity field remain distinct, with no KMS-local app decision cache, TTL, or cross-identity reuse.
 
 <a id="tc-kms-auth-010-step-03"></a>
 ### Step 3: Exercise failure and recovery
@@ -72,6 +72,11 @@ Execute the exact Rust matrix in a second fresh test process and compare bounded
 **Expected results:**
 
 - Both processes pass every exact row; no authorization decision survives restart, and evidence retains only counts, durations, coverage labels, and hashes.
+
+## Post-baseline regression coverage (PRs #1278, #1310, #1311, #1365, #1399)
+
+- The exact Rust matrix under `main_service::upgrade_authority::tests` now has 8 rows. Besides the four freshness, scope, and recovery rows it covers: short `compose_hash` (not 32 bytes) and `instance_id` (neither 20 bytes nor empty) refused before the backend is called, with an empty `instance_id` still allowed (#1310); a backend that accepts the connection and never answers is bounded by `core.auth_api.webhook.timeout` (default `60s`, #1365); and a backend response with a multibyte character on the quoting bound is bounded without aborting (#1278). Both fresh processes must report exactly 8 passed.
+- App authorization (`bootAuth/app`) is still never cached. Two KMS-local reuses exist and are not app decisions: the auth API info (`GetMeta`) and the KMS self-authorization are reused for one second with concurrent callers sharing one request (#1311), and the KMS's own verified boot info is reused for one hour instead of for the process lifetime (#1399). Denials and errors are never reused.
 
 ## Postconditions
 
