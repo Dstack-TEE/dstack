@@ -64,6 +64,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1355)
+
+- Create a credential whose token is `abc\u00e9-<lease>-\u00fc123`: a byte cut at 4 falls inside `é` and a byte cut 4 from the end falls inside `ü`. The create response and `Admin.GetDnsCredential` both return HTTP 200 with the token redacted by character (`abcé...ü123`), and the following `Admin.ListDnsCredentials` still succeeds and never carries the full token. Before the fix the first read aborted the gateway.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

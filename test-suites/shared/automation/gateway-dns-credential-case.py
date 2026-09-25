@@ -324,6 +324,36 @@ def main() -> int:
             len(concurrent_ids) == 4 and len(set(concurrent_ids)) == 4
         )
 
+        # PR #1355: redaction counts characters, so a token with a multi-byte
+        # character on either cut is redacted instead of aborting every read.
+        wide_secret = f"abc\u00e9-{lease}-\u00fc123"
+        wide_code, wide_created = json_rpc(
+            base,
+            admin_token,
+            "Admin.CreateDnsCredential",
+            {**create_common, "name": f"{prefix}-wide", "cf_api_token": wide_secret},
+        )
+        if wide_code == 200:
+            created_ids.append(str(wide_created["id"]))
+        wide_get_code, wide_fetched = (
+            json_rpc(
+                base,
+                admin_token,
+                "Admin.GetDnsCredential",
+                {"id": str(wide_created["id"])},
+            )
+            if wide_code == 200
+            else (0, {})
+        )
+        checks["multibyte_token_redacted_by_character"] = (
+            wide_code == 200
+            and wide_get_code == 200
+            and wide_created.get("cf_api_token", wide_created.get("cfApiToken"))
+            == redacted(wide_secret)
+            and wide_fetched.get("cf_api_token", wide_fetched.get("cfApiToken"))
+            == redacted(wide_secret)
+        )
+
         list_after_code, after = json_rpc(
             base, admin_token, "Admin.ListDnsCredentials", {}
         )
@@ -337,8 +367,8 @@ def main() -> int:
                 if str(row.get("id")) in set(created_ids)
             )
             and all(
-                secret not in json.dumps(after)
-                for secret in (secret_one, secret_two, updated_secret)
+                secret not in json.dumps(after, ensure_ascii=False)
+                for secret in (secret_one, secret_two, updated_secret, wide_secret)
             )
         )
         if not all(checks.values()):
@@ -356,7 +386,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-03",
                     "status": "PASS",
-                    "observed": "Concurrent creates remained isolated, repeated listing stayed redacted, and the admin listener remained healthy.",
+                    "observed": "Concurrent creates remained isolated, a token with multi-byte characters on both redaction cuts was redacted by character, repeated listing stayed redacted, and the admin listener remained healthy.",
                 },
             ]
         )
