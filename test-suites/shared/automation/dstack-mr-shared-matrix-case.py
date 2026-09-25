@@ -935,9 +935,7 @@ def normalization_rows(
     observed: dict[str, dict[str, str]] = {}
     for memory, qemu in NORMALIZED_INDEPENDENCE_ROWS:
         name = f"normalized-{memory}-qemu-{qemu}"
-        output = measure(
-            name, normalized, machine_args(memory=memory, qemu=qemu)
-        )
+        output = measure(name, normalized, machine_args(memory=memory, qemu=qemu))
         for register in ("rtmr1", "rtmr2"):
             if output[register] != normalized_output[register]:
                 raise AssertionError(f"{name}: {register} depends on the host")
