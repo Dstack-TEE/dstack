@@ -64,6 +64,12 @@ Interrupt the external verifier/auth/image/network dependency, restart after acc
 
 - Uncertainty fails closed, recovery does not reuse stale decisions, accepted state survives only as documented, and cross-identity replay or substitution fails.
 
+## Post-baseline regression coverage (PRs #1302, #1303)
+
+- Nitro Enclave `device_id` is now derived from the attested PCR4 (the parent EC2 instance ID measurement) instead of the module ID prefix, which was `i` for every enclave. `DstackApp` device allowlists must hold `sha256(PCR4)`; enclaves on different parent instances must get different `device_id` values, and a document without PCR4 is rejected (#1302).
+- Key release to a Nitro Enclave needs `nitro_enclave_key_release = true` in addition to a successful attestation and policy decision; with the default `false`, app, KMS, and temp-CA release fail with `aws nitro enclave key release is not enabled` (#1303). The gate itself is covered in `tc-kms-release-010`.
+- This case stays capability-blocked until the cross-platform fixture provides a Nitro Enclave document and its trust chain.
+
 ## Postconditions
 
 Remove run-scoped evidence/state and restore trust, cache, routing and dependency baselines.
