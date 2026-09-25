@@ -733,6 +733,13 @@ def main() -> int:
                     "restarted Gateway did not listen while ACME was unresponsive"
                 )
             restart_listen_seconds = round(time.monotonic() - restart_started, 3)
+            admin_deadline = time.monotonic() + 10
+            while time.monotonic() < admin_deadline:
+                try:
+                    SUPPORT.rpc(base, token, "Admin.GetCertbotConfig", {})
+                    break
+                except urllib.error.URLError:
+                    time.sleep(0.1)
             restored_after_stall_code = SUPPORT.rpc(
                 base, token, "Admin.SetCertbotConfig", configured_values
             )[0]
