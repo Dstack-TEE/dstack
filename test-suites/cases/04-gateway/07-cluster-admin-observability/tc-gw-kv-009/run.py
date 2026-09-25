@@ -14,6 +14,14 @@ import urllib.request
 from pathlib import Path
 
 CASE_ID = "tc-gw-kv-009"
+# Named so a filter change cannot silently drop them: PR #1374 bounds every
+# peer HTTPS exchange by the sync timeout, and PR #1357 makes the renew and
+# rotation lease locks atomic within a node.
+REQUIRED_TESTS = (
+    "kv::https_client::transport_tests::a_peer_that_never_answers_does_not_hang_the_client",
+    "kv::cert_lock_tests::two_tasks_on_one_node_cannot_both_acquire",
+    "kv::cert_lock_tests::a_holder_that_was_taken_over_does_not_release_the_new_holder_lock",
+)
 
 
 def rpc(url: str, method: str) -> tuple[int, dict[str, object]]:
@@ -86,6 +94,9 @@ def main() -> int:
         "cluster_peer_visibility": len(peer_counts) == 3
         and all(count >= 2 for count in peer_counts),
         "kv_lifecycle_matrix": unit.returncode == 0 and unit_passed >= 5,
+        "required_tests_passed": all(
+            f"test {name} ... ok" in output for name in REQUIRED_TESTS
+        ),
     }
     passed = all(checks.values())
     status = "PASS" if passed else "FAIL"
