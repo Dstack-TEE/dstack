@@ -79,6 +79,18 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 - A v1 `IssueCert` request with `usage_ra_tls=true` on the same listener returns a leaf whose attestation extension is a MessagePack map (first byte `0x80`-`0x8f`, `0xde`, or `0xdf`) that decodes completely into `version`, `platform`, and `stack` with a `stack.data` map.
 - Automated in `shared/automation/passed-rpc-case.py` (`check_certificate_attestation_wire`); only structural fields and first bytes are recorded, never the private key.
 
+## Post-baseline regression coverage (PR #1232)
+
+- `not_before` and `not_after` are bounded by the last RFC 5280 certificate
+  time, `253402300799` (9999-12-31T23:59:59Z). On both v0 `GetTlsKey` and v1
+  `IssueCert`, `not_after=253402300799` is signed and the leaf's notAfter is
+  exactly that instant.
+- `not_after=253402300800`, `not_after=18446744073709551615`, and
+  `not_before=253402300800` each return an HTTP 4xx pRPC error whose message
+  names the offending field, and a valid `GetTlsKey` still succeeds afterwards.
+- Automated in `shared/automation/passed-rpc-case.py`
+  (`check_certificate_validity_bounds`).
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

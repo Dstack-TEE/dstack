@@ -108,6 +108,8 @@ CASES = {
 
 # OID of the RA-TLS extension that carries the versioned attestation.
 RATLS_ATTESTATION_OID = "1.3.6.1.4.1.62397.1.8"
+# The last timestamp an RFC 5280 certificate can carry.
+MAX_CERT_VALIDITY_SECS = 253_402_300_799
 NVIDIA_VENDOR_ID = "0x10de"
 DISPLAY_CLASS_PREFIXES = ("0x0300", "0x0302")
 
@@ -436,6 +438,65 @@ def check_certificate_attestation_wire(
     }
 
 
+def check_certificate_validity_bounds(
+    socket: str, route: str, payload: dict[str, Any], **_: Any
+) -> dict[str, Any]:
+    """PR #1232: a validity bound past 9999-12-31T23:59:59Z is refused, not signed."""
+    from cryptography import x509
+
+    observed: dict[str, Any] = {}
+    for surface, target in (("v0", route), ("v1", v1_route(route, "IssueCert"))):
+        request = {key: value for key, value in payload.items() if key != "not_before"}
+        request["not_after"] = MAX_CERT_VALIDITY_SECS
+        code, body = call(
+            socket, target, "application/json", json.dumps(request).encode()
+        )
+        if code != 200:
+            raise AssertionError(
+                f"{surface} last representable not_after returned HTTP {code}"
+            )
+        leaf = x509.load_pem_x509_certificate(
+            json.loads(body)["certificate_chain"][0].encode()
+        )
+        if int(leaf.not_valid_after_utc.timestamp()) != MAX_CERT_VALIDITY_SECS:
+            raise AssertionError(
+                f"{surface} certificate notAfter was not 9999-12-31T23:59:59Z"
+            )
+        rejected = {}
+        for field, value in (
+            ("not_after", MAX_CERT_VALIDITY_SECS + 1),
+            ("not_after", 2**64 - 1),
+            ("not_before", MAX_CERT_VALIDITY_SECS + 1),
+        ):
+            bad = {**request, field: value}
+            if field == "not_before":
+                bad.pop("not_after")
+            code, body = call(
+                socket, target, "application/json", json.dumps(bad).encode()
+            )
+            error = json.loads(body).get("error") if body else None
+            if code < 400 or not isinstance(error, str) or field not in error:
+                raise AssertionError(
+                    f"{surface} unrepresentable {field}={value} was not refused by name"
+                )
+            rejected[f"{field}={value}"] = code
+        code, _ = call(socket, route, "application/json", json.dumps(payload).encode())
+        if code != 200:
+            raise AssertionError(
+                f"GetTlsKey was unavailable after the {surface} refusals"
+            )
+        observed[surface] = {"maximum_accepted": True, "rejected_http": rejected}
+    return observed
+
+
+def check_tls_key(**kwargs: Any) -> dict[str, Any]:
+    """Run every post-baseline GetTlsKey check."""
+    return {
+        **check_certificate_attestation_wire(**kwargs),
+        "validity_bounds": check_certificate_validity_bounds(**kwargs),
+    }
+
+
 def host_nvidia_display_devices() -> int:
     """Count NVIDIA display-class PCI devices the way lspci::sysfs does."""
     count = 0
@@ -515,7 +576,7 @@ def check_gpu_info_contract(
 
 
 EXTRA_CHECKS = {
-    "tc-gos-dstackguest-001": check_certificate_attestation_wire,
+    "tc-gos-dstackguest-001": check_tls_key,
     "tc-gos-dstackguest-004": check_attest_wire,
     "tc-gos-guestapi-006": check_gpu_info_contract,
 }
