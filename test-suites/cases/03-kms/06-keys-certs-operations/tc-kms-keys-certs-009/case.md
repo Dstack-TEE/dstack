@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PRs #1305, #1309)
+
+- The fixture KMS auto-bootstraps (`auto_bootstrap_domain` is set). With both root keys present but one derived certificate (`rpc.crt`) missing, a restart must not generate new root keys: it exits non-zero with `KMS has already been bootstrapped` and both root key files are byte-identical afterwards (#1305).
+- Both root keys are written last, so their joint presence marks a completed bootstrap. With only a stale `root-ca.key` left (a crash between the two root key writes) and every other file absent, a restart redoes the bootstrap: the stale key is replaced, `root-k256.key` is written, and the KMS serves a new public identity (#1309). The complete cold backup is then restored as before.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

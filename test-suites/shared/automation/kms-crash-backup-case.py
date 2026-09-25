@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -143,6 +144,67 @@ def main() -> int:
             {"name": "orphan_atomic_temp", "status": "PASS", "identity_preserved": True}
         )
 
+        root_digests = {
+            name: hashlib.sha256((cert_dir / name).read_bytes()).digest()
+            for name in ("root-ca.key", "root-k256.key")
+        }
+        (cert_dir / "rpc.crt").unlink()
+        replacement = start(
+            binary, str(kms["config"]), socket, artifacts / "missing-cert-start.log"
+        )
+        try:
+            exit_code = replacement.wait(timeout=20)
+        except subprocess.TimeoutExpired as error:
+            raise AssertionError(
+                "KMS auto-bootstrapped over existing root keys"
+            ) from error
+        replacement = None
+        refused = "KMS has already been bootstrapped" in (
+            artifacts / "missing-cert-start.log"
+        ).read_text(errors="replace")
+        kept = all(
+            hashlib.sha256((cert_dir / name).read_bytes()).digest() == digest
+            for name, digest in root_digests.items()
+        )
+        if exit_code == 0 or not refused or not kept:
+            raise AssertionError(
+                f"missing certificate: exit={exit_code} refused={refused} root_keys_kept={kept}"
+            )
+        shutil.copy2(backup / "rpc.crt", cert_dir / "rpc.crt")
+        rows.append(
+            {
+                "name": "auto_bootstrap_refused_over_root_keys",
+                "status": "PASS",
+                "exit_nonzero": True,
+                "root_keys_unchanged": True,
+            }
+        )
+
+        for entry in cert_dir.iterdir():
+            if entry.is_file():
+                entry.unlink()
+        stale = cert_dir / "root-ca.key"
+        stale.write_bytes(b"stale")
+        stale.chmod(0o600)
+        replacement = start(
+            binary, str(kms["config"]), socket, artifacts / "interrupted-bootstrap.log"
+        )
+        redone_identity = public_identity(wait_meta(url))
+        stop(replacement.pid)
+        replacement.wait(timeout=5)
+        replacement = None
+        if stale.read_bytes() == b"stale" or not (cert_dir / "root-k256.key").is_file():
+            raise AssertionError("interrupted bootstrap was not redone")
+        if redone_identity == original_identity:
+            raise AssertionError("redone bootstrap reused the original identity")
+        rows.append(
+            {
+                "name": "interrupted_bootstrap_redone",
+                "status": "PASS",
+                "new_identity": True,
+            }
+        )
+
         root_k256 = cert_dir / "root-k256.key"
         root_k256.write_bytes(b"truncated")
         root_k256.chmod(0o600)
@@ -191,12 +253,12 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 os.killpg(replacement.pid, signal.SIGKILL)
                 replacement.wait(timeout=5)
-        # If failure happened after corruption, restore the complete backup before
-        # retaining the fixture so interactive debugging starts from valid keys.
-        if (
-            backup.is_dir()
-            and (cert_dir / "root-k256.key").read_bytes() == b"truncated"
-        ):
+        # On failure, restore the complete backup before retaining the fixture
+        # so interactive debugging starts from the original keys.
+        if backup.is_dir() and status != "PASS":
+            for entry in cert_dir.iterdir():
+                if entry.is_file():
+                    entry.unlink()
             for entry in backup.iterdir():
                 shutil.copy2(entry, cert_dir / entry.name)
         shutil.rmtree(staging, ignore_errors=True)
@@ -217,7 +279,7 @@ def main() -> int:
         json.dumps({"artifacts": [artifact]}, indent=2) + "\n"
     )
     summary = (
-        "4/4 KMS crash and cold-backup groups passed" if status == "PASS" else failure
+        "6/6 KMS crash and cold-backup groups passed" if status == "PASS" else failure
     )
     result = {
         "schema_version": "1.0",
