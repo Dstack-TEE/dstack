@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1308)
+
+- `RegisterCvm` no longer writes and applies the WireGuard config under the routing lock; a single worker applies the latest rendered state after the call returns, coalescing bursts and retrying failures. The fixture replaces `wg` with a lease-owned stub that copies each `wg syncconf` input to the file published as `wireguard_applied_config`.
+- Within 15 seconds of the eight-way burst the applied config lists every registered public key; after the stale instances are recycled it lists none of them; and the later four-way burst is applied in full. A registration's peer is never lost to coalescing.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.

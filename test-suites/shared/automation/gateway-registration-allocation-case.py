@@ -49,6 +49,17 @@ def register(
     return code, client_ip, application_error
 
 
+def wait_applied(path: pathlib.Path, keys: list[str], present: bool) -> bool:
+    """Wait until the applied WireGuard config lists, or omits, every key."""
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if all((key in text) is present for key in keys):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def main() -> int:
     """Run concurrent allocation, idempotence, expiry, and recycle paths."""
     if os.environ["DSTACK_TEST_CASE_ID"] != CASE_ID:
@@ -59,6 +70,7 @@ def main() -> int:
     )
     gateway = manifest["values"]["gateway"]
     debug_base = str(gateway["debug_url"]).rstrip("/")
+    applied = pathlib.Path(str(gateway["wireguard_applied_config"]))
     lease = str(manifest.get("lease_id", "lease"))[-10:].replace("-", "")
     prefix = f"alloc-{lease}"
     steps: list[dict[str, str]] = []
@@ -113,6 +125,11 @@ def main() -> int:
             f"{prefix}-duplicate-key",
             first_rows[0][2],
         )
+        # PR #1308: registration returns before the WireGuard apply, which a
+        # single worker coalesces; the burst must still reach the interface.
+        checks["burst_applied_asynchronously"] = wait_applied(
+            applied, [row[2] for row in first_rows], True
+        )
         checks["idempotent_and_collision_safe"] = (
             repeat_code == 200
             and not repeat_error
@@ -133,6 +150,9 @@ def main() -> int:
                 break
             time.sleep(0.25)
         checks["stale_instances_recycled"] = not remaining
+        checks["recycled_peers_withdrawn"] = wait_applied(
+            applied, [row[2] for row in first_rows], False
+        )
 
         second_rows = [
             (
@@ -154,6 +174,9 @@ def main() -> int:
         checks["post_recycle_addresses_unique"] = len(second_ips) == len(
             second_rows
         ) and len(set(second_ips)) == len(second_ips)
+        checks["second_burst_applied"] = wait_applied(
+            applied, [row[2] for row in second_rows], True
+        )
         if not all(checks.values()):
             raise AssertionError(
                 f"allocation checks failed: {sorted(k for k, v in checks.items() if not v)}"
@@ -163,12 +186,12 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-02",
                     "status": "PASS",
-                    "observed": "Eight concurrent registrations received unique IPv4 allocations; re-registration was stable and duplicate keys were rejected.",
+                    "observed": "Eight concurrent registrations received unique IPv4 allocations and all reached the applied WireGuard config; re-registration was stable and duplicate keys were rejected.",
                 },
                 {
                     "id": f"{CASE_ID}-step-03",
                     "status": "PASS",
-                    "observed": "Bounded stale expiry removed all run-scoped instances and subsequent allocations remained unique without concurrent duplication.",
+                    "observed": "Bounded stale expiry removed all run-scoped instances and their peers from the applied config, and a later burst was applied with unique allocations.",
                 },
             ]
         )
