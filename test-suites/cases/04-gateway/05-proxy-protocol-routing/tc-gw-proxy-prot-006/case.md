@@ -64,6 +64,11 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1245)
+
+- The connection limit is checked and taken in one atomic step. Six routed connections are released together from a barrier against `max_connections_per_app = 2`: exactly two reach the backend, and the other four close without data within 0.4 seconds, which keeps the admitted relays inside the 1-second idle timeout while they are classified.
+- A relay whose client stops reading is reaped by the idle timeout instead of the 5-hour total, on both the splice and the adaptive kTLS paths, and a writer that accepts no bytes ends the relay instead of spinning a core. These need a client that stalls against a full socket buffer and a zero-length writer, which the live fixture cannot produce deterministically, so the harness runs exactly these candidate tests and requires all four to pass: `proxy::splice::tests::a_client_that_stops_reading_is_reaped_by_the_idle_timeout`, `proxy::adaptive_ktls::tests::a_client_that_stops_reading_is_reaped_by_the_idle_timeout`, `proxy::io_bridge::tests::a_writer_that_accepts_no_bytes_is_an_error_not_a_spin` and `proxy::tls_passthough::tests::the_connection_limit_check_takes_the_slot`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
