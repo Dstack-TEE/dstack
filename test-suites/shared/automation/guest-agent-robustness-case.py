@@ -64,6 +64,14 @@ class Blocked(Exception):
     """A prerequisite the fixture does not provide."""
 
 
+class StepFailure(AssertionError):
+    """A failed step that still carries what it observed, for the artifact."""
+
+    def __init__(self, message: str, observed: dict[str, Any]):
+        super().__init__(message)
+        self.observed = observed
+
+
 @dataclass
 class Target:
     """One pRPC listener, reached over a unix socket or a forwarded port."""
@@ -445,14 +453,28 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
             "simulator answers from a fixture instead of the host's QGS"
         )
 
-    deadline = time.monotonic() + LOAD_SECONDS
+    load_started = time.monotonic()
+    deadline = load_started + LOAD_SECONDS
     load_replies: list[Reply] = []
+    load_failures: list[dict[str, Any]] = []
     probe: list[float] = []
     failures: list[str] = []
 
-    def saturate(_: int) -> None:
+    def saturate(index: int) -> None:
         while time.monotonic() < deadline:
-            load_replies.append(quote(0))
+            issued = time.monotonic() - load_started
+            reply = quote(0)
+            load_replies.append(reply)
+            if not reply.ok:
+                load_failures.append(
+                    {
+                        "thread": index,
+                        "issued_at_seconds": round(issued, 3),
+                        "seconds": round(reply.seconds, 3),
+                        "status": reply.status,
+                        "error": reply.error,
+                    }
+                )
 
     with ThreadPoolExecutor(max_workers=CONCURRENCY + 1) as pool:
         loaders = [pool.submit(saturate, index) for index in range(CONCURRENCY)]
@@ -479,14 +501,37 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
         "loaded_p95_seconds": round(percentile(probe, 0.95), 4),
         "loaded_max_seconds": round(max(probe, default=0.0), 4),
         "bound_seconds": TRIVIAL_LATENCY_BOUND_SECONDS,
+        "load_failures": sorted(
+            load_failures, key=lambda row: row["issued_at_seconds"]
+        ),
         "probe_failures": failures[:5],
         "agent_before": agent_before,
         "agent_after": agent_after,
         "agent_restarted": restarted,
-        "agent_journal": guest_agent_journal(values) if restarted else [],
+        "agent_journal": guest_agent_journal(values)
+        if restarted or load_failures or failures
+        else [],
     }
+    try:
+        check_head_of_line(observations, load_replies, probe, failures)
+    except AssertionError as error:
+        raise StepFailure(str(error), observations) from error
+    return observations
+
+
+def check_head_of_line(
+    observations: dict[str, Any],
+    load_replies: list[Reply],
+    probe: list[float],
+    failures: list[str],
+) -> None:
+    """Apply the step-2 expectations to what the load observed."""
+    agent_before, agent_after = (
+        observations["agent_before"],
+        observations["agent_after"],
+    )
     # Checked first: a watchdog restart explains every dropped call below (#1256).
-    if restarted:
+    if observations["agent_restarted"]:
         raise AssertionError(
             f"the agent did not survive the load: {agent_before} became {agent_after}. "
             f"{sum(1 for reply in load_replies if not reply.ok)} of {len(load_replies)} "
@@ -505,7 +550,6 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
             f"{CONCURRENCY} concurrent GetQuote calls, past the "
             f"{TRIVIAL_LATENCY_BOUND_SECONDS}s bound; the quote path is blocking the runtime"
         )
-    return observations
 
 
 # --------------------------------------------------------------------------
@@ -1008,10 +1052,15 @@ def execute(case_id: str, case: Case, values: dict[str, Any]) -> dict[str, Any]:
             report["steps"][step_id] = {"status": "BLOCKED", "observed": failure}
             break
         except Exception as error:  # noqa: BLE001 - the harness reports, never crashes
-            status, failure = "FAIL", f"{type(error).__name__}: {error}"
+            name = "AssertionError" if isinstance(error, StepFailure) else None
+            status, failure = "FAIL", f"{name or type(error).__name__}: {error}"
             print(failure, file=sys.stderr, flush=True)
             print(f"STEP {step_id} END - FAIL", flush=True)
-            report["steps"][step_id] = {"status": "FAIL", "observed": failure}
+            report["steps"][step_id] = {
+                "status": "FAIL",
+                "observed": failure,
+                **getattr(error, "observed", {}),
+            }
             break
         report["steps"][step_id] = {
             "status": "PASS",
