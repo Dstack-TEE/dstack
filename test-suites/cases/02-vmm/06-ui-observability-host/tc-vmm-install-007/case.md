@@ -49,7 +49,7 @@ Run the installer with `--src <case>/src` (absent) and `--prefix <case>/prefix-c
 **Expected results:**
 
 - Exit status is 0; the stub `cargo` ran exactly once with working directory `<case>/src/dstack`; `<case>/prefix-clone/bin/dstackup` exists and is executable.
-- `cloning dstack source into` appears on stderr and not on stdout, so the `$(resolve_source)` capture holds only the checkout path.
+- `cloning dstack source into` appears on stderr and not on stdout.
 
 <a id="tc-vmm-install-007-step-02"></a>
 ### Step 2: Update an existing checkout and use a temporary checkout
@@ -59,7 +59,7 @@ Run the installer again with the same `--src` and a new prefix, then run it with
 **Expected results:**
 
 - The second run exits 0, reports `updating dstack source in` on stderr only, builds in `<case>/src/dstack`, and installs `dstackup`.
-- The run without `--src` exits 0, builds exactly once in `<TMPDIR>/dstack-install.*/source/dstack`, and installs `dstackup`.
+- The run without `--src` exits 0, builds exactly once in `<TMPDIR>/dstack-install.*/source/dstack`, installs `dstackup`, and leaves no `dstack-install.*` directory under `TMPDIR`.
 
 <a id="tc-vmm-install-007-step-03"></a>
 ### Step 3: Refuse invalid inputs before building
@@ -74,8 +74,11 @@ Run the installer with an existing `--src` directory that is not a dstack checko
 ## Post-baseline regression coverage (PR #1162)
 
 - Before PR #1162 the progress messages and git output of `resolve_source` went to stdout, so `checkout=$(resolve_source)` captured them with the path and the build directory was wrong. Against the pre-fix script, the Step 1 row and both Step 2 rows fail; against the candidate they pass.
-- Known candidate issue, recorded but not gated: `tmp_src` is assigned inside the `$(resolve_source)` subshell, so the `EXIT` trap in the parent shell sees it empty and the temporary checkout under `TMPDIR` is not removed. The evidence field `temporary_checkout_removed` records it; gate on it once the installer is fixed.
+
+## Post-baseline regression coverage (PR #1227)
+
+- `resolve_source` now sets `checkout` in the installer's own shell instead of a `$(resolve_source)` subshell, so the `EXIT` trap sees `tmp_src` and removes the temporary checkout. The temporary-checkout row gates on `temporary_checkout_removed`; against the pre-fix script it fails because `<TMPDIR>/dstack-install.*` is left behind.
 
 ## Postconditions
 
-The case-scoped temporary directory, including the local origin, checkouts, prefixes, and any leaked temporary checkout under its private `TMPDIR`, is removed when the harness exits. Nothing outside it is modified.
+The case-scoped temporary directory, including the local origin, checkouts, prefixes, and its private `TMPDIR`, is removed when the harness exits. Nothing outside it is modified.
