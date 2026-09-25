@@ -73,6 +73,11 @@ Drive the sync route through the authenticated local client and real TLS client:
 - The sync routes accept only the RA-TLS app-id extension (`1.3.6.1.4.1.62397.1.3`); the app-info fallback was removed, and a certificate issued by a guest agent's local CA now carries the attested app id. Before sending any sync request, decode the leaf of the fixture's simulator-issued client identity and compare its app-id extension with `DstackGuest.Info.app_id` from the case-owned simulator. Expected: the extension is present exactly once, is non-empty, and its hex equals the simulator app id.
 - Every gateway node now enforces the peer check (no `insecure_skip_attestation`), so the positive rows in Steps 2 and 3 authenticate solely through that app-id extension.
 
+## Post-baseline regression coverage (PRs #1276, #1374 and #1380)
+
+- An authenticated envelope whose `sender_id` is the target node's own id is refused with HTTP 400 on both `/wavekv/sync/persistent` and `/wavekv/push/persistent`, like node id 0, and changes no key count.
+- Decoding and merging now run off the async workers (PR #1276) and the peer client is bounded by `core.sync.timeout` (PR #1374); neither changes the statuses above. The bounded client is pinned by name in `tc-gw-kv-009`.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
