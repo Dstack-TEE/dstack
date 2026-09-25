@@ -105,12 +105,11 @@ pub(crate) fn record_decode_failure(key: &str) {
 
 /// Record the outcome of pushing a new WireGuard config.
 ///
-/// Covers the whole of `reconfigure()`, not just `wg syncconf`: rendering and
+/// Covers the whole of `reconfigure_wg()`, not just `wg syncconf`: rendering and
 /// writing the config can fail too, and all three leave the data plane on its
-/// previous routing table while the gateway keeps answering. `wg syncconf`
-/// additionally rejects the *whole* file when one peer stanza is bad, and its
-/// call site can only log that, so without a counter a gateway that stopped
-/// applying routing updates looks healthy.
+/// previous routing table while the gateway keeps answering. The apply worker
+/// only logs and retries with backoff, so without a counter a gateway that
+/// stopped applying routing updates looks healthy.
 pub(crate) fn record_wg_reconfigure(ok: bool) {
     WG_RECONFIGURE_TOTAL.fetch_add(1, Ordering::Relaxed);
     if !ok {

@@ -34,12 +34,15 @@ async fn create_test_state_with(tweak: impl FnOnce(&mut Config)) -> TestState {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
     config.sync.data_dir = temp_dir.path().to_string_lossy().to_string();
     // the default points at /etc/wireguard/wg0.conf, so anything that calls
-    // `reconfigure` would write to the host's real WireGuard config.
+    // `reconfigure_wg` would write to the host's real WireGuard config.
     config.wg.config_path = temp_dir
         .path()
         .join("wg.conf")
         .to_string_lossy()
         .into_owned();
+    // and the default interface is wg0, so `wg syncconf` would reprogram the
+    // host's real tunnel wherever the tests run with enough privileges.
+    config.wg.interface = "wg-test-absent".to_string();
     tweak(&mut config);
     let options = ProxyOptions {
         config,
@@ -79,10 +82,8 @@ async fn wg_config_is_written_owner_only() {
     let state = create_test_state().await;
     let path = state.lock().config.wg.config_path.clone();
 
-    // `reconfigure` also runs `wg syncconf`, which fails without a real
-    // interface — that failure is logged rather than propagated, so the write
-    // is still exercised here.
-    state.lock().reconfigure().expect("reconfigure failed");
+    // The file write succeeds even when syncconf fails without an interface.
+    let _ = state.reconfigure_wg();
 
     let rendered = std::fs::read_to_string(&path).expect("wg config was not written");
     assert!(

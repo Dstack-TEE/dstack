@@ -31,20 +31,22 @@ impl DebugRpc for DebugRpcHandler {
             "Debug register CVM: app_id={}, instance_id={}",
             request.app_id, request.instance_id
         );
-        self.state.do_register_cvm(
-            &request.app_id,
-            &request.instance_id,
-            &request.client_public_key,
-            "",
-            // Reports nothing about itself: no port policy, and no statement
-            // either way about health gating. A brand-new debug-registered
-            // instance is therefore never polled and always counts as healthy,
-            // which keeps this path usable for testing routing without
-            // standing up a guest agent -- and re-registering an id that a real
-            // CVM already claimed leaves that CVM's declaration alone rather
-            // than silently downgrading it out of polling for good.
-            Default::default(),
-        )
+        self.state
+            .register_cvm_async(
+                request.app_id,
+                request.instance_id,
+                request.client_public_key,
+                String::new(),
+                // Reports nothing about itself: no port policy, and no statement
+                // either way about health gating. A brand-new debug-registered
+                // instance is therefore never polled and always counts as healthy,
+                // which keeps this path usable for testing routing without
+                // standing up a guest agent -- and re-registering an id that a real
+                // CVM already claimed leaves that CVM's declaration alone rather
+                // than silently downgrading it out of polling for good.
+                Default::default(),
+            )
+            .await
     }
 
     async fn info(self) -> Result<InfoResponse> {

@@ -195,7 +195,6 @@ async fn main() -> Result<()> {
     .await?;
     info!("Starting background tasks");
     state.start_bg_tasks().await?;
-    state.lock().reconfigure()?;
 
     proxy::start(proxy_config, state.clone()).context("failed to start the proxy")?;
 

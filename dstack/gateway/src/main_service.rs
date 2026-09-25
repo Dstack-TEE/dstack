@@ -29,7 +29,7 @@ use safe_write::safe_write_with_mode;
 use smallvec::{smallvec, SmallVec};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
-    Notify,
+    Notify, Semaphore,
 };
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
@@ -50,6 +50,7 @@ use crate::{
 
 mod auth_client;
 mod handshakes;
+mod wg_apply;
 
 use handshakes::LatestHandshakesCache;
 
@@ -71,6 +72,12 @@ pub struct ProxyInner {
     pub(crate) certbot: Arc<DistributedCertBot>,
     my_app_id: Vec<u8>,
     state: Mutex<ProxyState>,
+    /// Capacity-one queue: each apply renders the latest state, so pending
+    /// requests can be coalesced without losing a state change.
+    wg_apply_tx: std::sync::mpsc::SyncSender<()>,
+    /// Only one registration mutates the routing table at a time anyway.
+    /// Wait asynchronously rather than parking all RPC/blocking workers on it.
+    registration_slot: Arc<Semaphore>,
     pub(crate) notify_state_updated: Notify,
     auth_client: AuthClient,
     pub(crate) acceptor: TlsAcceptor,
@@ -206,11 +213,11 @@ impl Proxy {
             .with_context(|| format!("failed to delete CVM {instance_id} from WaveKV"))?;
 
         let removed_locally = state.forget_instance(instance_id).is_some();
-        // Reconfigure unconditionally: the tombstone write and the in-memory
-        // removal are not repeated on a retry, so gating this on them would
-        // leave a failed reconfigure with no retry path and the removed CVM's
-        // WireGuard peer stuck on the interface.
-        state.reconfigure()?;
+        drop(state);
+        // Reapply unconditionally: the tombstone write and the in-memory
+        // removal are not repeated on a retry, so the peer is only guaranteed
+        // to leave the interface if every call requests an apply.
+        self.request_wg_apply();
         Ok(CvmRemoval {
             record_existed,
             removed_locally,
@@ -277,10 +284,18 @@ impl Proxy {
 
     pub async fn new(options: ProxyOptions) -> Result<Self> {
         let (port_policy_tx, port_policy_rx) = unbounded_channel();
-        let inner = ProxyInner::new(options, port_policy_tx).await?;
+        let (wg_apply_tx, wg_apply_rx) = std::sync::mpsc::sync_channel(1);
+        let inner = ProxyInner::new(options, port_policy_tx, wg_apply_tx).await?;
         let proxy = Self {
             _inner: Arc::new(inner),
         };
+        let weak = Arc::downgrade(&proxy._inner);
+        wg_apply::spawn(wg_apply_rx, move || {
+            let Some(proxy) = weak.upgrade() else {
+                return Ok(());
+            };
+            proxy.reconfigure_wg()
+        })?;
         crate::proxy::port_policy::spawn_fetcher(proxy.clone(), port_policy_rx);
         Ok(proxy)
     }
@@ -289,6 +304,27 @@ impl Proxy {
 impl ProxyInner {
     pub(crate) fn lock(&self) -> MutexGuard<'_, ProxyState> {
         self.state.lock().or_panic("Failed to lock AppState")
+    }
+
+    /// Render the WireGuard config under the routing lock, then write and apply
+    /// it after releasing that lock. Only the apply worker calls this.
+    fn reconfigure_wg(&self) -> Result<()> {
+        let rendered = self.lock().generate_wg_config();
+        let result = rendered.and_then(|rendered| apply_wg_config(&self.config, &rendered));
+        crate::metrics::record_wg_reconfigure(result.is_ok());
+        result
+    }
+
+    /// Queue a full apply on the worker. Every caller goes through here, so
+    /// registrations, removals and reloads never wait on disk I/O or `wg`.
+    pub(crate) fn request_wg_apply(&self) {
+        use std::sync::mpsc::TrySendError;
+        match self.wg_apply_tx.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => {}
+            Err(TrySendError::Disconnected(())) => {
+                error!("WireGuard apply worker stopped");
+            }
+        }
     }
 
     /// WireGuard handshake ages, without taking the routing lock.
@@ -421,7 +457,8 @@ impl ProxyInner {
         }
         if num_recycled > 0 {
             info!("recycled {num_recycled} stale instances");
-            state.reconfigure()?;
+            drop(state);
+            self.request_wg_apply();
         }
         Ok(())
     }
@@ -429,6 +466,7 @@ impl ProxyInner {
     pub async fn new(
         options: ProxyOptions,
         port_policy_tx: UnboundedSender<String>,
+        wg_apply_tx: std::sync::mpsc::SyncSender<()>,
     ) -> Result<Self> {
         let ProxyOptions {
             config,
@@ -633,6 +671,8 @@ impl ProxyInner {
             config,
             state,
             notify_state_updated: Notify::new(),
+            wg_apply_tx,
+            registration_slot: Arc::new(Semaphore::new(1)),
             my_app_id,
             auth_client,
             acceptor,
@@ -779,6 +819,38 @@ impl Proxy {
         })
     }
 
+    /// Keep synchronous KV work and routing-lock waits off the RPC executor.
+    /// The permit moves into the closure so cancellation cannot admit another
+    /// blocking job before an already started registration finishes.
+    pub(crate) async fn register_cvm_async(
+        &self,
+        app_id: String,
+        instance_id: String,
+        client_public_key: String,
+        compose_hash: String,
+        reported: ReportedCapabilities,
+    ) -> Result<RegisterCvmResponse> {
+        let permit = self
+            .registration_slot
+            .clone()
+            .acquire_owned()
+            .await
+            .context("registration queue closed")?;
+        let proxy = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            proxy.do_register_cvm(
+                &app_id,
+                &instance_id,
+                &client_public_key,
+                &compose_hash,
+                reported,
+            )
+        })
+        .await
+        .context("registration worker failed")?
+    }
+
     /// Register a CVM with the given app_id, instance_id and client_public_key.
     ///
     /// `port_policy = None` means the CVM didn't report any policy (legacy
@@ -819,9 +891,6 @@ impl Proxy {
                 reported,
             )
             .context("failed to allocate IP address for client")?;
-        if let Err(err) = state.reconfigure() {
-            error!("failed to reconfigure: {err:?}");
-        }
         // Capture the prewarm decision before continuing under the lock.
         // If the instance arrived without port_policy (legacy CVM, or
         // compose_hash mismatch invalidated the cache), enqueue a
@@ -852,6 +921,9 @@ impl Proxy {
             gateways,
         };
         drop(state);
+        // Apply even when the peer is unchanged: a re-registration is how a
+        // CVM repairs a tunnel the interface lost (see gateway_checker).
+        self.request_wg_apply();
         if needs_prewarm {
             let _ = self.port_policy_tx.send(instance_id.to_string());
         }
@@ -1427,7 +1499,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
     });
 
     // Initial WireGuard configuration
-    proxy.lock().reconfigure()?;
+    proxy.request_wg_apply();
 
     // Watch for node changes and reconfigure WireGuard
     let mut rx = kv_store.watch_nodes();
@@ -1438,9 +1510,7 @@ fn start_wavekv_watch_task(proxy: Proxy) -> Result<()> {
                 break;
             }
             info!("WaveKV: detected remote node changes, reconfiguring WireGuard...");
-            if let Err(err) = proxy_for_nodes.lock().reconfigure() {
-                error!("Failed to reconfigure WireGuard: {err:?}");
-            }
+            proxy_for_nodes.request_wg_apply();
         }
     });
 
@@ -1709,11 +1779,6 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
 
     report_unreadable_overrides(&mut state.reported_bad_overrides, unreadable_overrides);
 
-    let reconfigured = if wg_changed {
-        state.reconfigure()
-    } else {
-        Ok(())
-    };
     drop(state);
 
     // The node that deleted it could only withdraw its own `conn/` and
@@ -1724,7 +1789,29 @@ fn reload_instances_from_kv_store(proxy: &Proxy, store: &KvStore) -> Result<()> 
             warn!("failed to withdraw this node's observations of {instance_id}: {err:?}");
         }
     }
-    reconfigured
+    if wg_changed {
+        // The apply blocks on file I/O and `wg syncconf`; the routing lock
+        // must not be held across it (see reconfigure_wg).
+        proxy.request_wg_apply();
+    }
+    Ok(())
+}
+
+/// Write the rendered WireGuard config and apply it with `wg syncconf`.
+///
+/// Blocking OS work (write + rename + fsync, fork/exec/wait); never call this
+/// with the routing lock held. Errors propagate so the worker retries even
+/// when no further registrations arrive.
+fn apply_wg_config(config: &Config, wg_config: &str) -> Result<()> {
+    // the rendered config carries the interface's WireGuard private key.
+    safe_write_with_mode(&config.wg.config_path, wg_config, 0o600)
+        .context("failed to write wg config")?;
+    let ifname = &config.wg.interface;
+    let config_path = &config.wg.config_path;
+
+    cmd!(wg syncconf $ifname $config_path).context("failed to set wg config")?;
+    info!("wg config updated");
+    Ok(())
 }
 
 /// WireGuard peers keyed by public key, valued by (last handshake, elapsed).
@@ -2418,46 +2505,6 @@ impl ProxyState {
         Ok(model.render()?)
     }
 
-    pub(crate) fn reconfigure(&mut self) -> Result<()> {
-        // Every way out of here that is not a clean apply leaves the data plane
-        // on the routing table it already had, so they all feed one counter --
-        // the early returns included. A config that cannot be rendered or
-        // written never reaches `wg` at all, and both call sites of this
-        // function only log the `Err`, so a full disk would otherwise look
-        // exactly like having nothing to apply.
-        let result = self.reconfigure_inner();
-        if result.is_err() {
-            crate::metrics::record_wg_reconfigure(false);
-        }
-        result
-    }
-
-    fn reconfigure_inner(&mut self) -> Result<()> {
-        let wg_config = self.generate_wg_config()?;
-        // the rendered config carries the interface's WireGuard private key.
-        safe_write_with_mode(&self.config.wg.config_path, wg_config, 0o600)
-            .context("failed to write wg config")?;
-        // wg setconf <interface_name> <config_path>
-        let ifname = &self.config.wg.interface;
-        let config_path = &self.config.wg.config_path;
-
-        match cmd!(wg syncconf $ifname $config_path) {
-            Ok(_) => {
-                crate::metrics::record_wg_reconfigure(true);
-                info!("wg config updated");
-            }
-            Err(err) => {
-                // `wg syncconf` rejects the whole file when one peer stanza is
-                // bad, and this stays `Ok` for the caller as it always has, so
-                // the counter is the only signal that routing updates stopped
-                // reaching the data plane.
-                crate::metrics::record_wg_reconfigure(false);
-                error!("failed to set wg config: {err:?}");
-            }
-        }
-        Ok(())
-    }
-
     /// Whether health observations are allowed to affect routing at all.
     ///
     /// With polling switched off nothing ever leaves `Unknown`, and `Unknown`
@@ -2741,17 +2788,19 @@ impl GatewayRpc for RpcHandler {
                 })
             })
             .transpose()?;
-        self.state.do_register_cvm(
-            &app_id,
-            &instance_id,
-            &request.client_public_key,
-            &compose_hash,
-            ReportedCapabilities {
-                port_policy,
-                // A real CVM always states its intent, either way.
-                health_check: Some(request.health_check),
-            },
-        )
+        self.state
+            .register_cvm_async(
+                app_id,
+                instance_id,
+                request.client_public_key,
+                compose_hash,
+                ReportedCapabilities {
+                    port_policy,
+                    // A real CVM always states its intent, either way.
+                    health_check: Some(request.health_check),
+                },
+            )
+            .await
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {
