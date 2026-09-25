@@ -87,9 +87,11 @@ the replacement configuration is written, restore the dependency, and retry.
 
 Boot a candidate development CVM with a case-scoped KMS, start one real
 Gateway node in each independent cluster, and enable gateway registration only
-after both Gateway identities are available. Start a bounded HTTP workload in
-the CVM. Address the same app ID through each Gateway proxy with an explicit
-TLS SNI mapping.
+after both Gateway identities are available. Install a case-owned wildcard
+certificate for `*.localhost` on each node with `Admin.ImportCert`; since
+PR #1239 the Gateway no longer reads a proxy certificate from its config file.
+Start a bounded HTTP workload in the CVM. Address the same app ID through each
+Gateway proxy with an explicit TLS SNI mapping.
 
 **Expected results:**
 

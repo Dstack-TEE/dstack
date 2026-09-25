@@ -54,6 +54,7 @@ Exercise empty and populated stores, one-label wildcard lookup, mismatched-key r
 **Expected results:**
 
 - A wildcard matches exactly one child label but not its base or nested descendants; expired and mismatched replacements retain the prior certificate, and an expired entry does not block another domain's update.
+- PR #1239: the store reads the served chain's own `notAfter`, so a chain that has expired is refused even when its replicated record claims a later expiry. The candidate module has seven tests.
 
 <a id="tc-gw-certificat-006-step-03"></a>
 ### Step 3: Verify state, isolation, and diagnostics

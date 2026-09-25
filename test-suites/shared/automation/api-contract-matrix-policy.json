@@ -18,6 +18,7 @@
     "Admin.GetMeta": "full",
     "Admin.GetNodeStatuses": "full",
     "Admin.GetZtDomain": "full",
+    "Admin.ImportCert": "rejection-only",
     "Admin.ListCertAttestations": "full",
     "Admin.ListDnsCredentials": "full",
     "Admin.ListRejectedInstances": "full",

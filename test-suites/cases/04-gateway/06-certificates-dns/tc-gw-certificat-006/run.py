@@ -50,11 +50,11 @@ def main() -> int:
     output = completed.stdout + completed.stderr
     (artifacts / "cert-store-tests.log").write_text(output)
     passed = sum(int(value) for value in RESULT.findall(output))
-    status = "PASS" if completed.returncode == 0 and passed == 6 else "FAIL"
+    status = "PASS" if completed.returncode == 0 and passed == 7 else "FAIL"
     rows = {
         "returncode": completed.returncode,
         "passed_tests": passed,
-        "expected_tests": 6,
+        "expected_tests": 7,
         "duration_seconds": round(time.monotonic() - started, 3),
         "coverage": {
             "empty_store": "test_cert_store_basic" in output,
@@ -65,6 +65,8 @@ def main() -> int:
             "unrelated_update_survives_expired_entry": "expired_certificate_does_not_block_another_domain_update"
             in output,
             "expired_update_rejected": "expired_update_retains_previous_certificate"
+            in output,
+            "expired_chain_rejected_despite_record": "an_expired_chain_is_rejected_however_the_record_dates_it"
             in output,
         },
     }
@@ -81,12 +83,12 @@ def main() -> int:
         {
             "id": f"{CASE_ID}-step-02",
             "status": status,
-            "observed": "Empty-store, builder lookup, and one-label wildcard boundaries were exercised by the complete current six-test module.",
+            "observed": "Empty-store, builder lookup, and one-label wildcard boundaries were exercised by the complete current seven-test module.",
         },
         {
             "id": f"{CASE_ID}-step-03",
             "status": status,
-            "observed": "Expired and mismatched updates retained valid state, while an expired entry did not block an unrelated domain update.",
+            "observed": "Expired and mismatched updates retained valid state, a chain past its notAfter was refused however its record dated it, and an expired entry did not block an unrelated domain update.",
         },
     ]
     artifact_rows = [

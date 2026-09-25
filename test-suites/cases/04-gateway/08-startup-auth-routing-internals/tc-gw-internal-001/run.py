@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import pathlib
 import re
 import signal
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -54,6 +56,60 @@ def wait_health(url: str, token: str, expected: int = 200) -> bool:
     """Wait for a bounded health state."""
     for _ in range(80):
         if health(url, token) == expected:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def served_leaf(proxy_address: str, server_name: str) -> bytes | None:
+    """Return the DER leaf the proxy listener presents for one SNI."""
+    host, port = proxy_address.rsplit(":", 1)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((host, int(port)), timeout=5) as raw:
+            with context.wrap_socket(raw, server_hostname=server_name) as stream:
+                return stream.getpeercert(binary_form=True)
+    except (OSError, ssl.SSLError):
+        return None
+
+
+def pem_leaf(path: pathlib.Path) -> bytes:
+    """Decode the first certificate of a PEM chain."""
+    text = path.read_text()
+    begin = "-----BEGIN CERTIFICATE-----"
+    start = text.index(begin) + len(begin)
+    end = text.index("-----END CERTIFICATE-----", start)
+    return base64.b64decode("".join(text[start:end].split()))
+
+
+def import_cert(admin_url: str, token: str, value: dict[str, str]) -> int | None:
+    """Call Admin.ImportCert without retaining its body."""
+    request = urllib.request.Request(
+        f"{admin_url.rstrip('/')}/Admin.ImportCert",
+        data=json.dumps(value).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            response.read(4096)
+            return int(response.status)
+    except urllib.error.HTTPError as error:
+        error.read(4096)
+        return int(error.code)
+    except OSError:
+        return None
+
+
+def wait_leaf(proxy_address: str, server_name: str, expected: bytes) -> bool:
+    """Wait for the proxy listener to present one exact leaf."""
+    for _ in range(80):
+        if served_leaf(proxy_address, server_name) == expected:
             return True
         time.sleep(0.1)
     return False
@@ -139,6 +195,8 @@ def main() -> int:
     tls = config["tls"]
     token = pathlib.Path(gateway["admin_auth_token_file"]).read_text().strip()
     health_url = str(gateway["health_url"])
+    admin_url = str(gateway["admin_url"])
+    proxy_address = str(gateway["proxy_address"])
     binary = str(values["prepared_binaries"]["dstack_gateway"]["path"])
     guest_socket = str(
         values["gateway_guest_simulator"]["services"]["DstackGuest"]["socket"]
@@ -156,6 +214,7 @@ def main() -> int:
         cert_path = pathlib.Path(tls["certs"])
         ca_path = pathlib.Path(tls["mutual"]["ca_certs"])
         private_files = [key_path, cert_path, ca_path]
+        imported_leaf = pem_leaf(cert_path)
         soft, hard = limits(original_pid)
         san = subprocess.run(
             [
@@ -195,6 +254,17 @@ def main() -> int:
             and b"DNS:localhost" in san.stdout,
             "initial_health": health(health_url, token) == 200,
             "debug_config_has_no_key_material": "key_file" not in core["debug"],
+            # PR #1239 replaced the file-configured proxy certificate with
+            # Admin.ImportCert; the rendered configuration names no such file.
+            "static_proxy_certificate_keys_absent": not {
+                "base_domain",
+                "cert_chain",
+                "cert_key",
+            }
+            & set(core["proxy"]),
+            "imported_certificate_served": wait_leaf(
+                proxy_address, "gateway.localhost", imported_leaf
+            ),
         }
 
         conflict = start(binary, config_path, environment)
@@ -205,23 +275,20 @@ def main() -> int:
             conflict_code not in {None, 0} and health(health_url, token) == 200
         )
 
-        invalid_config = workspace / "config/gateway-invalid-cert.toml"
-        invalid_text = config_path.read_text()
-        proxy_cert = str(core["proxy"]["cert_chain"])
-        marker = f'cert_chain = "{proxy_cert}"'
-        if invalid_text.count(marker) != 1:
-            raise AssertionError("static proxy certificate field was ambiguous")
-        invalid_config.write_text(
-            invalid_text.replace(
-                marker, f'cert_chain = "{workspace / "data/absent-cert.pem"}"', 1
-            )
+        invalid_code = import_cert(
+            admin_url,
+            token,
+            {
+                "domain": "localhost",
+                "cert_pem": "not a certificate",
+                "key_pem": key_path.read_text(),
+            },
         )
-        invalid = start(binary, invalid_config, environment)
-        invalid_code = wait_exit(invalid)
-        if invalid_code is None:
-            stop(invalid)
         invalid_rejected = (
-            invalid_code not in {None, 0} and health(health_url, token) == 200
+            invalid_code is not None
+            and invalid_code >= 400
+            and health(health_url, token) == 200
+            and served_leaf(proxy_address, "gateway.localhost") == imported_leaf
         )
 
         # A leftover `insecure_skip_attestation = true` is ignored rather than
@@ -274,6 +341,8 @@ def main() -> int:
             **startup_checks,
             "bind_conflict_rejected": conflict_rejected,
             "invalid_certificate_rejected": invalid_rejected,
+            "restart_serves_imported_certificate": restart_healthy
+            and wait_leaf(proxy_address, "gateway.localhost", imported_leaf),
             "stale_attestation_switch_ignored": stale_switch_ignored,
             "original_exited": original_exited,
             "restart_healthy": restart_healthy,
@@ -283,7 +352,7 @@ def main() -> int:
         }
         if not all(checks.values()):
             raise AssertionError(
-                f"startup checks failed: {sorted(k for k, value in checks.items() if not value)}; conflict_nonzero={conflict_code not in {None, 0}}; invalid_nonzero={invalid_code not in {None, 0}}"
+                f"startup checks failed: {sorted(k for k, value in checks.items() if not value)}; conflict_nonzero={conflict_code not in {None, 0}}; invalid_import_http={invalid_code}"
             )
         observation = {
             "candidate_commit": runtime["candidate_commit"],
@@ -294,7 +363,7 @@ def main() -> int:
             "restart_open_file_hard": restart_hard,
             "private_file_count": len(private_files),
             "bind_conflict_returncode_nonzero": conflict_code not in {None, 0},
-            "invalid_certificate_returncode_nonzero": invalid_code not in {None, 0},
+            "invalid_certificate_import_http": invalid_code,
             "stale_attestation_switch_returncode_nonzero": stale_code not in {None, 0},
         }
         evidence_path = result_dir / "artifacts/gateway-production-startup.json"
@@ -321,12 +390,12 @@ def main() -> int:
             {
                 "id": f"{CASE_ID}-step-03",
                 "status": "PASS",
-                "observed": "Bind conflict, missing static certificate, and a leftover insecure_skip_attestation switch without a guest agent all failed to start without disturbing the original healthy listener; the last failed at the app-identity phase.",
+                "observed": "A bind conflict and a leftover insecure_skip_attestation switch without a guest agent failed to start, and an unparsable Admin.ImportCert certificate was refused, all without disturbing the original healthy listener or its served certificate; the switch failed at the app-identity phase.",
             },
             {
                 "id": f"{CASE_ID}-step-04",
                 "status": "PASS",
-                "observed": "The original process exited and a same-config restart converged healthy with identical resource policy and no private temporary file.",
+                "observed": "The original process exited and a same-config restart converged healthy with identical resource policy, served the imported proxy certificate from the store, and left no private temporary file.",
             },
         ]
         status = "PASS"

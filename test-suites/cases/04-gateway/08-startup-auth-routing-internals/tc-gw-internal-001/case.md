@@ -80,6 +80,12 @@ Restart the owning service where permitted and inspect state for this and an adj
 - `core.debug.insecure_skip_attestation` was removed. The rendered production configuration must not contain the key, and the executable harness asserts its absence.
 - Start a second gateway from a copy of the production configuration that adds a leftover `insecure_skip_attestation = true` line under `[core.debug]`, clears `rpc_domain` so certificate generation is skipped, and points `DSTACK_AGENT_ADDRESS` at a non-existent socket. Expected: the process exits non-zero with `Failed to get app info` (the switch is ignored, not honored), and the original listener still answers health with HTTP 200. Delete the temporary configuration afterwards.
 
+## Post-baseline regression coverage (PR #1239)
+
+- `[core.proxy] base_domain`, `cert_chain` and `cert_key` were removed; the proxy certificate is installed with `Admin.ImportCert` and kept in WaveKV. The rendered configuration must carry none of the three keys, and the proxy listener must present the certificate the fixture imported for `*.localhost` (SNI `gateway.localhost`).
+- The former "missing static certificate" startup arm is replaced: `Admin.ImportCert` with an unparsable certificate is refused with an HTTP 4xx, health stays 200, and the listener keeps presenting the previously imported certificate.
+- After the same-config restart the listener presents the imported certificate again, read from the store rather than from any file.
+
 ## Postconditions
 
 Remove run-scoped state and verify processes, files, devices, listeners, and allocations match baseline.
