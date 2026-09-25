@@ -66,6 +66,19 @@ Restart the owning service or VM where permitted, re-query all affected state, t
 
 - Persistent/transient state follows policy, the adjacent identity is unchanged, no credential is exposed, and files, mounts, devices, processes, listeners, and counters return to baseline.
 
+## Post-baseline regression coverage (PR #1240)
+
+- The Supervisor restricts its Unix control socket to mode `0600` after bind,
+  because `/deploy` runs arbitrary commands unauthenticated. Step 1 requires
+  the case-owned socket mode to be exactly `600`.
+- A child that exits with status 3 reports `{"exited": 3}` and a child killed
+  by SIGKILL reports `{"exited": 137}` (128 + signal), not the raw wait status.
+- `clear` never drops a started or running process: with the long-running
+  child still running, `clear` fails with an error that names it, and the
+  child keeps its PID. After the two exited children are stopped, a second
+  `clear` forgets exactly them and `list` holds only the running child. The
+  final `clear` after removal succeeds.
+
 ## Postconditions
 
 Remove run-scoped inputs and faults; preserve redacted native outputs and required attachments.

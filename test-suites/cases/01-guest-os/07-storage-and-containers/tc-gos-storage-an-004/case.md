@@ -66,6 +66,13 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - Repeated observations match the method’s documented persistence, determinism, and idempotency semantics and remain scoped to the caller or run-scoped object; invalid or unauthorized input is rejected without secret disclosure, partial mutation, or loss of service availability.
 
+## Post-baseline regression coverage (PR #1358)
+
+- The Supervisor reopens a redirected log only when its path is removed or
+  renamed, not on its own writes. A child writing a line every 100 ms has its
+  `stdout` file renamed to `.1` and later deleted; after each, fresh lines must
+  appear at the original path, and the renamed file must stop growing.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
