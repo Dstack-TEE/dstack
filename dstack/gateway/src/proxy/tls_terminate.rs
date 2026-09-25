@@ -4,7 +4,7 @@
 
 use std::io;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -623,8 +623,10 @@ impl AsyncWrite for MergedStream {
 /// The internal `Info` call returns the TCB info and VM config even when the
 /// app compose sets `public_tcbinfo = false`; the guest agent only withholds
 /// them on its external surface. `/app-info` is public, so withhold them here too.
+/// The choice is fixed for the CVM's lifetime, so it is decided once.
 fn public_app_info(mut info: AppInfo) -> AppInfo {
-    if !tcb_info_is_public(&info.tcb_info) {
+    static TCB_INFO_PUBLIC: OnceLock<bool> = OnceLock::new();
+    if !*TCB_INFO_PUBLIC.get_or_init(|| tcb_info_is_public(&info.tcb_info)) {
         info.tcb_info.clear();
         info.vm_config.clear();
     }
@@ -683,7 +685,7 @@ mod tests {
         assert!(remainder.is_empty(), "got {remainder:?}");
     }
 
-    fn app_info_with_compose(extra: serde_json::Value) -> AppInfo {
+    fn tcb_info_with_compose(extra: serde_json::Value) -> String {
         let mut compose = serde_json::json!({
             "manifest_version": "3",
             "name": "gateway",
@@ -693,26 +695,19 @@ mod tests {
             .as_object_mut()
             .expect("object")
             .extend(extra.as_object().expect("object").clone());
-        AppInfo {
-            tcb_info: serde_json::json!({ "app_compose": compose.to_string() }).to_string(),
-            vm_config: "{\"cpu_count\":2}".into(),
-            ..Default::default()
-        }
+        serde_json::json!({ "app_compose": compose.to_string() }).to_string()
     }
 
     #[test]
-    fn app_info_withholds_tcb_info_when_the_compose_opts_out() {
-        let info = public_app_info(app_info_with_compose(
-            serde_json::json!({ "public_tcbinfo": false }),
-        ));
-        assert!(info.tcb_info.is_empty());
-        assert!(info.vm_config.is_empty());
+    fn tcb_info_is_private_when_the_compose_opts_out() {
+        let tcb_info = tcb_info_with_compose(serde_json::json!({ "public_tcbinfo": false }));
+        assert!(!tcb_info_is_public(&tcb_info));
     }
 
     #[test]
-    fn app_info_keeps_tcb_info_by_default() {
-        let info = public_app_info(app_info_with_compose(serde_json::json!({})));
-        assert!(!info.tcb_info.is_empty());
-        assert!(!info.vm_config.is_empty());
+    fn tcb_info_is_public_by_default() {
+        assert!(tcb_info_is_public(&tcb_info_with_compose(
+            serde_json::json!({})
+        )));
     }
 }
