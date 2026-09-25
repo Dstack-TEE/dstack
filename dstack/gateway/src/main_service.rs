@@ -309,12 +309,8 @@ impl ProxyInner {
     /// Render the WireGuard config under the routing lock, then write and apply
     /// it after releasing that lock. Only the apply worker calls this.
     fn reconfigure_wg(&self) -> Result<()> {
-        self.reconfigure_wg_with(apply_wg_config)
-    }
-
-    fn reconfigure_wg_with(&self, apply: impl FnOnce(&Config, &str) -> Result<()>) -> Result<()> {
         let rendered = self.lock().generate_wg_config();
-        let result = rendered.and_then(|rendered| apply(&self.config, &rendered));
+        let result = rendered.and_then(|rendered| apply_wg_config(&self.config, &rendered));
         crate::metrics::record_wg_reconfigure(result.is_ok());
         result
     }
@@ -1810,7 +1806,6 @@ fn apply_wg_config(config: &Config, wg_config: &str) -> Result<()> {
     // the rendered config carries the interface's WireGuard private key.
     safe_write_with_mode(&config.wg.config_path, wg_config, 0o600)
         .context("failed to write wg config")?;
-    // wg setconf <interface_name> <config_path>
     let ifname = &config.wg.interface;
     let config_path = &config.wg.config_path;
 

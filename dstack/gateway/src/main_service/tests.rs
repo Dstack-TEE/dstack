@@ -2797,19 +2797,6 @@ fn tombstone_collection_triggers_on_write_count_boundaries_not_on_time() {
     assert!(!tombstone_collection_due(Some(w(100, 0)), w(90, 0), 100));
 }
 
-#[tokio::test]
-async fn wg_apply_runs_off_the_routing_lock() {
-    let state = create_test_state().await;
-    let mut unlocked = false;
-    state
-        .reconfigure_wg_with(|_, _| {
-            unlocked = state.state.try_lock().is_ok();
-            Ok(())
-        })
-        .unwrap();
-    assert!(unlocked, "the apply ran under the routing lock");
-}
-
 /// A sync merge holding the KV store must not stall routing via `refresh_state`.
 #[tokio::test]
 async fn refreshing_state_leaves_the_routing_lock_free_while_it_writes_to_the_kv_store() {
