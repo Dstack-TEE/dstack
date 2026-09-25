@@ -391,7 +391,7 @@ impl<S> PrpcHandler<'_, '_, S> {
             Err(err) => {
                 warn!(
                     "error handling prpc: {}",
-                    crate::bound_error_text(&format_args!("{err:?}"))
+                    crate::log_text(&format_args!("{err:?}"))
                 );
                 let body = encode_error(json, &err);
                 let status = crate::code_of(&err)
