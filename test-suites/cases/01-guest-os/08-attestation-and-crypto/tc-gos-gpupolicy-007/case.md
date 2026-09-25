@@ -73,6 +73,22 @@ Restart after accepted/rejected rows, replay applicable v0.5.4/v0.5.8/v0.5.11 in
 
 - Supported historical defaults remain stable, unsupported combinations fail before secret/device consumption, restart reconstructs the same decision and corrected retry succeeds without stale state.
 
+## Post-baseline regression coverage (PRs #1318 and #1353)
+
+- The measured `gpu-attestation` runtime event is now version 3 and carries
+  `dbgstat` (`enabled` if any GPU claim reports debug enabled, else
+  `disabled`) and `secboot` (`true` only if every claim reports secure boot)
+  next to `devices`, `cc_mode`, `devtools`, and `evidence_sha256`. Step 2 must
+  compare both fields against the per-GPU claims in the validated `nvattest`
+  output.
+- Before `nvattest` runs, setup waits up to 30 s for chrony to synchronize
+  (`chronyc waitsync`) and only warns if it does not, so a guest that boots
+  with an unsynchronized clock still attests once time converges.
+- Both require an NVIDIA confidential-computing GPU and stay BLOCKED on this
+  capability probe otherwise. The event serialization is also exercised by the
+  `system_setup` unit filter in
+  [tc-gos-setup-004](../../12-setup-utilities-simulator/tc-gos-setup-004/case.md#tc-gos-setup-004).
+
 ## Postconditions
 
 Remove run-scoped VMs/files/devices and verify baseline restoration.
