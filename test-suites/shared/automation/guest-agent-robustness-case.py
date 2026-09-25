@@ -43,6 +43,13 @@ QUOTE_REPORT_DATA_RANGE = (568, 632)
 TRIVIAL_LATENCY_BOUND_SECONDS = 1.0
 LOAD_COST_FLOOR_SECONDS = 0.05
 LOAD_SECONDS = 20.0
+# Gap between the loaders' first connections. On physical TDX the fixture
+# forwards the listener through QEMU user networking, whose host-side socket
+# listens with a backlog of one: 24 simultaneous connects overflow it, and a
+# busy host resets some of them before they reach the guest. One quote costs
+# about a second and they run one at a time, so a 1.2 s ramp still queues all
+# 24 callers on the quote lock.
+LOAD_RAMP_SECONDS = 0.05
 TRIVIAL_SAMPLE_INTERVAL_SECONDS = 0.1
 
 STALL_SECONDS = 30.0
@@ -461,6 +468,7 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
     failures: list[str] = []
 
     def saturate(index: int) -> None:
+        time.sleep(index * LOAD_RAMP_SECONDS)
         while time.monotonic() < deadline:
             issued = time.monotonic() - load_started
             reply = quote(0)
@@ -478,7 +486,7 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
 
     with ThreadPoolExecutor(max_workers=CONCURRENCY + 1) as pool:
         loaders = [pool.submit(saturate, index) for index in range(CONCURRENCY)]
-        time.sleep(1.0)
+        time.sleep(1.0 + CONCURRENCY * LOAD_RAMP_SECONDS)
         while time.monotonic() < deadline:
             reply = post(guest, "Version", {})
             if not reply.ok:
@@ -493,6 +501,7 @@ def head_of_line(targets: dict[str, Target], values: dict[str, Any]) -> dict[str
     observations = {
         "load_concurrency": CONCURRENCY,
         "load_seconds": LOAD_SECONDS,
+        "load_ramp_seconds": LOAD_RAMP_SECONDS,
         "load_calls": len(load_replies),
         "quote_unit_cost_seconds": round(unit_cost, 4),
         "baseline_p95_seconds": round(percentile(baseline, 0.95), 4),
