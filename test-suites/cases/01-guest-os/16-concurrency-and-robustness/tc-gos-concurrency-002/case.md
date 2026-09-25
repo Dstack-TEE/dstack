@@ -18,6 +18,12 @@
 - Read and obey [`shared/automation/execution-guide.md`](../../../../shared/automation/execution-guide.md) before executing Step 1.
 - The harness is [`shared/automation/guest-agent-robustness-case.py`](../../../../shared/automation/guest-agent-robustness-case.py).
 - Every call uses its own connection.
+- On physical TDX the listener is reached through a QEMU user-networking
+  port forward, whose host socket listens with a backlog of one. Opening all 24
+  loader connections at once overflows it, and on a busy host some are reset
+  before they reach the guest, with the agent untouched. The loaders therefore
+  open their first connections 50 ms apart; with one quote costing about a
+  second, all 24 are still queued on the quote lock.
 - The simulator answers a quote in under a millisecond, so nothing blocks. The
   harness reports **BLOCKED**, never PASS, when one quote costs less than 50 ms.
 
@@ -37,8 +43,8 @@ runtime parked on quotes gets the agent SIGABRTed (fixed in #1256).
 ## Test Data
 
 - 20 unloaded `Version` samples and 3 single `GetQuote` calls, as baselines.
-- 24 threads issuing `GetQuote` with random `report_data` for 20 s, while
-  `Version` is sampled every 100 ms.
+- 24 threads issuing `GetQuote` with random `report_data` for 20 s, started
+  50 ms apart, while `Version` is sampled every 100 ms.
 - Bound: loaded `Version` p95 at most **1.0 s**.
 - The in-guest agent's (PID, start time) before and after, read over the
   fixture's `ssh_argv` when it publishes one.
