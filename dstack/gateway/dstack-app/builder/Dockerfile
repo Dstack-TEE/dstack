@@ -23,7 +23,7 @@ RUN git clone ${DSTACK_SRC_URL} repo && \
     cd repo && \
     git checkout ${DSTACK_REV}
 RUN rustup target add x86_64-unknown-linux-musl
-RUN cd repo/dstack && cargo build --release -p dstack-gateway --target x86_64-unknown-linux-musl
+RUN cd repo/dstack && cargo build --release --locked -p dstack-gateway --target x86_64-unknown-linux-musl
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
