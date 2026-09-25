@@ -35,3 +35,8 @@ PR 841 was rebased from `e2cf39ae01` onto `next` at `0fb3b24bbd`. The 131 merged
 - #1307: onboarding with `source_token` still calls `GetTempCaCert`, which the admin listener does not serve, and fails with `Service not found: GetTempCaCert`. `tc-kms-onboard-005` depends on the fix, PR #1406.
 - #1401: a percent-encoded line break in the method segment can still forge a log line through the request span's method field. The L7 check in `tc-gw-contract-001`..`003` looks for this and is expected to fail on `next` until the fix merges. Fix: PR #1407.
 - #1308: the detached WireGuard apply thread can be cut off by process exit between writing and renaming its temporary config, leaving `.wireguard.conf.*.tmp` with the interface private key behind; `tc-gw-internal-001` caught it intermittently. Fix: PR #1408.
+- #1331: `/var/lib` is a writable overlay, so without a boot-time entry `systemd-tmpfiles-setup` re-applies `tpm2-tss-fapi.conf` and the TPM keystore reverts to `2775 tss:tss` at runtime (`tc-gos-platform-005`). Fix: PR #1413.
+- #789: the `gpu-attestation` runtime event carries a per-boot evidence digest and is extended into PCR14 before the TPM key provider unseals, so a GPU CVM on GCP or AWS with `key_provider = tpm` cannot unseal after a reboot. Found on a GCP a3-highgpu-1g H100 run of the GPU cases. Fix: PR #1410.
+- `systemd-tpm2-setup` fails on the read-only root and leaves the guest degraded. Fix: PR #1411.
+- 0828cb45df: the pooled Unix-socket HTTP client outlives the supervisor's 15s keep-alive, so a VMM request can fail with `EPIPE` (`tc-kms-upgrade-010`). Fix: PR #1412.
+- `Vmm.StopVm` returns before QEMU exits and a `StartVm` in that window is silently skipped (`tc-gos-setup-008`). Fix: PR #1414.
