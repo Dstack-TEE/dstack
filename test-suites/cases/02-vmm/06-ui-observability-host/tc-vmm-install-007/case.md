@@ -79,6 +79,10 @@ Run the installer with an existing `--src` directory that is not a dstack checko
 
 - `resolve_source` now sets `checkout` in the installer's own shell instead of a `$(resolve_source)` subshell, so the `EXIT` trap sees `tmp_src` and removes the temporary checkout. The temporary-checkout row gates on `temporary_checkout_removed`; against the pre-fix script it fails because `<TMPDIR>/dstack-install.*` is left behind.
 
+## Post-baseline regression coverage (PR #1393)
+
+- The installer builds `dstackup` with `cargo build --release --locked`. The stub `cargo` also records its arguments, and every row that builds (Steps 1 and 2) must pass `--locked`. `dstackup` itself adds `--locked` when it builds the managed binaries (`dstack/crates/dstackup/src/install.rs`); that path needs a real source build and is not exercised here.
+
 ## Postconditions
 
 The case-scoped temporary directory, including the local origin, checkouts, prefixes, and its private `TMPDIR`, is removed when the harness exits. Nothing outside it is modified.
