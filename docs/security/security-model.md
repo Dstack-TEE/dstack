@@ -126,10 +126,14 @@ For a successful TDX GPU launch, the GPU-relevant RTMR3 event order is:
 compose-hash
 init-script-hash (zero or more, in configured order)
 gpu-policy-hash
-gpu-attestation
 instance-id
 boot-mr-done
+os-image-hash (KMS key provider only)
+gpu-attestation
+key-provider
 ```
+
+The GPU gate itself runs before the app keys are requested, and a failed gate stops the boot before any key is released. Only the `gpu-attestation` event is extended after key provisioning. Its `evidence_sha256` covers `nvattest` output made with a fresh nonce on every boot, and the TPM key provider seals its seed to the runtime register (PCR14 on GCP and AWS). Extending a per-boot value before the unseal would make the sealed seed unrecoverable after a reboot.
 
 `gpu-policy-hash` is emitted even for a GPU-less launch. `gpu-attestation` is emitted only after an attached GPU passes `nvattest`, the built-in checks, the optional Rego policy, and the NVML state checks. Its UTF-8 JSON payload has this shape:
 

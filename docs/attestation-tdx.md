@@ -39,8 +39,8 @@ multiple parties and let each party verify its code independently without
 reconstructing the complete compose document.
 
 For a GPU launch, any `init-script-hash` events are followed by
-`gpu-policy-hash` and, after successful NVIDIA attestation and policy
-evaluation, `gpu-attestation`. The `gpu-policy-hash` payload is
+`gpu-policy-hash`. After successful NVIDIA attestation and policy evaluation,
+`gpu-attestation` follows `boot-mr-done` and precedes `key-provider`. The `gpu-policy-hash` payload is
 `SHA-256(JCS(requirements.gpu_policy))`, using `{}` when the field is omitted.
 The `gpu-attestation` payload is JSON containing the verified device count,
 CC/DevTools state, aggregate signed-claim `dbgstat` and `secboot`, and
