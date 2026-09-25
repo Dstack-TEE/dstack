@@ -10,8 +10,8 @@ import os
 import re
 import select
 import socket
-import subprocess
 import ssl
+import subprocess
 import threading
 import time
 from pathlib import Path

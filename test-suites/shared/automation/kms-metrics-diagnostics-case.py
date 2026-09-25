@@ -14,10 +14,11 @@ import ssl
 import subprocess
 import threading
 import time
-import tomllib
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import tomllib
 
 SUPPORTED_CASES = {"tc-kms-keys-certs-008", "tc-kms-release-010", "tc-kms-apiver-011"}
 
