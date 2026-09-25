@@ -88,6 +88,7 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 - PR #1230: the create dialog's `Disk Preallocation` select (`#diskPrealloc`) starts at `Default (host setting)` (empty value). Selecting `falloc` while `Storage Discard` is on shows the `Turn Storage Discard off` hint, `metadata` hides it, and the form is returned to the default before submission, so the UI-created VM persists the node default `disk_prealloc="off"` in the public listing.
 - PR #1282: the System menu's `Images` panel lists the fixture image and has no `Registry` section.
+- PR #1398: every external `<script src="http(s)://...">` in the served console (the unpkg Vue fallback when `vendor/vue.global.prod.js` is absent) carries `integrity="sha384-..."` and `crossorigin="anonymous"`, so the browser refuses altered CDN code; the page still renders, so the pinned hash matches what the CDN serves. Every non-root entry in `dstack/vmm/ui/package-lock.json` has `resolved` and `integrity`.
 
 ## Postconditions
 
