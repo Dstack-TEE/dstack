@@ -30,6 +30,11 @@ VERIFIER_TESTS = (
     "verification::tests::verifies_real_v1_issue_cert_chain_and_embedded_attestation",
     "verification::tests::rejects_a_real_v1_certificate_attestation_bound_to_another_key",
 )
+# `--verify-cert` reports `is_valid: false` with a `reason`, and exits
+# non-zero, when the attested app info does not decode (PR #1333).
+CLI_TESTS = (
+    "cert_oneshot_result_tests::a_certificate_whose_app_info_does_not_decode_is_not_reported_valid",
+)
 
 
 def atomic_json(path: pathlib.Path, value: Any) -> None:
@@ -89,7 +94,7 @@ def main() -> int:
         )
         output = completed.stdout + completed.stderr
         passed = bool(
-            re.search(r"test result: ok\. 31 passed; 0 failed", output)
+            re.search(r"test result: ok\. \d+ passed; 0 failed", output)
         ) and all(f"{test} ... ok" in output for test in REQUIRED_TESTS)
         row.update(
             {
@@ -138,6 +143,41 @@ def main() -> int:
             raise AssertionError(
                 f"dstack-verifier real v1 certificate rows failed with rc={verifier.returncode}"
             )
+        cli = subprocess.run(
+            [
+                find_command(environment, "cargo"),
+                "test",
+                "-p",
+                "dstack-verifier",
+                "--bin",
+                "dstack-verifier",
+                "--",
+                "--exact",
+                *CLI_TESTS,
+            ],
+            cwd=repository / "dstack",
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=600,
+            check=False,
+        )
+        cli_output = cli.stdout + cli.stderr
+        cli_passed = f"test result: ok. {len(CLI_TESTS)} passed; 0 failed" in (
+            cli_output
+        ) and all(f"test {test} ... ok" in cli_output for test in CLI_TESTS)
+        row["verify_cert"] = {
+            "package": "dstack-verifier",
+            "tests": CLI_TESTS,
+            "returncode": cli.returncode,
+            "passed": cli_passed,
+            "output_sha256": hashlib.sha256(cli_output.encode()).hexdigest(),
+        }
+        if cli.returncode or not cli_passed:
+            raise AssertionError(
+                f"dstack-verifier --verify-cert result rows failed with rc={cli.returncode}"
+            )
     except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
         status = "FAIL"
         summary = str(error)
@@ -155,6 +195,7 @@ def main() -> int:
             "real_v1_issue_cert_msgpack_attestation_chain_and_key_binding",
             "real_v0_get_tls_key_scale_attestation_same_cvm_identity",
             "v1_certificate_attestation_rejected_against_another_key",
+            "verify_cert_undecodable_app_info_reported_invalid",
         ],
     }
     artifact = {

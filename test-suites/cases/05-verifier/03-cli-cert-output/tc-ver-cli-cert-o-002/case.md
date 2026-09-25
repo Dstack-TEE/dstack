@@ -79,6 +79,10 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 - Real same-boot TDX RA-TLS leaves: the v1 `IssueCert` leaf embeds MessagePack V1 and the v0 `GetTlsKey` leaf embeds legacy SCALE. Each chains to its CVM CA, passes `ra_tls::attestation::verify_der` with the attestation bound to its own public key, passes the full verifier image check, and both name the same CVM (`verification::tests::verifies_real_v1_issue_cert_chain_and_embedded_attestation`).
 - The v1 leaf's attestation is rejected against the v0 leaf's key with `report data mismatch` (`verification::tests::rejects_a_real_v1_certificate_attestation_bound_to_another_key`).
 
+## Post-baseline regression coverage (PR #1333)
+
+- `--verify-cert` output now carries `is_valid` and `reason` like `/verify`. A certificate whose attested app info does not decode is reported with `is_valid = false`, a `reason` naming `failed to decode app info from the certificate`, and `app_info = null`, and the command exits non-zero; a decodable one keeps `is_valid = true` and `reason = null` (`cert_oneshot_result_tests::a_certificate_whose_app_info_does_not_decode_is_not_reported_valid`, run by exact name from the `dstack-verifier` binary tests). No committed fixture is a self-signed RA-TLS certificate, so this row is not exercised end to end.
+
 ## Postconditions
 
 Remove run-scoped objects and restore changed configuration. Preserve logs and responses in the result artifacts.
