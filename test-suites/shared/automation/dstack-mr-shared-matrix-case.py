@@ -464,19 +464,28 @@ def execute_matrix(
         ],
         None,
     )
+    # PR #1387: GPU and NVSwitch root ports are modelled only with PCI
+    # hotplug off, which is also the VMM default now.
+    gpu_args = [
+        *BASE_ARGS,
+        "--num-gpus",
+        "1",
+        "--num-nvswitches",
+        "1",
+        "--pci-hole64-size",
+        "16T",
+    ]
     accepted(
         "gpu-topology-functional",
         fixture / "metadata.json",
-        [
-            *BASE_ARGS,
-            "--num-gpus",
-            "1",
-            "--num-nvswitches",
-            "1",
-            "--pci-hole64-size",
-            "16T",
-        ],
+        [*gpu_args, "--hotplug-off", "true"],
         ["rtmr0"],
+    )
+    rejected(
+        "gpu-topology-hotplug-on",
+        fixture / "metadata.json",
+        gpu_args,
+        "PCI hotplug on root ports is not modeled",
     )
     accepted(
         "hugepage-numa-topology",
