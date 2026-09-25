@@ -14,7 +14,13 @@ from pathlib import Path
 
 CASE_ID = "tc-gw-proxy-prot-001"
 FILTER = "pp::tests"
-MINIMUM_TESTS = 7
+MINIMUM_TESTS = 9
+# PR #1278: header lengths around the fixed-buffer cutoff and a v1 header
+# ending on a bare CR must return rather than abort the gateway.
+REQUIRED_TESTS = (
+    "pp::tests::representative_v2_header_lengths_do_not_abort",
+    "pp::tests::a_v1_header_ending_on_a_bare_cr_does_not_abort",
+)
 
 
 def main() -> int:
@@ -49,7 +55,10 @@ def main() -> int:
     output = process.stdout + process.stderr
     matches = [int(value) for value in re.findall(r"(\d+) passed; 0 failed", output)]
     passed_tests = max(matches, default=0)
-    passed = process.returncode == 0 and passed_tests >= MINIMUM_TESTS
+    required_passed = all(f"test {name} ... ok" in output for name in REQUIRED_TESTS)
+    passed = (
+        process.returncode == 0 and passed_tests >= MINIMUM_TESTS and required_passed
+    )
     status = "PASS" if passed else "FAIL"
     evidence = {
         "candidate_commit": runtime["candidate_commit"],
@@ -57,6 +66,7 @@ def main() -> int:
         "filter": FILTER,
         "minimum_tests": MINIMUM_TESTS,
         "passed_tests": passed_tests,
+        "required_tests_passed": required_passed,
         "returncode": process.returncode,
         "coverage": [
             "PROXY v1 IPv4 source and destination",
@@ -66,6 +76,8 @@ def main() -> int:
             "oversized v2 rejection",
             "synthetic unspecified address display",
             "v2 source display",
+            "v2 header lengths never reach the unchecked advance",
+            "v1 header ending on a bare CR",
         ],
         "mutable_fixture_reused": False,
     }
