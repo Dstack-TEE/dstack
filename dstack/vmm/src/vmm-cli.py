@@ -441,14 +441,19 @@ class VmmClient:
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
         auth_token: Optional[str] = None,
+        verify_tls: bool = True,
     ):
         """Initialize the client with a base URL and optional auth credentials.
 
         Two credential forms are supported for a VMM with `[auth]` enabled:
         a bearer token (sent as `Authorization: Bearer <token>`), or HTTP Basic
         (user + password). A bearer token takes precedence when both are set.
+
+        HTTPS certificates are verified against the system CA store (or
+        `SSL_CERT_FILE`) unless `verify_tls` is False.
         """
         self.base_url = base_url.rstrip("/")
+        self.verify_tls = verify_tls
         self.use_uds = self.base_url.startswith("unix:")
         self.auth_user = auth_user or None
         self.auth_password = auth_password or None
@@ -519,10 +524,10 @@ class VmmClient:
             conn = UnixSocketHTTPConnection(self.uds_path)
         else:
             if self.is_https:
-                # TODO: we should verify TLS cert.
                 context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
+                if not self.verify_tls:
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
                 conn = http.client.HTTPSConnection(self.host, context=context)
             else:
                 conn = http.client.HTTPConnection(self.host)
@@ -571,11 +576,14 @@ class VmmCLI:
         auth_user: Optional[str] = None,
         auth_password: Optional[str] = None,
         auth_token: Optional[str] = None,
+        verify_tls: bool = True,
     ):
         """Initialize the CLI with a base URL and optional auth credentials."""
         self.base_url = base_url.rstrip("/")
         self.headers = {"Content-Type": "application/json"}
-        self.client = VmmClient(base_url, auth_user, auth_password, auth_token)
+        self.client = VmmClient(
+            base_url, auth_user, auth_password, auth_token, verify_tls
+        )
 
     def rpc_call(self, method: str, params: Optional[Dict] = None) -> Dict:
         """Make an RPC call to the dstack-vmm API."""
@@ -758,7 +766,9 @@ class VmmCLI:
     ) -> Dict:
         """Get the encryption public key for the specified application ID."""
         if kms_url:
-            client = VmmClient(kms_url)
+            # The KMS serves its RA-TLS certificate, which no system CA
+            # issued; the key is trusted through the signature checked below.
+            client = VmmClient(kms_url, verify_tls=False)
             path = "/prpc/GetAppEnvEncryptPubKey?json"
             status, response = client.request(
                 "POST",
@@ -1792,6 +1802,11 @@ def main():
         "`Authorization: Bearer` (can also be set via DSTACK_VMM_TOKEN env var "
         "or config file). Takes precedence over --auth-user/--auth-password.",
     )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="skip TLS certificate verification for an https:// VMM URL",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
@@ -2298,7 +2313,13 @@ def main():
     # Resolve the URL with auto-discovery
     url = resolve_vmm_url(instances, config, args.url)
     try:
-        cli = VmmCLI(url, args.auth_user, args.auth_password, args.token)
+        cli = VmmCLI(
+            url,
+            args.auth_user,
+            args.auth_password,
+            args.token,
+            verify_tls=not args.insecure,
+        )
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
