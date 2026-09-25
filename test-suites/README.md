@@ -3,7 +3,7 @@
 <a id="core-components-test-guide"></a>
 # dstack Core Components Full Test Plan
 
-The post-baseline merged-PR review is recorded in [`audit/core-components-post-baseline-pr-audit.md`](audit/core-components-post-baseline-pr-audit.md). The latest `next` rebase review is recorded in [`audit/core-components-next-rebase-audit-2026-08-25.md`](audit/core-components-next-rebase-audit-2026-08-25.md).
+The post-baseline merged-PR review is recorded in [`audit/core-components-post-baseline-pr-audit.md`](audit/core-components-post-baseline-pr-audit.md). The latest `next` rebase review is recorded in [`audit/core-components-next-rebase-audit-2026-09-24.md`](audit/core-components-next-rebase-audit-2026-09-24.md).
 
 ## 1. Objective and scope
 
@@ -12,7 +12,7 @@ This plan is a source-derived, full functional audit of the dstack guest OS, VMM
 Execution order is discovered by sorting chapter, section, and case directory
 names. Each directory owns its `metadata.json`. Traceability is in
 `catalog/feature-audit.md`; the raw repository scan is `catalog/source-inventory.json` and the
-mandatory 214-field configuration matrix is `catalog/configuration-inventory.json`, the complete protobuf field matrix is `catalog/api-inventory.json`, and reverse file-to-case traceability is `catalog/source-coverage-map.json`.
+mandatory 250-field configuration matrix is `catalog/configuration-inventory.json`, the complete protobuf field matrix is `catalog/api-inventory.json`, and reverse file-to-case traceability is `catalog/source-coverage-map.json`.
 A source reference means the case must be reviewed when that implementation
 surface changes. Passing existing unit tests is evidence for a step only when
 the case explicitly runs them; it never substitutes for product-level expected
