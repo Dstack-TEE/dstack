@@ -235,17 +235,13 @@ def audit_image_content(argv: list[str]) -> dict[str, Any]:
     ).stdout.strip()
     if wait_online != "enabled":
         failures.append(f"systemd-networkd-wait-online.service is {wait_online!r}")
-    # PR #1331: rootfs tmpfiles are applied at build time, not on every boot.
+    # dstack-image.conf keeps the keystore root-owned 0755 over tpm2-tss's
+    # 2775 default; /var/lib is a writable overlay, so this is a runtime check.
     rootfs = ssh(
-        argv,
-        "test ! -e /usr/lib/tmpfiles.d/dstack-image.conf && echo no-boot-tmpfiles; "
-        "systemctl show dstack-firstboot.service --property=LoadState --value; "
-        "test ! -e /var/mail/.dstack-keep "
-        "-a ! -e /var/lib/tpm2-tss/system/keystore/.dstack-keep && echo no-keep-files; "
-        "stat -c %a /var/lib/tpm2-tss/system/keystore; readlink /tapp",
+        argv, "stat -c %a /var/lib/tpm2-tss/system/keystore; readlink /tapp"
     ).stdout.split()
-    if rootfs != ["no-boot-tmpfiles", "not-found", "no-keep-files", "755", "dstack"]:
-        failures.append(f"build-time rootfs tmpfiles state {rootfs}")
+    if rootfs != ["755", "dstack"]:
+        failures.append(f"rootfs tmpfiles state {rootfs}")
     # PR #1274: the initramfs applies systemd's options to the API mounts it
     # hands over, and a dm-verity mismatch panics instead of returning EIO.
     for target, wanted in EARLY_MOUNT_OPTIONS.items():
@@ -287,7 +283,7 @@ def audit_image_content(argv: list[str]) -> dict[str, Any]:
         "kernel_devel_absent": True,
         "tdx_guest_tune_installed": True,
         "system_presets": presets,
-        "build_time_tmpfiles": True,
+        "rootfs_tmpfiles": True,
     }
 
 
@@ -538,7 +534,7 @@ def main() -> int:
                 {
                     "id": f"{CASE_ID}-step-05",
                     "status": "PASS",
-                    "observed": "The booted kernel ran with MMCONFIG enabled and the declared Incus, SWIOTLB and driver-removal configuration; the NVIDIA userspace matched the candidate driver pin, resolved through the linker cache, and was held back from udev autoload behind topology-derived module options; the kernel build tree was absent from the measured rootfs; only dstack presets shipped with networkd-wait-online enabled; and rootfs tmpfiles were applied at build time without a boot-time tmpfiles.d entry, first-boot unit, or keep files; the initramfs API mounts carried nosuid/nodev/noexec, dm-verity panicked on corruption, no unknown sysctl shipped, and the NVIDIA container runtime logged at info.",
+                    "observed": "The booted kernel ran with MMCONFIG enabled and the declared Incus, SWIOTLB and driver-removal configuration; the NVIDIA userspace matched the candidate driver pin, resolved through the linker cache, and was held back from udev autoload behind topology-derived module options; the kernel build tree was absent from the measured rootfs; only dstack presets shipped with networkd-wait-online enabled; the TPM keystore stayed root-owned 0755 at runtime with /tapp linked to dstack; the initramfs API mounts carried nosuid/nodev/noexec, dm-verity panicked on corruption, no unknown sysctl shipped, and the NVIDIA container runtime logged at info.",
                 }
             )
             emit("step-05", "PASS")
