@@ -13,8 +13,6 @@ ARTIFACTS="$WORK/artifacts"
 source "$SELF/versions.env"
 
 "$SELF/scripts/normalize-skeleton-modes.sh" "$TREE" "$FLAVOR"
-# After mkosi's own tmpfiles pass, so these override package defaults.
-systemd-tmpfiles --root="$TREE" --create "$SELF/rootfs.tmpfiles"
 "$SELF/scripts/write-os-release.sh" \
 	"$TREE" "$DSTACK_VERSION" "$DSTACK_CODENAME"
 mkdir -p "$KSTAGE/usr/lib" "$OUTPUTDIR/.image-tools"
