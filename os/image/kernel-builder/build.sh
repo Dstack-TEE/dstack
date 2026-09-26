@@ -18,7 +18,7 @@ cp "$archive" "$context/kernel-devel.tar.gz"
 
 ${DOCKER:-docker} build \
     --file "$SELF/Dockerfile" \
-    --build-arg "BASE_IMAGE=debian:$DEBIAN_RELEASE-slim" \
+    --build-arg "BASE_IMAGE=$DEBIAN_BASE_IMAGE" \
     --build-arg "DEBIAN_SNAPSHOT=$DEBIAN_SNAPSHOT" \
     --build-arg "KERNEL_RELEASE=$KERNEL_VERSION-dstack" \
     --build-arg "IMAGE_VERSION=${IMAGE_VERSION:-$DSTACK_VERSION}" \
