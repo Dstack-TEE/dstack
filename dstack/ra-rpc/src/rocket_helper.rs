@@ -232,8 +232,10 @@ macro_rules! declare_prpc_routes {
             NEXT_REQ_ID.fetch_add(1, Ordering::Relaxed)
         }
 
+        // `method` is the percent-decoded route segment; the span prefixes every
+        // event of the request, so it goes through `log_text` like the error text.
         #[rocket::post($path, data = "<data>")]
-        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %method))]
+        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %$crate::log_text(&method)))]
         async fn $post<'a: 'd, 'd>(
             state: &'a $crate::rocket_helper::deps::State<$state>,
             method: &'a str,
@@ -252,7 +254,7 @@ macro_rules! declare_prpc_routes {
         }
 
         #[rocket::get($path)]
-        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %method))]
+        #[tracing::instrument(level = "INFO", skip_all, fields(id = next_req_id(), method = %$crate::log_text(&method)))]
         async fn $get(
             state: &$crate::rocket_helper::deps::State<$state>,
             method: &str,
