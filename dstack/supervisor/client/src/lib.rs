@@ -5,7 +5,7 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use http_client::http_request;
+use http_client::{http_request_with_options, ConnectionReuse, RequestOptions};
 use log::{error, info};
 use supervisor::{ProcessConfig, ProcessInfo, Response};
 
@@ -97,8 +97,15 @@ impl SupervisorClient {
             "POST" | "PUT" | "PATCH" => serde_json::to_vec(&body)?,
             _ => vec![],
         };
+        // The supervisor drops an idle keep-alive connection after 15s, so a
+        // pooled one can be closed under the next request (EPIPE).
+        let options = RequestOptions {
+            connection_reuse: ConnectionReuse::Fresh,
+            ..Default::default()
+        };
         let (status, response_bytes) =
-            http_request(method, &self.base_url, path, &body_bytes).await?;
+            http_request_with_options(method, &self.base_url, path, &body_bytes, &[], options)
+                .await?;
         if status != 200 {
             anyhow::bail!("Server returned error: {}", status);
         }
