@@ -2131,6 +2131,15 @@
       "environment": "SIMULATION"
     },
     {
+      "case_id": "tc-kms-onboard-005",
+      "source_run": "pr841-0924-full-ea75d8809",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/03-rpc-onboard/tc-kms-onboard-005/run.py",
+      "environment": "SIMULATOR",
+      "notes": "A new KMS onboards through the source's admin listener with source_token while public_key_handover is off, and inherits the source k256 key; onboarding without a token or through the public URL is refused. Needs #1406.",
+      "promoted_at": "2026-09-26T01:00:00Z"
+    },
+    {
       "case_id": "tc-kms-platform-006",
       "source_run": "kms-cross-platform-focused-002",
       "source_status": "PASS",
