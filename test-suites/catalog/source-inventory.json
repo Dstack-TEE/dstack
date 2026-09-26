@@ -226,7 +226,7 @@
         "os/mkosi/mkosi.postinst",
         "os/mkosi/mkosi.skeleton/etc/systemd/network/20-wired.network",
         "os/mkosi/mkosi.skeleton/usr/lib/systemd/system-preset/80-dstack.preset",
-        "os/mkosi/rootfs.tmpfiles",
+        "os/mkosi/mkosi.skeleton/usr/lib/tmpfiles.d/dstack-image.conf",
         "os/mkosi/scripts/write-os-release.sh",
         "os/mkosi/tests/acceptance.sh",
         "os/mkosi/versions.env",

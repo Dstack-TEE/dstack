@@ -7668,11 +7668,11 @@
     },
     {
       "component": "guest-os",
-      "source": "os/mkosi/rootfs.tmpfiles",
+      "source": "os/mkosi/mkosi.skeleton/usr/lib/tmpfiles.d/dstack-image.conf",
       "case_ids": [
         "tc-gos-platform-005"
       ],
-      "rationale": "Post-baseline source change (#1331) mapped to focused regression coverage."
+      "rationale": "Post-baseline source change (#1331, reverted by #1415) mapped to focused regression coverage."
     },
     {
       "component": "guest-os",

@@ -119,11 +119,8 @@ The assertions are static image content and hold on a guest without a GPU.
 - Every `*.preset` file under `/usr/lib/systemd/system-preset` and
   `/etc/systemd/system-preset` has `dstack` in its name, and
   `systemd-networkd-wait-online.service` is `enabled`.
-- `/usr/lib/tmpfiles.d/dstack-image.conf` is absent, `dstack-firstboot.service`
-  is `not-found`, `/var/mail/.dstack-keep` and
-  `/var/lib/tpm2-tss/system/keystore/.dstack-keep` are absent,
-  `/var/lib/tpm2-tss/system/keystore` has mode `755`, and `/tapp` links to
-  `dstack`.
+- `/var/lib/tpm2-tss/system/keystore` has mode `755` at runtime, and `/tapp`
+  links to `dstack`.
 - `/proc` and `/sys` are mounted `nosuid,nodev,noexec`, `/run` `nosuid,nodev`,
   and `/dev` `nosuid`; the `rootfs` dm-verity mapping carries
   `panic_on_corruption`.
@@ -150,17 +147,17 @@ The assertions are static image content and hold on a guest without a GPU.
   `/usr/lib/dstack/tdx-guest-tune.sh`; PR #1226 moves the kernel build tree out
   of the measured rootfs.
 
-## Post-baseline regression coverage (PRs #1321 and #1331)
+## Post-baseline regression coverage (PRs #1321, #1331 and #1415)
 
 - PR #1321 deletes every non-dstack preset file at image build time, so a
   distribution preset such as Debian's `90-systemd.preset` cannot shadow the
   terminal `disable *` in `99-dstack-default.preset`, and enables
   `systemd-networkd-wait-online.service`, the unit behind the
   `network-online.target` that `dstack-prepare` waits on.
-- PR #1331 applies `rootfs.tmpfiles` once in `mkosi.finalize` instead of
-  shipping it in `tmpfiles.d`, where it re-ran against the read-only root on
-  every boot, and drops the `dstack-firstboot.service` and `.dstack-keep`
-  placeholders. Step 5 checks the booted result.
+- PR #1331 applied `rootfs.tmpfiles` only at build time; PR #1415 reverts it.
+  `/var/lib` is a writable overlay, so without the boot-time pass
+  `tpm2-tss-fapi.conf` resets the keystore to `2775 tss:tss`. Step 5 checks
+  the runtime mode.
 
 ## Post-baseline regression coverage (PRs #1274, #1327, and #1329)
 
