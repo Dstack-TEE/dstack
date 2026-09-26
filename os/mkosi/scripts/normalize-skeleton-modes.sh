@@ -28,7 +28,7 @@ for skeleton in "${skeletons[@]}"; do
         else
             chmod 0644 "$destination"
         fi
-    done < <(find "$skeleton" -type f -print0)
+    done < <(find "$skeleton" -type f ! -name .dstack-keep -print0)
 
     # -mindepth 1 keeps the skeleton root itself out of the loop; without it
     # the empty relative path would chmod the rootfs root as a side effect.
