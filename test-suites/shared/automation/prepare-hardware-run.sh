@@ -1,0 +1,396 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+export PATH="$HOME/.cargo/bin:$PATH"
+
+repo=${1:-$(git rev-parse --show-toplevel)}
+output=${2:?usage: prepare-hardware-run.sh REPOSITORY OUTPUT_JSON LAB_MANIFEST [CACHE_ROOT]}
+lab_manifest=${3:?usage: prepare-hardware-run.sh REPOSITORY OUTPUT_JSON LAB_MANIFEST [CACHE_ROOT]}
+cache_root=${4:-${DSTACK_TEST_CACHE_ROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/dstack-test}}
+
+repo=$(realpath -e -- "$repo")
+plan="$repo/test-suites"
+docker_shell_runner="$plan/shared/automation/run-docker-shell"
+export DSTACK_TEST_DOCKER_SHELL_RUNNER="$docker_shell_runner"
+template=$(realpath -e -- "$lab_manifest")
+generated_lab="${output%.json}.lab.json"
+fixture_root="$cache_root/shared/fixtures/verifier/full-tdx-0.5.4.1"
+image_hash=14ad42d0270b444eaeb53918a5a94d9b17eec7a817cd336173b17c5327541c67
+foundry_version=v1.7.1
+foundry_sha256=cf7e688ed0c4c48adffca788b496076e31060b67ac5afe1e43dbb5499c20c88b
+foundry_bin="$cache_root/tools/foundry-$foundry_version"
+bun_version=1.2.18
+bun_sha256=90e032a982ae299c62d645dac6caaa8eb00b69092bc8501bf13a590de8d099c8
+bun_bin_dir="$cache_root/tools/bun-v$bun_version"
+bun_bin="$bun_bin_dir/bun"
+mkdir -p "$cache_root/tmp"
+
+require_command() {
+  command -v "$1" >/dev/null || {
+    printf 'missing required command: %s\n' "$1" >&2
+    exit 1
+  }
+}
+
+for command in cargo curl dstack-acpi-tables git jq mkosi npm python3 tar unshare unzip; do
+  require_command "$command"
+done
+
+user_namespace_ready() {
+  unshare --user --map-root-user true >/dev/null 2>&1
+}
+
+if ! user_namespace_ready; then
+  if [[ $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null) == 1 ]]; then
+    sudo sysctl -q -w kernel.apparmor_restrict_unprivileged_userns=0
+  fi
+  user_namespace_ready || {
+    printf '%s\n' \
+      'Unprivileged user namespaces are unavailable after prerequisite setup.' \
+      'mkosi cannot build exact-revision guest images in this environment.' >&2
+    exit 1
+  }
+fi
+
+docker_shell_wrapper=$(jq -r '.environment.DSTACK_TEST_DOCKER_SHELL_WRAPPER // empty' "$template")
+if [[ -n $docker_shell_wrapper ]]; then
+  docker_shell_wrapper=$(realpath -e -- "$docker_shell_wrapper")
+  test -x "$docker_shell_wrapper" || {
+    printf 'Docker shell wrapper is not executable: %s\n' "$docker_shell_wrapper" >&2
+    exit 1
+  }
+else
+  require_command docker
+fi
+export DSTACK_TEST_DOCKER_SHELL_WRAPPER="$docker_shell_wrapper"
+
+docker_run() {
+  if [[ -n $docker_shell_wrapper ]]; then
+    local command
+    printf -v command '%q ' docker "$@"
+    "$docker_shell_wrapper" "$command"
+  else
+    docker "$@"
+  fi
+}
+
+docker_ready() {
+  docker_run info --format '{{.ServerVersion}}' >/dev/null 2>&1
+}
+
+if ! docker_ready; then
+  if command -v systemctl >/dev/null 2>&1; then
+    sudo systemctl start docker.service >/dev/null 2>&1 || true
+  fi
+  docker_ready || {
+    printf '%s\n' \
+      'Docker daemon is unavailable after attempting to start docker.service.' \
+      'Inspect systemctl status docker.service before preparing the test run.' >&2
+    exit 1
+  }
+fi
+
+"$plan/shared/automation/prepare-vmm-hugepages.sh"
+
+acpi_tables_bin=$(realpath -e -- "$(command -v dstack-acpi-tables)")
+qemu_data_dir=$(realpath -e -- "$(dirname "$acpi_tables_bin")/../share/qemu")
+test -d "$qemu_data_dir" || {
+  printf 'missing required dstack-acpi-tables data directory: %s\n' "$qemu_data_dir" >&2
+  exit 1
+}
+
+# Guest-backed cases must exercise binaries from this candidate revision, not
+# an older image that happens to carry the same release version. Build both
+# flavors once through mkosi's content-addressed component cache, validate the
+# embedded provenance, then publish them under immutable revision-derived names.
+revision=$(git -C "$repo" rev-parse HEAD)
+short_revision=${revision:0:9}
+prod_image="dstack-mkosi-$short_revision"
+dev_image="dstack-dev-mkosi-$short_revision"
+identity_image="dstack-dev-mkosi-$short_revision-identity-variant"
+image_store=$(jq -er '.environment.DSTACK_TEST_IMAGE_STORE' "$template")
+image_store=$(realpath -e -- "$image_store")
+image_matches() {
+  local name=$1 expected_dev=$2 image="$image_store/$1"
+  local metadata="$image/metadata.json"
+  [[ -f $metadata ]] &&
+    [[ $(jq -r '.git_revision' "$metadata") == "$revision" ]] &&
+    [[ $(jq -r '.builder' "$metadata") == mkosi ]] &&
+    [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]] &&
+    [[ $(sha256sum "$image/sha256sum.txt" | cut -d' ' -f1) == \
+      "$(tr -d '[:space:]' <"$image/digest.txt")" ]] &&
+    (cd "$image" && sha256sum --check --status sha256sum.txt)
+}
+for row in "$prod_image:false" "$dev_image:true"; do
+  IFS=: read -r name expected_dev <<<"$row"
+  if [[ -e $image_store/$name ]] && ! image_matches "$name" "$expected_dev"; then
+    printf 'candidate image name exists with mismatched provenance: %s\n' "$name" >&2
+    exit 1
+  fi
+done
+if ! image_matches "$prod_image" false || ! image_matches "$dev_image" true; then
+  mkosi_root="$cache_root/mkosi-candidate-$short_revision"
+  mkdir -p "$cache_root/tmp/mkosi" "$mkosi_root"
+  git_common=$(realpath -e -- "$(git -C "$repo" rev-parse --git-common-dir)")
+  original_repo=${git_common%/.git}
+  build_repo="$original_repo.worktrees/candidate-image-$short_revision"
+  if [[ ! -e $build_repo/.git ]]; then
+    mkdir -p "$(dirname "$build_repo")"
+    git -C "$repo" worktree add --detach "$build_repo" "$revision"
+  fi
+  [[ $(git -C "$build_repo" rev-parse HEAD) == "$revision" ]] || {
+    printf 'candidate image worktree points at the wrong revision: %s\n' \
+      "$build_repo" >&2
+    exit 1
+  }
+  [[ -z $(git -C "$build_repo" status --porcelain) ]] || {
+    printf 'candidate image worktree is dirty: %s\n' "$build_repo" >&2
+    exit 1
+  }
+  "$build_repo/os/mkosi/build.sh" lint
+  TMPDIR="$cache_root/tmp/mkosi" \
+    FLAVORS="prod dev" \
+    DSTACK_DEV_CACHE_DIR="$cache_root/mkosi-dev" \
+    "$build_repo/os/mkosi/build.sh" image "$mkosi_root"
+  find_image_output() {
+    local flavor=$1 expected_dev=$2 output_root="$mkosi_root/out/$1"
+    local -a candidates=()
+    while IFS= read -r -d '' metadata; do
+      if [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]]; then
+        candidates+=("${metadata%/metadata.json}")
+      fi
+    done < <(find "$output_root" -mindepth 2 -maxdepth 2 -type f \
+      -name metadata.json -print0)
+    [[ ${#candidates[@]} -eq 1 ]] || {
+      printf 'expected exactly one %s mkosi image output, found %s under %s\n' \
+        "$flavor" "${#candidates[@]}" "$output_root" >&2
+      return 1
+    }
+    printf '%s\n' "${candidates[0]}"
+  }
+  prod_source=$(find_image_output prod false)
+  dev_source=$(find_image_output dev true)
+  for row in "$prod_source:$prod_image:false" "$dev_source:$dev_image:true"; do
+    IFS=: read -r source name expected_dev <<<"$row"
+    [[ -e $image_store/$name ]] && continue
+    metadata="$source/metadata.json"
+    [[ -f $source/sha256sum.txt && -f $metadata ]] || {
+      printf 'mkosi output is incomplete: %s\n' "$source" >&2
+      exit 1
+    }
+    [[ $(jq -r '.git_revision' "$metadata") == "$revision" ]] || {
+      printf 'mkosi output revision mismatch: %s\n' "$source" >&2
+      exit 1
+    }
+    [[ $(jq -r '.is_dev' "$metadata") == "$expected_dev" ]] || {
+      printf 'mkosi output flavor mismatch: %s\n' "$source" >&2
+      exit 1
+    }
+    [[ $(jq -r '.builder' "$metadata") == mkosi ]] || {
+      printf 'mkosi output builder mismatch: %s\n' "$source" >&2
+      exit 1
+    }
+    (cd "$source" && sha256sum --check --status sha256sum.txt) || {
+      printf 'mkosi output checksum verification failed: %s\n' "$source" >&2
+      exit 1
+    }
+    [[ $(sha256sum "$source/sha256sum.txt" | cut -d' ' -f1) == \
+      "$(tr -d '[:space:]' <"$source/digest.txt")" ]] || {
+      printf 'mkosi output digest mismatch: %s\n' "$source" >&2
+      exit 1
+    }
+    stage="$image_store/.$name.tmp.$$"
+    sudo cp -a -- "$source" "$stage"
+    sudo chown -R root:root "$stage"
+    sudo mv -- "$stage" "$image_store/$name"
+  done
+fi
+
+# The identity matrix changes the measured image input while keeping the guest
+# capable of running the development TEE simulator. A production image cannot
+# serve as that row: it intentionally omits the simulator. Derive a second,
+# checksum-bound package identity from the exact-revision dev image instead.
+identity_image_matches() {
+  local image="$image_store/$identity_image"
+  [[ -f $image/identity-variant.txt ]] &&
+    [[ $(cat "$image/identity-variant.txt") == dstack-test-identity-variant-v1 ]] &&
+    [[ $(jq -r '.git_revision' "$image/metadata.json") == "$revision" ]] &&
+    [[ $(jq -r '.builder' "$image/metadata.json") == mkosi ]] &&
+    [[ $(jq -r '.is_dev' "$image/metadata.json") == true ]] &&
+    [[ $(sha256sum "$image/sha256sum.txt" | cut -d' ' -f1) == \
+      "$(tr -d '[:space:]' <"$image/digest.txt")" ]] &&
+    (cd "$image" && sha256sum --check --status sha256sum.txt)
+}
+if [[ -e $image_store/$identity_image ]] && ! identity_image_matches; then
+  printf 'identity variant exists with mismatched provenance: %s\n' \
+    "$identity_image" >&2
+  exit 1
+fi
+if ! identity_image_matches; then
+  stage="$image_store/.$identity_image.tmp.$$"
+  identity_tmp=$(mktemp -d "$cache_root/tmp/identity-variant.XXXXXX")
+  cleanup_identity_stage() {
+    [[ -z ${stage:-} ]] || sudo rm -rf -- "$stage"
+    rm -rf -- "$identity_tmp"
+  }
+  trap cleanup_identity_stage EXIT
+  sudo cp -al -- "$image_store/$dev_image" "$stage"
+  printf '%s\n' dstack-test-identity-variant-v1 \
+    >"$identity_tmp/identity-variant.txt"
+  {
+    cat "$stage/sha256sum.txt"
+    (cd "$identity_tmp" && sha256sum identity-variant.txt)
+  } >"$identity_tmp/sha256sum.txt"
+  sha256sum "$identity_tmp/sha256sum.txt" | cut -d' ' -f1 \
+    >"$identity_tmp/digest.txt"
+  sudo install -m 0644 "$identity_tmp/identity-variant.txt" \
+    "$stage/identity-variant.txt"
+  sudo install -m 0644 "$identity_tmp/sha256sum.txt" "$stage/sha256sum.txt"
+  sudo install -m 0644 "$identity_tmp/digest.txt" "$stage/digest.txt"
+  (cd "$stage" && sha256sum --check --status sha256sum.txt)
+  sudo chown -R root:root "$stage"
+  sudo mv -- "$stage" "$image_store/$identity_image"
+  stage=""
+  rm -rf -- "$identity_tmp"
+  trap - EXIT
+fi
+if [[ ! -x "$bun_bin" ]]; then
+  archive=$(mktemp "$cache_root/tmp/bun.XXXXXX.zip")
+  extract_dir=$(mktemp -d "$cache_root/tmp/bun.XXXXXX")
+  cleanup_bun_archive() {
+    rm -f "$archive"
+    rm -rf "$extract_dir"
+  }
+  trap cleanup_bun_archive EXIT
+  curl --fail --location --retry 3 --output "$archive" \
+    "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-linux-x64.zip"
+  echo "$bun_sha256  $archive" | sha256sum --check --status
+  unzip -q "$archive" -d "$extract_dir"
+  mkdir -p "$bun_bin_dir"
+  install -m 0755 "$extract_dir/bun-linux-x64/bun" "$bun_bin"
+  cleanup_bun_archive
+  trap - EXIT
+fi
+[[ $("$bun_bin" --version) == "$bun_version" ]] || {
+  printf 'pinned Bun version mismatch: %s\n' "$bun_bin" >&2
+  exit 1
+}
+export PATH="$bun_bin_dir:$PATH"
+
+if [[ ! -x "$foundry_bin/forge" ]]; then
+  archive=$(mktemp "$cache_root/tmp/foundry.XXXXXX.tar.gz")
+  trap 'rm -f "$archive"' EXIT
+  mkdir -p "$foundry_bin"
+  curl --fail --location --retry 3 --output "$archive" \
+    "https://github.com/foundry-rs/foundry/releases/download/$foundry_version/foundry_${foundry_version}_linux_amd64.tar.gz"
+  echo "$foundry_sha256  $archive" | sha256sum --check --status
+  tar -xzf "$archive" -C "$foundry_bin"
+  test -x "$foundry_bin/forge"
+fi
+export PATH="$foundry_bin:$PATH"
+
+# Only initialize the contract fixtures used by the scripted KMS cases. The
+# much larger Yocto submodules are unrelated to this run preparation.
+git -C "$repo" submodule update --init --depth 1 -- \
+  dstack/kms/auth-eth/lib/forge-std \
+  dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
+  dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
+git -C "$repo/dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable" \
+  submodule update --init --depth 1 -- lib/openzeppelin-contracts
+test -s "$repo/dstack/kms/auth-eth/lib/forge-std/src/Test.sol"
+test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol"
+test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable/lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.sol"
+test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades/src/Upgrades.sol"
+
+# Materialize locked JavaScript dependencies before workers start. Installing
+# into shared package directories from concurrent cases races and previously
+# left auth services without tsc or a healthy listener.
+(
+  cd "$repo/dstack/kms/auth-simple"
+  "$bun_bin" install --frozen-lockfile
+)
+(
+  cd "$repo/dstack/kms/auth-eth-bun"
+  "$bun_bin" install --frozen-lockfile
+)
+(
+  cd "$repo/dstack/kms/auth-eth"
+  npm ci --ignore-scripts
+)
+
+# This public, immutable image is required by four verifier harnesses. Bind the
+# extracted directory to its published digest before exposing it to a case.
+if [[ ! -f "$fixture_root/sha256sum.txt" ]] || \
+   [[ $(sha256sum "$fixture_root/sha256sum.txt" | cut -d' ' -f1) != "$image_hash" ]]; then
+  archive=$(mktemp "$cache_root/tmp/full-tdx.XXXXXX.tar.gz")
+  trap 'rm -f "$archive"' EXIT
+  rm -rf "$fixture_root"
+  mkdir -p "$fixture_root"
+  curl --fail --location --retry 3 --output "$archive" \
+    "https://download.dstack.org/os-images/mr_${image_hash}.tar.gz"
+  tar -xzf "$archive" -C "$fixture_root"
+  test "$(sha256sum "$fixture_root/sha256sum.txt" | cut -d' ' -f1)" = "$image_hash"
+fi
+
+# The compose-validation case deliberately runs without registry access and
+# therefore needs this public base image present before fixture isolation.
+if ! docker_run image inspect alpine:latest >/dev/null 2>&1; then
+  docker_run pull alpine:latest
+fi
+
+docker_subnet_pool=$(
+  "$plan/shared/automation/prepare-docker-network-pool.py"
+)
+
+python3 - "$template" "$generated_lab" "$plan" "$fixture_root" "$foundry_bin" "$bun_bin_dir" \
+  "$acpi_tables_bin" "$qemu_data_dir" "$prod_image" "$dev_image" \
+  "$identity_image" \
+  "$docker_subnet_pool" <<'PY'
+import json
+import pathlib
+import sys
+
+template, output, plan, full_tdx, foundry_bin, bun_bin, acpi_tables, qemu_data = map(
+    pathlib.Path, sys.argv[1:9]
+)
+prod_image, dev_image, identity_image, docker_subnet_pool = sys.argv[9:]
+value = json.loads(template.read_text())
+environment = value.setdefault("environment", {})
+providers = {
+    "DSTACK_TEST_PROVIDER_PHYSICAL_TDX": "physical-tdx.py",
+    "DSTACK_TEST_PROVIDER_ISOLATED_COMPONENT": "isolated-component.py",
+    "DSTACK_TEST_PROVIDER_HARDWARE_POOL": "hardware-pool.py",
+    "DSTACK_TEST_PROVIDER_VERSION_MATRIX": "version-matrix.py",
+}
+for variable, name in providers.items():
+    path = (plan / "shared/fixtures/providers" / name).resolve(strict=True)
+    if not path.is_file():
+        raise SystemExit(f"provider is not a file: {path}")
+    environment[variable] = str(path)
+environment["DSTACK_TEST_VERIFIER_FULL_TDX_IMAGE_DIR"] = str(
+    full_tdx.resolve(strict=True)
+)
+environment["DSTACK_TEST_ACPI_TABLES_BINARY"] = str(acpi_tables.resolve(strict=True))
+environment["DSTACK_TEST_QEMU_DATA_DIR"] = str(qemu_data.resolve(strict=True))
+environment["DSTACK_TEST_GUEST_IMAGE"] = prod_image
+environment["DSTACK_TEST_NO_TEE_GUEST_IMAGE"] = dev_image
+environment["DSTACK_TEST_GUEST_PROD_IMAGE"] = prod_image
+environment["DSTACK_TEST_GUEST_DEV_IMAGE"] = dev_image
+environment["DSTACK_TEST_IDENTITY_ALT_IMAGE"] = identity_image
+environment["DSTACK_TEST_DOCKER_SUBNET_POOL"] = docker_subnet_pool
+environment["DSTACK_TEST_DOCKER_SHELL_RUNNER"] = str(
+    (plan / "shared/automation/run-docker-shell").resolve(strict=True)
+)
+path_prepend = value.setdefault("environment_path_prepend", [])
+for tool_path in (foundry_bin, bun_bin):
+    resolved = str(tool_path.resolve(strict=True))
+    if resolved not in path_prepend:
+        path_prepend.insert(0, resolved)
+output.parent.mkdir(parents=True, exist_ok=True)
+output.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+PY
+
+export DSTACK_TEST_LAB_MANIFEST="$generated_lab"
+"$plan/shared/automation/prepare-run.sh" "$repo" "$output" "$cache_root"
+printf 'prepared hardware prerequisites and runtime manifest: %s\n' "$output"

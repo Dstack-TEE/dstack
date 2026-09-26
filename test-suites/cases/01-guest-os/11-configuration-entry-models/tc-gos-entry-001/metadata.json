@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-entry-001",
+  "title": "Guest-agent configuration precedence and compose deserialization",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-entry-001"
+  ],
+  "risks": [
+    "risk-gos-entry-001"
+  ],
+  "tags": [
+    "gos",
+    "configuration-entry-points-and-presentation-models"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Guest-agent configuration precedence and compose deserialization"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

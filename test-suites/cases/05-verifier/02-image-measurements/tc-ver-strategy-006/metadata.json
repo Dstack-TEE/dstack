@@ -1,0 +1,22 @@
+{
+  "id": "tc-ver-strategy-006",
+  "title": "Platform-specific OS image verification and download strategy",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-strategy-006"
+  ],
+  "risks": [
+    "risk-ver-strategy-006"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "actions_under_test": [
+    "Platform-specific OS image verification and download strategy"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

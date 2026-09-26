@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-023",
+  "title": "Versioned attestation create inspect JSON and strip CLI",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-023"
+  ],
+  "risks": [
+    "risk-gos-setup-023"
+  ],
+  "tags": [
+    "guest-os",
+    "dstack-util"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Versioned attestation create inspect JSON and strip CLI"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

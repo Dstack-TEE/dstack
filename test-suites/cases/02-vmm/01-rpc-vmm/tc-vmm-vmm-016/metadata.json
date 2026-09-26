@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-vmm-016",
+  "title": "Vmm.ListGpus",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-vmm-016"
+  ],
+  "risks": [
+    "risk-vmm-vmm-016"
+  ],
+  "tags": [
+    "vmm",
+    "vmm-rpc"
+  ],
+  "fixture": {
+    "profile": "gpu-policy",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Vmm.ListGpus"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/capability-probe-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

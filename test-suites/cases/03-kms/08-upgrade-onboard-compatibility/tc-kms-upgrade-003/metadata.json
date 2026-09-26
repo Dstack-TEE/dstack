@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-upgrade-003",
+  "title": "0.5.8 direct onboard to 0.6.0",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-upgrade-003"
+  ],
+  "risks": [
+    "risk-kms-upgrade-003"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "0.5.8 direct onboard to 0.6.0"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 360
+  }
+}

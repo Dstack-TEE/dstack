@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certbot-003",
+  "title": "Cloudflare DNS record API boundaries",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-certbot-003"
+  ],
+  "risks": [
+    "risk-gw-certbot-003"
+  ],
+  "tags": [
+    "gw",
+    "certbot-acme-and-dns-engine"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Cloudflare DNS record API boundaries"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/certbot-cloudflare-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

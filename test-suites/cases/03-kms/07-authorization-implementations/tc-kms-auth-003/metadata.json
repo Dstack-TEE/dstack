@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-003",
+  "title": "Ethereum authorization freshness and domain binding",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-auth-003"
+  ],
+  "risks": [
+    "risk-kms-auth-003"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Ethereum authorization freshness and domain binding"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

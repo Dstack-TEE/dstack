@@ -1,0 +1,35 @@
+{
+  "id": "tc-kms-platform-006",
+  "title": "Nitro Enclave app and KMS authorization",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-platform-006"
+  ],
+  "risks": [
+    "risk-kms-platform-006"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Nitro Enclave app and KMS authorization"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-cross-platform-attestation-case.py",
+    "args": [],
+    "timeout_seconds": 1800
+  }
+}

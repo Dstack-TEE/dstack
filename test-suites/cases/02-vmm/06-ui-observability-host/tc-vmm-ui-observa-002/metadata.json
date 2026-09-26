@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-ui-observa-002",
+  "title": "Console log channels follow and ANSI handling",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-ui-observa-002"
+  ],
+  "risks": [
+    "risk-vmm-ui-observa-002"
+  ],
+  "tags": [
+    "vmm",
+    "ui-observability-host"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Console log channels follow and ANSI handling"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

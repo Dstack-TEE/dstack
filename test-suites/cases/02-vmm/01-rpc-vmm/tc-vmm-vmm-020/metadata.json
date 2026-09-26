@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-vmm-020",
+  "title": "Vmm.SvRemove",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-vmm-020"
+  ],
+  "risks": [
+    "risk-vmm-vmm-020"
+  ],
+  "tags": [
+    "vmm",
+    "vmm-rpc"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Vmm.SvRemove"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-vmm-lifecycle-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}
