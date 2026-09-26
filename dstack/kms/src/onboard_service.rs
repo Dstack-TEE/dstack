@@ -9,10 +9,11 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{
+    admin_client::AdminClient,
     kms_client::KmsClient,
     onboard_server::{OnboardRpc, OnboardServer},
-    AttestationInfoResponse, BootstrapRequest, BootstrapResponse, GetKmsKeyRequest, OnboardRequest,
-    OnboardResponse,
+    AttestationInfoResponse, BootstrapRequest, BootstrapResponse, GetKmsKeyRequest, KmsKeyResponse,
+    OnboardRequest, OnboardResponse,
 };
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
@@ -606,30 +607,68 @@ impl Keys {
     ) -> Result<Self> {
         let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
         let attestation_slot_out = attestation_slot.clone();
+        let capture_source_attestation = Box::new(move |info: Option<CertInfo>| {
+            let Some(info) = info else {
+                bail!("Source KMS did not present a TLS certificate");
+            };
+            let Some(attestation) = info.attestation else {
+                bail!("Source KMS certificate does not contain attestation");
+            };
+            let mut slot = attestation_slot_out
+                .lock()
+                .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?;
+            *slot = Some(attestation);
+            Ok(())
+        });
+        let source_attestation = || {
+            attestation_slot
+                .lock()
+                .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
+                .clone()
+                .context("Missing source KMS attestation")
+        };
+
+        if !source_token.is_empty() {
+            // `other_kms_url` is the source's admin listener. It accepts a self-issued
+            // RA-TLS client certificate, so no temp CA is fetched first.
+            let (ra_cert, ra_key) = gen_ra_cert(None).await?;
+            let client = RaClientConfig::builder()
+                .tls_no_check(true)
+                .tls_built_in_root_certs(false)
+                .remote_uri(other_kms_url.to_string())
+                .tls_client_cert(ra_cert)
+                .tls_client_key(ra_key)
+                .cert_validator(capture_source_attestation)
+                .attestation_verifier(attestation_verifier.clone())
+                .bearer_token(source_token.to_string())
+                .build()
+                .into_client()?;
+            let info = dstack_client().info().await.context("Failed to get info")?;
+            let keys_res = AdminClient::new(client)
+                .get_kms_key(GetKmsKeyRequest {
+                    vm_config: info.vm_config,
+                })
+                .await?;
+            // The attestation is only captured by that first request; nothing
+            // received is used before the source passes this check.
+            ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier)
+                .await
+                .context("Source KMS is not allowed for onboarding")?;
+            return Self::from_key_response(cfg, keys_res, domain).await;
+        }
+
         let client = RaClientConfig::builder()
             .tls_no_check(true)
             .remote_uri(other_kms_url.to_string())
-            .cert_validator(Box::new(move |info: Option<CertInfo>| {
-                let Some(info) = info else {
-                    bail!("Source KMS did not present a TLS certificate");
-                };
-                let Some(attestation) = info.attestation else {
-                    bail!("Source KMS certificate does not contain attestation");
-                };
-                let mut slot = attestation_slot_out
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?;
-                *slot = Some(attestation);
-                Ok(())
-            }))
+            .cert_validator(capture_source_attestation)
             .attestation_verifier(attestation_verifier.clone())
-            .maybe_bearer_token((!source_token.is_empty()).then(|| source_token.to_string()))
             .build()
             .into_client()?;
         let mut kms_client = KmsClient::new(client);
 
         let tmp_ca = kms_client.get_temp_ca_cert().await?;
-        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
+        let (ra_cert, ra_key) =
+            gen_ra_cert(Some((tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key))).await?;
         let ra_client = RaClient::new_mtls(
             other_kms_url.into(),
             ra_cert,
@@ -638,12 +677,7 @@ impl Keys {
         )
         .context("Failed to create client")?;
         kms_client = KmsClient::new(ra_client);
-        let source_attestation = attestation_slot
-            .lock()
-            .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
-            .clone()
-            .context("Missing source KMS attestation")?;
-        ensure_kms_allowed(cfg, &source_attestation, &attestation_verifier)
+        ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier)
             .await
             .context("Source KMS is not allowed for onboarding")?;
 
@@ -653,6 +687,14 @@ impl Keys {
                 vm_config: info.vm_config,
             })
             .await?;
+        Self::from_key_response(cfg, keys_res, domain).await
+    }
+
+    async fn from_key_response(
+        cfg: &KmsConfig,
+        keys_res: KmsKeyResponse,
+        domain: &str,
+    ) -> Result<Self> {
         if keys_res.keys.len() != 1 {
             return Err(anyhow::anyhow!("Invalid keys"));
         }
@@ -818,11 +860,11 @@ fn keccak256(msg: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String, String)> {
+/// Mint an RA-TLS client certificate, signed by `ca` (cert and key PEM) or self-issued.
+async fn gen_ra_cert(ca: Option<(String, String)>) -> Result<(String, String)> {
     use ra_tls::cert::CertRequest;
     use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 
-    let ca = CaCert::new(ca_cert_pem, ca_key_pem)?;
     let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
     let pubkey = key.public_key_der();
     let report_data = QuoteContentType::RaTlsCert.to_report_data(&pubkey);
@@ -836,6 +878,10 @@ async fn gen_ra_cert(ca_cert_pem: String, ca_key_pem: String) -> Result<(String,
         .attestation(&attestation)
         .key(&key)
         .build();
-    let cert = ca.sign(req).context("Failed to sign certificate")?;
+    let cert = match ca {
+        Some((cert_pem, key_pem)) => CaCert::new(cert_pem, key_pem)?.sign(req),
+        None => req.self_signed(),
+    }
+    .context("Failed to sign certificate")?;
     Ok((cert.pem(), key.serialize_pem()))
 }
