@@ -2098,7 +2098,11 @@ impl Stage0<'_> {
     /// explicitly disabled — set the GPU ready state without verification. The
     /// optional Rego policy is always evaluated; when no attestation is
     /// performed, its claims-array input is empty.
-    async fn measure_gpu(&self) -> Result<[u8; 32]> {
+    ///
+    /// Returns the policy digest and, when a GPU was attested, the
+    /// `gpu-attestation` event payload. The caller measures that payload only
+    /// after key provisioning: see [`Stage0::setup_fs`].
+    async fn measure_gpu(&self) -> Result<([u8; 32], Option<Vec<u8>>)> {
         let gpu_policy_hash = gpu::measure_gpu_policy(&self.shared.dir.app_compose_file())?;
 
         let gpu_policy = self
@@ -2118,7 +2122,7 @@ impl Stage0<'_> {
                 info!("application GPU Rego policy accepted an empty claims array");
             }
             if inventory.nvidia == 0 {
-                return Ok(gpu_policy_hash);
+                return Ok((gpu_policy_hash, None));
             }
             warn!(
                 "requirements.gpu_policy.attest_gpu is false; setting GPU ready state without attestation"
@@ -2127,7 +2131,7 @@ impl Stage0<'_> {
             if let Err(err) = gpu::set_gpu_ready_state(inventory.nvidia) {
                 warn!("failed to set GPU ready state: {err:?}");
             }
-            return Ok(gpu_policy_hash);
+            return Ok((gpu_policy_hash, None));
         }
         let expected_devices = gpu::nvidia_gpu_count(inventory)?;
         if expected_devices == 0 {
@@ -2135,7 +2139,7 @@ impl Stage0<'_> {
             if gpu_policy.rego.is_some() {
                 info!("application GPU Rego policy accepted an empty claims array");
             }
-            return Ok(gpu_policy_hash);
+            return Ok((gpu_policy_hash, None));
         }
         self.vmm.notify_q("boot.progress", "attesting GPU").await;
         info!("verifying GPU TEE attestation");
@@ -2158,10 +2162,8 @@ impl Stage0<'_> {
         gpu_state.set_ready()?;
         let devtools = gpu_state.any_devtools();
         let event = attestation.event(devtools)?;
-        emit_runtime_event("gpu-attestation", &event)
-            .context("failed to emit GPU attestation event")?;
         info!("GPU TEE attestation succeeded");
-        Ok(gpu_policy_hash)
+        Ok((gpu_policy_hash, Some(event)))
     }
 }
 
@@ -2261,6 +2263,8 @@ struct AppInfo {
     compose_hash: [u8; 32],
     gpu_policy_hash: [u8; 32],
     init_script_hashes: Vec<Vec<u8>>,
+    /// `gpu-attestation` payload, measured after key provisioning.
+    gpu_attestation_event: Option<Vec<u8>>,
 }
 
 struct Stage0<'a> {
@@ -2978,7 +2982,7 @@ impl<'a> Stage0<'a> {
         for script_hash in &init_script_hashes {
             emit_runtime_event("init-script-hash", script_hash)?;
         }
-        let gpu_policy_hash = self
+        let (gpu_policy_hash, gpu_attestation_event) = self
             .measure_gpu()
             .await
             .context("failed to verify GPU TEE attestation")?;
@@ -3012,6 +3016,7 @@ impl<'a> Stage0<'a> {
             compose_hash,
             gpu_policy_hash,
             init_script_hashes,
+            gpu_attestation_event,
         })
     }
 
@@ -3065,6 +3070,15 @@ impl<'a> Stage0<'a> {
             .context("Failed to request app keys")?;
         if app_keys.disk_crypt_key.is_empty() {
             bail!("Failed to get valid key phrase from KMS");
+        }
+        // The GPU gate already passed before the keys were requested; only its
+        // event is measured here. The payload hashes nvattest output made with
+        // a fresh nonce, so it differs on every boot. Extending it before the
+        // TPM key provider unseals would change PCR14, which the seed is sealed
+        // to, and the CVM could never unseal its keys again after a reboot.
+        if let Some(event) = &app_info.gpu_attestation_event {
+            emit_runtime_event("gpu-attestation", event)
+                .context("failed to emit GPU attestation event")?;
         }
 
         self.verify_app(&app_info, &app_keys)
