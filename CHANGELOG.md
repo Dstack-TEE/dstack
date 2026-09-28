@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrade notes
 
+See [docs/upgrading-to-0.6.md](docs/upgrading-to-0.6.md) for the upgrade
+procedure.
+
 - **Every measurement changes.** Register the new `os_image_hash` on chain
   before deploying 0.6.0 images. The VMM now defaults `qemu_hotplug_off` to
   `true`, which changes the ACPI tables and RTMRs of every CVM on its next
@@ -59,10 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DstackApp` contracts with `allowAnyDevice = false` must add the new value
   (#1302). Root-key handover moves to the admin listener; turn off
   `core.onboard.public_key_handover` once every node is upgraded (#1307)
-- **Gateway:** `core.debug.insecure_skip_attestation` is gone, and a gateway
+- **Admin APIs fail closed:** a KMS or Gateway with its admin API enabled
+  but no `auth_token` or `htpasswd_file` refuses to start. The VMM's `[auth]`
+  now guards the whole API and web UI
+- **Gateway:** roll nodes one at a time; 0.5.x and 0.6.0 nodes serve traffic
+  but do not sync until every node is upgraded.
+  `core.debug.insecure_skip_attestation` is gone, and a gateway
   without a guest agent no longer starts (#1148). A certificate configured in
   `[core.proxy]` is ignored; install it with `Admin.ImportCert` (#1239)
-- **VMM:** upgrade netd together with the VMM, and before it on hosts running
+- **VMM:** a 0.5.x app that sets `key_provider_id` cannot boot its 0.5.x
+  image on a 0.6.0 VMM; move it to the 0.6.0 image with the host. Upgrade
+  netd together with the VMM, and before it on hosts running
   bridge or macvtap VMs (#1145, #1217)
 - **Images:** component images publish to `ghcr.io/dstack-tee/<component>`
   (#1222). `dstackup` digest-pins its default KMS image, so fresh installs
@@ -155,8 +165,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - opt-in `dns-persist-01` certificate validation, which issues certificates
   without DNS provider credentials. Experimental; see
   `docs/certbot-dns-persist-01.md` (#1132)
-- WaveKV v2 with dual-stack compatibility and deterministic conflict
-  resolution (#1031, #1067)
+- WaveKV v2 with deterministic conflict resolution. A 0.5.x data directory
+  is migrated in place; 0.5.x and 0.6.0 nodes do not sync with each other
+  (#1031, #1067)
 - simultaneous CVM connections to multiple Gateway clusters (#1060)
 - a Prometheus metrics endpoint (#1037), with sync rejection and node
   liveness metrics (#1100, #1102)
