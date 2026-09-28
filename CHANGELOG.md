@@ -47,6 +47,11 @@ procedure.
   `true`, which changes the ACPI tables and RTMRs of every CVM on its next
   start, whatever its image; update any allowlist that pins MRs, or set it
   back to `false` on hosts without GPUs (#1387)
+- **Apps on the 0.6.0 guest image:** `pre_launch_script` runs under
+  `set -euo pipefail`; a GPU CVM must pass GPU attestation to boot unless
+  `requirements.gpu_policy.attest_gpu` is false; legacy iptables is gone;
+  environment variables arrive byte for byte instead of with `\n` escaped;
+  and an encrypted environment that cannot be decrypted stops the boot
 - **v1 keys differ from v0 keys.** Existing apps keep their keys on the
   unversioned (v0) paths. Moving to v1 `GetKey` needs an asset migration
   signed by the old key; see `docs/guest-api-v1.md`. v1 attestations and
