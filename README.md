@@ -154,6 +154,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [Self-hosted Quick Onboarding](./docs/onboarding.md) - First app on one host
 - [Build the Guest OS](./docs/building-guest-os.md) - Build and verify bootable images from source
 - [Deployment](./docs/deployment.md) - Self-hosting on TDX or AMD SEV-SNP hardware
+- [Upgrading to 0.6](./docs/upgrading-to-0.6.md) - Upgrading from dstack 0.5.x
 - [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
 
