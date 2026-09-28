@@ -410,6 +410,9 @@ pub struct CvmConfig {
     /// The URL of the PCCS server
     #[serde(default)]
     pub pccs_url: String,
+    /// Optional AMD KDS-compatible collateral mirror/cache URL passed to guests.
+    #[serde(default)]
+    pub sev_snp_kds_url: String,
     /// Node-local credentials and collateral settings used when an individual
     /// VM requests a simulated TEE platform.
     #[serde(default)]
@@ -943,6 +946,10 @@ impl Config {
         }
         for (name, value) in [
             ("cvm.pccs_url", Some(self.cvm.pccs_url.as_str())),
+            (
+                "cvm.sev_snp_kds_url",
+                Some(self.cvm.sev_snp_kds_url.as_str()),
+            ),
             (
                 "cvm.nvidia_attestation_proxy_url",
                 self.cvm.nvidia_attestation_proxy_url.as_deref(),

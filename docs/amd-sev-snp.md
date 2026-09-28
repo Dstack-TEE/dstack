@@ -130,18 +130,32 @@ for production TEE deployments.
 ## AMD KDS collateral
 
 The verifier obtains AMD certificate collateral from the built-in AMD KDS URL
-when the attestation evidence does not already contain the required chain. An
-operator can set an AMD-KDS-compatible mirror or cache:
+when the attestation evidence does not already contain the required chain. The
+public endpoint may be temporarily unavailable because of maintenance,
+outage, routing restrictions, or a disconnected deployment. An operator can
+set an AMD-KDS-compatible mirror or cache for both the KMS CVM and application
+CVMs during installation:
 
-```toml
-[core]
-amd_kds_base_url = "https://mirror.example.com/vcek/v1"
+```sh
+sudo dstackup install --platform amd-sev-snp \
+  --sev-snp-kds-url "https://mirror.example.com/vcek/v1"
 ```
 
-Leave the value empty to use the built-in default. A custom endpoint is part of
-the verification trust and availability boundary: use a controlled mirror,
-preserve TLS validation, and do not make verification succeed without valid
-AMD signatures.
+The value is rendered into the KMS configuration as:
+
+```toml
+[core.attestation.urls]
+amd_kds = "https://mirror.example.com/vcek/v1"
+```
+
+The same value is passed to application CVMs as
+`collateral_urls.amd_kds`. Leave the option unset to use the built-in default.
+A custom endpoint is part of the verification trust and availability boundary:
+use a controlled mirror, preserve TLS validation, and do not make verification
+succeed without valid AMD signatures. The endpoint must implement the AMD KDS
+API, including certificate-chain and chip/TCB-specific VCEK requests. A
+pre-populated cache can continue serving known collateral during a public KDS
+maintenance window or outage; cache misses must fail closed.
 
 ## Troubleshooting
 
