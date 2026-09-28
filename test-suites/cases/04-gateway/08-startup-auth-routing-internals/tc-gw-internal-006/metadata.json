@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-internal-006",
+  "title": "Port-policy filtering fetch retry and PP decision",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-internal-006"
+  ],
+  "risks": [
+    "risk-gw-internal-006"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Port-policy filtering fetch retry and PP decision"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

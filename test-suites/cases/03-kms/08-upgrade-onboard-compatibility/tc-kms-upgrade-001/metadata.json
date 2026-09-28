@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-upgrade-001",
+  "title": "0.5.4 to 0.6.0 through 0.5.7 bridge",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-upgrade-001"
+  ],
+  "risks": [
+    "risk-kms-upgrade-001"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "0.5.4 to 0.6.0 through 0.5.7 bridge"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 360
+  }
+}

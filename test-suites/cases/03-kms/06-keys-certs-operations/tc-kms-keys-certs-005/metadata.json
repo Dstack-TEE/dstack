@@ -1,0 +1,38 @@
+{
+  "id": "tc-kms-keys-certs-005",
+  "title": "CA persistence and near-expiry renewal",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-keys-certs-005"
+  ],
+  "risks": [
+    "risk-kms-keys-certs-005"
+  ],
+  "tags": [
+    "kms",
+    "keys-certs-operations"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "CA role validation",
+    "CA persistence across restart",
+    "Near-expiry CA renewal with key preservation"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-temp-ca-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

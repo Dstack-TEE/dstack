@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-019",
+  "title": "Quote and quote-report CLI bindings",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-019"
+  ],
+  "risks": [
+    "risk-gos-setup-019"
+  ],
+  "tags": [
+    "guest-os",
+    "dstack-util"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Quote and quote-report CLI bindings"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

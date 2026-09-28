@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-internal-001",
+  "title": "Gateway startup certificate mode and resource limits",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-internal-001"
+  ],
+  "risks": [
+    "risk-gw-internal-001"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Gateway startup certificate mode and resource limits"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

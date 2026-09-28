@@ -1,0 +1,35 @@
+{
+  "id": "tc-gw-select-007",
+  "title": "Top-N backend selection DNS cache and failover",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-select-007"
+  ],
+  "risks": [
+    "risk-gw-select-007"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Top-N backend selection DNS cache and failover"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

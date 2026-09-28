@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certificat-005",
+  "title": "CAA publication and validation",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-certificat-005"
+  ],
+  "risks": [
+    "risk-gw-certificat-005"
+  ],
+  "tags": [
+    "gateway",
+    "certificates-dns"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "CAA publication and validation"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-caa-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

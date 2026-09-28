@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-004",
+  "title": "Staged system setup idempotence and config identity",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-004"
+  ],
+  "risks": [
+    "risk-gos-setup-004"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "profile": "no-tee-guest-lifecycle",
+    "simulation_allowed": true,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Staged system setup idempotence and config identity"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 1200
+  }
+}

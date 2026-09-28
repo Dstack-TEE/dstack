@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-compute-ne-007",
+  "title": "QEMU command and platform matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-compute-ne-007"
+  ],
+  "risks": [
+    "risk-vmm-compute-ne-007"
+  ],
+  "tags": [
+    "vmm",
+    "compute-network-image"
+  ],
+  "fixture": {
+    "profile": "vmm-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "QEMU command and platform matrix"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

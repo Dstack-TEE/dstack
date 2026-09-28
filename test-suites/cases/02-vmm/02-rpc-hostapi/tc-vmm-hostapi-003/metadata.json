@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-hostapi-003",
+  "title": "HostApi.GetSealingKey",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-hostapi-003"
+  ],
+  "risks": [
+    "risk-vmm-hostapi-003"
+  ],
+  "tags": [
+    "vmm",
+    "hostapi-rpc"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "HostApi.GetSealingKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-hostapi-sealing-key-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

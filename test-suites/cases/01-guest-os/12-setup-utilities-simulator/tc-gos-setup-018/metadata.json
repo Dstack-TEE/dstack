@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-018",
+  "title": "TDX event-log extend show and replay CLI",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-018"
+  ],
+  "risks": [
+    "risk-gos-setup-018"
+  ],
+  "tags": [
+    "guest-os",
+    "dstack-util"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "TDX event-log extend show and replay CLI"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

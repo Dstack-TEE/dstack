@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-011",
+  "title": "GPU measurement in system setup",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-011"
+  ],
+  "risks": [
+    "risk-gos-setup-011"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "profile": "gpu-policy",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "GPU measurement in system setup"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/capability-probe-case.py",
+    "args": [],
+    "timeout_seconds": 60
+  }
+}

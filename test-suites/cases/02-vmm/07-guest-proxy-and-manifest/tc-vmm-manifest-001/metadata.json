@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-manifest-001",
+  "title": "Proxied GuestApi transport and VM targeting",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-manifest-001"
+  ],
+  "risks": [
+    "risk-vmm-manifest-001"
+  ],
+  "tags": [
+    "vmm",
+    "guest-proxy-and-manifest-fidelity"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Proxied GuestApi transport and VM targeting"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

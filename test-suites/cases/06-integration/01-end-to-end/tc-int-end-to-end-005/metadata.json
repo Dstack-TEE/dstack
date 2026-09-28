@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-end-to-end-005",
+  "title": "Multi-instance load balancing and isolation",
+  "priority": "P0",
+  "requirements": [
+    "req-int-end-to-end-005"
+  ],
+  "risks": [
+    "risk-int-end-to-end-005"
+  ],
+  "tags": [
+    "integration",
+    "end-to-end"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Multi-instance load balancing and isolation"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+    "args": [],
+    "timeout_seconds": 1800
+  }
+}

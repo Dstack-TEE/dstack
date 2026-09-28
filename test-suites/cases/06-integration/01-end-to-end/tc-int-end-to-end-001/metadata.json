@@ -1,0 +1,36 @@
+{
+  "id": "tc-int-end-to-end-001",
+  "title": "New application deployment trust chain",
+  "priority": "P0",
+  "requirements": [
+    "req-int-end-to-end-001"
+  ],
+  "risks": [
+    "risk-int-end-to-end-001"
+  ],
+  "tags": [
+    "integration",
+    "end-to-end"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "New application deployment trust chain"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",
+    "args": [],
+    "timeout_seconds": 1200
+  }
+}
