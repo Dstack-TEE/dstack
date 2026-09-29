@@ -321,6 +321,26 @@ not listed: the `all` attach mode finds GPUs and switches by PCI class instead.
 - VFIO driver configured
 - GPU not in use by host
 
+### Custom QEMU wrapper
+
+`qemu_path` can point at a wrapper script that execs QEMU with extra arguments.
+Devices it adds to the root PCIe bus change the guest's ACPI tables, and
+therefore RTMR0, so the KMS and verifier reject the CVM unless its `vm_config`
+declares them. For each device the wrapper appends to `pcie.0`:
+
+- append it after dstack's own arguments, with `bus=pcie.0` and no `addr=`, so
+  QEMU gives it the next free slot;
+- keep it single-function;
+- list it, in command-line order, in `vm_config.extra_root_devices` inside
+  `.host-shared/.sys-config.json`: `"root_port"` for a `pcie-root-port`,
+  `"endpoint"` for anything else.
+
+For example, a wrapper that adds four `ivshmem-plain` regions and a
+`virtio-blk-pci` cache disk declares
+`"extra_root_devices": ["endpoint", "endpoint", "endpoint", "endpoint", "endpoint"]`.
+Devices behind a root port the wrapper adds are not on the root bus and need no
+entry.
+
 ---
 
 ## Troubleshooting
