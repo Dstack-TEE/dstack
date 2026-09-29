@@ -19,7 +19,7 @@ use crate::{
     app::Manifest,
     config::{CvmConfig, CvmPlatform, DiskPrealloc, Networking, NetworkingMode, ProcessAnnotation},
     netd::{tap_name, InterfaceIdentity},
-    vm_launcher::{ChildCommand, LaunchSpec, OpenFile},
+    vm_launcher::{ChildCommand, LaunchSpec, OpenFile, Sidecar, SidecarChannel},
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -449,48 +449,46 @@ impl VmConfig {
             .networks
             .iter()
             .any(|network| network.nic.mode == NetworkingMode::Macvtap);
-        let Some(socket) = prepared.swtpm_socket.as_deref() else {
-            if has_macvtap {
-                return self.wrap_launcher(&prepared, process, None, None);
-            }
+        let mut sidecars = Vec::new();
+        if let Some(socket) = prepared.swtpm_socket.as_deref() {
+            let swtpm_path = prepared
+                .swtpm_path
+                .as_ref()
+                .context("missing swtpm executable for configured socket")?;
+            let (socket_uid, socket_gid) = (Uid::effective().as_raw(), Gid::effective().as_raw());
+            let swtpm_args = vec![
+                "socket".into(),
+                "--tpm2".into(),
+                "--tpmstate".into(),
+                format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
+                "--ctrl".into(),
+                format!(
+                    "type=unixio,path={},mode=0600,uid={socket_uid},gid={socket_gid}",
+                    socket.display()
+                ),
+                "--flags".into(),
+                "not-need-init,startup-clear".into(),
+            ];
+            sidecars.push(Sidecar {
+                name: "swtpm".into(),
+                command: ChildCommand {
+                    command: swtpm_path.to_string_lossy().into_owned(),
+                    args: swtpm_args,
+                },
+                channel: SidecarChannel::Listen(socket.to_path_buf()),
+            });
+        }
+        if sidecars.is_empty() && !has_macvtap {
             return Ok(vec![process]);
-        };
-        let swtpm_path = prepared
-            .swtpm_path
-            .as_ref()
-            .context("missing swtpm executable for configured socket")?;
-        let (socket_uid, socket_gid) = (Uid::effective().as_raw(), Gid::effective().as_raw());
-
-        let swtpm_args = vec![
-            "socket".into(),
-            "--tpm2".into(),
-            "--tpmstate".into(),
-            format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
-            "--ctrl".into(),
-            format!(
-                "type=unixio,path={},mode=0600,uid={socket_uid},gid={socket_gid}",
-                socket.display()
-            ),
-            "--flags".into(),
-            "not-need-init,startup-clear".into(),
-        ];
-        self.wrap_launcher(
-            &prepared,
-            process,
-            Some(ChildCommand {
-                command: swtpm_path.to_string_lossy().into_owned(),
-                args: swtpm_args,
-            }),
-            Some(socket.to_path_buf()),
-        )
+        }
+        self.wrap_launcher(&prepared, process, sidecars)
     }
 
     fn wrap_launcher(
         &self,
         prepared: &PreparedQemuLaunch,
         process: ProcessConfig,
-        swtpm: Option<ChildCommand>,
-        swtpm_socket: Option<PathBuf>,
+        sidecars: Vec<Sidecar>,
     ) -> Result<Vec<ProcessConfig>> {
         // Each queue pair is a separate open of the same macvtap character
         // device; the kernel attaches one tap queue per open.
@@ -510,8 +508,7 @@ impl VmConfig {
                 command: process.command,
                 args: process.args,
             },
-            swtpm,
-            swtpm_socket,
+            sidecars,
             open_files,
             startup_timeout_ms: 5_000,
             shutdown_timeout_ms: 10_000,
@@ -956,7 +953,7 @@ impl QemuCommandBuilder<'_> {
             // Recorded on the process rather than tracked in VMM memory, so it
             // survives a VMM restart and describes the QEMU that is actually
             // running. The vm-launcher wrapper copies this note verbatim, so
-            // TPM-backed VMs carry it too.
+            // VMs behind it carry it too.
             serial_logappend: true,
         })?;
         Ok(ProcessConfig {
