@@ -246,24 +246,62 @@ pub(crate) fn pci_numa_node(device: &str) -> Result<String> {
     Ok(numa_node)
 }
 
-/// NUMA nodes used by the QEMU hugepage layout.
+/// NUMA nodes used by the QEMU hugepage layout: GPU count by host node, in
+/// host node order, which is the guest node order.
 ///
 /// This mirrors the launch path: only GPU devices determine the split, while
 /// bridges/NVSwitches are attached after the NUMA topology is constructed.  If
 /// no GPU is attached, QEMU still creates a single node (node 0).
-pub(crate) fn hugepage_numa_nodes(gpus: &GpuConfig) -> Result<HashMap<String, u32>> {
-    let mut numa_nodes = HashMap::new();
+pub(crate) fn hugepage_numa_nodes(gpus: &GpuConfig) -> Result<BTreeMap<u32, u32>> {
+    let mut numa_nodes = BTreeMap::new();
 
     for device in &gpus.gpus {
-        let node = pci_numa_node(&device.slot)?;
+        let node = pci_numa_node(&device.slot)?
+            .parse()
+            .with_context(|| format!("invalid NUMA node of {}", device.slot))?;
         *numa_nodes.entry(node).or_insert(0) += 1;
     }
 
     if numa_nodes.is_empty() {
-        numa_nodes.insert("0".to_string(), 0);
+        numa_nodes.insert(0, 0);
     }
 
     Ok(numa_nodes)
+}
+
+/// Bus number of the first guest node's `pxb-pcie`.
+const FIRST_PXB_BUS: u8 = 5;
+
+/// Bus number of each guest node's `pxb-pcie`, in guest node order.
+///
+/// An expander's range runs up to the next one's bus: its own bus, one per
+/// GPU root port, and `spare_buses` for devices a QEMU wrapper adds behind it.
+pub(crate) fn pxb_buses(numa_nodes: &BTreeMap<u32, u32>, spare_buses: u8) -> Result<Vec<u8>> {
+    let mut next = u32::from(FIRST_PXB_BUS);
+    let buses = numa_nodes
+        .values()
+        .map(|&gpus| {
+            let bus = next;
+            next += gpus + 1 + u32::from(spare_buses);
+            u8::try_from(bus).ok()
+        })
+        .collect::<Option<_>>();
+    match buses {
+        Some(buses) if next <= 0x100 => Ok(buses),
+        _ => bail!(
+            "the PXB bus ranges of {} NUMA nodes exceed bus 255",
+            numa_nodes.len()
+        ),
+    }
+}
+
+/// Guest RAM in MiB. The hugepage layout gives every node the same whole
+/// number of GiB, rounding the total up to fit.
+pub(crate) fn effective_memory_mb(requested_mb: u32, hugepage_numa_node_count: Option<u32>) -> u32 {
+    match hugepage_numa_node_count {
+        Some(nodes) => round_up(requested_mb / 1024, nodes.max(1)).saturating_mul(1024),
+        None => requested_mb,
+    }
 }
 
 /// Effective vCPU count used for both QEMU `-smp` and SNP launch measurement.
@@ -282,18 +320,6 @@ pub(crate) fn effective_vcpu_count(
         Some(numa_nodes) => round_up(vcpus, numa_nodes.max(1)),
         None => vcpus,
     }
-}
-
-pub(crate) fn effective_vcpu_count_for_manifest(
-    manifest: &Manifest,
-    gpus: &GpuConfig,
-) -> Result<u32> {
-    let numa_node_count = if manifest.hugepages {
-        Some(hugepage_numa_nodes(gpus)?.len() as u32)
-    } else {
-        None
-    };
-    Ok(effective_vcpu_count(manifest.vcpu, numa_node_count))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2164,7 +2190,28 @@ fn make_vm_config(
     } else {
         GpuConfig::default()
     };
-    let effective_vcpus = effective_vcpu_count_for_manifest(manifest, &gpus)?;
+    let hugepage_nodes = manifest
+        .hugepages
+        .then(|| hugepage_numa_nodes(&gpus))
+        .transpose()?;
+    let numa_node_count = hugepage_nodes.as_ref().map(|nodes| nodes.len() as u32);
+    let effective_vcpus = effective_vcpu_count(manifest.vcpu, numa_node_count);
+    let memory_mb = effective_memory_mb(manifest.memory, numa_node_count);
+    // The expanders' bus numbers shape RTMR0. Record them unless the legacy
+    // fields imply them: one node, with its expander on the first bus exactly
+    // when GPUs are attached.
+    let pxb_buses = match &hugepage_nodes {
+        Some(nodes) => pxb_buses(nodes, cfg.cvm.qemu_pxb_spare_buses)?,
+        None => vec![],
+    };
+    let numa_nodes = if pxb_buses == [FIRST_PXB_BUS] && !gpus.gpus.is_empty() {
+        vec![]
+    } else {
+        pxb_buses
+            .into_iter()
+            .map(|bus| dstack_types::NumaNodeConfig { pxb_bus: Some(bus) })
+            .collect()
+    };
     // Each resolved network interface becomes one virtio-net-pci device in the
     // QEMU command (see `VmConfig::config_qemu`), which changes the guest's
     // ACPI/DSDT layout and therefore RTMR0. Measure the interface count so the
@@ -2193,12 +2240,13 @@ fn make_vm_config(
     let mut config = serde_json::to_value(dstack_types::VmConfig {
         os_image_hash,
         cpu_count: effective_vcpus,
-        memory_size: manifest.memory as u64 * 1024 * 1024,
+        memory_size: memory_mb as u64 * 1024 * 1024,
         qemu_single_pass_add_pages: cfg.cvm.qemu_single_pass_add_pages,
         pic: cfg.cvm.qemu_pic,
         qemu_version: Some(cfg.cvm.resolve_qemu_version()?),
         pci_hole64_size: cfg.cvm.qemu_pci_hole64_size,
         hugepages: manifest.hugepages,
+        numa_nodes,
         num_gpus: gpus.gpus.len() as u32,
         num_nvswitches: gpus.bridges.len() as u32,
         num_nics,
@@ -3407,6 +3455,22 @@ mod tests {
         assert_eq!(effective_vcpu_count(4, Some(2)), 4);
         assert_eq!(effective_vcpu_count(3, Some(0)), 3);
         assert_eq!(effective_vcpu_count(3, None), 3);
+    }
+
+    #[test]
+    fn effective_memory_splits_whole_gib_across_numa_nodes() {
+        assert_eq!(effective_memory_mb(3000, None), 3000);
+        assert_eq!(effective_memory_mb(3072, Some(1)), 3072);
+        assert_eq!(effective_memory_mb(3072, Some(2)), 4096);
+    }
+
+    #[test]
+    fn pxb_ranges_hold_gpu_ports_and_spare_buses() -> Result<()> {
+        let nodes = BTreeMap::from([(0, 0), (1, 4), (3, 1)]);
+        assert_eq!(pxb_buses(&nodes, 0)?, [5, 6, 11]);
+        assert_eq!(pxb_buses(&nodes, 1)?, [5, 7, 13]);
+        assert!(pxb_buses(&nodes, 100).is_err());
+        Ok(())
     }
 
     #[test]

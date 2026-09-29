@@ -318,6 +318,7 @@ impl CvmVerifier {
                 None
             })
             .hugepages(vm_config.hugepages)
+            .numa_nodes(&vm_config.numa_nodes)
             .num_gpus(vm_config.num_gpus)
             .num_nics(vm_config.num_nics)
             .num_verity_volumes(vm_config.num_verity_volumes)

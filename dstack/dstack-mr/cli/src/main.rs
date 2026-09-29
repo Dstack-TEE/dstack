@@ -61,6 +61,11 @@ struct MachineConfig {
     #[arg(long, default_value = "false")]
     hugepages: bool,
 
+    /// PXB bus number of each guest NUMA node, comma-separated (e.g. 5,10);
+    /// omitted means the layout --hugepages implies
+    #[arg(long, value_delimiter = ',')]
+    numa_pxb_buses: Vec<u8>,
+
     /// Number of GPUs
     #[arg(long, default_value = "0")]
     num_gpus: u32,
@@ -117,6 +122,11 @@ fn main() -> Result<()> {
             // The image declares its OVMF layout. Older metadata.json files
             // predate the field, so fall back to the only layout that existed.
             let ovmf_variant = image_info.ovmf_variant.unwrap_or_default();
+            let numa_nodes: Vec<_> = config
+                .numa_pxb_buses
+                .iter()
+                .map(|&bus| dstack_types::NumaNodeConfig { pxb_bus: Some(bus) })
+                .collect();
 
             let machine = Machine::builder()
                 .cpu_count(config.cpu)
@@ -131,6 +141,7 @@ fn main() -> Result<()> {
                 .smm(config.smm)
                 .maybe_pci_hole64_size(config.pci_hole64_size)
                 .hugepages(config.hugepages)
+                .numa_nodes(&numa_nodes)
                 .num_gpus(config.num_gpus)
                 .num_nvswitches(config.num_nvswitches)
                 .num_nics(config.num_nics)
@@ -217,7 +228,7 @@ fn rtmr0_labels(_variant: OvmfVariant) -> &'static [(&'static str, &'static str)
         ("separator", "fixed: sha384(0x00000000)"),
         (
             "acpi_loader",
-            "varies-with: cpu_count, pic, smm, hpet, hotplug_off, pci_hole64, root_verity, host_share_mode, num_gpus, num_nvswitches, hugepages, qemu_version",
+            "varies-with: cpu_count, pic, smm, hpet, hotplug_off, pci_hole64, root_verity, host_share_mode, num_gpus, num_nvswitches, hugepages, numa_nodes, qemu_version",
         ),
         ("acpi_rsdp", "same as acpi_loader"),
         ("acpi_tables", "same as acpi_loader"),
@@ -351,6 +362,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
             None
         })
         .hugepages(vm.hugepages)
+        .numa_nodes(&vm.numa_nodes)
         .num_gpus(vm.num_gpus)
         .num_nics(vm.num_nics)
         .num_verity_volumes(vm.num_verity_volumes)
@@ -396,8 +408,13 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
         vm.cpu_count, vm.memory_size, vm.qemu_version, vm.pic, vm.qemu_single_pass_add_pages,
     );
     println!(
-        "  hugepages={} num_gpus={} num_nvswitches={} hotplug_off={} pci_hole64={}",
-        vm.hugepages, vm.num_gpus, vm.num_nvswitches, vm.hotplug_off, vm.pci_hole64_size,
+        "  hugepages={} numa_nodes={:?} num_gpus={} num_nvswitches={} hotplug_off={} pci_hole64={}",
+        vm.hugepages,
+        vm.numa_nodes,
+        vm.num_gpus,
+        vm.num_nvswitches,
+        vm.hotplug_off,
+        vm.pci_hole64_size,
     );
     println!("  host_share_mode={:?}", vm.host_share_mode);
     println!("  image_dir={}", image_dir.display());

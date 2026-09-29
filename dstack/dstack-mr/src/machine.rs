@@ -31,6 +31,9 @@ pub struct Machine<'a> {
     pub smm: bool,
     pub pci_hole64_size: Option<u64>,
     pub hugepages: bool,
+    /// Guest NUMA nodes; empty means the layout `hugepages` implies.
+    #[builder(default)]
+    pub numa_nodes: &'a [dstack_types::NumaNodeConfig],
     pub num_gpus: u32,
     pub num_nvswitches: u32,
     /// Number of virtio-net NICs. Each NIC contributes a PCI device to the
