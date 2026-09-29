@@ -23,12 +23,14 @@ pub(crate) fn build(config: &MachineConfig) -> Result<AcpiBlobs, Error> {
         config.pic,
         legacy_irq_overrides,
     ));
-    let srat_offset = config.hugepages.then_some(tables.len() as u32);
-    if config.hugepages {
+    let numa_nodes = config.numa_layout().len() as u32;
+    let srat_offset = (numa_nodes > 0).then_some(tables.len() as u32);
+    if numa_nodes > 0 {
         tables.extend(srat::build(
             config.cpu_count,
             config.memory_size,
             config.pci_hole64_size,
+            numa_nodes,
         ));
     }
     let mcfg_offset = tables.len() as u32;
@@ -58,6 +60,7 @@ mod tests {
             pic: false,
             smm: false,
             hugepages: false,
+            numa_nodes: vec![],
             num_gpus: 0,
             num_nvswitches: 0,
             num_nics: 0,

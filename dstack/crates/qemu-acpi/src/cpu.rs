@@ -67,7 +67,7 @@ fn ost(index: u32) -> Result<Vec<u8>, Error> {
     method(b"_OST", 0x0b, &call)
 }
 
-pub(crate) fn object(index: u32, numa: bool) -> Result<Vec<u8>, Error> {
+pub(crate) fn object(index: u32, pxm: Option<u32>) -> Result<Vec<u8>, Error> {
     let x2apic = index >= 255;
     let mut body = Vec::new();
     body.extend_from_slice(&name(index));
@@ -90,8 +90,9 @@ pub(crate) fn object(index: u32, numa: bool) -> Result<Vec<u8>, Error> {
         body.extend_from_slice(&eject(index)?);
     }
     body.extend_from_slice(&ost(index)?);
-    if numa {
-        body.extend_from_slice(&[0x08, b'_', b'P', b'X', b'M', 0x00]);
+    if let Some(pxm) = pxm {
+        body.extend_from_slice(b"\x08_PXM");
+        body.extend_from_slice(&integer(pxm));
     }
     package(if x2apic { &[0x5b, 0x82] } else { &[0x5b, 0x83] }, &body)
 }
@@ -103,14 +104,14 @@ mod tests {
     #[test]
     fn legacy_processor_matches_qemu() -> Result<(), Error> {
         let Ok(expected) = hex::decode("5b83450443303031010000000000140c5f53544108a44353544101085f4d4154110b0a080008010101000000140b5f454a300143454a3001140e5f4f53540b434f53540168696a") else { panic!("valid test vector") };
-        assert_eq!(object(1, false)?, expected);
+        assert_eq!(object(1, None)?, expected);
         Ok(())
     }
 
     #[test]
     fn multi_byte_integer_processor_matches_qemu() -> Result<(), Error> {
         let Ok(expected) = hex::decode("5b83480443303032020000000000140d5f53544108a4435354410a02085f4d4154110b0a080008020201000000140c5f454a300143454a300a02140f5f4f53540b434f53540a0268696a") else { panic!("valid test vector") };
-        assert_eq!(object(2, false)?, expected);
+        assert_eq!(object(2, None)?, expected);
         Ok(())
     }
 }

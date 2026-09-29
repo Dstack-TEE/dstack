@@ -84,7 +84,7 @@ pub(crate) fn build(
     slot_count: u32,
     root_port_count: u32,
     modern_serial_irq: bool,
-    pxb_devfn: Option<u8>,
+    pxb_count: u8,
 ) -> Vec<u8> {
     let lpc = lpc_children(modern_serial_irq);
 
@@ -92,12 +92,14 @@ pub(crate) fn build(
     for slot in 0..slot_count {
         devices.push(((slot * 8) as u8, false));
     }
-    if let Some(devfn) = pxb_devfn {
-        devices.push((devfn, false));
+    let first_pxb = u32::from(crate::topology::FIRST_PXB_SLOT);
+    let pxb_slots = first_pxb..first_pxb + u32::from(pxb_count);
+    for slot in pxb_slots.clone() {
+        devices.push(((slot * 8) as u8, false));
     }
     let mut slot = slot_count;
     for _ in 0..root_port_count {
-        if pxb_devfn == Some((slot * 8) as u8) {
+        while pxb_slots.contains(&slot) {
             slot += 1;
         }
         devices.push(((slot * 8) as u8, true));
@@ -298,6 +300,6 @@ impl Aml for Irq {
 mod tests {
     #[test]
     fn matches_qemu() {
-        super::super::fixture::assert_region(&super::build(5, 0, true, None), 7834, 8245);
+        super::super::fixture::assert_region(&super::build(5, 0, true, 0), 7834, 8245);
     }
 }

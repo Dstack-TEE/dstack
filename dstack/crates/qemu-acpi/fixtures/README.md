@@ -38,7 +38,8 @@ Run the complete three-blob differential matrix with:
 ```
 
 The script compares `etc/acpi/tables`, `etc/table-loader`, and
-`etc/acpi/rsdp` byte for byte for normal, NUMA, and NUMA/PXB configurations.
+`etc/acpi/rsdp` byte for byte for normal, NUMA, single-PXB, and multi-node
+PXB configurations.
 The dump patch is test-only instrumentation and does not change table
 construction.
 
@@ -49,6 +50,10 @@ for each compatibility family cover the Cartesian product of:
 
 - CPU hotplug enabled or disabled; and
 - ordinary Q35 or NUMA with one PXB.
+
+`qemu-11.1-q35-hotplug-off-numa3-pxb-*.bin` capture three guest NUMA nodes
+whose PXBs sit on buses 5, 6 and 8 (12 vCPUs, 6 GiB, two NICs), together with
+their loader and RSDP blobs.
 
 `qemu-11.1-q35-one-nic.bin` is an untrimmed byte-for-byte regression fixture.
 Fixture names identify the emulated compatibility version, not necessarily the

@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{build, Error, MachineConfig, QemuVersion};
+    use crate::{build, Error, MachineConfig, NumaNode, QemuVersion};
 
     fn config(nics: u32, volumes: u32) -> MachineConfig {
         MachineConfig {
@@ -13,6 +13,7 @@ mod tests {
             pic: false,
             smm: false,
             hugepages: false,
+            numa_nodes: vec![],
             num_gpus: 0,
             num_nvswitches: 0,
             num_nics: nics,
@@ -55,6 +56,59 @@ mod tests {
             include_bytes!("../fixtures/qemu-11.1-q35-numa-one-nic-rsdp.bin")
         );
         Ok(())
+    }
+
+    /// Three nodes whose expanders sit on buses 5, 6 and 8: QEMU lists them
+    /// newest first, and the adjacent pair leaves PCI0 decoding bus 5.
+    #[test]
+    fn three_numa_nodes_match_qemu_byte_for_byte() -> Result<(), Error> {
+        let mut c = config(2, 0);
+        c.cpu_count = 12;
+        c.memory_size = 6 << 30;
+        c.hugepages = true;
+        c.numa_nodes = [5, 6, 8]
+            .map(|bus| NumaNode { pxb_bus: Some(bus) })
+            .to_vec();
+        c.num_gpus = 1;
+        c.hotplug_off = true;
+        let actual = build(&c)?;
+        let expected = include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-numa3-pxb-base.bin");
+        assert_eq!(&actual.tables[..expected.len()], expected);
+        assert!(actual.tables[expected.len()..].iter().all(|b| *b == 0));
+        assert_eq!(
+            actual.loader,
+            include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-numa3-pxb-loader.bin")
+        );
+        assert_eq!(
+            actual.rsdp,
+            include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-numa3-pxb-rsdp.bin")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn numa_layouts_qemu_cannot_build_are_rejected() {
+        let nodes = |buses: &[u8]| {
+            buses
+                .iter()
+                .map(|&bus| NumaNode { pxb_bus: Some(bus) })
+                .collect::<Vec<_>>()
+        };
+        let mut c = config(1, 0);
+        c.cpu_count = 2;
+        c.hugepages = true;
+        for (hugepages, cpus, buses) in [
+            (false, 2, nodes(&[5, 7])),
+            (true, 3, nodes(&[5, 7])),
+            (true, 2, nodes(&[5, 5])),
+            (true, 2, nodes(&[0, 5])),
+            (true, 16, nodes(&(5..21).collect::<Vec<_>>())),
+        ] {
+            c.hugepages = hugepages;
+            c.cpu_count = cpus;
+            c.numa_nodes = buses;
+            assert!(build(&c).is_err(), "{c:?}");
+        }
     }
 
     fn qemu_hash(config: MachineConfig) -> Result<String, Error> {
