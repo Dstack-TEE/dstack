@@ -274,15 +274,15 @@ const FIRST_PXB_BUS: u8 = 5;
 
 /// Bus number of each guest node's `pxb-pcie`, in guest node order.
 ///
-/// An expander's range runs up to the next one's bus: its own bus, one per
-/// GPU root port, and `spare_buses` for devices a QEMU wrapper adds behind it.
-pub(crate) fn pxb_buses(numa_nodes: &BTreeMap<u32, u32>, spare_buses: u8) -> Result<Vec<u8>> {
+/// An expander's range runs up to the next one's bus: its own bus and one
+/// per GPU root port.
+pub(crate) fn pxb_buses(numa_nodes: &BTreeMap<u32, u32>) -> Result<Vec<u8>> {
     let mut next = u32::from(FIRST_PXB_BUS);
     let buses = numa_nodes
         .values()
         .map(|&gpus| {
             let bus = next;
-            next += gpus + 1 + u32::from(spare_buses);
+            next += gpus + 1;
             u8::try_from(bus).ok()
         })
         .collect::<Option<_>>();
@@ -2201,7 +2201,7 @@ fn make_vm_config(
     // fields imply them: one node, with its expander on the first bus exactly
     // when GPUs are attached.
     let pxb_buses = match &hugepage_nodes {
-        Some(nodes) => pxb_buses(nodes, cfg.cvm.qemu_pxb_spare_buses)?,
+        Some(nodes) => pxb_buses(nodes)?,
         None => vec![],
     };
     let numa_nodes = if pxb_buses == [FIRST_PXB_BUS] && !gpus.gpus.is_empty() {
@@ -3465,11 +3465,10 @@ mod tests {
     }
 
     #[test]
-    fn pxb_ranges_hold_gpu_ports_and_spare_buses() -> Result<()> {
+    fn pxb_ranges_hold_gpu_ports() -> Result<()> {
         let nodes = BTreeMap::from([(0, 0), (1, 4), (3, 1)]);
-        assert_eq!(pxb_buses(&nodes, 0)?, [5, 6, 11]);
-        assert_eq!(pxb_buses(&nodes, 1)?, [5, 7, 13]);
-        assert!(pxb_buses(&nodes, 100).is_err());
+        assert_eq!(pxb_buses(&nodes)?, [5, 6, 11]);
+        assert!(pxb_buses(&BTreeMap::from([(0, 100), (1, 100), (2, 100)])).is_err());
         Ok(())
     }
 

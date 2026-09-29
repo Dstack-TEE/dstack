@@ -449,8 +449,6 @@ pub struct CvmConfig {
     pub qemu_pci_hole64_size: u64,
     /// QEMU hotplug_off
     pub qemu_hotplug_off: bool,
-    /// Bus numbers each hugepage NUMA node's PXB reserves beyond its GPUs
-    pub qemu_pxb_spare_buses: u8,
     /// TDX attestation/hash scheme policy. `legacy` keeps the existing
     /// digest.txt measurement path; `lite` opts into split measurement CBOR;
     /// `auto` uses `lite` when the image carries TDX measurement material and

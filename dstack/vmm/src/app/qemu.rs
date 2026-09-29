@@ -879,7 +879,7 @@ impl QemuCommandBuilder<'_> {
         let memory_mb = effective_memory_mb(self.vm.manifest.memory, Some(numa_count));
         let vcpus_per_node = smp / numa_count;
         let memory_per_node = memory_mb / 1024 / numa_count;
-        let buses = pxb_buses(numa_nodes, self.cfg.qemu_pxb_spare_buses)?;
+        let buses = pxb_buses(numa_nodes)?;
         for (index, (node, bus_number)) in numa_nodes.keys().zip(buses).enumerate() {
             let index = index as u32;
             let cpu_start = index * vcpus_per_node;
