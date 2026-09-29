@@ -44,6 +44,9 @@ pub struct Machine<'a> {
     /// Number of virtio-blk verity volumes attached before the NICs.
     #[builder(default)]
     pub num_verity_volumes: u32,
+    /// Devices a host QEMU wrapper appends to the root bus.
+    #[builder(default)]
+    pub extra_root_devices: &'a [dstack_types::RootBusDevice],
     /// Whether QEMU attaches a tpm-tis device backed by swtpm.
     #[builder(default)]
     pub swtpm: bool,

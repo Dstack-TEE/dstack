@@ -1431,6 +1431,15 @@ pub struct NumaNodeConfig {
     pub pxb_bus: u8,
 }
 
+/// A device a host QEMU wrapper appends to the root PCIe bus.
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RootBusDevice {
+    /// Any single-function device other than a PCIe root port.
+    Endpoint,
+    RootPort,
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct VmConfig {
     #[serde(with = "hex_bytes", default)]
@@ -1476,6 +1485,12 @@ pub struct VmConfig {
     /// changes the measured ACPI/DSDT layout.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub num_verity_volumes: u32,
+    /// Devices a host `qemu_path` wrapper appends to `pcie.0` after dstack's
+    /// own, in command-line order, each auto-addressed (`bus=pcie.0`, no
+    /// `addr=`) and single-function. They take the next free root-bus slots
+    /// and change the measured ACPI/DSDT layout. Omitted when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_root_devices: Vec<RootBusDevice>,
     /// Whether QEMU attaches a software TPM device. The TPM changes the ACPI
     /// table layout and must therefore be included in TDX measurement inputs.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2572,7 +2587,7 @@ mod platform_tests {
 
 #[cfg(test)]
 mod vm_config_device_count_tests {
-    use super::VmConfig;
+    use super::{RootBusDevice, VmConfig};
 
     fn legacy_json() -> serde_json::Value {
         serde_json::json!({
@@ -2624,6 +2639,20 @@ mod vm_config_device_count_tests {
                 .get("num_verity_volumes")
                 .and_then(|v| v.as_u64()),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn extra_root_devices_are_serialized_only_when_present() {
+        let mut cfg: VmConfig = serde_json::from_value(legacy_json()).unwrap();
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert!(serialized.get("extra_root_devices").is_none());
+
+        cfg.extra_root_devices = vec![RootBusDevice::Endpoint, RootBusDevice::RootPort];
+        let serialized = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(
+            serialized["extra_root_devices"],
+            serde_json::json!(["endpoint", "root_port"])
         );
     }
 
