@@ -33,9 +33,9 @@ pub struct MachineConfig {
     pub pic: bool,
     pub smm: bool,
     pub hugepages: bool,
-    /// Guest NUMA nodes, in node-id order. Empty means the layout `hugepages`
-    /// alone implies: one node, with an expander on bus 5 when GPUs are
-    /// attached.
+    /// Guest NUMA nodes, in node-id order, whatever backs their memory. Empty
+    /// means the layout `hugepages` alone implies: one node, with an expander
+    /// on bus 5 when GPUs are attached.
     pub numa_nodes: Vec<NumaNode>,
     pub num_gpus: u32,
     pub num_nvswitches: u32,
@@ -64,8 +64,6 @@ pub enum TopologyError {
     NvswitchWithoutIommufd,
     #[error("PCI hotplug on root ports is not modeled; set hotplug_off for GPU passthrough")]
     HotplugWithRootPorts,
-    #[error("NUMA nodes require hugepages")]
-    NumaWithoutHugepages,
     #[error("{what} ({count}) must split evenly across {nodes} NUMA nodes")]
     UnevenNumaSplit {
         what: &'static str,
@@ -101,9 +99,6 @@ impl MachineConfig {
         let nodes = self.numa_nodes.len();
         if nodes == 0 {
             return Ok(());
-        }
-        if !self.hugepages {
-            return Err(TopologyError::NumaWithoutHugepages);
         }
         for (what, count) in [
             ("cpu_count", u64::from(self.cpu_count)),

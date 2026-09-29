@@ -72,6 +72,8 @@ mod tests {
         c.num_gpus = 1;
         c.hotplug_off = true;
         let actual = build(&c)?;
+        c.hugepages = false;
+        assert_eq!(build(&c)?, actual, "an explicit layout ignores hugepages");
         let expected = include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-numa3-pxb-base.bin");
         assert_eq!(&actual.tables[..expected.len()], expected);
         assert!(actual.tables[expected.len()..].iter().all(|b| *b == 0));
@@ -95,16 +97,12 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut c = config(1, 0);
-        c.cpu_count = 2;
-        c.hugepages = true;
-        for (hugepages, cpus, buses) in [
-            (false, 2, nodes(&[5, 7])),
-            (true, 3, nodes(&[5, 7])),
-            (true, 2, nodes(&[5, 5])),
-            (true, 2, nodes(&[0, 5])),
-            (true, 16, nodes(&(5..21).collect::<Vec<_>>())),
+        for (cpus, buses) in [
+            (3, nodes(&[5, 7])),
+            (2, nodes(&[5, 5])),
+            (2, nodes(&[0, 5])),
+            (16, nodes(&(5..21).collect::<Vec<_>>())),
         ] {
-            c.hugepages = hugepages;
             c.cpu_count = cpus;
             c.numa_nodes = buses;
             assert!(build(&c).is_err(), "{c:?}");

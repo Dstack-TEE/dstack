@@ -1423,8 +1423,8 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
-/// One guest NUMA node of a hugepage VM. vCPUs and RAM are split evenly
-/// across the nodes, in node order.
+/// One guest NUMA node. vCPUs and RAM are split evenly across the nodes, in
+/// node order.
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NumaNodeConfig {
     /// Bus number of the node's `pxb-pcie` expander (its `bus_nr`), if any.
@@ -1451,11 +1451,11 @@ pub struct VmConfig {
     pub pci_hole64_size: u64,
     #[serde(default)]
     pub hugepages: bool,
-    /// Guest NUMA nodes of a hugepage VM, in node order. They shape the
-    /// ACPI SRAT and DSDT and therefore RTMR0. Empty means the layout
-    /// `hugepages` implies: one node, with an expander on bus 5 when GPUs are
-    /// attached; omitted in that case so earlier configs stay byte-for-byte
-    /// stable.
+    /// Guest NUMA nodes, in node order, whatever backs their memory. They
+    /// shape the ACPI SRAT and DSDT and therefore RTMR0. Empty means the
+    /// layout `hugepages` implies: one node, with an expander on bus 5 when
+    /// GPUs are attached; omitted in that case so earlier configs stay
+    /// byte-for-byte stable.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub numa_nodes: Vec<NumaNodeConfig>,
     #[serde(default)]
