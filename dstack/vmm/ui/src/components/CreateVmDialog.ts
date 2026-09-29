@@ -197,6 +197,11 @@ const CreateVmDialogComponent = {
               <textarea id="userConfig" v-model="form.user_config" placeholder="Optional user config placed at /dstack/.user-config in the CVM"></textarea>
             </div>
 
+            <div class="form-group full-width">
+              <label for="annotations">Annotations</label>
+              <textarea id="annotations" v-model="form.annotations" placeholder="Optional KEY=VALUE per line, for host-side tooling; never passed to the CVM"></textarea>
+            </div>
+
             <div class="form-group full-width" v-if="availableGpus.length > 0">
               <gpu-config-editor
                 :available-gpus="availableGpus"

@@ -36,6 +36,29 @@ type AppCompose = {
   event_log_version?: number;
 };
 
+/** Parses one `KEY=VALUE` annotation per line, refusing a key given twice. */
+function parseAnnotations(text: string): Record<string, string> {
+  const annotations = new Map<string, string>();
+  for (const line of text.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) {
+      throw new Error(`Invalid annotation "${line}", expected KEY=VALUE`);
+    }
+    const key = line.slice(0, eq);
+    if (annotations.has(key)) {
+      throw new Error(`Annotation "${key}" given twice`);
+    }
+    annotations.set(key, line.slice(eq + 1));
+  }
+  return Object.fromEntries(annotations);
+}
+
+function annotationsText(annotations: Record<string, string> | null | undefined): string {
+  return Object.entries(annotations || {})
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+}
+
 function initScriptList(initScript: string | string[] | undefined): string[] {
   const scripts = Array.isArray(initScript)
     ? [...initScript]
@@ -167,6 +190,7 @@ type VmFormState = {
   disk_prealloc: string;
   networks: NetworkFormEntry[];
   user_config: string;
+  annotations: string;
   kms_urls: string[];
   gateway_urls: string[];
   stopped: boolean;
@@ -259,6 +283,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     disk_prealloc: '',
     networks: [],
     user_config: '',
+    annotations: '',
     kms_urls: [],
     gateway_urls: [],
     stopped: false,
@@ -630,6 +655,7 @@ type CreateVmPayloadSource = {
     kms_urls?: string[];
     gateway_urls?: string[];
     stopped?: boolean;
+    annotations?: Record<string, string>;
   };
 
   function buildCreateVmPayload(source: CreateVmPayloadSource): VmmTypes.IVmConfiguration {
@@ -657,6 +683,7 @@ type CreateVmPayloadSource = {
       kms_urls: source.kms_urls?.filter((url) => url && url.trim().length) ?? [],
       gateway_urls: source.gateway_urls?.filter((url) => url && url.trim().length) ?? [],
       stopped: !!source.stopped,
+      annotations: source.annotations ?? {},
     };
   }
 
@@ -1126,6 +1153,8 @@ type CreateVmPayloadSource = {
     // and inheriting "full" unannounced costs the next deploy a full write of
     // its disk before the VM boots.
     vmForm.value.disk_prealloc = '';
+    // And a clone's annotations are parameters for that VM's host tooling.
+    vmForm.value.annotations = '';
     vmForm.value.swapValue = 0;
     vmForm.value.swapUnit = 'GB';
     vmForm.value.swap_size = 0;
@@ -1265,6 +1294,7 @@ type CreateVmPayloadSource = {
         kms_urls: vmForm.value.kms_urls,
         gateway_urls: vmForm.value.gateway_urls,
         stopped: vmForm.value.stopped,
+        annotations: parseAnnotations(vmForm.value.annotations),
       });
 
       await vmmRpc.createVm(payload);
@@ -1420,6 +1450,7 @@ type CreateVmPayloadSource = {
       no_tee: !!config.no_tee,
       simulated_tee: config.simulated_tee || '',
       user_config: config.user_config || '',
+      annotations: annotationsText(config.annotations),
       stopped: !!config.stopped,
       event_log_version: theVm.appCompose?.event_log_version || 1,
     };
