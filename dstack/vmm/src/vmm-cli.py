@@ -372,17 +372,19 @@ def encrypt_env(envs, hex_public_key: str) -> str:
     return result.hex()
 
 
-def parse_annotations(items: Optional[List[str]]) -> Dict[str, str]:
-    """Parse repeated KEY=VALUE annotation arguments."""
-    annotations = {}
-    for item in items or []:
-        key, sep, value = item.partition("=")
+class AnnotationAction(argparse.Action):
+    """Collect repeated KEY=VALUE arguments, refusing a key given twice."""
+
+    def __call__(self, parser, namespace, value, option_string=None):
+        """Add one annotation to the namespace."""
+        key, sep, val = value.partition("=")
         if not sep or not key:
-            raise argparse.ArgumentTypeError(
-                f"invalid annotation {item!r}, expected KEY=VALUE"
-            )
-        annotations[key] = value
-    return annotations
+            parser.error(f"{option_string}: expected KEY=VALUE, got {value!r}")
+        annotations = getattr(namespace, self.dest) or {}
+        if key in annotations:
+            parser.error(f"{option_string}: {key!r} given twice")
+        annotations[key] = val
+        setattr(namespace, self.dest, annotations)
 
 
 def parse_port_mapping(port_str: str) -> Dict:
@@ -996,7 +998,7 @@ class VmmCLI:
             "pin_numa": args.pin_numa,
             "stopped": args.stopped,
             "no_tee": args.no_tee,
-            "annotations": parse_annotations(args.annotation),
+            "annotations": args.annotation or {},
         }
         if args.disk_prealloc:
             params["disk_prealloc"] = args.disk_prealloc
@@ -2049,7 +2051,7 @@ def main():
     )
     deploy_parser.add_argument(
         "--annotation",
-        action="append",
+        action=AnnotationAction,
         metavar="KEY=VALUE",
         help="Annotation for host-side tooling (can be repeated)",
     )
@@ -2326,7 +2328,7 @@ def main():
     annotations_group = update_parser.add_mutually_exclusive_group()
     annotations_group.add_argument(
         "--annotation",
-        action="append",
+        action=AnnotationAction,
         metavar="KEY=VALUE",
         help="Replace the annotations with these (can be repeated)",
     )
@@ -2430,13 +2432,7 @@ def main():
             net_vhost=args.net_vhost,
             net_vhost_inherit=getattr(args, "net_vhost_inherit", False),
             net_queues=args.net_queues,
-            annotations=(
-                {}
-                if args.no_annotations
-                else parse_annotations(args.annotation)
-                if args.annotation
-                else None
-            ),
+            annotations={} if args.no_annotations else args.annotation,
         )
     elif args.command == "kms":
         if not args.kms_action:

@@ -483,6 +483,14 @@ SPDX-License-Identifier: Apache-2.0
           <pre class="user-config-content">{{ vm.configuration.user_config }}</pre>
         </div>
 
+        <div v-if="Object.keys(vm.configuration?.annotations || {}).length" class="user-config-section">
+          <div class="section-header">
+            <h4>Annotations</h4>
+          </div>
+          <pre class="user-config-content"><template v-for="(value, key) in vm.configuration.annotations">{{ key }}={{ value }}
+</template></pre>
+        </div>
+
         <div class="vm-log-tabs">
           <button class="vm-log-button" @click="showLogs(vm.id, 'serial')">Serial Logs</button>
           <button class="vm-log-button" @click="showLogs(vm.id, 'stdout')">Stdout</button>
