@@ -320,6 +320,12 @@ practical consequence is that CVMs using the TPM key provider (`swtpm = true`)
 cannot be verified on either TDX path, which is what the full-image path
 already did.
 
+`vm_config.extra_root_devices` declares root-bus devices a host QEMU wrapper
+appends. The ACPI model distinguishes only root ports from other endpoints, so a
+verified list says how many devices the host added and where, not what they are.
+The layout lands in RTMR0 and so in `mr_system` and `mr_aggregated`: a policy
+that allowlists those values admits only the device layouts it has seen.
+
 The guest-side mitigation remains in place as defense in depth. The dangerous
 executable part of ACPI is AML (ACPI Machine Language): malicious AML can try to
 use `SystemMemory` operation regions through the Linux ACPICA interpreter to

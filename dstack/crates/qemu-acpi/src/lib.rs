@@ -26,7 +26,7 @@ mod srat;
 mod topology;
 
 pub use profile::{Compatibility, QemuVersion};
-pub use topology::{MachineConfig, NumaNode, TopologyError};
+pub use topology::{MachineConfig, NumaNode, RootBusDevice, TopologyError};
 
 /// Allocation granularity of QEMU's `etc/acpi/tables` fw_cfg blob.
 pub const TABLE_BLOB_SIZE: usize = 128 * 1024;

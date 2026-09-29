@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::{build, Error, MachineConfig, NumaNode, QemuVersion};
+    use crate::{build, Error, MachineConfig, NumaNode, QemuVersion, RootBusDevice};
 
     fn config(nics: u32, volumes: u32) -> MachineConfig {
         MachineConfig {
@@ -18,6 +18,7 @@ mod tests {
             num_nvswitches: 0,
             num_nics: nics,
             num_verity_volumes: volumes,
+            extra_root_devices: vec![],
             hotplug_off: false,
             root_verity: true,
             pci_hole64_size: None,
@@ -319,6 +320,45 @@ mod tests {
     fn device_kinds_share_qemus_slot_allocation() -> Result<(), Error> {
         assert_eq!(build(&config(5, 0))?.tables, build(&config(1, 4))?.tables);
         Ok(())
+    }
+
+    #[test]
+    fn extra_endpoints_without_root_ports_take_the_next_regular_slots() -> Result<(), Error> {
+        let mut c = config(1, 0);
+        c.extra_root_devices = vec![RootBusDevice::Endpoint; 3];
+        assert_eq!(build(&c)?.tables, build(&config(4, 0))?.tables);
+        Ok(())
+    }
+
+    #[test]
+    fn extra_endpoints_follow_gpu_root_ports() -> Result<(), Error> {
+        let mut c = config(1, 0);
+        c.hotplug_off = true;
+        c.num_gpus = 1;
+        let mut extra = c.clone();
+        extra.extra_root_devices = vec![RootBusDevice::Endpoint; 5];
+        let mut as_nics = c.clone();
+        as_nics.num_nics = 6;
+        assert_ne!(build(&extra)?.tables, build(&as_nics)?.tables);
+        assert_ne!(build(&extra)?.tables, build(&c)?.tables);
+        Ok(())
+    }
+
+    #[test]
+    fn extra_root_devices_are_validated() {
+        let mut c = config(1, 0);
+        c.extra_root_devices = vec![RootBusDevice::RootPort];
+        assert!(matches!(
+            c.validate(),
+            Err(crate::TopologyError::HotplugWithRootPorts)
+        ));
+        c.hotplug_off = true;
+        assert!(c.validate().is_ok());
+        c.extra_root_devices = vec![RootBusDevice::Endpoint; 26];
+        assert!(matches!(
+            c.validate(),
+            Err(crate::TopologyError::TooManyRootBusDevices { .. })
+        ));
     }
 
     #[test]

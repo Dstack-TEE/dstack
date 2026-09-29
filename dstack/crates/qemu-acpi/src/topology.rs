@@ -28,6 +28,17 @@ pub struct NumaNode {
     pub pxb_bus: Option<u8>,
 }
 
+/// A device a host QEMU wrapper appends to the root bus after dstack's own.
+///
+/// QEMU gives each one the next free root-bus slot in command-line order. The
+/// DSDT only tells a root port (which gets a child `S00`) from any other
+/// single-function endpoint, so the kind is all the model needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RootBusDevice {
+    Endpoint,
+    RootPort,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MachineConfig {
     pub qemu_version: QemuVersion,
@@ -44,6 +55,9 @@ pub struct MachineConfig {
     pub num_nvswitches: u32,
     pub num_nics: u32,
     pub num_verity_volumes: u32,
+    /// Devices appended to the root bus after the GPU and NVSwitch root ports,
+    /// in command-line order.
+    pub extra_root_devices: Vec<RootBusDevice>,
     pub hotplug_off: bool,
     pub root_verity: bool,
     pub pci_hole64_size: Option<u64>,
@@ -170,10 +184,16 @@ impl MachineConfig {
         } else {
             i64::from(self.num_gpus) + i64::from(self.num_nvswitches)
         };
+        let extra_root_ports = self
+            .extra_root_devices
+            .iter()
+            .filter(|device| **device == RootBusDevice::RootPort)
+            .count() as i64;
         let requested = i64::from(self.num_nics)
             + i64::from(self.num_verity_volumes)
             + fixed_delta
-            + passthrough_ports;
+            + passthrough_ports
+            + self.extra_root_devices.len() as i64;
         let available = 26 - pxbs as i64;
         if requested > available {
             return Err(TopologyError::TooManyRootBusDevices {
@@ -184,7 +204,7 @@ impl MachineConfig {
         if self.num_nvswitches > 0 && self.num_gpus == 0 {
             return Err(TopologyError::NvswitchWithoutIommufd);
         }
-        if !self.hotplug_off && passthrough_ports > 0 {
+        if !self.hotplug_off && passthrough_ports + extra_root_ports > 0 {
             return Err(TopologyError::HotplugWithRootPorts);
         }
         Ok(())
@@ -208,6 +228,7 @@ mod tests {
             num_nvswitches: 0,
             num_nics: 1,
             num_verity_volumes: 0,
+            extra_root_devices: vec![],
             hotplug_off: false,
             root_verity: true,
             pci_hole64_size: None,

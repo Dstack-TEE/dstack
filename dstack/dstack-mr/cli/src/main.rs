@@ -82,6 +82,11 @@ struct MachineConfig {
     #[arg(long, default_value = "0")]
     num_verity_volumes: u32,
 
+    /// Devices a QEMU wrapper appends to the root bus, comma-separated
+    /// (`endpoint` or `root_port`)
+    #[arg(long, value_delimiter = ',', value_parser = parse_root_bus_device)]
+    extra_root_devices: Vec<dstack_types::RootBusDevice>,
+
     /// Attach a QEMU tpm-tis device backed by swtpm
     #[arg(long, default_value = "false")]
     swtpm: bool,
@@ -101,6 +106,11 @@ struct MachineConfig {
     /// Output JSON
     #[arg(long)]
     json: bool,
+}
+
+fn parse_root_bus_device(value: &str) -> Result<dstack_types::RootBusDevice, String> {
+    serde_json::from_value(serde_json::Value::String(value.into()))
+        .map_err(|_| format!("expected endpoint or root_port, got {value}"))
 }
 
 fn main() -> Result<()> {
@@ -146,6 +156,7 @@ fn main() -> Result<()> {
                 .num_nvswitches(config.num_nvswitches)
                 .num_nics(config.num_nics)
                 .num_verity_volumes(config.num_verity_volumes)
+                .extra_root_devices(&config.extra_root_devices)
                 .swtpm(config.swtpm)
                 .hotplug_off(config.hotplug_off)
                 .root_verity(config.root_verity)
@@ -228,7 +239,7 @@ fn rtmr0_labels(_variant: OvmfVariant) -> &'static [(&'static str, &'static str)
         ("separator", "fixed: sha384(0x00000000)"),
         (
             "acpi_loader",
-            "varies-with: cpu_count, pic, smm, hpet, hotplug_off, pci_hole64, root_verity, host_share_mode, num_gpus, num_nvswitches, hugepages, numa_nodes, qemu_version",
+            "varies-with: cpu_count, pic, smm, hpet, hotplug_off, pci_hole64, root_verity, host_share_mode, num_gpus, num_nvswitches, hugepages, numa_nodes, extra_root_devices, qemu_version",
         ),
         ("acpi_rsdp", "same as acpi_loader"),
         ("acpi_tables", "same as acpi_loader"),
@@ -366,6 +377,7 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
         .num_gpus(vm.num_gpus)
         .num_nics(vm.num_nics)
         .num_verity_volumes(vm.num_verity_volumes)
+        .extra_root_devices(&vm.extra_root_devices)
         .swtpm(vm.swtpm)
         .num_nvswitches(vm.num_nvswitches)
         .host_share_mode(vm.host_share_mode.clone())
@@ -415,6 +427,10 @@ fn run_diagnose(config: &DiagnoseConfig) -> Result<()> {
         vm.num_nvswitches,
         vm.hotplug_off,
         vm.pci_hole64_size,
+    );
+    println!(
+        "  num_nics={} num_verity_volumes={} extra_root_devices={:?}",
+        vm.num_nics, vm.num_verity_volumes, vm.extra_root_devices,
     );
     println!("  host_share_mode={:?}", vm.host_share_mode);
     println!("  image_dir={}", image_dir.display());

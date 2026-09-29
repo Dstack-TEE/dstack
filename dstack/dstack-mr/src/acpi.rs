@@ -5,6 +5,7 @@
 //! QEMU-compatible ACPI table generation for TDX measurement.
 
 use anyhow::{bail, Context, Result};
+use dstack_types::RootBusDevice;
 use qemu_acpi::{MachineConfig, NumaNode, QemuVersion};
 
 use crate::Machine;
@@ -46,6 +47,14 @@ impl Machine<'_> {
             num_nvswitches: self.num_nvswitches,
             num_nics: self.num_nics,
             num_verity_volumes: self.num_verity_volumes,
+            extra_root_devices: self
+                .extra_root_devices
+                .iter()
+                .map(|device| match device {
+                    RootBusDevice::Endpoint => qemu_acpi::RootBusDevice::Endpoint,
+                    RootBusDevice::RootPort => qemu_acpi::RootBusDevice::RootPort,
+                })
+                .collect(),
             hotplug_off: self.hotplug_off,
             root_verity: self.root_verity,
             pci_hole64_size: self.pci_hole64_size,

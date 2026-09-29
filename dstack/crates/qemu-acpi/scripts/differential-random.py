@@ -41,6 +41,8 @@ class Case:
     pci_hole64_size: int = 0
     # PXB bus of each guest NUMA node; empty keeps the layout `hugepages` implies.
     pxb_buses: tuple = ()
+    # Devices a QEMU wrapper appends to the root bus: "e" endpoint, "r" root port.
+    extra: str = ""
 
     def numa_nodes(self):
         """Guest NUMA node count."""
@@ -82,6 +84,28 @@ def fixed_cases():
             hotplug_off=True,
             pxb_buses=(5, 7),
         ),
+        # A qemu_path wrapper's tier regions and cache disk after a GPU.
+        Case(gpus=1, hotplug_off=True, extra="eeeee"),
+        Case(
+            version="9.2.0",
+            cpus=64,
+            memory_mib=98304,
+            gpus=1,
+            hotplug_off=True,
+            pci_hole64_size=1 << 50,
+            extra="eeeee",
+        ),
+        Case(extra="ee"),
+        Case(hotplug_off=True, extra="rer"),
+        Case(
+            cpus=2,
+            hugepages=True,
+            gpus=2,
+            switches=1,
+            hotplug_off=True,
+            pxb_buses=(5, 7),
+            extra="eree",
+        ),
     ]
     return cases
 
@@ -106,6 +130,10 @@ def random_case(rng):
         capacity = min(capacity, 12 - int(root_verity))
     nics = rng.randint(0, max(0, capacity))
     volumes = rng.randint(0, max(0, capacity - nics))
+    free = available - passthrough - (1 if root_verity else 0) + 1 - nics - volumes
+    extra = "".join(
+        rng.choice("eer") for _ in range(rng.randint(0, min(4, max(0, free))))
+    )
     cpus = rng.choice([1, 2, 8, 9, 254, 255, 256, rng.randint(1, 512)])
     if nodes:
         cpus = nodes * max(1, cpus // nodes)
@@ -122,11 +150,12 @@ def random_case(rng):
         switches=switches,
         hugepages=hugepages,
         root_verity=root_verity,
-        hotplug_off=rng.choice([False, True]) or passthrough > 0,
+        hotplug_off=rng.choice([False, True]) or passthrough > 0 or "r" in extra,
         smm=rng.choice([False, True]),
         pic=rng.choice([False, True]),
         pci_hole64_size=rng.choice([0, 32 << 30, 1 << 40]),
         pxb_buses=tuple(pxb_buses),
+        extra=extra,
     )
 
 
@@ -216,6 +245,21 @@ def qemu_args(case):
             f"vfio-pci,host=00:00.0,bus=pci.{port},iommufd=iommufd0",
         ]
         port += 1
+    for index, kind in enumerate(case.extra):
+        if kind == "e":
+            args += [
+                "-object",
+                f"memory-backend-ram,id=shm{index},size=1M,share=on",
+                "-device",
+                f"ivshmem-plain,memdev=shm{index},bus=pcie.0",
+            ]
+        else:
+            args += [
+                "-device",
+                f"pcie-root-port,id=xrp{index},bus=pcie.0,chassis={100 + index}",
+                "-device",
+                f"virtio-rng-pci,bus=xrp{index}",
+            ]
     if case.hotplug_off:
         args += ["-global", "ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off"]
     if case.pci_hole64_size:
@@ -322,6 +366,7 @@ def run_case(case, image, rust_dump, output):
             str(case.volumes),
             str(int(case.pic)),
             ",".join(map(str, case.pxb_buses)),
+            case.extra,
         ],
         check=True,
         env={**env, "QEMU_ACPI_OUTPUT_DIR": str(output)},

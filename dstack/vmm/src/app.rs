@@ -2255,6 +2255,7 @@ fn make_vm_config(
         num_nvswitches: gpus.bridges.len() as u32,
         num_nics,
         num_verity_volumes,
+        extra_root_devices: Vec::new(),
         swtpm,
         host_share_mode: cfg.cvm.host_share_mode.clone(),
         hotplug_off: cfg.cvm.qemu_hotplug_off,

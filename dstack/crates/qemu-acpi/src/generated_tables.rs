@@ -65,6 +65,7 @@ mod tests {
             num_nvswitches: 0,
             num_nics: 0,
             num_verity_volumes: 0,
+            extra_root_devices: vec![],
             hotplug_off: false,
             root_verity: true,
             pci_hole64_size: None,
