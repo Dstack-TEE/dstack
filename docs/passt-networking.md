@@ -53,8 +53,9 @@ UDP flows (for example the `dstack` branch of
 <https://github.com/kvinwang/passt>) and point `passt_path` at it. On Ubuntu,
 a passt outside `/usr/bin/passt` also needs an AppArmor profile of its own:
 unconfined programs may not create the user namespaces passt sandboxes itself
-in (`kernel.apparmor_restrict_unprivileged_userns`). A profile that includes
-the distribution's `abstractions/passt` is enough.
+in (`kernel.apparmor_restrict_unprivileged_userns`). Build that profile from
+the policy shipped with the same passt source (`contrib/apparmor`), since
+newer passt releases need rules older distribution policies lack.
 
 ## Process lifecycle
 
