@@ -143,6 +143,11 @@ message VmConfiguration {
   // app identity, but "falloc" and "full" reserve host blocks and are only
   // accepted with storage_discard=false in compose_file.
   optional string disk_prealloc = 22;
+  // Opaque key/value metadata for host-side tooling, such as a qemu_path
+  // wrapper reading vm-manifest.json in the VM work directory. The VMM stores
+  // it with the VM and returns it here; it never interprets it, passes it to
+  // the guest, or measures it.
+  map<string, string> annotations = 23;
 }
 
 // Per-VM networking configuration.
@@ -233,6 +238,9 @@ message UpdateVmRequest {
   bool update_networking = 19;
   // Networking list. Empty + update_networking=true resets to node default.
   repeated NetworkingConfig networks = 20;
+  // Optional update annotations, replacing them all.
+  bool update_annotations = 21;
+  map<string, string> annotations = 22;
 }
 
 // Parameters for listing CVMs with pagination and filtering.

@@ -1387,6 +1387,7 @@ mod tests {
                     source: "/does-not-exist/volume.img".into(),
                 }],
                 disk_prealloc: DiskPrealloc::Off,
+                annotations: Default::default(),
             },
             image: Image {
                 info: ImageInfo {
