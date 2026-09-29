@@ -93,6 +93,7 @@ fn machine_from_vm_config(vm_config: &VmConfig, ovmf_variant: OvmfVariant) -> cr
             None
         })
         .hugepages(vm_config.hugepages)
+        .numa_nodes(&vm_config.numa_nodes)
         .num_gpus(vm_config.num_gpus)
         .num_nics(vm_config.num_nics)
         .num_verity_volumes(vm_config.num_verity_volumes)
@@ -544,6 +545,7 @@ pub fn tdx_measurements_for_image_dir_without_rtmr0(
             None
         })
         .hugepages(vm_config.hugepages)
+        .numa_nodes(&vm_config.numa_nodes)
         .num_gpus(vm_config.num_gpus)
         .num_nics(vm_config.num_nics)
         .num_verity_volumes(vm_config.num_verity_volumes)
@@ -637,6 +639,7 @@ pub fn tdx_measurements_for_image_dir_with_acpi_hashes(
             None
         })
         .hugepages(vm_config.hugepages)
+        .numa_nodes(&vm_config.numa_nodes)
         .num_gpus(vm_config.num_gpus)
         .num_nics(vm_config.num_nics)
         .num_verity_volumes(vm_config.num_verity_volumes)

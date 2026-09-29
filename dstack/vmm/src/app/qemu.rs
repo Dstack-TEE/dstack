@@ -4,7 +4,7 @@
 
 //! QEMU launch preparation and command construction.
 use super::{
-    effective_vcpu_count,
+    effective_memory_mb, effective_vcpu_count,
     host_share::create_shared_disk,
     hugepage_numa_nodes,
     image::Image,
@@ -13,7 +13,7 @@ use super::{
         ingress_nic, mac_address_for_vm_index, validate_resolved_networks,
         warn_if_vhost_net_missing,
     },
-    pci_numa_node, round_up, GpuConfig, VmWorkDir,
+    pci_numa_node, pxb_buses, GpuConfig, VmWorkDir,
 };
 use crate::{
     app::Manifest,
@@ -28,7 +28,7 @@ use dstack_types::version::Version;
 use fs_err as fs;
 use nix::unistd::{Gid, Uid};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -251,7 +251,7 @@ struct PreparedQemuLaunch {
     networks: Vec<Networking>,
     volumes: Vec<PreparedVolume>,
     storage_discard: bool,
-    hugepage_numa_nodes: Option<HashMap<String, u32>>,
+    hugepage_numa_nodes: Option<BTreeMap<u32, u32>>,
     gpu_numa_nodes: HashMap<String, String>,
     numa_cpus: Option<String>,
     swtpm_socket: Option<PathBuf>,
@@ -876,11 +876,11 @@ impl QemuCommandBuilder<'_> {
         let numa_nodes = numa_nodes
             .context("hugepage NUMA nodes should be computed during launch preparation")?;
         let numa_count = numa_nodes.len() as u32;
-        let memory_gib = round_up(self.vm.manifest.memory / 1024, numa_count);
+        let memory_mb = effective_memory_mb(self.vm.manifest.memory, Some(numa_count));
         let vcpus_per_node = smp / numa_count;
-        let memory_per_node = memory_gib / numa_count;
-        let mut bus_number = 5_u32;
-        for (index, (node, device_count)) in numa_nodes.iter().enumerate() {
+        let memory_per_node = memory_mb / 1024 / numa_count;
+        let buses = pxb_buses(numa_nodes)?;
+        for (index, (node, bus_number)) in numa_nodes.keys().zip(buses).enumerate() {
             let index = index as u32;
             let cpu_start = index * vcpus_per_node;
             let cpu_end = (index + 1) * vcpus_per_node - 1;
@@ -890,13 +890,12 @@ impl QemuCommandBuilder<'_> {
             command.arg("-object").arg(format!(
                 "memory-backend-file,id=mem{index},size={memory_per_node}G,mem-path=/dev/hugepages,share=on,prealloc=yes,host-nodes={node},policy=bind",
             ));
-            let address = 0xa + index;
+            let slot = 0x10 + index;
             command.arg("-device").arg(format!(
-                "pxb-pcie,id=pcie.node{node},bus=pcie.0,addr={address},numa_node={index},bus_nr={bus_number}",
+                "pxb-pcie,id=pcie.node{node},bus=pcie.0,addr={slot:#x},numa_node={index},bus_nr={bus_number}",
             ));
-            bus_number += device_count + 1;
         }
-        Ok((smp, memory_gib.saturating_mul(1024)))
+        Ok((smp, memory_mb))
     }
 
     fn configure_gpus(&self, command: &mut Command) -> Result<()> {

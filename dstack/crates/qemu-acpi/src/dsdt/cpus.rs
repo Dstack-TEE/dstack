@@ -157,12 +157,12 @@ fn res(field: &str) -> Path {
 
 pub(crate) fn build(
     cpu_count: u32,
-    numa: bool,
+    numa_nodes: u32,
     initialize_selector: bool,
     queued_eject: bool,
 ) -> Result<Vec<u8>, Error> {
     let mut out = resource_device(initialize_selector);
-    out.extend(cpus_device(cpu_count, numa, queued_eject)?);
+    out.extend(cpus_device(cpu_count, numa_nodes, queued_eject)?);
     Ok(out)
 }
 
@@ -241,7 +241,7 @@ fn resource_device(initialize_selector: bool) -> Vec<u8> {
 }
 
 /// `Device (\_SB.CPUS)`: the control methods plus one object per CPU.
-fn cpus_device(cpu_count: u32, numa: bool, queued_eject: bool) -> Result<Vec<u8>, Error> {
+fn cpus_device(cpu_count: u32, numa_nodes: u32, queued_eject: bool) -> Result<Vec<u8>, Error> {
     let hid = Name::new(Path::new("_HID"), &"ACPI0010");
     let cid = Name::new(Path::new("_CID"), &EISAName::new("PNP0A05"));
 
@@ -252,8 +252,10 @@ fn cpus_device(cpu_count: u32, numa: bool, queued_eject: bool) -> Result<Vec<u8>
     let ost = ost_method();
 
     let mut processors = Vec::new();
+    let cpus_per_node = cpu_count / numa_nodes.max(1);
     for index in 0..cpu_count {
-        processors.extend(crate::cpu::object(index, numa)?);
+        let pxm = (numa_nodes > 0).then(|| index / cpus_per_node);
+        processors.extend(crate::cpu::object(index, pxm)?);
     }
 
     let methods = [notify, status, eject, scan, ost].concat();
@@ -602,8 +604,7 @@ logical_op!(
 mod tests {
     #[test]
     fn matches_qemu() {
-        let generated =
-            super::build(1, false, false, true).unwrap_or_else(|error| panic!("{error}"));
+        let generated = super::build(1, 0, false, true).unwrap_or_else(|error| panic!("{error}"));
         super::super::fixture::assert_region(&generated, 6299, 7354);
     }
 }

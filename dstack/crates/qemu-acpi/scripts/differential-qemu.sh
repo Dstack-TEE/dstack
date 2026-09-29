@@ -24,13 +24,18 @@ rust_dump="$workspace/target/debug/examples/dump"
 
 run_case() {
     local version=$1 topology=$2
-    local hugepages=0 gpus=0
+    # pxb_buses: one guest NUMA node per bus, GPUs split evenly across them.
+    local hugepages=0 gpus=0 pxb_buses=()
     case "$topology" in
         normal) ;;
         numa) hugepages=1 ;;
-        numa-pxb) hugepages=1; gpus=8 ;;
+        numa-pxb) hugepages=1; gpus=8; pxb_buses=(5) ;;
+        numa2-pxb) hugepages=1; gpus=8; pxb_buses=(5 10) ;;
+        numa4-pxb-adjacent) hugepages=1; gpus=4; pxb_buses=(5 6 8 9) ;;
         *) echo "invalid internal topology: $topology" >&2; exit 2 ;;
     esac
+    local nodes=${#pxb_buses[@]}
+    ((hugepages && nodes == 0)) && nodes=1
 
     local output="$tmp/$version-$topology"
     mkdir "$output"
@@ -48,17 +53,20 @@ run_case() {
         -device "virtio-blk-pci,drive=hd0"
     )
     local machine=q35,kernel-irqchip=split,confidential-guest-support=tdx,hpet=off,smm=off,pic=off
-    if ((hugepages)); then
+    for ((node = 0; node < nodes; node++)); do
         args+=(
-            -numa "node,nodeid=0,cpus=0-7,memdev=mem0"
-            -object "memory-backend-file,id=mem0,size=2048M,mem-path=/dev/hugepages,share=on,prealloc=no"
+            -numa "node,nodeid=$node,cpus=$((node * 8 / nodes))-$(((node + 1) * 8 / nodes - 1)),memdev=mem$node"
+            -object "memory-backend-file,id=mem$node,size=$((2048 / nodes))M,mem-path=/dev/hugepages,share=on,prealloc=no"
         )
-    fi
+        if ((gpus)); then
+            args+=(-device "pxb-pcie,id=pcie.node$node,bus=pcie.0,addr=$((10 + node)),numa_node=$node,bus_nr=${pxb_buses[$node]}")
+        fi
+    done
     if ((gpus)); then
-        args+=(-object "iommufd,id=iommufd0" -device "pxb-pcie,id=pcie.node0,bus=pcie.0,addr=10,numa_node=0,bus_nr=5")
+        args+=(-object "iommufd,id=iommufd0")
         for ((index = 0; index < gpus; index++)); do
             args+=(
-                -device "pcie-root-port,id=pci.$index,bus=pcie.node0,chassis=$index"
+                -device "pcie-root-port,id=pci.$index,bus=pcie.node$((index * nodes / gpus)),chassis=$index"
                 -device "vfio-pci,host=00:00.0,bus=pci.$index,iommufd=iommufd0"
             )
         done
@@ -66,15 +74,18 @@ run_case() {
 
     QEMU_ACPI_COMPAT_VER="$version" QEMU_ACPI_DUMP_DIR="$output" \
         "$qemu" "${args[@]}" -machine "$machine"
-    "$rust_dump" 2 8 "$version" "$gpus" 0 "$hugepages"
-    cmp "$output/tables.bin" /tmp/rust.bin
-    cmp "$output/loader.bin" /tmp/rust-loader.bin
-    cmp "$output/rsdp.bin" /tmp/rust-rsdp.bin
+    local numa=""
+    ((nodes > 1)) && numa=$(IFS=,; echo "${pxb_buses[*]}")
+    QEMU_ACPI_OUTPUT_DIR="$output/rust" \
+        "$rust_dump" 2 8 "$version" "$gpus" 0 "$hugepages" 1 0 0 0 $((2048 << 20)) 0 0 "$numa"
+    for blob in tables loader rsdp; do
+        cmp "$output/$blob.bin" "$output/rust/$blob.bin"
+    done
     printf '%-6s %-8s tables+loader+rsdp match\n' "$version" "$topology"
 }
 
 for version in 8.0.0 8.2.0 9.0.0 9.1.0 9.2.0 10.0.0 10.2.0 11.0.0 11.1.0 11.2.0; do
-    for topology in normal numa numa-pxb; do
+    for topology in normal numa numa-pxb numa2-pxb numa4-pxb-adjacent; do
         run_case "$version" "$topology"
     done
 done

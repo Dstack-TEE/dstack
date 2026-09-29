@@ -35,7 +35,9 @@ mod sstate;
 /// DSDT body: everything after the 36-byte ACPI table header.
 pub(crate) fn body(config: &MachineConfig) -> Result<Vec<u8>, Error> {
     let pci_hotplug = !config.hotplug_off;
-    let has_pxb = config.hugepages && config.num_gpus > 0;
+    let numa = config.numa_layout();
+    let pxb_buses = config.pxb_buses();
+    let has_pxb = !pxb_buses.is_empty();
     let low_ram_end = if config.memory_size >= 0xb000_0000 {
         0x8000_0000
     } else {
@@ -43,7 +45,7 @@ pub(crate) fn body(config: &MachineConfig) -> Result<Vec<u8>, Error> {
     };
     let fixed_slots = 4 + u32::from(config.root_verity);
     let regular_slots = fixed_slots + config.num_nics + config.num_verity_volumes;
-    let root_ports = if config.hugepages && config.num_gpus > 0 {
+    let root_ports = if has_pxb {
         config.num_nvswitches
     } else {
         config.num_gpus + config.num_nvswitches
@@ -81,22 +83,20 @@ pub(crate) fn body(config: &MachineConfig) -> Result<Vec<u8>, Error> {
         Path::new("_SB_"),
         cpus::build(
             config.cpu_count,
-            config.hugepages,
+            numa.len() as u32,
             initialize_cpu_selector,
             queued_cpu_eject,
         )?,
     ));
     out.extend(gpe::e02()); //           7354..7382  \_GPE._E02
-    if has_pxb {
-        out.extend(pxb::build());
-    }
+    out.extend(pxb::build(&numa));
     out.extend(Scope::raw(
         Path::new("\\_SB_.PCI0"),
         crs::build(
             low_ram_end,
             config.pci_hole64_size,
             pci_hotplug,
-            if has_pxb { 4 } else { crs::BUS_MAX },
+            root_bus_limit(&pxb_buses),
         ),
     ));
     out.extend(sstate::build()); //      7732..7774  Scope(\) _S3/_S4/_S5
@@ -105,12 +105,26 @@ pub(crate) fn body(config: &MachineConfig) -> Result<Vec<u8>, Error> {
         regular_slots,
         root_ports,
         modern_serial_irq,
-        has_pxb.then_some(0x80),
+        pxb_buses.len() as u8,
     ));
     if pci_hotplug {
         out.extend(gpe::e01());
     }
     Ok(out)
+}
+
+/// The last bus number PCI0 decodes. QEMU lowers it below each expander's
+/// bus in the order it walks them, newest first, so an expander on the bus
+/// right after one walked earlier does not lower it again.
+fn root_bus_limit(pxb_buses: &[u8]) -> u16 {
+    pxb_buses.iter().rev().fold(crs::BUS_MAX, |limit, &bus| {
+        let bus = u16::from(bus);
+        if bus < limit {
+            bus - 1
+        } else {
+            limit
+        }
+    })
 }
 
 /// Complete DSDT, including its standard ACPI header.
@@ -208,6 +222,7 @@ mod tests {
             pic: false,
             smm: false,
             hugepages: false,
+            numa_nodes: vec![],
             num_gpus: 0,
             num_nvswitches: 0,
             num_nics: 0,

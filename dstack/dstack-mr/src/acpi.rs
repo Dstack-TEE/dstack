@@ -5,7 +5,7 @@
 //! QEMU-compatible ACPI table generation for TDX measurement.
 
 use anyhow::{bail, Context, Result};
-use qemu_acpi::{MachineConfig, QemuVersion};
+use qemu_acpi::{MachineConfig, NumaNode, QemuVersion};
 
 use crate::Machine;
 
@@ -35,6 +35,13 @@ impl Machine<'_> {
             pic: options.pic,
             smm: self.smm,
             hugepages: self.hugepages,
+            numa_nodes: self
+                .numa_nodes
+                .iter()
+                .map(|node| NumaNode {
+                    pxb_bus: Some(node.pxb_bus),
+                })
+                .collect(),
             num_gpus: self.num_gpus,
             num_nvswitches: self.num_nvswitches,
             num_nics: self.num_nics,

@@ -39,6 +39,18 @@ class Case:
     smm: bool = False
     pic: bool = False
     pci_hole64_size: int = 0
+    # PXB bus of each guest NUMA node; empty keeps the layout `hugepages` implies.
+    pxb_buses: tuple = ()
+
+    def numa_nodes(self):
+        """Guest NUMA node count."""
+        return len(self.pxb_buses) or int(self.hugepages)
+
+    def pxbs(self):
+        """PXB bus of each node that has one, explicit or implied."""
+        if self.pxb_buses:
+            return self.pxb_buses
+        return (5,) if self.hugepages and self.gpus else ()
 
 
 def fixed_cases():
@@ -58,6 +70,18 @@ def fixed_cases():
         Case(hugepages=True, gpus=1),
         Case(hugepages=True, gpus=8, switches=4, hotplug_off=True),
         Case(version="9.1.0", hugepages=True, gpus=1, hotplug_off=True),
+        Case(hugepages=True, pxb_buses=(5,)),
+        Case(cpus=2, hugepages=True, gpus=8, hotplug_off=True, pxb_buses=(5, 10)),
+        Case(cpus=4, hugepages=True, pxb_buses=(5, 6, 8, 9)),
+        Case(cpus=512, memory_mib=8192, hugepages=True, pxb_buses=(5, 7)),
+        Case(
+            cpus=2,
+            hugepages=True,
+            gpus=2,
+            switches=4,
+            hotplug_off=True,
+            pxb_buses=(5, 7),
+        ),
     ]
     return cases
 
@@ -66,8 +90,13 @@ def random_case(rng):
     hugepages = rng.choice([False, True])
     gpus = rng.randint(0, 8)
     switches = rng.randint(0, 4) if gpus else 0
-    pxb = hugepages and gpus > 0
-    available = 25 if pxb else 26
+    nodes = rng.choice([0, 0, 2, 3, 4]) if hugepages else 0
+    pxb_buses = []
+    for _ in range(nodes):
+        pxb_buses.append(pxb_buses[-1] + rng.randint(1, 6) if pxb_buses else 5)
+    pxbs = len(pxb_buses) or int(hugepages and gpus > 0)
+    pxb = pxbs > 0
+    available = 26 - pxbs
     passthrough = switches if pxb else gpus + switches
     root_verity = rng.choice([False, True])
     capacity = available - passthrough - (1 if root_verity else 0) + 1
@@ -77,12 +106,16 @@ def random_case(rng):
         capacity = min(capacity, 12 - int(root_verity))
     nics = rng.randint(0, max(0, capacity))
     volumes = rng.randint(0, max(0, capacity - nics))
+    cpus = rng.choice([1, 2, 8, 9, 254, 255, 256, rng.randint(1, 512)])
+    if nodes:
+        cpus = nodes * max(1, cpus // nodes)
     return Case(
         version=rng.choice(
             ["8.0.0", "9.1.0", "9.2.0", "10.0.0", "11.0.0", "11.1.0", "11.2.0"]
         ),
-        cpus=rng.choice([1, 2, 8, 9, 254, 255, 256, rng.randint(1, 512)]),
-        memory_mib=rng.choice([1, 2047, 2048, 2815, 2816, rng.randint(1, 1_048_576)]),
+        cpus=cpus,
+        memory_mib=max(nodes, 1)
+        * rng.choice([1, 2047, 2048, 2815, 2816, rng.randint(1, 1_048_576)]),
         nics=nics,
         volumes=volumes,
         gpus=gpus,
@@ -93,6 +126,7 @@ def random_case(rng):
         smm=rng.choice([False, True]),
         pic=rng.choice([False, True]),
         pci_hole64_size=rng.choice([0, 32 << 30, 1 << 40]),
+        pxb_buses=tuple(pxb_buses),
     )
 
 
@@ -146,24 +180,27 @@ def qemu_args(case):
         "-machine",
         f"q35,kernel-irqchip=split,hpet=off,smm={'on' if case.smm else 'off'},pic={'on' if case.pic else 'off'}",
     ]
-    if case.hugepages:
+    nodes = case.numa_nodes()
+    for node in range(nodes):
+        cpus = case.cpus // nodes
         args += [
             "-numa",
-            f"node,nodeid=0,cpus=0-{case.cpus - 1},memdev=mem0",
+            f"node,nodeid={node},cpus={node * cpus}-{(node + 1) * cpus - 1},memdev=mem{node}",
             "-object",
-            f"memory-backend-file,id=mem0,size={case.memory_mib}M,mem-path=/tmp,share=on,prealloc=no",
+            f"memory-backend-file,id=mem{node},size={case.memory_mib // nodes}M,mem-path=/tmp,share=on,prealloc=no",
         ]
     port = 0
     if case.gpus:
         args += ["-object", "iommufd,id=iommufd0"]
-        bus = "pcie.0"
-        if case.hugepages:
-            args += [
-                "-device",
-                "pxb-pcie,id=pcie.node0,bus=pcie.0,addr=10,numa_node=0,bus_nr=5",
-            ]
-            bus = "pcie.node0"
-        for _ in range(case.gpus):
+    pxbs = case.pxbs()
+    for node, bus_nr in enumerate(pxbs):
+        args += [
+            "-device",
+            f"pxb-pcie,id=pcie.node{node},bus=pcie.0,addr={0x10 + node:x},numa_node={node},bus_nr={bus_nr}",
+        ]
+    if case.gpus:
+        for gpu in range(case.gpus):
+            bus = f"pcie.node{gpu * len(pxbs) // case.gpus}" if pxbs else "pcie.0"
             args += [
                 "-device",
                 f"pcie-root-port,id=pci.{port},bus={bus},chassis={port}",
@@ -284,6 +321,7 @@ def run_case(case, image, rust_dump, output):
             str(case.memory_mib * 1024 * 1024),
             str(case.volumes),
             str(int(case.pic)),
+            ",".join(map(str, case.pxb_buses)),
         ],
         check=True,
         env={**env, "QEMU_ACPI_OUTPUT_DIR": str(output)},

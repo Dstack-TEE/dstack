@@ -4,7 +4,7 @@
 use std::error::Error;
 use std::str::FromStr;
 
-use qemu_acpi::{build, MachineConfig, QemuVersion};
+use qemu_acpi::{build, MachineConfig, NumaNode, QemuVersion};
 
 fn optional<T: FromStr>(args: &mut impl Iterator<Item = String>, default: T) -> Result<T, String> {
     match args.next() {
@@ -29,6 +29,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let memory_size = optional(&mut args, 2u64 << 30)?;
     let volumes = optional(&mut args, 0)?;
     let pic = optional::<u8>(&mut args, 0)? == 1;
+    // Comma-separated PXB bus of each NUMA node; empty keeps the legacy layout.
+    let numa_nodes = optional::<String>(&mut args, String::new())?
+        .split(',')
+        .filter(|bus| !bus.is_empty())
+        .map(|bus| bus.parse().map(|bus| NumaNode { pxb_bus: Some(bus) }))
+        .collect::<Result<_, _>>()?;
     let blobs = build(&MachineConfig {
         qemu_version: version,
         cpu_count: cpus,
@@ -36,6 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         pic,
         smm,
         hugepages,
+        numa_nodes,
         num_gpus: gpus,
         num_nvswitches: nvswitches,
         num_nics: nics,
