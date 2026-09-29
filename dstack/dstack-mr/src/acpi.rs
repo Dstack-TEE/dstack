@@ -46,6 +46,7 @@ impl Machine<'_> {
             num_nvswitches: self.num_nvswitches,
             num_nics: self.num_nics,
             num_verity_volumes: self.num_verity_volumes,
+            extra_root_devices: Vec::new(),
             hotplug_off: self.hotplug_off,
             root_verity: self.root_verity,
             pci_hole64_size: self.pci_hole64_size,

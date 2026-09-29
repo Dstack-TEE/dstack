@@ -4,7 +4,7 @@
 use std::error::Error;
 use std::str::FromStr;
 
-use qemu_acpi::{build, MachineConfig, NumaNode, QemuVersion};
+use qemu_acpi::{build, MachineConfig, NumaNode, QemuVersion, RootBusDevice};
 
 fn optional<T: FromStr>(args: &mut impl Iterator<Item = String>, default: T) -> Result<T, String> {
     match args.next() {
@@ -35,6 +35,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .filter(|bus| !bus.is_empty())
         .map(|bus| bus.parse().map(|bus| NumaNode { pxb_bus: Some(bus) }))
         .collect::<Result<_, _>>()?;
+    // Devices appended after the root ports: `e` endpoint, `r` root port.
+    let extra_root_devices = optional::<String>(&mut args, String::new())?
+        .chars()
+        .map(|kind| match kind {
+            'e' => Ok(RootBusDevice::Endpoint),
+            'r' => Ok(RootBusDevice::RootPort),
+            _ => Err(format!("invalid extra root device kind: {kind}")),
+        })
+        .collect::<Result<_, _>>()?;
     let blobs = build(&MachineConfig {
         qemu_version: version,
         cpu_count: cpus,
@@ -47,6 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         num_nvswitches: nvswitches,
         num_nics: nics,
         num_verity_volumes: volumes,
+        extra_root_devices,
         hotplug_off,
         root_verity,
         pci_hole64_size: (hole != 0).then_some(hole),

@@ -14,7 +14,7 @@
 //! against the captured QEMU fixture on its own, so a mismatch points at a
 //! region instead of at the whole blob.
 
-use crate::{Compatibility, Error, MachineConfig};
+use crate::{Compatibility, Error, MachineConfig, RootBusDevice};
 use acpi_tables::aml::{Path, Scope};
 
 mod cpus;
@@ -50,6 +50,11 @@ pub(crate) fn body(config: &MachineConfig) -> Result<Vec<u8>, Error> {
     } else {
         config.num_gpus + config.num_nvswitches
     };
+    // QEMU auto-addresses these after dstack's regular devices, in this order.
+    let trailing: Vec<RootBusDevice> =
+        std::iter::repeat_n(RootBusDevice::RootPort, root_ports as usize)
+            .chain(config.extra_root_devices.iter().copied())
+            .collect();
     let modern_serial_irq = matches!(
         config.qemu_version.compatibility(),
         Some(Compatibility::V11_1)
@@ -103,7 +108,7 @@ pub(crate) fn body(config: &MachineConfig) -> Result<Vec<u8>, Error> {
     out.extend(fwcf::build()); //        7774..7834  Scope(\_SB.PCI0) FWCF
     out.extend(notify::build(
         regular_slots,
-        root_ports,
+        &trailing,
         modern_serial_irq,
         pxb_buses.len() as u8,
     ));
@@ -227,6 +232,7 @@ mod tests {
             num_nvswitches: 0,
             num_nics: 0,
             num_verity_volumes: 0,
+            extra_root_devices: vec![],
             hotplug_off: false,
             root_verity: true,
             pci_hole64_size: None,

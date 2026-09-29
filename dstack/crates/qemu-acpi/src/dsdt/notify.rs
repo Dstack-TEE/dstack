@@ -72,6 +72,7 @@ use acpi_tables::aml::{
 use acpi_tables::{Aml, AmlSink};
 
 use super::ops::{emit, Raw};
+use crate::RootBusDevice;
 
 /// Devfns populated on the root bus of the baseline machine by the ICH9 chipset:
 /// LPC (which emits extra AML), SATA, and SMBus.
@@ -82,7 +83,7 @@ const LPC_DEVFN: u8 = 0xf8;
 
 pub(crate) fn build(
     slot_count: u32,
-    root_port_count: u32,
+    trailing: &[RootBusDevice],
     modern_serial_irq: bool,
     pxb_count: u8,
 ) -> Vec<u8> {
@@ -98,11 +99,11 @@ pub(crate) fn build(
         devices.push(((slot * 8) as u8, false));
     }
     let mut slot = slot_count;
-    for _ in 0..root_port_count {
+    for device in trailing {
         while pxb_slots.contains(&slot) {
             slot += 1;
         }
-        devices.push(((slot * 8) as u8, true));
+        devices.push(((slot * 8) as u8, *device == RootBusDevice::RootPort));
         slot += 1;
     }
     for &devfn in CHIPSET_DEVFNS {
@@ -300,6 +301,6 @@ impl Aml for Irq {
 mod tests {
     #[test]
     fn matches_qemu() {
-        super::super::fixture::assert_region(&super::build(5, 0, true, 0), 7834, 8245);
+        super::super::fixture::assert_region(&super::build(5, &[], true, 0), 7834, 8245);
     }
 }
