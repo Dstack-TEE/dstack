@@ -1315,13 +1315,14 @@ class VmmCLI:
                 networking.pop("bridge_name", None)
             if mode and mode != "macvtap":
                 networking.pop("parent", None)
-            # Same rule for the data plane. User networking has neither a vhost
-            # backend nor multiple queues, so carrying an inherited pin into it
-            # is rejected for a flag the operator never typed -- and the two
-            # flags that would clear it are the ones they have not found yet.
+            # Same rule for the data plane. User and passt networking have
+            # neither a vhost backend nor multiple queues, so carrying an
+            # inherited pin into them is rejected for a flag the operator never
+            # typed -- and the two flags that would clear it are the ones they
+            # have not found yet.
             # An explicitly typed value still earns the error: that one is
             # theirs to be wrong about.
-            if mode == "user":
+            if mode in ("user", "passt"):
                 if net_vhost is None:
                     networking.pop("vhost", None)
                 if not net_queues:
@@ -2108,7 +2109,7 @@ def main():
     )
     deploy_parser.add_argument(
         "--net",
-        choices=["bridge", "user", "macvtap"],
+        choices=["bridge", "user", "macvtap", "passt"],
         help="Networking mode (default: use global config)",
     )
     net_vhost = deploy_parser.add_mutually_exclusive_group()
@@ -2235,7 +2236,7 @@ def main():
     update_parser.add_argument("--user-config", help="Path to user config file")
     update_parser.add_argument(
         "--net",
-        choices=["bridge", "user", "macvtap", "default"],
+        choices=["bridge", "user", "macvtap", "passt", "default"],
         help=(
             "Networking mode (applies from the next boot). 'default' stops "
             "pinning a mode and follows the node's, the way --net-queues auto "

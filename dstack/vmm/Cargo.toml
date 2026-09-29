@@ -24,6 +24,7 @@ uuid = { workspace = true, features = ["v4"] }
 sha2.workspace = true
 hex.workspace = true
 fs-err.workspace = true
+futures.workspace = true
 getrandom = { workspace = true, features = ["std"] }
 nix = { workspace = true, features = ["fs", "process", "signal", "user"] }
 dirs.workspace = true

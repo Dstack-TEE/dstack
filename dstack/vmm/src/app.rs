@@ -796,7 +796,7 @@ impl App {
                     })
                     .await
                 }
-                NetworkingMode::User | NetworkingMode::Custom => continue,
+                NetworkingMode::User | NetworkingMode::Custom | NetworkingMode::Passt => continue,
             };
             let response = match result {
                 Ok(response) => response,
@@ -998,9 +998,9 @@ impl App {
         let Some(info) = self.supervisor.info(id).await? else {
             return Ok(());
         };
-        // Non-TPM VMs run QEMU directly and keep the existing Supervisor stop
-        // path. Only the TPM launcher's hidden subcommand implements graceful
-        // child-process shutdown.
+        // VMs without sidecars or inherited descriptors run QEMU directly and
+        // keep the existing Supervisor stop path. Only the vm-launcher hidden
+        // subcommand implements graceful child-process shutdown.
         if info.config.args.first().map(String::as_str) != Some("vm-launcher") {
             return self.supervisor.stop(id).await;
         }

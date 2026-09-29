@@ -2417,6 +2417,7 @@ dependencies = [
  "fatfs",
  "fs-err",
  "fscommon",
+ "futures",
  "getrandom 0.3.4",
  "guest-api",
  "hex",

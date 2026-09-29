@@ -39,6 +39,7 @@ fn networking_backend_name(mode: NetworkingMode) -> &'static str {
         NetworkingMode::User => "slirp",
         NetworkingMode::Custom => "custom",
         NetworkingMode::Macvtap => "macvtap",
+        NetworkingMode::Passt => "passt",
     }
 }
 

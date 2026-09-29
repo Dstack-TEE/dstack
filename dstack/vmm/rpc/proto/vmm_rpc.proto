@@ -47,9 +47,10 @@ message VmInfo {
 
 // Runtime status of a resolved VM network interface.
 message NetworkInterfaceStatus {
-  // Product-facing mode: "user", "bridge", "macvtap", or "custom".
+  // Product-facing mode: "user", "bridge", "macvtap", "passt", or "custom".
   string mode = 1;
-  // QEMU/network backend shape: "slirp", "tap_bridge", "macvtap", or "custom".
+  // QEMU/network backend shape: "slirp", "tap_bridge", "macvtap", "passt", or
+  // "custom".
   string backend = 2;
   string mac = 3;
   // Linux bridge name for tap_bridge backend.
@@ -152,7 +153,7 @@ message VmConfiguration {
 
 // Per-VM networking configuration.
 message NetworkingConfig {
-  // Networking mode: "bridge", "user", "macvtap"
+  // Networking mode: "bridge", "user", "macvtap", "passt"
   string mode = 1;
   // Per-VM bridge interface name. Empty = node default bridge.
   string bridge_name = 2;

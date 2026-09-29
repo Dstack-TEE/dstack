@@ -69,7 +69,7 @@ enum Command {
     SanitizeGpu(SanitizeGpuArgs),
     /// Run the privileged TAP and libvirt nwfilter broker.
     Netd(NetdArgs),
-    /// Internal per-VM QEMU/swtpm launcher.
+    /// Internal per-VM launcher for QEMU and its sidecars.
     #[command(hide = true)]
     VmLauncher(VmLauncherArgs),
 }

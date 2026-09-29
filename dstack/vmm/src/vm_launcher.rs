@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -30,13 +31,42 @@ pub struct ChildCommand {
     pub args: Vec<String>,
 }
 
+/// Descriptor a sidecar receives its end of a [`SidecarChannel::Socketpair`] as.
+pub const SIDECAR_FD: i32 = 3;
+
+/// A helper process QEMU talks to over a Unix socket, such as swtpm or passt.
+/// It starts before QEMU and lives and dies with it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sidecar {
+    pub name: String,
+    pub command: ChildCommand,
+    pub channel: SidecarChannel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidecarChannel {
+    /// The sidecar listens on this path; QEMU starts once it exists.
+    Listen(PathBuf),
+    /// The launcher connects the two over a socketpair: the sidecar gets its
+    /// end as [`SIDECAR_FD`], QEMU gets the other end as this descriptor.
+    Socketpair(i32),
+}
+
+impl Sidecar {
+    fn listen_socket(&self) -> Option<&Path> {
+        match &self.channel {
+            SidecarChannel::Listen(path) => Some(path),
+            SidecarChannel::Socketpair(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaunchSpec {
     pub qemu: ChildCommand,
     #[serde(default)]
-    pub swtpm: Option<ChildCommand>,
-    #[serde(default)]
-    pub swtpm_socket: Option<PathBuf>,
+    pub sidecars: Vec<Sidecar>,
     #[serde(default)]
     pub open_files: Vec<OpenFile>,
     #[serde(default = "default_startup_timeout_ms")]
@@ -65,59 +95,54 @@ impl Drop for SocketCleanup {
     fn drop(&mut self) {
         if self.0.exists() {
             if let Err(error) = fs_err::remove_file(&self.0) {
-                warn!(path = %self.0.display(), %error, "failed to clean up swtpm socket");
+                warn!(path = %self.0.display(), %error, "failed to clean up sidecar socket");
             }
         }
     }
 }
 
-impl LaunchSpec {
-    fn is_single_process(&self) -> bool {
-        self.swtpm.is_none()
-    }
-}
-
-struct PreparedOpenFiles {
-    // Retain the original device handles through the fork or exec handoff;
-    // they close automatically when this prepared set leaves scope.
-    _opened: Vec<fs_err::File>,
-    // Own the collision-free source fds used by dup2. Dropping these before
-    // fork or exec would close the source fds while `mappings` still refers to them.
-    _inherited: Vec<OwnedFd>,
+/// Descriptors a child receives at fixed numbers.
+struct InheritedFds {
+    // Collision-free copies that `mappings` refers to. They must stay open
+    // until the child has exec'd, and close when this leaves scope.
+    _sources: Vec<OwnedFd>,
     mappings: Vec<(i32, i32)>,
 }
 
-fn prepare_open_files(open_files: &[OpenFile]) -> Result<PreparedOpenFiles> {
-    let opened = open_files
+fn inherit_fds(fds: &[(i32, OwnedFd)]) -> Result<InheritedFds> {
+    let max_target = fds.iter().map(|(target, _)| *target).max().unwrap_or(2);
+    let sources = fds
         .iter()
-        .map(|file| {
-            fs_err::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&file.path)
-                .with_context(|| format!("failed to open {}", file.path.display()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let max_target = open_files.iter().map(|file| file.fd).max().unwrap_or(2);
-    let inherited = opened
-        .iter()
-        .map(|file| {
-            let fd = fcntl(file.as_raw_fd(), FcntlArg::F_DUPFD_CLOEXEC(max_target + 1))
+        .map(|(_, fd)| {
+            let fd = fcntl(fd.as_raw_fd(), FcntlArg::F_DUPFD_CLOEXEC(max_target + 1))
                 .context("failed to reserve inherited file descriptor")?;
             // SAFETY: F_DUPFD_CLOEXEC returned a new descriptor owned by this process.
             Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         })
         .collect::<Result<Vec<_>>>()?;
-    let mappings = open_files
+    let mappings = fds
         .iter()
-        .zip(&inherited)
-        .map(|(file, opened)| (file.fd, opened.as_raw_fd()))
-        .collect::<Vec<_>>();
-    Ok(PreparedOpenFiles {
-        _opened: opened,
-        _inherited: inherited,
+        .zip(&sources)
+        .map(|((target, _), source)| (*target, source.as_raw_fd()))
+        .collect();
+    Ok(InheritedFds {
+        _sources: sources,
         mappings,
     })
+}
+
+fn open_files(files: &[OpenFile]) -> Result<Vec<(i32, OwnedFd)>> {
+    files
+        .iter()
+        .map(|file| {
+            let opened = fs_err::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&file.path)
+                .with_context(|| format!("failed to open {}", file.path.display()))?;
+            Ok((file.fd, OwnedFd::from(opened.into_parts().0)))
+        })
+        .collect()
 }
 
 fn prepare_child(expected_parent: libc::pid_t, mappings: &[(i32, i32)]) -> std::io::Result<()> {
@@ -142,12 +167,12 @@ fn prepare_child(expected_parent: libc::pid_t, mappings: &[(i32, i32)]) -> std::
     Ok(())
 }
 
-fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
+fn spawn_child(spec: &ChildCommand, fds: &[(i32, OwnedFd)]) -> Result<Child> {
     let parent = getpid().as_raw();
     let mut command = Command::new(&spec.command);
     command.args(&spec.args);
-    let prepared = prepare_open_files(open_files)?;
-    let mappings = prepared.mappings.clone();
+    let inherited = inherit_fds(fds)?;
+    let mappings = inherited.mappings.clone();
     // SAFETY: pre_exec only invokes async-signal-safe libc operations. Checking
     // the parent after PR_SET_PDEATHSIG closes the fork/parent-exit race.
     unsafe {
@@ -160,10 +185,10 @@ fn spawn_child(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<Child> {
         .with_context(|| format!("failed to start {}", spec.command))
 }
 
-fn exec_in_place(spec: &ChildCommand, open_files: &[OpenFile]) -> Result<()> {
-    let prepared = prepare_open_files(open_files)?;
+fn exec_in_place(spec: &ChildCommand, fds: &[(i32, OwnedFd)]) -> Result<()> {
+    let inherited = inherit_fds(fds)?;
     let parent = getppid().as_raw();
-    prepare_child(parent, &prepared.mappings).context("failed to prepare in-place QEMU exec")?;
+    prepare_child(parent, &inherited.mappings).context("failed to prepare in-place QEMU exec")?;
     let mut command = std::process::Command::new(&spec.command);
     command.args(&spec.args);
     let error = command.exec();
@@ -196,54 +221,110 @@ async fn stop_child(child: &mut Child, name: &str, grace: Duration) {
     }
 }
 
-async fn wait_for_swtpm(swtpm: &mut Child, socket: &Path, deadline: Instant) -> Result<()> {
-    loop {
-        if socket.exists() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for swtpm socket {}", socket.display());
-        }
-        tokio::select! {
-            status = swtpm.wait() => {
-                bail!("swtpm exited before socket was ready: {}", status?);
-            }
-            _ = sleep(Duration::from_millis(50)) => {}
-        }
+struct RunningSidecar {
+    name: String,
+    child: Child,
+}
+
+async fn stop_sidecars(sidecars: &mut [RunningSidecar], grace: Duration) {
+    for sidecar in sidecars.iter_mut().rev() {
+        stop_child(&mut sidecar.child, &sidecar.name, grace).await;
     }
+}
+
+async fn wait_for_sockets(
+    sidecars: &mut [RunningSidecar],
+    specs: &[Sidecar],
+    deadline: Instant,
+) -> Result<()> {
+    loop {
+        for sidecar in sidecars.iter_mut() {
+            if let Some(status) = sidecar.child.try_wait()? {
+                bail!("{} exited during startup: {status}", sidecar.name);
+            }
+        }
+        let pending = specs.iter().find_map(|spec| {
+            spec.listen_socket()
+                .filter(|socket| !socket.exists())
+                .map(|socket| (&spec.name, socket))
+        });
+        let Some((name, socket)) = pending else {
+            return Ok(());
+        };
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for {name} socket {}", socket.display());
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Starts a sidecar, handing it its end of a socketpair channel and keeping
+/// the other end for QEMU.
+fn spawn_sidecar(sidecar: &Sidecar, qemu_fds: &mut Vec<(i32, OwnedFd)>) -> Result<Child> {
+    let mut fds = vec![];
+    if let SidecarChannel::Socketpair(qemu_fd) = sidecar.channel {
+        let (ours, theirs) = UnixStream::pair().context("failed to create sidecar socketpair")?;
+        qemu_fds.push((qemu_fd, ours.into()));
+        fds.push((SIDECAR_FD, theirs.into()));
+    }
+    spawn_child(&sidecar.command, &fds)
+}
+
+/// Resolves when any sidecar exits, reporting which one.
+async fn wait_any_sidecar(
+    sidecars: &mut [RunningSidecar],
+) -> (String, std::io::Result<std::process::ExitStatus>) {
+    let waits = sidecars
+        .iter_mut()
+        .map(|sidecar| Box::pin(async { (sidecar.name.clone(), sidecar.child.wait().await) }));
+    futures::future::select_all(waits).await.0
 }
 
 pub async fn run(spec_path: &Path) -> Result<()> {
     let raw = fs_err::read(spec_path)
         .with_context(|| format!("failed to read launch spec {}", spec_path.display()))?;
     let spec: LaunchSpec = serde_json::from_slice(&raw).context("failed to parse launch spec")?;
-    if spec.is_single_process() {
-        return exec_in_place(&spec.qemu, &spec.open_files);
+    let mut qemu_fds = open_files(&spec.open_files)?;
+    if spec.sidecars.is_empty() {
+        return exec_in_place(&spec.qemu, &qemu_fds);
     }
-    let _socket_cleanup = spec.swtpm_socket.clone().map(SocketCleanup);
-    if let Some(socket) = &spec.swtpm_socket {
+    let mut socket_cleanup = vec![];
+    for sidecar in &spec.sidecars {
+        let Some(socket) = sidecar.listen_socket() else {
+            continue;
+        };
+        socket_cleanup.push(SocketCleanup(socket.to_path_buf()));
         if socket.exists() {
-            fs_err::remove_file(socket).context("failed to remove stale swtpm socket")?;
+            fs_err::remove_file(socket)
+                .with_context(|| format!("failed to remove stale {} socket", sidecar.name))?;
         }
     }
 
     let grace = Duration::from_millis(spec.shutdown_timeout_ms);
     let mut terminate = signal(SignalKind::terminate()).context("failed to watch SIGTERM")?;
     let mut interrupt = signal(SignalKind::interrupt()).context("failed to watch SIGINT")?;
-    let mut swtpm = if let Some(command) = &spec.swtpm {
-        Some(spawn_child(command, &[])?)
-    } else {
-        None
-    };
+    let mut sidecars = Vec::with_capacity(spec.sidecars.len());
+    for sidecar in &spec.sidecars {
+        match spawn_sidecar(sidecar, &mut qemu_fds) {
+            Ok(child) => sidecars.push(RunningSidecar {
+                name: sidecar.name.clone(),
+                child,
+            }),
+            Err(error) => {
+                stop_sidecars(&mut sidecars, grace).await;
+                return Err(error);
+            }
+        }
+    }
     enum StartupExit {
         Ready,
         Error(anyhow::Error),
         Signal,
     }
-    let startup_exit = if let (Some(swtpm), Some(socket)) = (&mut swtpm, &spec.swtpm_socket) {
-        let startup = wait_for_swtpm(
-            swtpm,
-            socket,
+    let startup_exit = {
+        let startup = wait_for_sockets(
+            &mut sidecars,
+            &spec.sidecars,
             Instant::now() + Duration::from_millis(spec.startup_timeout_ms),
         );
         tokio::pin!(startup);
@@ -255,80 +336,85 @@ pub async fn run(spec_path: &Path) -> Result<()> {
             _ = terminate.recv() => StartupExit::Signal,
             _ = interrupt.recv() => StartupExit::Signal,
         }
-    } else {
-        StartupExit::Ready
     };
     match startup_exit {
         StartupExit::Ready => {}
         StartupExit::Error(error) => {
-            if let Some(child) = &mut swtpm {
-                stop_child(child, "swtpm", grace).await;
-            }
+            stop_sidecars(&mut sidecars, grace).await;
             return Err(error);
         }
         StartupExit::Signal => {
-            if let Some(child) = &mut swtpm {
-                stop_child(child, "swtpm", grace).await;
-            }
+            stop_sidecars(&mut sidecars, grace).await;
             return Ok(());
         }
     }
 
-    let mut qemu = match spawn_child(&spec.qemu, &spec.open_files) {
+    let qemu = spawn_child(&spec.qemu, &qemu_fds);
+    // QEMU holds its own copies now. Keeping ours would hide QEMU's exit from
+    // socketpair sidecars.
+    drop(qemu_fds);
+    let mut qemu = match qemu {
         Ok(child) => child,
         Err(error) => {
-            if let Some(child) = &mut swtpm {
-                stop_child(child, "swtpm", grace).await;
-            }
+            stop_sidecars(&mut sidecars, grace).await;
             return Err(error);
         }
     };
     info!(
         qemu_pid = qemu.id(),
-        swtpm_pid = swtpm.as_ref().and_then(|child| child.id()),
+        sidecars = ?sidecars
+            .iter()
+            .map(|sidecar| (sidecar.name.as_str(), sidecar.child.id()))
+            .collect::<Vec<_>>(),
         "VM processes started"
     );
 
     enum Exit {
         Signal,
         Qemu(std::process::ExitStatus),
-        Swtpm(std::process::ExitStatus),
+        Sidecar(String, std::process::ExitStatus),
     }
     let exit = tokio::select! {
         _ = terminate.recv() => Exit::Signal,
         _ = interrupt.recv() => Exit::Signal,
         status = qemu.wait() => Exit::Qemu(status.context("failed to wait for QEMU")?),
-        status = async {
-            match &mut swtpm {
-                Some(child) => child.wait().await,
-                None => std::future::pending().await,
-            }
-        } => Exit::Swtpm(status.context("failed to wait for swtpm")?),
+        (name, status) = wait_any_sidecar(&mut sidecars) => {
+            let status = status.with_context(|| format!("failed to wait for {name}"))?;
+            Exit::Sidecar(name, status)
+        }
     };
 
-    match exit {
+    let qemu_status = match exit {
         Exit::Signal => {
             stop_child(&mut qemu, "qemu", grace).await;
-            if let Some(child) = &mut swtpm {
-                stop_child(child, "swtpm", grace).await;
-            }
-            Ok(())
+            stop_sidecars(&mut sidecars, grace).await;
+            return Ok(());
         }
-        Exit::Qemu(status) => {
-            if let Some(child) = &mut swtpm {
-                stop_child(child, "swtpm", grace).await;
-            }
-            if status.success() {
-                Ok(())
+        Exit::Qemu(status) => status,
+        Exit::Sidecar(name, status) => {
+            // A socketpair sidecar exits cleanly once QEMU closes its end,
+            // which can be observed before QEMU itself has been reaped.
+            let qemu_exit = if status.success() {
+                timeout(grace, qemu.wait()).await.ok().and_then(Result::ok)
             } else {
-                bail!("QEMU exited with {status}")
+                None
+            };
+            match qemu_exit {
+                Some(qemu_status) => qemu_status,
+                None => {
+                    error!(%name, %status, "sidecar exited while QEMU was running");
+                    stop_child(&mut qemu, "qemu", grace).await;
+                    stop_sidecars(&mut sidecars, grace).await;
+                    bail!("{name} exited with {status}")
+                }
             }
         }
-        Exit::Swtpm(status) => {
-            error!(%status, "swtpm exited while QEMU was running");
-            stop_child(&mut qemu, "qemu", grace).await;
-            bail!("swtpm exited with {status}")
-        }
+    };
+    stop_sidecars(&mut sidecars, grace).await;
+    if qemu_status.success() {
+        Ok(())
+    } else {
+        bail!("QEMU exited with {qemu_status}")
     }
 }
 
@@ -348,6 +434,14 @@ mod tests {
         matches!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH))
     }
 
+    fn sidecar(command: ChildCommand, socket: PathBuf) -> Sidecar {
+        Sidecar {
+            name: "swtpm".into(),
+            command,
+            channel: SidecarChannel::Listen(socket),
+        }
+    }
+
     async fn create_fake_socket(path: PathBuf) {
         sleep(Duration::from_millis(100)).await;
         let _listener = UnixListener::bind(path).unwrap();
@@ -361,27 +455,12 @@ mod tests {
         let output = dir.path().join("output");
         fs_err::write(&input, b"macvtap-fd")?;
         let command = shell(format!("cat <&3 > {}", output.display()));
-        let open_files = vec![OpenFile { fd: 3, path: input }];
-        let mut child = spawn_child(&command, &open_files)?;
+        let fds = open_files(&[OpenFile { fd: 3, path: input }])?;
+        let mut child = spawn_child(&command, &fds)?;
         assert!(child.wait().await?.success());
 
         assert_eq!(fs_err::read(output)?, b"macvtap-fd");
         Ok(())
-    }
-
-    #[test]
-    fn single_process_launch_omits_swtpm() {
-        let mut spec = LaunchSpec {
-            qemu: shell("exit 0".into()),
-            swtpm: None,
-            swtpm_socket: None,
-            open_files: vec![],
-            startup_timeout_ms: 1_000,
-            shutdown_timeout_ms: 1_000,
-        };
-        assert!(spec.is_single_process());
-        spec.swtpm = Some(shell("exit 0".into()));
-        assert!(!spec.is_single_process());
     }
 
     #[tokio::test]
@@ -391,11 +470,10 @@ mod tests {
         let swtpm_pid = dir.path().join("swtpm.pid");
         let spec = LaunchSpec {
             qemu: shell("exit 7".into()),
-            swtpm: Some(shell(format!(
-                "echo $$ > {}; sleep 30",
-                swtpm_pid.display()
-            ))),
-            swtpm_socket: Some(socket.clone()),
+            sidecars: vec![sidecar(
+                shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
+                socket.clone(),
+            )],
             open_files: vec![],
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
@@ -420,8 +498,7 @@ mod tests {
         let qemu_pid = dir.path().join("qemu.pid");
         let spec = LaunchSpec {
             qemu: shell(format!("echo $$ > {}; sleep 30", qemu_pid.display())),
-            swtpm: Some(shell("sleep 0.2; exit 9".into())),
-            swtpm_socket: Some(socket.clone()),
+            sidecars: vec![sidecar(shell("sleep 0.2; exit 9".into()), socket.clone())],
             open_files: vec![],
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
@@ -440,17 +517,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn socketpair_connects_qemu_to_its_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let reply = dir.path().join("reply");
+        let spec = LaunchSpec {
+            qemu: shell(format!(
+                "echo ping >&4; read reply <&4; echo \"$reply\" > {}",
+                reply.display()
+            )),
+            sidecars: vec![Sidecar {
+                name: "passt".into(),
+                command: shell("read line <&3; echo \"pong $line\" >&3".into()),
+                channel: SidecarChannel::Socketpair(4),
+            }],
+            open_files: vec![],
+            startup_timeout_ms: 2_000,
+            shutdown_timeout_ms: 500,
+        };
+        let spec_path = dir.path().join("spec.json");
+        fs_err::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+
+        // The sidecar exiting cleanly alongside QEMU is a normal shutdown.
+        run(&spec_path).await.unwrap();
+        assert_eq!(fs_err::read_to_string(reply).unwrap(), "pong ping\n");
+    }
+
+    #[tokio::test]
+    async fn one_sidecar_failure_stops_qemu_and_the_other_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("swtpm.sock");
+        let qemu_pid = dir.path().join("qemu.pid");
+        let swtpm_pid = dir.path().join("swtpm.pid");
+        let spec = LaunchSpec {
+            qemu: shell(format!("echo $$ > {}; sleep 30", qemu_pid.display())),
+            sidecars: vec![
+                sidecar(
+                    shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
+                    socket.clone(),
+                ),
+                Sidecar {
+                    name: "passt".into(),
+                    command: shell("sleep 0.3; exit 1".into()),
+                    channel: SidecarChannel::Socketpair(4),
+                },
+            ],
+            open_files: vec![],
+            startup_timeout_ms: 2_000,
+            shutdown_timeout_ms: 500,
+        };
+        let spec_path = dir.path().join("spec.json");
+        fs_err::write(&spec_path, serde_json::to_vec(&spec).unwrap()).unwrap();
+        tokio::spawn(create_fake_socket(socket.clone()));
+
+        let error = run(&spec_path).await.unwrap_err();
+        assert!(error.to_string().starts_with("passt exited"), "{error:#}");
+        for pid_file in [qemu_pid, swtpm_pid] {
+            let pid: libc::pid_t = fs_err::read_to_string(pid_file)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap();
+            assert!(process_is_gone(pid));
+        }
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
     async fn startup_timeout_stops_swtpm_and_removes_socket() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("swtpm.sock");
         let swtpm_pid = dir.path().join("swtpm.pid");
         let spec = LaunchSpec {
             qemu: shell("exit 0".into()),
-            swtpm: Some(shell(format!(
-                "echo $$ > {}; sleep 30",
-                swtpm_pid.display()
-            ))),
-            swtpm_socket: Some(socket.clone()),
+            sidecars: vec![sidecar(
+                shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
+                socket.clone(),
+            )],
             open_files: vec![],
             startup_timeout_ms: 100,
             shutdown_timeout_ms: 500,
@@ -475,11 +617,10 @@ mod tests {
         let swtpm_pid = dir.path().join("swtpm.pid");
         let spec = LaunchSpec {
             qemu: shell("sleep 0.1; exit 0".into()),
-            swtpm: Some(shell(format!(
-                "echo $$ > {}; sleep 30",
-                swtpm_pid.display()
-            ))),
-            swtpm_socket: Some(socket.clone()),
+            sidecars: vec![sidecar(
+                shell(format!("echo $$ > {}; sleep 30", swtpm_pid.display())),
+                socket.clone(),
+            )],
             open_files: vec![],
             startup_timeout_ms: 2_000,
             shutdown_timeout_ms: 500,
@@ -506,11 +647,13 @@ mod tests {
         let qemu_marker = dir.path().join("qemu-started");
         let spec = LaunchSpec {
             qemu: shell(format!("touch {}", qemu_marker.display())),
-            swtpm: Some(ChildCommand {
-                command: dir.path().join("missing-swtpm").display().to_string(),
-                args: vec![],
-            }),
-            swtpm_socket: Some(socket.clone()),
+            sidecars: vec![sidecar(
+                ChildCommand {
+                    command: dir.path().join("missing-swtpm").display().to_string(),
+                    args: vec![],
+                },
+                socket.clone(),
+            )],
             open_files: vec![],
             startup_timeout_ms: 100,
             shutdown_timeout_ms: 100,

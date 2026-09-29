@@ -23,6 +23,8 @@ node_name = ""
 # TEE platform: "auto", "tdx", or "amd-sev-snp". Auto selects AMD SEV-SNP when host CPU flags include sev_snp, otherwise TDX.
 platform = "auto"
 qemu_path = ""
+# passt executable for passt networking. Empty finds `passt` in PATH at startup.
+passt_path = ""
 kms_urls = ["http://127.0.0.1:8081"]
 shuffle_kms_urls = true
 gateway_urls = ["http://127.0.0.1:8082"]
@@ -53,6 +55,7 @@ qmp_socket = false
 instance_id = ""
 # Network choices that deployment RPC callers may make. Macvtap is excluded
 # by default because libvirt nwfilter applies only to bridge interfaces.
+# Add "passt" to offer it on hosts with passt installed.
 allowed_network_modes = ["user", "bridge"]
 # Empty allowlists mean callers can only use the node networking defaults.
 allowed_bridges = []
@@ -187,6 +190,21 @@ restrict = false
 
 # for mode = "bridge"
 # bridge = "virbr0"
+
+# for mode = "passt". Each passt NIC runs its own passt process next to QEMU,
+# and port_map entries are published through it. Empty values keep passt's
+# own defaults, which copy the host's addresses. no_map_gw keeps the guest
+# from reaching host loopback services through the gateway address.
+interface = ""
+address = "10.0.2.10"
+netmask = "255.255.255.0"
+gateway = "10.0.2.2"
+dns = ["1.1.1.1", "1.0.0.1"]
+# These two need passt from August 2024 or later; no_map_gw also works before.
+map_host_loopback = ""
+map_guest_addr = ""
+no_map_gw = true
+ipv4_only = true
 
 # Optional filtering for bridge interfaces only. It does not apply to macvtap.
 # "none" installs no nwfilter binding. It does not remove the netd dependency:

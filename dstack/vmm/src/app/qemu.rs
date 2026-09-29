@@ -17,9 +17,12 @@ use super::{
 };
 use crate::{
     app::Manifest,
-    config::{CvmConfig, CvmPlatform, DiskPrealloc, Networking, NetworkingMode, ProcessAnnotation},
+    config::{
+        CvmConfig, CvmPlatform, DiskPrealloc, Networking, NetworkingMode, ProcessAnnotation,
+        Protocol,
+    },
     netd::{tap_name, InterfaceIdentity},
-    vm_launcher::{ChildCommand, LaunchSpec, OpenFile},
+    vm_launcher::{ChildCommand, LaunchSpec, OpenFile, Sidecar, SidecarChannel, SIDECAR_FD},
 };
 use anyhow::{bail, Context, Result};
 use bon::Builder;
@@ -221,20 +224,23 @@ struct PreparedVolume {
 /// the standard streams.
 const FIRST_INHERITED_FD: i32 = 3;
 
-/// Descriptors the launcher opens for each macvtap NIC, one per queue pair.
+/// Descriptors the launcher hands QEMU for each NIC: one per queue pair for a
+/// macvtap NIC, and one socketpair end for a passt NIC.
 ///
-/// Both the launcher's open list and the `-netdev` arguments derive from this
-/// one layout, so they cannot disagree about which descriptor belongs to which
+/// Both the launcher spec and the `-netdev` arguments derive from this one
+/// layout, so they cannot disagree about which descriptor belongs to which
 /// NIC.
-fn macvtap_fd_layout(networks: &[Networking]) -> Vec<Vec<i32>> {
+fn nic_fd_layout(networks: &[Networking]) -> Vec<Vec<i32>> {
     let mut next_fd = FIRST_INHERITED_FD;
     networks
         .iter()
         .map(|network| {
-            if network.nic.mode != NetworkingMode::Macvtap {
-                return Vec::new();
-            }
-            (0..network.queue_pairs())
+            let count = match network.nic.mode {
+                NetworkingMode::Macvtap => network.queue_pairs(),
+                NetworkingMode::Passt => 1,
+                NetworkingMode::User | NetworkingMode::Bridge | NetworkingMode::Custom => 0,
+            };
+            (0..count)
                 .map(|_| {
                     let fd = next_fd;
                     next_fd += 1;
@@ -449,55 +455,137 @@ impl VmConfig {
             .networks
             .iter()
             .any(|network| network.nic.mode == NetworkingMode::Macvtap);
-        let Some(socket) = prepared.swtpm_socket.as_deref() else {
-            if has_macvtap {
-                return self.wrap_launcher(&prepared, process, None, None);
+        let mut sidecars = Vec::new();
+        if let Some(socket) = prepared.swtpm_socket.as_deref() {
+            let swtpm_path = prepared
+                .swtpm_path
+                .as_ref()
+                .context("missing swtpm executable for configured socket")?;
+            let (socket_uid, socket_gid) = (Uid::effective().as_raw(), Gid::effective().as_raw());
+            let swtpm_args = vec![
+                "socket".into(),
+                "--tpm2".into(),
+                "--tpmstate".into(),
+                format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
+                "--ctrl".into(),
+                format!(
+                    "type=unixio,path={},mode=0600,uid={socket_uid},gid={socket_gid}",
+                    socket.display()
+                ),
+                "--flags".into(),
+                "not-need-init,startup-clear".into(),
+            ];
+            sidecars.push(Sidecar {
+                name: "swtpm".into(),
+                command: ChildCommand {
+                    command: swtpm_path.to_string_lossy().into_owned(),
+                    args: swtpm_args,
+                },
+                channel: SidecarChannel::Listen(socket.to_path_buf()),
+            });
+        }
+        for ((index, networking), fds) in prepared
+            .networks
+            .iter()
+            .enumerate()
+            .zip(nic_fd_layout(&prepared.networks))
+        {
+            if networking.nic.mode == NetworkingMode::Passt {
+                sidecars.push(self.passt_sidecar(cfg, &prepared, index, networking, fds[0])?);
             }
+        }
+        if sidecars.is_empty() && !has_macvtap {
             return Ok(vec![process]);
-        };
-        let swtpm_path = prepared
-            .swtpm_path
-            .as_ref()
-            .context("missing swtpm executable for configured socket")?;
-        let (socket_uid, socket_gid) = (Uid::effective().as_raw(), Gid::effective().as_raw());
+        }
+        self.wrap_launcher(&prepared, process, sidecars)
+    }
 
-        let swtpm_args = vec![
-            "socket".into(),
-            "--tpm2".into(),
-            "--tpmstate".into(),
-            format!("dir={}", prepared.workdir.swtpm_state_dir().display()),
-            "--ctrl".into(),
-            format!(
-                "type=unixio,path={},mode=0600,uid={socket_uid},gid={socket_gid}",
-                socket.display()
-            ),
-            "--flags".into(),
-            "not-need-init,startup-clear".into(),
+    /// passt runs as a sidecar of the per-VM launcher rather than as its own
+    /// supervisor process, so it cannot outlive the QEMU it serves.
+    ///
+    /// The two talk over a socketpair rather than a socket path: nothing is
+    /// left on disk, and distribution AppArmor profiles confine where passt
+    /// may create files. passt exits once QEMU closes its end.
+    ///
+    /// `--quiet` keeps passt to warnings and errors. Once sandboxed, passt can
+    /// no longer reach syslog under those same profiles, so every
+    /// informational message would otherwise turn into a "Failed to send"
+    /// line in the launcher's stderr.
+    fn passt_sidecar(
+        &self,
+        cfg: &CvmConfig,
+        prepared: &PreparedQemuLaunch,
+        index: usize,
+        networking: &Networking,
+        qemu_fd: i32,
+    ) -> Result<Sidecar> {
+        if cfg.passt_path.as_os_str().is_empty() {
+            bail!("passt networking requested but passt is not installed");
+        }
+        let mut args = vec![
+            "--foreground".to_string(),
+            "--quiet".into(),
+            "--fd".into(),
+            SIDECAR_FD.to_string(),
         ];
-        self.wrap_launcher(
-            &prepared,
-            process,
-            Some(ChildCommand {
-                command: swtpm_path.to_string_lossy().into_owned(),
-                args: swtpm_args,
-            }),
-            Some(socket.to_path_buf()),
-        )
+        for (flag, value) in [
+            ("--interface", &networking.interface),
+            ("--address", &networking.address),
+            ("--netmask", &networking.netmask),
+            ("--gateway", &networking.gateway),
+            ("--map-host-loopback", &networking.map_host_loopback),
+            ("--map-guest-addr", &networking.map_guest_addr),
+        ] {
+            if !value.is_empty() {
+                args.extend([flag.to_string(), value.clone()]);
+            }
+        }
+        for dns in &networking.dns {
+            args.extend(["--dns".to_string(), dns.clone()]);
+        }
+        if networking.no_map_gw {
+            args.push("--no-map-gw".into());
+        }
+        if networking.ipv4_only {
+            args.push("--ipv4-only".into());
+        }
+        // One flag per mapping: passt caps the length of a single port spec.
+        for mapping in &self.manifest.port_map {
+            if ingress_nic(mapping, &prepared.networks) != Some(index) {
+                continue;
+            }
+            let flag = match mapping.protocol {
+                Protocol::Tcp => "--tcp-ports",
+                Protocol::Udp => "--udp-ports",
+            };
+            args.extend([
+                flag.to_string(),
+                format!("{}/{}:{}", mapping.address, mapping.from, mapping.to),
+            ]);
+        }
+        Ok(Sidecar {
+            name: format!("passt-net{index}"),
+            command: ChildCommand {
+                command: cfg.passt_path.to_string_lossy().into_owned(),
+                args,
+            },
+            channel: SidecarChannel::Socketpair(qemu_fd),
+        })
     }
 
     fn wrap_launcher(
         &self,
         prepared: &PreparedQemuLaunch,
         process: ProcessConfig,
-        swtpm: Option<ChildCommand>,
-        swtpm_socket: Option<PathBuf>,
+        sidecars: Vec<Sidecar>,
     ) -> Result<Vec<ProcessConfig>> {
         // Each queue pair is a separate open of the same macvtap character
         // device; the kernel attaches one tap queue per open.
         let open_files = prepared
             .networks
             .iter()
-            .zip(macvtap_fd_layout(&prepared.networks))
+            .zip(nic_fd_layout(&prepared.networks))
+            .filter(|(network, _)| network.nic.mode == NetworkingMode::Macvtap)
             .flat_map(|(network, fds)| {
                 fds.into_iter().map(|fd| OpenFile {
                     fd,
@@ -510,8 +598,7 @@ impl VmConfig {
                 command: process.command,
                 args: process.args,
             },
-            swtpm,
-            swtpm_socket,
+            sidecars,
             open_files,
             startup_timeout_ms: 5_000,
             shutdown_timeout_ms: 10_000,
@@ -693,7 +780,7 @@ impl QemuCommandBuilder<'_> {
     }
 
     fn configure_networking(&self, command: &mut Command) -> Result<()> {
-        let macvtap_fds = macvtap_fd_layout(&self.prepared.networks);
+        let nic_fds = nic_fd_layout(&self.prepared.networks);
         for (index, networking) in self.prepared.networks.iter().enumerate() {
             let net_id = format!("net{index}");
             let mac = mac_address_for_vm_index(
@@ -764,6 +851,15 @@ impl QemuCommandBuilder<'_> {
                     }
                     netdev
                 }
+                NetworkingMode::Passt => {
+                    let fd = nic_fds
+                        .get(index)
+                        .and_then(|fds| fds.first())
+                        .with_context(|| {
+                            format!("passt interface {index} has no launcher descriptor")
+                        })?;
+                    format!("stream,id={net_id},server=off,addr.type=fd,addr.str={fd}")
+                }
                 NetworkingMode::Custom => {
                     if !networking.netdev.contains(&format!("id={net_id}")) {
                         bail!(
@@ -776,7 +872,7 @@ impl QemuCommandBuilder<'_> {
                     if networking.device.is_empty() {
                         bail!("macvtap interface {index} has not been prepared by netd");
                     }
-                    let fds = macvtap_fds
+                    let fds = nic_fds
                         .get(index)
                         .filter(|fds| !fds.is_empty())
                         .with_context(|| {
@@ -956,7 +1052,7 @@ impl QemuCommandBuilder<'_> {
             // Recorded on the process rather than tracked in VMM memory, so it
             // survives a VMM restart and describes the QEMU that is actually
             // running. The vm-launcher wrapper copies this note verbatim, so
-            // TPM-backed VMs carry it too.
+            // VMs behind it carry it too.
             serial_logappend: true,
         })?;
         Ok(ProcessConfig {
@@ -1153,9 +1249,10 @@ mod tests {
     };
 
     use crate::config::DiskPrealloc;
+    use crate::vm_launcher::SidecarChannel;
 
     use super::{
-        amd_sev_snp_memory_backend_arg, create_hd, fs, macvtap_fd_layout,
+        amd_sev_snp_memory_backend_arg, create_hd, fs, nic_fd_layout,
         parse_amd_sev_snp_qmp_capabilities, prepare_data_disk, qemu_img_create_args,
         virtio_pci_device, Command, Path, PreparedQemuLaunch, PreparedVolume, QemuCommandBuilder,
         VmConfig,
@@ -1550,7 +1647,7 @@ mod tests {
         assert!(args.contains(&"tap,id=net1,fds=5:6:7,vhost=on".to_string()));
 
         // The launcher must open exactly those descriptors, in that order.
-        let layout = macvtap_fd_layout(&networks);
+        let layout = nic_fd_layout(&networks);
         assert_eq!(layout, vec![vec![3, 4], vec![5, 6, 7]]);
     }
 
@@ -1599,6 +1696,32 @@ mod tests {
         assert!(args.iter().any(
             |arg| arg.starts_with("virtio-net-pci,netdev=net0,mac=") && !arg.contains("mq=on")
         ));
+    }
+
+    #[test]
+    fn passt_nic_connects_to_its_sidecar_which_publishes_the_port_map() {
+        let (config, vm, mut prepared) = test_launch_fixture();
+        let mut passt = config.cvm.networking.clone();
+        passt.nic.mode = NetworkingMode::Passt;
+        passt.no_map_gw = true;
+        let user = config.cvm.networking.clone();
+        prepared.networks = vec![passt.clone(), user.clone()];
+
+        let args = net_args(&config, vec![passt.clone(), user]);
+        assert!(args.contains(&"stream,id=net0,server=off,addr.type=fd,addr.str=3".to_string()));
+        // The mapping lands on the first NIC that can publish it, and only there.
+        assert!(!args.iter().any(|arg| arg.contains("hostfwd=")));
+
+        let mut cfg = config.cvm.clone();
+        assert!(vm.passt_sidecar(&cfg, &prepared, 0, &passt, 3).is_err());
+        cfg.passt_path = "/usr/bin/passt".into();
+        let sidecar = vm.passt_sidecar(&cfg, &prepared, 0, &passt, 3).unwrap();
+        assert_eq!(sidecar.name, "passt-net0");
+        assert!(matches!(sidecar.channel, SidecarChannel::Socketpair(3)));
+        assert_eq!(sidecar.command.command, "/usr/bin/passt");
+        let args = sidecar.command.args.join(" ");
+        assert!(args.contains("--tcp-ports 127.0.0.1/18080:8080"), "{args}");
+        assert!(args.contains("--no-map-gw"), "{args}");
     }
 
     #[test]

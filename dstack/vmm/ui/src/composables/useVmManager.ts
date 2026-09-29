@@ -569,9 +569,9 @@ fi
           bridge_name: network.mode === 'bridge' ? (network.bridge_name || '').trim() : '',
           parent: network.mode === 'macvtap' ? (network.parent || '').trim() : '',
         };
-        // The tuning controls are hidden for user mode, so sending values the
-        // operator cannot see would fail the deploy with nothing to fix.
-        if (network.mode !== 'user') {
+        // The tuning controls are hidden for user and passt modes, so sending
+        // values the operator cannot see would fail the deploy with nothing to fix.
+        if (network.mode !== 'user' && network.mode !== 'passt') {
           if (network.vhost === 'on' || network.vhost === 'off') {
             entry.vhost = network.vhost === 'on';
           }

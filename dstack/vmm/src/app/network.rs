@@ -204,32 +204,31 @@ pub(crate) fn warn_if_vhost_net_missing(networks: &[Networking]) {
 
 /// Which NIC an unpinned port mapping's traffic enters through.
 ///
-/// The first user-mode NIC, which is where QEMU's `hostfwd=` entries have
-/// always gone. There is no second choice: nothing else on this host publishes
-/// a port, so a VM without one has nowhere to put a mapping and the launch
-/// says so.
+/// The first NIC whose backend can publish a host port. A VM without one has
+/// nowhere to put a mapping and the launch says so.
 pub(crate) fn default_ingress_nic(networks: &[Networking]) -> Option<usize> {
     networks
         .iter()
-        .position(|network| network.nic.mode == NetworkingMode::User)
+        .position(|network| mode_carries_ingress(network.nic.mode))
 }
 
 /// Whether a NIC of this mode has a mechanism to publish a host port at all.
 ///
-/// QEMU's `hostfwd=`, and nothing else. A bridge TAP is built by netd, and the
-/// netd in this repository does not forward host ports; macvtap bypasses the
-/// host bridge; a custom netdev is a string the VMM does not interpret.
+/// QEMU's `hostfwd=` for user mode and passt's port forwarding, and nothing
+/// else. A bridge TAP is built by netd, and the netd in this repository does
+/// not forward host ports; macvtap bypasses the host bridge; a custom netdev is
+/// a string the VMM does not interpret.
 pub(crate) fn mode_carries_ingress(mode: NetworkingMode) -> bool {
-    matches!(mode, NetworkingMode::User)
+    matches!(mode, NetworkingMode::User | NetworkingMode::Passt)
 }
 
 /// Which NIC a port mapping's traffic enters through.
 ///
-/// One mapping resolves to at most one NIC, and only a user-mode NIC has a
-/// mechanism to carry it, so a pin to any other kind resolves to nothing
+/// One mapping resolves to at most one NIC, and only a user-mode or passt NIC
+/// has a mechanism to carry it, so a pin to any other kind resolves to nothing
 /// rather than to a NIC with no path into the guest.
 ///
-/// `None` is a mapping with nowhere to go: a VM with no user-mode NIC, or one
+/// `None` is a mapping with nowhere to go: a VM with no such NIC, or one
 /// whose NICs changed under a mapping that named one. The launch warns about
 /// each of those rather than dropping it in silence.
 pub(crate) fn ingress_nic(mapping: &PortMapping, networks: &[Networking]) -> Option<usize> {
@@ -560,6 +559,10 @@ mod tests {
         // path either.
         let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::Bridge)];
         assert_eq!(default_ingress_nic(&networks), None);
+
+        // passt publishes host ports the way hostfwd does.
+        let networks = [nic(NetworkingMode::Bridge), nic(NetworkingMode::Passt)];
+        assert_eq!(ingress_nic(&mapping(443, None), &networks), Some(1));
 
         let networks = [nic(NetworkingMode::Macvtap), nic(NetworkingMode::Custom)];
         assert_eq!(default_ingress_nic(&networks), None);
