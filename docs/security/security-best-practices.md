@@ -125,6 +125,8 @@ The VMM, gateway, and KMS management surfaces must have authentication enabled i
 
 All three share the same HTTP authenticator: bcrypt-only htpasswd (via `htpasswd -B`), constant-time token comparison, and fail-closed behavior.
 
+The VMM RPC is a management interface for trusted operators and front-end services, not for end users. It does not treat its inputs as adversarial: fields such as compose files, image names, ports, and resource settings are applied to the host as given. Never expose it to end users directly. Any service that forwards user requests to it, such as a control plane or portal, must authenticate the user and validate and sanitize every field before calling the RPC.
+
 ## Keep private material owner-only
 
 Secret-bearing files should be owner-only (`0600`) wherever possible, including app keys, decrypted env files, KMS root keys, gateway WireGuard/TLS keys, and ACME credentials. Preserve restrictive permissions when copying volumes, backing up `/etc/kms/certs`, or moving gateway and certbot state between hosts. Public issue [#606](https://github.com/Dstack-TEE/dstack/issues/606) tracks the remaining low-cost hardening work in dstack-managed file writes.
