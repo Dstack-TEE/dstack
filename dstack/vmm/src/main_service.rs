@@ -235,7 +235,7 @@ fn validate_port_mapping_nics(mappings: &[PortMapping], modes: &[NetworkingMode]
         if !mode_carries_ingress(*mode) {
             bail!(
                 "port mapping {} {}:{} names NIC {index}, which is {} and cannot publish a host \
-                 port; use a user-mode or bridge NIC",
+                 port; use a user or passt NIC",
                 mapping.protocol.as_str(),
                 mapping.address,
                 mapping.from,
@@ -554,6 +554,7 @@ fn networking_from_proto(
         "bridge" => (NetworkingMode::Bridge, true),
         "user" => (NetworkingMode::User, true),
         "macvtap" => (NetworkingMode::Macvtap, true),
+        "passt" => (NetworkingMode::Passt, true),
         "" if !names_backend && !tuned => return Ok(None),
         "" if !names_backend => (cvm_config.networking.nic.mode, false),
         "" => bail!("networking mode is required when a bridge or macvtap parent is set"),
@@ -648,11 +649,16 @@ fn networking_from_proto(
 /// allowed by node policy", with nothing for the operator to do about it. A VM
 /// can still be given a data plane override without naming any mode, which is
 /// how a node whose own backend is not caller-selectable stays tunable.
-fn advertised_modes(cvm_config: &CvmConfig, host_can_bridge: bool) -> Vec<String> {
+fn advertised_modes(
+    cvm_config: &CvmConfig,
+    host_can_bridge: bool,
+    host_has_passt: bool,
+) -> Vec<String> {
     [
         (NetworkingMode::User, "user", true),
         (NetworkingMode::Bridge, "bridge", host_can_bridge),
         (NetworkingMode::Macvtap, "macvtap", true),
+        (NetworkingMode::Passt, "passt", host_has_passt),
     ]
     .into_iter()
     .filter(|(mode, _, host_supports)| {
@@ -1306,7 +1312,9 @@ impl VmmRpc for RpcHandler {
         bridge_networking.nic.mode = NetworkingMode::Bridge;
         let host_can_bridge =
             validate_resolved_network(&bridge_networking).is_ok() || has_host_bridge_interface();
-        let supported_modes = advertised_modes(&self.app.config.cvm, host_can_bridge);
+        let host_has_passt = !self.app.config.cvm.passt_path.as_os_str().is_empty();
+        let supported_modes =
+            advertised_modes(&self.app.config.cvm, host_can_bridge, host_has_passt);
         Ok(GetMetaResponse {
             kms: Some(KmsSettings {
                 url: self
@@ -1345,6 +1353,7 @@ impl VmmRpc for RpcHandler {
                     NetworkingMode::Bridge => "bridge".to_string(),
                     NetworkingMode::Custom => String::new(),
                     NetworkingMode::Macvtap => "macvtap".to_string(),
+                    NetworkingMode::Passt => "passt".to_string(),
                 },
                 default_bridge: default_networking.nic.bridge.clone(),
                 max_queues: self.app.config.cvm.max_net_queues,
@@ -1870,10 +1879,15 @@ mod tests {
         macvtap.networking.macvtap_mode = "private".into();
         macvtap.allowed_network_modes.push(NetworkingMode::Macvtap);
 
+        let mut passt = test_cvm_config();
+        passt.networking.nic.mode = NetworkingMode::Passt;
+        passt.allowed_network_modes.push(NetworkingMode::Passt);
+
         let user = test_cvm_config();
         vec![
             ("bridge node", bridge),
             ("macvtap node", macvtap),
+            ("passt node", passt),
             ("user node", user),
         ]
     }
@@ -1979,6 +1993,7 @@ mod tests {
             NetworkingMode::User => "user",
             NetworkingMode::Macvtap => "macvtap",
             NetworkingMode::Custom => "custom",
+            NetworkingMode::Passt => "passt",
         }
     }
 
@@ -2164,7 +2179,7 @@ mod tests {
     fn advertised_modes_are_ones_the_rpc_would_accept() {
         let mut cvm = test_cvm_config();
         cvm.allowed_network_modes = vec![NetworkingMode::User];
-        for mode in ["bridge", "macvtap"] {
+        for mode in ["bridge", "macvtap", "passt"] {
             assert!(
                 networking_from_proto(
                     &rpc::NetworkingConfig {
@@ -2177,18 +2192,18 @@ mod tests {
                 "{mode} should be refused by this policy"
             );
         }
-        assert_eq!(advertised_modes(&cvm, true), vec!["user".to_string()]);
+        assert_eq!(advertised_modes(&cvm, true, true), vec!["user".to_string()]);
 
         cvm.allowed_network_modes = vec![NetworkingMode::User, NetworkingMode::Macvtap];
         assert_eq!(
-            advertised_modes(&cvm, true),
+            advertised_modes(&cvm, true, true),
             vec!["user".to_string(), "macvtap".to_string()]
         );
 
         // A mode policy allows but the host cannot serve is still not offered.
         cvm.allowed_network_modes.push(NetworkingMode::Bridge);
-        assert!(!advertised_modes(&cvm, false).contains(&"bridge".to_string()));
-        assert!(advertised_modes(&cvm, true).contains(&"bridge".to_string()));
+        assert!(!advertised_modes(&cvm, false, true).contains(&"bridge".to_string()));
+        assert!(advertised_modes(&cvm, true, true).contains(&"bridge".to_string()));
     }
 
     /// A VM keeps its bridge for life, so the node dropping that bridge from

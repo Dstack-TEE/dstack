@@ -220,7 +220,7 @@ const UpdateVmDialogComponent = {
                 placeholder="Override parent interface (empty = node default)"
               >
               <span v-else class="network-config-placeholder"></span>
-              <span v-if="network.mode !== 'user'" class="network-config-tuning">
+              <span v-if="network.mode !== 'user' && network.mode !== 'passt'" class="network-config-tuning">
                 <select v-model="network.vhost" aria-label="vhost-net data plane" title="Kernel vhost-net data plane">
                   <option value="">vhost: default</option>
                   <option value="on">vhost: on</option>

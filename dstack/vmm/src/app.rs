@@ -796,7 +796,7 @@ impl App {
                     })
                     .await
                 }
-                NetworkingMode::User | NetworkingMode::Custom => continue,
+                NetworkingMode::User | NetworkingMode::Custom | NetworkingMode::Passt => continue,
             };
             let response = match result {
                 Ok(response) => response,

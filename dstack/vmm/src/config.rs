@@ -392,6 +392,10 @@ pub struct CvmConfig {
     #[serde(default, deserialize_with = "deserialize_platform")]
     pub platform: Option<CvmPlatform>,
     pub qemu_path: PathBuf,
+    /// passt executable for passt networking. Empty resolves `passt` from
+    /// `PATH` at startup; passt networking is unavailable if that fails too.
+    #[serde(default)]
+    pub passt_path: PathBuf,
     /// The URL of the KMS server
     pub kms_urls: Vec<String>,
     /// Randomize KMS failover order independently for each CVM.
@@ -1018,8 +1022,8 @@ fn validate_networking(networking: &Networking) -> Result<()> {
                 "cvm.networking.macvtap_mode must be private, bridge, vepa, or passthru"
             );
         }
-        // User mode has no identity fields of its own to check.
-        NetworkingMode::User => {}
+        // User and passt modes have no identity fields of their own to check.
+        NetworkingMode::User | NetworkingMode::Passt => {}
     }
     Ok(())
 }
@@ -1058,6 +1062,7 @@ pub enum NetworkingMode {
     Bridge,
     Custom,
     Macvtap,
+    Passt,
 }
 
 impl NetworkingMode {
@@ -1069,6 +1074,7 @@ impl NetworkingMode {
             NetworkingMode::Bridge => "bridge",
             NetworkingMode::Custom => "custom",
             NetworkingMode::Macvtap => "macvtap",
+            NetworkingMode::Passt => "passt",
         }
     }
 }
@@ -1153,6 +1159,26 @@ pub struct Networking {
     pub dhcp_start: String,
     #[serde(default)]
     pub restrict: bool,
+
+    // ── Passt fields ───────────────────────────────────────────────
+    #[serde(default)]
+    pub interface: String,
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub netmask: String,
+    #[serde(default)]
+    pub gateway: String,
+    #[serde(default)]
+    pub dns: Vec<String>,
+    #[serde(default)]
+    pub map_host_loopback: String,
+    #[serde(default)]
+    pub map_guest_addr: String,
+    #[serde(default)]
+    pub no_map_gw: bool,
+    #[serde(default)]
+    pub ipv4_only: bool,
 
     // ── Custom fields ──────────────────────────────────────────────
     #[serde(default)]
@@ -1339,6 +1365,14 @@ impl Config {
                 }
             }
             info!("QEMU path: {}", me.cvm.qemu_path.display());
+            if me.cvm.passt_path == PathBuf::default() {
+                if let Ok(passt_path) = which::which("passt") {
+                    me.cvm.passt_path = passt_path;
+                }
+            }
+            if !me.cvm.passt_path.as_os_str().is_empty() {
+                info!("passt path: {}", me.cvm.passt_path.display());
+            }
         }
         Ok(me)
     }
