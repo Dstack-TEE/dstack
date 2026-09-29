@@ -372,6 +372,19 @@ def encrypt_env(envs, hex_public_key: str) -> str:
     return result.hex()
 
 
+def parse_annotations(items: Optional[List[str]]) -> Dict[str, str]:
+    """Parse repeated KEY=VALUE annotation arguments."""
+    annotations = {}
+    for item in items or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise argparse.ArgumentTypeError(
+                f"invalid annotation {item!r}, expected KEY=VALUE"
+            )
+        annotations[key] = value
+    return annotations
+
+
 def parse_port_mapping(port_str: str) -> Dict:
     """Parse a port mapping string into a dictionary.
 
@@ -983,6 +996,7 @@ class VmmCLI:
             "pin_numa": args.pin_numa,
             "stopped": args.stopped,
             "no_tee": args.no_tee,
+            "annotations": parse_annotations(args.annotation),
         }
         if args.disk_prealloc:
             params["disk_prealloc"] = args.disk_prealloc
@@ -1129,6 +1143,7 @@ class VmmCLI:
         net_vhost: Optional[bool] = None,
         net_vhost_inherit: bool = False,
         net_queues: Optional[Union[int, str]] = None,
+        annotations: Optional[Dict[str, str]] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command."""
         # Validate: --env-file requires --kms-url
@@ -1365,6 +1380,11 @@ class VmmCLI:
                 gpu_config = {"attach_mode": "listed", "gpus": []}
                 updates.append("GPUs (none)")
             upgrade_params["gpus"] = gpu_config
+
+        if annotations is not None:
+            upgrade_params["update_annotations"] = True
+            upgrade_params["annotations"] = annotations
+            updates.append(f"annotations ({len(annotations)})")
 
         if no_tee is not None:
             upgrade_params["no_tee"] = no_tee
@@ -2028,6 +2048,12 @@ def main():
         "--hugepages", action="store_true", help="Enable hugepages for the VM"
     )
     deploy_parser.add_argument(
+        "--annotation",
+        action="append",
+        metavar="KEY=VALUE",
+        help="Annotation for host-side tooling (can be repeated)",
+    )
+    deploy_parser.add_argument(
         "--disk-prealloc",
         choices=["off", "metadata", "falloc", "full"],
         default=None,
@@ -2297,6 +2323,16 @@ def main():
 
     # KMS URL for environment encryption
     update_parser.add_argument("--kms-url", action="append", type=str, help="KMS URL")
+    annotations_group = update_parser.add_mutually_exclusive_group()
+    annotations_group.add_argument(
+        "--annotation",
+        action="append",
+        metavar="KEY=VALUE",
+        help="Replace the annotations with these (can be repeated)",
+    )
+    annotations_group.add_argument(
+        "--no-annotations", action="store_true", help="Remove all annotations"
+    )
 
     args = parser.parse_args()
 
@@ -2394,6 +2430,13 @@ def main():
             net_vhost=args.net_vhost,
             net_vhost_inherit=getattr(args, "net_vhost_inherit", False),
             net_queues=args.net_queues,
+            annotations=(
+                {}
+                if args.no_annotations
+                else parse_annotations(args.annotation)
+                if args.annotation
+                else None
+            ),
         )
     elif args.command == "kms":
         if not args.kms_action:

@@ -143,6 +143,9 @@ pub struct Manifest {
     /// change to `cvm.disk_prealloc` leaves existing VMs alone.
     #[serde(default)]
     pub disk_prealloc: DiskPrealloc,
+    /// Opaque metadata for host-side tooling; see `VmConfiguration.annotations`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub annotations: BTreeMap<String, String>,
 }
 
 impl Manifest {
@@ -3254,6 +3257,20 @@ mod tests {
         ovmf
     }
 
+    #[test]
+    fn annotations_round_trip_and_stay_out_of_plain_manifests() -> Result<()> {
+        let mut manifest = test_manifest(2048);
+        assert!(serde_json::to_value(&manifest)?
+            .get("annotations")
+            .is_none());
+        manifest
+            .annotations
+            .insert("example.com/tier-size".into(), "64G".into());
+        let back = Manifest::from_json(serde_json::to_value(&manifest)?)?;
+        assert_eq!(back.annotations, manifest.annotations);
+        Ok(())
+    }
+
     fn test_manifest(memory: u32) -> Manifest {
         Manifest {
             id: "tdx-test".to_string(),
@@ -3276,6 +3293,7 @@ mod tests {
             networks: vec![],
             volumes: vec![],
             disk_prealloc: DiskPrealloc::Off,
+            annotations: Default::default(),
         }
     }
 
@@ -3636,6 +3654,7 @@ mod tests {
             networks: vec![],
             volumes: vec![],
             disk_prealloc: DiskPrealloc::Off,
+            annotations: Default::default(),
         };
 
         let mr_config = MrConfigV3::new(

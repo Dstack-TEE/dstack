@@ -242,6 +242,7 @@ impl VmInfo {
                         .map(|platform| platform.as_str().to_string()),
                     networking: configured_networking,
                     networks: configured_networks,
+                    annotations: self.manifest.annotations.clone().into_iter().collect(),
                 })
             },
             app_url: self

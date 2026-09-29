@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Deref;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -382,7 +382,17 @@ pub fn create_manifest_from_vm_config(
         networks,
         volumes,
         disk_prealloc,
+        annotations: annotations_from_proto(&request.annotations)?,
     })
+}
+
+fn annotations_from_proto(
+    annotations: &HashMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    if annotations.contains_key("") {
+        bail!("annotation keys must not be empty");
+    }
+    Ok(annotations.clone().into_iter().collect())
 }
 
 /// Resolve the data disk preallocation for a deployment. This is a host
@@ -1123,6 +1133,9 @@ impl VmmRpc for RpcHandler {
         if request.update_gateway_urls {
             manifest.gateway_urls = request.gateway_urls.clone();
         }
+        if request.update_annotations {
+            manifest.annotations = annotations_from_proto(&request.annotations)?;
+        }
         if request.update_networking {
             manifest.networks = if request.networks.is_empty() {
                 validate_default_network(&self.app.config.cvm)?;
@@ -1487,6 +1500,7 @@ mod tests {
             networking: None,
             networks: vec![],
             disk_prealloc: None,
+            annotations: Default::default(),
         }
     }
 
