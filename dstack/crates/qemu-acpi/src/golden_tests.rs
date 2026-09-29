@@ -102,6 +102,10 @@ mod tests {
             (2, nodes(&[5, 5])),
             (2, nodes(&[0, 5])),
             (16, nodes(&(5..21).collect::<Vec<_>>())),
+            (
+                2,
+                vec![NumaNode { pxb_bus: None }, NumaNode { pxb_bus: Some(5) }],
+            ),
         ] {
             c.cpu_count = cpus;
             c.numa_nodes = buses;
@@ -352,6 +356,12 @@ mod tests {
                     c.memory_size = memory_size;
                     c.pci_hole64_size = Some(u64::MAX);
                     crate::build(&c)?;
+                    c.hugepages = true;
+                    crate::build(&c)?;
+                    if cpus % 2 == 0 && memory_size % 2 == 0 {
+                        c.numa_nodes = [5, 6].map(|bus| NumaNode { pxb_bus: Some(bus) }).to_vec();
+                        crate::build(&c)?;
+                    }
                 }
             }
         }

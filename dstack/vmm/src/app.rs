@@ -296,7 +296,8 @@ pub(crate) fn pxb_buses(numa_nodes: &BTreeMap<u32, u32>) -> Result<Vec<u8>> {
 }
 
 /// Guest RAM in MiB. The hugepage layout gives every node the same whole
-/// number of GiB, rounding the total up to fit.
+/// number of GiB: the request, rounded down to whole GiB, then up to a
+/// multiple of the node count.
 pub(crate) fn effective_memory_mb(requested_mb: u32, hugepage_numa_node_count: Option<u32>) -> u32 {
     match hugepage_numa_node_count {
         Some(nodes) => round_up(requested_mb / 1024, nodes.max(1)).saturating_mul(1024),
@@ -2209,7 +2210,7 @@ fn make_vm_config(
     } else {
         pxb_buses
             .into_iter()
-            .map(|bus| dstack_types::NumaNodeConfig { pxb_bus: Some(bus) })
+            .map(|pxb_bus| dstack_types::NumaNodeConfig { pxb_bus })
             .collect()
     };
     // Each resolved network interface becomes one virtio-net-pci device in the

@@ -1427,9 +1427,8 @@ fn is_false(value: &bool) -> bool {
 /// node order.
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NumaNodeConfig {
-    /// Bus number of the node's `pxb-pcie` expander (its `bus_nr`), if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pxb_bus: Option<u8>,
+    /// Bus number of the node's `pxb-pcie` expander (its `bus_nr`).
+    pub pxb_bus: u8,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

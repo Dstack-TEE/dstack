@@ -125,7 +125,7 @@ fn main() -> Result<()> {
             let numa_nodes: Vec<_> = config
                 .numa_pxb_buses
                 .iter()
-                .map(|&bus| dstack_types::NumaNodeConfig { pxb_bus: Some(bus) })
+                .map(|&bus| dstack_types::NumaNodeConfig { pxb_bus: bus })
                 .collect();
 
             let machine = Machine::builder()

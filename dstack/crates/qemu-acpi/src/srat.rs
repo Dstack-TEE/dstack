@@ -87,11 +87,11 @@ pub(crate) fn build(
         body.extend_from_slice(&memory_affinity(base, length, node, true));
         entries += 1;
     };
-    let mut next_base = 0;
+    let mut next_base = 0u64;
     for node in 0..nodes {
         let mut mem_base = next_base;
         let mut mem_len = memory_size / u64::from(nodes);
-        next_base = mem_base + mem_len;
+        next_base = mem_base.saturating_add(mem_len);
         if mem_base <= HOLE_640K_START && next_base > HOLE_640K_START {
             mem_len -= next_base - HOLE_640K_START;
             if mem_len > 0 {
@@ -111,7 +111,7 @@ pub(crate) fn build(
             }
             mem_base = above_4g;
             mem_len = next_base - below_4g;
-            next_base = mem_base + mem_len;
+            next_base = mem_base.saturating_add(mem_len);
         }
         if mem_len > 0 {
             push(mem_base, mem_len, node);

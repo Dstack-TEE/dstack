@@ -890,9 +890,9 @@ impl QemuCommandBuilder<'_> {
             command.arg("-object").arg(format!(
                 "memory-backend-file,id=mem{index},size={memory_per_node}G,mem-path=/dev/hugepages,share=on,prealloc=yes,host-nodes={node},policy=bind",
             ));
-            let address = 0xa + index;
+            let slot = 0x10 + index;
             command.arg("-device").arg(format!(
-                "pxb-pcie,id=pcie.node{node},bus=pcie.0,addr={address},numa_node={index},bus_nr={bus_number}",
+                "pxb-pcie,id=pcie.node{node},bus=pcie.0,addr={slot:#x},numa_node={index},bus_nr={bus_number}",
             ));
         }
         Ok((smp, memory_mb))

@@ -16,6 +16,9 @@ pub(crate) const FIRST_PXB_SLOT: u8 = 0x10;
 /// Slot of the ICH9 LPC bridge, the first one an expander cannot take.
 const LPC_SLOT: u8 = 0x1f;
 
+/// QEMU's MAX_NODES.
+const MAX_NUMA_NODES: usize = 128;
+
 /// One guest NUMA node. vCPUs and RAM are split evenly across nodes, in node
 /// order, as contiguous ranges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +73,10 @@ pub enum TopologyError {
         count: u64,
         nodes: usize,
     },
+    #[error("{0} NUMA nodes exceed QEMU's limit of 128")]
+    TooManyNumaNodes(usize),
+    #[error("every explicit NUMA node needs a PXB expander")]
+    NumaNodeWithoutPxb,
     #[error("{0} PXB expanders do not fit on the root bus")]
     TooManyPxbs(usize),
     #[error("PXB bus numbers must be nonzero and distinct: {0:?}")]
@@ -99,6 +106,13 @@ impl MachineConfig {
         let nodes = self.numa_nodes.len();
         if nodes == 0 {
             return Ok(());
+        }
+        if nodes > MAX_NUMA_NODES {
+            return Err(TopologyError::TooManyNumaNodes(nodes));
+        }
+        // Node `i`'s expander sits on slot 0x10 + i only if every node has one.
+        if self.numa_nodes.iter().any(|node| node.pxb_bus.is_none()) {
+            return Err(TopologyError::NumaNodeWithoutPxb);
         }
         for (what, count) in [
             ("cpu_count", u64::from(self.cpu_count)),
