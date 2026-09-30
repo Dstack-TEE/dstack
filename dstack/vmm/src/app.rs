@@ -778,8 +778,8 @@ impl App {
             let queues = network.queue_pairs();
             let filtered = filters_bridge_traffic(network, &self.config.cvm);
             let netd = netd::client(&self.config.netd.socket);
-            let result = match network.nic.mode {
-                NetworkingMode::Bridge => {
+            let (result, method) = match network.nic.mode {
+                NetworkingMode::Bridge => (
                     netd.prepare_bridge(PrepareBridgeRequest {
                         identity: Some(identity.clone()),
                         bridge: network.nic.bridge.clone(),
@@ -793,9 +793,10 @@ impl App {
                         queues,
                         workdir: workdir.clone(),
                     })
-                    .await
-                }
-                NetworkingMode::Macvtap => {
+                    .await,
+                    "PrepareBridge",
+                ),
+                NetworkingMode::Macvtap => (
                     netd.prepare_macvtap(PrepareMacvtapRequest {
                         identity: Some(identity.clone()),
                         parent: network.nic.parent.clone(),
@@ -805,8 +806,9 @@ impl App {
                         queues,
                         workdir: workdir.clone(),
                     })
-                    .await
-                }
+                    .await,
+                    "PrepareMacvtap",
+                ),
                 NetworkingMode::User | NetworkingMode::Custom | NetworkingMode::Passt => continue,
             };
             let response = match result {
@@ -835,17 +837,21 @@ impl App {
                     // neither the NIC that asked nor what a node has to install
                     // to satisfy it appears anywhere in the failure.
                     let mode = network.nic.mode.as_str();
-                    let error = Err(error).context("failed to prepare netd-managed networking");
+                    let socket = self.config.netd.socket.display();
+                    let secs = netd::REQUEST_TIMEOUT.as_secs();
+                    let context = if error.chain().any(|e| e.is::<tokio::time::error::Elapsed>()) {
+                        format!("netd {method} on {socket} did not answer within {secs}s")
+                    } else {
+                        format!("netd {method} on {socket} failed")
+                    };
+                    let error = Err(error.context(context))
+                        .context("failed to prepare netd-managed networking");
                     return if unreachable {
                         error.with_context(|| {
                             format!(
                                 "interface {nic_index} is {mode}, whose host interface only netd \
                                  can build; run dstack-vmm netd on this host"
                             )
-                        })
-                    } else if queues > 1 {
-                        error.with_context(|| {
-                            format!("interface {nic_index} asked for {queues} queue pairs")
                         })
                     } else {
                         error.with_context(|| format!("interface {nic_index} is {mode}"))
@@ -2610,6 +2616,7 @@ mod tests {
         let app = App::new(config, supervisor);
         let (mut vm, _) = bridge_vm(&app, "vm-1");
         vm.manifest.no_tee = true;
+        vm.manifest.networks[0].queues = Some(2);
         let workdir = app.work_dir("vm-1").unwrap();
         fs::create_dir_all(workdir.shared_dir()).unwrap();
         workdir.put_manifest(&vm.manifest).unwrap();
@@ -2633,6 +2640,22 @@ mod tests {
         assert!(
             info.boot_error.contains("fake netd refuses PrepareBridge"),
             "boot_error lost netd reason: {:?}",
+            info.boot_error
+        );
+        assert!(
+            info.boot_error.contains("netd PrepareBridge on"),
+            "{}",
+            info.boot_error
+        );
+        assert!(
+            info.boot_error
+                .contains(&netd.socket().display().to_string()),
+            "{}",
+            info.boot_error
+        );
+        assert!(
+            !info.boot_error.contains("queue pairs"),
+            "{}",
             info.boot_error
         );
         assert_eq!(info.boot_progress, "failed");
