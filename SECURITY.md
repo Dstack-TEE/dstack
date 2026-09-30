@@ -10,6 +10,13 @@ Do not open public GitHub issues for exploitable vulnerabilities or details that
 
 Use private reporting for issues that could expose secrets, bypass attestation or authorization, compromise KMS keys, weaken workload isolation, or enable unauthorized code or configuration changes in production deployments.
 
+## Maintainer response
+
+dstack is a non-profit open-source project. Maintainers will make a best-effort
+attempt to acknowledge, assess, and address valid reports, and coordinate
+disclosure where appropriate. We do not offer a bug bounty or other monetary
+reward, and cannot commit to a response or remediation timeline.
+
 ## Public security questions
 
 Use public issues only for questions about documented behavior, documentation gaps, already-public findings, or hardening ideas that do not include an exploit path.
