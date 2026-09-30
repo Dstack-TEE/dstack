@@ -492,7 +492,18 @@ impl App {
     }
 
     pub async fn start_vm(&self, id: &str) -> Result<()> {
-        self.start_vm_with_restart_policy(id, true).await
+        let result = self.start_vm_with_restart_policy(id, true).await;
+        if let Err(err) = &result {
+            self.set_boot_error(id, err);
+        }
+        result
+    }
+
+    fn set_boot_error(&self, id: &str, err: &anyhow::Error) {
+        if let Some(vm) = self.lock().get_mut(id) {
+            vm.state.boot_error = ra_rpc::log_text(&format!("{err:#}"));
+            vm.state.boot_progress = "failed".into();
+        }
     }
 
     async fn start_vm_with_restart_policy(
@@ -1908,6 +1919,7 @@ impl App {
                 continue;
             }
             if let Err(error) = self.start_vm_with_restart_policy(&id, false).await {
+                self.set_boot_error(&id, &error);
                 warn!(id, %error, "automatic restart attempt failed");
             }
         }
@@ -2569,6 +2581,63 @@ mod tests {
             .unwrap_err();
         assert!(workdir.network_cleanup_pending());
         assert_eq!(netd.methods(), vec!["PrepareBridge", "RemoveInterface"]);
+    }
+
+    /// Regression: an immediately rejected network preparation must surface
+    /// the complete StartVm error chain in the existing boot diagnostics.
+    #[tokio::test]
+    async fn failed_start_reports_the_netd_error_chain_in_boot_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let netd = netd::testing::FakeNetd::spawn(&["RemoveInterface"]);
+        let (supervisor, server) = stopped_supervisor().await;
+        let mut config = test_config(netd.socket(), dir.path());
+        config.image.path = dir.path().join("images");
+        config.cvm.qemu_version = Some("10.1.0".into());
+        let image = config.image.path.join("dstack-test");
+        fs::create_dir_all(&image).unwrap();
+        fs::write(image.join("kernel"), b"kernel").unwrap();
+        fs::write(image.join("initrd"), b"initrd").unwrap();
+        fs::write(
+            image.join("metadata.json"),
+            serde_json::to_vec(&json!({
+                "kernel": "kernel", "initrd": "initrd", "hda": null,
+                "rootfs": null, "bios": null, "cmdline": null,
+                "version": "0.5.7", "shared_ro": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let app = App::new(config, supervisor);
+        let (mut vm, _) = bridge_vm(&app, "vm-1");
+        vm.manifest.no_tee = true;
+        let workdir = app.work_dir("vm-1").unwrap();
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        workdir.put_manifest(&vm.manifest).unwrap();
+        fs::write(workdir.app_compose_path(), r#"{"manifest_version":2,"name":"test","runner":"docker-compose","docker_compose_file":"services: {}","gateway_enabled":false,"storage_fs":"zfs"}"#).unwrap();
+        app.lock().add(VmState::new(vm));
+
+        let error = app.start_vm("vm-1").await.unwrap_err();
+        let chain = format!("{error:#}");
+        assert!(
+            chain.contains("failed to prepare netd-managed networking"),
+            "{chain}"
+        );
+        assert!(chain.contains("fake netd refuses PrepareBridge"), "{chain}");
+        let info = app.vm_info("vm-1").await.unwrap().unwrap();
+        assert!(
+            info.boot_error
+                .contains("failed to prepare netd-managed networking"),
+            "boot_error lost preparation context: {:?}",
+            info.boot_error
+        );
+        assert!(
+            info.boot_error.contains("fake netd refuses PrepareBridge"),
+            "boot_error lost netd reason: {:?}",
+            info.boot_error
+        );
+        assert_eq!(info.boot_progress, "failed");
+        assert_eq!(netd.methods(), ["PrepareBridge", "RemoveInterface"]);
+        server.abort();
     }
 
     /// A netd outage must not become a fleet that cannot be stopped.
