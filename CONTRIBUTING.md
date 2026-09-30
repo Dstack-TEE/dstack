@@ -30,7 +30,7 @@ git remote set-head origin -a
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Commit your changes using conventional commits
+4. Commit your changes using conventional commits and a DCO sign-off
 5. Push to the branch (`git push origin feature/amazing-feature`)
 6. Open a Pull Request
 
@@ -95,6 +95,31 @@ The simulator package is installed only in development images. This mode
 provides no hardware isolation and must never be used with production
 workloads or secrets. Real quote generation, hardware isolation, and KMS
 authorization still require TDX or another supported TEE.
+
+## Developer Certificate of Origin (DCO)
+
+All contributions must include a sign-off under the [Developer Certificate of
+Origin, version 1.1](https://developercertificate.org/). By signing off, you
+certify that you wrote the contribution or otherwise have the right to submit
+it under this project's open-source license.
+
+Add the sign-off when creating a commit:
+
+```bash
+git commit -s -m "feat: describe the change"
+```
+
+Git adds a line such as the following to the commit message, using your Git
+identity:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+Every commit in a pull request must be signed off. To add a missing sign-off to
+the most recent commit, run `git commit --amend --signoff`. For several commits,
+use `git rebase --signoff <base-branch>` before opening or updating the pull
+request.
 
 ## Commit Convention
 
