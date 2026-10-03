@@ -24,7 +24,7 @@ use k256::ecdsa::SigningKey;
 use moka::future::Cache;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
-    attestation::{AttestationVerifier, TeeVariant, VerifiedAttestation},
+    attestation::{resolve_vm_config, AttestationVerifier, TeeVariant, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
 };
@@ -257,14 +257,9 @@ pub(crate) fn build_boot_info_for_attestation(
     vm_config_str: &str,
 ) -> Result<BootInfo> {
     let boot_info = if att.report.amd_snp_report().is_some() {
-        let vm_config_str = if vm_config_str.is_empty() {
-            att.config.as_str()
-        } else {
-            vm_config_str
-        };
         amd_attest::build_amd_snp_boot_info_from_verified_attestation_and_vm_config(
             att,
-            vm_config_str,
+            resolve_vm_config(vm_config_str, &att.config)?,
         )?
     } else {
         build_boot_info(att, use_boottime_mr, vm_config_str)?
@@ -1157,6 +1152,28 @@ mod tests {
         assert_eq!(boot_info.tee_variant, TeeVariant::DstackAmdSevSnp);
         assert_eq!(boot_info.mr_aggregated.len(), 32);
         assert_eq!(boot_info.app_id, vec![0x11; 20]);
+    }
+
+    #[test]
+    fn build_boot_info_for_attestation_rejects_a_vm_config_differing_from_the_attested_one() {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let vm_config = snp_vm_config(&input, &mr_config);
+        let attestation = verified_snp_attestation_with_config(
+            measurement,
+            [0xab; 64],
+            vm_config.clone(),
+            &mr_config,
+        );
+        let mut request: serde_json::Value = serde_json::from_str(&vm_config).unwrap();
+        request["cpu_count"] = 8.into();
+
+        let err = build_boot_info_for_attestation(&attestation, false, &request.to_string())
+            .expect_err("a vm_config differing from the attested one must be rejected");
+        assert!(format!("{err:#}").contains("does not match the config carried"));
+        build_boot_info_for_attestation(&attestation, false, &vm_config)
+            .expect("an identical copy is accepted");
     }
 
     #[test]
