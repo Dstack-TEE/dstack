@@ -1077,38 +1077,17 @@ pub struct SnpLaunchInputs {
 /// `mr_config` document out of a VMM `vm_config` string.
 ///
 /// The fields are intentionally explicit so missing SNP launch inputs fail
-/// closed instead of falling back to TDX event-log decoding. Both the top-level
-/// shape and the legacy nested `vm_config` string shape are accepted.
+/// closed instead of falling back to TDX event-log decoding.
 pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInputs> {
-    let value: serde_json::Value =
+    let parsed: SevSnpMeasurementVmConfig =
         serde_json::from_str(vm_config).context("failed to parse vm_config for amd sev-snp")?;
-    let parsed: SevSnpMeasurementVmConfig = serde_json::from_value(value.clone())
-        .context("failed to parse vm_config for amd sev-snp")?;
-    let nested = value
-        .get("vm_config")
-        .and_then(|value| value.as_str())
-        .map(|vm_config| {
-            serde_json::from_str::<SevSnpMeasurementVmConfig>(vm_config)
-                .context("failed to parse nested vm_config for amd sev-snp")
-        })
-        .transpose()?;
     let measurement_document = parsed
         .sev_snp_measurement
-        .or_else(|| {
-            nested
-                .as_ref()
-                .and_then(|nested| nested.sev_snp_measurement.clone())
-        })
-        .ok_or_else(|| anyhow::anyhow!("sev_snp_measurement is required for amd sev-snp"))?;
-    let os_image_hash = if !parsed.os_image_hash.is_empty() {
-        parsed.os_image_hash
-    } else {
-        nested
-            .as_ref()
-            .map(|nested| nested.os_image_hash.clone())
-            .filter(|hash| !hash.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("os_image_hash is required for amd sev-snp"))?
-    };
+        .context("sev_snp_measurement is required for amd sev-snp")?;
+    let os_image_hash = parsed.os_image_hash;
+    if os_image_hash.is_empty() {
+        bail!("os_image_hash is required for amd sev-snp");
+    }
     let document: SnpMeasurementDocument = serde_json::from_str(&measurement_document)
         .context("invalid amd sev-snp measurement document")?;
     dstack_types::SevOsImageMeasurementDocument::new(
@@ -1122,8 +1101,7 @@ pub fn parse_snp_inputs_from_vm_config(vm_config: &str) -> Result<SnpLaunchInput
     validate_measurement_input(&input)?;
     let mr_config_document = parsed
         .mr_config
-        .or_else(|| nested.and_then(|nested| nested.mr_config))
-        .ok_or_else(|| anyhow::anyhow!("mr_config is required for amd sev-snp"))?;
+        .context("mr_config is required for amd sev-snp")?;
     MrConfigV3::from_document(&mr_config_document)
         .context("invalid amd sev-snp mr_config document")?;
     Ok(SnpLaunchInputs {
