@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-contract-001",
+  "title": "KMS request-contract matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-contract-001"
+  ],
+  "risks": [
+    "risk-kms-contract-001"
+  ],
+  "tags": [
+    "kms",
+    "request-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS.GetMeta"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/api-contract-matrix-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

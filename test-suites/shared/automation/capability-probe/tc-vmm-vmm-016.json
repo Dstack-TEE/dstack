@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-vmm-vmm-016",
+  "capability": "gpu-policy",
+  "reason": "Vmm.ListGpus is served by the gpu-policy fixture profile, which the hardware-pool provider backs with an NVIDIA confidential-computing GPU. This host has none, so the case cannot be exercised.",
+  "expires_when": "the host gains an NVIDIA confidential-computing GPU, at which point the probe fails and this registration must be replaced by a real harness"
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-vmm-017",
+  "title": "Vmm.ReloadVms",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-vmm-017"
+  ],
+  "risks": [
+    "risk-vmm-vmm-017"
+  ],
+  "tags": [
+    "vmm",
+    "vmm-rpc"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Vmm.ReloadVms"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-vmm-empty-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

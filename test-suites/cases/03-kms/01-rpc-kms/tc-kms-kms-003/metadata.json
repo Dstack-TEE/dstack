@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-kms-003",
+  "title": "KMS.GetAppEnvEncryptPubKey",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-kms-003"
+  ],
+  "risks": [
+    "risk-kms-kms-003"
+  ],
+  "tags": [
+    "kms",
+    "kms-rpc"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS.GetAppEnvEncryptPubKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-kms-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

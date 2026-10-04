@@ -1,0 +1,37 @@
+{
+  "id": "tc-vmm-install-007",
+  "title": "Source installer checkout resolution and failure handling",
+  "priority": "P2",
+  "requirements": [
+    "req-vmm-install-007"
+  ],
+  "risks": [
+    "risk-vmm-install-007"
+  ],
+  "tags": [
+    "vmm",
+    "host-scripts",
+    "regression"
+  ],
+  "fixture": {
+    "profile": "vmm-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Source installer checkout resolution and failure handling"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

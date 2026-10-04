@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-upgrade-008",
+  "title": "Source and target allowlist completeness",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-upgrade-008"
+  ],
+  "risks": [
+    "risk-kms-upgrade-008"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Source and target allowlist completeness"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

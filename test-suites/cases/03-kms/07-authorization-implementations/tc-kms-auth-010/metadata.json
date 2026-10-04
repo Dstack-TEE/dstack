@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-010",
+  "title": "Authorization decision freshness and scope isolation",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-auth-010"
+  ],
+  "risks": [
+    "risk-kms-auth-010"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Authorization decision freshness and scope isolation"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

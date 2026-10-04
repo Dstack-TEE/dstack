@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-022",
+  "title": "vTPM attest quote and verify CLI suite",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-022"
+  ],
+  "risks": [
+    "risk-gos-setup-022"
+  ],
+  "tags": [
+    "guest-os",
+    "dstack-util"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "vTPM attest quote and verify CLI suite"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

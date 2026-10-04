@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-admin-003",
+  "title": "Admin.Exit",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-admin-003"
+  ],
+  "risks": [
+    "risk-gw-admin-003"
+  ],
+  "tags": [
+    "gateway",
+    "admin-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-exit-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.Exit"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 240
+  }
+}

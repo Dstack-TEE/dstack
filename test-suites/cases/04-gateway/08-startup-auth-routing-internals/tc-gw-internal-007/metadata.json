@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-internal-007",
+  "title": "Dashboard connection counters and policy provenance",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-internal-007"
+  ],
+  "risks": [
+    "risk-gw-internal-007"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Dashboard connection counters and policy provenance"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

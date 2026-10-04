@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-017",
+  "title": "Simulator platform selection config and mount safety",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-017"
+  ],
+  "risks": [
+    "risk-gos-setup-017"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Simulator platform selection config and mount safety"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

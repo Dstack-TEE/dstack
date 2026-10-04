@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-004",
+  "title": "KMS contract ownership roles and upgrade controls",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-auth-004"
+  ],
+  "risks": [
+    "risk-kms-auth-004"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-onboard",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS contract ownership roles and upgrade controls"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-contract-ownership-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-guestapi-001",
+  "title": "GuestApi.Info",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-guestapi-001"
+  ],
+  "risks": [
+    "risk-gos-guestapi-001"
+  ],
+  "tags": [
+    "guest",
+    "guestapi-rpc"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "GuestApi.Info"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

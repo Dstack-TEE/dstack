@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certbot-004",
+  "title": "Certificate renewal threshold force and hook",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-certbot-004"
+  ],
+  "risks": [
+    "risk-gw-certbot-004"
+  ],
+  "tags": [
+    "gw",
+    "certbot-acme-and-dns-engine"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Certificate renewal threshold force and hook"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

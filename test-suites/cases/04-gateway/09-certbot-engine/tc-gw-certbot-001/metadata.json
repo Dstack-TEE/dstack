@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certbot-001",
+  "title": "ACME account creation load and credential persistence",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-certbot-001"
+  ],
+  "risks": [
+    "risk-gw-certbot-001"
+  ],
+  "tags": [
+    "gw",
+    "certbot-acme-and-dns-engine"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "ACME account creation load and credential persistence"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

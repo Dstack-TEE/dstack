@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-005",
+  "title": "KMS node registration and authorization lifecycle",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-auth-005"
+  ],
+  "risks": [
+    "risk-kms-auth-005"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS node registration and authorization lifecycle"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-node-registration-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

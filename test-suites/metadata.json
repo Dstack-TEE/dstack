@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "id": "dstack-core-components-full",
+  "title": "dstack Core Components Full Test Plan",
+  "guide": {
+    "path": "README.md",
+    "anchor": "core-components-test-guide"
+  }
+}

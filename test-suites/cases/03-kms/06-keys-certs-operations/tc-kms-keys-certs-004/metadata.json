@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-keys-certs-004",
+  "title": "Certificate signing CSR and app binding",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-keys-certs-004"
+  ],
+  "risks": [
+    "risk-kms-keys-certs-004"
+  ],
+  "tags": [
+    "kms",
+    "keys-certs-operations"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Certificate signing CSR and app binding"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-csr-binding-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

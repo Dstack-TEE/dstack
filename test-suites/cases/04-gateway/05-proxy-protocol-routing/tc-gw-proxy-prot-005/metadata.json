@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-proxy-prot-005",
+  "title": "App-address namespace and content-addressed HTTPS",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-proxy-prot-005"
+  ],
+  "risks": [
+    "risk-gw-proxy-prot-005"
+  ],
+  "tags": [
+    "gateway",
+    "proxy-protocol-routing"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "App-address namespace and content-addressed HTTPS"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}
