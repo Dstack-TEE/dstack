@@ -17,7 +17,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -166,10 +166,37 @@ static CONFIGFS_MKDIR_TRIED: Mutex<bool> = Mutex::new(false);
 /// 1. ConfigFS (Linux 6.7+)
 /// 2. VSock to QGS service
 pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
-    let _guard = TDX_LOCK.lock().map_err(|_| TdxAttestError::Busy)?;
+    get_quote_inner(report_data, None)
+}
+
+/// Get a TDX quote with a time budget for acquiring the quote locks.
+///
+/// This is the same as [get_quote] but adds a deadline which covers the
+/// process-wide mutex and ConfigFS `inblob` file lock. Returns
+/// [`TdxAttestError::Busy`] if the lock deadline expires.
+///
+/// This is not a timeout for the entire call: backend discovery, filesystem
+/// operations, quote generation, retries, and VSock I/O retain their existing
+/// behavior and may block beyond this budget. Once the locks are acquired,
+/// the deadline no longer applies.
+pub fn get_quote_with_lock_timeout(
+    report_data: &TdxReportData,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    if timeout.is_zero() {
+        return Err(TdxAttestError::InvalidParameter);
+    }
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or(TdxAttestError::InvalidParameter)?;
+    get_quote_inner(report_data, Some(deadline))
+}
+
+fn get_quote_inner(report_data: &TdxReportData, deadline: Option<Instant>) -> Result<Vec<u8>> {
+    let _guard = lock_quote_mutex(&TDX_LOCK, deadline)?;
 
     if should_try_configfs() {
-        return get_quote_via_configfs(report_data);
+        return get_quote_via_configfs(report_data, deadline);
     }
 
     if is_vsock_available() {
@@ -179,6 +206,67 @@ pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
     Err(TdxAttestError::NotSupported(
         "no quote method available (configfs not mounted, no vsock port configured)".to_string(),
     ))
+}
+
+const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+// Obtain lock on mutex, applying a deadline if given
+fn lock_quote_mutex(lock: &Mutex<()>, deadline: Option<Instant>) -> Result<MutexGuard<'_, ()>> {
+    let Some(deadline) = deadline else {
+        return lock.lock().map_err(|_| TdxAttestError::Busy);
+    };
+    loop {
+        check_lock_deadline(deadline)?;
+        match lock.try_lock() {
+            Ok(guard) => {
+                check_lock_deadline(deadline)?;
+                return Ok(guard);
+            }
+            Err(TryLockError::Poisoned(_)) => return Err(TdxAttestError::Busy),
+            Err(TryLockError::WouldBlock) => wait_for_lock_retry(deadline)?,
+        }
+    }
+}
+
+fn check_lock_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(TdxAttestError::Busy);
+    }
+    Ok(())
+}
+
+fn wait_for_lock_retry(deadline: Instant) -> Result<()> {
+    check_lock_deadline(deadline)?;
+    thread::sleep(LOCK_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+    Ok(())
+}
+
+// The caller owns the file and retains it throughout generation. Closing that
+// file releases flock on success and on every error path.
+fn lock_quote_file(file: &File, path: &str, deadline: Option<Instant>) -> Result<()> {
+    loop {
+        if let Some(deadline) = deadline {
+            check_lock_deadline(deadline)?;
+        }
+        let flags = libc::LOCK_EX | if deadline.is_some() { libc::LOCK_NB } else { 0 };
+        let ret = unsafe { libc::flock(file.as_raw_fd(), flags) };
+        if ret == 0 {
+            if let Some(deadline) = deadline {
+                check_lock_deadline(deadline)?;
+            }
+            return Ok(());
+        }
+        let err = std::io::Error::last_os_error();
+        if let Some(deadline) = deadline {
+            if err.kind() == std::io::ErrorKind::WouldBlock
+                || err.kind() == std::io::ErrorKind::Interrupted
+            {
+                wait_for_lock_retry(deadline)?;
+                continue;
+            }
+        }
+        return Err(TdxAttestError::Unexpected(format!("flock {path}: {err}")));
+    }
 }
 
 fn should_try_configfs() -> bool {
@@ -353,7 +441,10 @@ fn extend_rtmr_via_ioctl(index: u32, digest: [u8; 48]) -> Result<()> {
 // ============================================================================
 
 /// Get quote using Linux ConfigFS TSM interface (Linux 6.7+)
-fn get_quote_via_configfs(report_data: &TdxReportData) -> Result<Vec<u8>> {
+fn get_quote_via_configfs(
+    report_data: &TdxReportData,
+    deadline: Option<Instant>,
+) -> Result<Vec<u8>> {
     let configfs_path = prepare_configfs()?;
 
     let inblob_path = format!("{}/inblob", configfs_path);
@@ -365,13 +456,7 @@ fn get_quote_via_configfs(report_data: &TdxReportData) -> Result<Vec<u8>> {
         .open(&inblob_path)
         .map_err(|e| TdxAttestError::Unexpected(format!("open {inblob_path}: {e}")))?;
 
-    let ret = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) };
-    if ret != 0 {
-        let err = std::io::Error::last_os_error();
-        return Err(TdxAttestError::Unexpected(format!(
-            "flock {inblob_path}: {err}"
-        )));
-    }
+    lock_quote_file(&lock_file, &inblob_path, deadline)?;
 
     let gen1 = read_generation(&generation_path)?;
     write_inblob_with_retry(&inblob_path, report_data)?;
@@ -797,5 +882,93 @@ mod tests {
             Err(TdxAttestError::NotSupported(message))
                 if message.contains("must be absolute")
         ));
+    }
+
+    const WAIT: Duration = Duration::from_millis(50);
+    // Generous scheduler allowance; catches an accidentally unbounded wait or
+    // reuse of the existing ten-second quote retry delay.
+    const MAX_WAIT: Duration = Duration::from_secs(2);
+
+    #[test]
+    fn mutex_contention_times_out_and_recovers() {
+        let lock = Mutex::new(());
+        let holder = lock.lock().unwrap();
+        let start = Instant::now();
+        assert!(matches!(
+            lock_quote_mutex(&lock, Some(start + WAIT)),
+            Err(TdxAttestError::Busy)
+        ));
+        assert!(start.elapsed() >= WAIT);
+        assert!(start.elapsed() < MAX_WAIT);
+        drop(holder);
+        let _guard = lock_quote_mutex(&lock, Some(Instant::now() + MAX_WAIT)).unwrap();
+    }
+
+    #[test]
+    fn public_api_bounds_mutex_wait() {
+        let holder = TDX_LOCK.lock().unwrap();
+        let start = Instant::now();
+        assert!(matches!(
+            get_quote_with_lock_timeout(&[0; 64], WAIT),
+            Err(TdxAttestError::Busy)
+        ));
+        drop(holder);
+        assert!(start.elapsed() >= WAIT);
+        assert!(start.elapsed() < MAX_WAIT);
+    }
+
+    #[test]
+    fn expired_budget_does_not_acquire_free_locks() {
+        let deadline = Instant::now();
+        let lock = Mutex::new(());
+        assert!(matches!(
+            lock_quote_mutex(&lock, Some(deadline)),
+            Err(TdxAttestError::Busy)
+        ));
+        let file = tempfile::tempfile().unwrap();
+        assert!(matches!(
+            lock_quote_file(&file, "test", Some(deadline)),
+            Err(TdxAttestError::Busy)
+        ));
+        assert!(matches!(
+            get_quote_with_lock_timeout(&[0; 64], Duration::ZERO),
+            Err(TdxAttestError::InvalidParameter)
+        ));
+    }
+
+    #[test]
+    fn file_contention_uses_shared_deadline_and_recovers() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        // Separate open descriptions are necessary: dup/try_clone shares flock.
+        let waiter = file.reopen().unwrap();
+        let later = file.reopen().unwrap();
+        lock_quote_file(file.as_file(), "test", None).unwrap();
+        let deadline = Instant::now() + WAIT;
+        // Simulate time already spent acquiring the process-wide lock.
+        thread::sleep(WAIT / 2);
+        assert!(matches!(
+            lock_quote_file(&waiter, "test", Some(deadline)),
+            Err(TdxAttestError::Busy)
+        ));
+        assert!(Instant::now() >= deadline);
+        assert!(Instant::now().duration_since(deadline) < MAX_WAIT);
+        drop(file);
+        lock_quote_file(&later, "test", Some(Instant::now() + MAX_WAIT)).unwrap();
+        drop(later);
+        // A timed-out waiter must neither acquire nor retain the file lock.
+        lock_quote_file(&waiter, "test", Some(Instant::now() + MAX_WAIT)).unwrap();
+    }
+
+    #[test]
+    fn file_waiter_proceeds_when_holder_releases_lock() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let waiter = file.reopen().unwrap();
+        lock_quote_file(file.as_file(), "test", None).unwrap();
+        let release = thread::spawn(move || {
+            thread::sleep(WAIT);
+            drop(file);
+        });
+        lock_quote_file(&waiter, "test", Some(Instant::now() + MAX_WAIT)).unwrap();
+        release.join().unwrap();
     }
 }

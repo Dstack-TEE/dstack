@@ -6,6 +6,7 @@
 //!
 //! All functions return `NotSupported` error.
 
+use std::time::Duration;
 use thiserror::Error;
 
 use crate::{Result, TdxReport, TdxReportData};
@@ -39,6 +40,13 @@ pub enum TdxAttestError {
 }
 
 pub fn get_quote(_report_data: &TdxReportData) -> Result<Vec<u8>> {
+    Err(TdxAttestError::NotSupported)
+}
+
+pub fn get_quote_with_lock_timeout(
+    _report_data: &TdxReportData,
+    _timeout: Duration,
+) -> Result<Vec<u8>> {
     Err(TdxAttestError::NotSupported)
 }
 
