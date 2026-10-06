@@ -85,6 +85,23 @@ SPDX-License-Identifier: Apache-2.0
             background-color: #0056b3;
         }
 
+        button:disabled {
+            background-color: #6c757d;
+            cursor: wait;
+            opacity: 0.7;
+        }
+
+        button:disabled:hover {
+            background-color: #6c757d;
+        }
+
+        fieldset {
+            border: none;
+            margin: 0;
+            padding: 0;
+            min-width: 0;
+        }
+
         .error {
             color: #dc3545;
             margin-top: 10px;
@@ -210,7 +227,7 @@ SPDX-License-Identifier: Apache-2.0
             </div>
         </div>
 
-        <div v-if="!setupFinished">
+        <div v-if="!setupFinished && !success">
             <div v-if="!selectedOption" class="initial-buttons">
                 <button @click="selectedOption = 'bootstrap'">Bootstrap</button>
                 <button @click="selectedOption = 'onboard'">Onboard</button>
@@ -221,20 +238,24 @@ SPDX-License-Identifier: Apache-2.0
                     <div v-if="selectedOption === 'bootstrap'" class="option">
                         <h2>Bootstrap A New KMS Instance</h2>
                         <form @submit.prevent="handleBootstrap">
+                            <fieldset :disabled="busy">
                             <div class="form-group">
                                 <label for="domain">Domain Name:</label>
                                 <input type="text" id="domain" v-model="bootstrapDomain" required
                                     placeholder="The domain name serving this KMS RPC">
                             </div>
-                            <button type="submit">Bootstrap</button>
+                            <button type="submit">{{ busy ? 'Waiting...' : 'Bootstrap' }}</button>
+                            </fieldset>
                         </form>
                         <button @click="selectedOption = null; error = ''; success = ''"
+                            :disabled="busy"
                             style="margin-top: 10px; background-color: #6c757d;">Back</button>
                     </div>
 
                     <div v-if="selectedOption === 'onboard'" class="option">
                         <h2>Onboard from an Existing KMS Instance</h2>
                         <form @submit.prevent="handleOnboard">
+                            <fieldset :disabled="busy">
                             <div class="form-group">
                                 <label for="source_url">Source KMS URL:</label>
                                 <input type="url" id="source_url" v-model="sourceUrl" required
@@ -250,9 +271,11 @@ SPDX-License-Identifier: Apache-2.0
                                 <input type="text" id="domain" v-model="onboardDomain" required
                                     placeholder="The domain name serving this KMS RPC">
                             </div>
-                            <button type="submit">Onboard</button>
+                            <button type="submit">{{ busy ? 'Waiting...' : 'Onboard' }}</button>
+                            </fieldset>
                         </form>
                         <button @click="selectedOption = null; error = ''; success = ''"
+                            :disabled="busy"
                             style="margin-top: 10px; background-color: #6c757d;">Back</button>
                     </div>
                 </div>
@@ -267,7 +290,7 @@ SPDX-License-Identifier: Apache-2.0
         </div>
 
         <div v-if="success && !setupFinished" style="margin-top: 20px; text-align: center;">
-            <button @click="handleFinish">Finish Setup</button>
+            <button @click="handleFinish" :disabled="busy">{{ busy ? 'Waiting...' : 'Finish Setup' }}</button>
         </div>
     </div>
 
@@ -297,6 +320,7 @@ SPDX-License-Identifier: Apache-2.0
                     success: '',
                     result: '',
                     setupFinished: false,
+                    busy: false,
                     attestationInfo: null,
                     attestationLoading: true,
                     attestationError: '',
@@ -323,6 +347,8 @@ SPDX-License-Identifier: Apache-2.0
             },
             methods: {
                 async handleBootstrap() {
+                    if (this.busy) return;
+                    this.busy = true;
                     try {
                         const { ca_pubkey, k256_pubkey, attestation, error } = await rpcCall('Bootstrap', {
                             domain: this.bootstrapDomain
@@ -340,9 +366,13 @@ SPDX-License-Identifier: Apache-2.0
                     } catch (err) {
                         this.error = err.message;
                         this.success = '';
+                    } finally {
+                        this.busy = false;
                     }
                 },
                 async handleOnboard() {
+                    if (this.busy) return;
+                    this.busy = true;
                     try {
                         const data = await rpcCall('Onboard', {
                             source_url: this.sourceUrl + "/prpc",
@@ -360,9 +390,13 @@ SPDX-License-Identifier: Apache-2.0
                     } catch (err) {
                         this.error = err.message;
                         this.success = '';
+                    } finally {
+                        this.busy = false;
                     }
                 },
                 async handleFinish() {
+                    if (this.busy) return;
+                    this.busy = true;
                     try {
                         const response = await fetch("/finish");
                         if (!response.ok) throw new Error(response.statusText);
@@ -372,7 +406,8 @@ SPDX-License-Identifier: Apache-2.0
                         this.setupFinished = true;
                     } catch (err) {
                         this.error = err.message;
-                        this.success = '';
+                    } finally {
+                        this.busy = false;
                     }
                 }
             }
