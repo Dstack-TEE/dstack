@@ -185,6 +185,15 @@ message AttestationInfoResponse {
   bytes ppid = 8;
 }
 
+// Public material already written by Bootstrap or Onboard, so the setup page
+// can resume after a refresh without repeating those RPCs.
+message SetupStatusResponse {
+  bool provisioned = 1;
+  bytes k256_pubkey = 2;
+  bytes ca_pubkey = 3;
+  bytes attestation = 4;
+}
+
 // The Onboard RPC service.
 service Onboard {
   // Bootstrap a new KMS
@@ -193,6 +202,8 @@ service Onboard {
   rpc Onboard(OnboardRequest) returns (OnboardResponse);
   // Get attestation info for on-chain KMS authorization
   rpc GetAttestationInfo(google.protobuf.Empty) returns (AttestationInfoResponse);
+  // Public keys already stored for this KMS, if any
+  rpc GetSetupStatus(google.protobuf.Empty) returns (SetupStatusResponse);
   // Finish onboarding
   rpc Finish(google.protobuf.Empty) returns (google.protobuf.Empty);
 }
