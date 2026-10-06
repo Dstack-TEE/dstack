@@ -329,15 +329,21 @@ SPDX-License-Identifier: Apache-2.0
             },
             async mounted() {
                 try {
-                    const data = await rpcCall('GetAttestationInfo', {});
-                    if (data.error) {
-                        this.attestationError = data.error;
+                    const [attestation, setup] = await Promise.all([
+                        rpcCall('GetAttestationInfo', {}),
+                        rpcCall('GetSetupStatus', {}),
+                    ]);
+                    if (attestation.error) {
+                        this.attestationError = attestation.error;
                     } else {
-                        this.attestationInfo = data;
-                        if (data.site_name) {
-                            this.siteName = data.site_name;
-                            document.title = data.site_name;
+                        this.attestationInfo = attestation;
+                        if (attestation.site_name) {
+                            this.siteName = attestation.site_name;
+                            document.title = attestation.site_name;
                         }
+                    }
+                    if (setup && !setup.error && setup.provisioned) {
+                        this.applySetupStatus(setup);
                     }
                 } catch (err) {
                     this.attestationError = err.message;
@@ -346,6 +352,24 @@ SPDX-License-Identifier: Apache-2.0
                 }
             },
             methods: {
+                applySetupStatus(data) {
+                    if (data.attestation) {
+                        this.success = 'Bootstrap successful!';
+                        this.result = JSON.stringify({
+                            caPubkey: '0x' + (data.ca_pubkey || ''),
+                            k256Pubkey: '0x' + (data.k256_pubkey || ''),
+                            attestation: '0x' + data.attestation
+                        }, null, 2);
+                    } else {
+                        this.success = 'Onboarding successful!';
+                        this.result = data.k256_pubkey
+                            ? JSON.stringify({
+                                k256Pubkey: '0x' + data.k256_pubkey,
+                            }, null, 2)
+                            : '';
+                    }
+                    this.error = '';
+                },
                 async handleBootstrap() {
                     if (this.busy) return;
                     this.busy = true;
