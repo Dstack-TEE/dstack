@@ -192,6 +192,8 @@ message SetupStatusResponse {
   bytes k256_pubkey = 2;
   bytes ca_pubkey = 3;
   bytes attestation = 4;
+  // All key and certificate files are present, so Finish can start the KMS.
+  bool ready = 5;
 }
 
 // The Onboard RPC service.
