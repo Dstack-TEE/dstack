@@ -432,11 +432,14 @@ pub fn resolve_vm_config<'a>(external: &'a str, embedded: &'a str) -> Result<&'a
     Ok(external)
 }
 
-fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result<VmConfig> {
-    let config = resolve_vm_config(config, fallback_config)?;
+fn parse_vm_config(config: &str) -> Result<VmConfig> {
     // No vm config for nitro enclave
     let config = if config.is_empty() { "{}" } else { config };
     serde_json::from_str(config).context("Failed to parse vm config")
+}
+
+fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result<VmConfig> {
+    parse_vm_config(resolve_vm_config(config, fallback_config)?)
 }
 
 fn mr_config_document_from_value(value: &serde_json::Value) -> Result<Option<String>> {
@@ -1688,7 +1691,7 @@ fn decode_app_info_sev_snp(
     let mr_config = verify_snp_mr_config_host_data(mr_config_document.as_ref(), &parsed.host_data)?;
 
     let key_provider_info = key_provider_info_from_mr_config(&mr_config)?;
-    let os_image_hash = decode_vm_config_with_fallback(config, "")?.os_image_hash;
+    let os_image_hash = parse_vm_config(config)?.os_image_hash;
     let mrs = decode_mr_sev_snp(&parsed.measurement, &parsed.host_data);
 
     Ok(AppInfo {

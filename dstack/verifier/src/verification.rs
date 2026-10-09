@@ -765,9 +765,9 @@ impl CvmVerifier {
         details: &mut VerificationDetails,
     ) -> Result<VmConfig> {
         // The raw config string used for platform-specific binding.
-        let raw_config = resolve_vm_config(&vm_config, &attestation.config)?.to_string();
+        let raw_config = resolve_vm_config(&vm_config, &attestation.config)?;
         let mut vm_config = attestation
-            .decode_vm_config(&vm_config)
+            .decode_vm_config(raw_config)
             .context("Failed to decode VM config")?;
         match &attestation.quote {
             AttestationQuote::DstackGcpTdx(_) => {
@@ -817,7 +817,7 @@ impl CvmVerifier {
             AttestationQuote::DstackAmdSevSnp(_) => {
                 self.verify_os_image_hash_for_dstack_sev(
                     attestation,
-                    &raw_config,
+                    raw_config,
                     &mut vm_config,
                     details,
                 )?;
