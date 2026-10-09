@@ -419,23 +419,27 @@ fn find_event_payloads(runtime_events: &[RuntimeEvent], name: &str) -> Vec<Vec<u
         .collect()
 }
 
-fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result<VmConfig> {
-    let config = if config.is_empty() {
-        fallback_config
-    } else {
-        config
-    };
-    let config = if config.is_empty() { "{}" } else { config };
-    let config = vm_config_json_from_config(config).unwrap_or(Cow::Borrowed(config));
-    serde_json::from_str(&config).context("Failed to parse vm config")
+/// The VM config to decode: the caller-supplied copy or the one carried in the
+/// attestation. When both are given they must be identical, so no reader can
+/// authorize on one copy and decode another.
+pub fn resolve_vm_config<'a>(external: &'a str, embedded: &'a str) -> Result<&'a str> {
+    if external.is_empty() {
+        return Ok(embedded);
+    }
+    if !embedded.is_empty() && external != embedded {
+        bail!("vm_config does not match the config carried in the attestation");
+    }
+    Ok(external)
 }
 
-fn vm_config_json_from_config(config: &str) -> Option<Cow<'_, str>> {
-    let value = serde_json::from_str::<serde_json::Value>(config).ok()?;
-    value
-        .get("vm_config")
-        .and_then(|value| value.as_str())
-        .map(|vm_config| Cow::Owned(vm_config.to_string()))
+fn parse_vm_config(config: &str) -> Result<VmConfig> {
+    // No vm config for nitro enclave
+    let config = if config.is_empty() { "{}" } else { config };
+    serde_json::from_str(config).context("Failed to parse vm config")
+}
+
+fn decode_vm_config_with_fallback(config: &str, fallback_config: &str) -> Result<VmConfig> {
+    parse_vm_config(resolve_vm_config(config, fallback_config)?)
 }
 
 fn mr_config_document_from_value(value: &serde_json::Value) -> Result<Option<String>> {
@@ -453,16 +457,7 @@ fn mr_config_document_from_config(config: &str) -> Result<Option<String>> {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(config) else {
         return Ok(None);
     };
-    if let Some(mr_config) = mr_config_document_from_value(&value)? {
-        return Ok(Some(mr_config));
-    }
-
-    let Some(vm_config) = value.get("vm_config").and_then(|value| value.as_str()) else {
-        return Ok(None);
-    };
-    let vm_config = serde_json::from_str::<serde_json::Value>(vm_config)
-        .context("Failed to parse nested vm_config for amd sev-snp mr_config")?;
-    mr_config_document_from_value(&vm_config)
+    mr_config_document_from_value(&value)
 }
 
 pub use dstack_types::TeeVariant;
@@ -1685,11 +1680,10 @@ fn decode_app_info_sev_snp(
     external_vm_config: &str,
 ) -> Result<AppInfo> {
     let parsed = crate::amd_sev_snp::parse_unverified_amd_snp_report(report)?;
+    let config = resolve_vm_config(external_vm_config, embedded_config)?;
     let mr_config_document = if let Some(mr_config) = mr_config {
         Cow::Borrowed(mr_config)
-    } else if let Some(mr_config) = mr_config_document_from_config(external_vm_config)? {
-        Cow::Owned(mr_config)
-    } else if let Some(mr_config) = mr_config_document_from_config(embedded_config)? {
+    } else if let Some(mr_config) = mr_config_document_from_config(config)? {
         Cow::Owned(mr_config)
     } else {
         bail!("amd sev-snp mr_config is missing");
@@ -1697,8 +1691,7 @@ fn decode_app_info_sev_snp(
     let mr_config = verify_snp_mr_config_host_data(mr_config_document.as_ref(), &parsed.host_data)?;
 
     let key_provider_info = key_provider_info_from_mr_config(&mr_config)?;
-    let os_image_hash =
-        decode_vm_config_with_fallback(external_vm_config, embedded_config)?.os_image_hash;
+    let os_image_hash = parse_vm_config(config)?.os_image_hash;
     let mrs = decode_mr_sev_snp(&parsed.measurement, &parsed.host_data);
 
     Ok(AppInfo {
@@ -1983,17 +1976,8 @@ impl<T: GetDeviceId> Attestation<T> {
     }
 
     /// Decode the VM config from the external or embedded config
-    pub fn decode_vm_config<'a>(&'a self, mut config: &'a str) -> Result<VmConfig> {
-        if config.is_empty() {
-            config = &self.config;
-        }
-        if config.is_empty() {
-            // No vm config for nitro enclave
-            config = "{}";
-        }
-        let vm_config: VmConfig =
-            serde_json::from_str(config).context("Failed to parse vm config")?;
-        Ok(vm_config)
+    pub fn decode_vm_config(&self, config: &str) -> Result<VmConfig> {
+        decode_vm_config_with_fallback(config, &self.config)
     }
 
     /// Decode the app info from the platform-specific app info source.
