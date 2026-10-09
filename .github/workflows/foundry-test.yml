@@ -60,6 +60,10 @@ jobs:
         run: npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
 
       - name: Run Forge tests
+        # The upgrade-safety validator rejects a contract found in more than one
+        # build-info file. Since forge 1.8.4 `build --sizes` skips tests, so the
+        # test run would add a second build-info next to it.
         run: |
+          forge clean
           forge test --ffi -vvv
         id: test
