@@ -85,6 +85,23 @@ SPDX-License-Identifier: Apache-2.0
             background-color: #0056b3;
         }
 
+        button:disabled {
+            background-color: #6c757d;
+            cursor: wait;
+            opacity: 0.7;
+        }
+
+        button:disabled:hover {
+            background-color: #6c757d;
+        }
+
+        fieldset {
+            border: none;
+            margin: 0;
+            padding: 0;
+            min-width: 0;
+        }
+
         .error {
             color: #dc3545;
             margin-top: 10px;
@@ -210,10 +227,10 @@ SPDX-License-Identifier: Apache-2.0
             </div>
         </div>
 
-        <div v-if="!setupFinished">
+        <div v-if="!setupFinished && !success && !broken">
             <div v-if="!selectedOption" class="initial-buttons">
-                <button @click="selectedOption = 'bootstrap'">Bootstrap</button>
-                <button @click="selectedOption = 'onboard'">Onboard</button>
+                <button :disabled="statusLoading" @click="selectedOption = 'bootstrap'">Bootstrap</button>
+                <button :disabled="statusLoading" @click="selectedOption = 'onboard'">Onboard</button>
             </div>
 
             <Transition name="fade">
@@ -221,20 +238,24 @@ SPDX-License-Identifier: Apache-2.0
                     <div v-if="selectedOption === 'bootstrap'" class="option">
                         <h2>Bootstrap A New KMS Instance</h2>
                         <form @submit.prevent="handleBootstrap">
+                            <fieldset :disabled="busy || statusLoading">
                             <div class="form-group">
                                 <label for="domain">Domain Name:</label>
                                 <input type="text" id="domain" v-model="bootstrapDomain" required
                                     placeholder="The domain name serving this KMS RPC">
                             </div>
-                            <button type="submit">Bootstrap</button>
+                            <button type="submit">{{ busy ? 'Waiting...' : 'Bootstrap' }}</button>
+                            </fieldset>
                         </form>
                         <button @click="selectedOption = null; error = ''; success = ''"
+                            :disabled="busy"
                             style="margin-top: 10px; background-color: #6c757d;">Back</button>
                     </div>
 
                     <div v-if="selectedOption === 'onboard'" class="option">
                         <h2>Onboard from an Existing KMS Instance</h2>
                         <form @submit.prevent="handleOnboard">
+                            <fieldset :disabled="busy || statusLoading">
                             <div class="form-group">
                                 <label for="source_url">Source KMS URL:</label>
                                 <input type="url" id="source_url" v-model="sourceUrl" required
@@ -250,9 +271,11 @@ SPDX-License-Identifier: Apache-2.0
                                 <input type="text" id="domain" v-model="onboardDomain" required
                                     placeholder="The domain name serving this KMS RPC">
                             </div>
-                            <button type="submit">Onboard</button>
+                            <button type="submit">{{ busy ? 'Waiting...' : 'Onboard' }}</button>
+                            </fieldset>
                         </form>
                         <button @click="selectedOption = null; error = ''; success = ''"
+                            :disabled="busy"
                             style="margin-top: 10px; background-color: #6c757d;">Back</button>
                     </div>
                 </div>
@@ -267,7 +290,7 @@ SPDX-License-Identifier: Apache-2.0
         </div>
 
         <div v-if="success && !setupFinished" style="margin-top: 20px; text-align: center;">
-            <button @click="handleFinish">Finish Setup</button>
+            <button @click="handleFinish" :disabled="busy">{{ busy ? 'Waiting...' : 'Finish Setup' }}</button>
         </div>
     </div>
 
@@ -297,6 +320,9 @@ SPDX-License-Identifier: Apache-2.0
                     success: '',
                     result: '',
                     setupFinished: false,
+                    busy: false,
+                    statusLoading: true,
+                    broken: false,
                     attestationInfo: null,
                     attestationLoading: true,
                     attestationError: '',
@@ -304,25 +330,52 @@ SPDX-License-Identifier: Apache-2.0
                 }
             },
             async mounted() {
-                try {
-                    const data = await rpcCall('GetAttestationInfo', {});
-                    if (data.error) {
-                        this.attestationError = data.error;
-                    } else {
-                        this.attestationInfo = data;
-                        if (data.site_name) {
-                            this.siteName = data.site_name;
-                            document.title = data.site_name;
-                        }
+                const [attestation, setup] = await Promise.all([
+                    rpcCall('GetAttestationInfo', {}).catch(err => ({ error: err.message })),
+                    rpcCall('GetSetupStatus', {}).catch(err => ({ error: err.message })),
+                ]);
+                if (attestation.error) {
+                    this.attestationError = attestation.error;
+                } else {
+                    this.attestationInfo = attestation;
+                    if (attestation.site_name) {
+                        this.siteName = attestation.site_name;
+                        document.title = attestation.site_name;
                     }
-                } catch (err) {
-                    this.attestationError = err.message;
-                } finally {
-                    this.attestationLoading = false;
                 }
+                if (setup.error) {
+                    this.error = setup.error;
+                } else if (setup.provisioned && setup.ready) {
+                    this.applySetupStatus(setup);
+                } else if (setup.provisioned) {
+                    this.broken = true;
+                    this.error = 'KMS setup is incomplete; root keys exist but required certificates are missing';
+                }
+                this.attestationLoading = false;
+                this.statusLoading = false;
             },
             methods: {
+                applySetupStatus(data) {
+                    if (data.attestation) {
+                        this.success = 'Bootstrap successful!';
+                        this.result = JSON.stringify({
+                            caPubkey: '0x' + (data.ca_pubkey || ''),
+                            k256Pubkey: '0x' + (data.k256_pubkey || ''),
+                            attestation: '0x' + data.attestation
+                        }, null, 2);
+                    } else {
+                        this.success = 'Onboarding successful!';
+                        this.result = data.k256_pubkey
+                            ? JSON.stringify({
+                                k256Pubkey: '0x' + data.k256_pubkey,
+                            }, null, 2)
+                            : '';
+                    }
+                    this.error = '';
+                },
                 async handleBootstrap() {
+                    if (this.busy || this.statusLoading || this.success || this.broken) return;
+                    this.busy = true;
                     try {
                         const { ca_pubkey, k256_pubkey, attestation, error } = await rpcCall('Bootstrap', {
                             domain: this.bootstrapDomain
@@ -339,10 +392,13 @@ SPDX-License-Identifier: Apache-2.0
                         this.error = '';
                     } catch (err) {
                         this.error = err.message;
-                        this.success = '';
+                    } finally {
+                        this.busy = false;
                     }
                 },
                 async handleOnboard() {
+                    if (this.busy || this.statusLoading || this.success || this.broken) return;
+                    this.busy = true;
                     try {
                         const data = await rpcCall('Onboard', {
                             source_url: this.sourceUrl + "/prpc",
@@ -359,10 +415,13 @@ SPDX-License-Identifier: Apache-2.0
                         this.error = '';
                     } catch (err) {
                         this.error = err.message;
-                        this.success = '';
+                    } finally {
+                        this.busy = false;
                     }
                 },
                 async handleFinish() {
+                    if (this.busy) return;
+                    this.busy = true;
                     try {
                         const response = await fetch("/finish");
                         if (!response.ok) throw new Error(response.statusText);
@@ -372,7 +431,8 @@ SPDX-License-Identifier: Apache-2.0
                         this.setupFinished = true;
                     } catch (err) {
                         this.error = err.message;
-                        this.success = '';
+                    } finally {
+                        this.busy = false;
                     }
                 }
             }

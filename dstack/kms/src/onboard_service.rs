@@ -13,7 +13,7 @@ use dstack_kms_rpc::{
     kms_client::KmsClient,
     onboard_server::{OnboardRpc, OnboardServer},
     AttestationInfoResponse, BootstrapRequest, BootstrapResponse, GetKmsKeyRequest, KmsKeyResponse,
-    OnboardRequest, OnboardResponse,
+    OnboardRequest, OnboardResponse, SetupStatusResponse,
 };
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
@@ -105,6 +105,56 @@ fn validate_onboarding_domain(domain: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn stored_k256_pubkey(cfg: &KmsConfig) -> Result<Vec<u8>> {
+    let bytes = fs::read(cfg.k256_key()).context("failed to read k256 key")?;
+    let key = SigningKey::from_slice(&bytes).context("failed to parse k256 key")?;
+    Ok(key.verifying_key().to_sec1_bytes().to_vec())
+}
+
+fn setup_status(cfg: &KmsConfig) -> Result<SetupStatusResponse> {
+    if !cfg.root_keys_exist() {
+        return Ok(SetupStatusResponse {
+            provisioned: false,
+            ready: false,
+            k256_pubkey: Vec::new(),
+            ca_pubkey: Vec::new(),
+            attestation: Vec::new(),
+        });
+    }
+    let k256_pubkey = stored_k256_pubkey(cfg)?;
+    let ready = cfg.keys_exists();
+    if !cfg.bootstrap_info().exists() {
+        return Ok(SetupStatusResponse {
+            provisioned: true,
+            ready,
+            k256_pubkey,
+            ca_pubkey: Vec::new(),
+            attestation: Vec::new(),
+        });
+    }
+    let info: BootstrapResponse = serde_json::from_slice(
+        &fs::read(cfg.bootstrap_info()).context("failed to read bootstrap info")?,
+    )
+    .context("failed to parse bootstrap info")?;
+    if info.k256_pubkey != k256_pubkey {
+        tracing::warn!("ignoring bootstrap info whose k256 pubkey does not match the stored key");
+        return Ok(SetupStatusResponse {
+            provisioned: true,
+            ready,
+            k256_pubkey,
+            ca_pubkey: Vec::new(),
+            attestation: Vec::new(),
+        });
+    }
+    Ok(SetupStatusResponse {
+        provisioned: true,
+        ready,
+        k256_pubkey,
+        ca_pubkey: info.ca_pubkey,
+        attestation: info.attestation,
+    })
 }
 
 impl OnboardRpc for OnboardHandler {
@@ -214,6 +264,11 @@ impl OnboardRpc for OnboardHandler {
             eth_rpc_url,
             kms_contract_address,
         )
+    }
+
+    async fn get_setup_status(self) -> Result<SetupStatusResponse> {
+        let _bootstrap_guard = self.state.bootstrap_lock.lock().await;
+        setup_status(&self.state.config)
     }
 
     async fn finish(self) -> anyhow::Result<()> {
@@ -492,6 +547,88 @@ mod tests {
         bootstrap_keys(&cfg, &verifier).await.unwrap();
         assert!(cfg.keys_exists());
         assert_ne!(fs::read(cfg.root_ca_key()).unwrap(), b"stale");
+    }
+
+    #[test]
+    fn setup_status_is_empty_before_root_keys_exist() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let status = setup_status(&cfg).unwrap();
+        assert!(!status.provisioned);
+        assert!(!status.ready);
+        assert!(status.k256_pubkey.is_empty());
+        assert!(status.ca_pubkey.is_empty());
+        assert!(status.attestation.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn setup_status_returns_k256_pubkey_after_keys_are_stored() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        let expected = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
+        keys.store(&cfg).unwrap();
+        let status = setup_status(&cfg).unwrap();
+        assert!(status.provisioned);
+        assert!(status.ready);
+        assert_eq!(status.k256_pubkey, expected);
+        assert!(status.ca_pubkey.is_empty());
+        assert!(status.attestation.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn setup_status_includes_bootstrap_info_when_present() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        keys.store(&cfg).unwrap();
+        let expected_k256 = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
+        let stored = BootstrapResponse {
+            ca_pubkey: vec![1, 2, 3],
+            k256_pubkey: expected_k256.clone(),
+            attestation: vec![7, 8, 9],
+        };
+        fs::write(cfg.bootstrap_info(), serde_json::to_vec(&stored).unwrap()).unwrap();
+        let status = setup_status(&cfg).unwrap();
+        assert!(status.provisioned);
+        assert!(status.ready);
+        assert_eq!(status.ca_pubkey, stored.ca_pubkey);
+        assert_eq!(status.attestation, stored.attestation);
+        assert_eq!(status.k256_pubkey, expected_k256);
+    }
+
+    #[rocket::async_test]
+    async fn setup_status_drops_bootstrap_info_when_k256_mismatches() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        let expected_k256 = keys.k256_key.verifying_key().to_sec1_bytes().to_vec();
+        keys.store(&cfg).unwrap();
+        let stored = BootstrapResponse {
+            ca_pubkey: vec![1, 2, 3],
+            k256_pubkey: vec![4, 5, 6],
+            attestation: vec![7, 8, 9],
+        };
+        fs::write(cfg.bootstrap_info(), serde_json::to_vec(&stored).unwrap()).unwrap();
+        let status = setup_status(&cfg).unwrap();
+        assert!(status.provisioned);
+        assert!(status.ready);
+        assert_eq!(status.k256_pubkey, expected_k256);
+        assert!(status.ca_pubkey.is_empty());
+        assert!(status.attestation.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn setup_status_is_not_ready_when_certificates_are_missing() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let keys = Keys::generate("kms.example.com", false).await.unwrap();
+        keys.store(&cfg).unwrap();
+        fs::remove_file(cfg.rpc_cert()).unwrap();
+        let status = setup_status(&cfg).unwrap();
+        assert!(status.provisioned);
+        assert!(!status.ready);
+        assert!(!status.k256_pubkey.is_empty());
     }
 
     #[test]
