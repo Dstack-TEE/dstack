@@ -8,5 +8,5 @@
     "pccs_url": "",
     "docker_registry": "",
     "host_api_url": "vsock://2:12000/api",
-    "vm_config": "{\"os_image_hash\":\"64f0d1545cd510a8dfed7ad609d105b5d41f0cb2afcfdda8867ede00c88add7a\",\"cpu_count\":1,\"memory_size\":2147483648}"
+    "vm_config": "{\"os_image_hash\":\"e61be43dd1cc6a6f5edefd7c51b608983780839b0000ce60dd99737dcffe09b9\",\"cpu_count\":8,\"memory_size\":17179869184,\"qemu_version\":\"8.2.2\",\"pci_hole64_size\":0,\"hugepages\":false,\"num_gpus\":0,\"num_nvswitches\":0,\"hotplug_off\":false,\"image\":\"dstack-0.6.0\",\"host_share_mode\":\"vvfat\",\"spec_version\":1}"
 }

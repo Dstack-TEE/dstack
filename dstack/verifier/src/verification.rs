@@ -22,8 +22,8 @@ use dstack_mr::{tdx::TdxRtmr0AcpiHashes, TdxMeasurements};
 use dstack_types::{sha256sum, TdxAttestationVariant, VmConfig};
 use hex_literal::hex;
 use ra_tls::attestation::{
-    AppInfo, Attestation, AttestationQuote, AttestationVerifier, DstackVerifiedReport, NitroPcrs,
-    VerifiedAttestation, VersionedAttestation,
+    resolve_vm_config, AppInfo, Attestation, AttestationQuote, AttestationVerifier,
+    DstackVerifiedReport, NitroPcrs, VerifiedAttestation, VersionedAttestation,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -764,16 +764,10 @@ impl CvmVerifier {
         attestation: &VerifiedAttestation,
         details: &mut VerificationDetails,
     ) -> Result<VmConfig> {
-        // The raw config string used for platform-specific binding: the explicit
-        // request `vm_config` when supplied, otherwise the one embedded in the
-        // attestation (mirroring `decode_vm_config`'s own fallback).
-        let raw_config = if vm_config.is_empty() {
-            attestation.config.clone()
-        } else {
-            vm_config.clone()
-        };
+        // The raw config string used for platform-specific binding.
+        let raw_config = resolve_vm_config(&vm_config, &attestation.config)?;
         let mut vm_config = attestation
-            .decode_vm_config(&vm_config)
+            .decode_vm_config(raw_config)
             .context("Failed to decode VM config")?;
         match &attestation.quote {
             AttestationQuote::DstackGcpTdx(_) => {
@@ -823,7 +817,7 @@ impl CvmVerifier {
             AttestationQuote::DstackAmdSevSnp(_) => {
                 self.verify_os_image_hash_for_dstack_sev(
                     attestation,
-                    &raw_config,
+                    raw_config,
                     &mut vm_config,
                     details,
                 )?;
