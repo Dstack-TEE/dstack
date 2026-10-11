@@ -322,25 +322,24 @@ SPDX-License-Identifier: Apache-2.0
                 }
             },
             async mounted() {
-                const [attestation, setup] = await Promise.all([
-                    rpcCall('GetAttestationInfo', {}).catch(err => ({ error: err.message })),
-                    rpcCall('GetSetupStatus', {}).catch(err => ({ error: err.message })),
-                ]);
-                if (attestation.error) {
-                    this.attestationError = attestation.error;
-                } else {
+                rpcCall('GetAttestationInfo', {}).then(attestation => {
+                    if (attestation.error) throw new Error(attestation.error);
                     this.attestationInfo = attestation;
                     if (attestation.site_name) {
                         this.siteName = attestation.site_name;
                         document.title = attestation.site_name;
                     }
-                }
+                }).catch(err => {
+                    this.attestationError = err.message;
+                }).finally(() => {
+                    this.attestationLoading = false;
+                });
+                const setup = await rpcCall('GetSetupStatus', {}).catch(err => ({ error: err.message }));
                 if (setup.error) {
                     this.error = setup.error;
                 } else if (setup.provisioned) {
                     this.applySetupStatus(setup);
                 }
-                this.attestationLoading = false;
                 this.busy = false;
             },
             methods: {
@@ -365,6 +364,11 @@ SPDX-License-Identifier: Apache-2.0
                     }
                     this.error = '';
                 },
+                async recoverSetupStatus(err) {
+                    this.error = err.message;
+                    const setup = await rpcCall('GetSetupStatus', {}).catch(() => ({}));
+                    if (setup.provisioned) this.applySetupStatus(setup);
+                },
                 async handleBootstrap() {
                     this.busy = true;
                     try {
@@ -376,7 +380,7 @@ SPDX-License-Identifier: Apache-2.0
 
                         this.applySetupStatus(data);
                     } catch (err) {
-                        this.error = err.message;
+                        await this.recoverSetupStatus(err);
                     } finally {
                         this.busy = false;
                     }
@@ -394,7 +398,7 @@ SPDX-License-Identifier: Apache-2.0
 
                         this.applySetupStatus(data);
                     } catch (err) {
-                        this.error = err.message;
+                        await this.recoverSetupStatus(err);
                     } finally {
                         this.busy = false;
                     }
