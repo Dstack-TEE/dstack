@@ -14,7 +14,7 @@
 
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -46,6 +46,9 @@ const QUOTE_MIN_SIZE: usize = 1020;
 // QGS message constants
 const QGS_MSG_LEN_PREFIX_SIZE: usize = 4; // 4-byte length prefix
 const QGS_REQ_BUF_SIZE: usize = 16 * 1024; // 16KB buffer for request/response
+
+// Shared budget for connecting to QGS and exchanging a complete response.
+const QGS_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 // QGS message types
 const QGS_MSG_GET_QUOTE_REQ: u32 = 0;
@@ -165,6 +168,9 @@ static CONFIGFS_MKDIR_TRIED: Mutex<bool> = Mutex::new(false);
 /// Tries multiple methods in order:
 /// 1. ConfigFS (Linux 6.7+)
 /// 2. VSock to QGS service
+///
+/// VSock connection and I/O share a 30-second timeout. This does not include
+/// waiting for the process-wide lock or retrieving the TDX report.
 pub fn get_quote(report_data: &TdxReportData) -> Result<Vec<u8>> {
     let _guard = TDX_LOCK.lock().map_err(|_| TdxAttestError::Busy)?;
 
@@ -567,8 +573,6 @@ fn read_outblob_with_retry(path: &str) -> Result<Vec<u8>> {
 // ============================================================================
 
 fn get_quote_via_vsock(report_data: &TdxReportData) -> Result<Vec<u8>> {
-    use std::io::{Read as _, Write as _};
-
     let vsock_port = read_vsock_port()?;
     if vsock_port == 0 {
         return Err(TdxAttestError::NotSupported(format!(
@@ -579,11 +583,78 @@ fn get_quote_via_vsock(report_data: &TdxReportData) -> Result<Vec<u8>> {
     let report = get_report(report_data)?;
     let request = build_qgs_get_quote_request(&report.0);
 
-    let mut stream = vsock::VsockStream::connect_with_cid_port(vsock::VMADDR_CID_HOST, vsock_port)?;
+    let deadline = Instant::now() + QGS_IO_TIMEOUT;
+    let socket = socket2::Socket::new(
+        socket2::Domain::from(libc::AF_VSOCK),
+        socket2::Type::STREAM,
+        None,
+    )?;
+    let address = socket2::SockAddr::vsock(vsock::VMADDR_CID_HOST, vsock_port);
+    socket.connect_timeout(&address, remaining_qgs_time(deadline)?)?;
+    exchange_qgs_quote(&socket, &request, deadline)
+}
+
+fn remaining_qgs_time(deadline: Instant) -> io::Result<Duration> {
+    remaining_qgs_time_at(deadline, Instant::now())
+}
+
+fn remaining_qgs_time_at(deadline: Instant, now: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(now)
+        // socket2 truncates to microseconds so treat sub-microsecond budgets
+        // as zero (expired) before setting it.
+        .filter(|remaining| remaining.as_micros() != 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "QGS communication timed out"))
+}
+
+// read_exact/write_all may perform multiple system calls. Refresh their socket
+// timeout before each call so partial progress cannot restart the full budget.
+struct QgsStream<'a> {
+    socket: &'a socket2::Socket,
+    deadline: Instant,
+}
+
+fn qgs_io_error(error: io::Error) -> io::Error {
+    // Linux reports SO_RCVTIMEO/SO_SNDTIMEO expiry as EAGAIN (WouldBlock).
+    if error.kind() == io::ErrorKind::WouldBlock {
+        io::Error::new(io::ErrorKind::TimedOut, "QGS communication timed out")
+    } else {
+        error
+    }
+}
+
+impl Read for QgsStream<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.socket
+            .set_read_timeout(Some(remaining_qgs_time(self.deadline)?))?;
+        self.socket.read(buffer).map_err(qgs_io_error)
+    }
+}
+
+impl Write for QgsStream<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.socket
+            .set_write_timeout(Some(remaining_qgs_time(self.deadline)?))?;
+        self.socket
+            .send_with_flags(buffer, libc::MSG_NOSIGNAL)
+            .map_err(qgs_io_error)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.socket.flush()
+    }
+}
+
+fn exchange_qgs_quote(
+    socket: &socket2::Socket,
+    request: &[u8],
+    deadline: Instant,
+) -> Result<Vec<u8>> {
+    let mut stream = QgsStream { socket, deadline };
 
     let len_header = (request.len() as u32).to_be_bytes();
     stream.write_all(&len_header)?;
-    stream.write_all(&request)?;
+    stream.write_all(request)?;
 
     let mut len_buf = [0u8; QGS_MSG_LEN_PREFIX_SIZE];
     stream.read_exact(&mut len_buf)?;
@@ -720,6 +791,133 @@ fn parse_qgs_get_quote_response(data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixStream;
+
+    const IO_WAIT: Duration = Duration::from_millis(100);
+
+    #[test]
+    fn qgs_sub_microsecond_budget_is_expired() {
+        let now = Instant::now();
+        for nanos in [0, 1, 500, 999] {
+            let error = remaining_qgs_time_at(now + Duration::from_nanos(nanos), now).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        }
+        let minimum = Duration::from_micros(1);
+        assert_eq!(remaining_qgs_time_at(now + minimum, now).unwrap(), minimum);
+    }
+
+    fn assert_qgs_timeout(result: Result<Vec<u8>>, start: Instant) {
+        assert!(matches!(result, Err(TdxAttestError::VsockFailure(error))
+            if error.kind() == io::ErrorKind::TimedOut));
+        assert!(start.elapsed() >= IO_WAIT);
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn qgs_silent_peer_times_out() {
+        let (client, _peer) = UnixStream::pair().unwrap();
+        let socket = socket2::Socket::from(client);
+        let start = Instant::now();
+        assert_qgs_timeout(
+            exchange_qgs_quote(&socket, b"request", start + IO_WAIT),
+            start,
+        );
+    }
+
+    #[test]
+    fn qgs_partial_header_and_body_time_out() {
+        for data in [vec![0, 0], vec![0, 0, 0, 24, 1, 0]] {
+            let (client, mut peer) = UnixStream::pair().unwrap();
+            peer.write_all(&data).unwrap();
+            let socket = socket2::Socket::from(client);
+            let start = Instant::now();
+            assert_qgs_timeout(
+                exchange_qgs_quote(&socket, b"request", start + IO_WAIT),
+                start,
+            );
+        }
+    }
+
+    #[test]
+    fn qgs_partial_progress_does_not_restart_timeout() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        let socket = socket2::Socket::from(client);
+        let sender = thread::spawn(move || {
+            for _ in 0..40 {
+                if peer.write_all(&[0]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let start = Instant::now();
+        let mut stream = QgsStream {
+            socket: &socket,
+            deadline: start + IO_WAIT,
+        };
+        let error = stream.read_exact(&mut [0; 40]).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        drop(socket);
+        sender.join().unwrap();
+    }
+
+    #[test]
+    fn qgs_blocked_write_times_out() {
+        let (client, _peer) = UnixStream::pair().unwrap();
+        let socket = socket2::Socket::from(client);
+        socket.set_send_buffer_size(4096).unwrap();
+        let start = Instant::now();
+        let mut stream = QgsStream {
+            socket: &socket,
+            deadline: start + IO_WAIT,
+        };
+        let error = stream.write_all(&vec![0; 1024 * 1024]).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() >= IO_WAIT);
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn qgs_exchange_succeeds_before_deadline() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        let quote = vec![42; QUOTE_MIN_SIZE];
+        let mut response = Vec::new();
+        response.extend_from_slice(&QGS_MSG_VERSION_MAJOR.to_le_bytes());
+        response.extend_from_slice(&QGS_MSG_VERSION_MINOR.to_le_bytes());
+        response.extend_from_slice(&QGS_MSG_GET_QUOTE_RESP.to_le_bytes());
+        response.extend_from_slice(&(24 + quote.len() as u32).to_le_bytes());
+        response.extend_from_slice(&0u32.to_le_bytes());
+        response.extend_from_slice(&0u32.to_le_bytes());
+        response.extend_from_slice(&(quote.len() as u32).to_le_bytes());
+        response.extend_from_slice(&quote);
+        peer.write_all(&(response.len() as u32).to_be_bytes())
+            .unwrap();
+        peer.write_all(&response).unwrap();
+        let socket = socket2::Socket::from(client);
+        assert_eq!(
+            exchange_qgs_quote(&socket, b"request", Instant::now() + Duration::from_secs(2))
+                .unwrap(),
+            quote
+        );
+        let mut request = [0; 11];
+        peer.read_exact(&mut request).unwrap();
+        assert_eq!(&request[..4], &7u32.to_be_bytes());
+        assert_eq!(&request[4..], b"request");
+    }
+
+    #[test]
+    fn qgs_expired_deadline_fails_before_io() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        let socket = socket2::Socket::from(client);
+        let result = exchange_qgs_quote(&socket, b"request", Instant::now());
+        assert!(matches!(result, Err(TdxAttestError::VsockFailure(error))
+            if error.kind() == io::ErrorKind::TimedOut));
+        peer.set_nonblocking(true).unwrap();
+        assert_eq!(
+            peer.read(&mut [0]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
 
     // Environment variables are process-global, while Rust tests run in
     // parallel by default. Serialize tests that temporarily override them.
