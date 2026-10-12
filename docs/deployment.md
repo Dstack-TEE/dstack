@@ -470,11 +470,11 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 **How it works:**
 
 1. New KMS starts in onboard mode (empty `auto_bootstrap_domain`)
-2. New KMS calls `GetTempCaCert` on source KMS
-3. New KMS generates RA-TLS certificate with TDX quote
-4. New KMS calls `GetKmsKey` with mTLS authentication
-5. Source KMS verifies attestation via `bootAuth/kms` webhook
-6. If approved, source KMS returns root keys
+2. New KMS generates an RA-TLS client certificate with its TDX quote: self-issued when given a `source_token`, or minted from the temp CA fetched with `GetTempCaCert` for a source older than 0.6.0
+3. New KMS calls `GetKmsKey` over mTLS: `Admin.GetKmsKey` with the token, or the legacy public `KMS.GetKmsKey` without one
+4. Source KMS verifies attestation via `bootAuth/kms` webhook
+5. If approved, source KMS returns root keys
+6. New KMS verifies the source's attestation on that same connection and checks it against its own policy before using the keys
 7. Both KMS instances now derive identical keys
 
 **Configure new KMS for onboarding:**

@@ -628,65 +628,42 @@ impl Keys {
                 .context("Missing source KMS attestation")
         };
 
-        if !source_token.is_empty() {
-            // `other_kms_url` is the source's admin listener. It accepts a self-issued
-            // RA-TLS client certificate, so no temp CA is fetched first.
-            let (ra_cert, ra_key) = gen_ra_cert(None).await?;
-            let client = RaClientConfig::builder()
-                .tls_no_check(true)
-                .tls_built_in_root_certs(false)
-                .remote_uri(other_kms_url.to_string())
-                .tls_client_cert(ra_cert)
-                .tls_client_key(ra_key)
-                .cert_validator(capture_source_attestation)
-                .attestation_verifier(attestation_verifier.clone())
-                .bearer_token(source_token.to_string())
-                .build()
-                .into_client()?;
-            let info = dstack_client().info().await.context("Failed to get info")?;
-            let keys_res = AdminClient::new(client)
-                .get_kms_key(GetKmsKeyRequest {
-                    vm_config: info.vm_config,
-                })
-                .await?;
-            // The attestation is only captured by that first request; nothing
-            // received is used before the source passes this check.
-            ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier)
-                .await
-                .context("Source KMS is not allowed for onboarding")?;
-            return Self::from_key_response(cfg, keys_res, domain).await;
-        }
-
+        // With a token, `other_kms_url` is the source's admin listener, which accepts
+        // a self-issued RA-TLS client certificate. Without one, the source predates
+        // 0.6.0: it serves `KMS.GetKmsKey` publicly and pins its temp CA.
+        let tmp_ca = if source_token.is_empty() {
+            let client = RaClient::new(other_kms_url.to_string(), true)?;
+            let tmp_ca = KmsClient::new(client).get_temp_ca_cert().await?;
+            Some((tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key))
+        } else {
+            None
+        };
+        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca).await?;
         let client = RaClientConfig::builder()
             .tls_no_check(true)
+            .tls_built_in_root_certs(false)
             .remote_uri(other_kms_url.to_string())
+            .tls_client_cert(ra_cert)
+            .tls_client_key(ra_key)
             .cert_validator(capture_source_attestation)
             .attestation_verifier(attestation_verifier.clone())
+            .maybe_bearer_token((!source_token.is_empty()).then(|| source_token.to_string()))
             .build()
             .into_client()?;
-        let mut kms_client = KmsClient::new(client);
-
-        let tmp_ca = kms_client.get_temp_ca_cert().await?;
-        let (ra_cert, ra_key) =
-            gen_ra_cert(Some((tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key))).await?;
-        let ra_client = RaClient::new_mtls(
-            other_kms_url.into(),
-            ra_cert,
-            ra_key,
-            attestation_verifier.clone(),
-        )
-        .context("Failed to create client")?;
-        kms_client = KmsClient::new(ra_client);
+        let info = dstack_client().info().await.context("Failed to get info")?;
+        let request = GetKmsKeyRequest {
+            vm_config: info.vm_config,
+        };
+        let keys_res = if source_token.is_empty() {
+            KmsClient::new(client).get_kms_key(request).await?
+        } else {
+            AdminClient::new(client).get_kms_key(request).await?
+        };
+        // The attestation is captured only on the connection that returned the keys;
+        // nothing received is used before the source passes this check.
         ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier)
             .await
             .context("Source KMS is not allowed for onboarding")?;
-
-        let info = dstack_client().info().await.context("Failed to get info")?;
-        let keys_res = kms_client
-            .get_kms_key(GetKmsKeyRequest {
-                vm_config: info.vm_config,
-            })
-            .await?;
         Self::from_key_response(cfg, keys_res, domain).await
     }
 
