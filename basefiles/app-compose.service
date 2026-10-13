@@ -1,5 +1,7 @@
 [Unit]
 Description=App Compose Service
+# After= alone is satisfied by a failed unit; app must not run without these.
+Requires=dstack-prepare.service dstack-guest-agent.service
 Wants=docker.service
 After=docker.service dstack-prepare.service dstack-guest-agent.service
 

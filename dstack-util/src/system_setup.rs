@@ -301,20 +301,25 @@ impl HostShared {
                 }
                 bail!("Source file {src} does not exist");
             }
-            let src_size = src_path.metadata()?.len();
-            if src_size > max_size {
-                bail!("Source file {src} is too large, max size is {max_size} bytes");
-            }
             use fs::os::unix::fs::OpenOptionsExt;
-            let mut src_io = fs::OpenOptions::new()
+            use std::io::Read;
+            // O_NONBLOCK: opening a FIFO on the host share must not block the boot.
+            let src_io = fs::OpenOptions::new()
                 .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
                 .open(src_path)?;
+            if !src_io.metadata()?.is_file() {
+                bail!("Source file {src} is not a regular file");
+            }
             let mut dst_io = fs::OpenOptions::new()
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .open(dst_path)?;
-            std::io::copy(&mut src_io, &mut dst_io)?;
+            let copied = std::io::copy(&mut src_io.take(max_size + 1), &mut dst_io)?;
+            if copied > max_size {
+                bail!("Source file {src} is too large, max size is {max_size} bytes");
+            }
             Ok(())
         };
         cmd! {
@@ -322,13 +327,17 @@ impl HostShared {
             mkdir -p $host_shared_dir;
         }?;
 
+        // The host composes this filesystem. Nothing on it is executed and
+        // nothing on it is a device node: the guest copies a few regular files
+        // off it and unmounts it, so refuse set-user-ID bits, devices and exec.
+        //
         // Try to detect and mount shared disk by label first, fallback to 9p
         let disk_device = Self::find_disk_by_label(HOST_SHARED_DISK_LABEL);
         let mounted_via_disk = if let Some(dev) = disk_device {
             info!("Found shared disk at {}", dev);
             let mount_result = cmd! {
                 info "Attempting to mount shared disk";
-                mount -o ro $dev $host_shared_dir;
+                mount -o ro,nosuid,nodev,noexec $dev $host_shared_dir;
             };
             mount_result.is_ok()
         } else {
@@ -338,7 +347,7 @@ impl HostShared {
         if !mounted_via_disk {
             info!("Shared disk not found, trying 9p virtfs");
             cmd! {
-                mount -t 9p -o trans=virtio,version=9p2000.L,ro host-shared $host_shared_dir;
+                mount -t 9p -o trans=virtio,version=9p2000.L,ro,nosuid,nodev,noexec host-shared $host_shared_dir;
             }?;
         } else {
             info!("Successfully mounted shared disk");
@@ -1699,6 +1708,17 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         if area.encryption() != "aes-xts-plain64" {
             bail!("Invalid LUKS keyslot encryption: {}", area.encryption());
         }
+        // Pin where the encrypted key material is read from. The binary area
+        // must sit between the two header copies and the encrypted payload;
+        // otherwise a host with raw disk access could redirect it elsewhere.
+        let area_end = area.offset().checked_add(area.size());
+        if area.offset() < 2 * hdr_size || area_end.is_none_or(|end| end > PAYLOAD_OFFSET) {
+            bail!(
+                "Invalid LUKS keyslot area: offset={} size={}",
+                area.offset(),
+                area.size()
+            );
+        }
         if *key_size != 64 {
             bail!("Invalid LUKS keyslot key size: {key_size}");
         }
@@ -1797,4 +1817,58 @@ fn test_validate_luks2_header() {
     assert!(error
         .to_string()
         .contains("Invalid LUKS keyslot encryption"));
+}
+
+#[test]
+fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
+    // Redirect the keyslot binary area below the header region. Same length
+    // so the surrounding header stays intact; "00768" parses to 768, which is
+    // inside the header copies (< 2 * hdr_size) rather than the metadata gap.
+    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
+    let patched = patch_luks_json(&mut header, br#""offset":"32768""#, br#""offset":"00768""#);
+    assert_eq!(patched, 2, "expected to patch both header copies");
+    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
+    assert!(error.to_string().contains("Invalid LUKS keyslot area"));
+}
+
+/// Replace `needle` with `replacement` inside every LUKS JSON region, keeping
+/// each region the same length by giving back trailing NUL padding.
+#[cfg(test)]
+fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usize {
+    assert!(replacement.len() >= needle.len());
+    let grow = replacement.len() - needle.len();
+    let mut patched = 0;
+    let mut i = 0;
+    while i + needle.len() <= header.len() {
+        if &header[i..i + needle.len()] != needle {
+            i += 1;
+            continue;
+        }
+        let tail = &mut header[i..];
+        let end = tail.iter().position(|b| *b == 0).expect("NUL padding");
+        assert!(end + grow < tail.len(), "not enough NUL padding");
+        tail.copy_within(needle.len()..end, replacement.len());
+        tail[..replacement.len()].copy_from_slice(replacement);
+        patched += 1;
+        i += replacement.len();
+    }
+    patched
+}
+
+#[test]
+fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
+    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
+    // 2**64 - 32768 + 1000: added to the accepted offset 32768 it wraps to
+    // 1000, which is below PAYLOAD_OFFSET.
+    let patched = patch_luks_json(
+        &mut header,
+        br#""size":"258048""#,
+        br#""size":"18446744073709519848""#,
+    );
+    assert_eq!(patched, 2, "expected to patch both header copies");
+    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
+    assert!(
+        error.to_string().contains("Invalid LUKS keyslot area"),
+        "{error:#}"
+    );
 }
