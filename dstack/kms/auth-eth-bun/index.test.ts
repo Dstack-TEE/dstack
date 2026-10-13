@@ -565,3 +565,77 @@ describe('Ethereum finalized snapshot authorization', () => {
     expect(await recovered.json()).toMatchObject({ isAllowed: true, reason: 'recovered' });
   });
 });
+
+// The body dstack-kms 0.6.x posts: `dstack_verifier::PolicyBootInfo`, camelCase,
+// bytes as unprefixed lowercase hex, plus fields this backend does not read.
+describe('dstack-kms 0.6 bootAuth payload', () => {
+  const kmsPayload = (overrides: Record<string, unknown> = {}) => ({
+    teeVariant: 'dstack-tdx',
+    mrAggregated: '11'.repeat(32),
+    osImageHash: 'ec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6',
+    mrSystem: '22'.repeat(32),
+    appId: '33'.repeat(20),
+    composeHash: '44'.repeat(32),
+    instanceId: '55'.repeat(20),
+    deviceId: '66'.repeat(32),
+    keyProviderInfo: '7b226e616d65223a226b6d73227d'.repeat(40),
+    tcbStatus: 'UpToDate',
+    advisoryIds: ['INTEL-SA-00837'],
+    ...overrides,
+  });
+
+  const post = (path: string, body: unknown) =>
+    appFetch(new Request(`http://localhost:3001${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }));
+
+  const bootInfoArg = (functionName: string) =>
+    mockReadContract.mock.calls.map(([params]) => params)
+      .find((params) => params.functionName === functionName).args[0];
+
+  beforeEach(() => {
+    mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'isKmsAllowed' || params.functionName === 'isAppAllowed') {
+        return [true, ''];
+      }
+      if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      throw new Error(`unexpected function ${params.functionName}`);
+    });
+  });
+
+  it.each([
+    ['/bootAuth/kms', 'isKmsAllowed'],
+    ['/bootAuth/app', 'isAppAllowed'],
+  ])('%s forwards every policy field to %s', async (path, functionName) => {
+    const response = await post(path, kmsPayload());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ isAllowed: true, reason: '', gatewayAppId: 'gateway-app' });
+    expect(bootInfoArg(functionName)).toEqual({
+      appId: `0x${'33'.repeat(20)}`,
+      composeHash: `0x${'44'.repeat(32)}`,
+      instanceId: `0x${'55'.repeat(20)}`,
+      deviceId: `0x${'66'.repeat(32)}`,
+      mrAggregated: `0x${'11'.repeat(32)}`,
+      mrSystem: `0x${'22'.repeat(32)}`,
+      osImageHash: '0xec43cb8c5e04b6bb6c53b33b16076a01d83d01f7f4b703f2f78a0d947d6247e6',
+      tcbStatus: 'UpToDate',
+      advisoryIds: ['INTEL-SA-00837'],
+    });
+  });
+
+  it('maps the empty instance ID of an instance-less app to the zero address', async () => {
+    const response = await post('/bootAuth/app', kmsPayload({ instanceId: '' }));
+
+    expect(await response.json()).toMatchObject({ isAllowed: true });
+    expect(bootInfoArg('isAppAllowed').instanceId).toBe(`0x${'00'.repeat(20)}`);
+  });
+
+  it('passes a non-UpToDate TCB status through for the contract to judge', async () => {
+    await post('/bootAuth/kms', kmsPayload({ tcbStatus: 'OutOfDate' }));
+
+    expect(bootInfoArg('isKmsAllowed').tcbStatus).toBe('OutOfDate');
+  });
+});
