@@ -75,7 +75,7 @@ The native interface remains available when those host tools are present:
 # QEMU smoke-test the assembled UKI disk (host OVMF path is distro-specific)
 qemu-system-x86_64 -machine q35 -m 2G -nographic \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-  -drive if=virtio,format=raw,file=os/mkosi/build/out/prod/dstack-0.6.0/disk.raw
+  -drive if=virtio,format=raw,file=os/mkosi/build/out/prod/dstack-0.6.1/disk.raw
 ```
 
 `image` reuses a component-output cache, which is what makes local iteration
