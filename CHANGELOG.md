@@ -15,14 +15,6 @@ dstack 0.6.1 is a security release. Upgrade the guest OS, KMS, and verifier.
 
 - **New guest image.** Register the 0.6.1 `os_image_hash` on chain before
   deploying 0.6.1 images
-- **KMS rejects a mismatched `vm_config`.** A request whose `vm_config` differs
-  from the copy embedded in the attestation is refused. Released guests always
-  send identical copies; only untagged `master` builds from Dec 2025 to
-  Jan 2026 are affected. A `vm_config` nested under a `vm_config` key no longer
-  parses (#1430)
-- **Hugepage VMs:** the VMM now records the memory QEMU actually allocates
-  (whole GiB per NUMA node) in `vm_config`, so a hugepage VM whose requested
-  memory was not a multiple of that changes `vm_config` (#1418)
 
 ### Security
 
@@ -37,7 +29,8 @@ dstack 0.6.1 is a security release. Upgrade the guest OS, KMS, and verifier.
 ### Added
 
 - verifier: measure multi-node NUMA layouts of hugepage VMs through
-  `vm_config.numa_nodes`; the VMM orders guest NUMA nodes by host node (#1418)
+  `vm_config.numa_nodes`; the VMM orders guest NUMA nodes by host node and
+  records the memory QEMU actually allocates, so such VMs now verify (#1418)
 - verifier: `vm_config.extra_root_devices` describes root-bus devices that a
   `qemu_path` wrapper appends, so their DSDT entries can be measured (#1424)
 - vmm: `passt` networking is back. Each passt runs as a sidecar of the VM
