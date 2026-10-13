@@ -231,10 +231,22 @@ mod docker_logs {
         Ok(now.as_secs().saturating_sub(seconds) as i64)
     }
 
+    fn validate_container_name(name: &str) -> Result<()> {
+        let mut chars = name.chars();
+        let valid = chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+        if !valid {
+            anyhow::bail!("invalid container name");
+        }
+        Ok(())
+    }
+
     pub fn get_logs(
         container_name: &str,
         config: LogConfig,
     ) -> Result<impl Stream<Item = Result<String, bollard::errors::Error>>> {
+        // bollard interpolates the name into the request path without escaping it
+        validate_container_name(container_name)?;
         let LogConfig {
             since,
             until,
@@ -294,6 +306,33 @@ mod docker_logs {
     mod tests {
         use super::*;
         use std::time::{SystemTime, UNIX_EPOCH};
+
+        #[test]
+        fn test_validate_container_name() {
+            for name in [
+                "test/json?",
+                "test/json#",
+                "../info?",
+                "test%2Fjson%3F",
+                "/test",
+                ".",
+                "..",
+                "test\\name",
+                "test name",
+                "tést",
+                "",
+            ] {
+                assert!(validate_container_name(name).is_err(), "{name}");
+            }
+            for name in [
+                "test",
+                "dstack-gateway-1",
+                "Test_1.local",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ] {
+                assert!(validate_container_name(name).is_ok(), "{name}");
+            }
+        }
 
         #[test]
         fn test_parse_duration_empty() {
