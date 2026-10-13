@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-12
+
+dstack 0.6.1 is a security release. Upgrade the guest OS, KMS, and verifier.
+
+### Upgrade notes
+
+- **New guest image.** Register the 0.6.1 `os_image_hash` on chain before
+  deploying 0.6.1 images
+- **KMS rejects a mismatched `vm_config`.** A request whose `vm_config` differs
+  from the copy embedded in the attestation is refused. Released guests always
+  send identical copies; only untagged `master` builds from Dec 2025 to
+  Jan 2026 are affected. A `vm_config` nested under a `vm_config` key no longer
+  parses (#1430)
+- **Hugepage VMs:** the VMM now records the memory QEMU actually allocates
+  (whole GiB per NUMA node) in `vm_config`, so a hugepage VM whose requested
+  memory was not a multiple of that changes `vm_config` (#1418)
+
+### Security
+
+- guest-agent: `/logs/<container_name>` rejects names that are not valid Docker
+  container names, so a crafted name can no longer reach a different Docker
+  API endpoint (#1442)
+- KMS and verifier: a request `vm_config` must match the attested copy, and a
+  config has one layout. On AMD SEV-SNP the competing copies let a `SignCert`
+  request pass authorization with one `os_image_hash` and obtain a certificate
+  claiming another (#1430)
+
+### Added
+
+- verifier: measure multi-node NUMA layouts of hugepage VMs through
+  `vm_config.numa_nodes`; the VMM orders guest NUMA nodes by host node (#1418)
+- verifier: `vm_config.extra_root_devices` describes root-bus devices that a
+  `qemu_path` wrapper appends, so their DSDT entries can be measured (#1424)
+- vmm: `passt` networking is back. Each passt runs as a sidecar of the VM
+  launcher and talks to QEMU over a socketpair; see
+  `docs/passt-networking.md` (#1422, #1423)
+- vmm: per-VM `annotations` for host-side tooling, stored in the VM manifest
+  and never passed to the guest or measured (#1419, #1421)
+
+### Changed
+
+- sdk/simulator: use the GHCR openssh installer image (#1417)
+- dependency updates: rustls 0.23.45 in the Rust SDK, hickory-resolver 0.26.2,
+  and npm packages in KMS auth-eth and the VMM UI (#1429, #1432, #1434, #1436,
+  #1438, #1439, #1440)
+
 ## [0.6.0] - 2026-09-28
 
 > [!IMPORTANT]
@@ -1655,7 +1701,8 @@ New contributors in this release:
 * @Leechael made their first contribution
 * @nanometerzhu made their first contribution
 * @h4x3rotab made their first contribution
-[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.6.0..HEAD
+[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.6.1..HEAD
+[0.6.1]: https://github.com/Dstack-TEE/dstack/compare/v0.6.0..v0.6.1
 [0.6.0]: https://github.com/Dstack-TEE/dstack/compare/v0.5.11..v0.6.0
 [0.5.5]: https://github.com/Dstack-TEE/dstack/compare/v0.5.4..v0.5.5
 [0.5.4]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..v0.5.4
