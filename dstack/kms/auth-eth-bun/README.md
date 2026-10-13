@@ -112,6 +112,14 @@ this implementation is fully compatible with the original fastify + ethers versi
 - **comprehensive testing**: vitest test suite validates compatibility
 - **backward compatibility**: supports both minimal and full BootInfo formats
 
+### dstack-kms 0.6
+
+dstack-kms 0.6 posts `dstack_verifier::PolicyBootInfo`: bytes as unprefixed
+hex, plus `teeVariant` and `keyProviderInfo`, which the contract does not take
+and this backend drops. the KMS checks `appId`, `composeHash` and `instanceId`
+widths itself before calling the webhook. the `dstack-kms 0.6 bootAuth payload`
+tests pin this contract.
+
 ### OpenAPI specification
 
 the complete API specification is available in `openapi.json` and includes:
