@@ -275,7 +275,7 @@ app.get('/', async (c) => {
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
     });
-  } catch (error) {
+  } catch {
     console.error('authorization backend health check failed');
     return c.json({
       status: 'error',
@@ -294,7 +294,7 @@ app.post('/bootAuth/app',
       const bootInfo = c.req.valid('json');
       const result = await ethereum.checkBoot(bootInfo, false);
       return c.json(result);
-    } catch (error) {
+    } catch {
       console.error('application authorization backend failed');
       return c.json({
         isAllowed: false,
