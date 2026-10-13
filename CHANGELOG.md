@@ -15,11 +15,6 @@ dstack 0.6.1 is a security release. Upgrade the guest OS, KMS, and verifier.
 
 - **New guest image.** Register the 0.6.1 `os_image_hash` on chain before
   deploying 0.6.1 images
-- **KMS rejects a mismatched `vm_config`.** A request whose `vm_config` differs
-  from the copy embedded in the attestation is refused. Released guests always
-  send identical copies; only untagged `master` builds from Dec 2025 to
-  Jan 2026 are affected. A `vm_config` nested under a `vm_config` key no longer
-  parses (#1430)
 - **Hugepage VMs:** the VMM now records the memory QEMU actually allocates
   (whole GiB per NUMA node) in `vm_config`, so a hugepage VM whose requested
   memory was not a multiple of that changes `vm_config` (#1418)
