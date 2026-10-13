@@ -66,6 +66,33 @@ bun run check
 - `ETH_CHAIN_ID` - reject every decision if the RPC reports a different chain ID (default: unset, no check)
 - `ETH_FINALITY_CONFIRMATIONS` - read policy this many blocks behind the RPC head (default: 0, the head)
 
+## container image
+
+tagged releases are published by the `KMS auth-eth-bun` workflow
+(`.github/workflows/kms-auth-eth-bun.yml`): pushing the tag
+`kms-auth-eth-bun-v<version>` builds this directory and publishes
+`ghcr.io/dstack-tee/dstack-kms-auth-eth-bun:<version>` with a build provenance
+attestation. pull requests that touch this directory run the audit, lint and
+tests and build the image without pushing it.
+
+the image listens on port 8000, which matches the KMS webhook default
+`http://auth-api:8000`. deploy it by digest:
+
+```yaml
+auth-api:
+  image: ghcr.io/dstack-tee/dstack-kms-auth-eth-bun:<version>@sha256:<digest>
+  environment:
+    - ETH_RPC_URL=https://...
+    - KMS_CONTRACT_ADDR=0x...
+    - ETH_CHAIN_ID=8453
+```
+
+to build it locally:
+
+```bash
+docker build -t dstack-kms-auth-eth-bun .
+```
+
 ## API endpoints
 
 ### GET /
