@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- vmm: `qmp_socket` now defaults to `true`. Each CVM's QEMU exposes `qmp.sock` in its work dir, so the host can change disk options or compact a bloated `hda.img` (`blockdev-mirror`) without stopping the CVM. Applies to CVMs started after the change; set `qmp_socket = false` to opt out
+
 ## [0.6.1] - 2026-10-12
 
 dstack 0.6.1 is a security release. Upgrade the guest OS, KMS, and verifier.
