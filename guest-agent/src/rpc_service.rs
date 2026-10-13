@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -26,9 +27,7 @@ use k256::ecdsa::SigningKey;
 use or_panic::ResultOrPanic;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
-    attestation::{
-        QuoteContentType, TdxAttestationExt, VersionedAttestation, DEFAULT_HASH_ALGORITHM,
-    },
+    attestation::{QuoteContentType, TdxAttestationExt, DEFAULT_HASH_ALGORITHM},
     cert::{CertConfigV2, CertSigningRequestV2, Csr},
     kdf::{derive_key, derive_p256_key_pair_from_bytes},
 };
@@ -42,6 +41,42 @@ use crate::{
     backend::{PlatformBackend, RealPlatform},
     config::Config,
 };
+
+/// How long a failed identity decode, or a failed demo-cert request, is left
+/// alone before an `Info` call may touch the platform again. Both are reachable
+/// from the anonymous external `Info`, so retrying per call would let any caller
+/// keep the quote path busy for as long as the platform or KMS stays broken.
+const RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The identity fields `Info` reports, decoded once from a local attestation.
+///
+/// Decoding costs a hardware quote and an event-log replay, so doing it per
+/// `Info` call let anonymous callers monopolise the quote path.
+struct AppIdentity {
+    app_id: Vec<u8>,
+    instance_id: Vec<u8>,
+    device_id: Vec<u8>,
+    mr_aggregated: Vec<u8>,
+    os_image_hash: Vec<u8>,
+    compose_hash: Vec<u8>,
+    key_provider_info: String,
+}
+
+fn decode_identity(platform: &dyn PlatformBackend) -> Result<AppIdentity> {
+    let attestation = platform.attestation_for_info()?.into_v1();
+    let app_info = attestation
+        .decode_app_info(false)
+        .context("failed to decode app info")?;
+    Ok(AppIdentity {
+        app_id: app_info.app_id,
+        instance_id: app_info.instance_id,
+        device_id: app_info.device_id,
+        mr_aggregated: app_info.mr_aggregated.to_vec(),
+        os_image_hash: app_info.os_image_hash,
+        compose_hash: app_info.compose_hash,
+        key_provider_info: String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
+    })
+}
 
 fn read_dmi_file(name: &str) -> String {
     fs::read_to_string(format!("/sys/class/dmi/id/{name}"))
@@ -59,20 +94,45 @@ struct AppStateInner {
     keys: AppKeys,
     vm_config: String,
     cert_client: CertRequestClient,
-    demo_cert: RwLock<String>,
+    demo_cert: tokio::sync::OnceCell<String>,
+    /// When the last demo-cert request failed; held while one is running.
+    demo_cert_last_failure: tokio::sync::Mutex<Option<Instant>>,
     platform: Arc<dyn PlatformBackend>,
+    identity: tokio::sync::OnceCell<AppIdentity>,
+    identity_last_failure: Mutex<Option<Instant>>,
+    /// Queues platform calls; see [`AppStateInner::attest`].
+    attest_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppStateInner {
-    fn info_attestation(&self) -> Result<VersionedAttestation> {
-        self.platform.attestation_for_info()
+    /// Run a platform call on the blocking pool, one at a time.
+    ///
+    /// Platform calls block on the hardware quote, so running one on the
+    /// executor stalls every connection the agent serves, including the systemd
+    /// watchdog heartbeat. Callers queue on an async lock rather than on
+    /// `dstack-attest`'s quote lock, so a flood of requests holds no threads.
+    /// The guard moves into the task, so a cancelled caller cannot let the next
+    /// call in while its own is still running.
+    async fn attest<T: Send + 'static>(
+        &self,
+        work: impl FnOnce(&dyn PlatformBackend) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let guard = self.attest_lock.clone().lock_owned().await;
+        let platform = self.platform.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            work(platform.as_ref())
+        })
+        .await
+        .context("the attestation task panicked")?
     }
 
     async fn issue_cert(&self, key: &KeyPair, config: CertConfigV2) -> Result<Vec<String>> {
         let pubkey = key.public_key_der();
+        let attested = pubkey.clone();
         let attestation = self
-            .platform
-            .certificate_attestation(&pubkey)
+            .attest(move |platform| platform.certificate_attestation(&attested))
+            .await
             .context("Failed to get certificate attestation")?;
         let csr = CertSigningRequestV2 {
             confirm: "please sign cert:".to_string(),
@@ -112,26 +172,50 @@ impl AppStateInner {
 }
 
 impl AppState {
+    /// Start the demo-cert request in the background: one at a time, and at
+    /// most once per [`RETRY_INTERVAL`] after a failure, since the anonymous
+    /// `Info` calls this.
     fn maybe_request_demo_cert(&self) {
-        let state = self.inner.clone();
-        if !state
-            .demo_cert
-            .read()
-            .or_panic("lock shoud never fail")
-            .is_empty()
-        {
+        if self.inner.demo_cert.initialized() {
             return;
         }
+        let state = self.inner.clone();
         tokio::spawn(async move {
+            let Ok(mut last_failure) = state.demo_cert_last_failure.try_lock() else {
+                return;
+            };
+            if state.demo_cert.initialized()
+                || last_failure.is_some_and(|t| t.elapsed() < RETRY_INTERVAL)
+            {
+                return;
+            }
             match state.request_demo_cert().await {
-                Ok(demo_cert) => {
-                    *state.demo_cert.write().or_panic("lock shoud never fail") = demo_cert;
-                }
+                Ok(demo_cert) => _ = state.demo_cert.set(demo_cert),
                 Err(e) => {
-                    error!("Failed to request demo cert: {e}");
+                    error!("failed to request demo cert: {e:?}");
+                    *last_failure = Some(Instant::now());
                 }
             }
         });
+    }
+
+    /// The app identity, decoded once and cached for the life of the process.
+    /// A failure is retried at most once per [`RETRY_INTERVAL`].
+    async fn identity(&self) -> Result<&AppIdentity> {
+        self.inner
+            .identity
+            .get_or_try_init(|| async {
+                let last_failure = &self.inner.identity_last_failure;
+                if let Some(failed_at) = *last_failure.lock().or_panic("lock should never fail") {
+                    if failed_at.elapsed() < RETRY_INTERVAL {
+                        anyhow::bail!("the app identity is unavailable, retrying later");
+                    }
+                }
+                self.inner.attest(decode_identity).await.inspect_err(|_| {
+                    *last_failure.lock().or_panic("lock should never fail") = Some(Instant::now());
+                })
+            })
+            .await
     }
 
     pub async fn new_with_platform(
@@ -153,9 +237,13 @@ impl AppState {
                 config,
                 keys,
                 cert_client,
-                demo_cert: RwLock::new(String::new()),
+                demo_cert: Default::default(),
+                demo_cert_last_failure: Default::default(),
                 vm_config,
                 platform,
+                identity: Default::default(),
+                identity_last_failure: Default::default(),
+                attest_lock: Default::default(),
             }),
         };
         me.maybe_request_demo_cert();
@@ -170,18 +258,23 @@ impl AppState {
         &self.inner.config
     }
 
-    fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
+    async fn quote_response(&self, report_data: [u8; 64]) -> Result<GetQuoteResponse> {
+        let vm_config = self.inner.vm_config.clone();
         self.inner
-            .platform
-            .quote_response(report_data, &self.inner.vm_config)
+            .attest(move |platform| platform.quote_response(report_data, &vm_config))
+            .await
     }
 
-    fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
-        self.inner.platform.attest_response(report_data)
+    async fn attest_response(&self, report_data: [u8; 64]) -> Result<AttestResponse> {
+        self.inner
+            .attest(move |platform| platform.attest_response(report_data))
+            .await
     }
 
-    fn emit_event(&self, event: &str, payload: &[u8]) -> Result<()> {
-        self.inner.platform.emit_event(event, payload)
+    async fn emit_event(&self, event: String, payload: Vec<u8>) -> Result<()> {
+        self.inner
+            .attest(move |platform| platform.emit_event(&event, &payload))
+            .await
     }
 }
 
@@ -191,16 +284,15 @@ pub struct InternalRpcHandler {
 
 pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
     let hide_tcb_info = external && !state.config().app_compose.public_tcbinfo;
-    let versioned_attestation = state.inner.info_attestation()?;
-    let attestation = versioned_attestation.into_v1();
-    let app_info = attestation
-        .decode_app_info(false)
-        .context("Failed to decode app info")?;
-    let event_log = attestation.tdx_event_log().unwrap_or_default();
-    let tcb_info = if hide_tcb_info {
-        "".to_string()
+    let identity = state.identity().await?;
+    let (tcb_info, vm_config) = if hide_tcb_info {
+        Default::default()
     } else {
-        let app_compose = state.config().app_compose.raw.clone();
+        let attestation = state
+            .inner
+            .attest(|platform| platform.attestation_for_info())
+            .await?
+            .into_v1();
         let td_report = match attestation.td10_report() {
             Some(report) => json!({
                 "mrtd": hex::encode(report.mr_td),
@@ -211,42 +303,33 @@ pub async fn get_info(state: &AppState, external: bool) -> Result<AppInfo> {
             }),
             None => json!({}),
         };
-        serde_json::to_string_pretty(&json!({
+        let tcb_info = serde_json::to_string_pretty(&json!({
             "mrtd": td_report["mrtd"],
             "rtmr0": td_report["rtmr0"],
             "rtmr1": td_report["rtmr1"],
             "rtmr2": td_report["rtmr2"],
             "rtmr3": td_report["rtmr3"],
-            "mr_aggregated": hex::encode(app_info.mr_aggregated),
-            "os_image_hash": hex::encode(&app_info.os_image_hash),
-            "compose_hash": hex::encode(&app_info.compose_hash),
-            "device_id": hex::encode(&app_info.device_id),
-            "event_log": event_log,
-            "app_compose": app_compose,
+            "mr_aggregated": hex::encode(&identity.mr_aggregated),
+            "os_image_hash": hex::encode(&identity.os_image_hash),
+            "compose_hash": hex::encode(&identity.compose_hash),
+            "device_id": hex::encode(&identity.device_id),
+            "event_log": attestation.tdx_event_log().unwrap_or_default(),
+            "app_compose": state.config().app_compose.raw,
         }))
-        .unwrap_or_default()
-    };
-    let vm_config = if hide_tcb_info {
-        "".to_string()
-    } else {
-        state.inner.vm_config.clone()
+        .unwrap_or_default();
+        (tcb_info, state.inner.vm_config.clone())
     };
     state.maybe_request_demo_cert();
     Ok(AppInfo {
         app_name: state.config().app_compose.name.clone(),
-        app_id: app_info.app_id,
-        instance_id: app_info.instance_id,
-        device_id: app_info.device_id,
-        mr_aggregated: app_info.mr_aggregated.to_vec(),
-        os_image_hash: app_info.os_image_hash.clone(),
-        key_provider_info: String::from_utf8(app_info.key_provider_info).unwrap_or_default(),
-        compose_hash: app_info.compose_hash.clone(),
-        app_cert: state
-            .inner
-            .demo_cert
-            .read()
-            .or_panic("lock should not fail")
-            .clone(),
+        app_id: identity.app_id.clone(),
+        instance_id: identity.instance_id.clone(),
+        device_id: identity.device_id.clone(),
+        mr_aggregated: identity.mr_aggregated.clone(),
+        os_image_hash: identity.os_image_hash.clone(),
+        key_provider_info: identity.key_provider_info.clone(),
+        compose_hash: identity.compose_hash.clone(),
+        app_cert: state.inner.demo_cert.get().cloned().unwrap_or_default(),
         tcb_info,
         vm_config,
         cloud_vendor: read_dmi_file("sys_vendor"),
@@ -325,11 +408,11 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn get_quote(self, request: RawQuoteArgs) -> Result<GetQuoteResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
-        self.state.quote_response(report_data)
+        self.state.quote_response(report_data).await
     }
 
     async fn emit_event(self, request: EmitEventArgs) -> Result<()> {
-        self.state.emit_event(&request.event, &request.payload)
+        self.state.emit_event(request.event, request.payload).await
     }
 
     async fn info(self) -> Result<AppInfo> {
@@ -431,7 +514,7 @@ impl DstackGuestRpc for InternalRpcHandler {
 
     async fn attest(self, request: RawQuoteArgs) -> Result<AttestResponse> {
         let report_data = pad64(&request.report_data).context("Report data is too long")?;
-        self.state.attest_response(report_data)
+        self.state.attest_response(report_data).await
     }
 
     async fn version(self) -> Result<WorkerVersion> {
@@ -533,7 +616,7 @@ impl TappdRpc for InternalRpcHandlerV0 {
         };
         let report_data =
             content_type.to_report_data_with_hash(&request.report_data, &request.hash_algorithm)?;
-        let response = self.state.quote_response(report_data)?;
+        let response = self.state.quote_response(report_data).await?;
         Ok(TdxQuoteResponse {
             quote: response.quote,
             event_log: response.event_log,
@@ -626,7 +709,7 @@ impl WorkerRpc for ExternalRpcHandler {
                 let ed_bytes = ed25519_report_string.as_bytes();
                 ed25519_report_data[..ed_bytes.len()].copy_from_slice(ed_bytes);
 
-                self.state.quote_response(ed25519_report_data)
+                self.state.quote_response(ed25519_report_data).await
             }
             "secp256k1" | "secp256k1_prehashed" => {
                 let secp256k1_key = SigningKey::from_slice(&key_response.key)
@@ -639,7 +722,7 @@ impl WorkerRpc for ExternalRpcHandler {
                 let secp_bytes = secp256k1_report_string.as_bytes();
                 secp256k1_report_data[..secp_bytes.len()].copy_from_slice(secp_bytes);
 
-                self.state.quote_response(secp256k1_report_data)
+                self.state.quote_response(secp256k1_report_data).await
             }
             _ => Err(anyhow::anyhow!("Unsupported algorithm")),
         }
@@ -675,6 +758,7 @@ mod tests {
     use std::collections::HashSet;
     use std::convert::TryFrom;
     use std::io::Write;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
@@ -692,7 +776,21 @@ mod tests {
         }
     }
 
+    /// Counts the platform calls the test backend serves.
+    #[derive(Default)]
+    struct PlatformProbe {
+        info_calls: AtomicUsize,
+        cert_calls: AtomicUsize,
+        cert_failing: AtomicBool,
+    }
+
     async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
+        setup_test_state_with_probe(Default::default()).await
+    }
+
+    async fn setup_test_state_with_probe(
+        probe: Arc<PlatformProbe>,
+    ) -> (AppState, tempfile::NamedTempFile) {
         let mut temp_attestation_file = tempfile::NamedTempFile::new().unwrap();
 
         let attestation = include_bytes!("../fixtures/attestation.bin");
@@ -809,6 +907,7 @@ pNs85uhOZE8z2jr8Pg==
 
         struct TestSimulatorPlatform {
             attestation: VersionedAttestation,
+            probe: Arc<PlatformProbe>,
         }
 
         fn patch_report_data(
@@ -820,10 +919,15 @@ pNs85uhOZE8z2jr8Pg==
 
         impl PlatformBackend for TestSimulatorPlatform {
             fn attestation_for_info(&self) -> Result<VersionedAttestation> {
+                self.probe.info_calls.fetch_add(1, Ordering::Relaxed);
                 Ok(self.attestation.clone())
             }
 
             fn certificate_attestation(&self, pubkey: &[u8]) -> Result<VersionedAttestation> {
+                self.probe.cert_calls.fetch_add(1, Ordering::Relaxed);
+                if self.probe.cert_failing.load(Ordering::Relaxed) {
+                    anyhow::bail!("the platform cannot attest right now");
+                }
                 let report_data =
                     ra_tls::attestation::QuoteContentType::RaTlsCert.to_report_data(pubkey);
                 let attestation = patch_report_data(&self.attestation, report_data);
@@ -867,12 +971,17 @@ pNs85uhOZE8z2jr8Pg==
             keys: dummy_keys,
             vm_config: String::new(),
             cert_client: dummy_cert_client,
-            demo_cert: RwLock::new(String::new()),
+            demo_cert: Default::default(),
+            demo_cert_last_failure: Default::default(),
+            identity: Default::default(),
+            identity_last_failure: Default::default(),
+            attest_lock: Default::default(),
             platform: Arc::new(TestSimulatorPlatform {
                 attestation: VersionedAttestation::from_bytes(
                     &std::fs::read(temp_attestation_file.path()).unwrap(),
                 )
                 .unwrap(),
+                probe,
             }),
         };
 
@@ -1265,5 +1374,40 @@ pNs85uhOZE8z2jr8Pg==
 
         // k256 alias should produce the same public key as secp256k1
         assert_eq!(resp_k256.public_key, resp_secp.public_key);
+    }
+
+    #[tokio::test]
+    async fn an_external_info_answers_from_the_identity_cache() {
+        let probe = Arc::new(PlatformProbe::default());
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        for _ in 0..8 {
+            get_info(&state, true).await.expect("Info answers");
+        }
+        assert_eq!(
+            probe.info_calls.load(Ordering::Relaxed),
+            1,
+            "only the identity decode attests"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn info_requests_the_demo_cert_one_at_a_time_and_throttles_failures() {
+        let probe = Arc::new(PlatformProbe::default());
+        probe.cert_failing.store(true, Ordering::Relaxed);
+        let (state, _guard) = setup_test_state_with_probe(probe.clone()).await;
+        get_info(&state, true).await.expect("Info answers");
+        // The request holds the failure lock while it runs, so once it has
+        // reached the platform, taking the lock waits for it to finish.
+        while probe.cert_calls.load(Ordering::Relaxed) == 0 {
+            tokio::task::yield_now().await;
+        }
+        while state.inner.demo_cert_last_failure.lock().await.is_none() {
+            tokio::task::yield_now().await;
+        }
+        for _ in 0..8 {
+            get_info(&state, true).await.expect("Info answers");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(probe.cert_calls.load(Ordering::Relaxed), 1);
     }
 }
