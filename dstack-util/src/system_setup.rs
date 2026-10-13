@@ -36,7 +36,7 @@ use ra_tls::{
     cert::{generate_ra_cert, CertConfigV2, CertSigningRequestV2, Csr},
 };
 use rand::Rng as _;
-use safe_write::safe_write;
+use safe_write::safe_write_with_mode;
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -390,7 +390,8 @@ impl GatewayKeyStore {
 
     fn save(&self) -> Result<()> {
         let content = serde_json::to_string(self).context("Failed to serialize gateway cache")?;
-        safe_write(GATEWAY_CACHE_PATH, &content).context("Failed to write gateway cache")?;
+        safe_write_with_mode(GATEWAY_CACHE_PATH, &content, 0o600)
+            .context("Failed to write gateway cache")?;
         Ok(())
     }
 
@@ -657,12 +658,10 @@ impl<'a> GatewayContext<'a> {
             }
         }
 
-        let wg_dir = Path::new("/etc/wireguard");
-        fs::create_dir_all(wg_dir)?;
-        fs::write(wg_dir.join("dstack-wg0.conf"), &new_config)?;
+        safe_write_with_mode(WG_CONFIG_PATH, &new_config, 0o600)
+            .context("Failed to write WireGuard config")?;
 
         cmd! {
-            chmod 600 $wg_dir/dstack-wg0.conf;
             ignore wg-quick down dstack-wg0;
         }?;
 
@@ -1398,7 +1397,8 @@ impl<'a> Stage0<'a> {
 
         // Save app keys
         let keys_json = serde_json::to_string(&app_keys).context("Failed to serialize app keys")?;
-        fs::write(self.app_keys_file(), keys_json).context("Failed to write app keys")?;
+        safe_write_with_mode(self.app_keys_file(), keys_json, 0o600)
+            .context("Failed to write app keys")?;
 
         // Parse kernel command line options
         let opts = parse_dstack_options(&self.shared).context("Failed to parse kernel cmdline")?;
@@ -1458,14 +1458,15 @@ impl Stage1<'_> {
 
     fn write_env_file(&self, env_vars: &BTreeMap<String, String>) -> Result<()> {
         info!("Writing env");
-        fs::write(
+        safe_write_with_mode(
             self.shared.dir.join(DECRYPTED_ENV),
             crate::parse_env_file::convert_env_to_str(env_vars),
+            0o600,
         )
         .context("Failed to write decrypted env file")?;
-        let env_json = fs::File::create(self.shared.dir.join(DECRYPTED_ENV_JSON))
-            .context("Failed to create env file")?;
-        serde_json::to_writer(env_json, &env_vars).context("Failed to write decrypted env file")?;
+        let env_json = serde_json::to_vec(env_vars).context("Failed to serialize decrypted env")?;
+        safe_write_with_mode(self.shared.dir.join(DECRYPTED_ENV_JSON), env_json, 0o600)
+            .context("Failed to write decrypted env file")?;
         Ok(())
     }
 
