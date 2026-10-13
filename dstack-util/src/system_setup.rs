@@ -327,13 +327,17 @@ impl HostShared {
             mkdir -p $host_shared_dir;
         }?;
 
+        // The host composes this filesystem. Nothing on it is executed and
+        // nothing on it is a device node: the guest copies a few regular files
+        // off it and unmounts it, so refuse set-user-ID bits, devices and exec.
+        //
         // Try to detect and mount shared disk by label first, fallback to 9p
         let disk_device = Self::find_disk_by_label(HOST_SHARED_DISK_LABEL);
         let mounted_via_disk = if let Some(dev) = disk_device {
             info!("Found shared disk at {}", dev);
             let mount_result = cmd! {
                 info "Attempting to mount shared disk";
-                mount -o ro $dev $host_shared_dir;
+                mount -o ro,nosuid,nodev,noexec $dev $host_shared_dir;
             };
             mount_result.is_ok()
         } else {
@@ -343,7 +347,7 @@ impl HostShared {
         if !mounted_via_disk {
             info!("Shared disk not found, trying 9p virtfs");
             cmd! {
-                mount -t 9p -o trans=virtio,version=9p2000.L,ro host-shared $host_shared_dir;
+                mount -t 9p -o trans=virtio,version=9p2000.L,ro,nosuid,nodev,noexec host-shared $host_shared_dir;
             }?;
         } else {
             info!("Successfully mounted shared disk");
