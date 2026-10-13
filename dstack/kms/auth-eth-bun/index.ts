@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
+import { secureHeaders } from 'hono/secure-headers';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { createPublicClient, http, type Address, type Hex } from 'viem';
@@ -255,6 +257,19 @@ const publicRpcEndpoint = (value: string): string => {
 
 const backendUnavailable = 'authorization backend unavailable';
 const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
+
+// The schema caps a valid BootInfo well under this (advisoryIds alone at
+// 128 x 256 chars is 32 KiB); the limit stops an oversized body from being
+// buffered and parsed before validation rejects it.
+const MAX_BOOT_INFO_BYTES = 128 * 1024;
+
+// Every response is JSON for the KMS, never a page; the headers keep a browser
+// that reaches this port from sniffing or framing one.
+app.use('*', secureHeaders());
+app.use('/bootAuth/*', bodyLimit({
+  maxSize: MAX_BOOT_INFO_BYTES,
+  onError: (c) => c.json(invalidRequest, 413),
+}));
 
 // health check and info endpoint
 app.get('/', async (c) => {

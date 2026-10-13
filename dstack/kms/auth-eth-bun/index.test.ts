@@ -639,3 +639,54 @@ describe('dstack-kms 0.6 bootAuth payload', () => {
     expect(bootInfoArg('isKmsAllowed').tcbStatus).toBe('OutOfDate');
   });
 });
+
+describe('request hardening', () => {
+  const bootInfo = {
+    mrAggregated: '11'.repeat(32),
+    osImageHash: '22'.repeat(32),
+    appId: '33'.repeat(20),
+    composeHash: '44'.repeat(32),
+    instanceId: '55'.repeat(20),
+    deviceId: '66'.repeat(32),
+  };
+
+  const post = (body: string, contentType: string) =>
+    appFetch(new Request('http://localhost:3001/bootAuth/app', {
+      method: 'POST',
+      headers: { 'Content-Type': contentType, Origin: 'https://evil.example' },
+      body,
+    }));
+
+  it.each(['text/plain', 'application/x-www-form-urlencoded'])(
+    'rejects a cross-origin simple request sent as %s without reading the contract',
+    async (contentType) => {
+      const response = await post(JSON.stringify(bootInfo), contentType);
+
+      expect(response.status).toBe(400);
+      expect(response.headers.get('access-control-allow-origin')).toBeNull();
+      expect(mockReadContract).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects an oversized body before parsing it', async () => {
+    const response = await post(
+      JSON.stringify({ ...bootInfo, padding: 'a'.repeat(256 * 1024) }),
+      'application/json',
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      isAllowed: false,
+      reason: 'invalid authorization request',
+      gatewayAppId: '',
+    });
+    expect(mockReadContract).not.toHaveBeenCalled();
+  });
+
+  it('marks JSON responses as not sniffable and not frameable', async () => {
+    const response = await appFetch(new Request('http://localhost:3001/no-such-route'));
+
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+  });
+});
