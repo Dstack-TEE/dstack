@@ -735,47 +735,13 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_destination_canonical_ports() {
-        for (subdomain, port, is_tls, is_h2) in [
-            ("myapp-8090", 8090, false, false),
-            ("myapp-80", 80, false, false),
-            ("myapp-443s", 443, true, false),
-            ("myapp-8090s", 8090, true, false),
-            ("myapp-8090g", 8090, false, true),
-            ("myapp-65535", 65535, false, false),
-            ("myapp", 80, false, false),
-            ("myapp-s", 443, true, false),
-            ("myapp-g", 80, false, true),
-        ] {
-            let result = parse_dst_info(subdomain).unwrap();
-            assert_eq!(result.app_id, "myapp");
-            assert_eq!(result.port, port, "{subdomain}");
-            assert_eq!(result.is_tls, is_tls, "{subdomain}");
-            assert_eq!(result.is_h2, is_h2, "{subdomain}");
+    fn test_parse_canonical_port() {
+        for port in ["1", "80", "65535"] {
+            assert_eq!(parse_canonical_port(port).unwrap().to_string(), port);
         }
-    }
-
-    #[test]
-    fn test_parse_destination_invalid_ports() {
-        let mut accepted = Vec::new();
-        for subdomain in [
-            "myapp-08090",
-            "myapp-008090",
-            "myapp-08090s",
-            "myapp-08090g",
-            "myapp-0080",
-            "myapp-+8090",
-            "myapp-0",
-            "myapp-65536",
-            "myapp-８０",
-            "myapp-80x",
-        ] {
-            match parse_dst_info(subdomain) {
-                Ok(_) => accepted.push(subdomain),
-                Err(err) => assert_eq!(err.to_string(), "invalid port", "{subdomain}"),
-            }
+        for port in ["", "0", "08090", "+8090", "65536", "８０", "80s"] {
+            assert!(parse_canonical_port(port).is_err(), "{port}");
         }
-        assert!(accepted.is_empty(), "accepted invalid ports: {accepted:?}");
     }
 
     #[test]
@@ -815,5 +781,13 @@ mod tests {
         assert_eq!(result.app_id, "myapp");
         assert_eq!(result.port, 443);
         assert!(result.is_tls);
+
+        // Test app_id with custom port and HTTP/2
+        let result = parse_dst_info("myapp-8090g").unwrap();
+        assert_eq!(result.port, 8090);
+        assert!(result.is_h2);
+
+        // Test non-canonical port
+        assert!(parse_dst_info("myapp-08090s").is_err());
     }
 }
