@@ -135,6 +135,15 @@ struct DstInfo {
     is_h2: bool,
 }
 
+// Require one decimal spelling for each destination port. Port 0 is reserved,
+// so reject it along with leading zeros and signs in both SNI and TXT records.
+fn parse_canonical_port(port_str: &str) -> Result<u16> {
+    if port_str.starts_with('0') || !port_str.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("invalid port");
+    }
+    port_str.parse::<u16>().context("invalid port")
+}
+
 fn parse_dst_info(subdomain: &str) -> Result<DstInfo> {
     let mut parts = subdomain.split('-');
     let app_id = parts.next().context("no app id found")?.to_owned();
@@ -169,7 +178,7 @@ fn parse_dst_info(subdomain: &str) -> Result<DstInfo> {
             port = if port_str.is_empty() {
                 None
             } else {
-                Some(port_str.parse::<u16>().context("invalid port")?)
+                Some(parse_canonical_port(port_str)?)
             };
         }
     };
@@ -723,6 +732,50 @@ mod tests {
         let host = "3327603e03f5bd1f830812ca4a789277fc31f577-8080s.app.dstack.org";
         let (sniffed, _client) = sniff(client_hello(host, 0)).await;
         assert_eq!(sniffed.unwrap().0.as_deref(), Some(host));
+    }
+
+    #[test]
+    fn test_parse_destination_canonical_ports() {
+        for (subdomain, port, is_tls, is_h2) in [
+            ("myapp-8090", 8090, false, false),
+            ("myapp-80", 80, false, false),
+            ("myapp-443s", 443, true, false),
+            ("myapp-8090s", 8090, true, false),
+            ("myapp-8090g", 8090, false, true),
+            ("myapp-65535", 65535, false, false),
+            ("myapp", 80, false, false),
+            ("myapp-s", 443, true, false),
+            ("myapp-g", 80, false, true),
+        ] {
+            let result = parse_dst_info(subdomain).unwrap();
+            assert_eq!(result.app_id, "myapp");
+            assert_eq!(result.port, port, "{subdomain}");
+            assert_eq!(result.is_tls, is_tls, "{subdomain}");
+            assert_eq!(result.is_h2, is_h2, "{subdomain}");
+        }
+    }
+
+    #[test]
+    fn test_parse_destination_invalid_ports() {
+        let mut accepted = Vec::new();
+        for subdomain in [
+            "myapp-08090",
+            "myapp-008090",
+            "myapp-08090s",
+            "myapp-08090g",
+            "myapp-0080",
+            "myapp-+8090",
+            "myapp-0",
+            "myapp-65536",
+            "myapp-８０",
+            "myapp-80x",
+        ] {
+            match parse_dst_info(subdomain) {
+                Ok(_) => accepted.push(subdomain),
+                Err(err) => assert_eq!(err.to_string(), "invalid port", "{subdomain}"),
+            }
+        }
+        assert!(accepted.is_empty(), "accepted invalid ports: {accepted:?}");
     }
 
     #[test]

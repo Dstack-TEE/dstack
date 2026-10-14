@@ -25,6 +25,7 @@ use crate::{
 
 use super::{
     io_bridge::bridge_tcp,
+    parse_canonical_port,
     port_policy::{filter_allowed_addresses, should_send_pp},
     AddressGroup, AddressInfo,
 };
@@ -45,7 +46,7 @@ impl AppAddress {
         let (app_id, port) = data.split_once(':').context("invalid app address")?;
         Ok(Self {
             app_id: app_id.to_string(),
-            port: port.parse().context("invalid port")?,
+            port: parse_canonical_port(port)?,
         })
     }
 }
@@ -347,6 +348,29 @@ pub(crate) async fn proxy_to_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_app_address_canonical_ports() {
+        for port in [1, 80, 443, 8090, 65535] {
+            let address = AppAddress::parse(format!("myapp:{port}").as_bytes()).unwrap();
+            assert_eq!(address.app_id, "myapp");
+            assert_eq!(address.port, port);
+        }
+    }
+
+    #[test]
+    fn test_app_address_invalid_ports() {
+        let mut accepted = Vec::new();
+        for port in [
+            "08090", "008090", "0080", "+8090", "0", "65536", "", "８０", "80s", "80g",
+        ] {
+            match AppAddress::parse(format!("myapp:{port}").as_bytes()) {
+                Ok(_) => accepted.push(port),
+                Err(err) => assert_eq!(err.to_string(), "invalid port", "{port}"),
+            }
+        }
+        assert!(accepted.is_empty(), "accepted invalid ports: {accepted:?}");
+    }
 
     #[test]
     fn the_connection_limit_check_takes_the_slot() {
