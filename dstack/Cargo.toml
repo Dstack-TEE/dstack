@@ -37,6 +37,7 @@ members = [
     "vmm",
     "vmm/rpc",
     "vmm/netd-rpc",
+    "vmm-top",
     "gateway",
     "gateway/rpc",
     "certbot",

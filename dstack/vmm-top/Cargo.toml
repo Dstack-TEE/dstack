@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-vmm-top"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "terminal dashboard for one or many dstack-vmm nodes"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+crossterm.workspace = true
+dirs.workspace = true
+dstack-vmm-rpc.workspace = true
+fs-err.workspace = true
+futures.workspace = true
+http-client = { workspace = true, features = ["prpc"] }
+humantime.workspace = true
+libc.workspace = true
+ratatui.workspace = true
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["full"] }
+toml.workspace = true
+unicode-width.workspace = true
