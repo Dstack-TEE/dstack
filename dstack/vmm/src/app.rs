@@ -353,6 +353,8 @@ pub struct App {
     /// One lock per VM, held across a launch or a teardown. See
     /// [`App::launch_lock`].
     launch_locks: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    #[cfg(test)]
+    before_remove_workdir: Option<Arc<dyn Fn() -> Result<()> + Send + Sync>>,
 }
 
 const GUEST_AGENT_RPC_TIMEOUT: Duration = Duration::from_secs(30);
@@ -384,6 +386,8 @@ impl App {
             })),
             config: Arc::new(config),
             launch_locks: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(test)]
+            before_remove_workdir: None,
         }
     }
 
@@ -1050,6 +1054,14 @@ impl App {
         Ok(())
     }
 
+    fn remove_vm_workdir(&self, workdir: &VmWorkDir) -> Result<()> {
+        #[cfg(test)]
+        if let Some(before_remove) = &self.before_remove_workdir {
+            before_remove()?;
+        }
+        workdir.remove_all()
+    }
+
     /// Background cleanup: stop supervisor process, wait for it to exit,
     /// remove from supervisor, optionally delete workdir, and free CID.
     ///
@@ -1067,7 +1079,7 @@ impl App {
         // launch went on to start. Taking the lock first means the launch
         // finishes before removal decides anything, and removal then stops what
         // it actually started.
-        let _launch = self.launch_lock(id).await;
+        let launch = self.launch_lock(id).await;
         // Stop the supervisor process (idempotent if already stopped)
         if let Err(err) = self.stop_vm_process(id).await {
             debug!("graceful VM stop during removal failed: {err:?}");
@@ -1112,7 +1124,8 @@ impl App {
         let vm_path = self.work_dir(id)?;
         // Only delete the workdir for user-initiated removal or if .removing marker exists.
         // Orphaned supervisor processes without the marker keep their data intact.
-        if !(delete_workdir || vm_path.is_removing()) {
+        let delete_workdir = delete_workdir || vm_path.is_removing();
+        if !delete_workdir {
             self.release_vm_interfaces(id).await;
             if vm_path.path().exists() {
                 info!(
@@ -1134,22 +1147,35 @@ impl App {
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(RELEASE_RETRY_MAX);
             }
-            if let Err(err) = vm_path.remove_all() {
-                // `.removing` is deleted last, so what is left is resumed by
-                // the next reload.
-                error!("failed to remove VM directory for {id}: {err:?}");
-            }
         }
 
-        // Free CID and remove from memory (last step)
-        {
-            let mut state = self.lock();
-            if let Some(vm_state) = state.remove(id) {
-                state.cid_pool.free(vm_state.config.cid);
+        // Unlinking a preallocated disk can spend seconds freeing extents. Keep
+        // it off the async executor. The guards and final state cleanup travel
+        // with the deletion: cancelling the waiter must neither let another
+        // launch race it nor leave a deleted VM occupying its CID in memory.
+        let app = self.clone();
+        let id = id.to_string();
+        tokio::task::spawn_blocking(move || {
+            let _launch = launch;
+            let _mark = mark;
+            if delete_workdir {
+                if let Err(err) = app.remove_vm_workdir(&vm_path) {
+                    // `.removing` is deleted last, so what is left is resumed
+                    // by the next reload.
+                    error!("failed to remove VM directory for {id}: {err:?}");
+                }
             }
-        }
-
-        info!("VM {id} removed successfully");
+            // Free CID and remove from memory (last step).
+            {
+                let mut state = app.lock();
+                if let Some(vm_state) = state.remove(&id) {
+                    state.cid_pool.free(vm_state.config.cid);
+                }
+            }
+            info!("VM {id} removed successfully");
+        })
+        .await
+        .context("VM removal task failed")?;
         Ok(())
     }
 
@@ -2377,6 +2403,8 @@ mod tests {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut reader = BufReader::new(&mut stream);
                 let mut header = String::new();
+                assert!(reader.read_line(&mut header).await.unwrap() > 0);
+                let is_list = header.starts_with("GET /list ");
                 loop {
                     header.clear();
                     assert!(reader.read_line(&mut header).await.unwrap() > 0);
@@ -2384,9 +2412,16 @@ mod tests {
                         break;
                     }
                 }
-                let body = serde_json::to_string(&supervisor_client::supervisor::Response::Data(
-                    Option::<supervisor_client::supervisor::ProcessInfo>::None,
-                ))
+                let body = if is_list {
+                    serde_json::to_string(&supervisor_client::supervisor::Response::Data(Vec::<
+                        supervisor_client::supervisor::ProcessInfo,
+                    >::new(
+                    )))
+                } else {
+                    serde_json::to_string(&supervisor_client::supervisor::Response::Data(
+                        Option::<supervisor_client::supervisor::ProcessInfo>::None,
+                    ))
+                }
                 .unwrap();
                 stream
                     .write_all(
@@ -2410,6 +2445,236 @@ mod tests {
         std::fs::create_dir_all(workdir.path()).unwrap();
         workdir.mark_network_cleanup_pending().unwrap();
         workdir
+    }
+
+    /// Simulates a slow filesystem operation without allocating production-sized
+    /// disks. The OS-thread timeout releases even a blocked single-worker runtime.
+    struct DeletionGate {
+        entered: tokio::sync::oneshot::Receiver<()>,
+        release: std::sync::mpsc::Sender<()>,
+        expired: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl DeletionGate {
+        fn new(app: &mut App) -> Self {
+            let (entered, entered_rx) = tokio::sync::oneshot::channel();
+            let entered = Mutex::new(Some(entered));
+            let (release, release_rx) = std::sync::mpsc::channel();
+            let release_rx = Mutex::new(release_rx);
+            let expired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let timed_out = expired.clone();
+            app.before_remove_workdir = Some(Arc::new(move || {
+                entered.lock().unwrap().take().unwrap().send(()).unwrap();
+                if release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .is_err()
+                {
+                    timed_out.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                Ok(())
+            }));
+            Self {
+                entered: entered_rx,
+                release,
+                expired,
+            }
+        }
+    }
+
+    /// Regression: slow workdir deletion must not stop unrelated async work.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn slow_vm_deletion_does_not_block_status() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let dir = tempfile::tempdir().unwrap();
+        let netd = netd::testing::FakeNetd::spawn_at(&dir.path().join("netd.sock"), &["RemoveVm"]);
+        let mut app = App::new(test_config(netd.socket(), dir.path()), supervisor);
+        let gate = DeletionGate::new(&mut app);
+        let workdir = removable_vm(&app, "vm-1");
+        workdir.mark_network_cleanup_pending().unwrap();
+
+        app.remove_vm("vm-1").await.unwrap();
+        gate.entered.await.unwrap();
+        // The only async worker must be able to run another task while the
+        // filesystem operation is still paused on a different OS thread.
+        tokio::spawn(async { tokio::task::yield_now().await })
+            .await
+            .unwrap();
+        let status = app
+            .list_vms(StatusRequest {
+                ids: vec!["unrelated-vm".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(status.total, 0);
+        assert!(status.vms.is_empty());
+        assert!(
+            !gate.expired.load(std::sync::atomic::Ordering::SeqCst),
+            "Status only progressed after the deletion watchdog released the worker"
+        );
+        assert!(workdir.is_removing());
+        assert!(workdir.hda_path().exists());
+        assert!(!workdir.network_cleanup_pending());
+        assert!(app.refuse_if_removing("vm-1").is_err());
+        assert!(app.launch_lock_handle("vm-1").try_lock().is_err());
+        assert!(app.launch_lock_handle("unrelated-vm").try_lock().is_ok());
+        app.remove_vm("vm-1").await.unwrap();
+        assert!(app.start_vm("vm-1").await.is_err());
+        assert!(app.lock().get("vm-1").is_some());
+        assert!(app
+            .lock()
+            .cid_pool
+            .occupy(app.config.cvm.cid_start)
+            .is_err());
+        assert_eq!(netd.methods(), vec!["RemoveVm"]);
+
+        gate.release.send(()).unwrap();
+        let _finished = tokio::time::timeout(Duration::from_secs(5), app.launch_lock("vm-1"))
+            .await
+            .unwrap();
+        assert!(!workdir.path().exists());
+        assert!(app.refuse_if_removing("vm-1").is_ok());
+        let mut state = app.lock();
+        assert!(state.get("vm-1").is_none());
+        assert_eq!(state.cid_pool.allocate(), Some(app.config.cvm.cid_start));
+        server.abort();
+    }
+
+    fn removable_vm(app: &App, id: &str) -> VmWorkDir {
+        let workdir = app.work_dir(id).unwrap();
+        std::fs::create_dir_all(workdir.shared_dir()).unwrap();
+        std::fs::write(workdir.hda_path(), b"test disk contents").unwrap();
+        std::fs::write(workdir.shared_dir().join("config"), b"test config").unwrap();
+        let (mut vm, _) = bridge_vm(app, id);
+        {
+            let mut state = app.lock();
+            vm.cid = state.cid_pool.allocate().unwrap();
+            state.add(VmState::new(vm));
+        }
+        workdir
+    }
+
+    /// Invariant: cancelling the waiter must not release exclusion or skip the
+    /// final state/CID cleanup while an uncancellable filesystem task continues.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn cancelling_vm_deletion_keeps_guards_and_finishes_cleanup() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            supervisor,
+        );
+        let gate = DeletionGate::new(&mut app);
+        let workdir = removable_vm(&app, "vm-1");
+        workdir.set_removing().unwrap();
+        assert!(app.lock().start_removing("vm-1"));
+        let mark = RemovalMark::new(app.clone(), "vm-1");
+        let removal = tokio::spawn({
+            let app = app.clone();
+            async move { app.finish_remove_vm(mark, true).await }
+        });
+        gate.entered.await.unwrap();
+        removal.abort();
+        assert!(removal.await.unwrap_err().is_cancelled());
+        assert!(!gate.expired.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(workdir.is_removing());
+        assert!(workdir.hda_path().exists());
+        assert!(app.refuse_if_removing("vm-1").is_err());
+        assert!(app.launch_lock_handle("vm-1").try_lock().is_err());
+        app.remove_vm("vm-1").await.unwrap();
+        assert!(app.lock().get("vm-1").is_some());
+        assert!(app
+            .lock()
+            .cid_pool
+            .occupy(app.config.cvm.cid_start)
+            .is_err());
+
+        gate.release.send(()).unwrap();
+        let _finished = tokio::time::timeout(Duration::from_secs(5), app.launch_lock("vm-1"))
+            .await
+            .unwrap();
+        assert!(!workdir.path().exists());
+        assert!(app.refuse_if_removing("vm-1").is_ok());
+        let mut state = app.lock();
+        assert!(state.get("vm-1").is_none());
+        assert_eq!(state.cid_pool.allocate(), Some(app.config.cvm.cid_start));
+        server.abort();
+    }
+
+    /// Invariant: an ordinary deletion failure retains `.removing` for reload,
+    /// while preserving the existing behavior of removing the VM from memory.
+    #[tokio::test]
+    async fn failed_vm_deletion_leaves_a_recoverable_marker() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            supervisor,
+        );
+        let workdir = removable_vm(&app, "vm-1");
+        workdir.set_removing().unwrap();
+        app.before_remove_workdir = Some(Arc::new(|| anyhow::bail!("simulated filesystem error")));
+        assert!(app.lock().start_removing("vm-1"));
+        let mark = RemovalMark::new(app.clone(), "vm-1");
+        app.finish_remove_vm(mark, true).await.unwrap();
+        assert!(workdir.is_removing());
+        assert!(workdir.hda_path().exists());
+        assert!(app.refuse_if_removing("vm-1").is_ok());
+        assert!(app.lock().get("vm-1").is_none());
+        assert_eq!(
+            app.lock().cid_pool.allocate(),
+            Some(app.config.cvm.cid_start)
+        );
+
+        app.before_remove_workdir = None;
+        assert!(app.lock().start_removing("vm-1"));
+        let mark = RemovalMark::new(app.clone(), "vm-1");
+        // Reload/orphan cleanup uses the persisted marker, not delete_workdir.
+        app.finish_remove_vm(mark, false).await.unwrap();
+        assert!(!workdir.path().exists());
+        server.abort();
+    }
+
+    /// Invariant: a blocking-task panic is distinguishable from an ordinary
+    /// filesystem failure, releases guards, and keeps the deletion retryable.
+    #[tokio::test]
+    async fn panicking_vm_deletion_releases_guards_and_reports_task_failure() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            supervisor,
+        );
+        let workdir = removable_vm(&app, "vm-1");
+        workdir.set_removing().unwrap();
+        app.before_remove_workdir = Some(Arc::new(|| panic!("simulated deletion panic")));
+        assert!(app.lock().start_removing("vm-1"));
+        let mark = RemovalMark::new(app.clone(), "vm-1");
+        let error = app.finish_remove_vm(mark, true).await.unwrap_err();
+        assert_eq!(error.to_string(), "VM removal task failed");
+        assert!(error
+            .downcast_ref::<tokio::task::JoinError>()
+            .unwrap()
+            .is_panic());
+        assert!(workdir.is_removing());
+        assert!(app.refuse_if_removing("vm-1").is_ok());
+        assert!(app.launch_lock_handle("vm-1").try_lock().is_ok());
+        assert!(app.lock().get("vm-1").is_some());
+        assert!(app
+            .lock()
+            .cid_pool
+            .occupy(app.config.cvm.cid_start)
+            .is_err());
+
+        app.before_remove_workdir = None;
+        assert!(app.lock().start_removing("vm-1"));
+        let mark = RemovalMark::new(app.clone(), "vm-1");
+        app.finish_remove_vm(mark, false).await.unwrap();
+        assert!(!workdir.path().exists());
+        assert!(app.lock().get("vm-1").is_none());
+        server.abort();
     }
 
     /// A removal keeps retrying while netd is away, keeps the VM marked as
