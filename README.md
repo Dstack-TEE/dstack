@@ -165,6 +165,7 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [Intel TDX Attestation](./docs/attestation-tdx.md) - Measurement and runtime-event verification
 - [Native TEE Interfaces](./docs/native-tee-interfaces.md) - Advanced compatibility with Linux TEE devices and configfs-tsm
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
+- [VMM Top](./docs/vmm-top.md) - Terminal dashboard for one or many VMM nodes
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
 
