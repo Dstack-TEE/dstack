@@ -8,7 +8,7 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "terminal dashboard for one or many dstack-vmm nodes"
+description = "terminal dashboard for one or many dstack-vmm nodes, plus a hub that aggregates them"
 
 [dependencies]
 anyhow.workspace = true
@@ -19,12 +19,17 @@ dirs.workspace = true
 dstack-vmm-rpc.workspace = true
 fs-err.workspace = true
 futures.workspace = true
+http-body-util.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
 humantime.workspace = true
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 libc.workspace = true
 ratatui.workspace = true
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["full"] }
 toml.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 unicode-width.workspace = true

@@ -34,7 +34,9 @@ pub async fn run(sources: Vec<Source>, json: bool) -> Result<()> {
     }
     if json {
         let report = Report {
+            hub: String::new(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            interval_ms: 0,
             nodes,
         };
         println!("{}", serde_json::to_string_pretty(&report)?);

@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Where snapshots come from: a VMM, polled over its pRPC API and `/logs`,
-//! at a base address (`unix:` socket or `http(s)://`) with an optional bearer
-//! token.
+//! Where snapshots come from: a VMM polled directly, or a hub that polls many.
+//!
+//! Both speak HTTP (a VMM also over its unix socket), so a source is a base
+//! address plus an optional bearer token. A VMM is read through its pRPC API
+//! and `/logs`; a hub through `/api/v1/nodes` and `/api/v1/logs`. Only a VMM
+//! polled directly takes lifecycle actions: a hub is read-only, so handing
+//! someone its URL never hands them a stop button.
 
-use crate::snapshot::{Gpu, NodeSnapshot, Resources, Vm};
-use anyhow::{anyhow, bail, Result};
+use crate::snapshot::{Gpu, NodeSnapshot, Report, Resources, Vm};
+use anyhow::{anyhow, bail, Context, Result};
 use dstack_vmm_rpc::vmm_client::VmmClient;
 use dstack_vmm_rpc::{Id, StatusRequest};
 use http_client::http_request_with_headers;
 use http_client::prpc::PrpcClient;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 /// Bound on one poll or one request, so a hung node shows as an error instead
@@ -24,9 +29,17 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 /// so the poll bound would report slow successes as failures.
 pub const ACTION_TIMEOUT: Duration = Duration::from_secs(120);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceKind {
+    Vmm,
+    Hub,
+}
+
 #[derive(Clone, Debug)]
 pub struct SourceSpec {
     pub name: String,
+    pub kind: SourceKind,
     /// `unix:/path/to/vmm.sock` or `http(s)://host:port`.
     pub url: String,
     pub token: Option<String>,
@@ -45,6 +58,15 @@ impl LogChannel {
             LogChannel::Serial => "serial",
             LogChannel::Stdout => "stdout",
             LogChannel::Stderr => "stderr",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "serial" => Some(LogChannel::Serial),
+            "stdout" => Some(LogChannel::Stdout),
+            "stderr" => Some(LogChannel::Stderr),
+            _ => None,
         }
     }
 }
@@ -82,9 +104,9 @@ pub struct Source {
     pub spec: SourceSpec,
     /// Base for plain-HTTP requests: `unix:/path` or `http(s)://host:port`.
     base: String,
-    rpc: VmmClient<PrpcClient>,
+    rpc: Option<VmmClient<PrpcClient>>,
     /// Same endpoint with the longer [`ACTION_TIMEOUT`].
-    act_rpc: VmmClient<PrpcClient>,
+    act_rpc: Option<VmmClient<PrpcClient>>,
     read_only: bool,
 }
 
@@ -110,7 +132,13 @@ impl Source {
             };
             VmmClient::new(client)
         };
-        let (rpc, act_rpc) = (vmm_client(REQUEST_TIMEOUT), vmm_client(ACTION_TIMEOUT));
+        let (rpc, act_rpc) = match spec.kind {
+            SourceKind::Hub => (None, None),
+            SourceKind::Vmm => (
+                Some(vmm_client(REQUEST_TIMEOUT)),
+                Some(vmm_client(ACTION_TIMEOUT)),
+            ),
+        };
         Ok(Self {
             spec,
             base,
@@ -122,7 +150,7 @@ impl Source {
 
     /// Whether lifecycle actions may go through this source.
     pub fn writable(&self) -> bool {
-        !self.read_only
+        self.rpc.is_some() && !self.read_only
     }
 
     /// The address shown on screen: never carries credentials.
@@ -133,7 +161,10 @@ impl Source {
     /// Poll every node behind this source once.
     pub async fn poll(&self) -> Result<Vec<NodeSnapshot>> {
         tokio::time::timeout(REQUEST_TIMEOUT, async {
-            Ok(vec![self.poll_vmm(&self.rpc).await?])
+            match &self.rpc {
+                Some(rpc) => Ok(vec![self.poll_vmm(rpc).await?]),
+                None => self.poll_hub().await,
+            }
         })
         .await
         .map_err(|_| anyhow!("timed out after {}s", REQUEST_TIMEOUT.as_secs()))?
@@ -197,22 +228,49 @@ impl Source {
         Ok(node)
     }
 
+    async fn poll_hub(&self) -> Result<Vec<NodeSnapshot>> {
+        let body = self.get("/api/v1/nodes").await?;
+        let report: Report =
+            serde_json::from_slice(&body).context("hub answered something that is not a report")?;
+        Ok(report
+            .nodes
+            .into_iter()
+            .map(|mut n| {
+                n.via = Some(self.spec.name.clone());
+                n
+            })
+            .collect())
+    }
+
     /// The last `lines` lines of one VM log channel.
-    pub async fn logs(&self, vm_id: &str, ch: LogChannel, lines: u32) -> Result<String> {
-        let path = format!(
-            "/logs?id={}&follow=false&ansi=false&lines={lines}&ch={}",
-            query_escape(vm_id),
-            ch.as_str()
-        );
+    pub async fn logs(
+        &self,
+        node: &str,
+        vm_id: &str,
+        ch: LogChannel,
+        lines: u32,
+    ) -> Result<String> {
+        let path = match self.spec.kind {
+            SourceKind::Vmm => format!(
+                "/logs?id={}&follow=false&ansi=false&lines={lines}&ch={}",
+                query_escape(vm_id),
+                ch.as_str()
+            ),
+            SourceKind::Hub => format!(
+                "/api/v1/logs?node={}&id={}&lines={lines}&ch={}",
+                query_escape(node),
+                query_escape(vm_id),
+                ch.as_str()
+            ),
+        };
         let body = self.get(&path).await?;
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
 
     pub async fn act(&self, vm_id: &str, action: Action) -> Result<()> {
-        if self.read_only {
+        let Some(rpc) = self.act_rpc.as_ref().filter(|_| !self.read_only) else {
             bail!("{} is read-only", self.spec.name);
-        }
-        let rpc = &self.act_rpc;
+        };
         let id = Id {
             id: vm_id.to_string(),
         };
@@ -309,6 +367,7 @@ mod tests {
     fn rejects_unknown_scheme() {
         let spec = SourceSpec {
             name: "x".into(),
+            kind: SourceKind::Vmm,
             url: "ftp://x".into(),
             token: None,
         };

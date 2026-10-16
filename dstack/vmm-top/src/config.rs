@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Which VMMs to watch: a config file, `--node` flags, and, when neither
-//! names any, the VMMs running on this host.
+//! Which sources to watch: a config file, `--node` / `--hub` flags, and, when
+//! neither names any, the VMMs running on this host.
 //!
 //! ```toml
 //! # ~/.config/dstack/vmm-top.toml
@@ -14,9 +14,17 @@
 //! url = "http://10.0.0.11:9080"
 //! token_env = "TDX01_VMM_TOKEN"
 //!
+//! [[hub]]
+//! name = "dc-east"
+//! url = "https://vmm-hub.east.example:9970"
+//! token = "…"
+//!
+//! [serve]
+//! listen = "0.0.0.0:9970"
+//! token_env = "DSTACK_VMM_TOP_TOKEN"
 //! ```
 
-use crate::source::SourceSpec;
+use crate::source::{SourceKind, SourceSpec};
 use anyhow::{bail, Context, Result};
 use fs_err as fs;
 use serde::Deserialize;
@@ -25,6 +33,8 @@ use std::path::{Path, PathBuf};
 
 /// Token used for any VMM that names none, as with `dstack` and `vmm-cli.py`.
 pub const VMM_TOKEN_ENV: &str = "DSTACK_VMM_TOKEN";
+/// Token a hub requires, and a TUI sends to a hub that names none.
+pub const HUB_TOKEN_ENV: &str = "DSTACK_VMM_TOP_TOKEN";
 /// The control socket `dstackup install` creates.
 pub const DEFAULT_SOCKET: &str = "/var/run/dstack/vmm.sock";
 
@@ -41,6 +51,10 @@ pub struct FileConfig {
     pub discover: Option<bool>,
     #[serde(default, rename = "node")]
     pub nodes: Vec<Entry>,
+    #[serde(default, rename = "hub")]
+    pub hubs: Vec<Entry>,
+    #[serde(default)]
+    pub serve: ServeConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -53,6 +67,19 @@ pub struct Entry {
     pub token: Option<String>,
     /// Name of an environment variable holding the token; keeps it out of
     /// the file.
+    #[serde(default)]
+    pub token_env: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServeConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub listen: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
     #[serde(default)]
     pub token_env: Option<String>,
 }
@@ -135,23 +162,41 @@ pub fn name_from_url(url: &str) -> String {
 
 pub struct Flags<'a> {
     pub nodes: &'a [String],
+    pub hubs: &'a [String],
     /// For VMMs that name no token of their own.
     pub token: Option<&'a str>,
+    /// For hubs that name no token of their own.
+    pub hub_token: Option<&'a str>,
 }
 
 /// Every source to watch, with unique names.
 pub fn sources(file: &FileConfig, flags: Flags) -> Result<Vec<SourceSpec>> {
     let fallback = flags.token.map(str::to_string).or_else(env_token);
+    // A hub has its own token; a VMM token is never sent to one.
+    let hub_fallback = flags.hub_token.map(str::to_string);
     let mut out = Vec::new();
     for e in &file.nodes {
-        out.push(entry_spec(e, fallback.clone())?);
+        out.push(entry_spec(e, SourceKind::Vmm, fallback.clone())?);
+    }
+    for e in &file.hubs {
+        out.push(entry_spec(e, SourceKind::Hub, hub_fallback.clone())?);
     }
     for flag in flags.nodes {
         let (name, url) = parse_flag(flag);
         out.push(SourceSpec {
             name: name.unwrap_or_else(|| name_from_url(&url)),
+            kind: SourceKind::Vmm,
             url,
             token: fallback.clone(),
+        });
+    }
+    for flag in flags.hubs {
+        let (name, url) = parse_flag(flag);
+        out.push(SourceSpec {
+            name: name.unwrap_or_else(|| name_from_url(&url)),
+            kind: SourceKind::Hub,
+            url,
+            token: hub_fallback.clone(),
         });
     }
     if file.discover.unwrap_or(out.is_empty()) {
@@ -160,6 +205,7 @@ pub fn sources(file: &FileConfig, flags: Flags) -> Result<Vec<SourceSpec>> {
     if out.is_empty() && Path::new(DEFAULT_SOCKET).exists() {
         out.push(SourceSpec {
             name: "local".into(),
+            kind: SourceKind::Vmm,
             url: format!("unix:{DEFAULT_SOCKET}"),
             token: fallback,
         });
@@ -168,12 +214,13 @@ pub fn sources(file: &FileConfig, flags: Flags) -> Result<Vec<SourceSpec>> {
     Ok(out)
 }
 
-fn entry_spec(e: &Entry, fallback: Option<String>) -> Result<SourceSpec> {
+fn entry_spec(e: &Entry, kind: SourceKind, fallback: Option<String>) -> Result<SourceSpec> {
     let token = resolve_token(e.token.as_deref(), e.token_env.as_deref())
         .with_context(|| format!("token for {}", e.url))?
         .or(fallback);
     Ok(SourceSpec {
         name: e.name.clone().unwrap_or_else(|| name_from_url(&e.url)),
+        kind,
         url: e.url.clone(),
         token,
     })
@@ -233,6 +280,7 @@ pub fn discover(token: Option<&str>) -> Vec<SourceSpec> {
                 } else {
                     r.node_name
                 },
+                kind: SourceKind::Vmm,
                 url,
                 token: token.map(str::to_string),
             })
@@ -308,6 +356,7 @@ mod tests {
     fn duplicate_names_get_suffixes() {
         let spec = |n: &str| SourceSpec {
             name: n.into(),
+            kind: SourceKind::Vmm,
             url: "unix:/x".into(),
             token: None,
         };
@@ -326,8 +375,10 @@ mod tests {
             name = "a"
             url = "http://a:1"
             token = "t"
-            [[node]]
-            url = "https://b:9080"
+            [[hub]]
+            url = "https://hub:9970"
+            [serve]
+            listen = "127.0.0.1:9970"
             "#,
         )
         .unwrap();
@@ -335,13 +386,15 @@ mod tests {
             &cfg,
             Flags {
                 nodes: &[],
-                token: Some("fallback"),
+                hubs: &[],
+                token: None,
+                hub_token: None,
             },
         )
         .unwrap();
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].token.as_deref(), Some("t"));
-        assert_eq!(specs[1].token.as_deref(), Some("fallback"));
-        assert_eq!(specs[1].name, "b");
+        assert_eq!(specs[1].kind, SourceKind::Hub);
+        assert_eq!(specs[1].name, "hub");
     }
 }

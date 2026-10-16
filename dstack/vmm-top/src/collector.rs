@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! Background polling for the TUI.
+//! Background polling, shared by the TUI and the hub.
 //!
 //! One task per source polls on the shared interval and sends what it got.
 //! A failed poll keeps the last good data and marks it with the error, so a
@@ -12,7 +12,7 @@
 
 use crate::fmt::now_ms;
 use crate::snapshot::NodeSnapshot;
-use crate::source::{Action, LogChannel, Source};
+use crate::source::{Action, LogChannel, Source, SourceKind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -88,7 +88,7 @@ pub fn spawn(sources: Vec<Arc<Source>>, interval_ms: u64) -> Handle {
                     let tx = up_tx.clone();
                     tokio::spawn(async move {
                         let result = source
-                            .logs(&req.vm_id, req.channel, req.lines)
+                            .logs(&req.node, &req.vm_id, req.channel, req.lines)
                             .await
                             .map_err(|err| format!("{err:#}"));
                         let _ = tx.send(Update::Logs { req, result });
@@ -168,18 +168,24 @@ fn merge_poll(
 ) -> Vec<NodeSnapshot> {
     match result {
         Ok(mut nodes) => {
-            for n in &mut nodes {
-                n.polled_at_ms = now;
-                n.ok_at_ms = Some(now);
+            if source.spec.kind == SourceKind::Vmm {
+                for n in &mut nodes {
+                    n.polled_at_ms = now;
+                    n.ok_at_ms = Some(now);
+                }
             }
             nodes
         }
         Err(err) => {
-            let msg = format!("{err:#}");
+            let msg = match source.spec.kind {
+                SourceKind::Vmm => format!("{err:#}"),
+                SourceKind::Hub => format!("hub {} unreachable: {err:#}", source.spec.name),
+            };
             if last.is_empty() {
                 return vec![NodeSnapshot {
                     name: source.spec.name.clone(),
                     endpoint: source.endpoint(),
+                    via: (source.spec.kind == SourceKind::Hub).then(|| source.spec.name.clone()),
                     polled_at_ms: now,
                     error: Some(msg),
                     ..Default::default()
@@ -201,10 +207,11 @@ mod tests {
     use super::*;
     use crate::source::SourceSpec;
 
-    fn source() -> Source {
+    fn source(kind: SourceKind) -> Source {
         Source::new(
             SourceSpec {
                 name: "n1".into(),
+                kind,
                 url: "http://h:1".into(),
                 token: None,
             },
@@ -215,7 +222,7 @@ mod tests {
 
     #[test]
     fn failure_keeps_last_good_data() {
-        let s = source();
+        let s = source(SourceKind::Vmm);
         let good = merge_poll(
             &s,
             vec![],
@@ -238,10 +245,10 @@ mod tests {
 
     #[test]
     fn first_failure_makes_placeholder() {
-        let s = source();
+        let s = source(SourceKind::Hub);
         let bad = merge_poll(&s, vec![], Err(anyhow::anyhow!("refused")), 5);
         assert_eq!(bad[0].name, "n1");
-        assert_eq!(bad[0].endpoint, "http://h:1");
-        assert_eq!(bad[0].error.as_deref(), Some("refused"));
+        assert_eq!(bad[0].via.as_deref(), Some("n1"));
+        assert!(bad[0].error.as_deref().unwrap().contains("hub n1"));
     }
 }

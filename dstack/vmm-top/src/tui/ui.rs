@@ -744,6 +744,9 @@ fn node_cell(state: &State, n: &NodeEntry, col: Col) -> Vec<Span<'static>> {
                     format!(" {}", s.name),
                 ),
             ];
+            if let Some(hub) = &s.via {
+                v.push(dim(format!(" via {hub}")));
+            }
             if up {
                 v.push(dim(format!(
                     "  {} vm{}",
@@ -1120,7 +1123,9 @@ fn node_info(state: &State, n: &NodeEntry) -> Vec<Line<'static>> {
         kv("status", status),
         kv("endpoint", vec![val(s.endpoint.clone())]),
     ];
-    if !n.writable {
+    if let Some(hub) = &s.via {
+        l.push(kv("via hub", vec![val(hub.clone()), dim("  read-only")]));
+    } else if !n.writable {
         l.push(kv("actions", vec![dim("read-only")]));
     }
     l.push(kv(

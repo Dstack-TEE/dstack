@@ -370,7 +370,7 @@ impl State {
             .map(|snap| NodeEntry {
                 key: format!("{source}/{}", snap.name),
                 source,
-                writable,
+                writable: writable && snap.via.is_none(),
                 snap,
             })
             .collect();
@@ -928,7 +928,11 @@ impl State {
             return;
         };
         if !n.writable {
-            self.toast(format!("read-only: {}", n.snap.name), true);
+            let why = match &n.snap.via {
+                Some(hub) => format!("read-only: {} is watched through hub {hub}", n.snap.name),
+                None => format!("read-only: {}", n.snap.name),
+            };
+            self.toast(why, true);
             return;
         }
         self.input = Some(Input::Choose {
@@ -1114,9 +1118,12 @@ impl State {
     }
 }
 
-/// How a node is named on screen.
+/// `name` or `hub/name` when read through a hub.
 pub fn display_node(s: &NodeSnapshot) -> String {
-    s.name.clone()
+    match &s.via {
+        Some(hub) if hub != &s.name => format!("{hub}/{}", s.name),
+        _ => s.name.clone(),
+    }
 }
 
 // ── fleet totals ────────────────────────────────────────────────────────────
@@ -1401,11 +1408,13 @@ mod tests {
         ));
         assert_eq!(s.journal[0].kind, EntryKind::Action);
 
-        s.apply_nodes(1, vec![node("c", vec![vm("9", "x", "running", 1)])], false);
+        let mut hubbed = node("c", vec![vm("9", "x", "running", 1)]);
+        hubbed.via = Some("hub".into());
+        s.apply_nodes(1, vec![hubbed], true);
         s.sel = Some(RowKey::Vm("1/c".into(), "9".into()));
         s.begin_action();
         assert!(s.input.is_none());
-        assert!(s.toast.as_ref().unwrap().text.contains("read-only"));
+        assert!(s.toast.as_ref().unwrap().text.contains("hub"));
     }
 
     #[test]

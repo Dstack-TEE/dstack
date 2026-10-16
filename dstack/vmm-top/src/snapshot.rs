@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! What one poll of one node returns.
+//! What one poll of one node returns, in the shape both the TUI and the hub
+//! speak.
 //!
-//! `--json` prints these, so this is a wire format: fields are only added,
-//! each new one with `#[serde(default)]`. It deliberately carries no secrets:
-//! no encrypted env, no user config, no compose file.
+//! The hub serves these as JSON, so this is a wire format: fields are only
+//! added, each new one with `#[serde(default)]`, so a newer TUI reads an older
+//! hub and the other way round. It deliberately carries no secrets: no
+//! encrypted env, no user config, no compose file.
 
 use dstack_vmm_rpc as rpc;
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,10 @@ pub struct NodeSnapshot {
     pub name: String,
     /// Where the node is reached, without credentials.
     pub endpoint: String,
+    /// The hub this node was read through, when not polled directly. Set by
+    /// the TUI, not by the hub.
+    #[serde(default)]
+    pub via: Option<String>,
     /// Unix ms of the latest poll attempt.
     pub polled_at_ms: u64,
     /// Unix ms of the latest successful poll. Data below is from then.
@@ -121,10 +127,17 @@ pub struct GuestEvent {
     pub timestamp_ms: u64,
 }
 
-/// Every node at once, as `--json` prints it.
+/// Every node at once: what `--json` prints and a hub serves on
+/// `GET /api/v1/nodes`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Report {
+    /// Name of the hub that served this; empty from `--json`.
+    #[serde(default)]
+    pub hub: String,
     pub version: String,
+    /// The hub's poll interval; 0 from `--json`.
+    #[serde(default)]
+    pub interval_ms: u64,
     pub nodes: Vec<NodeSnapshot>,
 }
 
