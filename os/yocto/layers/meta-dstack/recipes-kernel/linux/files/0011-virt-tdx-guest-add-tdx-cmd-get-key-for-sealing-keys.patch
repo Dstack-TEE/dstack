@@ -1,0 +1,293 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Wed, 7 Oct 2026 18:28:42 -0700
+Subject: [PATCH 11/11] virt: tdx-guest: add TDX_CMD_GET_KEY to derive TD
+ sealing keys
+
+TDX module 1.5.34 and 2.0.18 add TDG.MR.KEY.GET, which derives a key from
+a platform hardware secret and the TD measurements selected by a key
+policy: MRTD, MROWNER, RTMR0-3, masked ATTRIBUTES and XFAM, plus a salt.
+The same TD measurements on the same platform get the same key, so a TD
+can seal data to its own identity without an external key provider.
+The kernel has no wrapper for the TDCALL and no way to reach it from
+user space.
+
+Add tdx_mcall_get_key() and a TDX_CMD_GET_KEY ioctl on /dev/tdx_guest
+that passes a TDKEYREQUEST from user space and returns the key and its
+size. The kernel does not interpret the request; the TDX module
+validates it. Key buffers are freed with kfree_sensitive().
+
+The TDX module serves the request only when the VMM set
+TD_PARAMS.CONFIG_FLAGS.SEALING or the TD set TDCS.TD_CTLS.ENABLE_HW_KEYS.
+TD_CTLS has a zero host write mask and a guest write mask that includes
+ENABLE_HW_KEYS, so the guest can opt in without VMM changes. On
+TDX_MR_KEY_GET_NOT_SUPPORTED, set ENABLE_HW_KEYS with TDG.VM.WR and retry
+once.
+
+The TDX module reports TDX_OPERAND_INVALID for every request when the
+CPU lacks SEAMOPS(SEAMGETKEY). Check TDX_FEATURES0.HW_SEALING with
+TDG.SYS.RD first and return -EOPNOTSUPP, so user space can tell an
+unsupported platform from a malformed request.
+---
+ arch/x86/coco/tdx/tdx.c                 | 87 +++++++++++++++++++++++++
+ arch/x86/include/asm/shared/tdx.h       |  4 ++
+ arch/x86/include/asm/tdx.h              |  2 +
+ drivers/virt/coco/tdx-guest/tdx-guest.c | 45 +++++++++++++
+ include/uapi/linux/tdx-guest.h          | 36 ++++++++++
+ 5 files changed, 174 insertions(+)
+
+diff --git a/arch/x86/coco/tdx/tdx.c b/arch/x86/coco/tdx/tdx.c
+index 7b2833705..873045250 100644
+--- a/arch/x86/coco/tdx/tdx.c
++++ b/arch/x86/coco/tdx/tdx.c
+@@ -37,6 +37,12 @@
+ #define TDCALL_RETURN_CODE(a)	((a) >> 32)
+ #define TDCALL_INVALID_OPERAND	0xc0000100
+ #define TDCALL_OPERAND_BUSY	0x80000200
++#define TDCALL_MR_KEY_GET_NOT_SUPPORTED	0xc0001004
++#define TDCALL_SVN_INVALID	0xc0001006
++
++/* TDX module global metadata, read with TDG.SYS.RD */
++#define TDX_SYS_FEATURES0		0x0A00000300000008
++#define TDX_FEATURES0_HW_SEALING	BIT_ULL(12)
+ 
+ #define TDREPORT_SUBTYPE_0	0
+ 
+@@ -176,6 +182,87 @@ int tdx_mcall_extend_rtmr(u8 index, u8 *data)
+ }
+ EXPORT_SYMBOL_GPL(tdx_mcall_extend_rtmr);
+ 
++static bool tdx_hw_sealing_supported(void)
++{
++	struct tdx_module_args args = {
++		.rdx = TDX_SYS_FEATURES0,
++	};
++
++	/* TDG.SYS.RD is not available on TDX module 1.0: no sealing either */
++	if (__tdcall_ret(TDG_SYS_RD, &args))
++		return false;
++
++	return args.r8 & TDX_FEATURES0_HW_SEALING;
++}
++
++static u64 __tdx_mcall_get_key(u8 *keyreq, u8 *key, u32 *key_bits)
++{
++	struct tdx_module_args args = {
++		.rcx = virt_to_phys(keyreq),
++		.rdx = virt_to_phys(key),
++		.r8 = 0,
++	};
++	u64 ret;
++
++	ret = __tdcall_ret(TDG_MR_KEY_GET, &args);
++	if (!ret)
++		*key_bits = args.r9;
++
++	return ret;
++}
++
++/**
++ * tdx_mcall_get_key() - Wrapper to derive a TD sealing key using
++ *			 TDG.MR.KEY.GET TDCALL.
++ * @keyreq: Address of the 128-byte aligned TDKEYREQUEST input buffer.
++ * @key: Address of the 32-byte aligned output buffer (32 bytes).
++ * @key_bits: Returns the size of the derived key in bits.
++ *
++ * TDG.MR.KEY.GET derives a platform-bound key from a hardware secret and the
++ * TD measurements selected by the key policy in TDKEYREQUEST.  It requires a
++ * TDX module and CPU that both support sealing (TDX_FEATURES0.HW_SEALING).
++ * The TDX module only serves the request after either the VMM set
++ * TD_PARAMS.CONFIG_FLAGS.SEALING or the TD itself set
++ * TDCS.TD_CTLS.ENABLE_HW_KEYS.  TD_CTLS is writable only by the guest, so the
++ * guest opts in on first use if the VMM did not.
++ *
++ * Return 0 on success, -EINVAL for invalid operands, -EOPNOTSUPP if the
++ * platform does not support key derivation, -EPERM if the requested SVNs are
++ * newer than the current TCB, -EBUSY for busy operation, or -EIO on other
++ * TDCALL failures.
++ */
++int tdx_mcall_get_key(u8 *keyreq, u8 *key, u32 *key_bits)
++{
++	u64 ret;
++
++	if (!tdx_hw_sealing_supported())
++		return -EOPNOTSUPP;
++
++	ret = __tdx_mcall_get_key(keyreq, key, key_bits);
++	if (TDCALL_RETURN_CODE(ret) == TDCALL_MR_KEY_GET_NOT_SUPPORTED &&
++	    !tdg_vm_wr(TDCS_TD_CTLS, TD_CTLS_ENABLE_HW_KEYS,
++		       TD_CTLS_ENABLE_HW_KEYS))
++		ret = __tdx_mcall_get_key(keyreq, key, key_bits);
++
++	if (ret) {
++		switch (TDCALL_RETURN_CODE(ret)) {
++		case TDCALL_INVALID_OPERAND:
++			return -EINVAL;
++		case TDCALL_MR_KEY_GET_NOT_SUPPORTED:
++			return -EOPNOTSUPP;
++		case TDCALL_SVN_INVALID:
++			return -EPERM;
++		case TDCALL_OPERAND_BUSY:
++			return -EBUSY;
++		default:
++			return -EIO;
++		}
++	}
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(tdx_mcall_get_key);
++
+ /**
+  * tdx_hcall_get_quote() - Wrapper to request TD Quote using GetQuote
+  *                         hypercall.
+diff --git a/arch/x86/include/asm/shared/tdx.h b/arch/x86/include/asm/shared/tdx.h
+index 11f3cf30b..9b3994a21 100644
+--- a/arch/x86/include/asm/shared/tdx.h
++++ b/arch/x86/include/asm/shared/tdx.h
+@@ -19,6 +19,8 @@
+ #define TDG_MEM_PAGE_ACCEPT		6
+ #define TDG_VM_RD			7
+ #define TDG_VM_WR			8
++#define TDG_SYS_RD			11
++#define TDG_MR_KEY_GET			29
+ 
+ /* TDX attributes */
+ #define TDX_ATTR_DEBUG_BIT		0
+@@ -64,6 +66,8 @@
+ #define TD_CTLS_VIRT_CPUID2		BIT_ULL(TD_CTLS_VIRT_CPUID2_BIT)
+ #define TD_CTLS_REDUCE_VE_BIT		3
+ #define TD_CTLS_REDUCE_VE		BIT_ULL(TD_CTLS_REDUCE_VE_BIT)
++#define TD_CTLS_ENABLE_HW_KEYS_BIT	4
++#define TD_CTLS_ENABLE_HW_KEYS		BIT_ULL(TD_CTLS_ENABLE_HW_KEYS_BIT)
+ #define TD_CTLS_LOCK_BIT		63
+ #define TD_CTLS_LOCK			BIT_ULL(TD_CTLS_LOCK_BIT)
+ 
+diff --git a/arch/x86/include/asm/tdx.h b/arch/x86/include/asm/tdx.h
+index 6b338d7f0..1f87dc0a2 100644
+--- a/arch/x86/include/asm/tdx.h
++++ b/arch/x86/include/asm/tdx.h
+@@ -70,6 +70,8 @@ int tdx_mcall_get_report0(u8 *reportdata, u8 *tdreport);
+ 
+ int tdx_mcall_extend_rtmr(u8 index, u8 *data);
+ 
++int tdx_mcall_get_key(u8 *keyreq, u8 *key, u32 *key_bits);
++
+ u64 tdx_hcall_get_quote(u8 *buf, size_t size);
+ 
+ void __init tdx_dump_attributes(u64 td_attr);
+diff --git a/drivers/virt/coco/tdx-guest/tdx-guest.c b/drivers/virt/coco/tdx-guest/tdx-guest.c
+index 40b53b4da..c74c8d55c 100644
+--- a/drivers/virt/coco/tdx-guest/tdx-guest.c
++++ b/drivers/virt/coco/tdx-guest/tdx-guest.c
+@@ -17,6 +17,7 @@
+ #include <linux/set_memory.h>
+ #include <linux/io.h>
+ #include <linux/delay.h>
++#include <linux/slab.h>
+ #include <linux/sockptr.h>
+ #include <linux/tsm.h>
+ #include <linux/tsm-mr.h>
+@@ -208,6 +209,48 @@ static long tdx_get_report0(struct tdx_report_req __user *req)
+ 			     USER_SOCKPTR(req->tdreport));
+ }
+ 
++static long tdx_get_key(struct tdx_key_req __user *ureq)
++{
++	u8 *keyreq, *key;
++	u32 key_bits = 0, reserved;
++	long ret;
++
++	if (get_user(reserved, &ureq->reserved))
++		return -EFAULT;
++	if (reserved)
++		return -EINVAL;
++
++	/* TDG.MR.KEY.GET requires 128-byte and 32-byte aligned private buffers */
++	keyreq = kmalloc(TDX_KEY_REQUEST_LEN, GFP_KERNEL);
++	if (!keyreq)
++		return -ENOMEM;
++
++	key = kzalloc(TDX_KEY_LEN, GFP_KERNEL);
++	if (!key) {
++		ret = -ENOMEM;
++		goto out_free_req;
++	}
++
++	if (copy_from_user(keyreq, ureq->keyrequest, TDX_KEY_REQUEST_LEN)) {
++		ret = -EFAULT;
++		goto out;
++	}
++
++	ret = tdx_mcall_get_key(keyreq, key, &key_bits);
++	if (ret)
++		goto out;
++
++	if (copy_to_user(ureq->key, key, TDX_KEY_LEN) ||
++	    put_user(key_bits, &ureq->key_bits))
++		ret = -EFAULT;
++out:
++	kfree_sensitive(key);
++out_free_req:
++	kfree(keyreq);
++
++	return ret;
++}
++
+ static void free_quote_buf(void *buf)
+ {
+ 	size_t len = PAGE_ALIGN(GET_QUOTE_BUF_SIZE);
+@@ -361,6 +404,8 @@ static long tdx_guest_ioctl(struct file *file, unsigned int cmd,
+ 	switch (cmd) {
+ 	case TDX_CMD_GET_REPORT0:
+ 		return tdx_get_report0((struct tdx_report_req __user *)arg);
++	case TDX_CMD_GET_KEY:
++		return tdx_get_key((struct tdx_key_req __user *)arg);
+ 	default:
+ 		return -ENOTTY;
+ 	}
+diff --git a/include/uapi/linux/tdx-guest.h b/include/uapi/linux/tdx-guest.h
+index a6a2098c0..5af9d2da6 100644
+--- a/include/uapi/linux/tdx-guest.h
++++ b/include/uapi/linux/tdx-guest.h
+@@ -39,4 +39,40 @@ struct tdx_report_req {
+  */
+ #define TDX_CMD_GET_REPORT0              _IOWR('T', 1, struct tdx_report_req)
+ 
++/* Length of TDKEYREQUEST used in TDG.MR.KEY.GET TDCALL */
++#define TDX_KEY_REQUEST_LEN             128
++
++/* Length of the key output buffer used in TDG.MR.KEY.GET TDCALL */
++#define TDX_KEY_LEN                     32
++
++/**
++ * struct tdx_key_req - Request struct for TDX_CMD_GET_KEY IOCTL.
++ *
++ * @keyrequest: User buffer with the TDKEYREQUEST structure. It selects the
++ *              key policy (MRTD, MROWNER, RTMRs), the attribute and XFAM
++ *              masks, the CPUSVN and TEE_TCB_SVN to derive for, and a salt.
++ *              See the TDG.MR.KEY.GET leaf in the TDX module ABI
++ *              specification for the layout.
++ * @key: User buffer to store the derived key.
++ * @key_bits: Size of the derived key in bits. Bytes of @key beyond it are
++ *            zero.
++ * @reserved: Must be zero.
++ */
++struct tdx_key_req {
++	__u8 keyrequest[TDX_KEY_REQUEST_LEN];
++	__u8 key[TDX_KEY_LEN];
++	__u32 key_bits;
++	__u32 reserved;
++};
++
++/*
++ * TDX_CMD_GET_KEY - Derive a TD sealing key using TDCALL[TDG.MR.KEY.GET]
++ *
++ * Return 0 on success, -EOPNOTSUPP if the TDX module does not support key
++ * derivation, -EINVAL for an invalid key request, -EPERM if the requested
++ * SVNs exceed the current TCB, -EIO on other TDCALL failures, and standard
++ * errno on other general error cases.
++ */
++#define TDX_CMD_GET_KEY                  _IOWR('T', 0x10, struct tdx_key_req)
++
+ #endif /* _UAPI_LINUX_TDX_GUEST_H_ */
