@@ -37,6 +37,7 @@ members = [
     "vmm",
     "vmm/rpc",
     "vmm/netd-rpc",
+    "vmm-top",
     "gateway",
     "gateway/rpc",
     "certbot",
@@ -289,9 +290,11 @@ derive_more = "2.1.1"
 tempfile = "3.18.0"
 
 # Utilities
+crossterm = "0.28"
 dirs = "6.0.0"
 humantime = "2.2.0"
 parcelona = "0.4.3"
+ratatui = "0.29"
 pin-project = "1.1.10"
 regex = "1.11.1"
 rinja = "0.3.5"
@@ -299,6 +302,7 @@ shared_child = "1.0.1"
 strip-ansi-escapes = "0.2.1"
 tailf = "0.1.2"
 time = "0.3.47"
+unicode-width = "0.2"
 uuid = { version = "1.15.1", features = ["v4"] }
 wait-timeout = "0.2"
 which = "7.0.2"
