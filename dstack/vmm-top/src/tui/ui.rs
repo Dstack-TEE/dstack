@@ -291,6 +291,9 @@ fn brand_line(state: &State, t: &Totals, width: usize) -> Line<'static> {
     if state.sources.len() != t.nodes {
         left.push(dim(format!(" · {} sources", state.sources.len())));
     }
+    if state.read_only {
+        left.push(dim(" · read-only"));
+    }
     Line::from(split_line(left, live_pill(state), width))
 }
 
@@ -929,6 +932,7 @@ fn event_glyph(e: &JournalEntry) -> Span<'static> {
         EntryKind::Change => sp(fg(ACCENT), "◆"),
         EntryKind::NodeDown => sp(fg(ERR), "✕"),
         EntryKind::NodeUp => sp(fg(OK), "●"),
+        EntryKind::Action => sp(fg(WARN), "▸"),
     }
 }
 
@@ -1116,6 +1120,9 @@ fn node_info(state: &State, n: &NodeEntry) -> Vec<Line<'static>> {
         kv("status", status),
         kv("endpoint", vec![val(s.endpoint.clone())]),
     ];
+    if !n.writable {
+        l.push(kv("actions", vec![dim("read-only")]));
+    }
     l.push(kv(
         "vmm",
         vec![
@@ -1246,6 +1253,49 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
             ];
             split_line(left, hints(&[("enter", "keep"), ("esc", "clear")]), width)
         }
+        Some(Input::Choose {
+            vm_name, node_key, ..
+        }) => {
+            let node = state
+                .node(node_key)
+                .map(|n| n.snap.name.clone())
+                .unwrap_or_default();
+            let mut left = vec![
+                sp(fg(WARN).add_modifier(Modifier::BOLD), " ▸ "),
+                sp(fg(TEXT), vm_name.clone()),
+                dim(format!(" on {node}   ")),
+            ];
+            left.extend(hints(&[
+                ("u", "start"),
+                ("d", "shutdown"),
+                ("r", "restart"),
+                ("k", "force stop"),
+                ("esc", "cancel"),
+            ]));
+            fit(left, width)
+        }
+        Some(Input::Confirm {
+            vm_name,
+            node_key,
+            action,
+            ..
+        }) => {
+            let node = state
+                .node(node_key)
+                .map(|n| n.snap.name.clone())
+                .unwrap_or_default();
+            let c = if action.is_forceful() { ERR } else { WARN };
+            let mut left = vec![
+                sp(
+                    fg(c).add_modifier(Modifier::BOLD),
+                    format!(" {} ", action.label()),
+                ),
+                sp(fg(TEXT), vm_name.clone()),
+                dim(format!(" on {node}?   ")),
+            ];
+            left.extend(hints(&[("y", "confirm"), ("n", "cancel")]));
+            fit(left, width)
+        }
         None => match &state.toast {
             Some(t) => fit(
                 vec![sp(fg(if t.bad { ERR } else { OK }), format!(" {}", t.text))],
@@ -1255,6 +1305,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
                 &[
                     ("↑↓", "move"),
                     ("enter", "open"),
+                    ("x", "act"),
                     ("/", "filter"),
                     ("a", "scope"),
                     ("s", "sort"),
@@ -1396,11 +1447,20 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &mut State) {
     };
     frame.render_widget(Paragraph::new(body), chunks[3]);
 
-    let foot = match &state.toast {
-        Some(t) => fit(
-            vec![sp(fg(if t.bad { ERR } else { OK }), format!(" {}", t.text))],
-            width,
-        ),
+    let foot = match &state.input {
+        Some(Input::Choose { .. }) | Some(Input::Confirm { .. }) => None,
+        _ => state
+            .toast
+            .as_ref()
+            .map(|t| vec![sp(fg(if t.bad { ERR } else { OK }), format!(" {}", t.text))]),
+    };
+    let foot = match foot {
+        Some(f) => fit(f, width),
+        None if state.input.is_some() => {
+            // Reuse the main footer's prompt rendering.
+            draw_footer(frame, chunks[4], state);
+            return;
+        }
         None => hints_fit(
             &[
                 ("tab", "next"),
@@ -1408,6 +1468,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &mut State) {
                 ("↑↓", "scroll"),
                 ("←→", "pan"),
                 ("f", "follow"),
+                ("x", "act"),
                 ("esc", "back"),
             ],
             width,
@@ -1547,6 +1608,7 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         ("z", "fold / unfold all"),
         ("enter", "open detail"),
         ("v", "preview pane"),
+        ("x", "start · shutdown · restart · stop"),
         ("/", "filter by name, id, app, image, node"),
         ("a", "scope: all · live · attention"),
         ("s S  I", "sort key · invert"),
@@ -1590,7 +1652,7 @@ mod tests {
     use ratatui::Terminal;
 
     fn sample() -> State {
-        let mut s = State::new(vec!["a".into(), "b".into()], 2000);
+        let mut s = State::new(vec!["a".into(), "b".into()], 2000, false);
         s.now_ms = 1_700_000_000_000;
         let vm = |id: &str, name: &str, status: &str, boot: &str| Vm {
             id: id.into(),
@@ -1631,6 +1693,7 @@ mod tests {
                 ],
                 ..Default::default()
             }],
+            true,
         );
         s.apply_nodes(
             1,
@@ -1640,6 +1703,7 @@ mod tests {
                 error: Some("connection refused".into()),
                 ..Default::default()
             }],
+            true,
         );
         s
     }

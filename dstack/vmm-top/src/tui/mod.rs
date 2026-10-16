@@ -10,7 +10,7 @@ pub mod ui;
 
 use crate::collector::{self, Command, LogRequest, Update};
 use crate::fmt::now_ms;
-use crate::source::Source;
+use crate::source::{Action, Source};
 use anyhow::Result;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -57,11 +57,12 @@ impl Drop for TerminalGuard {
     }
 }
 
-pub async fn run(sources: Vec<Source>, interval_ms: u64) -> Result<()> {
+pub async fn run(sources: Vec<Source>, interval_ms: u64, read_only: bool) -> Result<()> {
     let names = sources.iter().map(|s| s.spec.name.clone()).collect();
+    let writable: Vec<bool> = sources.iter().map(|s| s.writable()).collect();
     let sources: Vec<Arc<Source>> = sources.into_iter().map(Arc::new).collect();
     let mut handle = collector::spawn(sources, interval_ms);
-    let mut state = State::new(names, interval_ms);
+    let mut state = State::new(names, interval_ms, read_only);
     state.tick(now_ms());
 
     let _guard = TerminalGuard::enter()?;
@@ -103,7 +104,7 @@ pub async fn run(sources: Vec<Source>, interval_ms: u64) -> Result<()> {
             Some(up) = handle.updates.recv() => {
                 dirty = true;
                 state.tick(now_ms());
-                apply_update(&mut state, up);
+                apply_update(&mut state, up, &writable);
                 Vec::new()
             }
             _ = ticker.tick() => {
@@ -140,14 +141,30 @@ pub async fn run(sources: Vec<Source>, interval_ms: u64) -> Result<()> {
                         lines: model::LOG_LINES,
                     }));
                 }
+                Effect::Act {
+                    source,
+                    vm_id,
+                    what,
+                    action,
+                } => {
+                    let _ = handle.commands.send(Command::Act {
+                        source,
+                        vm_id,
+                        what,
+                        action,
+                    });
+                }
             }
         }
     }
 }
 
-fn apply_update(state: &mut State, up: Update) {
+fn apply_update(state: &mut State, up: Update, writable: &[bool]) {
     match up {
-        Update::Nodes { source, nodes } => state.apply_nodes(source, nodes),
+        Update::Nodes { source, nodes } => {
+            let w = writable.get(source).copied().unwrap_or(false);
+            state.apply_nodes(source, nodes, w);
+        }
         Update::Logs { req, result } => {
             let Some(node_key) = state
                 .nodes
@@ -159,6 +176,11 @@ fn apply_update(state: &mut State, up: Update) {
             };
             state.apply_logs(&RowKey::Vm(node_key, req.vm_id), req.channel, result);
         }
+        Update::Acted {
+            what,
+            action,
+            result,
+        } => state.acted(&what, action, result),
     }
 }
 
@@ -206,6 +228,25 @@ fn handle_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
             }
             return Vec::new();
         }
+        Some(Input::Choose { .. }) => {
+            match k.code {
+                KeyCode::Char('u') => state.choose_action(Action::Start),
+                KeyCode::Char('d') => state.choose_action(Action::Shutdown),
+                KeyCode::Char('k') => state.choose_action(Action::Stop),
+                KeyCode::Char('r') => state.choose_action(Action::Restart),
+                _ => state.input = None,
+            }
+            return Vec::new();
+        }
+        Some(Input::Confirm { .. }) => {
+            return match k.code {
+                KeyCode::Char('y') | KeyCode::Enter => state.confirm_action().into_iter().collect(),
+                _ => {
+                    state.input = None;
+                    Vec::new()
+                }
+            };
+        }
         None => {}
     }
     if state.detail.is_some() {
@@ -250,6 +291,7 @@ fn handle_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('S') | KeyCode::Char('<') => state.cycle_sort(false),
         KeyCode::Char('I') => state.invert_sort(),
         KeyCode::Char('/') => state.input = Some(Input::Filter(state.filter.clone())),
+        KeyCode::Char('x') => state.begin_action(),
         KeyCode::Char('r') => {
             state.toast("refreshing…", false);
             return vec![Effect::Refresh];
@@ -306,6 +348,15 @@ fn handle_detail_key(state: &mut State, k: KeyEvent) -> Vec<Effect> {
             }
             if state.detail.as_ref().is_some_and(|d| d.follow) {
                 state.scroll_detail(isize::MAX / 2);
+            }
+        }
+        KeyCode::Char('x') => {
+            if let Some(RowKey::Vm(n, v)) = state.detail.as_ref().map(|d| d.target.clone()) {
+                let prev = state.sel.replace(RowKey::Vm(n, v));
+                state.begin_action();
+                if state.input.is_none() {
+                    state.sel = prev;
+                }
             }
         }
         KeyCode::Char('r') => return vec![Effect::Refresh],

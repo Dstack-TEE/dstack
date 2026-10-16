@@ -8,7 +8,7 @@
 
 use crate::fmt;
 use crate::snapshot::{NodeSnapshot, Phase, Vm};
-use crate::source::LogChannel;
+use crate::source::{Action, LogChannel};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -125,6 +125,7 @@ pub struct NodeEntry {
     /// `<source index>/<name>`; stable across polls.
     pub key: String,
     pub source: usize,
+    pub writable: bool,
     pub snap: NodeSnapshot,
 }
 
@@ -134,6 +135,7 @@ pub enum EntryKind {
     Change,
     NodeDown,
     NodeUp,
+    Action,
 }
 
 #[derive(Clone, Debug)]
@@ -226,6 +228,17 @@ impl Detail {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Input {
     Filter(String),
+    Choose {
+        node_key: String,
+        vm_id: String,
+        vm_name: String,
+    },
+    Confirm {
+        node_key: String,
+        vm_id: String,
+        vm_name: String,
+        action: Action,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -253,6 +266,12 @@ pub enum Effect {
         node: String,
         vm_id: String,
         channel: LogChannel,
+    },
+    Act {
+        source: usize,
+        vm_id: String,
+        what: String,
+        action: Action,
     },
     SetInterval(u64),
     Quit,
@@ -287,13 +306,14 @@ pub struct State {
     pub now_ms: u64,
     pub updated_ms: u64,
     pub frame: u64,
+    pub read_only: bool,
     pub hits: Hits,
     /// Polls received while paused, applied on resume.
-    pending: Vec<(usize, Vec<NodeSnapshot>)>,
+    pending: Vec<(usize, Vec<NodeSnapshot>, bool)>,
 }
 
 impl State {
-    pub fn new(sources: Vec<String>, interval_ms: u64) -> Self {
+    pub fn new(sources: Vec<String>, interval_ms: u64, read_only: bool) -> Self {
         Self {
             nodes: Vec::new(),
             sources,
@@ -321,6 +341,7 @@ impl State {
             now_ms: 0,
             updated_ms: 0,
             frame: 0,
+            read_only,
             hits: Hits::default(),
             pending: Vec::new(),
         }
@@ -330,10 +351,10 @@ impl State {
 
     /// Replace the nodes of one source with a fresh poll, journaling what
     /// changed.
-    pub fn apply_nodes(&mut self, source: usize, nodes: Vec<NodeSnapshot>) {
+    pub fn apply_nodes(&mut self, source: usize, nodes: Vec<NodeSnapshot>, writable: bool) {
         if self.paused {
-            self.pending.retain(|(s, _)| *s != source);
-            self.pending.push((source, nodes));
+            self.pending.retain(|(s, _, _)| *s != source);
+            self.pending.push((source, nodes, writable));
             return;
         }
         let now = self.now_ms;
@@ -349,6 +370,7 @@ impl State {
             .map(|snap| NodeEntry {
                 key: format!("{source}/{}", snap.name),
                 source,
+                writable,
                 snap,
             })
             .collect();
@@ -526,6 +548,13 @@ impl State {
             bad,
             until_ms: self.now_ms + 5000,
         });
+    }
+
+    pub fn acted(&mut self, what: &str, action: Action, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.toast(format!("{} {what}: sent", action.label()), false),
+            Err(err) => self.toast(format!("{} {what} failed: {err}", action.label()), true),
+        }
     }
 
     // ── lookups ───────────────────────────────────────────────────────────
@@ -853,8 +882,8 @@ impl State {
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
         if !paused {
-            for (s, nodes) in std::mem::take(&mut self.pending) {
-                self.apply_nodes(s, nodes);
+            for (s, nodes, w) in std::mem::take(&mut self.pending) {
+                self.apply_nodes(s, nodes, w);
             }
         }
     }
@@ -871,6 +900,94 @@ impl State {
         };
         self.interval_ms = INTERVAL_STEPS_MS[i];
         self.interval_ms
+    }
+
+    /// The VM the selection points at, directly or through an event.
+    pub fn selected_vm(&self) -> Option<(String, String)> {
+        match self.sel.as_ref()? {
+            RowKey::Vm(n, v) => Some((n.clone(), v.clone())),
+            RowKey::Event(seq) => {
+                let e = self.event(*seq)?;
+                Some((e.node_key.clone(), e.vm_id.clone()?))
+            }
+            RowKey::Node(_) => None,
+        }
+    }
+
+    /// Start the action prompt for the selected VM.
+    pub fn begin_action(&mut self) {
+        if self.read_only {
+            self.toast("read-only: started with --read-only", true);
+            return;
+        }
+        let Some((node_key, vm_id)) = self.selected_vm() else {
+            self.toast("select a VM to act on", true);
+            return;
+        };
+        let Some((n, vm)) = self.vm(&node_key, &vm_id) else {
+            return;
+        };
+        if !n.writable {
+            self.toast(format!("read-only: {}", n.snap.name), true);
+            return;
+        }
+        self.input = Some(Input::Choose {
+            node_key,
+            vm_id,
+            vm_name: vm.name.clone(),
+        });
+    }
+
+    pub fn choose_action(&mut self, action: Action) {
+        if let Some(Input::Choose {
+            node_key,
+            vm_id,
+            vm_name,
+        }) = self.input.take()
+        {
+            self.input = Some(Input::Confirm {
+                node_key,
+                vm_id,
+                vm_name,
+                action,
+            });
+        }
+    }
+
+    pub fn confirm_action(&mut self) -> Option<Effect> {
+        let Some(Input::Confirm {
+            node_key,
+            vm_id,
+            vm_name,
+            action,
+        }) = self.input.take()
+        else {
+            return None;
+        };
+        let n = self.node(&node_key)?;
+        let what = format!("{vm_name} on {}", n.snap.name);
+        let source = n.source;
+        let node = n.snap.name.clone();
+        let now = self.now_ms;
+        self.push_journal(JournalEntry {
+            seq: 0,
+            at_ms: now,
+            kind: EntryKind::Action,
+            node_key,
+            node,
+            vm_id: Some(vm_id.clone()),
+            vm_name: Some(vm_name),
+            title: action.label().into(),
+            body: "requested from this terminal".into(),
+            bad: false,
+        });
+        self.toast(format!("{}: {what}…", action.label()), false);
+        Some(Effect::Act {
+            source,
+            vm_id,
+            what,
+            action,
+        })
     }
 
     /// Open the detail view for the selection.
@@ -1087,7 +1204,7 @@ mod tests {
     }
 
     fn state() -> State {
-        let mut s = State::new(vec!["a".into(), "b".into()], 2000);
+        let mut s = State::new(vec!["a".into(), "b".into()], 2000, false);
         s.now_ms = 10_000;
         s.apply_nodes(
             0,
@@ -1099,8 +1216,9 @@ mod tests {
                     vm("3", "old", "stopped", 2),
                 ],
             )],
+            true,
         );
-        s.apply_nodes(1, vec![node("b", vec![vm("4", "api", "running", 2)])]);
+        s.apply_nodes(1, vec![node("b", vec![vm("4", "api", "running", 2)])], true);
         s
     }
 
@@ -1170,21 +1288,22 @@ mod tests {
                     vm("3", "old", "stopped", 2),
                 ],
             )],
+            true,
         );
         assert_eq!(s.sel, Some(RowKey::Vm("0/a".into(), "3".into())));
         assert_eq!(s.selected_index(), 4);
         // It disappears: selection stays at the same position.
-        s.apply_nodes(0, vec![node("a", vec![vm("0", "new", "running", 1)])]);
+        s.apply_nodes(0, vec![node("a", vec![vm("0", "new", "running", 1)])], true);
         assert_eq!(s.selected_index(), 3);
         assert_eq!(s.sel, Some(RowKey::Vm("1/b".into(), "4".into())));
     }
 
     #[test]
     fn selection_stays_on_top_until_the_user_moves() {
-        let mut s = State::new(vec!["a".into(), "b".into()], 2000);
-        s.apply_nodes(1, vec![node("b", vec![])]);
+        let mut s = State::new(vec!["a".into(), "b".into()], 2000, false);
+        s.apply_nodes(1, vec![node("b", vec![])], true);
         assert_eq!(s.sel, Some(RowKey::Node("1/b".into())));
-        s.apply_nodes(0, vec![node("a", vec![])]);
+        s.apply_nodes(0, vec![node("a", vec![])], true);
         assert_eq!(s.sel, Some(RowKey::Node("0/a".into())));
     }
 
@@ -1215,6 +1334,7 @@ mod tests {
                 "a",
                 vec![vm("1", "web", "exited", 4), vm("2", "db", "exited", 8)],
             )],
+            true,
         );
         let titles: Vec<_> = s.journal.iter().take(2).map(|e| e.title.clone()).collect();
         assert!(titles.contains(&"running → exited".to_string()));
@@ -1226,18 +1346,18 @@ mod tests {
 
         let mut down = node("a", vec![]);
         down.error = Some("connection refused".into());
-        s.apply_nodes(0, vec![down]);
+        s.apply_nodes(0, vec![down], true);
         assert_eq!(s.journal[0].kind, EntryKind::NodeDown);
         // A failed poll says nothing about VMs: no "removed" storm.
         assert_eq!(s.journal.iter().filter(|e| e.title == "removed").count(), 1);
-        s.apply_nodes(0, vec![node("a", vec![])]);
+        s.apply_nodes(0, vec![node("a", vec![])], true);
         assert_eq!(s.journal[0].kind, EntryKind::NodeUp);
         assert!(s.journal.len() > base);
     }
 
     #[test]
     fn guest_events_are_deduplicated_and_ordered() {
-        let mut s = State::new(vec!["a".into()], 2000);
+        let mut s = State::new(vec!["a".into()], 2000, false);
         s.now_ms = 50_000;
         let mut v = vm("1", "web", "running", 1);
         v.events = vec![
@@ -1252,8 +1372,8 @@ mod tests {
                 timestamp_ms: 1000,
             },
         ];
-        s.apply_nodes(0, vec![node("a", vec![v.clone()])]);
-        s.apply_nodes(0, vec![node("a", vec![v])]);
+        s.apply_nodes(0, vec![node("a", vec![v.clone()])], true);
+        s.apply_nodes(0, vec![node("a", vec![v])], true);
         let guest: Vec<_> = s
             .journal
             .iter()
@@ -1264,10 +1384,59 @@ mod tests {
     }
 
     #[test]
+    fn actions_need_a_writable_direct_node() {
+        let mut s = state();
+        s.move_to(1);
+        s.begin_action();
+        assert!(matches!(s.input, Some(Input::Choose { .. })));
+        s.choose_action(Action::Stop);
+        let eff = s.confirm_action().unwrap();
+        assert!(matches!(
+            eff,
+            Effect::Act {
+                source: 0,
+                action: Action::Stop,
+                ..
+            }
+        ));
+        assert_eq!(s.journal[0].kind, EntryKind::Action);
+
+        s.apply_nodes(1, vec![node("c", vec![vm("9", "x", "running", 1)])], false);
+        s.sel = Some(RowKey::Vm("1/c".into(), "9".into()));
+        s.begin_action();
+        assert!(s.input.is_none());
+        assert!(s.toast.as_ref().unwrap().text.contains("read-only"));
+    }
+
+    #[test]
+    fn restart_goes_through_the_same_confirmation() {
+        let mut s = state();
+        s.move_to(1);
+        s.begin_action();
+        s.choose_action(Action::Restart);
+        assert!(matches!(
+            s.input,
+            Some(Input::Confirm {
+                action: Action::Restart,
+                ..
+            })
+        ));
+        let eff = s.confirm_action().unwrap();
+        assert!(matches!(
+            eff,
+            Effect::Act {
+                action: Action::Restart,
+                ..
+            }
+        ));
+        assert_eq!(s.journal[0].title, "restart");
+    }
+
+    #[test]
     fn pause_defers_updates() {
         let mut s = state();
         s.set_paused(true);
-        s.apply_nodes(1, vec![node("b", vec![])]);
+        s.apply_nodes(1, vec![node("b", vec![])], true);
         assert_eq!(s.nodes[1].snap.vms.len(), 1);
         s.set_paused(false);
         assert_eq!(s.nodes[1].snap.vms.len(), 0);

@@ -61,6 +61,10 @@ struct Cli {
     /// Print one JSON snapshot and exit.
     #[arg(long, conflicts_with = "once")]
     json: bool,
+
+    /// Never start, shut down or stop a VM from this terminal.
+    #[arg(long)]
+    read_only: bool,
 }
 
 #[tokio::main]
@@ -74,6 +78,7 @@ async fn main() -> Result<()> {
         (None, None) => DEFAULT_INTERVAL,
     };
     let interval_ms = (interval.as_millis() as u64).max(200);
+    let read_only = cli.read_only || file.read_only;
     let specs = config::sources(
         &file,
         config::Flags {
@@ -83,7 +88,7 @@ async fn main() -> Result<()> {
     )?;
     let sources = specs
         .into_iter()
-        .map(Source::new)
+        .map(|s| Source::new(s, read_only))
         .collect::<Result<Vec<_>>>()?;
 
     if sources.is_empty() {
@@ -100,5 +105,5 @@ async fn main() -> Result<()> {
     if cli.json || cli.once || !interactive {
         return once::run(sources, cli.json).await;
     }
-    tui::run(sources, interval_ms).await
+    tui::run(sources, interval_ms, read_only).await
 }

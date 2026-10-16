@@ -6,13 +6,13 @@
 //!
 //! One task per source polls on the shared interval and sends what it got.
 //! A failed poll keeps the last good data and marks it with the error, so a
-//! node that drops off still shows what was on it. Log fetches run on their
-//! own tasks and report back the same way; nothing here ever
+//! node that drops off still shows what was on it. Log fetches and actions
+//! run on their own tasks and report back the same way; nothing here ever
 //! blocks the caller's loop.
 
 use crate::fmt::now_ms;
 use crate::snapshot::NodeSnapshot;
-use crate::source::{LogChannel, Source};
+use crate::source::{Action, LogChannel, Source};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,6 +30,12 @@ pub struct LogRequest {
 pub enum Command {
     RefreshNow,
     Logs(LogRequest),
+    Act {
+        source: usize,
+        vm_id: String,
+        what: String,
+        action: Action,
+    },
 }
 
 pub enum Update {
@@ -40,6 +46,11 @@ pub enum Update {
     Logs {
         req: LogRequest,
         result: Result<String, String>,
+    },
+    Acted {
+        what: String,
+        action: Action,
+        result: Result<(), String>,
     },
 }
 
@@ -81,6 +92,30 @@ pub fn spawn(sources: Vec<Arc<Source>>, interval_ms: u64) -> Handle {
                             .await
                             .map_err(|err| format!("{err:#}"));
                         let _ = tx.send(Update::Logs { req, result });
+                    });
+                }
+                Command::Act {
+                    source,
+                    vm_id,
+                    what,
+                    action,
+                } => {
+                    let Some(source) = sources.get(source).cloned() else {
+                        continue;
+                    };
+                    let tx = up_tx.clone();
+                    let wake = wake.clone();
+                    tokio::spawn(async move {
+                        let result = source
+                            .act(&vm_id, action)
+                            .await
+                            .map_err(|err| format!("{err:#}"));
+                        let _ = tx.send(Update::Acted {
+                            what,
+                            action,
+                            result,
+                        });
+                        wake.notify_waiters();
                     });
                 }
             }
@@ -167,11 +202,14 @@ mod tests {
     use crate::source::SourceSpec;
 
     fn source() -> Source {
-        Source::new(SourceSpec {
-            name: "n1".into(),
-            url: "http://h:1".into(),
-            token: None,
-        })
+        Source::new(
+            SourceSpec {
+                name: "n1".into(),
+                url: "http://h:1".into(),
+                token: None,
+            },
+            false,
+        )
         .unwrap()
     }
 

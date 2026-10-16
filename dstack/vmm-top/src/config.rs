@@ -33,6 +33,8 @@ pub const DEFAULT_SOCKET: &str = "/var/run/dstack/vmm.sock";
 pub struct FileConfig {
     #[serde(default)]
     pub interval: Option<String>,
+    #[serde(default)]
+    pub read_only: bool,
     /// Also watch the VMMs registered on this host. Defaults to on only when
     /// nothing else is configured.
     #[serde(default)]

@@ -9,7 +9,7 @@
 use crate::snapshot::{Gpu, NodeSnapshot, Resources, Vm};
 use anyhow::{anyhow, bail, Result};
 use dstack_vmm_rpc::vmm_client::VmmClient;
-use dstack_vmm_rpc::StatusRequest;
+use dstack_vmm_rpc::{Id, StatusRequest};
 use http_client::http_request_with_headers;
 use http_client::prpc::PrpcClient;
 use std::time::{Duration, Instant};
@@ -17,6 +17,12 @@ use std::time::{Duration, Instant};
 /// Bound on one poll or one request, so a hung node shows as an error instead
 /// of freezing its row.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// Bound on one lifecycle action. The VMM answers a stop only once QEMU has
+/// exited (up to 15s before it kills), a shutdown once the guest agent has
+/// (up to 30s), and a start after waiting out a VM still stopping (up to 60s),
+/// so the poll bound would report slow successes as failures.
+pub const ACTION_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug)]
 pub struct SourceSpec {
@@ -43,15 +49,47 @@ impl LogChannel {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Start,
+    /// Ask the guest to power off.
+    Shutdown,
+    /// Kill QEMU.
+    Stop,
+    /// Kill QEMU, then start again. The VMM has no restart call; its start
+    /// waits for a VM told to stop to finish exiting, so the two in sequence
+    /// are safe.
+    Restart,
+}
+
+impl Action {
+    pub fn label(self) -> &'static str {
+        match self {
+            Action::Start => "start",
+            Action::Shutdown => "shutdown",
+            Action::Stop => "force stop",
+            Action::Restart => "restart",
+        }
+    }
+
+    /// Kills QEMU without asking the guest.
+    pub fn is_forceful(self) -> bool {
+        matches!(self, Action::Stop | Action::Restart)
+    }
+}
+
 pub struct Source {
     pub spec: SourceSpec,
     /// Base for plain-HTTP requests: `unix:/path` or `http(s)://host:port`.
     base: String,
     rpc: VmmClient<PrpcClient>,
+    /// Same endpoint with the longer [`ACTION_TIMEOUT`].
+    act_rpc: VmmClient<PrpcClient>,
+    read_only: bool,
 }
 
 impl Source {
-    pub fn new(spec: SourceSpec) -> Result<Self> {
+    pub fn new(spec: SourceSpec, read_only: bool) -> Result<Self> {
         let url = spec.url.trim();
         let base = if let Some(sock) = url.strip_prefix("unix:") {
             format!("unix:{sock}")
@@ -60,17 +98,31 @@ impl Source {
         } else {
             bail!("unsupported address '{url}': expected unix:/path/to/vmm.sock or http(s)://host:port");
         };
-        let client = match base.strip_prefix("unix:") {
-            Some(sock) => PrpcClient::new_unix(sock.to_string(), "/prpc".to_string()),
-            None => PrpcClient::new(format!("{base}/prpc")),
+        let vmm_client = |timeout: Duration| {
+            let client = match base.strip_prefix("unix:") {
+                Some(sock) => PrpcClient::new_unix(sock.to_string(), "/prpc".to_string()),
+                None => PrpcClient::new(format!("{base}/prpc")),
+            };
+            let client = client.with_request_timeout(timeout);
+            let client = match &spec.token {
+                Some(token) => client.with_bearer_token(token.clone()),
+                None => client,
+            };
+            VmmClient::new(client)
         };
-        let client = client.with_request_timeout(REQUEST_TIMEOUT);
-        let client = match &spec.token {
-            Some(token) => client.with_bearer_token(token.clone()),
-            None => client,
-        };
-        let rpc = VmmClient::new(client);
-        Ok(Self { spec, base, rpc })
+        let (rpc, act_rpc) = (vmm_client(REQUEST_TIMEOUT), vmm_client(ACTION_TIMEOUT));
+        Ok(Self {
+            spec,
+            base,
+            rpc,
+            act_rpc,
+            read_only,
+        })
+    }
+
+    /// Whether lifecycle actions may go through this source.
+    pub fn writable(&self) -> bool {
+        !self.read_only
     }
 
     /// The address shown on screen: never carries credentials.
@@ -156,6 +208,32 @@ impl Source {
         Ok(String::from_utf8_lossy(&body).into_owned())
     }
 
+    pub async fn act(&self, vm_id: &str, action: Action) -> Result<()> {
+        if self.read_only {
+            bail!("{} is read-only", self.spec.name);
+        }
+        let rpc = &self.act_rpc;
+        let id = Id {
+            id: vm_id.to_string(),
+        };
+        let result = match action {
+            Action::Start => rpc.start_vm(id).await,
+            Action::Shutdown => rpc.shutdown_vm(id).await,
+            Action::Stop => rpc.stop_vm(id).await,
+            Action::Restart => {
+                rpc.stop_vm(id.clone())
+                    .await
+                    .map_err(|err| anyhow!("stop failed: {err}"))?;
+                return rpc
+                    .start_vm(id)
+                    .await
+                    .map_err(|err| anyhow!("stopped, but start failed: {err}"));
+            }
+        };
+        result.map_err(|err| anyhow!("{err}"))?;
+        Ok(())
+    }
+
     async fn get(&self, path: &str) -> Result<Vec<u8>> {
         let auth = self.spec.token.as_ref().map(|t| format!("Bearer {t}"));
         let mut headers: Vec<(&str, &str)> = Vec::new();
@@ -234,6 +312,6 @@ mod tests {
             url: "ftp://x".into(),
             token: None,
         };
-        assert!(Source::new(spec).is_err());
+        assert!(Source::new(spec, false).is_err());
     }
 }
