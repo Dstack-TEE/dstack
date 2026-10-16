@@ -25,6 +25,7 @@ use crate::{
 
 use super::{
     io_bridge::bridge_tcp,
+    parse_canonical_port,
     port_policy::{filter_allowed_addresses, should_send_pp},
     AddressGroup, AddressInfo,
 };
@@ -45,7 +46,7 @@ impl AppAddress {
         let (app_id, port) = data.split_once(':').context("invalid app address")?;
         Ok(Self {
             app_id: app_id.to_string(),
-            port: port.parse().context("invalid port")?,
+            port: parse_canonical_port(port)?,
         })
     }
 }
@@ -347,6 +348,14 @@ pub(crate) async fn proxy_to_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_app_address_parse() {
+        let address = AppAddress::parse(b"myapp:8090").unwrap();
+        assert_eq!(address.app_id, "myapp");
+        assert_eq!(address.port, 8090);
+        assert!(AppAddress::parse(b"myapp:08090").is_err());
+    }
 
     #[test]
     fn the_connection_limit_check_takes_the_slot() {

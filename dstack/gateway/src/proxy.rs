@@ -135,6 +135,15 @@ struct DstInfo {
     is_h2: bool,
 }
 
+// Require one decimal spelling for each destination port. Port 0 is reserved,
+// so reject it along with leading zeros and signs in both SNI and TXT records.
+fn parse_canonical_port(port_str: &str) -> Result<u16> {
+    if port_str.starts_with('0') || !port_str.bytes().all(|byte| byte.is_ascii_digit()) {
+        bail!("invalid port");
+    }
+    port_str.parse::<u16>().context("invalid port")
+}
+
 fn parse_dst_info(subdomain: &str) -> Result<DstInfo> {
     let mut parts = subdomain.split('-');
     let app_id = parts.next().context("no app id found")?.to_owned();
@@ -169,7 +178,7 @@ fn parse_dst_info(subdomain: &str) -> Result<DstInfo> {
             port = if port_str.is_empty() {
                 None
             } else {
-                Some(port_str.parse::<u16>().context("invalid port")?)
+                Some(parse_canonical_port(port_str)?)
             };
         }
     };
@@ -726,6 +735,16 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_canonical_port() {
+        for port in ["1", "80", "65535"] {
+            assert_eq!(parse_canonical_port(port).unwrap().to_string(), port);
+        }
+        for port in ["", "0", "08090", "+8090", "65536", "８０", "80s"] {
+            assert!(parse_canonical_port(port).is_err(), "{port}");
+        }
+    }
+
+    #[test]
     fn test_parse_destination() {
         // Test basic app_id only
         let result = parse_dst_info("myapp").unwrap();
@@ -762,5 +781,13 @@ mod tests {
         assert_eq!(result.app_id, "myapp");
         assert_eq!(result.port, 443);
         assert!(result.is_tls);
+
+        // Test app_id with custom port and HTTP/2
+        let result = parse_dst_info("myapp-8090g").unwrap();
+        assert_eq!(result.port, 8090);
+        assert!(result.is_h2);
+
+        // Test non-canonical port
+        assert!(parse_dst_info("myapp-08090s").is_err());
     }
 }
