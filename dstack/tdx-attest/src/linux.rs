@@ -47,6 +47,9 @@ const QUOTE_MIN_SIZE: usize = 1020;
 const QGS_MSG_LEN_PREFIX_SIZE: usize = 4; // 4-byte length prefix
 const QGS_REQ_BUF_SIZE: usize = 16 * 1024; // 16KB buffer for request/response
 
+// Per read/write timeout for QGS; the kernel bounds vsock connect (2s by default).
+const QGS_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
 // QGS message types
 const QGS_MSG_GET_QUOTE_REQ: u32 = 0;
 const QGS_MSG_GET_QUOTE_RESP: u32 = 1;
@@ -580,6 +583,8 @@ fn get_quote_via_vsock(report_data: &TdxReportData) -> Result<Vec<u8>> {
     let request = build_qgs_get_quote_request(&report.0);
 
     let mut stream = vsock::VsockStream::connect_with_cid_port(vsock::VMADDR_CID_HOST, vsock_port)?;
+    stream.set_read_timeout(Some(QGS_IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(QGS_IO_TIMEOUT))?;
 
     let len_header = (request.len() as u32).to_be_bytes();
     stream.write_all(&len_header)?;
