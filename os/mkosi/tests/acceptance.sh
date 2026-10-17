@@ -251,6 +251,15 @@ if grep -q 'random.trust_bootloader' "$D/scripts/make-release-artifacts.sh"; the
   echo 'kernel command line must not be restated outside kernel-cmdline.sh' >&2
   exit 1
 fi
+# These keep the guest from acting on the host-controlled GPT and on host-supplied
+# system credentials; they only protect anything while they stay measured.
+cmdline=$(. "$D/../image/kernel-cmdline.sh" && dstack_kernel_cmdline hash size)
+for flag in systemd.gpt_auto=0 systemd.import_credentials=no; do
+  if [[ " $cmdline " != *" $flag "* ]]; then
+    echo "kernel command line lacks $flag" >&2
+    exit 1
+  fi
+done
 grep -q 'Archiving UKI image' "$D/../image/assemble.sh"
 grep -Fq "FLAVORS=\${FLAVORS:-prod}" "$D/build.sh"
 # A cache hit must never be able to answer the question repro-check asks.
