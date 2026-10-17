@@ -375,6 +375,38 @@ mod tests {
         Ok(())
     }
 
+    /// Invariant: even a malformed marker is handled after the payloads. A
+    /// directory in place of the marker produces a real filesystem error,
+    /// independent of privileges or directory enumeration order.
+    #[test]
+    fn remove_all_keeps_a_malformed_marker_until_payloads_are_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(dir.path().join("vm"));
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        fs::write(workdir.hda_path(), b"disk contents").unwrap();
+        fs::write(workdir.shared_dir().join("config"), b"config").unwrap();
+        fs::create_dir(workdir.removing_marker()).unwrap();
+        fs::write(workdir.removing_marker().join("sentinel"), b"marker").unwrap();
+
+        let error = workdir.remove_all().unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::IsADirectory
+        );
+        assert!(!workdir.hda_path().exists());
+        assert!(!workdir.shared_dir().exists());
+        assert!(workdir.is_removing());
+        assert_eq!(
+            fs::read(workdir.removing_marker().join("sentinel")).unwrap(),
+            b"marker"
+        );
+
+        fs::remove_dir_all(workdir.removing_marker()).unwrap();
+        workdir.set_removing().unwrap();
+        workdir.remove_all().unwrap();
+        assert!(!workdir.path().exists());
+    }
+
     /// `.removing` goes last, so an interrupted deletion is still a removal.
     #[test]
     fn remove_all_deletes_everything_and_tolerates_a_missing_directory() {
