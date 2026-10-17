@@ -2395,6 +2395,7 @@ mod tests {
     /// A supervisor with no remaining process lets removal exercise the real
     /// directory and netd paths without launching a VM.
     async fn stopped_supervisor() -> (SupervisorClient, tokio::task::JoinHandle<()>) {
+        use supervisor_client::supervisor::{ProcessInfo, Response};
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -2413,14 +2414,9 @@ mod tests {
                     }
                 }
                 let body = if is_list {
-                    serde_json::to_string(&supervisor_client::supervisor::Response::Data(Vec::<
-                        supervisor_client::supervisor::ProcessInfo,
-                    >::new(
-                    )))
+                    serde_json::to_string(&Response::Data(Vec::<ProcessInfo>::new()))
                 } else {
-                    serde_json::to_string(&supervisor_client::supervisor::Response::Data(
-                        Option::<supervisor_client::supervisor::ProcessInfo>::None,
-                    ))
+                    serde_json::to_string(&Response::Data(Option::<ProcessInfo>::None))
                 }
                 .unwrap();
                 stream
@@ -2495,7 +2491,10 @@ mod tests {
         workdir.mark_network_cleanup_pending().unwrap();
 
         app.remove_vm("vm-1").await.unwrap();
-        gate.entered.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), gate.entered)
+            .await
+            .expect("deletion did not reach the filesystem boundary")
+            .unwrap();
         // The only async worker must be able to run another task while the
         // filesystem operation is still paused on a different OS thread.
         tokio::spawn(async { tokio::task::yield_now().await })
@@ -2529,6 +2528,9 @@ mod tests {
             .occupy(app.config.cvm.cid_start)
             .is_err());
         assert_eq!(netd.methods(), vec!["RemoveVm"]);
+        let sweep = &netd.seen()[0];
+        assert_eq!(sweep["instance_id"], "test-instance");
+        assert_eq!(sweep["vm_id"], "vm-1");
 
         gate.release.send(()).unwrap();
         let _finished = tokio::time::timeout(Duration::from_secs(5), app.launch_lock("vm-1"))
@@ -2575,7 +2577,10 @@ mod tests {
             let app = app.clone();
             async move { app.finish_remove_vm(mark, true).await }
         });
-        gate.entered.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), gate.entered)
+            .await
+            .expect("deletion did not reach the filesystem boundary")
+            .unwrap();
         removal.abort();
         assert!(removal.await.unwrap_err().is_cancelled());
         assert!(!gate.expired.load(std::sync::atomic::Ordering::SeqCst));
@@ -2597,6 +2602,39 @@ mod tests {
             .unwrap();
         assert!(!workdir.path().exists());
         assert!(app.refuse_if_removing("vm-1").is_ok());
+        let mut state = app.lock();
+        assert!(state.get("vm-1").is_none());
+        assert_eq!(state.cid_pool.allocate(), Some(app.config.cvm.cid_start));
+        server.abort();
+    }
+
+    /// Invariant: orphan cleanup without a persisted removal request must not
+    /// erase the VM's data, but still finishes state/CID/guard cleanup.
+    #[tokio::test]
+    async fn an_unmarked_orphan_keeps_its_workdir() {
+        let (supervisor, server) = stopped_supervisor().await;
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            supervisor,
+        );
+        let workdir = removable_vm(&app, "vm-1");
+        assert!(!workdir.is_removing());
+        assert!(app.lock().start_removing("vm-1"));
+        let mark = RemovalMark::new(app.clone(), "vm-1");
+        app.finish_remove_vm(mark, false).await.unwrap();
+
+        assert_eq!(
+            std::fs::read(workdir.hda_path()).unwrap(),
+            b"test disk contents"
+        );
+        assert_eq!(
+            std::fs::read(workdir.shared_dir().join("config")).unwrap(),
+            b"test config"
+        );
+        assert!(!workdir.is_removing());
+        assert!(app.refuse_if_removing("vm-1").is_ok());
+        assert!(app.launch_lock_handle("vm-1").try_lock().is_ok());
         let mut state = app.lock();
         assert!(state.get("vm-1").is_none());
         assert_eq!(state.cid_pool.allocate(), Some(app.config.cvm.cid_start));
