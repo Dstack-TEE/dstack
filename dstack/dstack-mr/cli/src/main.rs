@@ -66,6 +66,11 @@ struct MachineConfig {
     #[arg(long, value_delimiter = ',')]
     numa_pxb_buses: Vec<u8>,
 
+    /// Number of guest NUMA nodes without PXB expanders (every device on the
+    /// root bus)
+    #[arg(long, conflicts_with = "numa_pxb_buses")]
+    numa_nodes: Option<usize>,
+
     /// Number of GPUs
     #[arg(long, default_value = "0")]
     num_gpus: u32,
@@ -132,11 +137,14 @@ fn main() -> Result<()> {
             // The image declares its OVMF layout. Older metadata.json files
             // predate the field, so fall back to the only layout that existed.
             let ovmf_variant = image_info.ovmf_variant.unwrap_or_default();
-            let numa_nodes: Vec<_> = config
-                .numa_pxb_buses
-                .iter()
-                .map(|&bus| dstack_types::NumaNodeConfig { pxb_bus: bus })
-                .collect();
+            let numa_nodes = match config.numa_nodes {
+                Some(nodes) => vec![dstack_types::NumaNodeConfig { pxb_bus: None }; nodes],
+                None => config
+                    .numa_pxb_buses
+                    .iter()
+                    .map(|&bus| dstack_types::NumaNodeConfig { pxb_bus: Some(bus) })
+                    .collect(),
+            };
 
             let machine = Machine::builder()
                 .cpu_count(config.cpu)

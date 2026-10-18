@@ -40,7 +40,7 @@ impl Machine<'_> {
                 .numa_nodes
                 .iter()
                 .map(|node| NumaNode {
-                    pxb_bus: Some(node.pxb_bus),
+                    pxb_bus: node.pxb_bus,
                 })
                 .collect(),
             num_gpus: self.num_gpus,

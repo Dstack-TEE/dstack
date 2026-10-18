@@ -55,6 +55,10 @@ for each compatibility family cover the Cartesian product of:
 whose PXBs sit on buses 5, 6 and 8 (12 vCPUs, 6 GiB, two NICs), together with
 their loader and RSDP blobs.
 
+`qemu-11.1-q35-hotplug-off-numa2-plain-*.bin` capture two guest NUMA nodes
+without PXBs (8 vCPUs, 2 GiB, one NIC, two GPU root ports and one extra
+endpoint on the root bus).
+
 `qemu-11.1-q35-one-nic.bin` is an untrimmed byte-for-byte regression fixture.
 Fixture names identify the emulated compatibility version, not necessarily the
 source tree's release number.
