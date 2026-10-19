@@ -9,10 +9,15 @@ hash measured in `app-compose.json`.
 A built volume is a raw GPT image:
 
 ```text
-p1: DSTACK_VOLUME metadata envelope
-p2: filesystem data
-p3: dm-verity superblock and hash tree
+p1 dstack-volume:      DSTACK_VOLUME metadata envelope
+p2 dstack-volume-data: filesystem data
+p3 dstack-verity:      dm-verity superblock and hash tree
 ```
+
+The guest opens the partitions by number; the labels only keep a volume apart
+from the app data disk, whose partition is `dstack-data`. Older volumes label
+p2 `dstack-data` too; the guest skips any disk with a `dstack-volume`
+partition when it looks for the data disk.
 
 The envelope identifies a candidate disk. It is not trusted. The guest passes
 the root from the measured app compose to `veritysetup`, so a forged envelope or

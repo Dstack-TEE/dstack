@@ -332,7 +332,7 @@ fn write_gpt(mut out: fs::File, layout: &GptLayout, root_hash: &str) -> Result<f
             first_lba: layout.data.first_lba,
             last_lba: layout.data.last_lba,
             flags: 0,
-            name: "dstack-data".to_string(),
+            name: "dstack-volume-data".to_string(),
         },
     );
     parts.insert(
@@ -455,7 +455,7 @@ mod tests {
         let data_partition = disk.partitions().get(&2).unwrap();
         let hash_partition = disk.partitions().get(&3).unwrap();
         assert_eq!(metadata.name, "dstack-volume");
-        assert_eq!(data_partition.name, "dstack-data");
+        assert_eq!(data_partition.name, "dstack-volume-data");
         assert_eq!(hash_partition.name, "dstack-verity");
         assert_eq!(
             data_partition.part_guid,
