@@ -89,6 +89,31 @@ mod tests {
         Ok(())
     }
 
+    /// Two nodes without expanders: GPUs and a wrapper's endpoint stay on
+    /// the root bus, and only the SRAT and the CPUs' `_PXM` carry the nodes.
+    #[test]
+    fn numa_nodes_without_pxb_match_qemu_byte_for_byte() -> Result<(), Error> {
+        let mut c = config(1, 0);
+        c.cpu_count = 8;
+        c.numa_nodes = vec![NumaNode { pxb_bus: None }; 2];
+        c.num_gpus = 2;
+        c.extra_root_devices = vec![RootBusDevice::Endpoint];
+        c.hotplug_off = true;
+        let actual = build(&c)?;
+        let expected = include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-numa2-plain-base.bin");
+        assert_eq!(&actual.tables[..expected.len()], expected);
+        assert!(actual.tables[expected.len()..].iter().all(|b| *b == 0));
+        assert_eq!(
+            actual.loader,
+            include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-numa2-plain-loader.bin")
+        );
+        assert_eq!(
+            actual.rsdp,
+            include_bytes!("../fixtures/qemu-11.1-q35-hotplug-off-numa2-plain-rsdp.bin")
+        );
+        Ok(())
+    }
+
     #[test]
     fn numa_layouts_qemu_cannot_build_are_rejected() {
         let nodes = |buses: &[u8]| {
@@ -107,6 +132,7 @@ mod tests {
                 2,
                 vec![NumaNode { pxb_bus: None }, NumaNode { pxb_bus: Some(5) }],
             ),
+            (3, vec![NumaNode { pxb_bus: None }; 2]),
         ] {
             c.cpu_count = cpus;
             c.numa_nodes = buses;

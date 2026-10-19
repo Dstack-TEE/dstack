@@ -39,7 +39,8 @@ class Case:
     smm: bool = False
     pic: bool = False
     pci_hole64_size: int = 0
-    # PXB bus of each guest NUMA node; empty keeps the layout `hugepages` implies.
+    # PXB bus of each guest NUMA node, None for a node without one; empty
+    # keeps the layout `hugepages` implies.
     pxb_buses: tuple = ()
     # Devices a QEMU wrapper appends to the root bus: "e" endpoint, "r" root port.
     extra: str = ""
@@ -51,7 +52,7 @@ class Case:
     def pxbs(self):
         """PXB bus of each node that has one, explicit or implied."""
         if self.pxb_buses:
-            return self.pxb_buses
+            return tuple(bus for bus in self.pxb_buses if bus is not None)
         return (5,) if self.hugepages and self.gpus else ()
 
 
@@ -106,6 +107,28 @@ def fixed_cases():
             pxb_buses=(5, 7),
             extra="eree",
         ),
+        # Guest NUMA nodes without expanders: SRAT and _PXM only.
+        Case(cpus=2, pxb_buses=(None, None)),
+        Case(cpus=12, memory_mib=6144, nics=2, pxb_buses=(None,) * 3),
+        Case(
+            cpus=192,
+            memory_mib=8192,
+            gpus=4,
+            hotplug_off=True,
+            pci_hole64_size=1 << 43,
+            pxb_buses=(None, None),
+            extra="eeeee",
+        ),
+        Case(
+            version="9.2.0",
+            cpus=4,
+            hugepages=True,
+            gpus=2,
+            switches=1,
+            hotplug_off=True,
+            pxb_buses=(None, None),
+            extra="er",
+        ),
     ]
     return cases
 
@@ -114,11 +137,14 @@ def random_case(rng):
     hugepages = rng.choice([False, True])
     gpus = rng.randint(0, 8)
     switches = rng.randint(0, 4) if gpus else 0
-    nodes = rng.choice([0, 0, 2, 3, 4]) if hugepages else 0
+    nodes = rng.choice([0, 0, 2, 3, 4])
     pxb_buses = []
-    for _ in range(nodes):
-        pxb_buses.append(pxb_buses[-1] + rng.randint(1, 6) if pxb_buses else 5)
-    pxbs = len(pxb_buses) or int(hugepages and gpus > 0)
+    if hugepages:
+        for _ in range(nodes):
+            pxb_buses.append(pxb_buses[-1] + rng.randint(1, 6) if pxb_buses else 5)
+    else:
+        pxb_buses = [None] * nodes
+    pxbs = sum(bus is not None for bus in pxb_buses) or int(hugepages and gpus > 0)
     pxb = pxbs > 0
     available = 26 - pxbs
     passthrough = switches if pxb else gpus + switches
@@ -365,7 +391,7 @@ def run_case(case, image, rust_dump, output):
             str(case.memory_mib * 1024 * 1024),
             str(case.volumes),
             str(int(case.pic)),
-            ",".join(map(str, case.pxb_buses)),
+            ",".join("-" if bus is None else str(bus) for bus in case.pxb_buses),
             case.extra,
         ],
         check=True,
