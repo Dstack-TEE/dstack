@@ -43,6 +43,16 @@ beforeEach(() => {
   mockGetBlockNumber.mockResolvedValue(100n);
 });
 
+describe('server runtime config', () => {
+  it('keeps Bun idleTimeout above the KMS webhook timeout', async () => {
+    // Vitest calls `fetch` directly and never hits Bun.serve, so this pins the
+    // config that production actually loads. Bun's default of 10s closes the
+    // socket while GET / is still awaiting eth_call.
+    const indexModule = await import('./index.ts');
+    expect(indexModule.default.idleTimeout).toBeGreaterThanOrEqual(60);
+  });
+});
+
 describe('API Compatibility Tests', () => {
   describe('GET /', () => {
     it('should return system info matching OpenAPI spec', async () => {
