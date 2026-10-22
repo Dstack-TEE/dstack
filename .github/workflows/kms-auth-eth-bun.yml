@@ -1,0 +1,175 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: KMS auth-eth-bun
+
+# The auth-eth-bun webhook ships on its own cadence, separate from the KMS
+# image: a `kms-auth-eth-bun-v*` tag publishes
+# ghcr.io/dstack-tee/dstack-kms-auth-eth-bun:<version>. Pull requests and
+# pushes that touch the backend run the checks and build the image without
+# pushing it.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release tag version without the kms-auth-eth-bun-v prefix
+        required: true
+        type: string
+  push:
+    branches: [ next, 'release/**' ]
+    tags:
+      - 'kms-auth-eth-bun-v*'
+    paths:
+      - 'dstack/kms/auth-eth-bun/**'
+      - '.github/workflows/kms-auth-eth-bun.yml'
+  pull_request:
+    branches: [ next, 'release/**' ]
+    paths:
+      - 'dstack/kms/auth-eth-bun/**'
+      - '.github/workflows/kms-auth-eth-bun.yml'
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/dstack-tee/dstack-kms-auth-eth-bun
+  BACKEND_DIR: dstack/kms/auth-eth-bun
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('kms-auth-eth-bun-v{0}', inputs.version) || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          # Keep in step with the base image in the Dockerfile.
+          bun-version: 1.4.2
+          # A release build must not restore a cache an untrusted run wrote.
+          no-cache: true
+
+      - name: Install dependencies
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: bun install --frozen-lockfile
+
+      - name: Audit dependencies
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: bun audit --audit-level=moderate
+
+      - name: Lint
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: bun run lint
+
+      - name: Test
+        working-directory: ${{ env.BACKEND_DIR }}
+        run: bun run test:run
+
+  image:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Decide whether to publish
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION=
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            VERSION=$DISPATCH_VERSION
+          else
+            case "$GITHUB_REF" in
+              refs/tags/kms-auth-eth-bun-v*) VERSION=${GITHUB_REF#refs/tags/kms-auth-eth-bun-v} ;;
+            esac
+          fi
+          if [ -n "$VERSION" ]; then
+            if [[ ! "$VERSION" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+              echo "version must be a valid Docker tag" >&2
+              exit 1
+            fi
+            echo "PUBLISH=1" >> "$GITHUB_ENV"
+            echo "IMAGE_REF=$IMAGE:$VERSION" >> "$GITHUB_ENV"
+          else
+            echo "PUBLISH=" >> "$GITHUB_ENV"
+            echo "IMAGE_REF=$IMAGE:check" >> "$GITHUB_ENV"
+          fi
+
+      # Manual runs rebuild an existing release tag, not the selected branch.
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('kms-auth-eth-bun-v{0}', inputs.version) || github.sha }}
+          persist-credentials: false
+
+      - name: Resolve the revision to build
+        run: echo "GIT_REV=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Log in to GitHub Container Registry
+        if: env.PUBLISH == '1'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ env.BACKEND_DIR }}
+          platforms: linux/amd64
+          push: ${{ env.PUBLISH == '1' }}
+          provenance: false
+          tags: ${{ env.IMAGE_REF }}
+          build-args: |
+            GIT_REV=${{ env.GIT_REV }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.GIT_REV }}
+            org.opencontainers.image.description=dstack KMS auth webhook backed by the DstackKms contract
+
+      - name: Verify anonymous pull access
+        if: env.PUBLISH == '1'
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          token=$(curl -fsSL \
+            "https://ghcr.io/token?scope=repository:dstack-tee/dstack-kms-auth-eth-bun:pull" \
+            | jq -er .token)
+          curl -fsSL -o /dev/null \
+            -H "Authorization: Bearer $token" \
+            -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/dstack-tee/dstack-kms-auth-eth-bun/manifests/$IMAGE_DIGEST"
+
+      - name: Generate artifact attestation
+        if: env.PUBLISH == '1'
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Summarize
+        if: env.PUBLISH == '1'
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "**Image**: \`$IMAGE_REF\`"
+            echo
+            echo "**Pinned**: \`$IMAGE@$IMAGE_DIGEST\`"
+            echo
+            echo "**Revision**: \`$GIT_REV\`"
+          } >> "$GITHUB_STEP_SUMMARY"
