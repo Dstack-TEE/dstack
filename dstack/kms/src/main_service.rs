@@ -18,7 +18,7 @@ use dstack_kms_rpc::{
     GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SignCertRequest,
     SignCertResponse,
 };
-use dstack_verifier::{CvmVerifier, VerificationDetails};
+use dstack_verifier::{CvmVerifier, VerificationDetails, MEASUREMENT_CACHE_SUFFIX};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use moka::future::Cache;
@@ -120,10 +120,10 @@ fn short_lived_cache<V: Clone + Send + Sync + 'static>() -> Cache<(), V> {
         .build()
 }
 
-/// remove a single cache entry (a hex-named subdir/file) under `parent_dir`, or
-/// everything when `sub_dir == "all"`. A non-hex key is rejected to keep the
-/// deletion confined to the cache.
-fn remove_cache(parent_dir: &Path, sub_dir: &str) -> Result<()> {
+/// remove a single cache entry (a hex-named subdir/file, plus `suffix`) under
+/// `parent_dir`, or everything when `sub_dir == "all"`. A non-hex key is
+/// rejected to keep the deletion confined to the cache.
+fn remove_cache(parent_dir: &Path, sub_dir: &str, suffix: &str) -> Result<()> {
     if sub_dir.is_empty() {
         return Ok(());
     }
@@ -136,7 +136,7 @@ fn remove_cache(parent_dir: &Path, sub_dir: &str) -> Result<()> {
     if !sub_dir.chars().all(|c| c.is_ascii_hexdigit()) {
         bail!("invalid cache key");
     }
-    let path = parent_dir.join(sub_dir);
+    let path = parent_dir.join(format!("{sub_dir}{suffix}"));
     if path.is_dir() {
         fs::remove_dir_all(path)?;
     } else if path.is_file() {
@@ -151,10 +151,11 @@ impl KmsState {
     /// listener's HTTP authenticator, not here.
     pub(crate) fn clear_image_cache(&self, image_hash: &str, config_hash: &str) -> Result<()> {
         let images_dir = self.config.image.cache_dir.join("images");
-        remove_cache(&images_dir, image_hash).context("failed to clear image cache")?;
-        // measurement cache is kept by the verifier under measurements/.
+        remove_cache(&images_dir, image_hash, "").context("failed to clear image cache")?;
+        // measurement cache is kept by the verifier as measurements/<key>.json.
         let mr_cache_dir = self.config.image.cache_dir.join("measurements");
-        remove_cache(&mr_cache_dir, config_hash).context("failed to clear measurement cache")?;
+        remove_cache(&mr_cache_dir, config_hash, MEASUREMENT_CACHE_SUFFIX)
+            .context("failed to clear measurement cache")?;
         Ok(())
     }
 
@@ -688,18 +689,32 @@ mod tests {
         fs::create_dir_all(&keep).unwrap();
         fs::create_dir_all(&drop).unwrap();
 
-        remove_cache(root, "beef").unwrap();
+        remove_cache(root, "beef", "").unwrap();
         assert!(!drop.exists(), "named entry must be removed");
         assert!(keep.exists(), "other entries must be kept");
 
         // empty key is a no-op; a non-hex key is rejected before touching disk.
-        remove_cache(root, "").unwrap();
-        assert!(remove_cache(root, "../escape").is_err());
+        remove_cache(root, "", "").unwrap();
+        assert!(remove_cache(root, "../escape", "").is_err());
         assert!(keep.exists());
 
         // "all" clears the whole cache dir.
-        remove_cache(root, "all").unwrap();
+        remove_cache(root, "all", "").unwrap();
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn remove_cache_deletes_the_measurement_cache_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let keep = root.join(format!("cafe{MEASUREMENT_CACHE_SUFFIX}"));
+        let drop = root.join(format!("beef{MEASUREMENT_CACHE_SUFFIX}"));
+        fs::write(&keep, "{}").unwrap();
+        fs::write(&drop, "{}").unwrap();
+
+        remove_cache(root, "beef", MEASUREMENT_CACHE_SUFFIX).unwrap();
+        assert!(!drop.exists(), "named measurement entry must be removed");
+        assert!(keep.exists(), "other measurement entries must be kept");
     }
     use std::collections::BTreeMap;
 

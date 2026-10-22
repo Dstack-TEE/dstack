@@ -96,6 +96,9 @@ fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInf
 // cached.
 const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
+/// File-name suffix of a measurement cache entry: `measurements/<key>.json`.
+pub const MEASUREMENT_CACHE_SUFFIX: &str = ".json";
+
 /// Upper bound on both a downloaded image archive and its extracted contents.
 /// Measurement images carry no rootfs; released ones are under 25 MB extracted.
 const MAX_IMAGE_SIZE: u64 = 100 << 20;
@@ -170,7 +173,7 @@ impl CvmVerifier {
 
     fn measurement_cache_path(&self, cache_key: &str) -> PathBuf {
         self.measurement_cache_dir()
-            .join(format!("{cache_key}.json"))
+            .join(format!("{cache_key}{MEASUREMENT_CACHE_SUFFIX}"))
     }
 
     /// Hash only what the measurement reads: `image` and the measurement documents
