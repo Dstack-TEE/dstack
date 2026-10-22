@@ -70,6 +70,10 @@ type Requirements struct {
 	// pointer for the same reason.
 	HealthStatusFile *string `json:"health_status_file,omitempty"`
 
+	// EphemeralDataDisk formats the data disk on every boot. Like HealthCheck,
+	// a false value must stay out of the manifest.
+	EphemeralDataDisk bool `json:"ephemeral_data_disk,omitempty"`
+
 	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
 
 	// Extra carries fields this SDK does not know; see AppCompose.Extra.
