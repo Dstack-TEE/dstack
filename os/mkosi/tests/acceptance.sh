@@ -268,16 +268,17 @@ grep -q 'scripts/build-components.sh' "$D/mkosi.build"
 grep -q '^BuildPackages=' "$D/mkosi.conf"
 grep -q '^ToolsTree=yes$' "$D/mkosi.conf"
 grep -q '^ToolsTreeProfiles=misc$' "$D/mkosi.conf"
-grep -q '^Snapshot=20260721T000000Z$' "$D/mkosi.tools.conf"
+grep -q '^Snapshot=20261021T000000Z$' "$D/mkosi.tools.conf"
 grep -q 'clean -f' "$D/build.sh"
 grep -q 'install-toolchains.sh' "$D/mkosi.build"
 grep -q '^RUST_TOOLCHAIN_VERSION=1.92.0$' "$D/versions.env"
-# Tracks the Go that oe-core pins for the production Yocto backend, so both
-# backends compile the same Go components with the same toolchain. It must also
-# stay >= the highest 'go' directive among them (nvidia-container-toolkit
+# Go 1.26.10 carries the CVE-2026-111943 fix (crypto/x509 rejects chains with
+# the compromised eMudhra/emSign intermediate CA keys), so this is ahead of the
+# Go that oe-core pins for the production Yocto backend. It must also stay >=
+# the highest 'go' directive among the Go components (nvidia-container-toolkit
 # currently declares go 1.25.0); GOTOOLCHAIN=local turns a violation into a
 # build failure rather than a silent download.
-grep -q '^GO_TOOLCHAIN_VERSION=1.26.2$' "$D/versions.env"
+grep -q '^GO_TOOLCHAIN_VERSION=1.26.10$' "$D/versions.env"
 for component in dstack-rust image-tools container-stack sysbox nvattest kernel nvidia zfs ovmf; do
   definition="$D/components/$component/$component.sh"
   grep -q "^COMPONENT_NAME=$component$" "$definition"
