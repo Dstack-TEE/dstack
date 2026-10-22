@@ -4,11 +4,13 @@
 
 use std::time::Duration;
 
+use crate::api_auth::EffectiveScopes;
 use crate::config::Config;
 use crate::guest_api_service::{list_containers, GuestApiHandler};
 use crate::rpc_service::{AppState, ExternalRpcHandler};
 use anyhow::Result;
 use docker_logs::parse_duration;
+use dstack_api_auth::jwt;
 use dstack_guest_agent_rpc::v0::{worker_server::WorkerRpc, AppInfo};
 use guest_api::guest_api_server::GuestApiRpc;
 use ra_rpc::{CallContext, RpcCall};
@@ -28,11 +30,26 @@ pub fn external_routes(config: &Config) -> Vec<Route> {
     routes
 }
 
+/// The dashboard, filtered by what this caller was granted.
+///
+/// Access to the page is `guest:dashboard` (enforced by the fairing); what it
+/// *shows* is narrowed block by block. Two independent gates: the app's
+/// measured `public_*` switches decide whether confidential data may leave the
+/// TEE at all, and the caller's scopes decide whether this caller may see it.
+/// A scope can only hide a block, never reveal one the app kept private.
 #[get("/")]
-async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
+async fn index(
+    state: &State<AppState>,
+    scopes: EffectiveScopes,
+) -> Result<RawHtml<String>, String> {
     let public_logs = state.config().app_compose.public_logs;
     let public_sysinfo = state.config().app_compose.public_sysinfo;
     let public_tcbinfo = state.config().app_compose.public_tcbinfo;
+    let show_identity = scopes.allows(jwt::scope::INFO);
+    let show_sysinfo = public_sysinfo && scopes.allows(jwt::scope::METRICS);
+    let show_containers = scopes.allows(jwt::scope::CONTAINERS);
+    let show_logs = public_logs && scopes.allows(jwt::scope::LOGS);
+    let show_tcb = public_tcbinfo && show_identity;
     let context = CallContext::builder().state(&**state).build();
     let handler = ExternalRpcHandler::construct(context.clone())
         .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
@@ -58,7 +75,7 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
     // Only collected when the page will actually render it. Collecting
     // otherwise would scan every process and disk, and spawn a GPU collector,
     // on guests that keep their sysinfo private.
-    let (system_info, gpu_info) = if public_sysinfo {
+    let (system_info, gpu_info) = if show_sysinfo {
         let handler = GuestApiHandler::construct(context)
             .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
         (
@@ -69,7 +86,13 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         Default::default()
     };
 
-    let containers = list_containers().await.unwrap_or_default().containers;
+    // Skipped, not merely hidden: the listing walks every container on a
+    // page an anonymous caller may be allowed to reach.
+    let containers = if show_containers {
+        list_containers().await.unwrap_or_default().containers
+    } else {
+        Vec::new()
+    };
     let model = crate::models::Dashboard {
         app_name,
         app_id,
@@ -79,9 +102,11 @@ async fn index(state: &State<AppState>) -> Result<RawHtml<String>, String> {
         tcb_info,
         containers,
         system_info,
-        public_sysinfo,
-        public_logs,
-        public_tcbinfo,
+        show_identity,
+        show_sysinfo,
+        show_containers,
+        show_logs,
+        show_tcb,
         cloud_vendor,
         cloud_product,
         gpu_info,

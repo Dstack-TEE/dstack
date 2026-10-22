@@ -1053,6 +1053,7 @@ fn instance_info_from_record(
         // cached selection on a record that never claimed the app opted out.
         health: data.health_check.unwrap_or(known_gated).into(),
         connections: Default::default(),
+        agent_token: data.agent_token,
     };
     (info, unreadable)
 }
@@ -1968,6 +1969,7 @@ impl ProxyState {
         let ReportedCapabilities {
             port_policy,
             health_check,
+            agent_token,
         } = reported;
         if id.is_empty() {
             bail!("instance_id is empty (no_instance_id is set?)");
@@ -2064,6 +2066,11 @@ impl ProxyState {
             if port_policy.is_some() {
                 existing.port_policy = port_policy.clone();
             }
+            // Same rule: a registration that supplies no token must not erase
+            // one, and one that does replaces it wholesale.
+            if agent_token.is_some() {
+                existing.agent_token = agent_token.clone();
+            }
             existing.clone()
         });
         if let Some(existing) = edited {
@@ -2115,6 +2122,7 @@ impl ProxyState {
                 ready: None,
                 health: health_check.unwrap_or(false).into(),
                 connections: Default::default(),
+                agent_token,
             },
         };
         self.add_instance(host_info.clone());
@@ -2124,6 +2132,15 @@ impl ProxyState {
     /// Lookup an instance's IP. Returns `None` if the instance is unknown.
     pub(crate) fn instance_ip(&self, instance_id: &str) -> Option<Ipv4Addr> {
         self.state.instances.get(instance_id).map(|i| i.ip)
+    }
+
+    /// The bearer token an instance's guest agent external listener accepts,
+    /// if the CVM supplied one at registration.
+    pub(crate) fn instance_agent_token(&self, instance_id: &str) -> Option<String> {
+        self.state
+            .instances
+            .get(instance_id)
+            .and_then(|info| info.agent_token.clone())
     }
 
     /// Lookup the effective port_policy for an instance: admin override wins,
@@ -2819,6 +2836,7 @@ impl GatewayRpc for RpcHandler {
                     port_policy,
                     // A real CVM always states its intent, either way.
                     health_check: Some(request.health_check),
+                    agent_token: request.agent_token.filter(|token| !token.is_empty()),
                 },
             )
             .await

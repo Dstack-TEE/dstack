@@ -4,7 +4,8 @@
 
 use std::{future::pending, os::unix::net::UnixListener as StdUnixListener, time::Duration};
 
-use crate::config::BindAddr;
+use crate::api_auth::ScopeFairing;
+use crate::config::SocketAddr;
 use crate::guest_api_service::GuestApiHandler;
 use crate::http_routes;
 use crate::rpc_service::{AppState, ExternalRpcHandler, InternalRpcHandler, InternalRpcHandlerV0};
@@ -177,8 +178,13 @@ async fn run_internal(
 }
 
 async fn run_external(state: AppState, figment: Figment) -> Result<()> {
+    let scopes = ScopeFairing::new(state.api_auth().clone());
     let rocket = mount_external(rocket::custom(figment))
         .mount("/", http_routes::external_routes(state.config()))
+        // Mounted first so a denied request has somewhere to land that is not
+        // itself behind the check.
+        .mount("/", dstack_api_auth::routes())
+        .attach(scopes)
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
@@ -220,7 +226,14 @@ async fn run_guest_api(state: AppState, figment: Figment) -> Result<()> {
     Ok(())
 }
 
-async fn run_watchdog(port: u16) {
+/// Probe the internal socket, not the external listener.
+///
+/// The external listener now refuses anonymous callers by default, so probing
+/// it would report the agent dead whenever the host configured no anonymous
+/// scope. The unix socket is the surface that cannot depend on that: it is
+/// local-only, unauthenticated, and always mounted. It also answers with the
+/// same `Version` the port probe asked for.
+async fn run_watchdog(socket_path: String) {
     let mut watchdog_usec = 0;
     let enabled = sd_notify::watchdog_enabled(false, &mut watchdog_usec);
     if !enabled {
@@ -237,19 +250,17 @@ async fn run_watchdog(port: u16) {
     info!("Watchdog enabled, interval={watchdog_usec}us, heartbeat={heatbeat_interval:?}");
     let mut interval = tokio::time::interval(heatbeat_interval);
 
-    let probe_url = format!("http://localhost:{port}/prpc/Worker.Version");
     loop {
         interval.tick().await;
 
-        let client = reqwest::Client::new();
-        match client.get(&probe_url).send().await {
-            Ok(response) if response.status().is_success() => {
+        match http_client::http_request("GET", &socket_path, "/Version", &[]).await {
+            Ok((status, _)) if (200..300).contains(&status) => {
                 if let Err(err) = sd_notify(false, &[NotifyState::Watchdog]) {
                     error!("Failed to notify systemd: {err}");
                 }
             }
-            Ok(response) => {
-                error!("Health check failed with status: {}", response.status());
+            Ok((status, _)) => {
+                error!("Health check failed with status: {status}");
             }
             Err(err) => {
                 error!("Health check request failed: {err:?}");
@@ -262,11 +273,12 @@ pub async fn run(state: AppState, figment: Figment, watchdog: bool) -> Result<()
     let internal_v0_figment = figment.clone().select("internal-v0");
     let internal_figment = figment.clone().select("internal");
     let external_figment = figment.clone().select("external");
-    let bind_addr = if watchdog {
+    let watchdog_socket = if watchdog {
         Some(
-            external_figment
-                .extract::<BindAddr>()
-                .context("Failed to extract bind address")?,
+            internal_figment
+                .extract::<SocketAddr>()
+                .context("Failed to extract the internal socket address")?
+                .address,
         )
     } else {
         None
@@ -288,8 +300,8 @@ pub async fn run(state: AppState, figment: Figment, watchdog: bool) -> Result<()
         _ = async {
             let _ = tappd_ready_rx.await;
             let _ = sock_ready_rx.await;
-            if let Some(bind_addr) = bind_addr {
-                run_watchdog(bind_addr.port).await;
+            if let Some(socket_path) = watchdog_socket {
+                run_watchdog(socket_path).await;
             } else {
                 pending::<()>().await;
             }

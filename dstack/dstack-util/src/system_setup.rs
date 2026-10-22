@@ -56,6 +56,7 @@ use crate::{
 };
 use cert_client::{validate_kms_rpc_cert, CertRequestClient};
 use cmd_lib::run_fun as cmd;
+use dstack_api_auth::jwt;
 use dstack_gateway_rpc::{
     gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
     RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
@@ -493,6 +494,50 @@ struct GatewayContext<'a> {
     keys: &'a AppKeys,
 }
 
+/// Scopes the gateway needs on the guest agent's external listener: the v1
+/// `Health` poll, and the frozen `Info` call that fills in a port policy the
+/// CVM did not report. Nothing else -- the gateway has no business on the
+/// dashboard or in the logs.
+const GATEWAY_AGENT_SCOPES: &[&str] = &[jwt::scope::HEALTH, jwt::scope::INFO];
+
+/// Mint the token the gateway presents to this CVM's guest agent.
+///
+/// Derived from the app root key, so it needs no distribution: the agent holds
+/// the public half, this holds the private one, and the gateway only carries
+/// the result. `None` when either side is not ready yet -- an app id that only
+/// the boot attestation can supply, or an app root key that does not parse --
+/// in which case registration carries no token and the agent answers
+/// anonymously, exactly as it did before this existed.
+///
+/// One token for both calls the gateway makes, because both are the gateway
+/// doing its own job: the v1 `Health` poll, and the frozen `Info` that fills in
+/// a port policy the CVM did not report. Scopes are still a whitelist -- the
+/// gateway gets nothing on the dashboard or in the logs.
+fn gateway_agent_token(app_id: &[u8], app_root_key: &[u8]) -> Option<String> {
+    let secret = ra_tls::api_v1::derive_app_key(
+        app_root_key,
+        jwt::INTERNAL_ISSUER_DOMAIN,
+        ra_tls::api_v1::KeyAlgorithm::Ed25519,
+    )
+    .ok()?;
+    let app_id = hex::encode(app_id);
+    // Long enough to survive a few failed refreshes: a token that expired
+    // during a gateway outage would turn "we could not re-register" into "we
+    // are locked out until the outage ends".
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let claims = jwt::Claims {
+        iss: jwt::internal_issuer(&app_id),
+        aud: app_id,
+        iat: now,
+        exp: now + 600,
+        scope: GATEWAY_AGENT_SCOPES.join(" "),
+    };
+    jwt::sign(&secret, &claims).ok()
+}
+
 impl<'a> GatewayContext<'a> {
     fn new(shared: &'a HostShared, keys: &'a AppKeys) -> Self {
         Self { shared, keys }
@@ -532,6 +577,14 @@ impl<'a> GatewayContext<'a> {
         key_store: &GatewayKeyStore,
         gateway_app_id: &str,
     ) -> Result<RegisterCvmResponse> {
+        let agent_token =
+            gateway_agent_token(&self.shared.instance_info.app_id, &self.keys.k256_key);
+        if agent_token.is_none() {
+            // Not fatal: the CVM registers without one and the agent answers
+            // however the host configured it. Say so once per registration
+            // rather than failing a boot over it.
+            info!("no guest agent token available; registering without one");
+        }
         let port_policy = RpcPortPolicy {
             ports: self
                 .shared
@@ -558,6 +611,7 @@ impl<'a> GatewayContext<'a> {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy.clone()),
                 health_check,
+                agent_token: agent_token.clone(),
             })
             .await
             .context("Failed to register CVM");
@@ -581,6 +635,7 @@ impl<'a> GatewayContext<'a> {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy),
                 health_check,
+                agent_token,
             })
             .await
             .context("Failed to register CVM")

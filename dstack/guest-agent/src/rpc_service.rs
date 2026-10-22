@@ -123,6 +123,8 @@ struct AppStateInner {
     /// VM is running.
     cloud_vendor: String,
     cloud_product: String,
+    /// Access control for the external listener. See `api_auth`.
+    api_auth: crate::api_auth::GuestApiAuth,
 }
 
 /// The identity fields v1 `Info` reports, decoded once.
@@ -258,7 +260,7 @@ impl AppState {
                 .context("Failed to parse VM config")?;
         let collateral_urls = sys_config.collateral_urls();
         let gpu_attestor = crate::gpu_attest::GpuAttestor::new();
-        let vm_config = sys_config.vm_config;
+        let vm_config = sys_config.vm_config.clone();
         // Same trust anchor decision as dstack-util: never host-supplied, and
         // development roots only when this guest published them itself.
         let verifier = Arc::new(default_verifier(&collateral_urls)?);
@@ -279,6 +281,11 @@ impl AppState {
                     config.app_compose.runner.clone(),
                 )
             });
+        // Built before the state so a bad `guest_agent_api` block is a boot
+        // error: an unknown scope name would otherwise silently grant nothing.
+        let api_auth =
+            crate::api_auth::GuestApiAuth::from_sys_config(&sys_config, Some(&keys.k256_key))
+                .context("Failed to set up guest API access control")?;
         // Parsed once, and non-fatally: an unusable app root key is reported by
         // the RPCs that need one, not by refusing to start.
         let app_root_signing_key = match SigningKey::from_slice(&keys.k256_key) {
@@ -305,6 +312,7 @@ impl AppState {
                 attest_lock: Arc::default(),
                 cloud_vendor: read_dmi_file("sys_vendor"),
                 cloud_product: read_dmi_file("product_name"),
+                api_auth,
             }),
         };
         // Decode identity now so no request has to. Non-fatal: a platform that
@@ -325,6 +333,11 @@ impl AppState {
 
     pub fn config(&self) -> &Config {
         &self.inner.config
+    }
+
+    /// Access control for the external listener.
+    pub(crate) fn api_auth(&self) -> &crate::api_auth::GuestApiAuth {
+        &self.inner.api_auth
     }
 
     pub(crate) fn health(&self) -> Option<&crate::health::HealthMonitor> {
@@ -405,6 +418,16 @@ impl AppState {
                 self.inner
                     .attest(decode_identity)
                     .await
+                    // External tokens are bound to the app id, which only the
+                    // boot attestation can supply. Binding here rather than at
+                    // startup covers the retry path too: until it lands the
+                    // listener serves anonymous callers and refuses every
+                    // token.
+                    .inspect(|identity| {
+                        self.inner
+                            .api_auth
+                            .bind_app_id(hex::encode(&identity.app_id));
+                    })
                     .inspect_err(|_| {
                         *last_failure.lock().or_panic("lock should never fail") =
                             Some(Instant::now());
@@ -1463,6 +1486,7 @@ pNs85uhOZE8z2jr8Pg==
             // against v0 `get_info` compares like with like.
             cloud_vendor: read_dmi_file("sys_vendor"),
             cloud_product: read_dmi_file("product_name"),
+            api_auth: crate::api_auth::GuestApiAuth::new(None, Some(&DUMMY_K256_KEY)).unwrap(),
         };
 
         (

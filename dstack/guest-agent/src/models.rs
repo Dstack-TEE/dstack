@@ -116,12 +116,26 @@ pub struct Dashboard {
     pub tcb_info: String,
     pub containers: Vec<Container>,
     pub system_info: SystemInfo,
-    pub public_sysinfo: bool,
-    pub public_logs: bool,
-    pub public_tcbinfo: bool,
+    /// The host's sysinfo and GPU collection may be shown: published by the
+    /// app (`public_sysinfo`) *and* granted to this caller.
+    pub show_sysinfo: bool,
+    /// The TCB document may be shown: published by the app
+    /// (`public_tcbinfo`) *and* granted to this caller.
+    pub show_tcb: bool,
     pub cloud_vendor: String,
     pub cloud_product: String,
     pub gpu_info: GpuInfoResponse,
+    /// Whether the caller may see the identity block at all. The page itself
+    /// already needs `guest:dashboard`; this narrows what it shows, block by
+    /// block, so a token for one kind of data does not carry the rest.
+    pub show_identity: bool,
+    /// Whether the container table is shown. Also decides whether the
+    /// container list is collected: a scope that hides a block should not pay
+    /// for producing it.
+    pub show_containers: bool,
+    /// Whether the logs column is shown. Requires `public_logs` as well -- a
+    /// scope cannot unlock logs the app did not publish.
+    pub show_logs: bool,
 }
 
 #[derive(Template)]
@@ -253,11 +267,13 @@ mod tests {
             tcb_info: String::new(),
             containers: vec![],
             system_info: Default::default(),
-            public_sysinfo: true,
-            public_logs: false,
-            public_tcbinfo: false,
+            show_sysinfo: true,
+            show_tcb: false,
             cloud_vendor: String::new(),
             cloud_product: String::new(),
+            show_identity: true,
+            show_containers: true,
+            show_logs: true,
             gpu_info: GpuInfoResponse {
                 gpus: vec![GpuDevice {
                     power_usage_mw: Some(70_123),
@@ -404,11 +420,13 @@ mod tests {
             tcb_info: String::new(),
             containers: vec![],
             system_info: Default::default(),
-            public_sysinfo: true,
-            public_logs: false,
-            public_tcbinfo: false,
+            show_sysinfo: true,
+            show_tcb: false,
             cloud_vendor: String::new(),
             cloud_product: String::new(),
+            show_identity: true,
+            show_containers: true,
+            show_logs: true,
             gpu_info,
         }
         .render()

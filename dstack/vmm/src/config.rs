@@ -308,6 +308,29 @@ where
     )
 }
 
+/// Check the block before it is handed to guests: the guest rejects the same
+/// things at boot, and an operator would rather learn about a typo at `vmm`
+/// startup than from a CVM that will not come up.
+fn validate_guest_agent_api(config: &dstack_types::GuestAgentApiConfig) -> Result<()> {
+    for name in &config.anonymous_scopes {
+        anyhow::ensure!(
+            dstack_api_auth::jwt::scope::is_known(name),
+            "unknown anonymous scope {name:?}"
+        );
+    }
+    for issuer in &config.external_issuers {
+        anyhow::ensure!(!issuer.name.is_empty(), "an external issuer needs a name");
+        for key in &issuer.public_keys {
+            anyhow::ensure!(
+                hex::decode(key).is_ok_and(|bytes| bytes.len() == 32),
+                "issuer {:?}: public key must be 32 bytes of hex",
+                issuer.name
+            );
+        }
+    }
+    Ok(())
+}
+
 impl CvmConfig {
     /// The effective TEE platform: the configured one, or host auto-detection
     /// when left unset (`platform` omitted / `auto`).
@@ -495,6 +518,13 @@ pub struct CvmConfig {
     /// An empty value is derived from the absolute run directory.
     #[serde(default)]
     pub instance_id: String,
+
+    /// Who may call the guest agent's external API (port 8090). Handed to the
+    /// guest in sys-config, so it is a host decision and not part of the
+    /// measurement; the measured `public_*` switches in app-compose still
+    /// decide whether confidential data may be exposed at all.
+    #[serde(default)]
+    pub guest_agent_api: dstack_types::GuestAgentApiConfig,
 
     /// Host sharing mode. (9p, vhd, vvfat)
     pub host_share_mode: String,
@@ -828,6 +858,8 @@ impl Config {
             .context("Invalid host_api configuration")?;
 
         self.netd.validate()?;
+        validate_guest_agent_api(&self.cvm.guest_agent_api)
+            .context("Invalid cvm.guest_agent_api configuration")?;
 
         anyhow::ensure!(self.cvm.cid_start >= 3, "cvm.cid_start must be at least 3");
         anyhow::ensure!(
@@ -1460,6 +1492,29 @@ mod tests {
         let cvm = cvm_with_qemu(&dir, "echo 'wrapper: exec /usr/libexec/qemu-kvm-8.2.0'");
         let err = format!("{:#}", cvm.resolve_qemu_version().unwrap_err());
         assert!(err.contains("set `qemu_version` in vmm.toml"), "{err}");
+    }
+
+    #[test]
+    fn guest_agent_api_rejects_what_the_guest_would_reject_at_boot() {
+        let mut config = dstack_types::GuestAgentApiConfig::default();
+        config.anonymous_scopes = vec!["guest:dashboard".into()];
+        assert!(validate_guest_agent_api(&config).is_ok());
+
+        config.anonymous_scopes = vec!["guest:everything".into()];
+        assert!(validate_guest_agent_api(&config)
+            .unwrap_err()
+            .to_string()
+            .contains("guest:everything"));
+
+        config.anonymous_scopes.clear();
+        config.external_issuers = vec![dstack_types::ExternalJwtIssuer {
+            name: "ops".into(),
+            public_keys: vec!["not-hex".into()],
+        }];
+        assert!(validate_guest_agent_api(&config)
+            .unwrap_err()
+            .to_string()
+            .contains("ops"));
     }
 
     #[test]

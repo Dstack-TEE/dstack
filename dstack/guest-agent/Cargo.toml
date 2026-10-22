@@ -40,11 +40,12 @@ sysinfo.workspace = true
 default-net.workspace = true
 rocket-vsock-listener.workspace = true
 sd-notify.workspace = true
-reqwest.workspace = true
 cmd_lib.workspace = true
 figment = { workspace = true, features = ["json", "toml"] }
 load_config.workspace = true
 k256 = { workspace = true, features = ["ecdsa"] }
+dstack-api-auth.workspace = true
+http-client.workspace = true
 dstack-types.workspace = true
 sha3.workspace = true
 strip-ansi-escapes.workspace = true

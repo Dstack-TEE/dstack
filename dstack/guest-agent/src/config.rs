@@ -23,9 +23,16 @@ pub fn load_config_figment_with_default(
     load_config("dstack", default_config, config_file, true)
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct BindAddr {
-    pub port: u16,
+/// Where one listener binds.
+///
+/// The external listener states a port; the internal ones state a unix socket
+/// path. Deserialized as a whole rather than per field so a typo in either is
+/// a startup error instead of a listener that silently binds elsewhere.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SocketAddr {
+    pub address: String,
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone)]

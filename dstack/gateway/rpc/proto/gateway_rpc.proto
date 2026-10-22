@@ -31,6 +31,16 @@ message RegisterCvmRequest {
   // gateway falls back to fetching app-compose via Info()) from "reported
   // empty" (new CVM with no special port behaviour).
   optional PortPolicy port_policy = 2;
+  // Ed25519 JWT the CVM minted for its own guest agent, so the gateway can
+  // call the agent's external listener now that it refuses anonymous callers
+  // by default. Bound to this CVM's app id and expiring within the hour; the
+  // CVM re-registers every three minutes, so a stale copy never outlives its
+  // usefulness.
+  //
+  // Empty from a CVM that predates the field, or one whose app identity is
+  // not known yet. The gateway then calls without a token and gets whatever
+  // the host left open -- possibly nothing, which is the intended default.
+  optional string agent_token = 4;
 }
 
 // PortPolicy carries the gateway-relevant per-port configuration declared by

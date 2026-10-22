@@ -1254,8 +1254,42 @@ pub struct SysConfig {
     /// string.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mr_config: Option<String>,
+    /// Access control for the guest agent's external listener. Absent means
+    /// the code defaults: nothing anonymous, no external issuers.
+    ///
+    /// Host-supplied, and deliberately not measured: it decides who may *ask*
+    /// the agent, never whether data may leave the TEE. Confidentiality stays
+    /// with the measured `public_logs`/`public_sysinfo`/`public_tcbinfo`
+    /// switches in app-compose, which a token here cannot widen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_agent_api: Option<GuestAgentApiConfig>,
     // JSON serialized VmConfig
     pub vm_config: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GuestAgentApiConfig {
+    /// Scopes granted to a caller that presents no token.
+    ///
+    /// Empty by default: an app that wants its dashboard on the internet has
+    /// to say so. This is an exposure choice, not a trust one -- the anonymous
+    /// caller is the same party a public 8090 already served.
+    #[serde(default)]
+    pub anonymous_scopes: Vec<String>,
+    /// Issuers other than the app's own root key.
+    #[serde(default)]
+    pub external_issuers: Vec<ExternalJwtIssuer>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalJwtIssuer {
+    /// The exact `iss` claim tokens from this issuer must carry.
+    pub name: String,
+    /// Hex-encoded Ed25519 public keys. More than one so a key can be rotated
+    /// without a flag day.
+    pub public_keys: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]

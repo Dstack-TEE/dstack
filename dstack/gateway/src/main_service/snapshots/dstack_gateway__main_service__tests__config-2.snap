@@ -1,6 +1,6 @@
 ---
 source: gateway/src/main_service/tests.rs
-assertion_line: 71
+assertion_line: 86
 expression: info1
 ---
 InstanceInfo {
@@ -20,5 +20,6 @@ InstanceInfo {
         gated: false,
         state: Ungated,
     },
+    agent_token: None,
     connections: 0,
 }

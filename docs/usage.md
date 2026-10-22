@@ -17,7 +17,7 @@ Open the dstack-vmm webpage [http://localhost:9080](http://localhost:9080) (chan
 After the container is deployed, it should take some time to start the CVM and the containers. Time would vary depending on your workload.
 
 - **[Logs]**: Click this button to view the CVM logs and monitor container startup progress
-- **[Dashboard]**: Once the container is running, click this button to view container information and logs. (Note: This button is only visible when dstack-gateway is enabled. If disabled, you'll need to add a port mapping to port 8090 to access the CVM dashboard)
+- **[Dashboard]**: Once the container is running, click this button to view container information and logs. (Note: This button is only visible when dstack-gateway is enabled. If disabled, you'll need to add a port mapping to port 8090 and allow the dashboard scopes in `[cvm.guest_agent_api]`; see [Guest Agent API access control](./guest-api-auth.md))
 
 <div align="center">
 <img src="./assets/guest-agent.png" alt="Guest Agent Dashboard" height="300">
