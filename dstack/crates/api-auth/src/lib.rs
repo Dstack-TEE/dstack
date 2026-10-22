@@ -301,7 +301,7 @@ impl<'r> Responder<'r, 'static> for Unauthorized {
     }
 }
 
-pub(crate) struct RequestRealm(String);
+struct RequestRealm(String);
 
 #[rocket::get("/__dstack_api_auth_unauthorized")]
 fn unauth_get() -> Unauthorized {

@@ -217,41 +217,28 @@ async fn fetch_with_retry(state: &Proxy, instance_id: &str) {
 }
 
 async fn fetch_and_store(state: &Proxy, instance_id: &str) -> Result<(), FetchError> {
-    let (ip, agent_port, agent_token) = {
+    let (ip, agent_port) = {
         let guard = state.lock();
         let ip = guard
             .instance_ip(instance_id)
             // Instance was recycled — never coming back under this id.
             .ok_or_else(|| FetchError::Permanent(anyhow::anyhow!("unknown instance")))?;
-        (
-            ip,
-            guard.config.proxy.agent_port,
-            guard.instance_agent_token(instance_id),
-        )
+        (ip, guard.config.proxy.agent_port)
     };
-    let policy = fetch_port_policy(ip, agent_port, agent_token.as_deref()).await?;
+    let policy = fetch_port_policy(ip, agent_port).await?;
     state
         .lock()
         .update_instance_port_policy(instance_id, policy);
     Ok(())
 }
 
-async fn fetch_port_policy(
-    ip: Ipv4Addr,
-    agent_port: u16,
-    agent_token: Option<&str>,
-) -> Result<PortPolicy, FetchError> {
+async fn fetch_port_policy(ip: Ipv4Addr, agent_port: u16) -> Result<PortPolicy, FetchError> {
     let url = format!("http://{ip}:{agent_port}/prpc");
     // Same untrusted peer as the health poller; see `guest_agent_client`.
     // Pooled, unlike the poller: this fills a cache rather than deciding
     // anything, it fires once per instance instead of on a timer, and a
     // connection that died while idle costs one retry of a lazy fetch.
-    let transport = super::guest_agent_client(url, ConnectionReuse::Pooled);
-    let transport = match agent_token {
-        Some(token) => transport.with_bearer_token(token),
-        None => transport,
-    };
-    let client = DstackGuestClient::new(transport);
+    let client = DstackGuestClient::new(super::guest_agent_client(url, ConnectionReuse::Pooled));
     // Network/RPC errors here are transient: agent might still be coming up.
     let info = client
         .info()

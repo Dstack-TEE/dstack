@@ -2134,15 +2134,6 @@ impl ProxyState {
         self.state.instances.get(instance_id).map(|i| i.ip)
     }
 
-    /// The bearer token an instance's guest agent external listener accepts,
-    /// if the CVM supplied one at registration.
-    pub(crate) fn instance_agent_token(&self, instance_id: &str) -> Option<String> {
-        self.state
-            .instances
-            .get(instance_id)
-            .and_then(|info| info.agent_token.clone())
-    }
-
     /// Lookup the effective port_policy for an instance: admin override wins,
     /// otherwise fall back to the instance-reported policy. `None` means
     /// neither is set — caller fails closed and may schedule a lazy fetch.

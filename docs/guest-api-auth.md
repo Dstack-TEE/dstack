@@ -26,11 +26,10 @@ only narrow what those allow. See
 
 `/prpc`, `/prpc/v0` and `/prpc/v1` are matched after percent-decoding and
 segment normalisation, so `/prpc/Worker.Info`, `/prpc/v0/Info` and
-`/%70rpc/Info` all need `guest:info`. There is no spelling that reaches a
-handler with a weaker check.
+`/%70rpc/Info` all need `guest:info`.
 
-A route the vocabulary does not name needs no scope: nothing is mounted there,
-and the router's 404 is the answer.
+The check fails closed: a path the table does not name is answered with 401,
+not passed to the router.
 
 ## Default: nothing anonymous
 
@@ -88,24 +87,32 @@ so they cannot be expressed.
 
 ### Where the internal issuer comes from
 
-The agent and the gateway both hold the app root key inside the TEE. The token
-the gateway presents is minted in the guest's own setup (`dstack-util`) and
-carried on registration, so it can be bound to the app id and expire:
+The gateway does not hold the app root key; the CVM mints its token and hands
+it over on registration, bound to the app id and short-lived:
 
-1. Both derive the same Ed25519 key:
-   `derive_app_key(app_root_key, "dstack:guest-api:issuer:v1", Ed25519)`.
+1. The agent and `dstack-util`, both inside the CVM, derive the same Ed25519
+   key: `derive_app_key(app_root_key, "dstack:guest-api:issuer:v1", Ed25519)`.
 2. `dstack-util` signs a token with `iss = "dstack:guest-api:<app_id>"`,
-   `aud = <app_id>`, a 10-minute lifetime, and the `guest:health`, `guest:info`
-   scopes.
+   `aud = <app_id>`, a 10-minute lifetime, and only the `guest:health` scope.
 3. Registration carries it to the gateway, which presents it on the v1 `Health`
-   poll and on the lazy `Info` fetch that fills in a port policy the CVM did not
-   report.
+   poll.
 
-Nothing else gets a token: the gateway has no business on the dashboard or in
-the logs.
+The host cannot mint an internal token: the signing key is derived from the app
+root key, which KMS releases only after the boot measurement is verified. The
+host can still name its own [external issuer](#external-issuers) and grant
+itself any scope; that is the same exposure as listing the scope in
+`anonymous_scopes`, and still bounded by the measured switches.
 
-The host cannot mint one: the signing key is derived from the app root key, which
-is released to the guest by KMS only after the boot measurement is verified.
+### Trust inside the CVM
+
+The CVM is one trust domain; the agent does not sandbox the processes in it. The
+issuer key is an ordinary v1 application key, so any process that can reach
+`dstack.sock` can obtain it with
+`GetKey(domain = "dstack:guest-api:issuer:v1", algorithm = ed25519)` and mint a
+token with any scope. That is by design -- the same process can already read
+the data those scopes expose -- and it is also how an app issues tokens of its
+own. Do not mount `dstack.sock` into a container you would not trust with
+that.
 
 ## The two gates
 
@@ -137,8 +144,5 @@ During the rollout, either upgrade the gateway first, or leave the host open:
 
 ```toml
 [cvm.guest_agent_api]
-anonymous_scopes = ["guest:version", "guest:health", "guest:info"]
+anonymous_scopes = ["guest:version", "guest:health"]
 ```
-
-`guest:info` is needed by gateways that did not report a port policy and fetch
-it lazily.

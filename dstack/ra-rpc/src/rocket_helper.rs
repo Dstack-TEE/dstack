@@ -527,7 +527,9 @@ pub async fn handle_prpc_impl<S, Call: RpcCall<S>>(
         method_trim_prefix,
         data,
     } = args;
-    let method = method.trim_start_matches(method_trim_prefix.unwrap_or_default());
+    let method = method
+        .strip_prefix(method_trim_prefix.unwrap_or_default())
+        .unwrap_or(method);
     let is_json = request.wants_json();
     let info = request
         .certificate

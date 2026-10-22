@@ -73,8 +73,8 @@ pub struct InstanceInfo {
     /// declaration and verdict disagree.
     pub(crate) health: Health,
     /// Bearer token for the instance's guest agent external listener, minted
-    /// by the CVM at registration. Absent for a legacy CVM, which has no such
-    /// listener to authenticate against.
+    /// by the CVM at registration. Absent for a legacy CVM, whose listener
+    /// needs none.
     pub agent_token: Option<String>,
     pub connections: Arc<AtomicU64>,
 }

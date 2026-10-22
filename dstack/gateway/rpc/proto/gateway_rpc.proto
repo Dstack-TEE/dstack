@@ -37,9 +37,9 @@ message RegisterCvmRequest {
   // CVM re-registers every three minutes, so a stale copy never outlives its
   // usefulness.
   //
-  // Empty from a CVM that predates the field, or one whose app identity is
-  // not known yet. The gateway then calls without a token and gets whatever
-  // the host left open -- possibly nothing, which is the intended default.
+  // Empty from a CVM that predates the field, or one that could not mint it.
+  // The gateway then calls without a token and gets whatever the host left
+  // open -- possibly nothing, which is the intended default.
   optional string agent_token = 4;
 }
 

@@ -281,11 +281,11 @@ impl AppState {
                     config.app_compose.runner.clone(),
                 )
             });
-        // Built before the state so a bad `guest_agent_api` block is a boot
-        // error: an unknown scope name would otherwise silently grant nothing.
+        // A bad `guest_agent_api` block is a boot error: an unknown scope name
+        // would otherwise silently grant nothing.
         let api_auth =
-            crate::api_auth::GuestApiAuth::from_sys_config(&sys_config, Some(&keys.k256_key))
-                .context("Failed to set up guest API access control")?;
+            crate::api_auth::GuestApiAuth::new(sys_config.guest_agent_api.as_ref(), &keys.k256_key)
+                .context("failed to set up guest API access control")?;
         // Parsed once, and non-fatally: an unusable app root key is reported by
         // the RPCs that need one, not by refusing to start.
         let app_root_signing_key = match SigningKey::from_slice(&keys.k256_key) {
@@ -418,16 +418,6 @@ impl AppState {
                 self.inner
                     .attest(decode_identity)
                     .await
-                    // External tokens are bound to the app id, which only the
-                    // boot attestation can supply. Binding here rather than at
-                    // startup covers the retry path too: until it lands the
-                    // listener serves anonymous callers and refuses every
-                    // token.
-                    .inspect(|identity| {
-                        self.inner
-                            .api_auth
-                            .bind_app_id(hex::encode(&identity.app_id));
-                    })
                     .inspect_err(|_| {
                         *last_failure.lock().or_panic("lock should never fail") =
                             Some(Instant::now());
@@ -1126,6 +1116,12 @@ pub(crate) mod tests {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    pub(crate) const DUMMY_K256_KEY: [u8; 32] = [
+        0x1A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0x0D, 0x1E, 0x2F, 0x3A, 0x4B, 0x5C,
+        0x6D, 0x7E, 0x8F, 0x9A, 0x0B, 0x1C, 0x2D, 0x3E, 0x4F, 0x5A, 0x6B, 0x7C, 0x8D, 0x9E, 0x0F,
+        0x1A, 0x2B,
+    ];
+
     fn extract_pubkey_from_report_data(report_data: &[u8], prefix: &str) -> Result<Vec<u8>> {
         let end = report_data
             .iter()
@@ -1352,12 +1348,6 @@ pNs85uhOZE8z2jr8Pg==
 -----END CERTIFICATE-----
 "#;
 
-        const DUMMY_K256_KEY: [u8; 32] = [
-            0x1A, 0x2B, 0x3C, 0x4D, 0x5E, 0x6F, 0x7A, 0x8B, 0x9C, 0x0D, 0x1E, 0x2F, 0x3A, 0x4B,
-            0x5C, 0x6D, 0x7E, 0x8F, 0x9A, 0x0B, 0x1C, 0x2D, 0x3E, 0x4F, 0x5A, 0x6B, 0x7C, 0x8D,
-            0x9E, 0x0F, 0x1A, 0x2B,
-        ];
-
         let dummy_keys = AppKeys {
             disk_crypt_key: Vec::new(),
             env_crypt_key: Vec::new(),
@@ -1486,7 +1476,7 @@ pNs85uhOZE8z2jr8Pg==
             // against v0 `get_info` compares like with like.
             cloud_vendor: read_dmi_file("sys_vendor"),
             cloud_product: read_dmi_file("product_name"),
-            api_auth: crate::api_auth::GuestApiAuth::new(None, Some(&DUMMY_K256_KEY)).unwrap(),
+            api_auth: crate::api_auth::GuestApiAuth::new(None, &DUMMY_K256_KEY).unwrap(),
         };
 
         (

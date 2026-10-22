@@ -130,9 +130,8 @@ pub struct InstanceRecord {
     /// a rollback and forward again.
     #[serde(default)]
     pub health_check: Option<bool>,
-    /// Token this CVM minted for the gateway, so the agent's external listener
-    /// can answer an operator-run caller. `None` for a CVM that predates the
-    /// field, or one whose app id is not yet known.
+    /// Token this CVM minted for the gateway's `Health` poll. `None` for a CVM
+    /// that predates the field, or one that could not mint it.
     ///
     /// Per-instance rather than per-app: the token is bound to the instance's
     /// app id and expires within the hour, and the CVM re-registers every

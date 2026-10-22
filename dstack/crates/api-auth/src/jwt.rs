@@ -170,19 +170,13 @@ pub struct IssuerKeys {
 /// Verifies tokens and reports what they grant.
 #[derive(Clone)]
 pub struct Verifier {
-    internal: Option<VerifyingKey>,
+    internal: VerifyingKey,
     external: Vec<IssuerKeys>,
 }
 
 impl Verifier {
-    /// `internal` is absent only when the app root key could not produce one;
-    /// an agent in that state still verifies external issuers.
-    pub fn new(internal: Option<VerifyingKey>, external: Vec<IssuerKeys>) -> Self {
+    pub fn new(internal: VerifyingKey, external: Vec<IssuerKeys>) -> Self {
         Self { internal, external }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.internal.is_none() && self.external.is_empty()
     }
 
     /// Verify `token` for the application whose id is `app_id_hex`.
@@ -238,7 +232,7 @@ impl Verifier {
 
     fn keys_for(&self, iss: &str, app_id_hex: &str) -> Vec<&VerifyingKey> {
         if iss == internal_issuer(app_id_hex) {
-            return self.internal.iter().collect();
+            return vec![&self.internal];
         }
         self.external
             .iter()
@@ -274,7 +268,7 @@ mod tests {
 
     fn verifier(seed: u8) -> Verifier {
         Verifier::new(
-            Some(SigningKey::from_bytes(&signing_key(seed)).verifying_key()),
+            SigningKey::from_bytes(&signing_key(seed)).verifying_key(),
             vec![],
         )
     }
@@ -362,7 +356,7 @@ mod tests {
     #[test]
     fn accepts_an_external_issuer_by_name() {
         let verifier = Verifier::new(
-            None,
+            SigningKey::from_bytes(&signing_key(1)).verifying_key(),
             vec![IssuerKeys {
                 name: "ops".into(),
                 keys: vec![SigningKey::from_bytes(&signing_key(9)).verifying_key()],
