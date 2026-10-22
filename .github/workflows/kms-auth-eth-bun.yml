@@ -50,7 +50,7 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           # Keep in step with the base image in the Dockerfile.
-          bun-version: 1.4.2
+          bun-version: 1.4.4
           # A release build must not restore a cache an untrusted run wrote.
           no-cache: true
 
