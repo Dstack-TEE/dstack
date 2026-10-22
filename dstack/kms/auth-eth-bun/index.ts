@@ -333,7 +333,11 @@ app.post('/bootAuth/kms',
 const port = parseInt(process.env.PORT || '3000');
 console.log(`starting server on port ${port}`);
 
+// Bun defaults idleTimeout to 10s and closes the socket while the handler is
+// still awaiting eth_call. KMS's webhook timeout is 60s; stay above that so the
+// client times out first. Bun's documented maximum is 255.
 export default {
   port,
+  idleTimeout: 255,
   fetch: app.fetch,
 };
