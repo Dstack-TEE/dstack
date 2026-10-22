@@ -29,11 +29,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let memory_size = optional(&mut args, 2u64 << 30)?;
     let volumes = optional(&mut args, 0)?;
     let pic = optional::<u8>(&mut args, 0)? == 1;
-    // Comma-separated PXB bus of each NUMA node; empty keeps the legacy layout.
+    // Comma-separated PXB bus of each NUMA node, `-` for none; empty keeps the
+    // legacy layout.
     let numa_nodes = optional::<String>(&mut args, String::new())?
         .split(',')
         .filter(|bus| !bus.is_empty())
-        .map(|bus| bus.parse().map(|bus| NumaNode { pxb_bus: Some(bus) }))
+        .map(|bus| match bus {
+            "-" => Ok(NumaNode { pxb_bus: None }),
+            bus => bus.parse().map(|bus| NumaNode { pxb_bus: Some(bus) }),
+        })
         .collect::<Result<_, _>>()?;
     // Devices appended after the root ports: `e` endpoint, `r` root port.
     let extra_root_devices = optional::<String>(&mut args, String::new())?

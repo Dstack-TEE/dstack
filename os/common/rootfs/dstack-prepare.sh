@@ -52,6 +52,36 @@ find_block_by_property() {
 	return 1
 }
 
+# A verity volume's first partition is labelled dstack-volume. Volumes built
+# before dstack-volume-data labelled their data partition dstack-data, the app
+# data disk's label: never take a partition on such a disk for the data disk.
+is_verity_volume_disk() {
+	local disk="$1" part
+	for part in /sys/class/block/"$disk"/"$disk"*; do
+		[ -e "$part/uevent" ] || continue
+		[ "$(read_uevent_property "$part/uevent" PARTNAME || true)" = dstack-volume ] && return 0
+	done
+	return 1
+}
+
+# Print the dstack-data partition. Returns 1 if there is none, 2 if there is
+# more than one.
+find_data_partition() {
+	local entry found=""
+	for entry in /sys/class/block/*; do
+		[ -e "$entry/partition" ] || continue
+		[ "$(read_uevent_property "$entry/uevent" PARTNAME || true)" = dstack-data ] || continue
+		is_verity_volume_disk "$(basename "$(dirname "$(readlink -f "$entry")")")" && continue
+		if [ -n "$found" ]; then
+			log "Error: more than one dstack-data partition: $found /dev/$(basename "$entry")"
+			return 2
+		fi
+		found="/dev/$(basename "$entry")"
+	done
+	[ -n "$found" ] || return 1
+	printf "%s" "$found"
+}
+
 resolve_block_spec() {
 	local spec="$1"
 	local device=""
@@ -203,8 +233,9 @@ choose_data_device() {
 	fi
 
 	# 2. Try to find partition with PARTLABEL=dstack-data
-	local data_disk
-	data_disk=$(resolve_block_spec "PARTLABEL=dstack-data" || true)
+	local data_disk rc=0
+	data_disk=$(find_data_partition) || rc=$?
+	[ "$rc" -ne 2 ] || return 1
 	if [ -n "$data_disk" ]; then
 		echo "$data_disk"
 		return 0

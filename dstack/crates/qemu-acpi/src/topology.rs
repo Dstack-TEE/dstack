@@ -89,8 +89,8 @@ pub enum TopologyError {
     },
     #[error("{0} NUMA nodes exceed QEMU's limit of 128")]
     TooManyNumaNodes(usize),
-    #[error("every explicit NUMA node needs a PXB expander")]
-    NumaNodeWithoutPxb,
+    #[error("NUMA nodes must either all have a PXB expander or none")]
+    MixedPxbNumaNodes,
     #[error("{0} PXB expanders do not fit on the root bus")]
     TooManyPxbs(usize),
     #[error("PXB bus numbers must be nonzero and distinct: {0:?}")]
@@ -125,8 +125,13 @@ impl MachineConfig {
             return Err(TopologyError::TooManyNumaNodes(nodes));
         }
         // Node `i`'s expander sits on slot 0x10 + i only if every node has one.
-        if self.numa_nodes.iter().any(|node| node.pxb_bus.is_none()) {
-            return Err(TopologyError::NumaNodeWithoutPxb);
+        let pxbs = self
+            .numa_nodes
+            .iter()
+            .filter(|n| n.pxb_bus.is_some())
+            .count();
+        if pxbs != 0 && pxbs != nodes {
+            return Err(TopologyError::MixedPxbNumaNodes);
         }
         for (what, count) in [
             ("cpu_count", u64::from(self.cpu_count)),

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- guest: `requirements.ephemeral_data_disk` in `app-compose.json` starts every boot with an empty data disk. The guest formats the data disk before any app code runs (#1461)
+
+### Fixed
+- guest: a fresh CVM with a verity volume could take the volume for its data disk and try to LUKS-format it: volumes labelled their data partition `dstack-data`, the data disk's label. `dstack verity` now labels it `dstack-volume-data`, and the guest skips disks that carry a `dstack-volume` partition, so volumes built by older releases are safe too
+
 ### Changed
 - vmm: `qmp_socket` now defaults to `true`. Each CVM's QEMU exposes `qmp.sock` in its work dir, so the host can change disk options or compact a bloated `hda.img` (`blockdev-mirror`) without stopping the CVM. Applies to CVMs started after the change; set `qmp_socket = false` to opt out
 

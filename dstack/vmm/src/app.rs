@@ -2213,7 +2213,7 @@ fn make_vm_config(
     } else {
         pxb_buses
             .into_iter()
-            .map(|pxb_bus| dstack_types::NumaNodeConfig { pxb_bus })
+            .map(|bus| dstack_types::NumaNodeConfig { pxb_bus: Some(bus) })
             .collect()
     };
     // Each resolved network interface becomes one virtio-net-pci device in the
