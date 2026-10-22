@@ -63,7 +63,8 @@ for patch in \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0007-sched-smp-batch-wake-q-ipis-in-tdx-guests.patch" \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0008-x86-kvm-runtime-pv-single-target-ipi-in-tdx-guests.patch" \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0009-mm-page-alloc-keep-accepted-reserve-before-watermarks.patch" \
-  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0010-x86-tdx-convert-swiotlb-to-shared-after-smp-bringup.patch"; do
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0010-x86-tdx-convert-swiotlb-to-shared-after-smp-bringup.patch" \
+  "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0011-virt-tdx-guest-add-tdx-cmd-get-key-for-sealing-keys.patch"; do
     patch -d "$src" -p1 --fuzz=0 < "$patch"
 done
 
