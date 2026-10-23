@@ -535,6 +535,7 @@ fn register_instances(proxy: &mut ProxyState, app: &str, count: usize, health_ch
                 ReportedCapabilities {
                     port_policy: Some(policy(false, &[])),
                     health_check: Some(health_check),
+                    agent_token: None,
                 },
             )
             .unwrap();
@@ -556,6 +557,7 @@ fn observe(proxy: &mut ProxyState, instance_id: &str, state: HealthState) {
             id: info.id,
             ip: info.ip,
             public_key: info.public_key,
+            agent_token: info.agent_token,
         },
         state,
     );
@@ -827,6 +829,7 @@ async fn a_published_record_carries_the_declaration_and_not_the_gate() {
                 ReportedCapabilities {
                     port_policy: Some(policy(false, &[])),
                     health_check: Some(true),
+                    agent_token: None,
                 },
             )
             .unwrap();
@@ -1051,6 +1054,7 @@ async fn both_operator_overrides_survive_the_ip_rebuild_path() {
             ReportedCapabilities {
                 port_policy: Some(policy(false, &[])),
                 health_check: Some(false),
+                agent_token: None,
             },
         )
         .unwrap();
@@ -1189,6 +1193,7 @@ async fn a_capability_change_arriving_through_kv_invalidates_the_cached_selectio
             port_policy: existing.port_policy.clone(),
             port_policy_hash: existing.port_policy_hash.clone(),
             health_check: Some(true),
+            agent_token: None,
         }
     };
     state
@@ -1529,6 +1534,7 @@ fn re_register(
             ReportedCapabilities {
                 port_policy: Some(policy(false, &[])),
                 health_check: Some(health_check),
+                agent_token: None,
             },
         )
         .unwrap();
@@ -1715,6 +1721,7 @@ async fn a_reboot_arriving_through_kv_resets_health_on_this_node_too() {
             port_policy: existing.port_policy.clone(),
             port_policy_hash: existing.port_policy_hash.clone(),
             health_check: Some(true),
+            agent_token: None,
         }
     };
     state
@@ -1761,6 +1768,7 @@ async fn a_record_written_without_the_capability_field_does_not_clear_it() {
             port_policy_hash: existing.port_policy_hash.clone(),
             // The older build does not know the field exists.
             health_check: None,
+            agent_token: None,
         }
     };
     state
@@ -1852,6 +1860,7 @@ async fn a_verdict_polled_before_a_reboot_is_not_applied_after_it() {
         id: "race-app-0".to_string(),
         ip: proxy.state.instances["race-app-0"].ip,
         public_key: proxy.state.instances["race-app-0"].public_key.clone(),
+        agent_token: None,
     };
 
     // The CVM reboots and re-registers mid-round.
@@ -1884,6 +1893,7 @@ async fn a_verdict_polled_from_a_stale_address_is_not_applied() {
         id: "addr-app-0".to_string(),
         ip: "10.99.99.99".parse().unwrap(),
         public_key: proxy.state.instances["addr-app-0"].public_key.clone(),
+        agent_token: None,
     };
 
     observe_from(&mut proxy, &polled, HealthState::Healthy);
@@ -1913,6 +1923,7 @@ async fn a_registration_that_reports_no_capability_leaves_it_alone() {
             ReportedCapabilities {
                 port_policy: Some(policy(false, &[])),
                 health_check: None,
+                agent_token: None,
             },
         )
         .unwrap();
@@ -1979,6 +1990,7 @@ async fn disabling_polling_keeps_both_old_and_new_instances_eligible() {
                 ReportedCapabilities {
                     port_policy: Some(policy(false, &[])),
                     health_check: Some(has_endpoint),
+                    agent_token: None,
                 },
             )
             .unwrap();
@@ -2135,6 +2147,7 @@ fn sync_from_peer_at(
                 port_policy: None,
                 port_policy_hash: String::new(),
                 health_check: Some(false),
+                agent_token: None,
             },
         )
         .unwrap();

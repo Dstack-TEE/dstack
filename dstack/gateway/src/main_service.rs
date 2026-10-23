@@ -1053,6 +1053,7 @@ fn instance_info_from_record(
         // cached selection on a record that never claimed the app opted out.
         health: data.health_check.unwrap_or(known_gated).into(),
         connections: Default::default(),
+        agent_token: data.agent_token,
     };
     (info, unreadable)
 }
@@ -1968,6 +1969,7 @@ impl ProxyState {
         let ReportedCapabilities {
             port_policy,
             health_check,
+            agent_token,
         } = reported;
         if id.is_empty() {
             bail!("instance_id is empty (no_instance_id is set?)");
@@ -2064,6 +2066,11 @@ impl ProxyState {
             if port_policy.is_some() {
                 existing.port_policy = port_policy.clone();
             }
+            // Same rule: a registration that supplies no token must not erase
+            // one, and one that does replaces it wholesale.
+            if agent_token.is_some() {
+                existing.agent_token = agent_token.clone();
+            }
             existing.clone()
         });
         if let Some(existing) = edited {
@@ -2115,6 +2122,7 @@ impl ProxyState {
                 ready: None,
                 health: health_check.unwrap_or(false).into(),
                 connections: Default::default(),
+                agent_token,
             },
         };
         self.add_instance(host_info.clone());
@@ -2749,6 +2757,33 @@ fn gateway_nodes(kv_store: &KvStore, exclude_down: bool) -> Vec<GatewayNodeInfo>
         .collect()
 }
 
+/// Longest `agent_token` a registration may carry.
+///
+/// The token is a short Ed25519 JWT -- a few hundred bytes. The field is
+/// self-declared, persisted, synced to every peer and sent back out as a
+/// request header, so it is bounded here rather than trusted.
+const MAX_AGENT_TOKEN_BYTES: usize = 4096;
+
+/// The `agent_token` a registration may store, or `None`.
+///
+/// Absent and empty both mean "this CVM has no token", which is what a CVM
+/// that predates the field or could not mint one reports. A value past
+/// [`MAX_AGENT_TOKEN_BYTES`] is not a token at all: it is dropped with a
+/// warning rather than stored, so one CVM cannot inflate every record.
+fn validated_agent_token(instance_id: &str, token: Option<String>) -> Option<String> {
+    match token {
+        Some(token) if token.len() > MAX_AGENT_TOKEN_BYTES => {
+            warn!(
+                "[{instance_id}] ignoring an agent token of {} bytes (limit {MAX_AGENT_TOKEN_BYTES})",
+                token.len()
+            );
+            None
+        }
+        Some(token) if token.is_empty() => None,
+        token => token,
+    }
+}
+
 pub struct RpcHandler {
     remote_app_id: Option<Vec<u8>>,
     remote_app_info: Option<AppInfo>,
@@ -2809,6 +2844,7 @@ impl GatewayRpc for RpcHandler {
                 })
             })
             .transpose()?;
+        let agent_token = validated_agent_token(&instance_id, request.agent_token);
         self.state
             .register_cvm_async(
                 app_id,
@@ -2819,6 +2855,7 @@ impl GatewayRpc for RpcHandler {
                     port_policy,
                     // A real CVM always states its intent, either way.
                     health_check: Some(request.health_check),
+                    agent_token,
                 },
             )
             .await

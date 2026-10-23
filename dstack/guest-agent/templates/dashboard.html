@@ -158,9 +158,11 @@ SPDX-License-Identifier: Apache-2.0
 </head>
 
 <body>
+    {% if show_identity || show_sysinfo %}
     <h1>Node Information</h1>
     <div class="info-section">
         <div class="info-grid">
+            {% if show_identity %}
             <div class="info-row">
                 <div class="info-label">App Name</div>
                 <div class="info-value">{{app_name}}</div>
@@ -187,7 +189,8 @@ SPDX-License-Identifier: Apache-2.0
                 <div class="info-value">{{cloud_vendor}} ({{cloud_product}})</div>
             </div>
             {% endif %}
-            {% if public_sysinfo %}
+            {% endif %}
+            {% if show_sysinfo %}
             <div class="info-row">
                 <div class="info-label">Operating System</div>
                 <div class="info-value">{{system_info.os_name}} {{system_info.os_version}}</div>
@@ -225,8 +228,9 @@ SPDX-License-Identifier: Apache-2.0
             {% endif %}
         </div>
     </div>
+    {% endif %}
 
-    {% if public_sysinfo %}
+    {% if show_sysinfo %}
     <h2>GPUs</h2>
     {% if !gpu_info.error.is_empty() %}
     <div class="info-section">{{ gpu_info.error }}</div>
@@ -333,6 +337,7 @@ SPDX-License-Identifier: Apache-2.0
     {% endif %}
     {% endif %}
 
+    {% if show_containers %}
     <h2>Deployed Containers</h2>
     <div class="table-scroll">
         <table>
@@ -340,7 +345,7 @@ SPDX-License-Identifier: Apache-2.0
                 <tr>
                     <th>Name</th>
                     <th>Status</th>
-                    {% if public_logs %}
+                    {% if show_logs %}
                     <th>Logs</th>
                     {% endif %}
                 </tr>
@@ -351,7 +356,7 @@ SPDX-License-Identifier: Apache-2.0
                 <tr>
                     <td>{{name|cname}}</td>
                     <td>{{container.status}}</td>
-                    {% if public_logs %}
+                    {% if show_logs %}
                     <td>
                         <a href="/logs/{{name|cname}}?text&bare&timestamps&follow&tail=20" target="_blank">View
                             Logs</a>
@@ -362,12 +367,11 @@ SPDX-License-Identifier: Apache-2.0
             </tbody>
         </table>
     </div>
+    {% endif %}
 
+    {% if show_tcb %}
     <h2>TCB Info</h2>
-    {% if public_tcbinfo %}
     <textarea readonly>{{tcb_info}}</textarea>
-    {% else %}
-    <p>TCB info is not public</p>
     {% endif %}
 </body>
 

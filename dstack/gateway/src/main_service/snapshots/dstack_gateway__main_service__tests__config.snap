@@ -20,5 +20,6 @@ InstanceInfo {
         gated: false,
         state: Ungated,
     },
+    agent_token: None,
     connections: 0,
 }

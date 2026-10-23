@@ -144,6 +144,17 @@ async fn an_unknown_method_is_reported_as_not_found() {
 }
 
 #[tokio::test]
+async fn a_repeated_service_prefix_is_not_stripped() {
+    // Exactly one prefix goes, so a caller cannot spell `Echo` in a path the
+    // routes do not name -- a front-end that keys a check on the route would
+    // otherwise let the request through.
+    let client = client().await;
+    let (status, body) = post(&client, "Demo.Demo.Echo", r#"{"text":"hello"}"#).await;
+    assert_eq!(status, 404, "{body}");
+    assert!(body.contains("Service not found: Demo.Echo"), "{body}");
+}
+
+#[tokio::test]
 async fn a_malformed_body_is_reported_as_a_bad_request() {
     let client = client().await;
     let (status, _) = post(&client, "Demo.Echo", "{not json").await;

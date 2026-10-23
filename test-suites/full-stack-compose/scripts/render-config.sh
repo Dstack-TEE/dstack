@@ -216,6 +216,9 @@ exclude = []
 include = []
 allow_attach_all = false
 
+[cvm.guest_agent_api]
+anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health", "guest:info"]
+
 [gateway]
 base_domain = "${BASE_DOMAIN}"
 port = ${GATEWAY1_PROXY_HOST_PORT}

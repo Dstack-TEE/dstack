@@ -180,7 +180,16 @@ Full specification: [host_api.proto](../../dstack/host-api/proto/host_api.proto)
 
 ### HTTP-based Public Guest API Service
 
-The dstack-guest-agent runs an HTTP server on port 8090 inside the CVM. This port is publicly accessible, allowing external clients to view basic CVM information.
+The dstack-guest-agent runs an HTTP server on port 8090 inside the CVM. By
+default it refuses callers it cannot identify: every route needs a scope, granted
+by a signed token or by the host's `guest_agent_api` sys-config. Anonymous access
+is an explicit host choice. [guest-api-auth.md](../guest-api-auth.md) covers the
+scope vocabulary and the token issuers.
+
+Anonymous access is an exposure decision, not a confidentiality one. Whether the
+data may leave the TEE at all is still decided by the app's measured
+`public_logs` / `public_sysinfo` / `public_tcbinfo` switches, which a scope
+cannot widen.
 
 Since dstack 0.6.0 the listener serves two API surfaces, selected by URL path
 alone: the frozen v0.5.11 `Worker` service at `/prpc` (equivalently

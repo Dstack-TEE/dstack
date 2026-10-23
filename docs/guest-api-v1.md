@@ -458,6 +458,11 @@ The v1 `Worker` has three methods, served at `/prpc/v1`.
 Nothing here returns key material, and no caller chooses what gets signed or
 attested.
 
+Every method also needs a scope, granted by a signed token or by the host's
+configuration. With no configuration the listener answers only token holders;
+see [Guest Agent API access control](./guest-api-auth.md) for the vocabulary and
+for how the gateway authenticates its health polls.
+
 ### There is no v1 AttestAppKey
 
 The frozen surface has `Worker.GetAttestationForAppKey`, which attests a key the

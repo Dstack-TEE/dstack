@@ -95,6 +95,10 @@ pub(crate) struct Target {
     pub id: String,
     pub ip: Ipv4Addr,
     pub public_key: String,
+    /// The token the CVM supplied at registration. `None` for a CVM that
+    /// predates the field; the poll then carries no credentials and gets
+    /// whatever the host left anonymous.
+    pub agent_token: Option<String>,
 }
 
 /// Start the polling loop. Called once at startup.
@@ -161,7 +165,7 @@ async fn poll_round(
     let timeout = config.timeout;
     let mut polls = futures::stream::iter(targets)
         .map(|target| async move {
-            let result = poll_instance(target.ip, agent_port, timeout).await;
+            let result = poll_instance(&target, agent_port, timeout).await;
             (target, result)
         })
         .buffer_unordered(config.concurrency.max(1));
@@ -243,6 +247,7 @@ pub(crate) fn select_targets(state: &Proxy) -> Vec<Target> {
             id: instance.id.clone(),
             ip: instance.ip,
             public_key: instance.public_key.clone(),
+            agent_token: instance.agent_token.clone(),
         })
         .collect()
 }
@@ -300,8 +305,8 @@ fn apply_hysteresis(
 /// A failure to get an answer comes back as [`PollResult::Unreachable`] rather
 /// than as a verdict; [`apply_hysteresis`] decides when enough of them in a row
 /// amount to one.
-async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> PollResult {
-    let client = WorkerV1Client::new(prober_transport(ip, agent_port));
+async fn poll_instance(target: &Target, agent_port: u16, timeout: Duration) -> PollResult {
+    let client = WorkerV1Client::new(prober_transport(target, agent_port));
     let response = match tokio::time::timeout(timeout, client.health(Default::default())).await {
         Err(_) => {
             return PollResult::unreachable(format!("health poll timed out after {timeout:?}"))
@@ -331,7 +336,7 @@ async fn poll_instance(ip: Ipv4Addr, agent_port: u16, timeout: Duration) -> Poll
 /// one. A probe riding a pooled connection would report healthy for an instance
 /// no real request can reach. Only the connection is unshared; the client
 /// itself is process-wide. See `http_client::ConnectionReuse`.
-fn prober_transport(ip: Ipv4Addr, agent_port: u16) -> http_client::prpc::PrpcClient {
+fn prober_transport(target: &Target, agent_port: u16) -> http_client::prpc::PrpcClient {
     // `/prpc/v1`, not `/prpc`: `Health` is a v1 `Worker` method.
     //
     // No released agent is affected. `Health` never shipped in a release, and a
@@ -345,8 +350,12 @@ fn prober_transport(ip: Ipv4Addr, agent_port: u16) -> http_client::prpc::PrpcCli
     // Instance-id routing keeps working and a restart on a current build fixes
     // it. Not worth a compatibility probe on every poll for a build nobody was
     // asked to run.
-    let url = format!("http://{ip}:{agent_port}/prpc/v1");
-    super::guest_agent_client(url, ConnectionReuse::Fresh)
+    let url = format!("http://{}:{agent_port}/prpc/v1", target.ip);
+    let client = super::guest_agent_client(url, ConnectionReuse::Fresh);
+    match &target.agent_token {
+        Some(token) => client.with_bearer_token(token),
+        None => client,
+    }
 }
 
 /// Longest reason kept from an agent's answer.
@@ -512,7 +521,7 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let port = fake_agent_capturing(Some(br#"{"healthy":true}"#.to_vec()), Some(tx)).await;
 
-        let _ = poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_secs(5)).await;
+        let _ = poll_instance(&local_target(), port, Duration::from_secs(5)).await;
 
         let request_line = rx.await.expect("the poller sent no request");
         assert!(
@@ -523,7 +532,7 @@ mod tests {
 
     async fn poll_fake(answer: Option<Vec<u8>>) -> PollResult {
         let port = fake_agent(answer).await;
-        poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_secs(5)).await
+        poll_instance(&local_target(), port, Duration::from_secs(5)).await
     }
 
     #[tokio::test]
@@ -553,7 +562,7 @@ mod tests {
     #[tokio::test]
     async fn an_agent_that_accepts_and_then_says_nothing_times_out() {
         let port = fake_agent(None).await;
-        let result = poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_millis(100)).await;
+        let result = poll_instance(&local_target(), port, Duration::from_millis(100)).await;
         let PollResult::Unreachable(reason) = result else {
             panic!("a silent agent must not produce a verdict, got {result:?}");
         };
@@ -569,7 +578,7 @@ mod tests {
                 .expect("bind");
             listener.local_addr().expect("addr").port()
         };
-        let result = poll_instance(Ipv4Addr::LOCALHOST, port, Duration::from_secs(5)).await;
+        let result = poll_instance(&local_target(), port, Duration::from_secs(5)).await;
         assert!(
             matches!(result, PollResult::Unreachable(_)),
             "a refused connection must not read as an agent saying no, got {result:?}"
@@ -635,7 +644,7 @@ mod tests {
     #[test]
     fn the_probe_does_not_ride_a_connection_someone_else_opened() {
         assert_eq!(
-            prober_transport(Ipv4Addr::new(10, 0, 0, 2), 8090).connection_reuse(),
+            prober_transport(&target(), 8090).connection_reuse(),
             ConnectionReuse::Fresh,
             "a probe over a pooled connection cannot see an agent that refuses new ones"
         );
@@ -656,6 +665,14 @@ mod tests {
             id: "inst-1".to_string(),
             ip: Ipv4Addr::new(10, 0, 0, 2),
             public_key: "key-1".to_string(),
+            agent_token: None,
+        }
+    }
+
+    fn local_target() -> Target {
+        Target {
+            ip: Ipv4Addr::LOCALHOST,
+            ..target()
         }
     }
 
