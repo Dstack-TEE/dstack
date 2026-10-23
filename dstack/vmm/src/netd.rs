@@ -47,7 +47,7 @@ use crate::config::{NetdConfig, NetworkFilterConfig};
 
 /// Bounds a whole call from the VMM, including waiting for netd to finish the
 /// operations queued ahead of it.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 /// Bound on listing nwfilter bindings. See [`existing_bindings`].
 const LISTING_TIMEOUT: Duration = Duration::from_secs(10);
