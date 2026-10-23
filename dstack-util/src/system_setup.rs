@@ -5,6 +5,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
+    net::{Ipv4Addr, Ipv6Addr},
     ops::Deref,
     path::{Path, PathBuf},
     process::Command,
@@ -370,6 +371,43 @@ impl HostShared {
     }
 }
 
+// The gateway's WireGuard fields are rendered into a wg-quick config, and
+// wg-quick runs its `PreUp`/`PostUp` hooks as root. Accept only values that
+// cannot carry config syntax, so the gateway cannot inject lines.
+fn parse_wg_ip(ip: &str) -> Result<Ipv4Addr> {
+    ip.parse()
+        .with_context(|| format!("invalid WireGuard address: {ip:?}"))
+}
+
+fn parse_wg_public_key(key: &str) -> Result<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let decoded = STANDARD
+        .decode(key)
+        .ok()
+        .filter(|decoded| decoded.len() == 32)
+        .with_context(|| format!("invalid WireGuard public key: {key:?}"))?;
+    Ok(STANDARD.encode(decoded))
+}
+
+fn validate_wg_endpoint(endpoint: &str) -> Result<&str> {
+    let valid = endpoint.rsplit_once(':').is_some_and(|(host, port)| {
+        let host_ok = match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+            Some(v6) => v6.parse::<Ipv6Addr>().is_ok(),
+            None => {
+                !host.is_empty()
+                    && host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            }
+        };
+        host_ok && port.parse::<u16>().is_ok()
+    });
+    if !valid {
+        bail!("invalid WireGuard endpoint: {endpoint:?}");
+    }
+    Ok(endpoint)
+}
+
 const GATEWAY_CACHE_PATH: &str = "/run/dstack/gateway-cache.json";
 const WG_CONFIG_PATH: &str = "/etc/wireguard/dstack-wg0.conf";
 /// Certificate validity period in seconds (10 days)
@@ -628,7 +666,7 @@ impl<'a> GatewayContext<'a> {
         };
         let mut wg_info = response.wg.context("Missing wg info")?;
 
-        let client_ip = &wg_info.client_ip;
+        let client_ip = parse_wg_ip(&wg_info.client_ip)?;
 
         // Sort peers by public key for consistent config generation
         wg_info.servers.sort_by(|a, b| a.pk.cmp(&b.pk));
@@ -643,7 +681,9 @@ impl<'a> GatewayContext<'a> {
             key_store.wg_sk
         );
         for WireGuardPeer { pk, ip, endpoint } in &wg_info.servers {
-            let ip = ip.split('/').next().unwrap_or_default();
+            let pk = parse_wg_public_key(pk)?;
+            let ip = parse_wg_ip(ip.split('/').next().unwrap_or_default())?;
+            let endpoint = validate_wg_endpoint(endpoint)?;
             new_config.push_str(&format!(
                 "[Peer]\n\
                 PublicKey = {pk}\n\
@@ -1871,4 +1911,33 @@ fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
         error.to_string().contains("Invalid LUKS keyslot area"),
         "{error:#}"
     );
+}
+
+#[test]
+fn wireguard_fields_reject_config_syntax() {
+    for endpoint in [
+        "gateway.example.com:51820",
+        "192.0.2.1:51821",
+        "[2001:db8::1]:51822",
+    ] {
+        assert_eq!(validate_wg_endpoint(endpoint).unwrap(), endpoint);
+    }
+    for endpoint in [
+        "",
+        "192.0.2.1",
+        "192.0.2.1:99999",
+        "0.0.0.0/0:1",
+        "192.0.2.1:51820\n[Interface]\nPostUp = id",
+        "[not-v6]:51820",
+    ] {
+        assert!(validate_wg_endpoint(endpoint).is_err(), "{endpoint:?}");
+    }
+
+    let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    assert_eq!(parse_wg_public_key(key).unwrap(), key);
+    assert!(parse_wg_public_key(&format!("{key}\nPostUp = id")).is_err());
+    assert!(parse_wg_public_key("AAAA").is_err());
+
+    assert!(parse_wg_ip("10.0.0.2").is_ok());
+    assert!(parse_wg_ip("10.0.0.2/32\n[Interface]").is_err());
 }
