@@ -7,6 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
     io::Write as _,
+    net::{Ipv4Addr, Ipv6Addr},
     ops::Deref,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -477,6 +478,43 @@ fn wireguard_endpoint_hosts(config: &str) -> Result<Vec<String>> {
         .collect()
 }
 
+// The gateway's WireGuard fields are rendered into a wg-quick config, and
+// wg-quick runs its `PreUp`/`PostUp` hooks as root. Accept only values that
+// cannot carry config syntax, so the gateway cannot inject lines.
+fn parse_wg_ip(ip: &str) -> Result<Ipv4Addr> {
+    ip.parse()
+        .with_context(|| format!("invalid WireGuard address: {ip:?}"))
+}
+
+fn parse_wg_public_key(key: &str) -> Result<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let decoded = STANDARD
+        .decode(key)
+        .ok()
+        .filter(|decoded| decoded.len() == 32)
+        .with_context(|| format!("invalid WireGuard public key: {key:?}"))?;
+    Ok(STANDARD.encode(decoded))
+}
+
+fn validate_wg_endpoint(endpoint: &str) -> Result<&str> {
+    let valid = endpoint.rsplit_once(':').is_some_and(|(host, port)| {
+        let host_ok = match host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+            Some(v6) => v6.parse::<Ipv6Addr>().is_ok(),
+            None => {
+                !host.is_empty()
+                    && host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            }
+        };
+        host_ok && port.parse::<u16>().is_ok()
+    });
+    if !valid {
+        bail!("invalid WireGuard endpoint: {endpoint:?}");
+    }
+    Ok(endpoint)
+}
+
 fn remove_partial_wireguard_config(path: &str, cluster: &str) {
     if let Err(error) = fs::remove_file(path) {
         if error.kind() != std::io::ErrorKind::NotFound {
@@ -838,12 +876,15 @@ impl<'a> GatewayContext<'a> {
             .context("too many gateway clusters")?;
         let mut wg_info = cluster.response.wg.take().context("missing wg info")?;
         wg_info.servers.sort_by(|a, b| a.pk.cmp(&b.pk));
+        let client_ip = parse_wg_ip(&wg_info.client_ip)?;
         let mut new_config = format!(
-            "[Interface]\nPrivateKey = {}\nListenPort = {listen_port}\nAddress = {}/32\n\n",
-            cluster.key_store.wg_sk, wg_info.client_ip
+            "[Interface]\nPrivateKey = {}\nListenPort = {listen_port}\nAddress = {client_ip}/32\n\n",
+            cluster.key_store.wg_sk
         );
         for WireGuardPeer { pk, ip, endpoint } in &wg_info.servers {
-            let ip = ip.split('/').next().unwrap_or_default();
+            let pk = parse_wg_public_key(pk)?;
+            let ip = parse_wg_ip(ip.split('/').next().unwrap_or_default())?;
+            let endpoint = validate_wg_endpoint(endpoint)?;
             new_config.push_str(&format!(
                 "[Peer]\nPublicKey = {pk}\nAllowedIPs = {ip}/32\nEndpoint = {endpoint}\nPersistentKeepalive = 25\n"
             ));
@@ -4002,8 +4043,9 @@ mod kms_provider_inventory_tests {
 #[cfg(test)]
 mod gateway_registration_refresh_tests {
     use super::{
-        carry_cluster_preference, gateway_rpc_url, order_by_stickiness, record_accepting_url,
-        wireguard_endpoint_hosts, GatewayKeyStore, IssuedClientCerts,
+        carry_cluster_preference, gateway_rpc_url, order_by_stickiness, parse_wg_ip,
+        parse_wg_public_key, record_accepting_url, validate_wg_endpoint, wireguard_endpoint_hosts,
+        GatewayKeyStore, IssuedClientCerts,
     };
     use std::os::unix::fs::PermissionsExt as _;
 
@@ -4353,5 +4395,34 @@ Endpoint = [2001:db8::1]:51822
             ["gateway.example.com", "192.0.2.1", "2001:db8::1"]
         );
         assert!(wireguard_endpoint_hosts("Endpoint = missing-port").is_err());
+    }
+
+    #[test]
+    fn wireguard_fields_reject_config_syntax() {
+        for endpoint in [
+            "gateway.example.com:51820",
+            "192.0.2.1:51821",
+            "[2001:db8::1]:51822",
+        ] {
+            assert_eq!(validate_wg_endpoint(endpoint).unwrap(), endpoint);
+        }
+        for endpoint in [
+            "",
+            "192.0.2.1",
+            "192.0.2.1:99999",
+            "0.0.0.0/0:1",
+            "192.0.2.1:51820\n[Interface]\nPostUp = id",
+            "[not-v6]:51820",
+        ] {
+            assert!(validate_wg_endpoint(endpoint).is_err(), "{endpoint:?}");
+        }
+
+        let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        assert_eq!(parse_wg_public_key(key).unwrap(), key);
+        assert!(parse_wg_public_key(&format!("{key}\nPostUp = id")).is_err());
+        assert!(parse_wg_public_key("AAAA").is_err());
+
+        assert!(parse_wg_ip("10.0.0.2").is_ok());
+        assert!(parse_wg_ip("10.0.0.2/32\n[Interface]").is_err());
     }
 }
