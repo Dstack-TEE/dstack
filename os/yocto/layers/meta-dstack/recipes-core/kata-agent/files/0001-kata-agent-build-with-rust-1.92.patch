@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: dstack <dev@dstack.invalid>
+Date: Thu, 2 Jul 2026 09:00:00 -0700
+Subject: [PATCH] kata-agent: build with Rust 1.92
+
+dstack's Yocto backend currently builds Rust binaries with cargo-bin 1.92. The
+upstream Kata main branch requires Rust 1.94 in Cargo.toml, but the agent
+code used by this MVP builds with 1.92 once the newly-unsafe x86 cpuid
+intrinsic calls are wrapped in unsafe blocks.
+
+Upstream-Status: Inappropriate [the dstack Yocto backend currently builds this MVP with cargo-bin 1.92]
+Signed-off-by: dstack <dev@dstack.invalid>
+---
+ Cargo.toml                                  | 2 +-
+ src/libs/kata-sys-util/src/protection.rs    | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 46a796b..51a43aa 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -2,7 +2,7 @@
+ authors = ["The Kata Containers community <kata-dev@lists.katacontainers.io>"]
+ edition = "2018"
+ license = "Apache-2.0"
+-rust-version = "1.94"
++rust-version = "1.92"
+
+ [workspace]
+ members = [
+diff --git a/src/libs/kata-sys-util/src/protection.rs b/src/libs/kata-sys-util/src/protection.rs
+index 93e11fe..d19fe44 100644
+--- a/src/libs/kata-sys-util/src/protection.rs
++++ b/src/libs/kata-sys-util/src/protection.rs
+@@ -126,7 +126,7 @@ pub fn available_guest_protection() -> Result<GuestProtection, ProtectionError>
+         // shouldn't hurt to double-check and have better logging if anything
+         // goes wrong.
+
+-        let fn0 = x86_64::__cpuid(0);
++        let fn0 = unsafe { x86_64::__cpuid(0) };
+         // The values in [ ebx, edx, ecx ] spell out "AuthenticAMD" when
+         // interpreted byte-wise as ASCII.  No need to bother here with an
+         // actual conversion to string though.
+@@ -140,7 +140,7 @@ pub fn available_guest_protection() -> Result<GuestProtection, ProtectionError>
+         }
+
+         // AMD64 Architecture Prgrammer's Manual Fn8000_001f docs on pg. 640
+-        let fn8000_001f = x86_64::__cpuid(0x8000_001f);
++        let fn8000_001f = unsafe { x86_64::__cpuid(0x8000_001f) };
+         if fn8000_001f.eax & 0x10 == 0 {
+             return Err(ProtectionError::CheckFailed("SEV not supported".to_owned()));
+         }
+--
+2.43.0

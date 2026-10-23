@@ -1,0 +1,15 @@
+[Unit]
+Description=Confidential Containers Attestation Agent (ttRPC)
+Documentation=https://github.com/confidential-containers/guest-components
+After=local-fs.target dstack-prepare.service
+Wants=dstack-prepare.service
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/confidential-containers/attestation-agent
+ExecStart=/usr/bin/ttrpc-aa -c /etc/attestation-agent.conf --attestation_sock unix:///run/confidential-containers/attestation-agent/attestation-agent.sock
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target
