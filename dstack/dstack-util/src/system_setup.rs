@@ -2648,7 +2648,11 @@ impl<'a> Stage0<'a> {
 
         cmd!(mkdir -p $mount_point).context("Failed to create mount point")?;
 
-        let disk_initialized = self.is_disk_initialized(opts);
+        let ephemeral = self.shared.app_compose.ephemeral_data_disk();
+        if ephemeral {
+            info!("discarding previous data disk contents (requirements.ephemeral_data_disk)");
+        }
+        let disk_initialized = !ephemeral && self.is_disk_initialized(opts);
 
         let has_filesystem = if opts.storage_encrypted && disk_initialized {
             info!("Mounting encrypted data disk");
@@ -2677,8 +2681,9 @@ impl<'a> Stage0<'a> {
             match opts.storage_fs {
                 FsType::Zfs => {
                     info!("Creating ZFS filesystem");
-                    if disk_initialized {
-                        // The interrupted attempt may have left a pool label behind.
+                    if disk_initialized || ephemeral {
+                        // An interrupted attempt or a previous boot may have
+                        // left a pool label behind.
                         cmd!(zpool labelclear -f $fs_dev).ok();
                     }
                     let autotrim = if opts.storage_discard { "on" } else { "off" };
