@@ -145,6 +145,25 @@ func TestHTMLCharactersAreNotEscaped(t *testing.T) {
 	}
 }
 
+// encoding/json escapes U+2028 and U+2029 even with HTML escaping off; the
+// other SDKs write them raw. The fixture also carries the six characters
+// `\u2028`, whose backslash is escaped, so they must come out as `\\u2028`.
+func TestLineSeparatorsAreNotEscaped(t *testing.T) {
+	compose := AppCompose{
+		Runner:            "docker-compose",
+		DockerComposeFile: "a\u2028b\u2029c \\u2028",
+	}
+	got, err := GetComposeHash(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical := "{\"docker_compose_file\":\"a\u2028b\u2029c \\\\u2028\",\"runner\":\"docker-compose\"}"
+	sum := sha256.Sum256([]byte(canonical))
+	if want := hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("the canonical form diverged from the other SDKs.\n got=%s\nwant=%s", got, want)
+	}
+}
+
 // A typed field and an Extra key of the same name must not both be emitted.
 func TestADeclaredFieldWinsOverExtra(t *testing.T) {
 	compose := AppCompose{
