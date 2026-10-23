@@ -218,9 +218,9 @@ mod docker_logs {
 
         let seconds = match unit {
             "s" => value,
-            "m" => value * 60,
-            "h" => value * 3600,
-            "d" => value * 24 * 3600,
+            "m" => value.saturating_mul(60),
+            "h" => value.saturating_mul(3600),
+            "d" => value.saturating_mul(24 * 3600),
             _ => {
                 anyhow::bail!("Invalid time unit. Use s, m, h, or d");
             }
@@ -371,6 +371,19 @@ mod docker_logs {
                 parse_duration_inner("1d", now).unwrap(),
                 now_secs - (24 * 3600)
             );
+        }
+
+        #[test]
+        fn an_oversized_duration_reaches_back_to_the_epoch() {
+            let now = SystemTime::now();
+            for unit in ["s", "m", "h", "d"] {
+                let duration = format!("{}{unit}", u64::MAX);
+                assert_eq!(
+                    parse_duration_inner(&duration, now).unwrap(),
+                    0,
+                    "{duration}"
+                );
+            }
         }
 
         #[test]
