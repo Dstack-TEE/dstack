@@ -438,7 +438,7 @@ impl AdminRpc for AdminRpcHandler {
         let provider = match request.provider_type.as_str() {
             "cloudflare" => DnsProvider::Cloudflare {
                 api_token: request.cf_api_token,
-                api_url: request.cf_api_url,
+                api_url: request.cf_api_url.filter(|url| !url.trim().is_empty()),
             },
             _ => bail!("unsupported provider type: {}", request.provider_type),
         };
@@ -498,7 +498,7 @@ impl AdminRpc for AdminRpcHandler {
                     *api_token = new_token;
                 }
                 if let Some(new_url) = request.cf_api_url {
-                    *api_url = Some(new_url);
+                    *api_url = Some(new_url).filter(|url| !url.trim().is_empty());
                 }
             }
         }
@@ -1176,6 +1176,119 @@ fn merge_certbot_config(
 }
 
 #[cfg(test)]
+mod dns_credential_url_tests {
+    use super::*;
+    use crate::config::{load_config_figment, Config, MutualConfig, TlsConfig};
+    use crate::main_service::ProxyOptions;
+
+    async fn gateway() -> (Proxy, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut config: Config = load_config_figment(None).focus("core").extract().unwrap();
+        config.sync.data_dir = dir.path().to_string_lossy().into_owned();
+        config.wg.config_path = dir.path().join("wg.conf").to_string_lossy().into_owned();
+        config.wg.interface = "wg-test-absent".into();
+        let state = Proxy::new(ProxyOptions {
+            config,
+            my_app_id: b"test-app-id".to_vec(),
+            tls_config: TlsConfig {
+                certs: String::new(),
+                key: String::new(),
+                mutual: MutualConfig {
+                    ca_certs: String::new(),
+                },
+            },
+        })
+        .await
+        .unwrap();
+        (state, dir)
+    }
+
+    fn api_url(state: &Proxy, id: &str) -> Option<String> {
+        let cred = state.kv_store().get_dns_credential(id).unwrap().unwrap();
+        let DnsProvider::Cloudflare { api_url, .. } = cred.provider;
+        api_url
+    }
+
+    async fn create(state: &Proxy, url: Option<&str>) -> DnsCredentialInfo {
+        AdminRpcHandler {
+            state: state.clone(),
+        }
+        .create_dns_credential(CreateDnsCredentialRequest {
+            name: "test".into(),
+            provider_type: "cloudflare".into(),
+            cf_api_token: "token".into(),
+            cf_api_url: url.map(str::to_owned),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_blank_cloudflare_url_stores_none() {
+        let (state, _dir) = gateway().await;
+        for url in ["", " \t\n"] {
+            let cred = create(&state, Some(url)).await;
+            assert_eq!(api_url(&state, &cred.id), None, "URL: {url:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn update_blank_cloudflare_url_clears_the_override() {
+        let (state, _dir) = gateway().await;
+        for url in ["", " \t\n"] {
+            let cred = create(&state, Some("http://localhost:8080/client/v4")).await;
+            AdminRpcHandler {
+                state: state.clone(),
+            }
+            .update_dns_credential(UpdateDnsCredentialRequest {
+                id: cred.id.clone(),
+                cf_api_url: Some(url.into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            assert_eq!(api_url(&state, &cred.id), None, "URL: {url:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn omitted_cloudflare_url_preserves_partial_update_semantics() {
+        let (state, _dir) = gateway().await;
+        let cred = create(&state, None).await;
+        assert_eq!(api_url(&state, &cred.id), None);
+
+        let custom = "http://localhost:8080/client/v4";
+        let cred = create(&state, Some(custom)).await;
+        assert_eq!(api_url(&state, &cred.id).as_deref(), Some(custom));
+        AdminRpcHandler {
+            state: state.clone(),
+        }
+        .update_dns_credential(UpdateDnsCredentialRequest {
+            id: cred.id.clone(),
+            name: Some("renamed".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(api_url(&state, &cred.id).as_deref(), Some(custom));
+
+        let replacement = "https://proxy.example/client/v4";
+        AdminRpcHandler {
+            state: state.clone(),
+        }
+        .update_dns_credential(UpdateDnsCredentialRequest {
+            id: cred.id.clone(),
+            cf_api_url: Some(replacement.into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(api_url(&state, &cred.id).as_deref(), Some(replacement));
+    }
+}
+
+#[cfg(test)]
 mod certbot_config_tests {
     use super::*;
 
@@ -1199,6 +1312,20 @@ mod certbot_config_tests {
         .expect("a readable record merges");
         assert_eq!(merged.renew_timeout, Duration::from_secs(60));
         assert_eq!(merged.acme_url, stored().acme_url);
+    }
+
+    #[test]
+    fn an_explicit_empty_acme_url_clears_the_override() {
+        let merged = merge_certbot_config(
+            Ok(stored()),
+            SetCertbotConfigRequest {
+                acme_url: Some(String::new()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(merged.acme_url.is_empty());
+        assert_eq!(merged.renew_interval, stored().renew_interval);
     }
 
     #[test]
