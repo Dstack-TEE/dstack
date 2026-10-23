@@ -221,6 +221,10 @@ pub(crate) struct InstallOpts {
     #[arg(long, default_value = config::DEFAULT_KMS_IMAGE)]
     pub(crate) kms_image: String,
 
+    /// AMD KDS-compatible collateral mirror/cache URL, as seen from CVMs.
+    #[arg(long, value_name = "URL")]
+    pub(crate) sev_snp_kds_url: Option<String>,
+
     /// host port for the KMS RPC (default: an auto-picked free port).
     #[arg(long)]
     pub(crate) kms_port: Option<u16>,
