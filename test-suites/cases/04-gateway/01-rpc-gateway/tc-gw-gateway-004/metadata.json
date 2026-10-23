@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-gateway-004",
+  "title": "Gateway.GetPeers",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-gateway-004"
+  ],
+  "risks": [
+    "risk-gw-gateway-004"
+  ],
+  "tags": [
+    "gateway",
+    "gateway-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Gateway.GetPeers"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

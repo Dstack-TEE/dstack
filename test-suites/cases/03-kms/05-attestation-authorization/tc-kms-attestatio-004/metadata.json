@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-attestatio-004",
+  "title": "Upgrade authority and allow_any_upgrade",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-attestatio-004"
+  ],
+  "risks": [
+    "risk-kms-attestatio-004"
+  ],
+  "tags": [
+    "kms",
+    "attestation-authorization"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Upgrade authority and allow_any_upgrade"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-upgrade-authority-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

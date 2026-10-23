@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-dstackguest-001",
+  "title": "DstackGuest.GetTlsKey",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-dstackguest-001"
+  ],
+  "risks": [
+    "risk-gos-dstackguest-001"
+  ],
+  "tags": [
+    "guest",
+    "dstackguest-rpc"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "DstackGuest.GetTlsKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

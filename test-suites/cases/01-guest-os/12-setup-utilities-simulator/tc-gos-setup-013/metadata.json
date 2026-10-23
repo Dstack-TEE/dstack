@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-013",
+  "title": "TDX simulator device ABI",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-013"
+  ],
+  "risks": [
+    "risk-gos-setup-013"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "TDX simulator device ABI"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

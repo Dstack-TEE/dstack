@@ -1,0 +1,37 @@
+{
+  "id": "tc-int-mixed-003",
+  "title": "Gateway v0.5.11 to candidate in-place disk migration",
+  "priority": "P0",
+  "requirements": [
+    "req-int-mixed-003"
+  ],
+  "risks": [
+    "risk-int-mixed-003"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Migrate v0.5.11 Gateway disk state during an in-place candidate upgrade"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-mixed-003-capability-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

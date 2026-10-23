@@ -1,0 +1,35 @@
+{
+  "id": "tc-vmm-serial-006",
+  "title": "CVM log rotation retention and follow continuity",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-serial-006"
+  ],
+  "risks": [
+    "risk-vmm-serial-006"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "CVM log rotation retention and follow continuity"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

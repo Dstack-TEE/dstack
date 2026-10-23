@@ -1,0 +1,23 @@
+{
+  "id": "tc-ver-cli-cert-o-002",
+  "title": "Certificate RA extension verification",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-cli-cert-o-002"
+  ],
+  "risks": [
+    "risk-ver-cli-cert-o-002"
+  ],
+  "tags": [
+    "verifier",
+    "cli-cert-output"
+  ],
+  "actions_under_test": [
+    "Certificate RA extension verification"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

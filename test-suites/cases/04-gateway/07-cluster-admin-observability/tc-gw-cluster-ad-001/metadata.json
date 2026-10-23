@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-cluster-ad-001",
+  "title": "WaveKV bootstrap replication and convergence",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-cluster-ad-001"
+  ],
+  "risks": [
+    "risk-gw-cluster-ad-001"
+  ],
+  "tags": [
+    "gateway",
+    "cluster-admin-observability"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "WaveKV bootstrap replication and convergence"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-wavekv-bootstrap-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

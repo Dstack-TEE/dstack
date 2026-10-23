@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-attestatio-003",
+  "title": "Deterministic key derivation and purpose separation",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-attestatio-003"
+  ],
+  "risks": [
+    "risk-gos-attestatio-003"
+  ],
+  "tags": [
+    "guest",
+    "attestation-and-crypto"
+  ],
+  "fixture": {
+    "profile": "guest-readonly",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Deterministic key derivation and purpose separation"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

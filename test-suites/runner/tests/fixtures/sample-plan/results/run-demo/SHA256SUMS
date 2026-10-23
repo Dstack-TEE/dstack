@@ -1,0 +1,7 @@
+bd09187e1cb77d4e60ea4772720d03dc9e783a51d8f943b5918d69fdac559b42  cases/01-gateway/01-proxy-protocol/tc-gw-pp-001/artifacts/backend-capture.json
+676a6e3d67da57aebdbcc3613100c71623f4f35eebd34e1e58c877b8fa191d4b  cases/01-gateway/01-proxy-protocol/tc-gw-pp-001/evidence.jsonl
+d4bb03792a2c674dcdaac431a8ecacf66f49fb376bd5b268280716e12db88779  cases/01-gateway/01-proxy-protocol/tc-gw-pp-001/prompt.md
+1d589f0c1d6f59e21c870a71d453876752b3fe732b6cd3a3aa8a8b3c959ccf97  cases/01-gateway/01-proxy-protocol/tc-gw-pp-001/result.json
+deeff3680a68d0730ac41042d3e94b5d4cdcf6423f8c4d8f0e05038744f1650e  cases/01-gateway/01-proxy-protocol/tc-gw-pp-001/runner.json
+958eafa2fbb4d9f9308d08d3879c44a831fa791196ae8bb620c18472e2e53215  cases/01-gateway/01-proxy-protocol/tc-gw-pp-001/session.jsonl
+2769dfc65c8e7fe03423b64544ad0356145ab261da3c3d8b4375b4993b3478b5  run.json

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-yocto-005",
+  "title": "Sysbox runtime services and nested-container boundary",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-yocto-005"
+  ],
+  "risks": [
+    "risk-gos-yocto-005"
+  ],
+  "tags": [
+    "gos",
+    "yocto-image-runtime-and-hardening"
+  ],
+  "fixture": {
+    "profile": "container-observability",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Sysbox runtime services and nested-container boundary"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

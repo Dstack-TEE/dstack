@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-cli-cert-o-003",
+  "title": "OS image hash verification modes",
+  "priority": "P1",
+  "requirements": [
+    "req-ver-cli-cert-o-003"
+  ],
+  "risks": [
+    "risk-ver-cli-cert-o-003"
+  ],
+  "tags": [
+    "verifier",
+    "cli-cert-output"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "OS image hash verification modes"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

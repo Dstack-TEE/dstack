@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "case_id": "tc-gos-boot-and-i-003",
+  "capability": "configuration-materialization-candidate-kms",
+  "reason": "The fixture can build encrypted configuration inputs, but the available KMS rejects the candidate guest because its image hash cannot be retrieved and authorized; no controlled candidate-image KMS fault and recovery matrix is declared.",
+  "expires_when": "the fixture declares a controlled KMS that authorizes and retrieves the current candidate guest image and provides encrypted-environment failure and recovery controls, at which point the probe fails and the real materialization harness must run"
+}

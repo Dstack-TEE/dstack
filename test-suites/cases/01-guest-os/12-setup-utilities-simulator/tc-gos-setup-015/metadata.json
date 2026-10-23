@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-015",
+  "title": "TPM simulator command proxy and lifecycle",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-015"
+  ],
+  "risks": [
+    "risk-gos-setup-015"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "profile": "no-tee-guest-lifecycle",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "TPM simulator command proxy and lifecycle"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}
