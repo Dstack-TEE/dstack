@@ -533,6 +533,10 @@ pub struct Requirements {
     /// on chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health_status_file: Option<String>,
+    /// Start every boot with an empty data disk. The guest formats the data
+    /// disk before any app code runs, discarding what earlier boots left on it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ephemeral_data_disk: bool,
 }
 
 impl Requirements {
@@ -543,6 +547,7 @@ impl Requirements {
             && self.gpu_policy.is_default()
             && !self.health_check
             && self.health_status_file.is_none()
+            && !self.ephemeral_data_disk
     }
 }
 
@@ -799,6 +804,12 @@ impl AppCompose {
 
     pub fn kms_enabled(&self) -> bool {
         self.key_provider().is_kms()
+    }
+
+    pub fn ephemeral_data_disk(&self) -> bool {
+        self.requirements
+            .as_ref()
+            .is_some_and(|requirements| requirements.ephemeral_data_disk)
     }
 
     pub fn key_provider(&self) -> KeyProviderKind {
