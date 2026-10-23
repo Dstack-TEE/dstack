@@ -16,7 +16,7 @@ jobs:
       id-token: write
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Extract version from tag
         id: ver
@@ -69,7 +69,7 @@ jobs:
               sys.exit(1)
           PY
 
-      - uses: rust-lang/crates-io-auth-action@v1
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
 
       - name: Publish dstack-sdk-types

@@ -26,16 +26,16 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Upgrade npm for trusted publishers support
         run: |
-          npm install -g npm@latest
+          npm install -g npm@11.21.1
           echo "npm: $(npm --version)"
 
       - name: Verify OIDC token availability
@@ -104,7 +104,7 @@ jobs:
 
       - name: GitHub Release
         if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: "JS SDK v${{ steps.tag.outputs.version }}"
           body: |
