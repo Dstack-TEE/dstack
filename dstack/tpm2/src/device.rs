@@ -356,7 +356,7 @@ pub fn add_command_capability(response: &[u8], command_code: u32) -> Result<Vec<
         return Ok(response.to_bytes());
     }
     let count = buf.get_u32()? as usize;
-    let mut attributes = Vec::with_capacity(count + 1);
+    let mut attributes = Vec::with_capacity(count.min(buf.remaining() / 4) + 1);
     for _ in 0..count {
         attributes.push(buf.get_u32()?);
     }
@@ -424,6 +424,15 @@ mod tests {
         .to_bytes();
         response[2..6].copy_from_slice(&9u32.to_be_bytes());
         assert!(TpmResponse::parse(&response).is_err());
+    }
+
+    #[test]
+    fn a_huge_list_count_fails_without_preallocating() {
+        let claims_u32_max = u32::MAX.to_be_bytes();
+        let mut buf = ResponseBuffer::new(&claims_u32_max);
+        assert!(crate::TpmlDigest::unmarshal(&mut buf).is_err());
+        let mut buf = ResponseBuffer::new(&claims_u32_max);
+        assert!(crate::TpmlPcrSelection::unmarshal(&mut buf).is_err());
     }
 
     #[test]
