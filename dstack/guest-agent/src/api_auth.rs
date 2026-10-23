@@ -6,7 +6,7 @@
 //!
 //! Every request that reaches `[external]` names a scope, and the caller has
 //! to be granted it: either by an Ed25519 JWT, or -- when the host configured
-//! it -- by being anonymous. Nothing is granted by default.
+//! it -- by being anonymous. Nothing is granted without one or the other.
 //!
 //! This is deliberately not a trust boundary. The measured `public_*` switches
 //! in app-compose still decide whether confidential data (logs, sysinfo, TCB
@@ -17,7 +17,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use dstack_api_auth::jwt::{self, IssuerKeys, ScopeSet, Verifier};
+use dstack_api_auth::jwt::{self, Decoded, IssuerKeys, ScopeSet, Verifier};
 use dstack_types::GuestAgentApiConfig;
 use ed25519_dalek::VerifyingKey;
 use rocket::{
@@ -94,7 +94,7 @@ impl GuestApiAuth {
     /// authenticate and got it wrong should see a refusal, not whatever the
     /// host happened to leave open. `app_id` is `None` while the app identity
     /// is unavailable, in which case no token can be checked.
-    fn resolve(&self, token: Option<&str>, app_id: Option<&str>) -> Result<ScopeSet> {
+    fn resolve(&self, token: Option<&Decoded>, app_id: Option<&str>) -> Result<ScopeSet> {
         let Some(token) = token else {
             return Ok(self.anonymous.clone());
         };
@@ -105,7 +105,7 @@ impl GuestApiAuth {
             .unwrap_or(0);
         let granted = self
             .verifier
-            .verify(token, app_id, now)
+            .verify_decoded(token, app_id, now)
             .context("rejected bearer token")?;
         Ok(self.anonymous.union(&granted))
     }
@@ -139,7 +139,11 @@ impl<'r> FromRequest<'r> for EffectiveScopes {
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, ()> {
         match request.local_cache(|| None::<ScopeSet>) {
             Some(scopes) => Outcome::Success(EffectiveScopes(scopes.clone())),
-            None => Outcome::Forward(rocket::http::Status::Forbidden),
+            // Unreachable: `ScopeFairing` either publishes a set or rewrites
+            // the request to the 401 route. Kept as a 401 rather than a 403 so
+            // a request that somehow got past the fairing still looks like
+            // every other refusal.
+            None => Outcome::Error((rocket::http::Status::Unauthorized, ())),
         }
     }
 }
@@ -206,7 +210,17 @@ impl Fairing for ScopeFairing {
     }
 
     async fn on_request(&self, req: &mut Request<'_>, _: &mut Data<'_>) {
-        let token = bearer_token(req);
+        // Read the token's shape first. It is the only cheap step, and it is
+        // the one an unauthenticated caller can drive; the app id lookup below
+        // can cost a boot attestation, so nothing that arrives here gets that
+        // far unless it is at least a well-formed Ed25519 token.
+        let token = match bearer_token(req).map(jwt::decode).transpose() {
+            Ok(token) => token,
+            Err(err) => {
+                tracing::debug!("{err:#}");
+                return deny(req);
+            }
+        };
         // Only a token needs the app id. Going through `identity()` rather
         // than a value bound at startup is what lets a boot whose first decode
         // failed recover: the retry is driven by the callers that need it.
@@ -219,10 +233,16 @@ impl Fairing for ScopeFairing {
                 .map(|identity| hex::encode(&identity.app_id)),
             None => None,
         };
-        let scopes = match self.state.api_auth().resolve(token, app_id.as_deref()) {
+        let scopes = match self
+            .state
+            .api_auth()
+            .resolve(token.as_ref(), app_id.as_deref())
+        {
             Ok(scopes) => scopes,
             Err(err) => {
-                warn!("{err:#}");
+                // Every caller on the internet reaches this. A warning per
+                // attempt is a log the public gets to size.
+                tracing::debug!("{err:#}");
                 return deny(req);
             }
         };
@@ -301,6 +321,13 @@ mod tests {
         .unwrap()
     }
 
+    /// Stands in for a token that is well-formed but not signed by anything
+    /// this agent trusts.
+    fn decoded(claims: jwt::Claims) -> Decoded {
+        let token = jwt::sign(&[1u8; 32], &claims).unwrap();
+        jwt::decode(&token).unwrap()
+    }
+
     #[test]
     fn anonymous_grants_only_what_was_configured() {
         assert!(auth(&[]).resolve(None, None).unwrap().is_empty());
@@ -311,8 +338,16 @@ mod tests {
 
     #[test]
     fn a_bad_token_is_refused_rather_than_downgraded_to_anonymous() {
+        let claims = jwt::Claims {
+            iss: jwt::internal_issuer("00"),
+            aud: "00".into(),
+            iat: 0,
+            exp: u64::MAX / 2,
+            scope: jwt::scope::DASHBOARD.into(),
+        };
+        // Signed by the wrong key, so it decodes and fails to verify.
         assert!(auth(&["guest:dashboard"])
-            .resolve(Some("not-a-token"), Some("00"))
+            .resolve(Some(&decoded(claims)), Some("00"))
             .is_err());
     }
 

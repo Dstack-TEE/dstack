@@ -145,6 +145,48 @@ pub fn internal_issuer(app_id_hex: &str) -> String {
     format!("dstack:guest-api:{app_id_hex}")
 }
 
+/// A token whose shape and claims have been read, with the signature still
+/// unchecked.
+///
+/// Split out from verification so a caller can refuse a malformed token before
+/// it does anything expensive. The guest agent needs exactly that: checking a
+/// token it was handed must not cost a boot attestation.
+#[derive(Clone, Debug)]
+pub struct Decoded {
+    signing_input: String,
+    signature: Vec<u8>,
+    pub claims: Claims,
+}
+
+/// Read a token's header and claims without verifying it.
+///
+/// Everything here is cheap and local. The result says nothing about whether
+/// the token was signed by anyone; [`Verifier::verify_decoded`] answers that.
+pub fn decode(token: &str) -> Result<Decoded> {
+    let mut parts = token.split('.');
+    let (Some(header), Some(encoded_payload), Some(encoded_signature), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        bail!("token is not a JWT");
+    };
+    if header != HEADER {
+        // Covers `alg: none`, HMAC, and any header carrying key material.
+        bail!("unsupported JWT header");
+    }
+    let payload = URL_SAFE_NO_PAD
+        .decode(encoded_payload)
+        .context("payload is not base64url")?;
+    let claims = serde_json::from_slice(&payload).context("malformed claims")?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(encoded_signature)
+        .context("signature is not base64url")?;
+    Ok(Decoded {
+        signing_input: format!("{header}.{encoded_payload}"),
+        signature,
+        claims,
+    })
+}
+
 /// Mint a token. `signing_key` is the raw 32-byte Ed25519 seed.
 pub fn sign(signing_key: &[u8; 32], claims: &Claims) -> Result<String> {
     let payload = serde_json::to_vec(claims).context("failed to serialize claims")?;
@@ -184,20 +226,37 @@ impl Verifier {
     /// `now` is seconds since the UNIX epoch, passed in rather than read here
     /// so the expiry rules can be tested.
     pub fn verify(&self, token: &str, app_id_hex: &str, now: u64) -> Result<ScopeSet> {
-        let mut parts = token.split('.');
-        let (Some(header), Some(encoded_payload), Some(signature), None) =
-            (parts.next(), parts.next(), parts.next(), parts.next())
-        else {
-            bail!("token is not a JWT");
-        };
-        if header != HEADER {
-            // Covers `alg: none`, HMAC, and any header carrying key material.
-            bail!("unsupported JWT header");
+        self.verify_decoded(&decode(token)?, app_id_hex, now)
+    }
+
+    /// Check the signature and claims of a token [`decode`] already read.
+    ///
+    /// Separate from [`Verifier::verify`] so a caller can pay for [`decode`]
+    /// alone -- it needs no key material and no app id -- and refuse the token
+    /// before doing anything that costs.
+    ///
+    /// The signature is checked before the claims: a claim error from an
+    /// unsigned token is a guess about a caller's intent, not a fact.
+    pub fn verify_decoded(&self, token: &Decoded, app_id_hex: &str, now: u64) -> Result<ScopeSet> {
+        let Decoded {
+            signing_input,
+            signature,
+            claims,
+        } = token;
+        let signature =
+            Signature::from_slice(signature).context("signature has the wrong length")?;
+
+        let keys = self.keys_for(&claims.iss, app_id_hex);
+        if keys.is_empty() {
+            bail!("unknown token issuer");
         }
-        let payload = URL_SAFE_NO_PAD
-            .decode(encoded_payload)
-            .context("payload is not base64url")?;
-        let claims: Claims = serde_json::from_slice(&payload).context("malformed claims")?;
+        if !keys.iter().any(|key| {
+            key.verify_strict(signing_input.as_bytes(), &signature)
+                .is_ok()
+        }) {
+            bail!("token signature does not verify");
+        }
+
         if claims.aud != app_id_hex {
             bail!("token was issued for a different application");
         }
@@ -209,23 +268,6 @@ impl Verifier {
         }
         if claims.iat > now + CLOCK_LEEWAY_SECS {
             bail!("token was issued in the future");
-        }
-        let signature = URL_SAFE_NO_PAD
-            .decode(signature)
-            .context("signature is not base64url")?;
-        let signature =
-            Signature::from_slice(&signature).context("signature has the wrong length")?;
-        let signing_input = format!("{header}.{encoded_payload}");
-
-        let keys = self.keys_for(&claims.iss, app_id_hex);
-        if keys.is_empty() {
-            bail!("unknown token issuer");
-        }
-        if !keys.iter().any(|key| {
-            key.verify_strict(signing_input.as_bytes(), &signature)
-                .is_ok()
-        }) {
-            bail!("token signature does not verify");
         }
         Ok(claims.scopes())
     }
@@ -351,6 +393,29 @@ mod tests {
             "guest:info",
         );
         assert!(verifier(1).verify(&future, APP_ID, 1000).is_err());
+    }
+
+    #[test]
+    fn decoding_refuses_a_shape_no_token_could_have() {
+        for token in [
+            "not-a-token",
+            "a.b.c.d",
+            "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJpc3MiOiJ4In0.",
+            "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.!!!.c2ln",
+        ] {
+            assert!(decode(token).is_err(), "{token}");
+        }
+        // A well-formed token decodes without any key: that is what lets the
+        // caller refuse it before doing work.
+        let token = mint(
+            1,
+            &internal_issuer(APP_ID),
+            APP_ID,
+            1000,
+            1300,
+            "guest:info",
+        );
+        assert_eq!(decode(&token).unwrap().claims.aud, APP_ID);
     }
 
     #[test]

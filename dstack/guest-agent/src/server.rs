@@ -242,13 +242,17 @@ async fn run_watchdog(port: u16) {
     let mut interval = tokio::time::interval(heatbeat_interval);
 
     let probe_url = format!("http://localhost:{port}/prpc/Worker.Version");
+    // Built once: the loop runs every few seconds for the process's lifetime,
+    // and a fresh client per tick leaks a connection pool each time.
+    let client = reqwest::Client::new();
     loop {
         interval.tick().await;
 
-        let client = reqwest::Client::new();
         match client.get(&probe_url).send().await {
             // 401 is the listener answering a caller with no scope, which is
-            // the default; it proves the listener is up as well as a 200.
+            // what happens when the host removes `guest:version` from
+            // `anonymous_scopes`; it proves the listener is up as well as a
+            // 200 does.
             Ok(response)
                 if response.status().is_success()
                     || response.status() == reqwest::StatusCode::UNAUTHORIZED =>

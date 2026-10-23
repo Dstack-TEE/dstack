@@ -410,6 +410,59 @@ mod tests {
         assert!(body.contains("system_load_average_1m 0.40"), "{body}");
     }
 
+    /// A caller granted only `guest:dashboard` gets the page and nothing on
+    /// it. Each block is guarded independently, so a missing guard shows up as
+    /// data in an otherwise empty document rather than as a stray heading.
+    #[test]
+    fn a_dashboard_granted_no_block_renders_none_of_them() {
+        let (app_id, instance_id, device_id) = ([0xd3u8; 32], [0xe5u8; 32], [0xf7u8; 32]);
+        let html = Dashboard {
+            app_name: "secret-app".into(),
+            app_id: app_id.to_vec(),
+            instance_id: instance_id.to_vec(),
+            device_id: device_id.to_vec(),
+            key_provider_info: "secret-kms".into(),
+            tcb_info: "secret-tcb".into(),
+            containers: vec![Container {
+                names: vec!["secret-container".into()],
+                status: "running".into(),
+                ..Default::default()
+            }],
+            system_info: SystemInfo {
+                os_name: "secret-os".into(),
+                cpu_model: "secret-cpu".into(),
+                ..Default::default()
+            },
+            show_identity: false,
+            show_sysinfo: false,
+            show_containers: false,
+            show_logs: false,
+            show_tcb: false,
+            cloud_vendor: "secret-vendor".into(),
+            cloud_product: "secret-product".into(),
+            gpu_info: Default::default(),
+        }
+        .render()
+        .expect("render");
+        for hidden in [
+            "secret-app".to_owned(),
+            hex::encode(app_id),
+            hex::encode(instance_id),
+            hex::encode(device_id),
+            "secret-kms".into(),
+            "secret-tcb".into(),
+            "secret-container".into(),
+            "secret-os".into(),
+            "secret-cpu".into(),
+            "secret-vendor".into(),
+            "Deployed Containers".into(),
+            "TCB Info".into(),
+            "Node Information".into(),
+        ] {
+            assert!(!html.contains(&hidden), "{hidden} leaked into {html}");
+        }
+    }
+
     fn dashboard_with(gpu_info: GpuInfoResponse) -> String {
         Dashboard {
             app_name: String::new(),

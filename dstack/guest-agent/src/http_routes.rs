@@ -51,8 +51,11 @@ async fn index(
     let show_logs = public_logs && scopes.allows(jwt::scope::LOGS);
     let show_tcb = public_tcbinfo && show_identity;
     let context = CallContext::builder().state(&**state).build();
-    let handler = ExternalRpcHandler::construct(context.clone())
-        .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
+    // `Info` costs a boot attestation (and may start a demo-cert request), so
+    // it is only asked for when the identity block -- and with it the TCB
+    // block, which requires `guest:info` too -- will be rendered.
+    // `guest:dashboard` is the one scope an anonymous visitor is most likely
+    // to be given, and on its own it renders every block hidden.
     let AppInfo {
         app_name,
         app_id,
@@ -67,10 +70,16 @@ async fn index(
         vm_config: _,
         cloud_vendor,
         cloud_product,
-    } = handler
-        .info()
-        .await
-        .map_err(|e| format!("Failed to get worker info: {}", e))?;
+    } = if show_identity || show_tcb {
+        let handler = ExternalRpcHandler::construct(context.clone())
+            .map_err(|e| format!("Failed to construct RPC handler: {}", e))?;
+        handler
+            .info()
+            .await
+            .map_err(|e| format!("Failed to get worker info: {}", e))?
+    } else {
+        Default::default()
+    };
 
     // Only collected when the page will actually render it. Collecting
     // otherwise would scan every process and disk, and spawn a GPU collector,
