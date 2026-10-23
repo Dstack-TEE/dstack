@@ -638,6 +638,24 @@ pub struct ImageConfig {
     pub path: PathBuf,
 }
 
+impl ImageConfig {
+    /// The directory of the image called `name`. Names are plain directory
+    /// names under `path`; a leading `.` is refused so `.`, `..` and hidden
+    /// entries can never resolve to the image root or outside it.
+    pub fn image_dir(&self, name: &str) -> Result<PathBuf> {
+        let valid = !name.is_empty()
+            && name.len() <= 64
+            && !name.starts_with('.')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+        if !valid {
+            bail!("invalid image name: {name:?}");
+        }
+        Ok(self.path.join(name))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     /// Deprecated: use `[image] path` instead. Kept for backward compatibility.
@@ -1381,6 +1399,28 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_dir_stays_a_direct_child_of_the_image_root() {
+        let cfg = ImageConfig {
+            path: PathBuf::from("/images"),
+        };
+        for name in ["dstack-0.6.1", "dstack-dev-0.5.3", "nvidia_gpu-1.0"] {
+            assert_eq!(cfg.image_dir(name).unwrap(), cfg.path.join(name));
+        }
+        for name in [
+            "",
+            ".",
+            "..",
+            ".hidden",
+            "a/b",
+            "../etc",
+            "ïmage",
+            &"a".repeat(65),
+        ] {
+            assert!(cfg.image_dir(name).is_err(), "{name:?}");
+        }
+    }
 
     /// The four names are spelled out three times -- serde, `FromStr` and
     /// `as_str` -- so a new variant that misses one of them fails here.
