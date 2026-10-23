@@ -216,7 +216,10 @@ const port = parseInt(process.env.PORT || '3000');
 const policy = getPolicy();
 console.log(`starting mock auth server on port ${port} (policy: ${policy})`);
 
+// Bun defaults idleTimeout to 10s and closes the socket while a handler is
+// still awaiting work. Stay above the KMS webhook timeout (60s). Bun max: 255.
 export default {
   port,
+  idleTimeout: 255,
   fetch: app.fetch,
 };

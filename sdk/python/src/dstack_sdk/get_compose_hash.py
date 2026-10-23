@@ -60,6 +60,7 @@ class Requirements:
         health_check: bool = False,
         health_status_file: Optional[str] = None,
         gpu_policy: Optional[Dict[str, Any]] = None,
+        ephemeral_data_disk: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize a new ``Requirements`` instance."""
@@ -69,6 +70,7 @@ class Requirements:
         self.health_check = health_check
         self.health_status_file = health_status_file
         self.gpu_policy = gpu_policy
+        self.ephemeral_data_disk = ephemeral_data_disk
         self._extra = dict(kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -89,6 +91,8 @@ class Requirements:
         # composes, so they must be different hashes in every SDK.
         if self.health_status_file is not None:
             result["health_status_file"] = self.health_status_file
+        if self.ephemeral_data_disk:
+            result["ephemeral_data_disk"] = True
         if self.gpu_policy is not None:
             result["gpu_policy"] = self.gpu_policy
         result.update(self._extra)
