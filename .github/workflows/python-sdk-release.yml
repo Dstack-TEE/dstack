@@ -31,12 +31,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install PDM
-        run: pip install pdm==2.29.3
+      # Build with the pinned, hash-checked backend alone: pdm-backend has no
+      # dependencies on Python >= 3.10, so nothing else is resolved in this
+      # credentialed job.
+      - name: Install build backend
+        run: |
+          echo 'pdm-backend==2.5.0 --hash=sha256:5b8746b567a16a1fd506ce66ee28e89d46374526f52238aa1b96cc2c08245c63' > "$RUNNER_TEMP/build-requirements.txt"
+          pip install --require-hashes --no-deps -r "$RUNNER_TEMP/build-requirements.txt"
 
       - name: Build distribution
         working-directory: sdk/python
-        run: pdm build
+        run: python -c "from pdm.backend import build_sdist, build_wheel; build_sdist('dist'); build_wheel('dist')"
 
       - name: Parse and verify version
         id: version
