@@ -15,7 +15,7 @@
 set -e
 
 PKG_LIST=$1
-SNAPSHOT_DATE=${SNAPSHOT_DATE:-20260317T000000Z}
+SNAPSHOT_DATE=${SNAPSHOT_DATE:-20261021T000000Z}
 
 if [ -z "$PKG_LIST" ]; then
     echo "Usage: $0 <pkg-list-file>" >&2
