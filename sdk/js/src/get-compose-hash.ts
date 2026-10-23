@@ -71,6 +71,8 @@ export interface Requirements extends SortableObject {
    * different app composes and hash differently, in every SDK.
    */
   health_status_file?: string;
+  /** Format the data disk on every boot. Leave it out rather than passing `false`. */
+  ephemeral_data_disk?: boolean;
   gpu_policy?: GpuPolicy;
 }
 

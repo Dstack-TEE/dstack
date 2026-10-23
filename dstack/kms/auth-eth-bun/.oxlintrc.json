@@ -1,21 +1,11 @@
 {
-  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/crates/oxc_linter/src/config/schema.json",
-  "rules": {
-    "typescript": "warn",
-    "unicorn": "warn",
-    "react": "off",
-    "jsx-a11y": "off",
-    "nextjs": "off"
-  },
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn"],
   "env": {
     "node": true,
     "es2022": true
   },
-  "globals": {
-    "globalThis": "readonly",
-    "console": "readonly"
-  },
-  "ignore_patterns": [
+  "ignorePatterns": [
     "node_modules/**",
     "dist/**",
     "build/**",
