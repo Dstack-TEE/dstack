@@ -109,18 +109,6 @@ tdx_attestation_variant = "auto"
 
 host_share_mode = "9p"
 
-# Access control for the guest agent's external listener (port 8090). Absent
-# means nothing is anonymous: only holders of a token (the gateway, minted
-# inside the CVM) can call it. This is an exposure choice, not a
-# confidentiality one -- what may leave the TEE is still decided by the
-# measured public_logs / public_sysinfo / public_tcbinfo switches in
-# app-compose. See docs/guest-api-auth.md.
-# [cvm.guest_agent_api]
-# anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health"]
-# [[cvm.guest_agent_api.external_issuers]]
-# name = "ops"
-# public_keys = ["<32-byte ed25519 public key, hex>"]
-
 # Default preallocation for a new CVM data disk. This is a host storage
 # policy -- the guest cannot see it and it does not affect measurements -- and
 # a deploy request may pick another mode per VM.
@@ -316,6 +304,23 @@ allow_attach_all = true
 sanitize_on_attach = false
 # Maximum time for all reset GPUs to become continuously VFIO-ready.
 sbr_timeout_ms = 10000
+
+# Access control for the guest agent's external listener (port 8090). Every
+# route needs a scope, granted by a signed Ed25519 JWT or by the anonymous list
+# below. This is an exposure choice, not a confidentiality one -- what may leave
+# the TEE is still decided by the measured public_logs / public_sysinfo /
+# public_tcbinfo switches in app-compose. See docs/guest-api-auth.md.
+#
+# The list is whole, not additive, and there is no built-in anonymous default:
+# comment the whole block out to refuse anonymous callers entirely. The set
+# below is what an unconfigured 8090 used to serve -- the dashboard, and the
+# identity, version and health it publishes. Containers, logs, metrics and
+# app-key attestation need a token either way.
+[cvm.guest_agent_api]
+anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health", "guest:info"]
+# [[cvm.guest_agent_api.external_issuers]]
+# name = "ops"
+# public_keys = ["<32-byte ed25519 public key, hex>"]
 
 [gateway]
 base_domain = "localhost"

@@ -33,12 +33,28 @@ not passed to the router.
 
 ## Default: nothing anonymous
 
-With no configuration, every scope above requires a token. The gateway still
-works, because it is issued one internally; the dashboard, `/metrics` and the
-log views stop answering to the public.
-
-The app's own SDKs are unaffected: they use the internal Unix socket, which is
+With no `[cvm.guest_agent_api]` block, an anonymous caller is granted nothing:
+the dashboard, its identity block, `/metrics` and the log views all need a
+token. The gateway still works, because it is issued one internally. The app's
+own SDKs are unaffected: they use the internal Unix socket, which is
 unauthenticated and reachable only by the application.
+
+The sample `vmm.toml` ships the block filled in with what an unconfigured 8090
+used to serve, so a host that copies the sample keeps the page it had:
+
+| Scope | Effect |
+|---|---|
+| `guest:version` | `Worker.Version` answers |
+| `guest:health` | `Worker.Health` answers |
+| `guest:info` | the identity block renders |
+| `guest:dashboard` | the page loads at all |
+
+Everything else is about the app's *contents* and stays behind a token even in
+that sample: the container table, `/metrics`, the log views and
+`Worker.GetAttestationForAppKey`.
+
+The dashboard does not fetch `Info` unless a block would show it, so an
+anonymous visitor granted only `guest:dashboard` costs the TEE no attestation.
 
 ## Configuring anonymous access
 
@@ -47,7 +63,7 @@ Anonymous access is a host decision, made in sys-config. The VMM writes it from
 
 ```toml
 [cvm.guest_agent_api]
-anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health"]
+anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health", "guest:info"]
 ```
 
 The same block in the guest's `/dstack/.host-shared/.sys-config.json`:
@@ -55,10 +71,14 @@ The same block in the guest's `/dstack/.host-shared/.sys-config.json`:
 ```json
 {
   "guest_agent_api": {
-    "anonymous_scopes": ["guest:dashboard", "guest:version", "guest:health"]
+    "anonymous_scopes": ["guest:dashboard", "guest:version", "guest:health", "guest:info"]
   }
 }
 ```
+
+The list is whole, not additive, and there is no built-in default to fall back
+on: omitting `anonymous_scopes`, or leaving the list empty, closes the listener
+to anonymous callers. Removing the block entirely does the same.
 
 Listing `guest:dashboard` without `guest:containers`, `guest:info`, `guest:logs`
 or `guest:metrics` gives an anonymous visitor the page with every block hidden.
@@ -92,6 +112,9 @@ it over on registration, bound to the app id and short-lived:
 
 1. The agent and `dstack-util`, both inside the CVM, derive the same Ed25519
    key: `derive_app_key(app_root_key, "dstack:guest-api:issuer:v1", Ed25519)`.
+   That domain string is final: it is a wire contract between `dstack-util` and
+   the agent, which are upgraded together but may briefly disagree, so it is
+   never versioned again.
 2. `dstack-util` signs a token with `iss = "dstack:guest-api:<app_id>"`,
    `aud = <app_id>`, a 10-minute lifetime, and only the `guest:health` scope.
 3. Registration carries it to the gateway, which presents it on the v1 `Health`
@@ -135,8 +158,8 @@ host cannot alter without changing the app id.
 
 ## Compatibility
 
-A guest with this change answers 401 to an old gateway that presents no token. The
-gateway counts that as unreachable and drops the instance after
+A guest with this change answers 401 to an old gateway that presents no token.
+The gateway counts that as unreachable and drops the instance after
 `failure_threshold` consecutive polls, so a mixed cluster rebalances away from
 new guests until the gateway is upgraded.
 
@@ -144,5 +167,12 @@ During the rollout, either upgrade the gateway first, or leave the host open:
 
 ```toml
 [cvm.guest_agent_api]
-anonymous_scopes = ["guest:version", "guest:health"]
+anonymous_scopes = ["guest:version", "guest:health", "guest:info", "guest:dashboard"]
 ```
+
+The reverse direction is quieter. A new guest registers with an old gateway
+node that does not store `agent_token`; when that record syncs to an upgraded
+node, the missing token means the upgraded node's health probe is refused too.
+The instance drops out of rotation while `order_by_stickiness` keeps routing
+user traffic to it. Upgrade every gateway node in the cluster before rolling
+guests, not just the one the VMM talks to.

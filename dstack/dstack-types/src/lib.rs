@@ -1255,7 +1255,7 @@ pub struct SysConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mr_config: Option<String>,
     /// Access control for the guest agent's external listener. Absent means
-    /// the code defaults: nothing anonymous, no external issuers.
+    /// nothing anonymous and no external issuers.
     ///
     /// Host-supplied, and deliberately not measured: it decides who may *ask*
     /// the agent, never whether data may leave the TEE. Confidentiality stays
@@ -1273,8 +1273,9 @@ pub struct GuestAgentApiConfig {
     /// Scopes granted to a caller that presents no token.
     ///
     /// Empty by default: an app that wants its dashboard on the internet has
-    /// to say so. This is an exposure choice, not a trust one -- the anonymous
-    /// caller is the same party a public 8090 already served.
+    /// to say so, in `vmm.toml` or in the guest's sys-config. What a host is
+    /// expected to open is spelled out in the sample `vmm.toml` rather than
+    /// here, so the shipped default stays visible where an operator sets it.
     #[serde(default)]
     pub anonymous_scopes: Vec<String>,
     /// Issuers other than the app's own root key.

@@ -261,6 +261,10 @@ kms_urls = ["https://$KMS_DOMAIN:$KMS_RPC_LISTEN_PORT"]
 gateway_urls = ["https://$GATEWAY_DOMAIN:$GATEWAY_RPC_LISTEN_PORT"]
 cid_start = $VMM_CID_POOL_START
 cid_pool_size = $VMM_CID_POOL_SIZE
+
+[cvm.guest_agent_api]
+anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health", "guest:info"]
+
 [cvm.port_mapping]
 enabled = $VMM_PORT_MAPPING_ENABLED
 address = "127.0.0.1"
