@@ -268,6 +268,9 @@ impl TpmResponse {
             .ok_or_else(|| anyhow::anyhow!("invalid response tag: 0x{:04x}", tag_raw))?;
 
         let size = buf.get_u32()? as usize;
+        if size < 10 {
+            bail!("TPM response size {size} is smaller than its header");
+        }
         if response.len() < size {
             bail!(
                 "TPM response size mismatch: expected {}, got {}",
@@ -409,6 +412,18 @@ mod tests {
         assert!(response.is_success());
         assert_eq!(response.data, [0, 0]);
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_a_response_size_smaller_than_the_header() {
+        let mut response = TpmResponse {
+            tag: TpmSt::NoSessions,
+            response_code: 0,
+            data: vec![],
+        }
+        .to_bytes();
+        response[2..6].copy_from_slice(&9u32.to_be_bytes());
+        assert!(TpmResponse::parse(&response).is_err());
     }
 
     #[test]
