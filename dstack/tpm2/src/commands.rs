@@ -425,6 +425,9 @@ impl TpmContext {
 
             let mut buf = response.data_buffer();
             let random_bytes = buf.get_tpm2b()?;
+            if random_bytes.is_empty() {
+                anyhow::bail!("TPM returned no random bytes");
+            }
             result.extend_from_slice(&random_bytes);
         }
 
