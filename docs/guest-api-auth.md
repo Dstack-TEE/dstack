@@ -116,7 +116,9 @@ it over on registration, bound to the app id and short-lived:
    the agent, which are upgraded together but may briefly disagree, so it is
    never versioned again.
 2. `dstack-util` signs a token with `iss = "dstack:guest-api:<app_id>"`,
-   `aud = <app_id>`, a 10-minute lifetime, and only the `guest:health` scope.
+   `aud = <app_id>`, only the `guest:health` scope, `iat` rounded down to the
+   half hour and `exp` one hour later. Every registration within a half hour
+   carries the same token, and it never has less than 30 minutes left.
 3. Registration carries it to the gateway, which presents it on the v1 `Health`
    poll.
 
