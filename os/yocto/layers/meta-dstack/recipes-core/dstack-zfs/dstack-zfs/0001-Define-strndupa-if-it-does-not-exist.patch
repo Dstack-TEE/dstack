@@ -1,0 +1,34 @@
+From cc0cd6f71f6ef96fca2d7b730a3f0f6722fec696 Mon Sep 17 00:00:00 2001
+From: Khem Raj <raj.khem@gmail.com>
+Date: Sat, 7 May 2022 12:15:22 -0700
+Subject: [PATCH] Define strndupa if it does not exist
+
+musl e.g. does not supply strndupa, unlike glibc
+
+Upstream-Status: Pending
+Signed-off-by: Khem Raj <raj.khem@gmail.com>
+
+---
+ etc/systemd/system-generators/zfs-mount-generator.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/etc/systemd/system-generators/zfs-mount-generator.c b/etc/systemd/system-generators/zfs-mount-generator.c
+index f4c6c26..255bee4 100644
+--- a/etc/systemd/system-generators/zfs-mount-generator.c
++++ b/etc/systemd/system-generators/zfs-mount-generator.c
+@@ -193,6 +193,15 @@ fopenat(int dirfd, const char *pathname, int flags,
+ 	return (fdopen(fd, stream_mode));
+ }
+ 
++#ifndef strndupa
++#define strndupa(s, n) \
++       (__extension__ ({const char *__in = (s);                    \
++                        size_t __len = strnlen (__in, (n)) + 1;    \
++                        char *__out = (char *) alloca (__len);     \
++                        __out[__len-1] = '\0';                     \
++                        (char *) memcpy (__out, __in, __len-1);}))
++#endif
++
+ static int
+ line_worker(char *line, const char *cachefile)
+ {

@@ -5,12 +5,14 @@
 ### The open framework for confidential AI.
 
 [![GitHub Stars](https://img.shields.io/github/stars/dstack-tee/dstack?style=flat-square&logo=github)](https://github.com/Dstack-TEE/dstack/stargazers)
-[![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Dstack-TEE/dstack/blob/master/LICENSE)
+[![License](https://img.shields.io/github/license/dstack-tee/dstack?style=flat-square)](https://github.com/Dstack-TEE/dstack/blob/next/LICENSE)
 [![REUSE status](https://api.reuse.software/badge/github.com/Dstack-TEE/dstack)](https://api.reuse.software/info/github.com/Dstack-TEE/dstack)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Dstack-TEE/dstack)
 [![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/+UO4bS4jflr45YmUx)
 
-[Documentation](https://docs.phala.com/dstack) · [Examples](https://github.com/Dstack-TEE/dstack-examples) · [Community](https://t.me/+UO4bS4jflr45YmUx)
+Original Contributors: Hang Yin, Kevin Wang, Andrew Miller
+
+[Documentation](https://docs.phala.com/dstack) · [Security](./SECURITY.md) · [Examples](https://github.com/Dstack-TEE/dstack-examples) · [Community](https://t.me/+UO4bS4jflr45YmUx)
 
 </div>
 
@@ -18,11 +20,21 @@
 
 ## What is dstack?
 
-dstack is the open framework for confidential AI - deploy AI applications with cryptographic privacy guarantees.
+dstack is the open framework for confidential AI — deploy AI applications with cryptographic privacy guarantees.
 
 AI providers ask users to trust them with sensitive data. But trust doesn't scale, and trust can't be verified. With dstack, your containers run inside confidential VMs (Intel TDX) with native support for NVIDIA Confidential Computing (H100, Blackwell). Users can cryptographically verify exactly what's running: private AI with your existing Docker workflow.
 
-### Features
+## Supported Platforms
+
+| Platform | Status | Attestation |
+|----------|--------|-------------|
+| **Bare metal TDX** | Available | TDX |
+| **Bare metal AMD SEV-SNP** | Host support; requires an SNP-capable guest image | SEV-SNP |
+| **[Phala Cloud](https://cloud.phala.network)** | Available | TDX |
+| **GCP Confidential VMs** | Available | TDX + TPM |
+| **AWS Nitro Enclaves** | Available | NSM |
+
+## Features
 
 **Zero friction onboarding**
 - **Docker Compose native**: Bring your docker-compose.yaml as-is. No SDK, no code changes.
@@ -55,15 +67,43 @@ services:
       - "8000:8000"
 ```
 
-Deploy to any TDX host with the [`dstack-nvidia-0.5.x` base image](https://github.com/Dstack-TEE/meta-dstack/releases), or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+Deploy to a self-hosted TDX machine with the `dstackup install` -> `dstack deploy` workflow, or use [Phala Cloud](https://cloud.phala.network) for managed infrastructure. AMD SEV-SNP hosts use the same workflow when the selected guest image includes `digest.txt`.
 
-Want to deploy a self hosted dstack? Check our [full deployment guide →](./docs/deployment.md)
+Setting up dstack on your own hardware? Start with the [self-hosted quick onboarding guide](./docs/onboarding.md)
+
+Building or customizing the guest OS itself? Follow the [guest-OS build guide](./docs/building-guest-os.md).
+
+Developing without TEE hardware? Use a development image with
+[no-TEE mode and swtpm](./docs/development-without-tee.md).
 
 ## Architecture
 
 ![Architecture](./docs/assets/arch.png)
 
-Your container runs inside a Confidential VM (Intel TDX) with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
+### Repository layout
+
+```text
+dstack/  Core services, Rust crates, host and guest runtime code
+sdk/     Stable public SDK paths
+os/      Guest-OS payload, image contract, and build backends
+docs/    User and operator documentation
+tools/   Standalone development and security tools
+```
+
+The default and recommended OS backend is mkosi under `os/mkosi/`. The Yocto
+backend under `os/yocto/` is deprecated and kept only to rebuild existing
+images; do not use it for new work. Shared rootfs payload and release assembly
+stay outside the backends so they are not duplicated. See
+[`os/README.md`](./os/README.md).
+
+Scripts follow the same ownership boundaries: component-specific helpers stay
+beside their component under `dstack/`; files installed into every guest live
+in `os/common/rootfs/`; backend-neutral image tooling lives in `os/image/`;
+mkosi-only helpers live in `os/mkosi/scripts/` (deprecated Yocto-only helpers
+in `os/yocto/scripts/`); and repository-wide standalone utilities live in
+`tools/`.
+
+Your container runs inside a Confidential VM, such as Intel TDX or AMD SEV-SNP, with optional GPU isolation via NVIDIA Confidential Computing. The CPU TEE protects application logic; the GPU TEE protects model weights and inference data.
 
 **Core components:**
 
@@ -76,6 +116,19 @@ Your container runs inside a Confidential VM (Intel TDX) with optional GPU isola
 - **VMM**: Runs on bare-metal TDX hosts. Parses docker-compose files directly — no app changes needed. Boots CVMs from a reproducible OS image. Allocates CPU, memory, and confidential GPU resources.
 
 [Full security model →](./docs/security/security-model.md)
+
+## Security and Trust
+
+Security docs are linked here so deployers and reviewers can quickly find the trust model, production guidance, audit, and the status of already-answered public findings.
+
+- [Security Overview](./docs/security/) - entry point for users, operators, researchers, and AI agents
+- [Security Model](./docs/security/security-model.md) - threat model, trust boundaries, and verification checklist
+- [Public Security Reports](./docs/security/public-security-reports.md) - public status for security reports and related hardening work
+- [Security Best Practices](./docs/security/security-best-practices.md) - production settings and hardening guidance
+- [Security Audit](./docs/security/dstack-audit.pdf) - third-party audit by zkSecurity
+- [Report a Vulnerability](./SECURITY.md) - use GitHub's private security reporting path
+
+Please do not disclose exploitable vulnerabilities in public GitHub issues. Use the private reporting path in [SECURITY.md](./SECURITY.md).
 
 ## SDKs
 
@@ -96,23 +149,24 @@ Apps communicate with the guest agent via HTTP over `/var/run/dstack.sock`. Use 
 - [Verification](./docs/verification.md) - How to verify TEE attestation
 
 **For Operators**
-- [Deployment](./docs/deployment.md) - Self-hosting on TDX hardware
+- [Hardware Enablement](./docs/hardware-enablement.md) - Prepare a TDX or AMD SEV-SNP host
+- [AMD SEV-SNP](./docs/amd-sev-snp.md) - Image, attestation, and key-release requirements
+- [Self-hosted Quick Onboarding](./docs/onboarding.md) - First app on one host
+- [Build the Guest OS](./docs/building-guest-os.md) - Build and verify bootable images from source
+- [Deployment](./docs/deployment.md) - Self-hosting on TDX or AMD SEV-SNP hardware
+- [Upgrading to 0.6](./docs/upgrading-to-0.6.md) - Upgrading from dstack 0.5.x
 - [On-Chain Governance](./docs/onchain-governance.md) - Smart contract authorization
 - [Gateway](./docs/dstack-gateway.md) - Gateway configuration
 
 **Reference**
+- [Guest Agent API v1](./docs/guest-api-v1.md) - Key derivation, signature chains, and the versioned guest API
+- [Guest Agent API v0](./docs/guest-api-v0.md) - The frozen legacy surface, for clients that still speak the unversioned API
 - [App Compose Format](./docs/normalized-app-compose.md) - Compose file specification
+- [Intel TDX Attestation](./docs/attestation-tdx.md) - Measurement and runtime-event verification
+- [Native TEE Interfaces](./docs/native-tee-interfaces.md) - Advanced compatibility with Linux TEE devices and configfs-tsm
 - [VMM CLI Guide](./docs/vmm-cli-user-guide.md) - Command-line reference
 - [Design Decisions](./docs/design-and-hardening-decisions.md) - Architecture rationale
 - [FAQ](./docs/faq.md) - Frequently asked questions
-
-## Security
-
-- [Security Overview](./docs/security/) - Security documentation and responsible disclosure
-- [Security Model](./docs/security/security-model.md) - Threat model and trust boundaries
-- [Security Best Practices](./docs/security/security-best-practices.md) - Production hardening
-- [Security Audit](./docs/security/dstack-audit.pdf) - Third-party audit by zkSecurity
-- [CVM Boundaries](./docs/security/cvm-boundaries.md) - Information exchange and isolation
 
 ## FAQ
 
@@ -156,21 +210,24 @@ Yes. dstack powers production AI infrastructure at [OpenRouter](https://openrout
 <details>
 <summary><strong>Can I run this on my own hardware?</strong></summary>
 
-Yes. dstack runs on any Intel TDX-capable server. See the [deployment guide](./docs/deployment.md) for self-hosting instructions. You can also use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
+Yes. dstack runs on supported TEE-capable servers, including Intel TDX-capable hardware. See the [deployment guide](./docs/deployment.md) for self-hosting instructions. You can also use [Phala Cloud](https://cloud.phala.network) for managed infrastructure.
 
 </details>
 
 <details>
 <summary><strong>What TEE hardware is supported?</strong></summary>
 
-Currently: Intel TDX (4th/5th Gen Xeon) and NVIDIA Confidential Computing (H100, Blackwell). AMD SEV-SNP support is planned.
+- **GCP**: Intel TDX (Confidential VMs)
+- **AWS**: Nitro Enclaves (NSM attestation)
+- **Bare metal**: Intel TDX (4th/5th Gen Xeon) and AMD SEV-SNP on supported dstack OS images. Intel TDX is the production path; AMD SEV-SNP is new and experimental.
+- **GPUs**: NVIDIA Confidential Computing (H100, Blackwell)
 
 </details>
 
 <details>
 <summary><strong>How do users verify my deployment?</strong></summary>
 
-Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/master/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
+Your app exposes attestation quotes via the SDK. Users verify these quotes using [dstack-verifier](https://github.com/Dstack-TEE/dstack/tree/next/dstack/verifier), [dcap-qvl](https://github.com/Phala-Network/dcap-qvl), or the [Trust Center](https://trust.phala.com). See the [verification guide](./docs/verification.md) for details.
 
 </details>
 
@@ -184,6 +241,8 @@ dstack is a Linux Foundation [Confidential Computing Consortium](https://confide
 ## Community
 
 [Telegram](https://t.me/+UO4bS4jflr45YmUx) · [GitHub Discussions](https://github.com/Dstack-TEE/dstack/discussions) · [Examples](https://github.com/Dstack-TEE/dstack-examples)
+
+For enterprise support and licensing, [book a call](https://cal.com/team/phala/founders) or email us at support@phala.network.
 
 [![Repobeats](https://repobeats.axiom.co/api/embed/0a001cc3c1f387fae08172a9e116b0ec367b8971.svg)](https://github.com/Dstack-TEE/dstack/pulse)
 
@@ -206,4 +265,7 @@ Logo and branding assets: [dstack-logo-kit](./docs/assets/dstack-logo-kit/)
 
 ## License
 
-Apache 2.0
+The dstack-owned source, SDKs, documentation, tools, guest OS backend, and
+image-assembly code are Apache-2.0. Embedded and third-party components retain
+their own license declarations and notices. See file-level SPDX declarations
+and [`REUSE.toml`](./REUSE.toml) for the exact scope.

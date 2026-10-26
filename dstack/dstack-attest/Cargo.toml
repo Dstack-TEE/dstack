@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-attest"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cc-eventlog.workspace = true
+rmp-serde.workspace = true
+dcap-qvl.workspace = true
+dstack-types.workspace = true
+ez-hash.workspace = true
+fs-err.workspace = true
+safe-write.workspace = true
+rustix = { workspace = true, features = ["process"] }
+hex.workspace = true
+hex_fmt.workspace = true
+or-panic.workspace = true
+pem.workspace = true
+scale = { workspace = true, features = ["derive"] }
+sev-snp-attest.workspace = true
+sev-snp-qvl.workspace = true
+serde.workspace = true
+serde-human-bytes.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+tdx-attest.workspace = true
+tpm-attest.workspace = true
+nsm-attest.workspace = true
+nsm-qvl.workspace = true
+tpm-qvl.workspace = true
+tpm-types.workspace = true
+tracing.workspace = true
+url.workspace = true
+x509-parser.workspace = true
+insta.workspace = true
+errify.workspace = true
+aws-nitro-enclaves-nsm-api = { version = "0.4", optional = true }
+ciborium = { workspace = true, optional = true }
+hmac = { version = "0.12", optional = true }
+rand = { workspace = true, optional = true }
+rsa = { workspace = true, optional = true }
+tpm2 = { workspace = true, optional = true }
+
+[features]
+# Synthetic-attestation helpers used to build fixtures. Simulator only -- see
+# the gated `impl Attestation` in src/v1.rs for why production must not have it.
+simulator = []
+quote = [
+    "aws-nitro-enclaves-nsm-api",
+    "ciborium",
+    "hmac",
+    "rand",
+    "rsa",
+    "tpm2",
+]
+
+[dev-dependencies]
+futures = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+dstack-mr = { workspace = true }
+rcgen = { workspace = true }
+tempfile = { workspace = true }

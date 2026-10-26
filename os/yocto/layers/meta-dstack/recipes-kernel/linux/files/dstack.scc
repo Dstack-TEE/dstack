@@ -1,0 +1,3 @@
+define KFEATURE_DESCRIPTION "dstack configuration"
+
+kconf non-hardware dstack.cfg

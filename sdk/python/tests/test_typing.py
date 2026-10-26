@@ -7,12 +7,12 @@
 import inspect
 from typing import get_type_hints
 
-from dstack_sdk import AsyncDstackClient
-from dstack_sdk import DstackClient
+from dstack_sdk import AsyncDstackClientV0
+from dstack_sdk import DstackClientV0
 from dstack_sdk import GetKeyResponse
 from dstack_sdk import GetQuoteResponse
 from dstack_sdk import GetTlsKeyResponse
-from dstack_sdk.dstack_client import InfoResponse
+from dstack_sdk.dstack_client_v0 import InfoResponse
 
 # Use a test endpoint to avoid socket file not found errors
 TEST_ENDPOINT = "http://localhost:8080"
@@ -20,7 +20,7 @@ TEST_ENDPOINT = "http://localhost:8080"
 
 def test_sync_method_type_annotations():
     """Test that sync methods have correct type annotations, not Coroutine."""
-    client = DstackClient(TEST_ENDPOINT)
+    client = DstackClientV0(TEST_ENDPOINT)
 
     # Check get_tls_key method
     get_tls_key_method = getattr(client, "get_tls_key")
@@ -48,14 +48,13 @@ def test_sync_method_type_annotations():
 
 def test_all_sync_method_types():
     """Test all sync business methods have correct type annotations."""
-    client = DstackClient(TEST_ENDPOINT)
+    client = DstackClientV0(TEST_ENDPOINT)
 
     expected_types = {
         "get_key": GetKeyResponse,
         "get_quote": GetQuoteResponse,
         "get_tls_key": GetTlsKeyResponse,
         "info": InfoResponse,
-        "emit_event": type(None),  # Returns None
         "is_reachable": bool,
     }
 
@@ -90,14 +89,13 @@ def test_all_sync_method_types():
 
 def test_async_method_types():
     """Test that async methods have correct type annotations."""
-    client = AsyncDstackClient(TEST_ENDPOINT)
+    client = AsyncDstackClientV0(TEST_ENDPOINT)
 
     expected_types = {
         "get_key": GetKeyResponse,
         "get_quote": GetQuoteResponse,
         "get_tls_key": GetTlsKeyResponse,
         "info": InfoResponse,
-        "emit_event": type(None),
         "is_reachable": bool,
     }
 
@@ -123,15 +121,14 @@ def test_async_method_types():
 
 def test_method_signature_comparison():
     """Compare method signatures between sync and async versions."""
-    sync_client = DstackClient(TEST_ENDPOINT)
-    async_client = AsyncDstackClient(TEST_ENDPOINT)
+    sync_client = DstackClientV0(TEST_ENDPOINT)
+    async_client = AsyncDstackClientV0(TEST_ENDPOINT)
 
     methods_to_check = [
         "get_key",
         "get_quote",
         "get_tls_key",
         "info",
-        "emit_event",
         "is_reachable",
     ]
 

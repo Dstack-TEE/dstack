@@ -1,0 +1,147 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: SDK compatibility
+
+permissions:
+  contents: read
+
+# Released SDKs against the current agent: nothing to re-check unless the SDKs
+# or the agent they talk to changed. Not a required status check, so a
+# workflow-level filter is safe.
+#
+# `dstack/**` rather than the guest-agent directories alone. The agent under
+# test is built through `simulator_start`, whose dependency closure reaches a
+# dozen crates in that workspace; naming the three obvious ones would leave the
+# rest silently uncovered the moment one of them changed behaviour.
+on:
+  push:
+    branches: [next, 'release/**']
+    paths:
+      - 'sdk/**'
+      - 'dstack/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/sdk-compat.yaml'
+  pull_request:
+    branches: [next, 'release/**']
+    paths:
+      - 'sdk/**'
+      - 'dstack/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/sdk-compat.yaml'
+
+env:
+  CARGO_TERM_COLOR: always
+  # Both the current tree and the released tags pin channel "1.92" in
+  # rust-toolchain.toml. Without this, rustup would treat that as a toolchain
+  # distinct from the "1.92.0" installed below and re-download it -- along with
+  # the three cross-compilation targets the pin asks for, none of which the SDK
+  # suites need. The compat job is about the wire surface, not about
+  # reproducing each tag's toolchain provisioning.
+  RUSTUP_TOOLCHAIN: 1.92.0
+
+jobs:
+  # The agent the released SDKs are tested against, built once.
+  #
+  # Both matrix legs call `simulator_start`, which builds
+  # `dstack-guest-agent-simulator` out of the current tree -- the same binary,
+  # from the same commit, compiled twice in parallel. Nothing here replaces that
+  # call or hands the legs a binary from elsewhere: they still build from their
+  # own checkout, so what they test is still what this commit produces. This job
+  # only puts the artifacts in the cache first, under a key both legs restore,
+  # so the build they run finds its work already done.
+  #
+  # A `needs:` rather than a skip switch in `simulator_build` on purpose. That
+  # switch would be a path where the binary under test did not come from the
+  # checkout, which is not worth trading for a few minutes.
+  simulator:
+    name: Build the agent under test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+          shared-key: sdk-compat-agent
+
+      - name: Build the simulator
+        run: ./sdk/simulator/build.sh
+
+  sdk-compat:
+    name: ${{ matrix.tag }} SDKs vs current agent
+    needs: simulator
+    runs-on: ubuntu-latest
+    strategy:
+      # Each tag is an independent claim; one failing should not hide the other.
+      fail-fast: false
+      matrix:
+        # v0.5.11 is the tag the freeze is defined against, and v0.5.8 is the
+        # newest tag whose SDK *clients and suites* actually differ from it.
+        #
+        # The bar is a different client, not a different tree. v0.5.10's sdk/
+        # tree is the same object as v0.5.11's (`git rev-parse v0.5.10:sdk
+        # v0.5.11:sdk` prints one hash twice) and v0.5.9 differs from it by a
+        # single line -- a reqwest dependency spec in sdk/rust/Cargo.toml, with
+        # every client and test source in all four languages byte-identical.
+        # Either pair runs the same suites twice and reports one agreement as
+        # two independent results, at the cost of a second uncached
+        # four-language build. v0.5.8 is the first tag going back that carries
+        # a genuinely different client (26 files), and it earns its slot: it is
+        # the only released client that still asserts `EmitEvent` succeeds, so
+        # it is the only one that catches 0.6.0 removing it. v0.5.11's three
+        # assertions about that method were all rewritten in v0.5.9..v0.5.11
+        # to tolerate failure under a simulator endpoint, so the v0.5.11 leg
+        # passes them without exercising anything. See sdk/compat/README.md.
+        tag: [v0.5.8, v0.5.11]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The job checks the released SDKs out with `git worktree add <tag>`,
+          # which needs that tag's commit and its full tree locally. A shallow
+          # clone plus `fetch-tags` gives the refs but not a guarantee about the
+          # objects behind them, so take the whole history: the clone is a
+          # rounding error next to the Rust build in this job.
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      # Restore only. The `simulator` job above populated this key; a leg that
+      # saved as well would race its twin for the same entry and gain nothing,
+      # since the next run's `simulator` job writes it again anyway.
+      - name: Restore the agent build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+          shared-key: sdk-compat-agent
+          save-if: false
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          # The `go` directive in the released sdk/go/go.mod.
+          go-version: '1.24'
+
+      - name: Install Node
+        uses: actions/setup-node@v5
+        with:
+          # The released sdk/js/package.json asks for node >=18; 20 is what the
+          # JS SDK release workflow publishes from.
+          node-version: '20'
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          # The released sdk/python/pyproject.toml asks for >=3.10; 3.11 is what
+          # the Python SDK release workflow builds with. The runner script
+          # installs PDM if it is missing, the same way sdk/run-tests.sh does.
+          python-version: '3.11'
+
+      - name: Released SDKs against the current agent
+        run: ./sdk/compat/run-compat-tests.sh ${{ matrix.tag }}

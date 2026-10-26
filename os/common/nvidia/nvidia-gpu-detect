@@ -1,0 +1,90 @@
+#!/bin/sh
+# nvidia-gpu-detect - report NVIDIA GPU / NVSwitch presence via sysfs PCI.
+#
+# Intended for use as a systemd ExecCondition= so that GPU-only services skip
+# cleanly (instead of failing) on instances without a GPU / without NVSwitch.
+# This lets the NVIDIA and plain images be merged into a single image.
+#
+#   exit 0 -> hardware present     (systemd runs the unit)
+#   exit 1 -> hardware absent      (systemd skips the unit, no failure)
+#
+# The `count-gpus` mode is a query instead: it prints the GPU count on stdout
+# and always exits 0. nvidia-module-options uses it to pick module options that
+# match the topology the guest was actually given.
+#
+# Detection mirrors
+# tools/vm-runner/enable-vfio-passthrough.sh, but reads PCI class codes
+# from sysfs so it works before the nvidia driver is loaded and without relying
+# on lspci / the pci.ids name database:
+#
+#   GPU      = NVIDIA (0x10de) VGA (0x0300xx) or 3D controller (0x0302xx)
+#   NVSwitch = NVIDIA (0x10de) bridge          (0x06xxxx, any bridge subclass)
+#
+# NVSwitch matches any NVIDIA bridge-class device (mirrors the `grep 'Bridge'`
+# heuristic in tools/vm-runner/enable-vfio-passthrough.sh) rather than
+# only the "Other bridge" subclass 0x0680, so it stays correct if a future
+# NVSwitch enumerates under a different bridge subclass. This is safe here
+# because these images run as TDX guests whose only NVIDIA-vendor devices are
+# GPUs (class 0x03xx) and NVSwitches (class 0x06xx).
+
+NVIDIA_VENDOR="0x10de"
+# Overridable only so the detection can be exercised against a synthetic PCI
+# tree; nothing in the image sets it.
+PCI_DEVICES=${NVIDIA_PCI_DEVICES:-/sys/bus/pci/devices}
+
+# match_vendor_class <class-glob>: succeed if any PCI device has NVIDIA's
+# vendor id and a class matching the given glob (e.g. "0x0302*").
+match_vendor_class() {
+    for dev in "$PCI_DEVICES"/*; do
+        [ -r "$dev/vendor" ] || continue
+        [ -r "$dev/class" ] || continue
+        [ "$(cat "$dev/vendor")" = "$NVIDIA_VENDOR" ] || continue
+        # shellcheck disable=SC2254  # the caller passes a glob on purpose
+        case "$(cat "$dev/class")" in
+            $1) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# count_vendor_class <class-glob>...: print how many PCI devices have NVIDIA's
+# vendor id and a class matching any of the given globs. Used to size the NVLink
+# module options, which differ between a single-GPU and a multi-GPU tenant.
+count_vendor_class() {
+    count=0
+    for dev in "$PCI_DEVICES"/*; do
+        [ -r "$dev/vendor" ] || continue
+        [ -r "$dev/class" ] || continue
+        [ "$(cat "$dev/vendor")" = "$NVIDIA_VENDOR" ] || continue
+        class=$(cat "$dev/class")
+        for glob in "$@"; do
+            # shellcheck disable=SC2254  # the patterns are globs on purpose
+            case "$class" in
+                $glob)
+                    count=$((count + 1))
+                    break
+                    ;;
+            esac
+        done
+    done
+    echo "$count"
+}
+
+case "${1:-gpu}" in
+    gpu)
+        match_vendor_class '0x0300*' || match_vendor_class '0x0302*'
+        ;;
+    nvswitch)
+        match_vendor_class '0x06*'
+        ;;
+    count-gpus)
+        # Prints the count and always exits 0, so it is a query rather than an
+        # ExecCondition. A device is only ever one class, so the two globs
+        # cannot double count the same GPU.
+        count_vendor_class '0x0300*' '0x0302*'
+        ;;
+    *)
+        echo "usage: ${0##*/} {gpu|nvswitch|count-gpus}" >&2
+        exit 64
+        ;;
+esac

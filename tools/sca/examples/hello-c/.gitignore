@@ -1,0 +1,3 @@
+# build artifacts (produced by build.sh)
+/rootfs/run/sca/bin/app
+/app-compose.json

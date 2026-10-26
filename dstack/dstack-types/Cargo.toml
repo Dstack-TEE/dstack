@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-types"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ciborium.workspace = true
+hex = { workspace = true, features = ["std"] }
+or-panic.workspace = true
+scale = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde-human-bytes.workspace = true
+serde_with.workspace = true
+serde_jcs.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+size-parser = { workspace = true, features = ["serde"] }

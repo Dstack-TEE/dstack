@@ -1,0 +1,16 @@
+[Unit]
+Description=containerd eStargz snapshotter
+Requires=dstack-prepare.service
+After=network-online.target dstack-prepare.service
+Before=containerd.service
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/jq -e '.runner == "nerdctl-compose" and (.snapshotter // "overlayfs") == "stargz"' /dstack/app-compose.json
+ExecStart=/usr/bin/containerd-stargz-grpc --address /run/containerd-stargz-grpc/containerd-stargz-grpc.sock --root /var/lib/containerd-stargz-grpc
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 100); do test -S /run/containerd-stargz-grpc/containerd-stargz-grpc.sock && exit 0; sleep 0.1; done; exit 1'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

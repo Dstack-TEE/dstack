@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "tpm-attest"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+hex = { workspace = true, features = ["alloc"] }
+serde = { workspace = true, features = ["derive"] }
+serde-human-bytes.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["oid"] }
+tempfile.workspace = true
+tracing.workspace = true
+fs-err.workspace = true
+tpm-types.workspace = true
+dstack-types.workspace = true
+tpm2.workspace = true
+scale.workspace = true

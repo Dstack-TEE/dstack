@@ -1,0 +1,43 @@
+From: dstack ACPI differential harness
+Subject: [TEST ONLY] dump all measured ACPI fw_cfg blobs
+SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+SPDX-License-Identifier: Apache-2.0
+
+This instrumentation does not alter ACPI construction.  When
+QEMU_ACPI_DUMP_DIR is set, it writes the three measured blobs and exits.
+Without that variable, the existing DUMP_ACPI_TABLES behavior is unchanged.
+
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -2775,6 +2775,31 @@ void acpi_setup(void)
+
+ #ifdef DUMP_ACPI_TABLES
+     {
++        const char *dump_dir = getenv("QEMU_ACPI_DUMP_DIR");
++        if (dump_dir) {
++            struct {
++                const char *name;
++                GArray *blob;
++            } outputs[] = {
++                { "tables.bin", tables.table_data },
++                { "loader.bin", tables.linker->cmd_blob },
++                { "rsdp.bin", tables.rsdp },
++            };
++
++            for (size_t i = 0; i < ARRAY_SIZE(outputs); i++) {
++                g_autofree char *path = g_build_filename(dump_dir,
++                                                         outputs[i].name,
++                                                         NULL);
++                g_autoptr(GError) error = NULL;
++                if (!g_file_set_contents(path, outputs[i].blob->data,
++                                         outputs[i].blob->len, &error)) {
++                    error_report("failed to dump %s: %s", path,
++                                 error->message);
++                    exit(1);
++                }
++            }
++            exit(0);
++        }
+         uint8_t *ptr = (uint8_t *)tables.table_data->data;
+         uint64_t size = tables.table_data->len;
+         int flags = fcntl(1, F_GETFL);

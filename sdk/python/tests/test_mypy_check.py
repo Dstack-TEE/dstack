@@ -15,8 +15,8 @@ except ImportError:
 
 import pytest
 
-from dstack_sdk import AsyncDstackClient
-from dstack_sdk import DstackClient
+from dstack_sdk import AsyncDstackClientV0
+from dstack_sdk import DstackClientV0
 
 
 def test_sync_client_types():
@@ -36,7 +36,7 @@ def test_sync_client_types():
         }
         mock_post.return_value = mock_response
 
-        client = DstackClient(endpoint)
+        client = DstackClientV0(endpoint)
 
         # Test get_tls_key - this should be GetTlsKeyResponse, not Coroutine
         tls_result = client.get_tls_key()
@@ -78,7 +78,7 @@ async def test_async_client_types():
         }
         mock_post.return_value = mock_response
 
-        client = AsyncDstackClient(endpoint)
+        client = AsyncDstackClientV0(endpoint)
 
         # Test get_tls_key - this should be GetTlsKeyResponse
         tls_result = await client.get_tls_key()

@@ -1,0 +1,8 @@
+build*/
+repro*/
+# The container build environment, not a build output the globs above target.
+!repro-build/
+*.raw
+*.raw.zst
+mkosi.tools/
+mkosi.tools.manifest

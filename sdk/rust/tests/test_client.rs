@@ -5,8 +5,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This file exercises the deprecated v0 surface; that is its purpose.
+#![allow(deprecated)]
+
 use dcap_qvl::quote::Quote;
-use dstack_sdk::dstack_client::DstackClient as AsyncDstackClient;
+use dstack_sdk::dstack_client_v0::DstackClientV0 as AsyncDstackClient;
 use sha2::{Digest, Sha256};
 
 #[tokio::test]
@@ -25,20 +28,9 @@ async fn test_async_client_get_quote() {
 }
 
 #[tokio::test]
-async fn test_async_client_attest() {
-    let client = AsyncDstackClient::new(None);
-    let result = client.attest(b"test".to_vec()).await.unwrap();
-    let attestation = result.decode_attestation().unwrap();
-    assert!(!attestation.is_empty());
-
-    let too_large = client.attest(vec![0_u8; 65]).await;
-    assert!(too_large.is_err());
-}
-
-#[tokio::test]
 async fn test_async_client_get_tls_key() {
     let client = AsyncDstackClient::new(None);
-    let key_config = dstack_sdk_types::dstack::TlsKeyConfig::builder().build();
+    let key_config = dstack_sdk_types::dstack_v0::TlsKeyConfig::builder().build();
     let result = client.get_tls_key(key_config).await.unwrap();
     assert!(result.key.starts_with("-----BEGIN PRIVATE KEY-----"));
     assert!(!result.certificate_chain.is_empty());
@@ -47,26 +39,11 @@ async fn test_async_client_get_tls_key() {
 #[tokio::test]
 async fn test_tls_key_uniqueness() {
     let client = AsyncDstackClient::new(None);
-    let key_config_1 = dstack_sdk_types::dstack::TlsKeyConfig::builder().build();
-    let key_config_2 = dstack_sdk_types::dstack::TlsKeyConfig::builder().build();
+    let key_config_1 = dstack_sdk_types::dstack_v0::TlsKeyConfig::builder().build();
+    let key_config_2 = dstack_sdk_types::dstack_v0::TlsKeyConfig::builder().build();
     let result1 = client.get_tls_key(key_config_1).await.unwrap();
     let result2 = client.get_tls_key(key_config_2).await.unwrap();
     assert_ne!(result1.key, result2.key);
-}
-
-#[tokio::test]
-async fn test_replay_rtmr() {
-    let client = AsyncDstackClient::new(None);
-    let result = client.get_quote("test".into()).await.unwrap();
-    let rtmrs = result.replay_rtmrs().unwrap();
-    let quote = result.decode_quote().unwrap();
-
-    let tdx_quote = Quote::parse(&quote).unwrap();
-    let quote_report = tdx_quote.report.as_td10().unwrap();
-    assert_eq!(rtmrs[&0], hex::encode(quote_report.rt_mr0));
-    assert_eq!(rtmrs[&1], hex::encode(quote_report.rt_mr1));
-    assert_eq!(rtmrs[&2], hex::encode(quote_report.rt_mr2));
-    assert_eq!(rtmrs[&3], hex::encode(quote_report.rt_mr3));
 }
 
 #[tokio::test]
@@ -109,69 +86,139 @@ async fn test_info() {
 }
 
 #[tokio::test]
-async fn test_async_client_sign_and_verify_ed25519() {
+async fn test_async_client_version() {
     let client = AsyncDstackClient::new(None);
-    let data_to_sign = b"test message for ed25519".to_vec();
-    let algorithm = "ed25519";
-
-    let sign_resp = client.sign(algorithm, data_to_sign.clone()).await.unwrap();
-    assert!(!sign_resp.signature.is_empty());
-    assert!(!sign_resp.public_key.is_empty());
-    assert_eq!(sign_resp.signature_chain.len(), 3);
-
-    let sig = sign_resp.decode_signature().unwrap();
-    let pub_key = sign_resp.decode_public_key().unwrap();
-
-    let verify_resp = client
-        .verify(
-            algorithm,
-            data_to_sign.clone(),
-            sig.clone(),
-            pub_key.clone(),
-        )
-        .await
-        .unwrap();
-    assert!(verify_resp.valid);
-
-    let bad_data = b"wrong message".to_vec();
-    let verify_resp_bad = client
-        .verify(algorithm, bad_data, sig, pub_key)
-        .await
-        .unwrap();
-    assert!(!verify_resp_bad.valid);
+    let result = client.version().await.unwrap();
+    assert!(!result.version.is_empty());
 }
 
 #[tokio::test]
-async fn test_async_client_sign_and_verify_secp256k1() {
+async fn test_async_client_get_key_k256_alias() {
     let client = AsyncDstackClient::new(None);
-    let data_to_sign = b"test message for secp256k1".to_vec();
-    let algorithm = "secp256k1";
-
-    let sign_resp = client.sign(algorithm, data_to_sign.clone()).await.unwrap();
-    let sig = sign_resp.decode_signature().unwrap();
-    let pub_key = sign_resp.decode_public_key().unwrap();
-
-    let verify_resp = client
-        .verify(algorithm, data_to_sign, sig, pub_key)
+    // k256 should work as an alias for secp256k1
+    let result = client
+        .get_key(Some("test".to_string()), None)
         .await
         .unwrap();
-    assert!(verify_resp.valid);
+    assert!(!result.key.is_empty());
+    assert_eq!(result.decode_key().unwrap().len(), 32);
 }
 
 #[tokio::test]
-async fn test_async_client_sign_and_verify_secp256k1_prehashed() {
+async fn test_async_client_sign_k256_alias() {
     let client = AsyncDstackClient::new(None);
-    let data_to_sign = b"test message for secp256k1 prehashed";
-    let digest = Sha256::digest(data_to_sign).to_vec();
-    let algorithm = "secp256k1_prehashed";
+    let data = b"test message".to_vec();
 
-    let sign_resp = client.sign(algorithm, digest.clone()).await.unwrap();
-    let sig = sign_resp.decode_signature().unwrap();
-    let pub_key = sign_resp.decode_public_key().unwrap();
+    // Sign with k256 alias
+    let resp_k256 = client.sign("k256", data.clone()).await.unwrap();
+    assert!(!resp_k256.signature.is_empty());
+    assert!(!resp_k256.public_key.is_empty());
 
-    let verify_resp = client
-        .verify(algorithm, digest.clone(), sig, pub_key)
+    // Sign with secp256k1 should produce the same public key
+    let resp_secp = client.sign("secp256k1", data.clone()).await.unwrap();
+    assert_eq!(resp_k256.public_key, resp_secp.public_key);
+}
+
+// Sign and Verify are both v0 RPCs, so the round trip stays entirely on the
+// frozen surface. v1 has neither: an app there signs locally with the key
+// `get_key` returns, and a relying party verifies per `docs/guest-api-v1.md`.
+
+#[tokio::test]
+async fn test_sign_then_verify_ed25519() {
+    let client = AsyncDstackClient::new(None);
+    let data = b"test message for ed25519".to_vec();
+    let resp = client.sign("ed25519", data.clone()).await.unwrap();
+    let signature = resp.decode_signature().unwrap();
+    let public_key = resp.decode_public_key().unwrap();
+
+    assert_eq!(resp.signature_chain.len(), 3);
+    assert!(
+        client
+            .verify("ed25519", data, signature.clone(), public_key.clone())
+            .await
+            .unwrap()
+            .valid
+    );
+    assert!(
+        !client
+            .verify("ed25519", b"wrong message".to_vec(), signature, public_key)
+            .await
+            .unwrap()
+            .valid
+    );
+}
+
+#[tokio::test]
+async fn test_sign_then_verify_secp256k1() {
+    let client = AsyncDstackClient::new(None);
+    let data = b"test message for secp256k1".to_vec();
+    let resp = client.sign("secp256k1", data.clone()).await.unwrap();
+    let signature = resp.decode_signature().unwrap();
+    let public_key = resp.decode_public_key().unwrap();
+
+    assert_eq!(resp.signature_chain.len(), 3);
+    assert!(
+        client
+            .verify("secp256k1", data, signature.clone(), public_key.clone())
+            .await
+            .unwrap()
+            .valid
+    );
+    assert!(
+        !client
+            .verify(
+                "secp256k1",
+                b"wrong message".to_vec(),
+                signature,
+                public_key
+            )
+            .await
+            .unwrap()
+            .valid
+    );
+}
+
+#[tokio::test]
+async fn test_sign_then_verify_secp256k1_prehashed() {
+    let client = AsyncDstackClient::new(None);
+    let digest = Sha256::digest(b"test message for prehashed").to_vec();
+    let resp = client
+        .sign("secp256k1_prehashed", digest.clone())
         .await
         .unwrap();
-    assert!(verify_resp.valid);
+    let signature = resp.decode_signature().unwrap();
+    let public_key = resp.decode_public_key().unwrap();
+
+    assert_eq!(resp.signature_chain.len(), 3);
+    assert!(
+        client
+            .verify("secp256k1_prehashed", digest, signature, public_key)
+            .await
+            .unwrap()
+            .valid
+    );
+}
+
+/// A refused prpc call answers 4xx with `{"error": "..."}`, and that message is
+/// the whole value of the response -- `EmitEvent` exists in 0.6 only to explain
+/// its own removal. Both the status and the agent's text have to reach the
+/// caller, which `error_for_status()` and the unix client's default error both
+/// used to throw away.
+#[tokio::test]
+async fn a_refused_call_reports_the_status_and_the_agent_message() {
+    let client = AsyncDstackClient::new(None);
+    let err = client
+        .emit_event("test-event".to_string(), b"payload".to_vec())
+        .await
+        .unwrap_err();
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("HTTP 400"),
+        "expected the status in: {message}"
+    );
+    assert!(
+        message.contains("EmitEvent was removed in dstack 0.6.0"),
+        "expected the agent's own explanation in: {message}"
+    );
 }

@@ -1,0 +1,77 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Debian trixie, the same release the guest image targets, so `mkosi
+# dependencies` resolves to the package names it actually prints and
+# systemd-repart/-boot/-ukify exist as separate packages the way mkosi expects.
+# Pinned by digest: a floating tag would silently change the build environment.
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    LC_ALL=C
+
+# Kept in sync with `mkosi --directory os/mkosi dependencies`; the entrypoint
+# re-checks that list at run time and fails loudly if mkosi grows a new one.
+RUN apt-get update && apt-get install --yes --no-install-recommends \
+        apt \
+        apt-utils \
+        bash \
+        btrfs-progs \
+        ca-certificates \
+        coreutils \
+        cpio \
+        curl \
+        debian-archive-keyring \
+        dosfstools \
+        e2fsprogs \
+        erofs-utils \
+        git \
+        grub-common \
+        grub-pc-bin \
+        keyutils \
+        kmod \
+        libcryptsetup12 \
+        libseccomp2 \
+        libtss2-dev \
+        mtools \
+        opensc \
+        openssl \
+        pkcs11-provider \
+        policycoreutils \
+        python3 \
+        python3-cryptography \
+        python3-pefile \
+        python3-venv \
+        sbsigntool \
+        squashfs-tools \
+        systemd \
+        systemd-boot \
+        systemd-repart \
+        systemd-ukify \
+        tar \
+        xfsprogs \
+        xz-utils \
+        zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# The exact mkosi CI installs, taken from os/mkosi/versions.env so the pin has
+# one home. Installed into a venv whose shebang is absolute, which keeps it
+# working regardless of HOME or the invoking user.
+ARG MKOSI_REVISION
+ARG MKOSI_VERSION
+RUN test -n "$MKOSI_REVISION" -a -n "$MKOSI_VERSION" \
+        || { echo "MKOSI_REVISION and MKOSI_VERSION build args are required" >&2; exit 1; } \
+    && python3 -m venv /opt/mkosi-venv \
+    && /opt/mkosi-venv/bin/pip install --quiet --disable-pip-version-check \
+        "mkosi @ git+https://github.com/systemd/mkosi.git@${MKOSI_REVISION}" \
+    && ln -s /opt/mkosi-venv/bin/mkosi /usr/local/bin/mkosi \
+    && actual=$(mkosi --version | awk '{print $2}' | cut -d. -f1) \
+    && test "$actual" = "$MKOSI_VERSION" \
+        || { echo "pinned revision produced mkosi $actual, expected $MKOSI_VERSION" >&2; exit 1; }
+
+COPY entrypoint.sh /usr/local/bin/dstack-mkosi-entrypoint
+RUN chmod 0755 /usr/local/bin/dstack-mkosi-entrypoint
+
+ENTRYPOINT ["/usr/local/bin/dstack-mkosi-entrypoint"]

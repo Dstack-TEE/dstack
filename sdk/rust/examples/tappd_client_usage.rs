@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Demonstrates the deprecated v0 surface on purpose.
+#![allow(deprecated)]
+
 use dstack_sdk::tappd_client::TappdClient;
 
 #[tokio::main]

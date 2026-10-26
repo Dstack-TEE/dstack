@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-kms"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+fs-err.workspace = true
+dstack-build-info.workspace = true
+hex.workspace = true
+hex_fmt.workspace = true
+rocket.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+x25519-dalek.workspace = true
+yasna.workspace = true
+
+dstack-kms-rpc.workspace = true
+ra-rpc = { workspace = true, features = ["client", "rocket"] }
+ra-tls.workspace = true
+load_config.workspace = true
+serde-human-bytes.workspace = true
+reqwest = { workspace = true, features = ["json"] }
+sha2.workspace = true
+sha3.workspace = true
+k256.workspace = true
+rand.workspace = true
+dstack-guest-agent-rpc.workspace = true
+http-client = { workspace = true, features = ["prpc"] }
+scale.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
+ring.workspace = true
+safe-write.workspace = true
+serde_json.workspace = true
+dstack-types.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tempfile.workspace = true
+serde-duration.workspace = true
+dstack-verifier = { workspace = true, default-features = false }
+dstack-mr.workspace = true
+base64.workspace = true
+
+# BLS12-381 for MPC key derivation
+blstrs = "0.7"
+elliptic-curve = "0.13"
+hkdf = "0.12.4"
+bs58 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# NEAR integration
+near-api = "0.8.3"
+near-crypto = "0.34.6"  # Still needed for InMemorySigner in onboard_service.rs
+byte-slice-cast = "1.2"
+url.workspace = true
+
+# DCAP QVL for TDX quote verification
+dcap-qvl.workspace = true
+dstack-attest.workspace = true
+dstack-api-auth.workspace = true
+moka = { workspace = true, features = ["future"] }
+
+[dev-dependencies]
+cc-eventlog.workspace = true
+
+[features]
+default = []

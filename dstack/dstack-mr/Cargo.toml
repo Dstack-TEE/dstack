@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <daniel.sharifi@nearone.org>
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-mr"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A CLI tool for calculating TDX/SEV measurements for dstack images"
+
+[lib]
+name = "dstack_mr"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dstack-mr"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true, features = ["alloc"] }
+serde-human-bytes.workspace = true
+hex = { workspace = true, features = ["std"] }
+thiserror.workspace = true
+sha2.workspace = true
+anyhow.workspace = true
+binrw.workspace = true
+object.workspace = true
+hex-literal.workspace = true
+fs-err.workspace = true
+bon.workspace = true
+log.workspace = true
+scale.workspace = true
+dstack-types.workspace = true
+qemu-acpi.workspace = true
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["blocking"] }
+flate2.workspace = true
+tar.workspace = true

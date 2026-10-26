@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: KMS Auth-ETH Foundry Tests
+
+on:
+  push:
+    paths:
+      - 'dstack/kms/auth-eth/**'
+      - '.github/workflows/foundry-test.yml'
+  pull_request:
+    paths:
+      - 'dstack/kms/auth-eth/**'
+      - '.github/workflows/foundry-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FOUNDRY_PROFILE: ci
+
+jobs:
+  check:
+    name: Foundry project
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dstack/kms/auth-eth
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout contract dependencies
+        working-directory: .
+        run: |
+          git submodule update --init --recursive --depth 1 -- \
+            dstack/kms/auth-eth/lib/forge-std \
+            dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
+            dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Show Forge version
+        run: |
+          forge --version
+
+      - name: Run Forge fmt
+        run: |
+          forge fmt --check
+        id: fmt
+
+      - name: Run Forge build
+        run: |
+          forge build --sizes
+        id: build
+
+      - name: Install OpenZeppelin upgrades validator
+        run: npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
+
+      - name: Run Forge tests
+        # The upgrade-safety validator rejects a contract found in more than one
+        # build-info file. Since forge 1.8.4 `build --sizes` skips tests, so the
+        # test run would add a second build-info next to it.
+        run: |
+          forge clean
+          forge test --ffi -vvv
+        id: test

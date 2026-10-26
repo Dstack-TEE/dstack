@@ -1,0 +1,14 @@
+[Unit]
+Description=Sysbox container runtime
+Documentation=https://github.com/nestybox/sysbox
+Wants=dstack-prepare.service
+After=dstack-prepare.service sysbox-mgr.service sysbox-fs.service
+BindsTo=sysbox-mgr.service sysbox-fs.service
+Before=docker.service containerd.service
+
+[Service]
+Type=exec
+ExecStart=/bin/sh -c "/usr/bin/sysbox-runc --version && /usr/bin/sysbox-mgr --version && /usr/bin/sysbox-fs --version && /bin/sleep infinity"
+
+[Install]
+WantedBy=multi-user.target

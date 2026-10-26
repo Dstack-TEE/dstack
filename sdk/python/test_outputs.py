@@ -2,26 +2,26 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Test script for verifying Python SDK outputs."""
+
 import asyncio
 import sys
 
-from dstack_sdk import (
-    DstackClient,
-    AsyncDstackClient,
-    TappdClient,
-    AsyncTappdClient,
-    get_compose_hash,
-    verify_env_encrypt_public_key,
-)
+from dstack_sdk import AsyncDstackClientV0
+from dstack_sdk import AsyncTappdClient
+from dstack_sdk import DstackClientV0
+from dstack_sdk import TappdClient
+from dstack_sdk import get_compose_hash
+from dstack_sdk import verify_env_encrypt_public_key
 
 
-async def main():
+async def main():  # noqa: D103
     print("=== Python SDK Output Test ===")
 
     try:
         # Test client get_key
-        client = DstackClient()
-        print("\n1. Testing DstackClient.get_key()")
+        client = DstackClientV0()
+        print("\n1. Testing DstackClientV0.get_key()")
 
         test_paths = [
             {"path": "test/wallet", "purpose": "ethereum"},
@@ -49,7 +49,7 @@ async def main():
 
             account = to_account(eth_key)
             print(f"  address: {account.address}")
-            print(f"  type: ethereum account")
+            print("  type: ethereum account")
         except ImportError:
             print(
                 "  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')"
@@ -63,7 +63,7 @@ async def main():
 
             account_secure = to_account_secure(eth_key)
             print(f"  address: {account_secure.address}")
-            print(f"  type: ethereum account")
+            print("  type: ethereum account")
         except ImportError:
             print(
                 "  error: Ethereum integration not available (install with pip install 'dstack-sdk[eth]')"
@@ -118,7 +118,6 @@ async def main():
             tappd_quote = tappd_client.tdx_quote("test-data", "raw")
             print(f"  quote length: {len(tappd_quote.quote)}")
             print(f"  event_log length: {len(tappd_quote.event_log)}")
-            print(f"  rtmrs count: {len(tappd_quote.replay_rtmrs())}")
         except Exception as error:
             print(f"  error: {error}")
 
@@ -137,24 +136,21 @@ async def main():
             async_tappd_quote = await async_tappd_client.tdx_quote("test-data", "raw")
             print(f"  quote length: {len(async_tappd_quote.quote)}")
             print(f"  event_log length: {len(async_tappd_quote.event_log)}")
-            print(f"  rtmrs count: {len(async_tappd_quote.replay_rtmrs())}")
         except Exception as error:
             print(f"  error: {error}")
 
         # Test quotes
         print("\n5. Testing Quote Methods")
-        print("\n5.1 DstackClient.get_quote():")
+        print("\n5.1 DstackClientV0.get_quote():")
         dstack_quote = client.get_quote("test-data-for-quote")
         print(f"  quote length: {len(dstack_quote.quote)}")
         print(f"  event_log length: {len(dstack_quote.event_log)}")
-        print(f"  rtmrs count: {len(dstack_quote.replay_rtmrs())}")
 
-        print("\n5.2 AsyncDstackClient.get_quote():")
-        async_client = AsyncDstackClient()
+        print("\n5.2 AsyncDstackClientV0.get_quote():")
+        async_client = AsyncDstackClientV0()
         async_dstack_quote = await async_client.get_quote("test-data-for-quote")
         print(f"  quote length: {len(async_dstack_quote.quote)}")
         print(f"  event_log length: {len(async_dstack_quote.event_log)}")
-        print(f"  rtmrs count: {len(async_dstack_quote.replay_rtmrs())}")
 
         # Test get_compose_hash
         print("\n6. Testing get_compose_hash")

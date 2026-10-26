@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-import crypto from "crypto";
+import { sha256 } from "@noble/hashes/sha256";
+import { bytesToHex } from "@noble/hashes/utils";
 
 type SortableValue = string | number | boolean | null | undefined | SortableObject | SortableArray;
 interface SortableObject {
@@ -35,6 +36,11 @@ function sortObject(obj: SortableValue): SortableValue {
 }
 
 export type KeyProviderKind = "none" | "kms" | "local" | "tpm";
+export type RequirementPlatform =
+  | "dstack-tdx"
+  | "dstack-gcp-tdx"
+  | "dstack-amd-sev-snp"
+  | "dstack-nitro-enclave";
 
 export interface DockerConfig extends SortableObject {
   registry?: string;
@@ -42,12 +48,58 @@ export interface DockerConfig extends SortableObject {
   token_key?: string;
 }
 
+export interface GpuPolicy extends SortableObject {
+  attest_gpu?: boolean;
+  rego?: string;
+  allow_devtools?: boolean;
+  allow_debug?: boolean;
+  allow_insecure_boot?: boolean;
+}
+
+export interface Requirements extends SortableObject {
+  platforms?: RequirementPlatform[];
+  tdx_measure_acpi_tables?: boolean;
+  launch_token_hash?: string;
+  /**
+   * Opt-in gateway health gating. Leave it out rather than passing `false`: the
+   * guest's Rust types skip a false `health_check`, and this hash has to be the
+   * one that gets whitelisted on chain.
+   */
+  health_check?: boolean;
+  /**
+   * Path to a file the app writes its own verdict into. `""` and absent are
+   * different app composes and hash differently, in every SDK.
+   */
+  health_status_file?: string;
+  /** Format the data disk on every boot. Leave it out rather than passing `false`. */
+  ephemeral_data_disk?: boolean;
+  gpu_policy?: GpuPolicy;
+}
+
+export interface PortAttrs extends SortableObject {
+  port: number;
+  pp?: boolean;
+}
+
+export interface PortPolicy extends SortableObject {
+  ports?: PortAttrs[];
+  restrict_mode?: boolean;
+}
+
+export interface VerityVolume extends SortableObject {
+  source: string;
+  /** dm-verity root hash, hex encoded. */
+  verity_root: string;
+  target: string;
+}
+
 export interface AppCompose extends SortableObject {
-  manifest_version?: number;
+  manifest_version?: number | string;
   name?: string;
   // Deprecated
   features?: string[];
   runner: string;
+  snapshotter?: "overlayfs" | "stargz";
   docker_compose_file?: string;
   docker_config?: DockerConfig;
   public_logs?: boolean;
@@ -63,6 +115,16 @@ export interface AppCompose extends SortableObject {
   allowed_envs?: string[];
   no_instance_id?: boolean;
   secure_time?: boolean;
+  requirements?: Requirements;
+  init_script?: string[];
+  storage_fs?: string;
+  /** Reclaim unused data-disk blocks; disable to hide allocation changes. */
+  storage_discard?: boolean;
+  /** Human size string, e.g. "2G", matching what the guest reads. */
+  swap_size?: string;
+  event_log_version?: number;
+  port_policy?: PortPolicy;
+  verity_volumes?: VerityVolume[];
   // Legacy fields for backward compatibility
   bash_script?: string;
   pre_launch_script?: string;
@@ -72,7 +134,7 @@ function preprocessAppCompose(dic: AppCompose): AppCompose {
   const obj: AppCompose = { ...dic };
   if (obj.runner === "bash" && "docker_compose_file" in obj) {
     delete obj.docker_compose_file;
-  } else if (obj.runner === "docker-compose" && "bash_script" in obj) {
+  } else if ((obj.runner === "docker-compose" || obj.runner === "nerdctl-compose") && "bash_script" in obj) {
     delete obj.bash_script;
   }
   if ("pre_launch_script" in obj && !obj.pre_launch_script) {
@@ -104,5 +166,5 @@ export function getComposeHash(app_compose: AppCompose, normalize: boolean = fal
     app_compose = preprocessAppCompose(app_compose);
   }
   const manifest_str = toDeterministicJson(app_compose);
-  return crypto.createHash("sha256").update(manifest_str, "utf8").digest("hex");
+  return bytesToHex(sha256(new TextEncoder().encode(manifest_str)));
 }

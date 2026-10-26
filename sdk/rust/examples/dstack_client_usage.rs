@@ -3,21 +3,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use dstack_sdk::dstack_client::DstackClient;
-use dstack_sdk_types::dstack::TlsKeyConfig;
+// Demonstrates the deprecated v0 surface on purpose.
+#![allow(deprecated)]
+
+use dstack_sdk::dstack_client_v0::DstackClientV0;
+use dstack_sdk_types::dstack_v0::TlsKeyConfig;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Create a DstackClient with default endpoint (/var/run/dstack.sock)
-    let client = DstackClient::new(None);
+    // Create a DstackClientV0 with default endpoint (/var/run/dstack.sock)
+    let client = DstackClientV0::new(None);
 
     // Or create with a custom endpoint
-    // let client = DstackClient::new(Some("/custom/path/dstack.sock"));
+    // let client = DstackClientV0::new(Some("/custom/path/dstack.sock"));
 
     // Or create with HTTP endpoint for simulator
-    // let client = DstackClient::new(Some("http://localhost:8000"));
+    // let client = DstackClientV0::new(Some("http://localhost:8000"));
 
-    println!("DstackClient created successfully!");
+    println!("DstackClientV0 created successfully!");
 
     // Example usage (these will fail without a running dstack service):
 
@@ -58,21 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let quote_bytes = response.decode_quote()?;
     println!("  Decoded quote bytes length: {}", quote_bytes.len());
 
-    // Replay RTMRs from event log
-    let rtmrs = response.replay_rtmrs()?;
-    println!("  Replayed RTMRs: {} entries", rtmrs.len());
-    for (idx, rtmr) in rtmrs.iter() {
-        println!("    RTMR{}: {}", idx, rtmr);
-    }
-
-    // 4. Emit an event
-    let event_payload = b"Application started successfully".to_vec();
-    client
-        .emit_event("AppStart".to_string(), event_payload)
-        .await?;
-    println!("Event emitted successfully!");
-
-    // 5. Get TLS key for server authentication
+    // 4. Get TLS key for server authentication
     let tls_config = TlsKeyConfig::builder()
         .subject("my-app.example.com")
         .alt_names(vec![
@@ -125,14 +114,11 @@ async fn main() -> anyhow::Result<()> {
     let sig_bytes = sign_resp.decode_signature()?;
     let pub_key_bytes = sign_resp.decode_public_key()?;
 
-    let verify_resp = client
-        .verify(
-            algorithm,
-            data_to_sign.clone(),
-            sig_bytes.clone(),
-            pub_key_bytes.clone(),
-        )
+    // Sign and Verify are both v0 RPCs, so this round trip stays on the frozen
+    // surface. v1 has neither; see `docs/guest-api-v1.md`.
+    let verified = client
+        .verify(algorithm, data_to_sign, sig_bytes, pub_key_bytes)
         .await?;
-    println!("  Verification successful: {}", verify_resp.valid);
+    println!("  Verification successful: {}", verified.valid);
     Ok(())
 }

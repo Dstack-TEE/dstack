@@ -1,0 +1,35 @@
+From 48cf4656e9a23f7f5b4a2f6a0e5b5b2b6d5e5b6d Mon Sep 17 00:00:00 2001
+From: h4x <dstack@phala.network>
+Date: Mon, 27 Oct 2025 23:52:02 +0000
+Subject: [PATCH] x86/tdx: select DMA_DIRECT_REMAP for encrypted guests
+
+TDX guests require DMA buffers to be mapped out of the shared (decrypted)
+pool in order for shared devices such as NVMe to complete I/O.  Without
+DMA_DIRECT_REMAP the dma-direct layer falls back to allocations from the
+regular page allocator, leaving the memory encrypted and causing every
+request to wedge once it hits the host.
+
+Ensure the TDX guest configuration pulls in DMA_DIRECT_REMAP, which in
+turn enables the coherent DMA pool machinery and honours the
+`coherent_pool=` kernel parameter.
+
+Upstream-Status: Inappropriate [TDX guest specific selection]
+Signed-off-by: h4x <dstack@phala.network>
+---
+ arch/x86/Kconfig | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index 5d57930be347..c1b55a4bf4f0 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -886,6 +886,7 @@ config INTEL_TDX_GUEST
+ 	depends on EFI_STUB
+ 	depends on PARAVIRT
+ 	select ARCH_HAS_CC_PLATFORM
++	select DMA_DIRECT_REMAP
+ 	select X86_MEM_ENCRYPT
+ 	select X86_MCE
+ 	select UNACCEPTED_MEMORY
+-- 
+2.46.0

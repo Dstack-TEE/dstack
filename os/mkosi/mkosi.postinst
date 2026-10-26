@@ -1,0 +1,27 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+B=${BUILDROOT:?}
+rm -f "$B/etc/machine-id" "$B/var/lib/dbus/machine-id"
+: > "$B/etc/machine-id"
+
+# Package-manager logs contain wall-clock timestamps from image assembly.
+# They are build diagnostics, not guest runtime state, so omit them from the
+# measured image to keep clean builds reproducible.
+rm -f "$B/var/log/alternatives.log" "$B/var/log/dpkg.log"
+rm -rf "$B/var/log/apt"
+
+# Host keys must be unique per booted development VM, never shared by all
+# guests built from one image. OpenSSH generates them on first boot.
+rm -f "$B"/etc/ssh/ssh_host_*_key "$B"/etc/ssh/ssh_host_*_key.pub
+
+# Build outputs are merged after package installation, so refresh the final
+# rootfs cache after manually staged NVIDIA and container-runtime libraries.
+ldconfig -r "$B"
+
+# systemd applies the first matching rule across all preset files sorted by
+# name, so a distro preset such as Debian's 90-systemd.preset would shadow the
+# `disable *` in 99-dstack-default.preset. Keep dstack's policy the only one.
+find "$B"/usr/lib/systemd/system-preset "$B"/etc/systemd/system-preset \
+  -maxdepth 1 -name '*.preset' ! -name '*dstack*' -print -delete 2>/dev/null || true

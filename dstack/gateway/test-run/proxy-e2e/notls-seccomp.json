@@ -1,0 +1,14 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": [
+    {
+      "names": ["setsockopt"],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 92,
+      "args": [
+        {"index": 1, "value": 6, "op": "SCMP_CMP_EQ"},
+        {"index": 2, "value": 31, "op": "SCMP_CMP_EQ"}
+      ]
+    }
+  ]
+}

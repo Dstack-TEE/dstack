@@ -1,0 +1,2734 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError, Weak},
+    time::Duration,
+};
+
+use anyhow::{anyhow, bail, Context, Result};
+use cc_eventlog::{
+    tdx::{
+        TDX_ACPI_DATA_EVENT_PAYLOAD, TDX_ACPI_DATA_EVENT_TYPE, TDX_ACPI_LOADER_EVENT,
+        TDX_ACPI_RSDP_EVENT, TDX_ACPI_TABLES_EVENT,
+    },
+    TdxEvent,
+};
+use dstack_mr::{tdx::TdxRtmr0AcpiHashes, TdxMeasurements};
+use dstack_types::{sha256sum, TdxAttestationVariant, VmConfig};
+use hex_literal::hex;
+use ra_tls::attestation::{
+    resolve_vm_config, AppInfo, Attestation, AttestationQuote, AttestationVerifier,
+    DstackVerifiedReport, NitroPcrs, VerifiedAttestation, VersionedAttestation,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+use tokio::{io::AsyncWriteExt, sync::Mutex as AsyncMutex};
+use tpm_qvl::verify::VerifiedReport as TpmVerifiedReport;
+use tracing::{debug, info, warn};
+
+use crate::types::{
+    PolicyBootInfo, VerificationDetails, VerificationRequest, VerificationResponse,
+};
+
+/// Return the canonical TCB status and advisory list used by auth policy.
+///
+/// Matched exhaustively on purpose: adding a `DstackVerifiedReport` variant must
+/// fail the build here rather than silently inherit another platform's TCB
+/// semantics through a catch-all arm.
+pub fn policy_tcb_fields(attestation: &VerifiedAttestation) -> (String, Vec<String>) {
+    match &attestation.report {
+        DstackVerifiedReport::DstackTdx(report) => {
+            (report.status.clone(), report.advisory_ids.clone())
+        }
+        // GCP binds a TPM quote next to the TDX quote, but only the TDX report
+        // carries a TCB surface, so the TPM report contributes nothing here.
+        DstackVerifiedReport::DstackGcpTdx { tdx_report, .. } => {
+            (tdx_report.status.clone(), tdx_report.advisory_ids.clone())
+        }
+        // SNP has no upstream status string; it is derived by comparing the
+        // report's TCB versions, so read it from `tcb_info` rather than a field.
+        DstackVerifiedReport::DstackAmdSevSnp(report) => (
+            report.tcb_info.tcb_status().to_string(),
+            report.advisory_ids.clone(),
+        ),
+        // AWS NitroTPM has no TDX/SNP-style TCB surface; a verified attestation
+        // is normalized to "UpToDate" so the verifier's policy boot info matches
+        // the KMS bootAuth payload and passes the shared "UpToDate" auth gate.
+        DstackVerifiedReport::DstackAwsNitroTpm(_) => ("UpToDate".to_string(), Vec::new()),
+        // Other no-TCB platforms (currently Nitro Enclave) stay empty so a
+        // relying party's UpToDate requirement fails closed.
+        DstackVerifiedReport::DstackNitroEnclave(_) => (String::new(), Vec::new()),
+    }
+}
+
+fn policy_boot_info_from_verified_app_info(
+    attestation: &VerifiedAttestation,
+    app_info: &AppInfo,
+) -> PolicyBootInfo {
+    let (tcb_status, advisory_ids) = policy_tcb_fields(attestation);
+    PolicyBootInfo::from_app_info(
+        attestation.quote.variant(),
+        app_info,
+        tcb_status,
+        advisory_ids,
+    )
+}
+
+/// best-effort: None for empty/malformed blobs.
+fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInfo> {
+    if bytes.is_empty() {
+        return None;
+    }
+    serde_json::from_slice(bytes).ok()
+}
+
+// Bump whenever expected RTMR computation changes so stale entries get ignored.
+// v3: all supported OVMF measurements use the Pre202505 RTMR[0] layout.
+//
+// Setup-header normalization did not need a bump: images that predate it are
+// measured exactly as before, and normalized images are new images whose
+// `os_image_hash` -- part of the `VmConfig` this key hashes -- has never been
+// cached.
+const MEASUREMENT_CACHE_VERSION: u32 = 3;
+
+/// Upper bound on both a downloaded image archive and its extracted contents.
+/// Measurement images carry no rootfs; released ones are under 25 MB extracted.
+const MAX_IMAGE_SIZE: u64 = 100 << 20;
+
+/// Tries per image download; only transport failures and 5xx responses retry.
+const IMAGE_DOWNLOAD_ATTEMPTS: u32 = 3;
+
+#[derive(Clone, Serialize, Deserialize)]
+struct CachedMeasurement {
+    version: u32,
+    measurements: TdxMeasurements,
+}
+
+/// Cap on `<image_cache_dir>/measurements/` (~400 B per entry). Entries never go
+/// stale, but a caller varying the VM shape adds one per shape.
+const MEASUREMENT_CACHE_MAX_ENTRIES: usize = 1024;
+
+struct ImagePaths {
+    image_dir: PathBuf,
+    fw_path: PathBuf,
+    kernel_path: PathBuf,
+    initrd_path: PathBuf,
+    kernel_cmdline: String,
+    is_dev: bool,
+    version: String,
+    kernel_header_normalized: bool,
+}
+
+pub struct CvmVerifier {
+    pub image_cache_dir: String,
+    pub download_url: String,
+    pub download_timeout: Duration,
+    pub attestation_verifier: Arc<AttestationVerifier>,
+    download_locks: Mutex<HashMap<String, Weak<AsyncMutex<()>>>>,
+}
+
+impl CvmVerifier {
+    pub fn new(
+        image_cache_dir: String,
+        download_url: String,
+        download_timeout: Duration,
+        attestation_verifier: Arc<AttestationVerifier>,
+    ) -> Self {
+        Self {
+            image_cache_dir,
+            download_url,
+            download_timeout,
+            attestation_verifier,
+            download_locks: Mutex::default(),
+        }
+    }
+
+    /// One lock per image, held from the cache check until the image is
+    /// installed, so concurrent requests for an image download it once.
+    fn download_lock(&self, hex_os_image_hash: &str) -> Arc<AsyncMutex<()>> {
+        let mut locks = self
+            .download_locks
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(hex_os_image_hash).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::default();
+        locks.insert(hex_os_image_hash.to_owned(), Arc::downgrade(&lock));
+        lock
+    }
+
+    fn measurement_cache_dir(&self) -> PathBuf {
+        Path::new(&self.image_cache_dir).join("measurements")
+    }
+
+    fn measurement_cache_path(&self, cache_key: &str) -> PathBuf {
+        self.measurement_cache_dir()
+            .join(format!("{cache_key}.json"))
+    }
+
+    /// Hash only what the measurement reads: `image` and the measurement documents
+    /// are caller-controlled and unused, so they must not be able to force a miss.
+    /// Clear them rather than allowlisting, so new `VmConfig` fields stay in the key.
+    fn vm_config_cache_key(vm_config: &VmConfig) -> Result<String> {
+        let vm_config = VmConfig {
+            image: None,
+            tdx_measurement: None,
+            gcp_measurement: None,
+            aws_measurement: None,
+            ..vm_config.clone()
+        };
+        let serialized = serde_json::to_vec(&vm_config)
+            .context("Failed to serialize VM config for cache key computation")?;
+        Ok(hex::encode(Sha256::digest(&serialized)))
+    }
+
+    fn load_measurements_from_cache(&self, cache_key: &str) -> Result<Option<TdxMeasurements>> {
+        let path = self.measurement_cache_path(cache_key);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let path_display = path.display().to_string();
+        let contents = match fs_err::read(&path) {
+            Ok(data) => data,
+            Err(e) => {
+                warn!("Failed to read measurement cache {}: {e:?}", path_display);
+                return Ok(None);
+            }
+        };
+
+        let cached: CachedMeasurement = match serde_json::from_slice(&contents) {
+            Ok(entry) => entry,
+            Err(e) => {
+                warn!("Failed to parse measurement cache {}: {e:?}", path_display);
+                return Ok(None);
+            }
+        };
+
+        if cached.version != MEASUREMENT_CACHE_VERSION {
+            debug!(
+                "Ignoring measurement cache {} due to version mismatch (found {}, expected {})",
+                path_display, cached.version, MEASUREMENT_CACHE_VERSION
+            );
+            return Ok(None);
+        }
+
+        debug!("Loaded measurement cache entry {}", cache_key);
+        Ok(Some(cached.measurements))
+    }
+
+    fn store_measurements_in_cache(
+        &self,
+        cache_key: &str,
+        measurements: &TdxMeasurements,
+    ) -> Result<()> {
+        let cache_dir = self.measurement_cache_dir();
+        fs_err::create_dir_all(&cache_dir)
+            .context("Failed to create measurement cache directory")?;
+
+        let path = self.measurement_cache_path(cache_key);
+        let mut tmp = tempfile::NamedTempFile::new_in(&cache_dir)
+            .context("Failed to create temporary cache file")?;
+
+        let entry = CachedMeasurement {
+            version: MEASUREMENT_CACHE_VERSION,
+            measurements: measurements.clone(),
+        };
+        serde_json::to_writer(tmp.as_file_mut(), &entry)
+            .context("Failed to serialize measurement cache entry")?;
+        tmp.as_file_mut()
+            .sync_all()
+            .context("Failed to flush measurement cache entry to disk")?;
+
+        tmp.persist(&path).map_err(|e| {
+            anyhow!(
+                "Failed to persist measurement cache to {}: {e}",
+                path.display()
+            )
+        })?;
+        debug!("Stored measurement cache entry {}", cache_key);
+        if let Err(e) = Self::prune_measurement_cache(&cache_dir, MEASUREMENT_CACHE_MAX_ENTRIES) {
+            warn!("failed to prune the measurement cache: {e:?}");
+        }
+        Ok(())
+    }
+
+    /// Best effort: drop the oldest `.json` entries (not in-flight temp files)
+    /// until at most `max_entries` remain.
+    fn prune_measurement_cache(cache_dir: &Path, max_entries: usize) -> Result<()> {
+        let mut entries = Vec::new();
+        for entry in fs_err::read_dir(cache_dir).context("failed to read measurement cache")? {
+            let entry = entry.context("failed to read measurement cache entry")?;
+            let path = entry.path();
+            if path.extension() != Some(OsStr::new("json")) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            entries.push((modified, path));
+        }
+        if entries.len() <= max_entries {
+            return Ok(());
+        }
+        let excess = entries.len() - max_entries;
+        entries.sort();
+        for (_, path) in entries.iter().take(excess) {
+            if let Err(e) = fs_err::remove_file(path) {
+                debug!("failed to evict measurement cache entry: {e:?}");
+            }
+        }
+        debug!("evicted {excess} measurement cache entries");
+        Ok(())
+    }
+
+    fn compute_measurements(vm_config: &VmConfig, image: &ImagePaths) -> Result<TdxMeasurements> {
+        let firmware = image.fw_path.display().to_string();
+        let kernel = image.kernel_path.display().to_string();
+        let initrd = image.initrd_path.display().to_string();
+
+        // Prefer the explicit variant the image declared; pre-`ovmf_variant`
+        // deployments fall back to the only layout that existed back then.
+        let ovmf_variant = vm_config.ovmf_variant.unwrap_or_default();
+
+        dstack_mr::Machine::builder()
+            .cpu_count(vm_config.cpu_count)
+            .memory_size(vm_config.memory_size)
+            .firmware(&firmware)
+            .kernel(&kernel)
+            .initrd(&initrd)
+            .kernel_cmdline(&image.kernel_cmdline)
+            .root_verity(true)
+            .hotplug_off(vm_config.hotplug_off)
+            .maybe_two_pass_add_pages(vm_config.qemu_single_pass_add_pages)
+            .normalized_setup_header(image.kernel_header_normalized)
+            .maybe_pic(vm_config.pic)
+            .maybe_qemu_version(vm_config.qemu_version.clone())
+            .maybe_pci_hole64_size(if vm_config.pci_hole64_size > 0 {
+                Some(vm_config.pci_hole64_size)
+            } else {
+                None
+            })
+            .hugepages(vm_config.hugepages)
+            .numa_nodes(&vm_config.numa_nodes)
+            .num_gpus(vm_config.num_gpus)
+            .num_nics(vm_config.num_nics)
+            .num_verity_volumes(vm_config.num_verity_volumes)
+            .extra_root_devices(&vm_config.extra_root_devices)
+            .swtpm(vm_config.swtpm)
+            .num_nvswitches(vm_config.num_nvswitches)
+            .host_share_mode(vm_config.host_share_mode.clone())
+            .ovmf_variant(ovmf_variant)
+            .build()
+            .measure()
+            .context("Failed to compute expected MRs")
+    }
+
+    async fn load_or_compute_measurements(
+        &self,
+        vm_config: &VmConfig,
+        image: ImagePaths,
+    ) -> Result<TdxMeasurements> {
+        let cache_key = Self::vm_config_cache_key(vm_config)?;
+
+        if let Some(measurements) = self.load_measurements_from_cache(&cache_key)? {
+            return Ok(measurements);
+        }
+
+        let vm_config = vm_config.clone();
+        let measurements =
+            tokio::task::spawn_blocking(move || Self::compute_measurements(&vm_config, &image))
+                .await
+                .context("measurement task failed")??;
+
+        if let Err(e) = self.store_measurements_in_cache(&cache_key, &measurements) {
+            warn!(
+                "Failed to write measurement cache entry for {}: {e:?}",
+                cache_key
+            );
+        }
+
+        Ok(measurements)
+    }
+
+    fn images_dir(&self) -> PathBuf {
+        Path::new(&self.image_cache_dir).join("images")
+    }
+
+    fn image_content_digest(image_dir: &Path) -> Result<Option<Vec<u8>>> {
+        let sha256sum_path = image_dir.join("sha256sum.txt");
+        if !sha256sum_path.exists() {
+            return Ok(None);
+        }
+        let files_doc =
+            fs_err::read_to_string(&sha256sum_path).context("Failed to read sha256sum.txt")?;
+        Ok(Some(
+            Sha256::new_with_prefix(files_doc.as_bytes())
+                .finalize()
+                .to_vec(),
+        ))
+    }
+
+    fn image_hash_matches_legacy_digest(image_dir: &Path, expected: &[u8]) -> Result<bool> {
+        Ok(Self::image_content_digest(image_dir)?
+            .as_deref()
+            .is_some_and(|digest| digest == expected))
+    }
+
+    /// Mirrors the confinement rule `tar::Entry::unpack_in` applies internally:
+    /// `..` components, absolute paths, and Windows prefixes escape the
+    /// extraction root, while `.` components are stripped and are harmless.
+    ///
+    /// This duplicates the library check on purpose. `Archive::unpack` discards
+    /// the `unpack_in` return value, so an escaping member is silently dropped
+    /// and extraction still reports success; checking here turns that into an
+    /// error and keeps the boundary from widening if the library's behavior
+    /// ever changes. It must not be *stricter* than the library, though:
+    /// rejecting `.` components would reject the `./`-prefixed archives that
+    /// `tar -czf out.tar.gz .` produces, and roughly a third of the images
+    /// published on download.dstack.org are packed that way.
+    fn is_confined_archive_path(path: &Path) -> bool {
+        path.components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+    }
+
+    /// Check every file the image manifest lists against the digest it binds.
+    /// This is the only content check on `bzImage`, `ovmf.fd` and the initrd
+    /// before they are measured.
+    fn verify_image_manifest(
+        extracted_dir: &Path,
+        files_doc: &str,
+    ) -> Result<Vec<sha256sum::Entry>> {
+        let entries = sha256sum::parse(files_doc.as_bytes()).map_err(anyhow::Error::msg)?;
+        for entry in &entries {
+            let mut file = fs_err::File::open(extracted_dir.join(&entry.name))
+                .with_context(|| format!("image is missing manifest entry {}", entry.name))?;
+            let mut hasher = Sha256::new();
+            std::io::copy(&mut file, &mut hasher)
+                .with_context(|| format!("failed to read manifest entry {}", entry.name))?;
+            if hasher.finalize().as_slice() != entry.hash {
+                bail!("{} does not match its digest in sha256sum.txt", entry.name);
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Bind an extracted image to `os_image_hash` and drop everything the
+    /// binding does not cover.
+    fn verify_extracted_image(extracted_dir: &Path, hex_os_image_hash: &str) -> Result<()> {
+        // All image modes are addressed by sha256(sha256sum.txt); extra
+        // measurement CBOR files are ordinary entries and do not define
+        // alternate image hashes. Check it before anything else in the archive
+        // is parsed or hashed.
+        let files_doc = fs_err::read_to_string(extracted_dir.join("sha256sum.txt"))
+            .context("failed to read sha256sum.txt")?;
+        if hex::encode(Sha256::digest(&files_doc)) != hex_os_image_hash {
+            bail!("os_image_hash does not match sha256(sha256sum.txt)");
+        }
+        let manifest = Self::verify_image_manifest(extracted_dir, &files_doc)?;
+        Self::prune_unlisted_image_files(extracted_dir, &manifest)?;
+        Self::check_measured_files_are_listed(extracted_dir, &manifest)
+    }
+
+    /// `metadata.json` picks the firmware, kernel and initrd that get measured.
+    /// The manifest binds their bytes only if they are among its entries; any
+    /// other path -- absolute, `..`, or just unlisted -- would be measured from
+    /// bytes `os_image_hash` never committed to.
+    fn check_measured_files_are_listed(
+        extracted_dir: &Path,
+        manifest: &[sha256sum::Entry],
+    ) -> Result<()> {
+        let listed = |name: &str| manifest.iter().any(|entry| entry.name == name);
+        if !listed("metadata.json") {
+            bail!("sha256sum.txt does not list metadata.json");
+        }
+        let image_info = fs_err::read_to_string(extracted_dir.join("metadata.json"))
+            .context("failed to read image metadata")?;
+        let image_info: dstack_types::ImageInfo =
+            serde_json::from_str(&image_info).context("failed to parse image metadata")?;
+        for name in [&image_info.bios, &image_info.kernel, &image_info.initrd] {
+            if !listed(name) {
+                bail!("metadata.json names {name}, which sha256sum.txt does not list");
+            }
+        }
+        Ok(())
+    }
+
+    fn extract_image_archive(tarball_path: &Path, extracted_dir: &Path) -> Result<()> {
+        let file = fs_err::File::open(tarball_path).context("Failed to open image archive")?;
+        // `MultiGzDecoder`, not `GzDecoder`: the latter stops at the first gzip
+        // member and reports clean EOF, so a concatenated-member archive would
+        // extract partially without any error.
+        let decoder = flate2::read::MultiGzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        let mut extracted = 0u64;
+        for entry in archive.entries().context("Failed to read image archive")? {
+            let mut entry = entry.context("Failed to read image archive entry")?;
+            let path = entry
+                .path()
+                .context("Failed to decode image archive path")?;
+            if !Self::is_confined_archive_path(&path) {
+                bail!("image archive contains unsafe path {}", path.display());
+            }
+            let entry_type = entry.header().entry_type();
+            if !(entry_type.is_file() || entry_type.is_dir()) {
+                bail!(
+                    "image archive contains unsupported entry {}",
+                    path.display()
+                );
+            }
+            extracted += entry.size();
+            if extracted > MAX_IMAGE_SIZE {
+                bail!("image archive extracts to more than {MAX_IMAGE_SIZE} bytes");
+            }
+            if !entry
+                .unpack_in(extracted_dir)
+                .context("Failed to extract image archive entry")?
+            {
+                bail!("image archive entry escaped the extraction root");
+            }
+        }
+        Ok(())
+    }
+
+    fn prune_unlisted_image_files(
+        extracted_dir: &Path,
+        manifest: &[sha256sum::Entry],
+    ) -> Result<()> {
+        let listed_files: Vec<&OsStr> = manifest.iter().map(|entry| entry.name.as_ref()).collect();
+        let files = fs_err::read_dir(extracted_dir).context("Failed to read directory")?;
+        for file in files {
+            let file = file.context("Failed to read directory entry")?;
+            let filename = file.file_name();
+            // sha256sum.txt is the content-addressed OS identity and is needed
+            // again when a legacy TDX quote is verified from the cache.
+            if filename != OsStr::new("sha256sum.txt")
+                && !listed_files.contains(&filename.as_os_str())
+            {
+                if file.path().is_dir() {
+                    fs_err::remove_dir_all(file.path()).context("Failed to remove directory")?;
+                } else {
+                    fs_err::remove_file(file.path()).context("Failed to remove file")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn tdx_acpi_hashes_from_event_log(event_log: &[TdxEvent]) -> Result<TdxRtmr0AcpiHashes> {
+        let rtmr0_events = event_log
+            .iter()
+            .filter(|event| event.imr == 0)
+            .collect::<Vec<_>>();
+        let acpi_events = rtmr0_events
+            .iter()
+            .filter(|event| {
+                event.event_type == TDX_ACPI_DATA_EVENT_TYPE
+                    && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD
+            })
+            .collect::<Vec<_>>();
+        if acpi_events.len() != 3 {
+            bail!(
+                "TDX lite attestation requires exactly 3 RTMR0 ACPI DATA events; found {} candidates and {} RTMR0 events",
+                acpi_events.len(),
+                rtmr0_events.len()
+            );
+        }
+
+        let digest_for = |name: &str| -> Result<Vec<u8>> {
+            let matches = acpi_events
+                .iter()
+                .copied()
+                .filter(|event| event.event == name)
+                .collect::<Vec<_>>();
+            if matches.len() != 1 {
+                bail!(
+                    "TDX lite attestation requires exactly one RTMR0 ACPI DATA event named {name}; found {}",
+                    matches.len()
+                );
+            }
+            let digest = matches[0].digest();
+            if digest.len() != 48 {
+                bail!(
+                    "TDX RTMR0 ACPI DATA event {name} has invalid digest length {}, expected 48",
+                    digest.len()
+                );
+            }
+            Ok(digest)
+        };
+
+        Ok(TdxRtmr0AcpiHashes {
+            loader: digest_for(TDX_ACPI_LOADER_EVENT)?,
+            rsdp: digest_for(TDX_ACPI_RSDP_EVENT)?,
+            tables: digest_for(TDX_ACPI_TABLES_EVENT)?,
+        })
+    }
+
+    /// Compare recomputed ACPI digests against the ones the guest reported.
+    ///
+    /// RTMR0 alone would already fail on a mismatch, but only with an opaque
+    /// "MRs do not match": name the offending table here so an operator can
+    /// tell a tampered table apart from an unexpected VM shape.
+    fn assert_tdx_acpi_hashes_match(
+        expected: &TdxRtmr0AcpiHashes,
+        reported: &TdxRtmr0AcpiHashes,
+    ) -> Result<()> {
+        for (name, expected, reported) in [
+            (TDX_ACPI_LOADER_EVENT, &expected.loader, &reported.loader),
+            (TDX_ACPI_RSDP_EVENT, &expected.rsdp, &reported.rsdp),
+            (TDX_ACPI_TABLES_EVENT, &expected.tables, &reported.tables),
+        ] {
+            if expected != reported {
+                bail!(
+                    "TDX lite {name} digest mismatch: expected {}, reported {}",
+                    hex::encode(expected),
+                    hex::encode(reported)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Helper method to ensure image is downloaded and return image paths
+    async fn ensure_image_downloaded(&self, vm_config: &VmConfig) -> Result<ImagePaths> {
+        let hex_os_image_hash = hex::encode(&vm_config.os_image_hash);
+
+        // Get image directory
+        let image_dir = self.images_dir().join(&hex_os_image_hash);
+
+        let metadata_path = image_dir.join("metadata.json");
+        if !metadata_path.exists() {
+            info!("Image {hex_os_image_hash} not found, downloading");
+            tokio::time::timeout(
+                self.download_timeout,
+                self.download_image(&hex_os_image_hash, &image_dir),
+            )
+            .await
+            .context("Download image timeout")?
+            .with_context(|| format!("Failed to download image {hex_os_image_hash}"))?;
+        }
+
+        let image_info =
+            fs_err::read_to_string(metadata_path).context("Failed to read image metadata")?;
+        let image_info: dstack_types::ImageInfo =
+            serde_json::from_str(&image_info).context("Failed to parse image metadata")?;
+
+        let fw_path = image_dir.join(&image_info.bios);
+        let kernel_path = image_dir.join(&image_info.kernel);
+        let initrd_path = image_dir.join(&image_info.initrd);
+        let kernel_cmdline = dstack_mr::tdx::measured_kernel_cmdline(&image_info.cmdline);
+
+        Ok(ImagePaths {
+            image_dir,
+            fw_path,
+            kernel_path,
+            initrd_path,
+            kernel_cmdline,
+            is_dev: image_info.is_dev,
+            version: image_info.version,
+            kernel_header_normalized: image_info.kernel_header_normalized,
+        })
+    }
+
+    /// Compute expected TDX measurements for a given VM configuration.
+    ///
+    /// This method downloads the OS image if needed (using the configured cache),
+    /// then computes the expected MRTD and RTMRs based on the VM configuration.
+    /// Results are cached automatically.
+    pub async fn compute_measurements_for_config(
+        &self,
+        vm_config: &VmConfig,
+    ) -> Result<TdxMeasurements> {
+        let image_paths = self.ensure_image_downloaded(vm_config).await?;
+
+        self.load_or_compute_measurements(vm_config, image_paths)
+            .await
+    }
+
+    pub async fn verify(&self, request: VerificationRequest) -> Result<VerificationResponse> {
+        // Keep the two verifier input modes disjoint:
+        // - `attestation` is self-contained and its embedded config is used.
+        // - raw TDX input uses top-level `quote` + `event_log` + `vm_config`.
+        // Never mix top-level config with an attestation; otherwise an
+        // untrusted, separately supplied config could influence verification.
+        let has_attestation = request.attestation.is_some();
+        if has_attestation
+            && (request.quote.is_some()
+                || request.event_log.is_some()
+                || request.vm_config.is_some())
+        {
+            warn!(
+                "attestation is present; ignoring top-level quote/event_log/vm_config to avoid mixed verification inputs"
+            );
+        }
+        let request_vm_config = if has_attestation {
+            String::new()
+        } else {
+            request.vm_config.clone().unwrap_or_default()
+        };
+        let attestation = if let Some(attestation) = &request.attestation {
+            VersionedAttestation::from_bytes(attestation).context("Failed to decode attestaion")?
+        } else if let Some(tdx_quote) = request.quote {
+            let event_log = request
+                .event_log
+                .as_ref()
+                .context("Event log is required")?;
+            Attestation::from_tdx_quote(tdx_quote, event_log.as_bytes())
+                .context("Failed to create attestation")?
+                .into_versioned()
+        } else {
+            bail!("Quote is required");
+        };
+        let mut details = VerificationDetails::default();
+
+        let attestation = attestation.into_v1();
+        let verified = attestation.verify(&self.attestation_verifier).await;
+        let verified_attestation = match verified {
+            Ok(att) => {
+                details.quote_verified = true;
+                details.tee_variant = Some(att.quote.variant());
+                // keep the top-level tcb_status consistent with the
+                // boot_info.tcbStatus fed to the auth policy (notably AWS
+                // NitroTPM, which is normalized to "UpToDate" there).
+                let (tcb_status, advisory_ids) = policy_tcb_fields(&att);
+                details.tcb_status = (!tcb_status.is_empty()).then_some(tcb_status);
+                details.advisory_ids = advisory_ids;
+                details.report_data = Some(hex::encode(att.report_data));
+                att
+            }
+            Err(e) if sev_snp_qvl::collateral_unavailable(&e) => return Err(e),
+            Err(e) => {
+                return Ok(VerificationResponse {
+                    is_valid: false,
+                    details,
+                    reason: Some(format!("Quote verification failed: {e:#}")),
+                });
+            }
+        };
+        // Step 3: Verify os-image-hash matches using dstack-mr
+        let verified = self
+            .verify_os_image_hash(
+                request_vm_config.clone(),
+                &verified_attestation,
+                &mut details,
+            )
+            .await;
+        let vm_config = match verified {
+            Ok(vm_config) => vm_config,
+            Err(e) => {
+                return Ok(VerificationResponse {
+                    is_valid: false,
+                    details,
+                    reason: Some(format!("OS image hash verification failed: {e:#}")),
+                });
+            }
+        };
+        details.os_image_hash_verified = true;
+        match verified_attestation.decode_app_info_ex(false, &request_vm_config) {
+            Ok(mut info) => {
+                info.os_image_hash = vm_config.os_image_hash;
+                details.boot_info = Some(policy_boot_info_from_verified_app_info(
+                    &verified_attestation,
+                    &info,
+                ));
+                details.event_log_verified = true;
+                details.key_provider = decode_key_provider_info(&info.key_provider_info);
+                details.app_info = Some(info);
+            }
+            Err(e) => {
+                return Ok(VerificationResponse {
+                    is_valid: false,
+                    details,
+                    reason: Some(format!("Event log verification failed: {}", e)),
+                });
+            }
+        };
+
+        Ok(VerificationResponse {
+            is_valid: true,
+            details,
+            reason: None,
+        })
+    }
+
+    pub async fn verify_os_image_hash(
+        &self,
+        vm_config: String,
+        attestation: &VerifiedAttestation,
+        details: &mut VerificationDetails,
+    ) -> Result<VmConfig> {
+        // The raw config string used for platform-specific binding.
+        let raw_config = resolve_vm_config(&vm_config, &attestation.config)?;
+        let mut vm_config = attestation
+            .decode_vm_config(raw_config)
+            .context("Failed to decode VM config")?;
+        match &attestation.quote {
+            AttestationQuote::DstackGcpTdx(_) => {
+                let DstackVerifiedReport::DstackGcpTdx { tpm_report, .. } = &attestation.report
+                else {
+                    bail!("GCP TDX quote without a GCP TDX report");
+                };
+                self.verify_os_image_hash_for_gcp_tdx(&vm_config, tpm_report)?;
+            }
+            // The declared scheme alone selects the path, matched exhaustively
+            // so a new variant fails the build here instead of taking one.
+            //
+            // A `tdx_measurement` document must not pull a `Legacy` boot onto
+            // the lite path. Both paths now verify the ACPI tables, but they
+            // disagree on what `os_image_hash` means: legacy requires it to be
+            // the image digest and recomputes every MR from the downloaded
+            // image, while lite treats it as `sha256(sha256sum.txt)` and trusts
+            // the attached document for the image-static material. Images
+            // attach the document whenever they have it, independent of the
+            // scheme, so honoring it here would silently move a boot the app
+            // pinned to `Legacy` onto weaker image-identity checks.
+            //
+            // `Lite` without a document is rejected by the lite path itself,
+            // rather than degraded to a download.
+            AttestationQuote::DstackTdx(_) => match vm_config.tdx_attestation_variant {
+                TdxAttestationVariant::Legacy => {
+                    self.verify_os_image_hash_for_dstack_tdx(&vm_config, attestation, details)
+                        .await?;
+                }
+                TdxAttestationVariant::Lite => {
+                    self.verify_os_image_hash_for_dstack_tdx_lite(&vm_config, attestation, details)
+                        .await?;
+                }
+            },
+            AttestationQuote::DstackNitroEnclave(_) => {
+                let DstackVerifiedReport::DstackNitroEnclave(report) = &attestation.report else {
+                    bail!("internal error: nitro quote without a verified nitro report");
+                };
+                self.verify_os_image_hash_for_nitro_enclave(&vm_config, &report.pcrs)?;
+            }
+            AttestationQuote::DstackAwsNitroTpm(_) => {
+                let DstackVerifiedReport::DstackAwsNitroTpm(report) = &attestation.report else {
+                    bail!("internal error: NitroTPM quote without a verified NitroTPM report");
+                };
+                self.verify_os_image_hash_for_aws_nitro_tpm(&vm_config, &report.pcrs)?;
+            }
+            AttestationQuote::DstackAmdSevSnp(_) => {
+                self.verify_os_image_hash_for_dstack_sev(
+                    attestation,
+                    raw_config,
+                    &mut vm_config,
+                    details,
+                )?;
+            }
+        }
+        Ok(vm_config)
+    }
+
+    /// Verify the AMD SEV-SNP OS image binding.
+    ///
+    /// Unlike TDX (which replays RTMRs against a downloaded image), the SNP boot
+    /// is summarised by the launch `MEASUREMENT`. The CVM advertises the
+    /// self-contained launch inputs (`sev_snp_measurement`) and the MrConfigV3
+    /// document in its `vm_config`; we recompute the launch measurement from
+    /// those inputs and require it to equal the hardware-signed `MEASUREMENT`
+    /// (which is what makes the otherwise-untrusted inputs trustworthy), require
+    /// `HOST_DATA` to bind the MrConfigV3 document, and then verify/return the
+    /// unified `os_image_hash` (`sha256(sha256sum.txt)`). The shared recomputation in
+    /// `dstack_mr::sev` is the same code path the KMS uses for key release, so a
+    /// quote that the KMS would release keys for verifies here too.
+    fn verify_os_image_hash_for_dstack_sev(
+        &self,
+        attestation: &VerifiedAttestation,
+        raw_config: &str,
+        vm_config: &mut VmConfig,
+        details: &mut VerificationDetails,
+    ) -> Result<()> {
+        let report = attestation
+            .report
+            .amd_snp_report()
+            .context("internal error: sev-snp quote without a verified sev-snp report")?;
+        let binding =
+            dstack_mr::sev::verify_sev_launch(&report.measurement, &report.host_data, raw_config)
+                .context("amd sev-snp launch verification failed")?;
+        // verify_sev_launch has checked that vm_config.os_image_hash commits to
+        // the supplied sha256sum.txt and measurement.snp.cbor material.
+        vm_config.os_image_hash = binding.os_image_hash;
+        details.tcb_status = Some(report.tcb_info.tcb_status().to_string());
+        details.advisory_ids = report.advisory_ids.clone();
+        Ok(())
+    }
+
+    async fn verify_os_image_hash_for_dstack_tdx(
+        &self,
+        vm_config: &VmConfig,
+        attestation: &VerifiedAttestation,
+        details: &mut VerificationDetails,
+    ) -> Result<()> {
+        let verified_mrs = verified_tdx_mrs(attestation)?;
+
+        // Legacy TDX attestation keeps the original KMS verifier semantics:
+        // os_image_hash must be the image digest (digest.txt =
+        // sha256(sha256sum.txt)), and expected MRs are recomputed through the
+        // existing full-image path.
+        let image_paths = self.ensure_image_downloaded(vm_config).await?;
+        if !Self::image_hash_matches_legacy_digest(&image_paths.image_dir, &vm_config.os_image_hash)
+            .context("Failed to check legacy image digest")?
+        {
+            bail!("legacy TDX attestation requires os_image_hash = sha256(sha256sum.txt)");
+        }
+        details.os_image_is_dev = Some(image_paths.is_dev);
+        if !image_paths.version.is_empty() {
+            details.os_image_version = Some(image_paths.version.clone());
+        }
+
+        let expected_mrs = self
+            .load_or_compute_measurements(vm_config, image_paths)
+            .await
+            .context("Failed to compute expected measurements")?;
+        assert_tdx_mrs_eq(&expected_mrs, &verified_mrs).context("MRs do not match")?;
+        details.acpi_tables_verified = true;
+        Ok(())
+    }
+
+    async fn verify_os_image_hash_for_dstack_tdx_lite(
+        &self,
+        vm_config: &VmConfig,
+        attestation: &VerifiedAttestation,
+        details: &mut VerificationDetails,
+    ) -> Result<()> {
+        let verified_mrs = verified_tdx_mrs(attestation)?;
+        let Some(tdx_quote) = attestation.tdx_quote() else {
+            bail!("No TDX quote");
+        };
+        let event_log = &tdx_quote.event_log;
+
+        let document = vm_config
+            .tdx_measurement
+            .as_ref()
+            .context("tdx lite attestation requires vm_config.tdx_measurement")?;
+        document
+            .verify(&vm_config.os_image_hash)
+            .map_err(anyhow::Error::msg)
+            .context("tdx lite measurement material does not match os_image_hash")?;
+        let measurement = document
+            .decode_measurement()
+            .map_err(anyhow::Error::msg)
+            .context("failed to decode vm_config.tdx_measurement CBOR")?;
+        if let Some(config_ovmf_variant) = vm_config.ovmf_variant {
+            if config_ovmf_variant != measurement.tdvf.ovmf_variant {
+                bail!(
+                    "tdx measurement ovmf_variant mismatch: vm_config={:?}, document={:?}",
+                    config_ovmf_variant,
+                    measurement.tdvf.ovmf_variant
+                );
+            }
+        }
+
+        // Compute expected measurements. TDX lite keeps the unified image hash
+        // and carries split measurement material; verify it without
+        // downloading the image. The guest labels the three RTMR0 ACPI DATA
+        // events as acpi-loader, acpi-rsdp, and acpi-tables before exposing the
+        // event log, so the verifier does not guess based on event order.
+        let reported_acpi_hashes = Self::tdx_acpi_hashes_from_event_log(event_log)
+            .context("TDX lite attestation is missing named RTMR0 ACPI DATA digests")?;
+        // Recompute the digests from the declared VM shape instead of trusting
+        // the reported ones, and treat both failure modes as fatal: a mismatch
+        // means the tables are not the ones this shape produces, and a shape
+        // the generator cannot model (`swtpm`, a QEMU older than any profile)
+        // leaves nothing to compare against. Downgrading either case to "pass,
+        // but unverified" would make the check optional at the host's
+        // discretion, because `swtpm` and `qemu_version` are host-declared
+        // fields that no other measurement independently constrains.
+        let acpi_hashes =
+            dstack_mr::tdx::expected_rtmr0_acpi_hashes(vm_config, measurement.tdvf.ovmf_variant)
+                .context("failed to recompute expected TDX lite ACPI table digests")?;
+        Self::assert_tdx_acpi_hashes_match(&acpi_hashes, &reported_acpi_hashes)?;
+        details.acpi_tables_verified = true;
+        // RTMR0 below is rebuilt from the recomputed digests, so the expected
+        // value depends on nothing the host reported about the tables.
+        let expected_mrs = dstack_mr::tdx::tdx_measurements_from_measurement_document(
+            document,
+            vm_config,
+            &acpi_hashes,
+        )
+        .context("Failed to compute TDX expected measurements without image download")?;
+        assert_tdx_mrs_eq(&expected_mrs, &verified_mrs).context("MRs do not match")
+    }
+
+    /// Verify Nitro Enclave OS image hash using the signature-verified NSM PCRs.
+    ///
+    /// For Nitro:
+    /// 1. PCR0/1/2 come from the EIF build (code + kernel + app) in production mode.
+    /// 2. In debug mode AWS zeroes PCR0/1/2, so there is no measurement of the
+    ///    actual code; we refuse to authorize such enclaves.
+    /// 3. The computed image hash is compared against vm_config.os_image_hash.
+    fn verify_os_image_hash_for_nitro_enclave(
+        &self,
+        vm_config: &VmConfig,
+        pcrs: &NitroPcrs,
+    ) -> Result<()> {
+        // Reject debug-mode enclaves outright: their zeroed PCRs measure nothing,
+        // so accepting them would let arbitrary code run under attestation.
+        if pcrs.is_debug() {
+            bail!("nitro enclave is in debug mode (PCR0/1/2 are zeroed); refusing to verify");
+        }
+        let os_image_hash = pcrs.image_hash();
+        // Compare with expected os_image_hash from vm_config
+        if os_image_hash != vm_config.os_image_hash {
+            bail!(
+                "os_image_hash mismatch: expected={}, computed={}",
+                hex::encode(&vm_config.os_image_hash),
+                hex::encode(&os_image_hash)
+            );
+        }
+        Ok(())
+    }
+
+    /// Verify AWS EC2 NitroTPM OS image identity (unified with GCP/TDX lite):
+    /// `vm_config.aws_measurement` with `os_image_hash = sha256(sha256sum.txt)`
+    /// and `boot_pcr_digest = sha256(PCR4||PCR7||PCR12)` bound to the
+    /// attestation document PCRs. `aws_measurement` is required.
+    fn verify_os_image_hash_for_aws_nitro_tpm(
+        &self,
+        vm_config: &VmConfig,
+        pcrs: &std::collections::BTreeMap<u16, Vec<u8>>,
+    ) -> Result<()> {
+        let document = vm_config
+            .aws_measurement
+            .as_ref()
+            .context("vm_config.aws_measurement is required on AWS NitroTPM")?;
+        document
+            .verify(&vm_config.os_image_hash)
+            .map_err(anyhow::Error::msg)
+            .context("aws measurement material does not match os_image_hash")?;
+        let measurement = document
+            .decode_measurement()
+            .map_err(anyhow::Error::msg)
+            .context("failed to decode vm_config.aws_measurement")?;
+        let quoted_digest = dstack_attest::attestation::aws_nitro_tpm_boot_pcr_digest(pcrs)
+            .context("failed to compute NitroTPM boot_pcr_digest from attestation")?;
+        if measurement.boot_pcr_digest.as_slice() != quoted_digest.as_slice() {
+            bail!(
+                "AWS boot_pcr_digest mismatch: expected={}, quoted={}",
+                hex::encode(&measurement.boot_pcr_digest),
+                hex::encode(&quoted_digest)
+            );
+        }
+        Ok(())
+    }
+
+    fn verify_os_image_hash_for_gcp_tdx(
+        &self,
+        vm_config: &VmConfig,
+        tpm_report: &TpmVerifiedReport,
+    ) -> Result<()> {
+        // Verify PCR 0 (GCP OVMF firmware)
+        const EXPECTED_PCR0: [u8; 32] =
+            hex!("0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802");
+
+        let pcr0 = tpm_report.get_pcr(0)?;
+
+        let document = vm_config
+            .gcp_measurement
+            .as_ref()
+            .context("gcp tdx attestation requires vm_config.gcp_measurement")?;
+        document
+            .verify(&vm_config.os_image_hash)
+            .map_err(anyhow::Error::msg)
+            .context("gcp measurement material does not match os_image_hash")?;
+        let measurement = document
+            .decode_measurement()
+            .map_err(anyhow::Error::msg)
+            .context("failed to decode vm_config.gcp_measurement CBOR")?;
+        let expected_uki_hash = &measurement.uki_authenticode_sha256;
+
+        let pcr2_events: Vec<_> = tpm_report
+            .event_log
+            .iter()
+            .filter(|e| e.pcr_index == 2)
+            .collect();
+        debug!("PCR 2 Event Log contains {} events", pcr2_events.len());
+        // Extract Event 28 (3rd event, 0-indexed as 2)
+        // NOTE: This is GCP OVMF-specific behavior
+        let event_28_digest = {
+            if pcr0 != EXPECTED_PCR0 {
+                bail!(
+                    "PCR 0 mismatch: expected GCP OVMF v2, got {}",
+                    hex::encode(&pcr0)
+                );
+            }
+            &pcr2_events.get(2).context("Event 28 not found")?.digest
+        };
+
+        if event_28_digest != expected_uki_hash {
+            bail!(
+                "UKI hash mismatch: expected={}, actual={}",
+                hex::encode(expected_uki_hash),
+                hex::encode(event_28_digest)
+            );
+        }
+        debug!(
+            "✓ UKI hash verified from PCR 2 Event Log (Event 28), digest: {}",
+            hex::encode(event_28_digest)
+        );
+        Ok(())
+    }
+
+    pub async fn download_image(&self, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
+        let guard = self.download_lock(hex_os_image_hash).lock_owned().await;
+        if dst_dir.join("metadata.json").exists() {
+            return Ok(());
+        }
+        let url = self
+            .download_url
+            .replace("{OS_IMAGE_HASH}", hex_os_image_hash);
+
+        // Create a temporary directory for extraction within the cache directory
+        let cache_dir = self.images_dir().join("tmp");
+        fs_err::create_dir_all(&cache_dir).context("Failed to create cache directory")?;
+        let auto_delete_temp_dir = tempfile::Builder::new()
+            .prefix("tmp-download-")
+            .tempdir_in(&cache_dir)
+            .context("Failed to create temporary directory")?;
+        let tmp_dir = auto_delete_temp_dir.path();
+
+        info!("Downloading image from {url}");
+        Self::fetch_image_archive(&url, &tmp_dir.join("image.tar.gz")).await?;
+
+        let hex_os_image_hash = hex_os_image_hash.to_owned();
+        let dst_dir = dst_dir.to_owned();
+        tokio::task::spawn_blocking(move || {
+            // A blocking task outlives its caller: if the caller is cancelled
+            // (e.g. by `download_timeout`), this still runs to the end. Keep
+            // the lock until the install finishes, or the next download for
+            // this image would race it on `dst_dir`.
+            let _guard = guard;
+            Self::install_image(auto_delete_temp_dir.path(), &hex_os_image_hash, &dst_dir)
+        })
+        .await
+        .context("image install task failed")?
+    }
+
+    async fn fetch_image_archive(url: &str, path: &Path) -> Result<()> {
+        let client = reqwest::Client::new();
+        let mut attempt = 1;
+        loop {
+            match Self::try_fetch_image_archive(&client, url, path).await {
+                Err(err) if attempt < IMAGE_DOWNLOAD_ATTEMPTS && is_transient(&err) => {
+                    warn!("image download attempt {attempt} failed, retrying: {err:#}");
+                    tokio::time::sleep(Duration::from_secs(attempt.into())).await;
+                    attempt += 1;
+                }
+                result => return result.context("Failed to download image"),
+            }
+        }
+    }
+
+    async fn try_fetch_image_archive(
+        client: &reqwest::Client,
+        url: &str,
+        path: &Path,
+    ) -> Result<()> {
+        let mut response = client.get(url).send().await?.error_for_status()?;
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .context("Failed to create tarball file")?;
+        let mut downloaded = 0u64;
+        while let Some(chunk) = response.chunk().await? {
+            downloaded += chunk.len() as u64;
+            if downloaded > MAX_IMAGE_SIZE {
+                bail!("image archive exceeds {MAX_IMAGE_SIZE} bytes");
+            }
+            file.write_all(&chunk)
+                .await
+                .context("Failed to write chunk to file")?;
+        }
+        file.flush().await.context("Failed to flush image archive")
+    }
+
+    fn install_image(tmp_dir: &Path, hex_os_image_hash: &str, dst_dir: &Path) -> Result<()> {
+        let extracted_dir = tmp_dir.join("extracted");
+        fs_err::create_dir_all(&extracted_dir).context("Failed to create extraction directory")?;
+        Self::extract_image_archive(&tmp_dir.join("image.tar.gz"), &extracted_dir)?;
+        Self::verify_extracted_image(&extracted_dir, hex_os_image_hash)?;
+
+        if dst_dir.exists() {
+            fs_err::remove_dir_all(dst_dir).context("Failed to remove destination directory")?;
+        }
+        let dst_dir_parent = dst_dir.parent().context("Failed to get parent directory")?;
+        fs_err::create_dir_all(dst_dir_parent).context("Failed to create parent directory")?;
+        fs_err::rename(extracted_dir, dst_dir)
+            .context("Failed to move extracted files to destination directory")
+    }
+}
+
+/// A dropped connection, a truncated body or a 5xx may succeed on a retry.
+fn is_transient(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<reqwest::Error>()
+        .is_some_and(|err| err.status().is_none_or(|status| status.is_server_error()))
+}
+
+/// MRTD and RTMR0-2 from the verified TD report.
+fn verified_tdx_mrs(attestation: &VerifiedAttestation) -> Result<TdxMeasurements> {
+    let report = attestation
+        .report
+        .tdx_report()
+        .context("No TDX report")?
+        .report
+        .as_td10()
+        .context("Failed to decode TD report")?;
+    Ok(TdxMeasurements {
+        mrtd: report.mr_td.to_vec(),
+        rtmr0: report.rt_mr0.to_vec(),
+        rtmr1: report.rt_mr1.to_vec(),
+        rtmr2: report.rt_mr2.to_vec(),
+    })
+}
+
+fn assert_tdx_mrs_eq(expected: &TdxMeasurements, actual: &TdxMeasurements) -> Result<()> {
+    for (name, expected, actual) in [
+        ("MRTD", &expected.mrtd, &actual.mrtd),
+        ("RTMR0", &expected.rtmr0, &actual.rtmr0),
+        ("RTMR1", &expected.rtmr1, &actual.rtmr1),
+        ("RTMR2", &expected.rtmr2, &actual.rtmr2),
+    ] {
+        if expected != actual {
+            bail!(
+                "{name} mismatch: expected={}, actual={}",
+                hex::encode(expected),
+                hex::encode(actual)
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    // Kept inside `mod tests` so the non-test build stays free of unused imports.
+    use dcap_qvl::{
+        quote::{Report as DcapReport, TDReport10},
+        tcb_info::{TcbStatus, TcbStatusWithAdvisory},
+        verify::VerifiedReport as DcapVerifiedReport,
+    };
+    use dstack_attest::amd_sev_snp::{AmdSnpTcbInfo, VerifiedAmdSnpReport};
+    use ra_tls::attestation::{
+        AwsNitroTpmVerifiedReport, DstackAwsNitroTpmQuote, DstackGcpTdxQuote, DstackNitroQuote,
+        NitroVerifiedReport, SnpQuote, TdxQuote, TpmQuote,
+    };
+    use tpm_qvl::verify::{ClockInfo, QuoteInfo, TpmAttest};
+
+    fn aws_boot_pcrs(pcr4: u8) -> BTreeMap<u16, Vec<u8>> {
+        BTreeMap::from([
+            (4, vec![pcr4; 48]),
+            (7, vec![0x77; 48]),
+            (12, vec![0x12; 48]),
+        ])
+    }
+
+    fn aws_vm_config(pcrs: &BTreeMap<u16, Vec<u8>>) -> VmConfig {
+        let measurement =
+            dstack_types::AwsOsImageMeasurement::from_boot_pcrs(&pcrs[&4], &pcrs[&7], &pcrs[&12])
+                .expect("valid PCR lengths");
+        let measurement = measurement.to_cbor_vec();
+        let checksum_file = format!(
+            "{}  measurement.aws.cbor\n",
+            hex::encode(Sha256::digest(&measurement))
+        )
+        .into_bytes();
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&checksum_file);
+        serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+            "aws_measurement": dstack_types::AwsOsImageMeasurementDocument::new(
+                checksum_file,
+                measurement,
+            ),
+        }))
+        .expect("valid AWS vm_config")
+    }
+
+    fn test_verifier() -> CvmVerifier {
+        CvmVerifier::new(
+            String::new(),
+            String::new(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        )
+    }
+
+    fn test_attestation_verifier() -> Arc<AttestationVerifier> {
+        Arc::new(AttestationVerifier::new_prod(None).unwrap())
+    }
+
+    /// Build a TDX verified report carrying `status`/`advisory_ids`. Everything
+    /// else is zeroed: `policy_tcb_fields` reads only those two fields.
+    fn tdx_report(status: &str, advisory_ids: &[&str]) -> DcapVerifiedReport {
+        DcapVerifiedReport {
+            status: status.to_string(),
+            advisory_ids: advisory_ids.iter().map(|id| id.to_string()).collect(),
+            report: DcapReport::TD10(TDReport10 {
+                tee_tcb_svn: [0; 16],
+                mr_seam: [0; 48],
+                mr_signer_seam: [0; 48],
+                seam_attributes: [0; 8],
+                td_attributes: [0; 8],
+                xfam: [0; 8],
+                mr_td: [0; 48],
+                mr_config_id: [0; 48],
+                mr_owner: [0; 48],
+                mr_owner_config: [0; 48],
+                rt_mr0: [0; 48],
+                rt_mr1: [0; 48],
+                rt_mr2: [0; 48],
+                rt_mr3: [0; 48],
+                report_data: [0; 64],
+            }),
+            ppid: Vec::new(),
+            qe_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+            platform_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+        }
+    }
+
+    fn snp_report(tcb_info: AmdSnpTcbInfo, advisory_ids: &[&str]) -> VerifiedAmdSnpReport {
+        VerifiedAmdSnpReport {
+            measurement: [0; 48],
+            report_data: [0; 64],
+            host_data: [0; 32],
+            chip_id: [0; 64],
+            tcb_info,
+            advisory_ids: advisory_ids.iter().map(|id| id.to_string()).collect(),
+        }
+    }
+
+    fn tpm_report_for_gcp() -> TpmVerifiedReport {
+        TpmVerifiedReport {
+            attest: TpmAttest {
+                magic: 0,
+                type_: 0,
+                qualified_signer: Vec::new(),
+                qualified_data: Vec::new(),
+                clock_info: ClockInfo {
+                    clock: 0,
+                    reset_count: 0,
+                    restart_count: 0,
+                    safe: 0,
+                },
+                firmware_version: 0,
+                attested_quote_info: QuoteInfo {
+                    pcr_selections: Vec::new(),
+                    pcr_digest: Vec::new(),
+                },
+            },
+            platform: dstack_types::Platform::Gcp,
+            pcr_values: Vec::new(),
+            event_log: Vec::new(),
+        }
+    }
+
+    /// `policy_tcb_fields` ignores the quote, but pair each report with its own
+    /// platform's quote so the rows stay readable as real attestations.
+    fn verified_attestation(
+        quote: AttestationQuote,
+        report: DstackVerifiedReport,
+    ) -> VerifiedAttestation {
+        Attestation {
+            quote,
+            runtime_events: Vec::new(),
+            report_data: [0; 64],
+            config: String::new(),
+            report,
+        }
+    }
+
+    fn empty_tdx_quote() -> AttestationQuote {
+        AttestationQuote::DstackTdx(TdxQuote {
+            quote: Vec::new(),
+            event_log: Vec::new(),
+        })
+    }
+
+    /// Exercises the report-to-policy mapping itself, which is where a wrong
+    /// source can silently downgrade the auth gate (e.g. reading the wrong
+    /// report on GCP, or letting a no-TCB platform report "UpToDate").
+    #[test]
+    fn tcb_policy_fields_map_each_platform_to_its_own_tcb_source() {
+        let advisories = ["INTEL-SA-00001", "INTEL-SA-00002"];
+        let expected_advisories: Vec<String> = advisories.iter().map(|id| id.to_string()).collect();
+
+        // SNP derives its status by comparing TCB versions rather than reading
+        // a field, so cover both the equal (UpToDate) and unequal (OutOfDate)
+        // shapes.
+        let snp_up_to_date = AmdSnpTcbInfo::default();
+        let mut snp_out_of_date = AmdSnpTcbInfo::default();
+        snp_out_of_date.current.microcode = 1;
+
+        let rows: [(&str, VerifiedAttestation, &str, Vec<String>); 7] = [
+            (
+                "tdx-up-to-date",
+                verified_attestation(
+                    empty_tdx_quote(),
+                    DstackVerifiedReport::DstackTdx(tdx_report("UpToDate", &[])),
+                ),
+                "UpToDate",
+                Vec::new(),
+            ),
+            (
+                "tdx-out-of-date-carries-advisories",
+                verified_attestation(
+                    empty_tdx_quote(),
+                    DstackVerifiedReport::DstackTdx(tdx_report("OutOfDate", &advisories)),
+                ),
+                "OutOfDate",
+                expected_advisories.clone(),
+            ),
+            (
+                "tdx-revoked",
+                verified_attestation(
+                    empty_tdx_quote(),
+                    DstackVerifiedReport::DstackTdx(tdx_report("Revoked", &advisories)),
+                ),
+                "Revoked",
+                expected_advisories.clone(),
+            ),
+            (
+                // The bundled TPM report has no TCB surface: the TDX report must
+                // still drive policy, and must not be flattened to empty.
+                "gcp-tdx-reads-the-tdx-report-not-the-tpm-report",
+                verified_attestation(
+                    AttestationQuote::DstackGcpTdx(DstackGcpTdxQuote {
+                        tdx_quote: TdxQuote {
+                            quote: Vec::new(),
+                            event_log: Vec::new(),
+                        },
+                        tpm_quote: TpmQuote {
+                            message: Vec::new(),
+                            signature: Vec::new(),
+                            pcr_values: Vec::new(),
+                            ak_cert: Vec::new(),
+                            platform: dstack_types::Platform::Gcp,
+                            event_log: Vec::new(),
+                        },
+                    }),
+                    DstackVerifiedReport::DstackGcpTdx {
+                        tdx_report: tdx_report("OutOfDate", &advisories),
+                        tpm_report: tpm_report_for_gcp(),
+                    },
+                ),
+                "OutOfDate",
+                expected_advisories.clone(),
+            ),
+            (
+                "sev-snp-matching-tcb-versions-are-up-to-date",
+                verified_attestation(
+                    AttestationQuote::DstackAmdSevSnp(SnpQuote {
+                        report: Vec::new(),
+                        cert_chain: Vec::new(),
+                        mr_config: String::new(),
+                    }),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report(snp_up_to_date, &[])),
+                ),
+                "UpToDate",
+                Vec::new(),
+            ),
+            (
+                "sev-snp-mismatched-tcb-versions-are-out-of-date",
+                verified_attestation(
+                    AttestationQuote::DstackAmdSevSnp(SnpQuote {
+                        report: Vec::new(),
+                        cert_chain: Vec::new(),
+                        mr_config: String::new(),
+                    }),
+                    DstackVerifiedReport::DstackAmdSevSnp(snp_report(snp_out_of_date, &advisories)),
+                ),
+                "OutOfDate",
+                expected_advisories.clone(),
+            ),
+            (
+                // No TCB surface, but normalized to UpToDate so the verifier's
+                // policy boot info matches the KMS bootAuth payload.
+                "aws-nitro-tpm-is-normalized-to-up-to-date",
+                verified_attestation(
+                    AttestationQuote::DstackAwsNitroTpm(DstackAwsNitroTpmQuote {
+                        attestation_doc: Vec::new(),
+                    }),
+                    DstackVerifiedReport::DstackAwsNitroTpm(AwsNitroTpmVerifiedReport {
+                        module_id: String::new(),
+                        pcrs: BTreeMap::new(),
+                        public_key: None,
+                        user_data: Vec::new(),
+                        nonce: None,
+                        timestamp: 0,
+                    }),
+                ),
+                "UpToDate",
+                Vec::new(),
+            ),
+        ];
+
+        for (name, attestation, expected_status, expected_advisory_ids) in rows {
+            let (status, advisory_ids) = policy_tcb_fields(&attestation);
+            assert_eq!(status, expected_status, "{name}");
+            assert_eq!(advisory_ids, expected_advisory_ids, "{name}");
+        }
+    }
+
+    /// Split out from the table above because it asserts the opposite property:
+    /// Nitro Enclave must stay empty so a relying party's "UpToDate" gate fails
+    /// closed rather than accepting a platform with no TCB surface.
+    #[test]
+    fn nitro_enclave_reports_no_tcb_status_and_fails_an_up_to_date_gate() {
+        let attestation = verified_attestation(
+            AttestationQuote::DstackNitroEnclave(DstackNitroQuote {
+                nsm_quote: Vec::new(),
+            }),
+            DstackVerifiedReport::DstackNitroEnclave(NitroVerifiedReport {
+                module_id: String::new(),
+                pcrs: NitroPcrs {
+                    pcr0: vec![0x10; 48],
+                    pcr1: vec![0x11; 48],
+                    pcr2: vec![0x12; 48],
+                    pcr4: vec![0x14; 48],
+                },
+                user_data: Vec::new(),
+                timestamp: 0,
+            }),
+        );
+
+        let (status, advisory_ids) = policy_tcb_fields(&attestation);
+        assert_eq!(status, "");
+        assert_ne!(status, "UpToDate");
+        assert!(advisory_ids.is_empty());
+    }
+
+    #[test]
+    fn gcp_and_nitro_enclave_measurement_bindings_matrix() {
+        let verifier = test_verifier();
+
+        let nitro_pcrs = NitroPcrs {
+            pcr0: vec![0x10; 48],
+            pcr1: vec![0x11; 48],
+            pcr2: vec![0x12; 48],
+            pcr4: vec![0x14; 48],
+        };
+        let nitro_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(nitro_pcrs.image_hash()),
+        }))
+        .unwrap();
+        verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &nitro_pcrs)
+            .unwrap();
+        let mut changed_nitro = nitro_pcrs.clone();
+        changed_nitro.pcr2[0] ^= 1;
+        assert!(verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &changed_nitro)
+            .is_err());
+        let debug_nitro = NitroPcrs {
+            pcr0: vec![0; 48],
+            pcr1: vec![0; 48],
+            pcr2: vec![0; 48],
+            pcr4: vec![0; 48],
+        };
+        assert!(verifier
+            .verify_os_image_hash_for_nitro_enclave(&nitro_config, &debug_nitro)
+            .is_err());
+
+        let uki_hash = vec![0x24; 32];
+        let measurement = dstack_types::GcpOsImageMeasurement::new(uki_hash.clone()).unwrap();
+        let measurement_bytes = measurement.to_cbor_vec();
+        let checksum_file = format!(
+            "{}  measurement.gcp.cbor\n",
+            hex::encode(Sha256::digest(&measurement_bytes))
+        )
+        .into_bytes();
+        let os_image_hash = dstack_types::image_hash_from_sha256sum(&checksum_file);
+        let gcp_config: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": hex::encode(os_image_hash),
+            "gcp_measurement": dstack_types::GcpOsImageMeasurementDocument::new(
+                checksum_file,
+                measurement_bytes,
+            ),
+        }))
+        .unwrap();
+        let expected_pcr0 =
+            hex!("0cca9ec161b09288802e5a112255d21340ed5b797f5fe29cecccfd8f67b9f802");
+        let gcp_report = |pcr0: Vec<u8>, event_28: Vec<u8>| TpmVerifiedReport {
+            pcr_values: vec![tpm_types::PcrValue {
+                index: 0,
+                algorithm: "sha256".into(),
+                value: pcr0,
+            }],
+            event_log: vec![
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: vec![1; 32],
+                },
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: vec![2; 32],
+                },
+                tpm_types::TpmEvent {
+                    pcr_index: 2,
+                    digest: event_28,
+                },
+            ],
+            ..tpm_report_for_gcp()
+        };
+        verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_report(expected_pcr0.to_vec(), uki_hash.clone()),
+            )
+            .unwrap();
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_report(vec![0; 32], uki_hash.clone()),
+            )
+            .is_err());
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &gcp_config,
+                &gcp_report(expected_pcr0.to_vec(), vec![0; 32]),
+            )
+            .is_err());
+        let mut missing_document = gcp_config;
+        missing_document.gcp_measurement = None;
+        assert!(verifier
+            .verify_os_image_hash_for_gcp_tdx(
+                &missing_document,
+                &gcp_report(expected_pcr0.to_vec(), uki_hash),
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn aws_os_image_check_requires_measurement() {
+        let pcrs = aws_boot_pcrs(0x04);
+        let mut vm_config = aws_vm_config(&pcrs);
+        vm_config.aws_measurement = None;
+
+        let err = test_verifier()
+            .verify_os_image_hash_for_aws_nitro_tpm(&vm_config, &pcrs)
+            .expect_err("missing aws_measurement must fail");
+        assert!(format!("{err:#}").contains("aws_measurement is required"));
+    }
+
+    #[test]
+    fn aws_os_image_check_accepts_bound_measurement() {
+        let pcrs = aws_boot_pcrs(0x04);
+        test_verifier()
+            .verify_os_image_hash_for_aws_nitro_tpm(&aws_vm_config(&pcrs), &pcrs)
+            .expect("bound aws_measurement must verify");
+    }
+
+    #[test]
+    fn aws_os_image_check_rejects_boot_pcr_digest_mismatch() {
+        let quoted_pcrs = aws_boot_pcrs(0x04);
+        let vm_config = aws_vm_config(&aws_boot_pcrs(0x05));
+
+        let err = test_verifier()
+            .verify_os_image_hash_for_aws_nitro_tpm(&vm_config, &quoted_pcrs)
+            .expect_err("measurement for different PCRs must fail");
+        assert!(format!("{err:#}").contains("boot_pcr_digest mismatch"));
+    }
+
+    fn acpi_event(name: &str, digest_byte: u8) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: TDX_ACPI_DATA_EVENT_TYPE,
+            digest: vec![digest_byte; 48],
+            event: name.to_string(),
+            event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+            version: Default::default(),
+            preimage: None,
+        }
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hashes_are_selected_by_event_name() {
+        let event_log = vec![
+            acpi_event(TDX_ACPI_RSDP_EVENT, 2),
+            acpi_event(TDX_ACPI_TABLES_EVENT, 3),
+            acpi_event(TDX_ACPI_LOADER_EVENT, 1),
+        ];
+
+        let hashes =
+            CvmVerifier::tdx_acpi_hashes_from_event_log(&event_log).expect("named ACPI hashes");
+
+        assert_eq!(hashes.loader, vec![1u8; 48]);
+        assert_eq!(hashes.rsdp, vec![2u8; 48]);
+        assert_eq!(hashes.tables, vec![3u8; 48]);
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hashes_reject_unlabeled_events() {
+        let event_log = vec![
+            acpi_event("", 1),
+            acpi_event(TDX_ACPI_RSDP_EVENT, 2),
+            acpi_event(TDX_ACPI_TABLES_EVENT, 3),
+        ];
+
+        assert!(CvmVerifier::tdx_acpi_hashes_from_event_log(&event_log).is_err());
+    }
+
+    #[test]
+    fn decode_key_provider_info_parses_json_and_tolerates_garbage() {
+        let info =
+            decode_key_provider_info(br#"{"name":"kms","id":"abcd"}"#).expect("should parse");
+        assert_eq!(info.name, "kms");
+        assert_eq!(info.id, "abcd");
+
+        // empty/malformed must degrade to None, not fail the verify.
+        assert!(decode_key_provider_info(b"").is_none());
+        assert!(decode_key_provider_info(b"not json").is_none());
+    }
+
+    fn sample_measurements(byte: u8) -> TdxMeasurements {
+        TdxMeasurements {
+            mrtd: vec![byte; 48],
+            rtmr0: vec![byte.wrapping_add(1); 48],
+            rtmr1: vec![byte.wrapping_add(2); 48],
+            rtmr2: vec![byte.wrapping_add(3); 48],
+        }
+    }
+
+    #[test]
+    fn measurement_cache_version_mismatch_is_ignored_and_replaced() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let path = verifier.measurement_cache_path(&key);
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+
+        fs_err::write(
+            &path,
+            serde_json::to_vec(&CachedMeasurement {
+                version: MEASUREMENT_CACHE_VERSION - 1,
+                measurements: sample_measurements(0x11),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+
+        let current = sample_measurements(0x22);
+        verifier
+            .store_measurements_in_cache(&key, &current)
+            .unwrap();
+        let loaded = verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .expect("current cache entry");
+        assert_eq!(
+            serde_json::to_vec(&loaded).unwrap(),
+            serde_json::to_vec(&current).unwrap()
+        );
+    }
+
+    #[test]
+    fn corrupt_measurement_cache_entry_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let path = verifier.measurement_cache_path(&key);
+        fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+        fs_err::write(path, b"{not json").unwrap();
+
+        assert!(verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn measurement_cache_evicts_the_oldest_entries_and_spares_temporaries() {
+        let dir = tempfile::tempdir().expect("temp cache dir");
+        let cache_dir = dir.path();
+        let base = std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for index in 0..8u64 {
+            let path = cache_dir.join(format!("{index:02}.json"));
+            fs_err::write(&path, b"{}").unwrap();
+            let file = fs_err::File::open(&path).unwrap();
+            file.set_times(
+                std::fs::FileTimes::new().set_modified(base + Duration::from_secs(index)),
+            )
+            .unwrap();
+        }
+        // An in-flight `NamedTempFile`: no extension until `persist`.
+        let in_flight = cache_dir.join(".tmpABCDEF");
+        fs_err::write(&in_flight, b"partial").unwrap();
+
+        CvmVerifier::prune_measurement_cache(cache_dir, 3).unwrap();
+
+        let mut remaining: Vec<String> = fs_err::read_dir(cache_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec![
+                ".tmpABCDEF".to_string(),
+                "05.json".to_string(),
+                "06.json".to_string(),
+                "07.json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn concurrent_measurement_cache_writes_are_atomic() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        let config: VmConfig = serde_json::from_str("{}").unwrap();
+        let key = CvmVerifier::vm_config_cache_key(&config).unwrap();
+        let first = sample_measurements(0x11);
+        let second = sample_measurements(0x22);
+
+        std::thread::scope(|scope| {
+            for index in 0..16 {
+                let verifier = &verifier;
+                let key = &key;
+                let measurements = if index % 2 == 0 { &first } else { &second };
+                scope.spawn(move || {
+                    verifier
+                        .store_measurements_in_cache(key, measurements)
+                        .unwrap();
+                });
+            }
+        });
+        let cached = verifier
+            .load_measurements_from_cache(&key)
+            .unwrap()
+            .expect("one complete cache entry");
+        let encoded = serde_json::to_vec(&cached).unwrap();
+        assert!(
+            encoded == serde_json::to_vec(&first).unwrap()
+                || encoded == serde_json::to_vec(&second).unwrap()
+        );
+        let entries = fs_err::read_dir(verifier.measurement_cache_dir())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1, "temporary cache files must not survive");
+    }
+
+    /// Lay out an extracted image whose manifest is `files_doc`, with each
+    /// named file holding the payload given for it.
+    fn image_dir_with_manifest(files_doc: &str, files: &[(&str, &[u8])]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("temp image directory");
+        fs_err::write(dir.path().join("sha256sum.txt"), files_doc).unwrap();
+        for (name, payload) in files {
+            fs_err::write(dir.path().join(name), payload).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn measurement_cache_key_ignores_unmeasured_fields() {
+        let base: VmConfig = serde_json::from_value(serde_json::json!({
+            "os_image_hash": "11".repeat(32),
+            "cpu_count": 2,
+            "memory_size": 0x8000_0000u64,
+        }))
+        .unwrap();
+        let key = |config: &VmConfig| CvmVerifier::vm_config_cache_key(config).unwrap();
+        let blob = || vec![0xaa; 4096];
+
+        let mut padded = base.clone();
+        padded.image = Some("x".repeat(4096));
+        padded.tdx_measurement = Some(dstack_types::TdxOsImageMeasurementDocument::new(
+            blob(),
+            blob(),
+        ));
+        padded.gcp_measurement = Some(dstack_types::GcpOsImageMeasurementDocument::new(
+            blob(),
+            blob(),
+        ));
+        padded.aws_measurement = Some(dstack_types::AwsOsImageMeasurementDocument::new(
+            blob(),
+            blob(),
+        ));
+        assert_eq!(key(&padded), key(&base));
+
+        let mut resized = base.clone();
+        resized.cpu_count += 1;
+        assert_ne!(key(&resized), key(&base));
+    }
+
+    /// `os_image_hash` is checked before the manifest is parsed, and the files
+    /// `metadata.json` measures must be manifest entries.
+    #[test]
+    fn extracted_image_binds_the_files_metadata_measures() {
+        let verify = |kernel: &str| {
+            let metadata = format!(
+                r#"{{"cmdline":"","kernel":"{kernel}","initrd":"initrd","bios":"ovmf.fd"}}"#
+            );
+            let files: &[(&str, &[u8])] = &[
+                ("metadata.json", metadata.as_bytes()),
+                ("bzImage", b"kernel"),
+                ("initrd", b"initrd"),
+                ("ovmf.fd", b"firmware"),
+            ];
+            let files_doc: String = files
+                .iter()
+                .map(|(name, payload)| {
+                    format!("{}  {name}\n", hex::encode(Sha256::digest(payload)))
+                })
+                .collect();
+            let dir = image_dir_with_manifest(&files_doc, files);
+            let hash = hex::encode(Sha256::digest(&files_doc));
+            CvmVerifier::verify_extracted_image(dir.path(), &hash)
+        };
+        verify("bzImage").unwrap();
+        for kernel in ["/boot/bzImage", "../bzImage", "unlisted"] {
+            assert!(verify(kernel).is_err(), "accepted kernel {kernel}");
+        }
+
+        let dir = image_dir_with_manifest("not a manifest", &[]);
+        let err = CvmVerifier::verify_extracted_image(dir.path(), &"00".repeat(32)).unwrap_err();
+        assert!(err.to_string().contains("os_image_hash"), "{err:#}");
+    }
+
+    #[test]
+    fn image_cache_pruning_keeps_checksum_identity() {
+        let files_doc = format!("{}  metadata.json\n", hex::encode(Sha256::digest(b"{}")));
+        let dir = image_dir_with_manifest(
+            &files_doc,
+            &[("metadata.json", b"{}"), ("unmeasured", b"remove me")],
+        );
+
+        let manifest = CvmVerifier::verify_image_manifest(dir.path(), &files_doc).unwrap();
+        CvmVerifier::prune_unlisted_image_files(dir.path(), &manifest).unwrap();
+
+        assert!(dir.path().join("sha256sum.txt").exists());
+        assert!(dir.path().join("metadata.json").exists());
+        assert!(!dir.path().join("unmeasured").exists());
+    }
+
+    #[test]
+    fn every_manifest_entry_is_checked_before_the_image_is_accepted() {
+        let good = hex::encode(Sha256::digest(b"{}"));
+        let zero = "00".repeat(32);
+        let files: &[(&str, &[u8])] = &[("metadata.json", b"{}"), ("bzImage", b"kernel")];
+
+        for files_doc in [
+            format!("{good}  metadata.json\n{zero}  bzImage\n"),
+            format!("{good}  metadata.json\n{zero}  missing\n"),
+        ] {
+            let dir = image_dir_with_manifest(&files_doc, files);
+            assert!(
+                CvmVerifier::verify_image_manifest(dir.path(), &files_doc).is_err(),
+                "accepted {files_doc:?}"
+            );
+        }
+
+        let good_doc = format!(
+            "{good}  metadata.json\n{}  bzImage\n",
+            hex::encode(Sha256::digest(b"kernel"))
+        );
+        let dir = image_dir_with_manifest(&good_doc, files);
+        assert_eq!(
+            CvmVerifier::verify_image_manifest(dir.path(), &good_doc)
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn image_archive_paths_must_be_confined() {
+        for path in ["../escape", "/absolute", "nested/../escape"] {
+            assert!(
+                !CvmVerifier::is_confined_archive_path(Path::new(path)),
+                "{path}"
+            );
+        }
+        // `.` components are stripped by `unpack_in` and cannot escape, so the
+        // check must accept them: `tar -czf out.tar.gz .` prefixes every member
+        // with `./` and published images are packed that way.
+        for path in ["nested/artifact", "./metadata.json", ".", "./", ""] {
+            assert!(
+                CvmVerifier::is_confined_archive_path(Path::new(path)),
+                "{path}"
+            );
+        }
+    }
+
+    /// A valid image archive and its `os_image_hash`.
+    fn test_image_archive() -> (String, Vec<u8>) {
+        let metadata = br#"{"cmdline":"","kernel":"bzImage","initrd":"initrd","bios":"ovmf.fd"}"#;
+        let files: &[(&str, &[u8])] = &[
+            ("metadata.json", metadata),
+            ("bzImage", b"kernel"),
+            ("initrd", b"initrd"),
+            ("ovmf.fd", b"firmware"),
+        ];
+        let files_doc: String = files
+            .iter()
+            .map(|(name, payload)| format!("{}  {name}\n", hex::encode(Sha256::digest(payload))))
+            .collect();
+        let hash = hex::encode(Sha256::digest(&files_doc));
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        for (name, payload) in files
+            .iter()
+            .chain([&("sha256sum.txt", files_doc.as_bytes())])
+        {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            archive.append_data(&mut header, name, *payload).unwrap();
+        }
+        (hash, archive.into_inner().unwrap().finish().unwrap())
+    }
+
+    /// Serves `tarball` to every request, cutting the body in half for the
+    /// first `truncated` of them. Returns the download URL and a request count.
+    async fn serve_image_archive(
+        tarball: Vec<u8>,
+        truncated: usize,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/{{OS_IMAGE_HASH}}",
+            listener.local_addr().unwrap()
+        );
+        let served = Arc::new(AtomicUsize::new(0));
+        tokio::spawn({
+            let served = served.clone();
+            async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let request = served.fetch_add(1, Ordering::SeqCst);
+                    let _ = stream.read(&mut [0; 4096]).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        tarball.len()
+                    );
+                    let body = if request < truncated {
+                        &tarball[..tarball.len() / 2]
+                    } else {
+                        &tarball[..]
+                    };
+                    let _ = stream.write_all(head.as_bytes()).await;
+                    let _ = stream.write_all(body).await;
+                }
+            }
+        });
+        (url, served)
+    }
+
+    fn test_download_verifier(cache: &Path, url: String) -> Arc<CvmVerifier> {
+        Arc::new(CvmVerifier::new(
+            cache.to_str().unwrap().into(),
+            url,
+            Duration::from_secs(10),
+            test_attestation_verifier(),
+        ))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_requests_download_an_image_once() {
+        let (hash, tarball) = test_image_archive();
+        let (url, served) = serve_image_archive(tarball, 0).await;
+        let cache = tempfile::tempdir().unwrap();
+        let verifier = test_download_verifier(cache.path(), url);
+        let dst_dir = verifier.images_dir().join(&hash);
+        let downloads: Vec<_> = (0..8)
+            .map(|_| {
+                let (verifier, hash, dst_dir) = (verifier.clone(), hash.clone(), dst_dir.clone());
+                tokio::spawn(async move { verifier.download_image(&hash, &dst_dir).await })
+            })
+            .collect();
+        for download in downloads {
+            download.await.unwrap().unwrap();
+        }
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(fs_err::read(dst_dir.join("bzImage")).unwrap(), b"kernel");
+    }
+
+    #[tokio::test]
+    async fn truncated_image_download_is_retried() {
+        let (hash, tarball) = test_image_archive();
+        let (url, served) = serve_image_archive(tarball, 1).await;
+        let cache = tempfile::tempdir().unwrap();
+        let verifier = test_download_verifier(cache.path(), url);
+        let dst_dir = verifier.images_dir().join(&hash);
+        verifier.download_image(&hash, &dst_dir).await.unwrap();
+        assert_eq!(served.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(fs_err::read(dst_dir.join("bzImage")).unwrap(), b"kernel");
+    }
+
+    #[test]
+    fn image_archive_rejects_links_and_accepts_regular_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("valid.tar.gz");
+        {
+            let file = fs_err::File::create(&valid).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let payload = b"artifact";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "nested/artifact", &payload[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("valid-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&valid, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("nested/artifact")).unwrap(),
+            b"artifact"
+        );
+
+        let linked = directory.path().join("linked.tar.gz");
+        {
+            let file = fs_err::File::create(&linked).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            header.set_link_name("../outside").unwrap();
+            header.set_cksum();
+            archive.append_data(&mut header, "link", &[][..]).unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("linked-output");
+        fs_err::create_dir(&output).unwrap();
+        assert!(CvmVerifier::extract_image_archive(&linked, &output).is_err());
+    }
+
+    /// Images published on download.dstack.org come in two shapes: members
+    /// packed from a glob (`bzImage`, ...) and members packed from `.`
+    /// (`./`, `./bzImage`, ...). Both must extract to the same flat layout.
+    #[test]
+    fn image_archive_accepts_dot_prefixed_members() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive_path = directory.path().join("dot-prefixed.tar.gz");
+        {
+            let file = fs_err::File::create(&archive_path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append_data(&mut header, "./", &[][..]).unwrap();
+            let payload = b"artifact";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "./metadata.json", &payload[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let output = directory.path().join("dot-prefixed-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&archive_path, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("metadata.json")).unwrap(),
+            b"artifact"
+        );
+    }
+
+    /// `GzDecoder` stops at the first member of a concatenated gzip stream and
+    /// reports clean EOF, which would truncate the archive without an error.
+    #[test]
+    fn image_archive_reads_every_gzip_member() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut tarball = tar::Builder::new(Vec::new());
+        let payload = b"artifact";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tarball
+            .append_data(&mut header, "metadata.json", &payload[..])
+            .unwrap();
+        let tarball = tarball.into_inner().unwrap();
+
+        let archive_path = directory.path().join("multi-member.tar.gz");
+        {
+            use std::io::Write;
+
+            let mut file = fs_err::File::create(&archive_path).unwrap();
+            // One gzip member per half of the tar stream.
+            for half in tarball.chunks(tarball.len().div_ceil(2)) {
+                let mut encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(half).unwrap();
+                file.write_all(&encoder.finish().unwrap()).unwrap();
+            }
+            file.flush().unwrap();
+        }
+        let output = directory.path().join("multi-member-output");
+        fs_err::create_dir(&output).unwrap();
+        CvmVerifier::extract_image_archive(&archive_path, &output).unwrap();
+        assert_eq!(
+            fs_err::read(output.join("metadata.json")).unwrap(),
+            b"artifact"
+        );
+    }
+
+    #[tokio::test]
+    async fn verifies_sev_snp_attestation_fixture_without_image_download() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/sev-snp-attestation.json"))
+                .expect("SNP verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(!response.details.acpi_tables_verified);
+        assert_eq!(
+            response.details.tee_variant,
+            Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
+        );
+        assert!(
+            !image_cache_dir.exists(),
+            "SNP verification must not download or cache OS images"
+        );
+    }
+
+    #[tokio::test]
+    async fn attestation_fixture_ignores_conflicting_top_level_inputs() {
+        let mut request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/sev-snp-attestation.json"))
+                .expect("SNP verifier fixture parses");
+        request.quote = Some(vec![0]);
+        request.event_log = Some("[]".to_string());
+        request.vm_config = Some("not-json".to_string());
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert_eq!(
+            response.details.tee_variant,
+            Some(ra_tls::attestation::TeeVariant::DstackAmdSevSnp)
+        );
+    }
+
+    /// The fixture was captured from a real CVM, so its RTMR0 ACPI digests are
+    /// whatever QEMU actually produced. Reproducing them without the image
+    /// proves the generator agrees with hardware, not just with itself.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_without_image_download() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
+                .expect("TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
+        assert_eq!(
+            response.details.tee_variant,
+            Some(ra_tls::attestation::TeeVariant::DstackTdx)
+        );
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
+
+    /// The guest agent's v1 surfaces always hand out the MessagePack V1 schema,
+    /// while every captured fixture is the legacy SCALE form. Re-encoding a
+    /// fixture as V1 must not change a single verification outcome: the same
+    /// quote, event log, image and ACPI checks run, and they reach the same
+    /// verdict with the same details.
+    #[tokio::test]
+    async fn msgpack_and_scale_encodings_verify_identically() {
+        let fixtures = [
+            (
+                "tdx-lite",
+                include_str!("../fixtures/tdx-lite-attestation.json"),
+            ),
+            (
+                "tdx-lite-normalized",
+                include_str!("../fixtures/tdx-lite-normalized-attestation.json"),
+            ),
+            (
+                "tdx-lite-normalized-qemu-10-2",
+                include_str!("../fixtures/tdx-lite-normalized-qemu-10-2-attestation.json"),
+            ),
+            (
+                "sev-snp",
+                include_str!("../fixtures/sev-snp-attestation.json"),
+            ),
+        ];
+
+        for (name, fixture) in fixtures {
+            let request: VerificationRequest =
+                serde_json::from_str(fixture).expect("verifier fixture parses");
+            let scale = request
+                .attestation
+                .clone()
+                .expect("fixture carries an attestation");
+            let legacy = VersionedAttestation::from_bytes(&scale).expect("fixture decodes");
+            assert!(
+                matches!(legacy, VersionedAttestation::V0 { .. }),
+                "{name}: fixture is expected to be the legacy form"
+            );
+            let msgpack = VersionedAttestation::V1 {
+                attestation: legacy.into_v1(),
+            }
+            .to_bytes()
+            .expect("attestation re-encodes as V1");
+            assert!(
+                matches!(msgpack.first(), Some(0x80..=0x8f | 0xde | 0xdf)),
+                "{name}: re-encoded attestation is not a MessagePack map"
+            );
+
+            let mut responses = Vec::new();
+            for attestation in [scale, msgpack] {
+                let cache = tempfile::tempdir().expect("temp cache dir");
+                let verifier = CvmVerifier::new(
+                    cache.path().join("cache").display().to_string(),
+                    "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+                    Duration::from_secs(1),
+                    test_attestation_verifier(),
+                );
+                let response = verifier
+                    .verify(VerificationRequest {
+                        attestation: Some(attestation),
+                        ..request.clone()
+                    })
+                    .await
+                    .expect("verifier runs");
+                assert!(response.is_valid, "{name}: {:?}", response.reason);
+                assert!(response.details.quote_verified, "{name}");
+                assert!(response.details.event_log_verified, "{name}");
+                assert!(response.details.os_image_hash_verified, "{name}");
+                responses.push(serde_json::to_value(&response).expect("response serializes"));
+            }
+            assert_eq!(
+                responses[0], responses[1],
+                "{name}: MessagePack and SCALE encodings verified differently"
+            );
+        }
+    }
+
+    /// Verify one attestation through the full `CvmVerifier` path with image
+    /// download disabled, and require every check to pass.
+    async fn verify_lite_attestation(name: &str, attestation: Vec<u8>) -> serde_json::Value {
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+        let response = verifier
+            .verify(VerificationRequest {
+                quote: None,
+                event_log: None,
+                vm_config: None,
+                attestation: Some(attestation),
+            })
+            .await
+            .expect("verifier runs");
+        assert!(response.is_valid, "{name}: {:?}", response.reason);
+        assert!(response.details.quote_verified, "{name}");
+        assert!(response.details.event_log_verified, "{name}");
+        assert!(response.details.os_image_hash_verified, "{name}");
+        assert!(response.details.acpi_tables_verified, "{name}");
+        serde_json::to_value(&response).expect("response serializes")
+    }
+
+    fn fixture_attestation(fixture: &str) -> Vec<u8> {
+        let request: VerificationRequest =
+            serde_json::from_str(fixture).expect("verifier fixture parses");
+        request.attestation.expect("fixture carries an attestation")
+    }
+
+    fn is_msgpack_v1(bytes: &[u8]) -> bool {
+        matches!(
+            VersionedAttestation::from_bytes(bytes),
+            Ok(VersionedAttestation::V1 { .. })
+        ) && matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf))
+    }
+
+    /// Captured from a real TDX CVM: `/v1/Attest` and the frozen `/Attest`
+    /// asked for the same report data in the same boot. The platform produced
+    /// the legacy form (V1 runtime events), so the v1 bytes are the guest
+    /// agent's own MessagePack re-encoding, and they must verify to exactly the
+    /// response the legacy bytes do.
+    #[tokio::test]
+    async fn verifies_real_v1_attest_identically_to_v0_from_the_same_boot() {
+        let v1 = fixture_attestation(include_str!("../fixtures/tdx-lite-v1-attest.json"));
+        let v0 = fixture_attestation(include_str!("../fixtures/tdx-lite-v0-attest.json"));
+        assert!(is_msgpack_v1(&v1), "/v1/Attest must be MessagePack V1");
+        assert_eq!(v0.first(), Some(&0x00), "/Attest must be legacy SCALE");
+
+        let v1_response = verify_lite_attestation("v1 Attest", v1).await;
+        let v0_response = verify_lite_attestation("v0 Attest", v0).await;
+        assert_eq!(
+            v1_response, v0_response,
+            "v1 and v0 Attest from one boot verified differently"
+        );
+    }
+
+    /// Captured from the same boot: the certificate chains `/v1/IssueCert`
+    /// and the frozen `/GetTlsKey` returned with `usage_ra_tls` set, signed by
+    /// the CVM's local CA. The v1 leaf embeds MessagePack V1. Each leaf must
+    /// chain to its CA, pass RA-TLS verification with the report data bound to
+    /// its own public key, and carry an attestation that passes the full image
+    /// check -- and both must name the same CVM.
+    #[tokio::test]
+    async fn verifies_real_v1_issue_cert_chain_and_embedded_attestation() {
+        use ra_tls::traits::CertExt as _;
+
+        let mut identities = Vec::new();
+        for (name, pem, expect_v1) in [
+            (
+                "v1 IssueCert",
+                include_str!("../fixtures/tdx-lite-v1-issue-cert.pem"),
+                true,
+            ),
+            (
+                "v0 GetTlsKey",
+                include_str!("../fixtures/tdx-lite-v0-get-tls-key.pem"),
+                false,
+            ),
+        ] {
+            let chain: Vec<_> = x509_parser::pem::Pem::iter_from_buffer(pem.as_bytes())
+                .map(|pem| pem.expect("PEM block parses"))
+                .collect();
+            assert_eq!(chain.len(), 2, "{name}: leaf and CA");
+            let leaf = chain[0].parse_x509().expect("leaf parses");
+            let ca = chain[1].parse_x509().expect("CA parses");
+            leaf.verify_signature(Some(ca.public_key()))
+                .unwrap_or_else(|err| panic!("{name}: leaf is not signed by its CA: {err}"));
+
+            let embedded = leaf
+                .get_extension_bytes(ra_tls::oids::PHALA_RATLS_ATTESTATION)
+                .expect("extension reads")
+                .expect("leaf carries an attestation");
+            assert_eq!(is_msgpack_v1(&embedded), expect_v1, "{name}: wire form");
+
+            let verified =
+                ra_tls::attestation::verify_der(&chain[0].contents, &test_attestation_verifier())
+                    .await
+                    .unwrap_or_else(|err| panic!("{name}: RA-TLS verification failed: {err:#}"));
+            assert_eq!(
+                verified.public_key_der,
+                leaf.public_key().raw,
+                "{name}: attestation must be bound to the leaf key"
+            );
+
+            let response = verify_lite_attestation(name, embedded).await;
+            identities.push(response["details"]["app_info"].clone());
+        }
+        assert_eq!(
+            identities[0], identities[1],
+            "v1 and v0 certificates from one boot name different CVMs"
+        );
+    }
+
+    /// The certificate verification must not be vacuous: a leaf whose embedded
+    /// attestation was captured for a different key is rejected.
+    #[tokio::test]
+    async fn rejects_a_real_v1_certificate_attestation_bound_to_another_key() {
+        let v1_leaf = x509_parser::pem::Pem::iter_from_buffer(
+            include_str!("../fixtures/tdx-lite-v1-issue-cert.pem").as_bytes(),
+        )
+        .next()
+        .expect("leaf present")
+        .expect("PEM block parses");
+        let v0_leaf = x509_parser::pem::Pem::iter_from_buffer(
+            include_str!("../fixtures/tdx-lite-v0-get-tls-key.pem").as_bytes(),
+        )
+        .next()
+        .expect("leaf present")
+        .expect("PEM block parses");
+        // The v1 attestation checked against the v0 leaf's key: same quote, same
+        // CVM, wrong binding.
+        let v1_cert = v1_leaf.parse_x509().expect("leaf parses");
+        let v0_cert = v0_leaf.parse_x509().expect("leaf parses");
+        let attestation = ra_tls::attestation::from_der(&v1_leaf.contents)
+            .expect("extension decodes")
+            .expect("leaf carries an attestation");
+        assert!(is_msgpack_v1(
+            &attestation.clone().to_bytes().expect("re-encodes")
+        ));
+        assert_ne!(v1_cert.public_key().raw, v0_cert.public_key().raw);
+        let err = attestation
+            .into_v1()
+            .verify_with_ra_pubkey(v0_cert.public_key().raw, &test_attestation_verifier())
+            .await
+            .err()
+            .expect("an attestation bound to another key must not verify");
+        assert!(
+            err.to_string().contains("report data mismatch"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// Rebuild the fixture's measurement document around a different kernel
+    /// command line, keeping every hash that commits to it consistent:
+    /// `measurement.tdx.cbor`, its `sha256sum.txt` entry, and the
+    /// `os_image_hash` over that file. Nothing in the image-identity chain can
+    /// object to the result.
+    fn forge_command_line(attestation: &mut ra_tls::attestation::Attestation, suffix: &str) {
+        use sha2::{Digest, Sha256};
+
+        let mut config: serde_json::Value =
+            serde_json::from_str(&attestation.config).expect("vm_config parses");
+        let mut document: dstack_types::TdxOsImageMeasurementDocument =
+            serde_json::from_value(config["tdx_measurement"].clone())
+                .expect("tdx_measurement parses");
+
+        let mut measurement =
+            dstack_types::TdxOsImageMeasurement::from_cbor_slice(&document.measurement)
+                .expect("measurement decodes");
+        let previous = Sha256::digest(&document.measurement);
+        measurement.image.base_cmdline.push_str(suffix);
+        document.measurement = measurement.to_cbor_vec();
+
+        let checksum = String::from_utf8(document.checksum_file).expect("checksum file is utf-8");
+        let mut rewritten = String::new();
+        for line in checksum.lines() {
+            let (hash, name) = line.split_once("  ").expect("checksum line");
+            if name == "measurement.tdx.cbor" {
+                assert_eq!(hash, hex::encode(previous), "fixture checksum is stale");
+                rewritten.push_str(&hex::encode(Sha256::digest(&document.measurement)));
+            } else {
+                rewritten.push_str(hash);
+            }
+            rewritten.push_str("  ");
+            rewritten.push_str(name);
+            rewritten.push('\n');
+        }
+        document.checksum_file = rewritten.into_bytes();
+
+        config["os_image_hash"] =
+            serde_json::json!(hex::encode(Sha256::digest(&document.checksum_file)));
+        config["tdx_measurement"] = serde_json::to_value(&document).expect("document serializes");
+        attestation.config = config.to_string();
+    }
+
+    /// The document carries the kernel command line itself, not a digest of it,
+    /// so nothing stops a host from writing a different one and rebuilding
+    /// every hash that commits to it. What stops it is RTMR[2], which the CVM
+    /// extended with the command line it was actually booted with.
+    ///
+    /// This forges exactly that: an image identity that is internally
+    /// consistent and therefore passes every `os_image_hash` check. Only the
+    /// measurement comparison can reject it.
+    #[tokio::test]
+    async fn tdx_lite_rejects_a_self_consistent_forged_command_line() {
+        let request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-attestation.json"))
+                .expect("TDX lite verifier fixture parses");
+        let bytes = request.attestation.expect("fixture carries an attestation");
+
+        let mut attestation =
+            match VersionedAttestation::from_bytes(&bytes).expect("attestation decodes") {
+                VersionedAttestation::V0 { attestation } => attestation,
+                VersionedAttestation::V1 { .. } => {
+                    panic!("fixture is expected to be a legacy attestation")
+                }
+            };
+        forge_command_line(&mut attestation, " forged=1");
+        let forged = VersionedAttestation::V0 { attestation }
+            .to_bytes()
+            .expect("attestation re-encodes");
+
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let verifier = CvmVerifier::new(
+            cache.path().join("cache").display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier
+            .verify(VerificationRequest {
+                quote: None,
+                event_log: None,
+                vm_config: None,
+                attestation: Some(forged),
+            })
+            .await
+            .expect("verifier runs");
+
+        assert!(!response.is_valid, "a forged command line must not verify");
+        assert!(!response.details.os_image_hash_verified);
+        let reason = response.reason.unwrap_or_default();
+        assert!(
+            reason.contains("RTMR2 mismatch"),
+            "expected the command line to be caught by RTMR[2], got: {reason}"
+        );
+    }
+
+    /// Captured from a CVM whose OVMF normalizes the Linux setup header, so
+    /// RTMR[1] is the plain Authenticode hash of the shipped kernel. The host
+    /// ran QEMU 8.2.2 -- a version that *does* rewrite the header -- so this
+    /// only passes if the firmware actually undid that rewrite.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_with_normalized_kernel_header() {
+        let request: VerificationRequest = serde_json::from_str(include_str!(
+            "../fixtures/tdx-lite-normalized-attestation.json"
+        ))
+        .expect("normalized TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
+
+    /// The same image as the fixture above, captured on QEMU 10.2.1 -- a
+    /// version that does *not* rewrite the setup header. Its RTMR[1] is
+    /// byte-for-byte the one the 8.2.2 capture produced, which is the whole
+    /// point of normalizing: the digest no longer depends on the host's QEMU.
+    /// MRTD and RTMR[0] do differ, because page-add ordering and the generated
+    /// ACPI tables genuinely are version-specific.
+    #[tokio::test]
+    async fn verifies_tdx_lite_fixture_with_normalized_kernel_header_on_qemu_10_2() {
+        let request: VerificationRequest = serde_json::from_str(include_str!(
+            "../fixtures/tdx-lite-normalized-qemu-10-2-attestation.json"
+        ))
+        .expect("QEMU 10.2 normalized TDX lite verifier fixture parses");
+        let cache = tempfile::tempdir().expect("temp cache dir");
+        let image_cache_dir = cache.path().join("cache");
+        let verifier = CvmVerifier::new(
+            image_cache_dir.display().to_string(),
+            "http://127.0.0.1:9/should-not-download/{OS_IMAGE_HASH}.tar.gz".to_string(),
+            Duration::from_secs(1),
+            test_attestation_verifier(),
+        );
+
+        let response = verifier.verify(request).await.expect("verifier runs");
+        assert!(response.is_valid, "{:?}", response.reason);
+        assert!(response.details.quote_verified);
+        assert!(response.details.event_log_verified);
+        assert!(response.details.os_image_hash_verified);
+        assert!(response.details.acpi_tables_verified);
+        assert!(
+            !image_cache_dir.exists(),
+            "TDX lite verification must not download or cache OS images"
+        );
+    }
+
+    /// The captured VM ran 2 vCPUs; a VM shape that disagrees with the quote
+    /// must not reproduce its ACPI digests, which is what makes the recomputed
+    /// digests worth comparing in the first place.
+    #[test]
+    fn tdx_lite_acpi_hashes_depend_on_the_reported_vm_shape() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/tdx-lite-getquote.json"))
+                .expect("TDX lite getquote fixture parses");
+        let mut vm_config: VmConfig = serde_json::from_str(
+            fixture["vm_config"]
+                .as_str()
+                .expect("vm_config is a string"),
+        )
+        .expect("fixture vm_config parses");
+        let event_log: Vec<TdxEvent> = serde_json::from_str(
+            fixture["event_log"]
+                .as_str()
+                .expect("event_log is a string"),
+        )
+        .expect("fixture event log parses");
+        let ovmf_variant = vm_config.ovmf_variant.unwrap_or_default();
+
+        let reported = CvmVerifier::tdx_acpi_hashes_from_event_log(&event_log)
+            .expect("fixture carries named ACPI digests");
+        let expected = dstack_mr::tdx::expected_rtmr0_acpi_hashes(&vm_config, ovmf_variant)
+            .expect("ACPI tables are generated for the fixture VM shape");
+        CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect("recomputed digests match the captured CVM");
+
+        vm_config.cpu_count += 1;
+        let expected = dstack_mr::tdx::expected_rtmr0_acpi_hashes(&vm_config, ovmf_variant)
+            .expect("ACPI tables are generated for the altered VM shape");
+        CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect_err("an extra vCPU must change the ACPI tables");
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hash_mismatch_names_the_table() {
+        let expected = TdxRtmr0AcpiHashes {
+            loader: vec![1; 48],
+            rsdp: vec![2; 48],
+            tables: vec![3; 48],
+        };
+        let mut reported = expected.clone();
+        reported.tables = vec![4; 48];
+        let err = CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect_err("mismatched tables digest is rejected");
+        assert!(err.to_string().contains(TDX_ACPI_TABLES_EVENT), "{err:#}");
+        assert!(CvmVerifier::assert_tdx_acpi_hashes_match(&expected, &expected).is_ok());
+    }
+}

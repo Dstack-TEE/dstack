@@ -1,0 +1,15 @@
+Upstream-Status: Inappropriate [embedded specific]
+
+diff --git a/Makefile b/Makefile
+index a374cc09..b6632580 100644
+--- a/Makefile
++++ b/Makefile
+@@ -20,7 +20,7 @@
+ WITH_NVCGO   ?= yes
+ WITH_LIBELF  ?= no
+ WITH_TIRPC   ?= no
+-WITH_SECCOMP ?= yes
++WITH_SECCOMP := yes
+ 
+ ##### Global definitions #####
+ 

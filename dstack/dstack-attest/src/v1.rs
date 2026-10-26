@@ -1,0 +1,678 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+use anyhow::{anyhow, bail, Context, Result};
+use cc_eventlog::{
+    tdx::{self, TDX_ACPI_DATA_EVENT_PAYLOAD},
+    RuntimeEvent, TdxEvent,
+};
+use serde::{Deserialize, Serialize};
+use tpm_types::TpmQuote;
+
+pub const ATTESTATION_VERSION: u64 = 1;
+
+pub(crate) fn is_tdx_acpi_data_event(event: &TdxEvent) -> bool {
+    tdx::is_tdx_acpi_data_event(event)
+}
+
+pub(crate) fn strip_tdx_runtime_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
+    event_log
+        .into_iter()
+        .filter(|event| event.imr == 3)
+        .map(|event| event.stripped())
+        .collect()
+}
+
+fn strip_tdx_lite_acpi_data_event(event: TdxEvent) -> TdxEvent {
+    let mut event = event.stripped();
+    event.event_payload = TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec();
+    event
+}
+
+pub(crate) fn strip_tdx_lite_event_log(event_log: Vec<TdxEvent>) -> Vec<TdxEvent> {
+    event_log
+        .into_iter()
+        .filter_map(|event| {
+            if is_tdx_acpi_data_event(&event) {
+                Some(strip_tdx_lite_acpi_data_event(event))
+            } else if event.imr == 3 {
+                Some(event.stripped())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Always keep the RTMR0 ACPI DATA digest events (in addition to RTMR3
+/// runtime events), regardless of the boot's `tdx_attestation_variant`. This
+/// makes `strip_tdx_lite_event_log`'s output a strict superset of
+/// `strip_tdx_runtime_event_log`'s, so a verifier can independently choose
+/// lite or legacy verification for any TDX boot instead of being limited to
+/// whatever the VMM resolved at launch. See
+/// `dstack_types::TdxAttestationVariant` for the full rationale.
+///
+/// `config` is accepted for API stability but no longer changes the result.
+pub(crate) fn strip_tdx_event_log_for_config(
+    event_log: Vec<TdxEvent>,
+    _config: &str,
+) -> Vec<TdxEvent> {
+    strip_tdx_lite_event_log(event_log)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
+pub enum PlatformEvidence {
+    #[serde(rename = "tdx")]
+    Tdx {
+        quote: Vec<u8>,
+        event_log: Vec<TdxEvent>,
+    },
+    #[serde(rename = "gcp-tdx")]
+    GcpTdx {
+        quote: Vec<u8>,
+        event_log: Vec<TdxEvent>,
+        tpm_quote: TpmQuote,
+    },
+    #[serde(rename = "nitro-enclave")]
+    NitroEnclave { nsm_quote: Vec<u8> },
+    #[serde(rename = "aws-nitro-tpm")]
+    AwsNitroTpm { attestation_doc: Vec<u8> },
+    #[serde(rename = "sev-snp")]
+    SevSnp {
+        report: Vec<u8>,
+        cert_chain: Vec<Vec<u8>>,
+        mr_config: String,
+    },
+}
+
+impl PlatformEvidence {
+    pub fn tdx_quote(&self) -> Option<&[u8]> {
+        match self {
+            Self::Tdx { quote, .. } | Self::GcpTdx { quote, .. } => Some(quote.as_slice()),
+            Self::NitroEnclave { .. } | Self::AwsNitroTpm { .. } | Self::SevSnp { .. } => None,
+        }
+    }
+
+    pub fn tdx_event_log(&self) -> Option<&[TdxEvent]> {
+        match self {
+            Self::Tdx { event_log, .. } | Self::GcpTdx { event_log, .. } => {
+                Some(event_log.as_slice())
+            }
+            Self::NitroEnclave { .. } | Self::AwsNitroTpm { .. } | Self::SevSnp { .. } => None,
+        }
+    }
+
+    pub fn tpm_quote(&self) -> Option<&TpmQuote> {
+        match self {
+            Self::GcpTdx { tpm_quote, .. } => Some(tpm_quote),
+            Self::Tdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. }
+            | Self::SevSnp { .. } => None,
+        }
+    }
+
+    pub fn nsm_quote(&self) -> Option<&[u8]> {
+        match self {
+            Self::NitroEnclave { nsm_quote } => Some(nsm_quote.as_slice()),
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::AwsNitroTpm { .. }
+            | Self::SevSnp { .. } => None,
+        }
+    }
+
+    pub fn sev_snp_report(&self) -> Option<&[u8]> {
+        match self {
+            Self::SevSnp { report, .. } => Some(report.as_slice()),
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. } => None,
+        }
+    }
+
+    pub fn sev_snp_cert_chain(&self) -> Option<&[Vec<u8>]> {
+        match self {
+            Self::SevSnp { cert_chain, .. } => Some(cert_chain.as_slice()),
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. } => None,
+        }
+    }
+
+    pub fn sev_snp_mr_config_document(&self) -> Option<&str> {
+        match self {
+            Self::SevSnp { mr_config, .. } => Some(mr_config.as_str()),
+            Self::Tdx { .. }
+            | Self::GcpTdx { .. }
+            | Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. } => None,
+        }
+    }
+
+    pub fn tdx_event_log_mut(&mut self) -> Option<&mut Vec<TdxEvent>> {
+        match self {
+            Self::Tdx { event_log, .. } | Self::GcpTdx { event_log, .. } => Some(event_log),
+            Self::NitroEnclave { .. } | Self::AwsNitroTpm { .. } | Self::SevSnp { .. } => None,
+        }
+    }
+
+    pub fn into_stripped(self) -> Self {
+        self.into_stripped_for_config("")
+    }
+
+    pub fn into_stripped_for_config(self, config: &str) -> Self {
+        match self {
+            Self::Tdx { quote, event_log } => Self::Tdx {
+                quote,
+                event_log: strip_tdx_event_log_for_config(event_log, config),
+            },
+            Self::GcpTdx {
+                quote,
+                event_log,
+                tpm_quote,
+            } => Self::GcpTdx {
+                quote,
+                event_log: strip_tdx_runtime_event_log(event_log),
+                tpm_quote,
+            },
+            // No TDX event log to strip. Listed rather than caught by a
+            // wildcard so that a new platform has to state its answer here.
+            evidence @ (Self::NitroEnclave { .. }
+            | Self::AwsNitroTpm { .. }
+            | Self::SevSnp { .. }) => evidence,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
+pub enum StackEvidence {
+    #[serde(rename = "dstack")]
+    Dstack {
+        report_data: Vec<u8>,
+        runtime_events: Vec<RuntimeEvent>,
+        config: String,
+    },
+    #[serde(rename = "dstack-pod")]
+    DstackPod {
+        report_data: Vec<u8>,
+        runtime_events: Vec<RuntimeEvent>,
+        config: String,
+        report_data_payload: String,
+    },
+}
+
+fn decode_report_data(report_data: &[u8]) -> Result<[u8; 64]> {
+    report_data
+        .try_into()
+        .map_err(|_| anyhow!("stack.report_data must be 64 bytes"))
+}
+
+impl StackEvidence {
+    pub fn report_data(&self) -> Result<[u8; 64]> {
+        match self {
+            Self::Dstack { report_data, .. } | Self::DstackPod { report_data, .. } => {
+                decode_report_data(report_data)
+            }
+        }
+    }
+
+    pub fn runtime_events(&self) -> &[RuntimeEvent] {
+        match self {
+            Self::Dstack { runtime_events, .. } | Self::DstackPod { runtime_events, .. } => {
+                runtime_events.as_slice()
+            }
+        }
+    }
+
+    pub fn config(&self) -> &str {
+        match self {
+            Self::Dstack { config, .. } | Self::DstackPod { config, .. } => config,
+        }
+    }
+
+    pub fn report_data_payload(&self) -> Option<&str> {
+        match self {
+            Self::Dstack { .. } => None,
+            Self::DstackPod {
+                report_data_payload,
+                ..
+            } => Some(report_data_payload.as_str()),
+        }
+    }
+
+    pub fn into_dstack_pod(self, report_data_payload: String) -> Self {
+        match self {
+            Self::Dstack {
+                report_data,
+                runtime_events,
+                config,
+            }
+            | Self::DstackPod {
+                report_data,
+                runtime_events,
+                config,
+                ..
+            } => Self::DstackPod {
+                report_data,
+                runtime_events,
+                config,
+                report_data_payload,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attestation {
+    pub version: u64,
+    pub platform: PlatformEvidence,
+    pub stack: StackEvidence,
+}
+
+impl Attestation {
+    pub fn new(platform: PlatformEvidence, stack: StackEvidence) -> Self {
+        Self {
+            version: ATTESTATION_VERSION,
+            platform,
+            stack,
+        }
+    }
+
+    pub fn to_msgpack(&self) -> Result<Vec<u8>> {
+        let mut normalized = self.clone();
+        normalized.version = ATTESTATION_VERSION;
+        rmp_serde::to_vec_named(&normalized).context("failed to encode attestation as msgpack")
+    }
+
+    pub fn from_msgpack(bytes: &[u8]) -> Result<Self> {
+        let mut cursor = std::io::Cursor::new(bytes);
+        let mut decoder = rmp_serde::Deserializer::new(&mut cursor);
+        let value =
+            Self::deserialize(&mut decoder).context("failed to decode attestation from msgpack")?;
+        drop(decoder);
+        if cursor.position() != bytes.len() as u64 {
+            bail!(
+                "trailing bytes after attestation msgpack: {}",
+                bytes.len() as u64 - cursor.position()
+            );
+        }
+        if value.version != ATTESTATION_VERSION {
+            bail!(
+                "unsupported attestation version: expected {}, got {}",
+                ATTESTATION_VERSION,
+                value.version
+            );
+        }
+        Ok(value)
+    }
+
+    pub fn report_data(&self) -> Result<[u8; 64]> {
+        self.stack.report_data()
+    }
+
+    pub fn report_data_payload(&self) -> Option<&str> {
+        self.stack.report_data_payload()
+    }
+
+    pub fn into_stripped(self) -> Self {
+        let config = self.stack.config().to_string();
+        Self {
+            version: self.version,
+            platform: self.platform.into_stripped_for_config(&config),
+            stack: self.stack,
+        }
+    }
+
+    pub fn into_dstack_pod(self, report_data_payload: String) -> Self {
+        Self {
+            version: self.version,
+            platform: self.platform,
+            stack: self.stack.into_dstack_pod(report_data_payload),
+        }
+    }
+}
+
+/// Helpers for assembling synthetic attestations from a captured fixture.
+///
+/// Simulator only. Patching the report data into a quote leaves the quote's
+/// signature covering the bytes that were there before, so what comes out
+/// cannot pass verification -- it is evidence-shaped, not evidence. That is
+/// fine for a simulator whose callers skip verification, and wrong everywhere
+/// else, so these are behind a feature that only the simulator turns on: a
+/// per-package build of kms, gateway or verifier cannot reach them at all.
+///
+/// (`cargo build --workspace` unifies features, so a workspace-wide build does
+/// compile them into every crate. The gate is a statement of intent and a
+/// backstop for the documented per-package release builds, not a hard wall.)
+#[cfg(any(test, feature = "simulator"))]
+impl Attestation {
+    /// Patch `report_data` into both the platform quote and the stack evidence.
+    pub fn with_report_data(self, report_data: [u8; 64]) -> Self {
+        use crate::attestation::{SNP_REPORT_DATA_RANGE, TDX_QUOTE_REPORT_DATA_RANGE};
+
+        let platform = match self.platform {
+            PlatformEvidence::Tdx {
+                mut quote,
+                event_log,
+            } => {
+                if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                    quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::Tdx { quote, event_log }
+            }
+            // Same TDX quote layout, so the same patch applies. The vTPM quote
+            // beside it cannot follow: its `qualified_data` is
+            // `sha256(tdx_quote)`, and re-deriving that would need the AK to
+            // re-sign. So this severs the TPM binding on top of the quote
+            // signature the patch already invalidates -- acceptable only
+            // because nothing verifies a simulator attestation.
+            PlatformEvidence::GcpTdx {
+                mut quote,
+                event_log,
+                tpm_quote,
+            } => {
+                if quote.len() >= TDX_QUOTE_REPORT_DATA_RANGE.end {
+                    quote[TDX_QUOTE_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::GcpTdx {
+                    quote,
+                    event_log,
+                    tpm_quote,
+                }
+            }
+            PlatformEvidence::SevSnp {
+                mut report,
+                cert_chain,
+                mr_config,
+            } => {
+                if report.len() >= SNP_REPORT_DATA_RANGE.end {
+                    report[SNP_REPORT_DATA_RANGE].copy_from_slice(&report_data);
+                }
+                PlatformEvidence::SevSnp {
+                    report,
+                    cert_chain,
+                    mr_config,
+                }
+            }
+            // Nothing to patch: both carry their report data inside a signed
+            // document, and rewriting it would only invalidate the signature.
+            // Listed rather than caught by a wildcard so that a new platform
+            // has to state its answer here instead of silently getting this
+            // one -- GcpTdx was skipped for exactly that reason.
+            evidence @ (PlatformEvidence::NitroEnclave { .. }
+            | PlatformEvidence::AwsNitroTpm { .. }) => evidence,
+        };
+        Self {
+            version: self.version,
+            platform,
+            stack: self.stack,
+        }
+        .with_stack_report_data(report_data)
+    }
+
+    /// Patch `report_data` into the stack evidence only, leaving the platform
+    /// quote untouched.
+    ///
+    /// For callers that go on to generate a real quote over the same report
+    /// data: patching the fixture's quote first would only be overwritten.
+    pub fn with_stack_report_data(self, report_data: [u8; 64]) -> Self {
+        let stack = match self.stack {
+            StackEvidence::Dstack {
+                runtime_events,
+                config,
+                ..
+            } => StackEvidence::Dstack {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+            },
+            StackEvidence::DstackPod {
+                runtime_events,
+                config,
+                report_data_payload,
+                ..
+            } => StackEvidence::DstackPod {
+                report_data: report_data.to_vec(),
+                runtime_events,
+                config,
+                report_data_payload,
+            },
+        };
+        Self {
+            version: self.version,
+            platform: self.platform,
+            stack,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cc_eventlog::tdx::TDX_ACPI_DATA_EVENT_TYPE;
+    use dstack_types::mr_config::MrConfigV3;
+    use dstack_types::EventLogVersion;
+
+    fn test_mr_config_document() -> String {
+        MrConfigV3::new(
+            vec![0x11; 20],
+            vec![0x22; 32],
+            None,
+            dstack_types::KeyProviderKind::None,
+            Vec::new(),
+            vec![0x33; 20],
+        )
+        .to_canonical_json()
+    }
+
+    #[test]
+    fn msgpack_roundtrip_preserves_attestation() {
+        let attestation = Attestation::new(
+            PlatformEvidence::Tdx {
+                quote: vec![1u8, 2, 3],
+                event_log: vec![TdxEvent {
+                    imr: 3,
+                    event_type: 0x08000001,
+                    digest: vec![0xaa, 0xbb, 0xcc],
+                    event: "pod".into(),
+                    event_payload: vec![0xde, 0xad, 0xbe, 0xef],
+                    version: EventLogVersion::V1,
+                    preimage: None,
+                }],
+            },
+            StackEvidence::DstackPod {
+                report_data: vec![7u8; 64],
+                runtime_events: vec![RuntimeEvent {
+                    event: "pod".into(),
+                    payload: vec![0xca, 0xfe, 0xba, 0xbe],
+                    version: EventLogVersion::V1,
+                }],
+                config: "{}".into(),
+                report_data_payload: "{\"hello\":\"world\"}".into(),
+            },
+        );
+
+        let encoded = attestation.to_msgpack().expect("encode msgpack");
+        assert!(matches!(encoded.first(), Some(0x80..=0x8f)));
+        let decoded = Attestation::from_msgpack(&encoded).expect("decode msgpack");
+        assert_eq!(decoded.version, ATTESTATION_VERSION);
+        match decoded.platform {
+            PlatformEvidence::Tdx { quote, event_log } => {
+                assert_eq!(quote, vec![1u8, 2, 3]);
+                assert_eq!(event_log.len(), 1);
+                assert_eq!(event_log[0].event, "pod");
+                assert_eq!(event_log[0].event_payload, vec![0xde, 0xad, 0xbe, 0xef]);
+            }
+            _ => panic!("expected tdx platform evidence"),
+        }
+        match decoded.stack {
+            StackEvidence::DstackPod {
+                report_data,
+                runtime_events,
+                config,
+                report_data_payload,
+            } => {
+                assert_eq!(report_data, vec![7u8; 64]);
+                assert_eq!(runtime_events.len(), 1);
+                assert_eq!(runtime_events[0].event, "pod");
+                assert_eq!(runtime_events[0].payload, vec![0xca, 0xfe, 0xba, 0xbe]);
+                assert_eq!(config, "{}");
+                assert_eq!(report_data_payload, "{\"hello\":\"world\"}");
+            }
+            _ => panic!("expected dstack-pod stack evidence"),
+        }
+    }
+
+    #[test]
+    fn sev_snp_msgpack_roundtrip_preserves_evidence() {
+        let attestation = Attestation::new(
+            PlatformEvidence::SevSnp {
+                report: vec![0x11; 1184],
+                cert_chain: vec![vec![0x22, 0x33]],
+                mr_config: test_mr_config_document(),
+            },
+            StackEvidence::Dstack {
+                report_data: vec![9u8; 64],
+                runtime_events: vec![],
+                config: "{}".into(),
+            },
+        );
+
+        let encoded = attestation.to_msgpack().expect("encode msgpack");
+        let decoded = Attestation::from_msgpack(&encoded).expect("decode msgpack");
+        assert_eq!(
+            decoded.platform.sev_snp_report(),
+            Some(vec![0x11; 1184].as_slice())
+        );
+        assert_eq!(
+            decoded.platform.sev_snp_cert_chain(),
+            Some(vec![vec![0x22, 0x33]].as_slice())
+        );
+    }
+
+    fn boot_event(idx: usize) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: idx as u32,
+            digest: vec![idx as u8; 48],
+            event: String::new(),
+            event_payload: vec![0xff; idx + 1],
+            version: EventLogVersion::V1,
+            preimage: None,
+        }
+    }
+
+    fn acpi_data_event(idx: usize) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: TDX_ACPI_DATA_EVENT_TYPE,
+            digest: vec![idx as u8; 48],
+            event: String::new(),
+            event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+            version: EventLogVersion::V1,
+            preimage: None,
+        }
+    }
+
+    fn runtime_event() -> TdxEvent {
+        RuntimeEvent {
+            event: "app-id".into(),
+            payload: vec![0x42],
+            version: EventLogVersion::V1,
+        }
+        .into()
+    }
+
+    #[test]
+    fn lite_stripping_keeps_only_acpi_data_digests_and_runtime_payloads() {
+        let mut event_log = (0..20).map(boot_event).collect::<Vec<_>>();
+        event_log[3] = acpi_data_event(3);
+        event_log[8] = acpi_data_event(8);
+        event_log[15] = acpi_data_event(15);
+        event_log.push(runtime_event());
+
+        let stripped = strip_tdx_lite_event_log(event_log);
+
+        assert_eq!(stripped.len(), 4);
+        assert_eq!(
+            stripped[0..3]
+                .iter()
+                .map(|event| event.digest.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![3u8; 48], vec![8u8; 48], vec![15u8; 48]]
+        );
+        assert!(stripped[0..3]
+            .iter()
+            .all(|event| event.imr == 0 && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD));
+        assert_eq!(stripped[3].imr, 3);
+        assert_eq!(stripped[3].event, "app-id");
+        assert_eq!(stripped[3].event_payload, vec![0x42]);
+    }
+
+    #[test]
+    fn tdx_event_log_accessors_agree_on_gcp_tdx() {
+        // The mut accessor used to match bare TDX only, so `fill_v2_preimages`
+        // silently skipped GCP attestations and returned V2 events without the
+        // preimage the guest-agent proto promises clients can verify. Whatever
+        // the read accessor reaches, the mut one has to reach too.
+        let mut evidence = PlatformEvidence::GcpTdx {
+            quote: vec![0u8; 64],
+            event_log: vec![TdxEvent {
+                imr: 3,
+                event_type: cc_eventlog::DSTACK_RUNTIME_EVENT_TYPE,
+                digest: vec![0u8; 48],
+                event: "test-event".into(),
+                event_payload: b"payload".to_vec(),
+                version: EventLogVersion::V2,
+                preimage: None,
+            }],
+            tpm_quote: TpmQuote {
+                message: Vec::new(),
+                signature: Vec::new(),
+                pcr_values: Vec::new(),
+                ak_cert: Vec::new(),
+                platform: dstack_types::Platform::Gcp,
+                event_log: Vec::new(),
+            },
+        };
+
+        assert!(evidence.tdx_event_log().is_some());
+        let log = evidence
+            .tdx_event_log_mut()
+            .expect("mut accessor must reach GCP TDX too");
+        cc_eventlog::tdx::fill_v2_preimages(log);
+        assert!(evidence.tdx_event_log().unwrap()[0].preimage.is_some());
+    }
+
+    #[test]
+    fn sev_snp_with_report_data_patches_report_and_stack() {
+        let mut report = vec![0x11; 1184];
+        report[crate::attestation::SNP_REPORT_DATA_RANGE].copy_from_slice(&[0x22; 64]);
+        let attestation = Attestation::new(
+            PlatformEvidence::SevSnp {
+                report,
+                cert_chain: vec![],
+                mr_config: test_mr_config_document(),
+            },
+            StackEvidence::Dstack {
+                report_data: vec![0x22; 64],
+                runtime_events: vec![],
+                config: "{}".into(),
+            },
+        );
+
+        let patched = attestation.with_report_data([0x33; 64]);
+        assert_eq!(patched.report_data().unwrap(), [0x33; 64]);
+        let report = patched.platform.sev_snp_report().unwrap();
+        assert_eq!(
+            &report[crate::attestation::SNP_REPORT_DATA_RANGE],
+            &[0x33; 64]
+        );
+    }
+}

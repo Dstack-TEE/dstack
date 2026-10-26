@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Thu, 2 Jul 2026 00:00:00 -0700
+Subject: [PATCH] core: suppress ephemeral status output
+
+Ephemeral status output contains in-progress job updates such as:
+
+    A start job is running for ...
+
+These updates are intended to refresh the same console line, but serial
+log capture records each refresh as a separate line. Suppress only
+ephemeral status messages so normal [ OK ] and [FAILED] status output is
+preserved.
+
+Upstream-Status: Inappropriate [dstack-specific serial console policy]
+Signed-off-by: Kevin Wang <wy721@qq.com>
+---
+ src/core/manager.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/core/manager.c b/src/core/manager.c
+index 3b87896654..aa68edee1d 100644
+--- a/src/core/manager.c
++++ b/src/core/manager.c
+@@ -4539,6 +4539,13 @@ static bool manager_should_show_status(Manager *m, StatusType type) {
+         if (!IN_SET(manager_state(m), MANAGER_INITIALIZING, MANAGER_STARTING, MANAGER_STOPPING))
+                 return false;
+ 
++        /* Ephemeral status messages contain in-progress job updates such as
++         * "A start job is running for ...". Serial log capture records those
++         * carriage-return-based refreshes as repeated lines, so suppress them
++         * while preserving normal [ OK ] and [FAILED] status output. */
++        if (type == STATUS_TYPE_EPHEMERAL)
++                return false;
++
+         /* If we cannot find out the status properly, just proceed. */
+         if (type < STATUS_TYPE_EMERGENCY && manager_check_ask_password(m) > 0)
+                 return false;
+-- 
+2.43.0

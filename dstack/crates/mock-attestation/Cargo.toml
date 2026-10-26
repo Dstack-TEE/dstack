@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "mock-attestation"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Development-only cryptographically valid attestation evidence generator"
+
+[[bin]]
+name = "dstack-mock-attestation"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+fs-err.workspace = true
+rcgen.workspace = true
+ciborium.workspace = true
+p384 = { workspace = true, features = ["ecdsa", "pkcs8"] }
+p256 = { workspace = true, features = ["ecdsa", "pkcs8"] }
+sha2.workspace = true
+sev.workspace = true
+sev-snp-qvl.workspace = true
+tpm-types.workspace = true
+tpm-qvl.workspace = true
+dstack-types.workspace = true
+dcap-qvl.workspace = true
+scale.workspace = true
+yasna.workspace = true
+chrono.workspace = true
+rand.workspace = true
+tokio = { workspace = true, features = ["full"] }
+axum = "0.8"
+hex.workspace = true
+urlencoding = "2"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+nsm-qvl.workspace = true

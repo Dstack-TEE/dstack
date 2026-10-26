@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "certbot"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bon.workspace = true
+bytes.workspace = true
+enum_dispatch.workspace = true
+fs-err.workspace = true
+hickory-resolver.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+instant-acme.workspace = true
+path-absolutize.workspace = true
+rcgen.workspace = true
+reqwest.workspace = true
+safe-write.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["process", "time"] }
+tracing.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tracing-subscriber.workspace = true

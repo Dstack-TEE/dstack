@@ -1,0 +1,54 @@
+From: dstack <dstack@phala.network>
+Date: Mon, 16 Jun 2026 00:00:00 +0000
+Subject: [PATCH] OvmfPkg/AmdSev: drop the embedded sevsecret grub
+
+The AmdSevX64 firmware embeds a grub.efi (built by the OvmfPkg/AmdSev/Grub
+PREBUILD via grub-mkimage) that boots an encrypted LUKS volume using the
+SEV-injected secret and the out-of-tree sevsecret grub module.
+
+dstack does not use that boot model: it boots a UKI from an EFI System
+Partition with a dm-verity rootfs, so the embedded grub is dead weight.
+Building it is also infeasible here: OpenEmbedded provides no x86_64-efi
+grub modules at native build time and upstream grub has no sevsecret
+module (it is a distro patch).
+
+Remove the Grub PREBUILD and the Grub.inf component/FV entry. All other
+SEV / SEV-SNP functionality (SecretPei/SecretDxe secret injection, the
+BlobVerifierLibSevHashes kernel-hashes measured direct boot, SNP support)
+is unaffected.
+
+Upstream-Status: Inappropriate [dstack-specific firmware configuration]
+Signed-off-by: dstack <dstack@phala.network>
+---
+diff --git a/OvmfPkg/AmdSev/AmdSevX64.dsc b/OvmfPkg/AmdSev/AmdSevX64.dsc
+index e0eaa3c..76824d8 100644
+--- a/OvmfPkg/AmdSev/AmdSevX64.dsc
++++ b/OvmfPkg/AmdSev/AmdSevX64.dsc
+@@ -25,7 +25,6 @@
+   BUILD_TARGETS                  = NOOPT|DEBUG|RELEASE
+   SKUID_IDENTIFIER               = DEFAULT
+   FLASH_DEFINITION               = OvmfPkg/AmdSev/AmdSevX64.fdf
+-  PREBUILD                       = sh OvmfPkg/AmdSev/Grub/grub.sh
+ 
+   #
+   # Defines for default states.  These can be changed on the command line.
+@@ -731,7 +730,6 @@
+   MdeModulePkg/Bus/Usb/UsbMassStorageDxe/UsbMassStorageDxe.inf
+ 
+   OvmfPkg/AmdSev/SecretDxe/SecretDxe.inf
+-  OvmfPkg/AmdSev/Grub/Grub.inf
+ 
+ !include OvmfPkg/Include/Dsc/ShellComponents.dsc.inc
+ !include OvmfPkg/Include/Dsc/OvmfRngComponents.dsc.inc
+diff --git a/OvmfPkg/AmdSev/AmdSevX64.fdf b/OvmfPkg/AmdSev/AmdSevX64.fdf
+index 4217870..ff727a5 100644
+--- a/OvmfPkg/AmdSev/AmdSevX64.fdf
++++ b/OvmfPkg/AmdSev/AmdSevX64.fdf
+@@ -283,7 +283,6 @@ INF  FatPkg/EnhancedFatDxe/Fat.inf
+ INF  MdeModulePkg/Universal/Disk/UdfDxe/UdfDxe.inf
+ 
+ INF OvmfPkg/AmdSev/SecretDxe/SecretDxe.inf
+-INF  OvmfPkg/AmdSev/Grub/Grub.inf
+ 
+ INF MdeModulePkg/Logo/LogoDxe.inf
+ 

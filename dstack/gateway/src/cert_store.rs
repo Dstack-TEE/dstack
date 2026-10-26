@@ -1,0 +1,585 @@
+// SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+//! In-memory certificate store with SNI-based certificate resolution.
+//!
+//! This module provides a lock-free certificate store that supports:
+//! - Multiple certificates for different domains
+//! - Wildcard certificate matching
+//! - Dynamic certificate updates via atomic replacement
+//! - SNI-based certificate selection for TLS connections
+//!
+//! Architecture: `CertStore` is immutable after construction for lock-free reads.
+//! Updates are done by building a new `CertStore` and atomically swapping the `Arc<CertStore>`
+//! in the outer `RwLock<Arc<CertStore>>`.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
+
+use anyhow::{bail, Context, Result};
+use arc_swap::{ArcSwap, Guard};
+use or_panic::ResultOrPanic;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
+use tracing::{info, warn};
+
+use crate::kv::CertData;
+
+/// Immutable, lock-free certificate store.
+///
+/// This struct is designed for maximum read performance - no locks required for lookups.
+/// Updates are done by creating a new instance and atomically swapping via outer RwLock<Arc<CertStore>>.
+pub struct CertStore {
+    /// Exact domain -> CertifiedKey
+    exact_certs: HashMap<String, Arc<CertifiedKey>>,
+    /// Parent domain -> CertifiedKey (for wildcard certs)
+    /// e.g., "example.com" -> cert for "*.example.com"
+    wildcard_certs: HashMap<String, Arc<CertifiedKey>>,
+    /// Domain -> CertData (for metadata like expiry)
+    cert_data: HashMap<String, CertData>,
+}
+
+impl CertStore {
+    /// Create a new empty certificate store
+    pub fn new() -> Self {
+        Self {
+            exact_certs: HashMap::new(),
+            wildcard_certs: HashMap::new(),
+            cert_data: HashMap::new(),
+        }
+    }
+
+    /// Resolve certificate for a given SNI hostname (lock-free)
+    fn resolve_cert(&self, sni: &str) -> Option<Arc<CertifiedKey>> {
+        // 1. Try exact match first
+        if let Some(cert) = self.exact_certs.get(sni) {
+            return Some(cert.clone());
+        }
+
+        // 2. Try wildcard match (only one level deep per TLS spec)
+        // For "foo.bar.example.com", only try "bar.example.com"
+        if let Some((_, parent)) = sni.split_once('.') {
+            self.wildcard_certs.get(parent).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Check if a certificate exists for a domain
+    pub fn has_cert(&self, domain: &str) -> bool {
+        self.cert_data.contains_key(domain)
+    }
+
+    /// Get certificate data for a domain
+    #[cfg(test)]
+    pub fn get_cert_data(&self, domain: &str) -> Option<&CertData> {
+        self.cert_data.get(domain)
+    }
+
+    /// List all loaded domains
+    pub fn list_domains(&self) -> Vec<String> {
+        self.cert_data.keys().cloned().collect()
+    }
+
+    /// Check if a wildcard certificate exists for a domain
+    pub fn contains_wildcard(&self, base_domain: &str) -> bool {
+        self.wildcard_certs.contains_key(base_domain)
+    }
+}
+
+impl fmt::Debug for CertStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let exact_domains: Vec<_> = self.exact_certs.keys().cloned().collect();
+        let wildcard_domains: Vec<_> = self
+            .wildcard_certs
+            .keys()
+            .map(|k| format!("*.{}", k))
+            .collect();
+
+        f.debug_struct("CertStore")
+            .field("exact_domains", &exact_domains)
+            .field("wildcard_domains", &wildcard_domains)
+            .finish()
+    }
+}
+
+impl Default for CertStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ResolvesServerCert for CertStore {
+    fn resolve(&self, client_hello: ClientHello) -> Option<Arc<CertifiedKey>> {
+        let sni = client_hello.server_name()?;
+        self.resolve_cert(sni)
+    }
+}
+
+/// Certificate resolver that wraps `ArcSwap<CertStore>` for lock-free reads.
+///
+/// This allows TLS acceptors to be created once and certificates to be updated
+/// without recreating the acceptor. The read path (TLS handshake) is completely
+/// lock-free via `ArcSwap`. Write operations are serialized via a `Mutex` to
+/// prevent lost updates during concurrent certificate changes.
+pub struct CertResolver {
+    store: ArcSwap<CertStore>,
+    /// Mutex to serialize write operations (reads are still lock-free)
+    write_lock: std::sync::Mutex<()>,
+}
+
+impl CertResolver {
+    /// Create a new resolver with an empty CertStore
+    pub fn new() -> Self {
+        Self {
+            store: ArcSwap::from_pointee(CertStore::new()),
+            write_lock: std::sync::Mutex::new(()),
+        }
+    }
+
+    /// Get the current CertStore (lock-free)
+    pub fn get(&self) -> Guard<Arc<CertStore>> {
+        self.store.load()
+    }
+
+    /// Replace the CertStore atomically (lock-free)
+    pub fn set(&self, new_store: Arc<CertStore>) {
+        self.store.store(new_store);
+    }
+
+    /// List all domains
+    pub fn list_domains(&self) -> Vec<String> {
+        self.get().list_domains()
+    }
+
+    /// Check if a certificate exists for a domain
+    pub fn has_cert(&self, domain: &str) -> bool {
+        self.get().has_cert(domain)
+    }
+
+    /// Update a single certificate (creates new store with updated cert)
+    ///
+    /// This is an incremental update that preserves all existing certificates.
+    /// Write operations are serialized to prevent lost updates.
+    pub fn update_cert(&self, domain: &str, data: &CertData) -> Result<()> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .or_panic("failed to acquire write lock");
+
+        let old_store = self.get();
+
+        // Clone the installed store without revalidating existing certificates. An expired
+        // certificate for one domain must not block another domain from being renewed.
+        let mut builder = CertStoreBuilder::from_store(&old_store);
+        builder.add_cert(domain, data)?;
+
+        // Atomically swap
+        self.set(Arc::new(builder.build()));
+        Ok(())
+    }
+}
+
+impl Default for CertResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for CertResolver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(f)
+    }
+}
+
+impl ResolvesServerCert for CertResolver {
+    fn resolve(&self, client_hello: ClientHello) -> Option<Arc<CertifiedKey>> {
+        // Lock-free load via ArcSwap
+        let store = self.store.load();
+        let sni = client_hello.server_name()?;
+        store.resolve_cert(sni)
+    }
+}
+
+/// Builder for constructing a new CertStore.
+///
+/// Use this to build a complete certificate store, then call `build()` to get the immutable CertStore.
+pub struct CertStoreBuilder {
+    exact_certs: HashMap<String, Arc<CertifiedKey>>,
+    wildcard_certs: HashMap<String, Arc<CertifiedKey>>,
+    cert_data: HashMap<String, CertData>,
+}
+
+impl CertStoreBuilder {
+    /// Create a new empty builder
+    pub fn new() -> Self {
+        Self {
+            exact_certs: HashMap::new(),
+            wildcard_certs: HashMap::new(),
+            cert_data: HashMap::new(),
+        }
+    }
+
+    fn from_store(store: &CertStore) -> Self {
+        Self {
+            exact_certs: store.exact_certs.clone(),
+            wildcard_certs: store.wildcard_certs.clone(),
+            cert_data: store.cert_data.clone(),
+        }
+    }
+
+    /// Add a certificate to the builder
+    ///
+    /// The domain is the base domain (e.g., "example.com").
+    /// All gateway certificates are wildcard certs for "*.{domain}".
+    pub fn add_cert(&mut self, domain: &str, data: &CertData) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("system time is before Unix epoch")?
+            .as_secs();
+        // `not_after` is a replicated field; the chain is what gets served.
+        if data.not_after <= now {
+            bail!("certificate record for {domain} is expired");
+        }
+        let cert_not_after = get_cert_expiry(&data.cert_pem).with_context(|| {
+            format!("failed to read the expiry of the certificate for {domain}")
+        })?;
+        if cert_not_after <= now {
+            bail!("certificate for {domain} is expired");
+        }
+        if cert_not_after < data.not_after {
+            // Renewal is scheduled from the record, so this delays it.
+            warn!(
+                "cert_store: the record for {domain} outlives its certificate by {} seconds",
+                data.not_after - cert_not_after
+            );
+        }
+
+        let certified_key = parse_certified_key(&data.cert_pem, &data.key_pem)
+            .with_context(|| format!("failed to parse certificate for {}", domain))?;
+
+        let certified_key = Arc::new(certified_key);
+
+        // Gateway certificates are always wildcard certs
+        // domain is the base domain (e.g., "example.com"), cert is for "*.example.com"
+        self.wildcard_certs
+            .insert(domain.to_string(), certified_key);
+        info!(
+            "cert_store: prepared wildcard certificate for *.{} (expires: {})",
+            domain,
+            format_expiry(cert_not_after)
+        );
+
+        // Store metadata
+        self.cert_data.insert(domain.to_string(), data.clone());
+
+        Ok(())
+    }
+
+    /// Build the immutable CertStore
+    pub fn build(self) -> CertStore {
+        CertStore {
+            exact_certs: self.exact_certs,
+            wildcard_certs: self.wildcard_certs,
+            cert_data: self.cert_data,
+        }
+    }
+}
+
+impl Default for CertStoreBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The `notAfter` of the first certificate in a PEM chain, as a Unix timestamp.
+pub(crate) fn get_cert_expiry(cert_pem: &str) -> Option<u64> {
+    use x509_parser::prelude::*;
+    let pem = Pem::iter_from_buffer(cert_pem.as_bytes()).next()?.ok()?;
+    let cert = pem.parse_x509().ok()?;
+    u64::try_from(cert.validity().not_after.timestamp()).ok()
+}
+
+/// Parse certificate and private key PEM strings into a CertifiedKey
+fn parse_certified_key(cert_pem: &str, key_pem: &str) -> Result<CertifiedKey> {
+    let certs = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .context("failed to parse certificate chain")?;
+
+    if certs.is_empty() {
+        anyhow::bail!("no certificates found in PEM");
+    }
+
+    let key =
+        PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).context("failed to parse private key")?;
+
+    let signing_key = rustls::crypto::aws_lc_rs::sign::any_supported_type(&key)
+        .map_err(|e| anyhow::anyhow!("failed to create signing key: {:?}", e))?;
+
+    let certified_key = CertifiedKey::new(certs, signing_key);
+    certified_key
+        .keys_match()
+        .context("certificate and private key do not match")?;
+    Ok(certified_key)
+}
+
+/// Format expiry timestamp as human-readable string
+fn format_expiry(not_after: u64) -> String {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let expiry = UNIX_EPOCH + Duration::from_secs(not_after);
+    let now = SystemTime::now();
+
+    match expiry.duration_since(now) {
+        Ok(remaining) => {
+            let days = remaining.as_secs() / 86400;
+            format!("{} days remaining", days)
+        }
+        Err(_) => "expired".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl CertStore {
+        /// Check if a certificate can be resolved for a given SNI hostname
+        pub fn has_cert_for_sni(&self, sni: &str) -> bool {
+            self.resolve_cert(sni).is_some()
+        }
+    }
+
+    fn make_test_cert_data() -> CertData {
+        // Generate a self-signed test certificate using rcgen
+        use ra_tls::rcgen::{self, CertificateParams, KeyPair};
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let key_pair = KeyPair::generate().expect("failed to generate key pair");
+        let mut params = CertificateParams::new(vec!["test.example.com".to_string()])
+            .expect("failed to create cert params");
+        params.not_after = rcgen::date_time_ymd(2030, 1, 1);
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("failed to generate self-signed cert");
+
+        let not_after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + Duration::from_secs(365 * 24 * 3600).as_secs();
+
+        CertData {
+            cert_pem: cert.pem(),
+            key_pem: key_pair.serialize_pem(),
+            not_after,
+            issued_by: 1,
+            issued_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+
+    #[test]
+    fn test_cert_store_basic() {
+        let store = CertStore::new();
+        assert!(store.list_domains().is_empty());
+    }
+
+    #[test]
+    fn test_cert_store_builder() {
+        let data = make_test_cert_data();
+
+        // Use builder - domain is base domain (e.g., "example.com")
+        // All gateway certs are wildcard certs
+        let mut builder = CertStoreBuilder::new();
+        builder
+            .add_cert("example.com", &data)
+            .expect("failed to add cert");
+
+        let store = builder.build();
+
+        // Check it's loaded (stored by base domain)
+        assert!(store.has_cert("example.com"));
+        assert_eq!(store.list_domains().len(), 1);
+
+        // Should resolve any subdomain via wildcard matching
+        assert!(store.has_cert_for_sni("test.example.com"));
+        assert!(store.has_cert_for_sni("foo.example.com"));
+
+        // Should not resolve exact base domain (wildcard doesn't match base)
+        assert!(!store.has_cert_for_sni("example.com"));
+
+        // Should not resolve different domain
+        assert!(!store.has_cert_for_sni("example.org"));
+    }
+
+    #[test]
+    fn test_cert_store_wildcard() {
+        // Generate wildcard cert
+        use ra_tls::rcgen::{self, CertificateParams, KeyPair};
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let key_pair = KeyPair::generate().expect("failed to generate key pair");
+        let mut params = CertificateParams::new(vec!["*.example.com".to_string()])
+            .expect("failed to create cert params");
+        params.not_after = rcgen::date_time_ymd(2030, 1, 1);
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("failed to generate self-signed cert");
+
+        let not_after = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + Duration::from_secs(365 * 24 * 3600).as_secs();
+
+        let data = CertData {
+            cert_pem: cert.pem(),
+            key_pem: key_pair.serialize_pem(),
+            not_after,
+            issued_by: 1,
+            issued_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+
+        let mut builder = CertStoreBuilder::new();
+        // Now we use base domain format (without *. prefix)
+        builder
+            .add_cert("example.com", &data)
+            .expect("failed to add wildcard cert");
+
+        let store = builder.build();
+
+        // Should resolve any subdomain
+        assert!(store.has_cert_for_sni("foo.example.com"));
+        assert!(store.has_cert_for_sni("bar.example.com"));
+
+        // Wildcard certs do not match nested subdomains
+        assert!(!store.has_cert_for_sni("sub.foo.example.com"));
+
+        // Should not resolve different domain
+        assert!(!store.has_cert_for_sni("example.org"));
+    }
+
+    /// A certificate whose chain has already expired, described by a record
+    /// that says otherwise.
+    fn make_expired_cert_data() -> CertData {
+        use ra_tls::rcgen::{self, CertificateParams, KeyPair};
+
+        let key_pair = KeyPair::generate().expect("failed to generate key pair");
+        let mut params = CertificateParams::new(vec!["test.example.com".to_string()])
+            .expect("failed to create cert params");
+        params.not_before = rcgen::date_time_ymd(2019, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2020, 1, 1);
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("failed to generate self-signed cert");
+
+        CertData {
+            cert_pem: cert.pem(),
+            key_pem: key_pair.serialize_pem(),
+            not_after: u64::MAX,
+            issued_by: 1,
+            issued_at: 0,
+        }
+    }
+
+    #[test]
+    fn an_expired_chain_is_rejected_however_the_record_dates_it() {
+        let mut builder = CertStoreBuilder::new();
+        let err = builder
+            .add_cert("example.com", &make_expired_cert_data())
+            .expect_err("an expired certificate chain must be rejected");
+        assert!(
+            err.to_string().contains("expired"),
+            "unexpected rejection reason: {err:#}"
+        );
+        assert!(!builder.build().has_cert("example.com"));
+    }
+
+    #[test]
+    fn mismatched_key_update_retains_previous_certificate() {
+        let original = make_test_cert_data();
+        let mut mismatched = make_test_cert_data();
+        mismatched.cert_pem = original.cert_pem.clone();
+
+        let resolver = CertResolver::new();
+        resolver
+            .update_cert("example.com", &original)
+            .expect("failed to install original certificate");
+        let original_not_after = resolver
+            .get()
+            .get_cert_data("example.com")
+            .expect("original certificate missing")
+            .not_after;
+
+        let error = resolver
+            .update_cert("example.com", &mismatched)
+            .expect_err("mismatched key must be rejected");
+        assert!(error.to_string().contains("failed to parse certificate"));
+        assert_eq!(
+            resolver
+                .get()
+                .get_cert_data("example.com")
+                .expect("original certificate was lost")
+                .not_after,
+            original_not_after
+        );
+        assert!(resolver.get().has_cert_for_sni("app.example.com"));
+    }
+
+    #[test]
+    fn expired_certificate_does_not_block_another_domain_update() {
+        let mut builder = CertStoreBuilder::new();
+        builder
+            .add_cert("expired.example.com", &make_test_cert_data())
+            .expect("failed to install initial certificate");
+        builder
+            .cert_data
+            .get_mut("expired.example.com")
+            .expect("installed certificate is missing")
+            .not_after = 1;
+
+        let resolver = CertResolver::new();
+        resolver.set(Arc::new(builder.build()));
+        resolver
+            .update_cert("fresh.example.com", &make_test_cert_data())
+            .expect("expired certificate blocked an unrelated update");
+
+        assert!(resolver.get().has_cert("expired.example.com"));
+        assert!(resolver.get().has_cert("fresh.example.com"));
+    }
+
+    #[test]
+    fn expired_update_retains_previous_certificate() {
+        let original = make_test_cert_data();
+        let mut expired = make_test_cert_data();
+        expired.not_after = 1;
+
+        let resolver = CertResolver::new();
+        resolver
+            .update_cert("example.com", &original)
+            .expect("failed to install original certificate");
+        resolver
+            .update_cert("example.com", &expired)
+            .expect_err("expired certificate must be rejected");
+
+        assert_eq!(
+            resolver
+                .get()
+                .get_cert_data("example.com")
+                .expect("original certificate was lost")
+                .not_after,
+            original.not_after
+        );
+        assert!(resolver.get().has_cert_for_sni("app.example.com"));
+    }
+}

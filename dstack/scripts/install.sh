@@ -1,0 +1,307 @@
+#!/bin/sh
+
+# SPDX-FileCopyrightText: 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
+set -eu
+
+DEFAULT_REPO="https://github.com/Dstack-TEE/dstack"
+DEFAULT_REF="next"
+DEFAULT_PREFIX="/usr/local"
+
+usage() {
+    cat <<'EOF'
+Install dstackup from source.
+
+Usage:
+  dstack/scripts/install.sh [options]
+  curl -fsSL https://raw.githubusercontent.com/Dstack-TEE/dstack/next/dstack/scripts/install.sh | sh
+
+Options:
+  --repo URL       Git repository to clone when not run from a checkout.
+                  Default: https://github.com/Dstack-TEE/dstack
+  --ref REF        Git ref to checkout when cloning or updating DSTACK_SRC.
+                  Default: next
+  --src DIR        Persistent source checkout to build from.
+                  Default: a temporary checkout
+  --prefix DIR     Install dstackup under DIR/bin. Use the same DIR with
+                  dstackup install --prefix for a self-contained install.
+                  Default: /usr/local
+  --no-sudo        Do not use sudo for creating DIR/bin or installing binaries.
+  -h, --help       Show this help.
+
+Environment:
+  DSTACK_REPO              Same as --repo.
+  DSTACK_REF               Same as --ref.
+  DSTACK_SRC               Same as --src.
+  DSTACK_INSTALL_PREFIX    Same as --prefix.
+EOF
+}
+
+repo=${DSTACK_REPO:-$DEFAULT_REPO}
+ref=${DSTACK_REF:-$DEFAULT_REF}
+src=${DSTACK_SRC:-}
+prefix=${DSTACK_INSTALL_PREFIX:-$DEFAULT_PREFIX}
+prefix_set=0
+no_sudo=0
+tmp_src=
+
+if [ "${DSTACK_INSTALL_PREFIX+x}" = x ]; then
+    prefix_set=1
+fi
+
+cleanup() {
+    if [ -n "$tmp_src" ]; then
+        rm -rf "$tmp_src"
+    fi
+}
+trap cleanup EXIT INT TERM
+
+info() {
+    printf '%s\n' "$*" >&2
+}
+
+error() {
+    printf 'error: %s\n' "$*" >&2
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --repo)
+            if [ "$#" -lt 2 ]; then
+                error "--repo requires a URL"
+                exit 1
+            fi
+            repo=$2
+            shift 2
+            ;;
+        --ref)
+            if [ "$#" -lt 2 ]; then
+                error "--ref requires a ref"
+                exit 1
+            fi
+            ref=$2
+            shift 2
+            ;;
+        --src)
+            if [ "$#" -lt 2 ]; then
+                error "--src requires a directory"
+                exit 1
+            fi
+            src=$2
+            shift 2
+            ;;
+        --prefix|--root)
+            if [ "$#" -lt 2 ]; then
+                error "--prefix requires a directory"
+                exit 1
+            fi
+            prefix=$2
+            prefix_set=1
+            shift 2
+            ;;
+        --no-sudo)
+            no_sudo=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            error "unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+need_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        error "required command not found: $1"
+        exit 1
+    fi
+}
+
+is_core_checkout() {
+    [ -f "$1/Cargo.toml" ] &&
+        [ -d "$1/crates/dstackup" ] &&
+        [ -d "$1/crates/dstack-cli" ] &&
+        [ -d "$1/vmm" ] &&
+        [ -d "$1/supervisor" ]
+}
+
+is_checkout() {
+    is_core_checkout "$1/dstack" || is_core_checkout "$1"
+}
+
+core_dir() {
+    if is_core_checkout "$1/dstack"; then
+        echo "$1/dstack"
+    else
+        echo "$1"
+    fi
+}
+
+abs_dir() {
+    (cd "$1" && pwd)
+}
+
+script_checkout() {
+    case "$0" in
+        */*)
+            script_dir=$(dirname "$0")
+            if [ -d "$script_dir/../.." ] && is_checkout "$script_dir/../.."; then
+                abs_dir "$script_dir/../.."
+                return 0
+            elif [ -d "$script_dir/.." ] && is_checkout "$script_dir/.."; then
+                abs_dir "$script_dir/.."
+                return 0
+            fi
+            ;;
+    esac
+    return 1
+}
+
+# Sets `checkout`. Runs in the calling shell rather than a command
+# substitution so the temporary checkout it may create stays visible to the
+# exit trap that removes it.
+resolve_source() {
+    if is_checkout "."; then
+        checkout=$(abs_dir ".")
+        return 0
+    fi
+
+    if checkout=$(script_checkout); then
+        return 0
+    fi
+
+    need_cmd git
+
+    if [ -n "$src" ] && [ -e "$src" ]; then
+        if ! is_checkout "$src" || ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
+            error "$src exists but is not a dstack git checkout"
+            exit 1
+        fi
+        info "updating dstack source in $src"
+        (
+            cd "$src"
+            git fetch --tags origin
+            git checkout "$ref"
+            if git rev-parse --verify "origin/$ref" >/dev/null 2>&1; then
+                git pull --ff-only origin "$ref"
+            fi
+        ) >&2
+    elif [ -n "$src" ]; then
+        info "cloning dstack source into $src"
+        git clone "$repo" "$src" >&2
+        (
+            cd "$src"
+            git fetch --tags origin
+            git checkout "$ref"
+        ) >&2
+    else
+        need_cmd mktemp
+        tmp_src=$(mktemp -d "${TMPDIR:-/tmp}/dstack-install.XXXXXX")
+        src="$tmp_src/source"
+        info "cloning dstack source into a temporary checkout"
+        git clone "$repo" "$src" >&2
+        (
+            cd "$src"
+            git fetch --tags origin
+            git checkout "$ref"
+        ) >&2
+    fi
+
+    checkout=$(abs_dir "$src")
+}
+
+validate_prefix() {
+    case "$prefix" in
+        /*) ;;
+        *)
+            error "--prefix must be an absolute path"
+            exit 1
+            ;;
+    esac
+    if [ "$prefix" = "/" ]; then
+        error "--prefix must not be /"
+        exit 1
+    fi
+    case "$prefix" in
+        *"/../"*|*"/.."|*"/./"*|*"/.")
+            error "--prefix must not contain . or .. path components"
+            exit 1
+            ;;
+    esac
+}
+
+validate_prefix
+
+if ! command -v cargo >/dev/null 2>&1 && [ -n "${HOME:-}" ] && [ -f "$HOME/.cargo/env" ]; then
+    # Mirrors rustup's post-install shell setup when the current shell has not
+    # loaded Cargo yet.
+    # shellcheck disable=SC1091
+    . "$HOME/.cargo/env"
+fi
+
+need_cmd cargo
+need_cmd install
+
+resolve_source
+core_checkout=$(core_dir "$checkout")
+bin_dir="$prefix/bin"
+
+if [ "$no_sudo" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
+    sudo_cmd=sudo
+else
+    sudo_cmd=
+fi
+
+if [ -n "$sudo_cmd" ]; then
+    need_cmd sudo
+    $sudo_cmd install -d -m 0755 "$bin_dir"
+else
+    install -d -m 0755 "$bin_dir"
+fi
+
+info "building dstackup from $checkout"
+(
+    cd "$core_checkout"
+    cargo build --release --locked \
+        -p dstackup
+)
+
+install_bin() {
+    src_bin="$core_checkout/target/release/$1"
+    dest_bin="$bin_dir/$2"
+    if [ ! -f "$src_bin" ]; then
+        error "expected binary not found: $src_bin"
+        exit 1
+    fi
+    if [ -n "$sudo_cmd" ]; then
+        $sudo_cmd install -m 0755 "$src_bin" "$dest_bin"
+    else
+        install -m 0755 "$src_bin" "$dest_bin"
+    fi
+}
+
+install_bin dstackup dstackup
+
+if [ "$prefix_set" -eq 1 ]; then
+    next_install="sudo $bin_dir/dstackup install --prefix $prefix"
+else
+    next_install="sudo $bin_dir/dstackup install"
+fi
+
+cat <<EOF
+
+installed dstackup into $bin_dir:
+  dstackup
+
+next:
+  $next_install
+
+the dstackup install command builds and installs the local dstack CLI and host
+daemon binaries, static assets, and host config.
+EOF

@@ -6,8 +6,8 @@ import unittest.mock
 
 import pytest
 
-from dstack_sdk import AsyncDstackClient
-from dstack_sdk import DstackClient
+from dstack_sdk import AsyncDstackClientV0
+from dstack_sdk import DstackClientV0
 
 
 class TestConnectionReuse:
@@ -16,7 +16,7 @@ class TestConnectionReuse:
     @pytest.mark.asyncio
     async def test_async_context_manager_reuses_client(self):
         """Test that async context manager creates and reuses a single client."""
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
 
         # Verify client is None initially
         assert client._client is None
@@ -48,7 +48,7 @@ class TestConnectionReuse:
 
     def test_sync_context_manager_reuses_client(self):
         """Test that sync context manager creates and reuses a single client."""
-        client = DstackClient()
+        client = DstackClientV0()
 
         # Verify sync client is None initially
         assert client.async_client._sync_client is None
@@ -83,7 +83,7 @@ class TestConnectionReuse:
     @pytest.mark.asyncio
     async def test_async_without_context_manager_reuses_client(self):
         """Test that without context manager, clients are still reused."""
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
 
         with unittest.mock.patch("httpx.AsyncClient") as mock_async_client_class:
             # Mock the context manager behavior
@@ -105,7 +105,7 @@ class TestConnectionReuse:
 
     def test_sync_without_context_manager_reuses_client(self):
         """Test that without context manager, clients are still reused."""
-        client = DstackClient()
+        client = DstackClientV0()
 
         with unittest.mock.patch("httpx.Client") as mock_client_class:
             # Mock the context manager behavior
@@ -126,7 +126,7 @@ class TestConnectionReuse:
     @pytest.mark.asyncio
     async def test_async_context_manager_with_real_requests(self):
         """Test async context manager with real requests to ensure connection reuse."""
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
 
         async with client:
             # Make multiple requests - these should reuse the same connection
@@ -146,7 +146,7 @@ class TestConnectionReuse:
 
     def test_sync_context_manager_with_real_requests(self):
         """Test sync context manager with real requests to ensure connection reuse."""
-        client = DstackClient()
+        client = DstackClientV0()
 
         with client:
             # Make multiple requests - these should reuse the same connection
@@ -167,7 +167,7 @@ class TestConnectionReuse:
     @pytest.mark.asyncio
     async def test_async_nested_context_managers(self):
         """Test that nested async context managers work correctly."""
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
 
         async with client:
             first_client = client._client
@@ -185,7 +185,7 @@ class TestConnectionReuse:
 
     def test_sync_nested_context_managers(self):
         """Test that nested sync context managers work correctly."""
-        client = DstackClient()
+        client = DstackClientV0()
 
         with client:
             first_client = client.async_client._sync_client

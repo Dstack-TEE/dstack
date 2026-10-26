@@ -14,10 +14,11 @@ log_level = "debug"
 keys_file = "appkeys.json"
 compose_file = "app-compose.json"
 sys_config_file = "sys-config.json"
+data_disks = ["/"]
 
 [default.core.simulator]
-enabled = true
 attestation_file = "attestation.bin"
+patch_report_data = true
 
 [internal-v0]
 address = "unix:./tappd.sock"

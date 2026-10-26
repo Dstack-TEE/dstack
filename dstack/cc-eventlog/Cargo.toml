@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2024 Phala Network <dstack@phala.network>
+# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <daniel.sharifi@nearone.org>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "cc-eventlog"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+digest = "0.10.7"
+dstack-types.workspace = true
+ez-hash.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+or-panic.workspace = true
+scale.workspace = true
+serde.workspace = true
+serde-human-bytes.workspace = true
+serde_jcs = "0.2.0"
+serde_json = { workspace = true, features = ["alloc"] }
+sha2.workspace = true
+
+[dev-dependencies]
+insta.workspace = true

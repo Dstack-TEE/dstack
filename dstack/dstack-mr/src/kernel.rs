@@ -1,0 +1,445 @@
+// SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+use crate::{measure_sha384, num::read_le, utf16_encode};
+use anyhow::{bail, Context, Result};
+use object::pe;
+use sha2::{Digest, Sha384};
+
+/// QEMU's TDX setup-header patch places the initrd at a memory-dependent
+/// address below this guest-memory size. At and above this threshold the
+/// patched kernel Authenticode hash is stable for a given kernel/initrd pair.
+pub const TDX_KERNEL_HASH_STABLE_MIN_MEMORY: u64 = 0xB0000000;
+/// QEMU's low-memory initrd placement also resolves to the same below-4G
+/// placement at exactly 2 GiB, so it shares the high-memory patched kernel hash.
+pub const TDX_KERNEL_HASH_COMPAT_2G_MEMORY: u64 = 0x80000000;
+
+pub fn tdx_kernel_hash_uses_precomputed_high_mem(memory_size: u64) -> bool {
+    memory_size == TDX_KERNEL_HASH_COMPAT_2G_MEMORY
+        || memory_size >= TDX_KERNEL_HASH_STABLE_MIN_MEMORY
+}
+
+/// Calculates the Authenticode hash of a PE/COFF file
+fn authenticode_sha384_hash(data: &[u8]) -> Result<Vec<u8>> {
+    let lfanew_offset = 0x3c;
+    let lfanew: u32 = read_le(data, lfanew_offset, "DOS header")?;
+
+    let pe_sig_offset = lfanew as usize;
+    let pe_sig: u32 = read_le(data, pe_sig_offset, "PE signature offset")?;
+    if pe_sig != pe::IMAGE_NT_SIGNATURE {
+        bail!("Invalid PE signature");
+    }
+
+    let coff_header_offset = pe_sig_offset + 4;
+    let optional_header_size =
+        read_le::<u16>(data, coff_header_offset + 16, "COFF header size")? as usize;
+
+    let optional_header_offset = coff_header_offset + 20;
+    let magic: u16 = read_le(data, optional_header_offset, "header magic")?;
+
+    let is_pe32_plus = magic == 0x20b;
+
+    let checksum_offset = optional_header_offset + 64;
+    let checksum_end = checksum_offset + 4;
+
+    let data_dir_offset = optional_header_offset + if is_pe32_plus { 112 } else { 96 };
+    let cert_dir_offset = data_dir_offset + (pe::IMAGE_DIRECTORY_ENTRY_SECURITY * 8);
+    let cert_dir_end = cert_dir_offset + 8;
+
+    let size_of_headers_offset = optional_header_offset + 60;
+    let size_of_headers = read_le::<u32>(data, size_of_headers_offset, "size_of_headers")? as usize;
+
+    // Both bounds come from the file; check them before slicing.
+    if cert_dir_end > data.len() {
+        bail!(
+            "malformed PE: certificate directory ends at {cert_dir_end}, past the {}-byte image",
+            data.len()
+        );
+    }
+    if size_of_headers < cert_dir_end || size_of_headers > data.len() {
+        bail!(
+            "malformed PE: size_of_headers {size_of_headers} is outside [{cert_dir_end}, {}]",
+            data.len()
+        );
+    }
+
+    let mut hasher = Sha384::new();
+    hasher.update(&data[0..checksum_offset]);
+    hasher.update(&data[checksum_end..cert_dir_offset]);
+    hasher.update(&data[cert_dir_end..size_of_headers]);
+
+    let mut sum_of_bytes_hashed = size_of_headers;
+
+    let num_sections_offset = coff_header_offset + 2;
+    let num_sections = read_le::<u16>(data, num_sections_offset, "number of sections")? as usize;
+
+    let section_table_offset = optional_header_offset + optional_header_size;
+    let section_size = 40;
+
+    let mut sections = Vec::with_capacity(num_sections);
+    for i in 0..num_sections {
+        let section_offset = section_table_offset + (i * section_size);
+
+        let ptr_raw_data_offset = section_offset + 20;
+        let ptr_raw_data =
+            read_le::<u32>(data, ptr_raw_data_offset, "pointer_to_raw_data")? as usize;
+
+        let size_raw_data_offset = section_offset + 16;
+        let size_raw_data =
+            read_le::<u32>(data, size_raw_data_offset, "size_of_raw_data")? as usize;
+
+        if size_raw_data > 0 {
+            sections.push((ptr_raw_data, size_raw_data));
+        }
+    }
+
+    sections.sort_by_key(|&(offset, _)| offset);
+
+    for (offset, size) in sections {
+        let start = offset;
+        let end = start + size;
+
+        if end <= data.len() {
+            hasher.update(&data[start..end]);
+        } else {
+            let available_size = data.len().saturating_sub(start);
+            if available_size > 0 {
+                hasher.update(&data[start..start + available_size]);
+            }
+        }
+
+        sum_of_bytes_hashed += size;
+    }
+
+    let file_size = data.len();
+
+    let cert_table_addr_offset = cert_dir_offset;
+    let cert_table_size_offset = cert_dir_offset + 4;
+
+    let cert_table_addr =
+        read_le::<u32>(data, cert_table_addr_offset, "certificate table address")? as usize;
+    let cert_table_size =
+        read_le::<u32>(data, cert_table_size_offset, "certificate table size")? as usize;
+
+    if cert_table_addr > 0 && cert_table_size > 0 && file_size > sum_of_bytes_hashed {
+        let trailing_data_len = file_size - sum_of_bytes_hashed;
+
+        if trailing_data_len > cert_table_size {
+            let hashed_trailing_len = trailing_data_len.saturating_sub(cert_table_size);
+            let trailing_start = sum_of_bytes_hashed;
+
+            if trailing_start + hashed_trailing_len <= data.len() {
+                hasher.update(&data[trailing_start..trailing_start + hashed_trailing_len]);
+            }
+        }
+    }
+    let remainder = file_size % 8;
+    if remainder != 0 {
+        let padding = vec![0u8; 8 - remainder];
+        hasher.update(&padding);
+    }
+    Ok(hasher.finalize().to_vec())
+}
+
+/// Patches the kernel image as qemu does.
+fn patch_kernel(
+    kernel_data: &[u8],
+    initrd_size: u32,
+    mem_size: u64,
+    acpi_data_size: u32,
+) -> Result<Vec<u8>> {
+    const MIN_KERNEL_LENGTH: usize = 0x1000;
+    if kernel_data.len() < MIN_KERNEL_LENGTH {
+        bail!("the kernel image is too short");
+    }
+
+    let mut kd = kernel_data.to_vec();
+
+    let protocol = u16::from_le_bytes(kd[0x206..0x208].try_into().context("impossible failure")?);
+
+    let (real_addr, cmdline_addr) = if protocol < 0x200 || (kd[0x211] & 0x01) == 0 {
+        (0x90000_u32, 0x9a000_u32)
+    } else {
+        (0x10000_u32, 0x20000_u32)
+    };
+
+    if protocol >= 0x200 {
+        kd[0x210] = 0xb0; // type_of_loader = Qemu v0
+    }
+    if protocol >= 0x201 {
+        kd[0x211] |= 0x80; // loadflags |= CAN_USE_HEAP
+        let heap_end_ptr = cmdline_addr.saturating_sub(real_addr).saturating_sub(0x200);
+        kd[0x224..0x228].copy_from_slice(&heap_end_ptr.to_le_bytes());
+    }
+    if protocol >= 0x202 {
+        kd[0x228..0x22C].copy_from_slice(&cmdline_addr.to_le_bytes());
+    } else {
+        kd[0x20..0x22].copy_from_slice(&0xa33f_u16.to_le_bytes());
+        let offset = cmdline_addr.saturating_sub(real_addr) as u16;
+        kd[0x22..0x24].copy_from_slice(&offset.to_le_bytes());
+    }
+
+    if initrd_size > 0 {
+        if protocol < 0x200 {
+            bail!("the kernel image is too old for ramdisk");
+        }
+        let mut initrd_max = if protocol >= 0x20c {
+            let xlf =
+                u16::from_le_bytes(kd[0x236..0x238].try_into().context("impossible failure")?);
+            // XLF_CAN_BE_LOADED_ABOVE_4G is bit 1. Bit 6, 0x40, is
+            // XLF_5LEVEL_ENABLED; a kernel built without 5-level paging sets
+            // one and not the other, and QEMU tests bit 1.
+            if (xlf & 0x02) != 0 {
+                u32::MAX
+            } else {
+                0x37ffffff
+            }
+        } else if protocol >= 0x203 {
+            let max =
+                u32::from_le_bytes(kd[0x22c..0x230].try_into().context("impossible failure")?);
+            if max == 0 {
+                0x37ffffff
+            } else {
+                max
+            }
+        } else {
+            0x37ffffff
+        };
+
+        let lowmem = if mem_size < TDX_KERNEL_HASH_STABLE_MIN_MEMORY {
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY
+        } else {
+            0x80000000
+        };
+        let below_4g_mem_size = if mem_size >= lowmem {
+            lowmem as u32
+        } else {
+            mem_size as u32
+        };
+
+        if let Some(available_mem) = below_4g_mem_size.checked_sub(acpi_data_size) {
+            if initrd_max >= available_mem {
+                initrd_max = available_mem.saturating_sub(1);
+            }
+        } else {
+            // If acpi_data_size >= below_4g_mem_size, we have no memory available
+            bail!(
+                "ACPI data size ({}) exceeds available memory ({})",
+                acpi_data_size,
+                below_4g_mem_size
+            );
+        }
+        if initrd_size >= initrd_max {
+            bail!("initrd is too large");
+        }
+
+        let initrd_addr = initrd_max.saturating_sub(initrd_size) & !4095;
+        kd[0x218..0x21C].copy_from_slice(&initrd_addr.to_le_bytes());
+        kd[0x21C..0x220].copy_from_slice(&initrd_size.to_le_bytes());
+    }
+    Ok(kd)
+}
+
+/// Compute the first RTMR[1] event digest: the Authenticode SHA-384 hash of the
+/// kernel after QEMU applies its setup-header patches.
+pub(crate) fn patched_kernel_authenticode_sha384(
+    kernel_data: &[u8],
+    initrd_size: u32,
+    mem_size: u64,
+    acpi_data_size: u32,
+) -> Result<Vec<u8>> {
+    let kd = patch_kernel(kernel_data, initrd_size, mem_size, acpi_data_size)
+        .context("Failed to patch kernel")?;
+    authenticode_sha384_hash(&kd).context("Failed to compute kernel hash")
+}
+
+/// Compute the first RTMR[1] event digest for an image whose OVMF normalizes
+/// the Linux setup header: the Authenticode SHA-384 of the kernel file itself.
+///
+/// Both sides fill in the boot-loader-owned fields with the values QEMU <= 10.1
+/// writes -- `os/image/normalize-kernel-header.py` in the image build and
+/// `0007-OvmfPkg-QemuKernelLoaderFsDxe-normalize-setup-header.patch` in the
+/// firmware -- so what OVMF measures is the file, on every QEMU version and at
+/// every guest memory size.
+pub(crate) fn kernel_authenticode_sha384(kernel_data: &[u8]) -> Result<Vec<u8>> {
+    authenticode_sha384_hash(kernel_data).context("failed to compute kernel hash")
+}
+
+/// Measures the TDX kernel image OVMF loads.
+///
+/// `normalized_setup_header` says which kernel bytes OVMF ends up measuring:
+/// the kernel file as shipped when the image's firmware normalizes the setup
+/// header, otherwise QEMU's rewritten copy.
+pub(crate) fn rtmr1_log(
+    kernel_data: &[u8],
+    initrd_size: u32,
+    mem_size: u64,
+    acpi_data_size: u32,
+    normalized_setup_header: bool,
+) -> Result<Vec<Vec<u8>>> {
+    let kernel_hash = if normalized_setup_header {
+        kernel_authenticode_sha384(kernel_data)?
+    } else {
+        patched_kernel_authenticode_sha384(kernel_data, initrd_size, mem_size, acpi_data_size)?
+    };
+    Ok(vec![
+        kernel_hash,
+        measure_sha384(b"Calling EFI Application from Boot Option"),
+        measure_sha384(&[0x00, 0x00, 0x00, 0x00]), // Separator
+        measure_sha384(b"Exit Boot Services Invocation"),
+        measure_sha384(b"Exit Boot Services Returned with Success"),
+    ])
+}
+
+/// Measures the kernel command line by converting to UTF-16LE and hashing.
+pub(crate) fn measure_cmdline(cmdline: &str) -> Vec<u8> {
+    let mut utf16_cmdline = utf16_encode(cmdline);
+    utf16_cmdline.extend([0, 0]);
+    measure_sha384(&utf16_cmdline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn initrd_addr(kernel: &[u8]) -> u32 {
+        u32::from_le_bytes(kernel[0x218..0x21c].try_into().unwrap())
+    }
+
+    /// A minimal PE/COFF so `authenticode_sha384_hash` has something to walk.
+    fn pe_kernel() -> Vec<u8> {
+        let mut kernel = vec![0u8; 0x2000];
+        let lfanew = 0x40usize;
+        kernel[0x3c..0x40].copy_from_slice(&(lfanew as u32).to_le_bytes());
+        kernel[lfanew..lfanew + 4].copy_from_slice(&object::pe::IMAGE_NT_SIGNATURE.to_le_bytes());
+        let coff = lfanew + 4;
+        // SizeOfOptionalHeader, then PE32+ magic and SizeOfHeaders.
+        kernel[coff + 16..coff + 18].copy_from_slice(&0xf0u16.to_le_bytes());
+        let opt = coff + 20;
+        kernel[opt..opt + 2].copy_from_slice(&0x020bu16.to_le_bytes());
+        kernel[opt + 60..opt + 64].copy_from_slice(&0x400u32.to_le_bytes());
+        // Setup header: protocol 2.12, and a non-zero heap_end_ptr like a real
+        // build has, so the two branches cannot coincide by accident.
+        kernel[0x202..0x206].copy_from_slice(b"HdrS");
+        kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
+        // XLF_CAN_BE_LOADED_ABOVE_4G, so QEMU derives the initrd address from
+        // available low memory and the patched digest moves with guest RAM.
+        kernel[0x236..0x238].copy_from_slice(&0x0002u16.to_le_bytes());
+        kernel[0x224..0x226].copy_from_slice(&0x50a0u16.to_le_bytes());
+        kernel
+    }
+
+    #[test]
+    fn a_malformed_pe_header_is_rejected_instead_of_panicking() {
+        // lfanew, PE signature, then the 20-byte COFF header.
+        let optional_header_offset = 0x40 + 4 + 20;
+        let with_size_of_headers = |size_of_headers: u32| {
+            let mut kernel = pe_kernel();
+            kernel[optional_header_offset + 60..optional_header_offset + 64]
+                .copy_from_slice(&size_of_headers.to_le_bytes());
+            kernel
+        };
+
+        let too_large = with_size_of_headers(0xffff_fff0);
+        assert!(kernel_authenticode_sha384(&too_large).is_err());
+        let too_small = with_size_of_headers(0);
+        assert!(kernel_authenticode_sha384(&too_small).is_err());
+        // Long enough to read `SizeOfHeaders`, too short for the cert directory.
+        let mut truncated = pe_kernel();
+        truncated.truncate(optional_header_offset + 70);
+        assert!(kernel_authenticode_sha384(&truncated).is_err());
+    }
+
+    /// The flag has to reach the digest, not just the struct: an image whose
+    /// firmware normalizes must measure the file, and one whose firmware does
+    /// not must measure QEMU's rewritten copy.
+    #[test]
+    fn the_normalized_flag_selects_which_kernel_bytes_are_measured() {
+        let kernel = pe_kernel();
+        let normalized = rtmr1_log(&kernel, 0x1000, 0x8000_0000, 0x28000, true).unwrap();
+        let patched = rtmr1_log(&kernel, 0x1000, 0x8000_0000, 0x28000, false).unwrap();
+        assert_ne!(normalized[0], patched[0]);
+        assert_eq!(normalized[0], kernel_authenticode_sha384(&kernel).unwrap());
+        assert_eq!(
+            patched[0],
+            patched_kernel_authenticode_sha384(&kernel, 0x1000, 0x8000_0000, 0x28000).unwrap()
+        );
+    }
+
+    /// Normalizing is what makes the digest independent of guest RAM, so the
+    /// two branches must disagree about that too.
+    #[test]
+    fn only_the_patched_digest_moves_with_guest_memory() {
+        let kernel = pe_kernel();
+        let at = |mem| rtmr1_log(&kernel, 0x1000, mem, 0x28000, true).unwrap()[0].clone();
+        assert_eq!(at(0x8000_0000), at(0xA000_0000));
+        let patched_at = |mem| rtmr1_log(&kernel, 0x1000, mem, 0x28000, false).unwrap()[0].clone();
+        assert_ne!(patched_at(0x8000_0000), patched_at(0xA000_0000));
+    }
+
+    /// QEMU derives the initrd ceiling from XLF_CAN_BE_LOADED_ABOVE_4G,
+    /// which is bit 1; bit 6 is XLF_5LEVEL_ENABLED and must not be read as it.
+    #[test]
+    fn only_xlf_bit_1_raises_the_initrd_ceiling() {
+        let mut kernel = vec![0u8; 0x1000];
+        kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
+
+        // The initrd the 0.6.0 image ships, so these are the addresses QEMU
+        // puts it at and the image build writes into the shipped kernel.
+        let initrd_size = 6_454_798;
+        let with_xlf = |xlf: u16| {
+            let mut k = kernel.clone();
+            k[0x236..0x238].copy_from_slice(&xlf.to_le_bytes());
+            initrd_addr(&patch_kernel(&k, initrd_size, 0x8000_0000, 0x28000).unwrap())
+        };
+
+        // 0x37ffffff is the ceiling for a kernel that cannot be loaded above
+        // 4G; the raised ceiling is the below-4G window minus the ACPI area.
+        assert_eq!(with_xlf(0x0000), 0x379D_8000);
+        assert_eq!(with_xlf(0x0040), 0x379D_8000, "the 5-level flag raised it");
+        assert_eq!(with_xlf(0x0002), 0x7F9B_0000, "the above-4G flag did not");
+        assert_eq!(with_xlf(0x0042), 0x7F9B_0000);
+    }
+
+    #[test]
+    fn tdx_kernel_patch_uses_precomputed_digest_at_2g_and_high_memory() {
+        let mut kernel = vec![0u8; 0x1000];
+        // Linux boot protocol >= 2.12 with XLF_CAN_BE_LOADED_ABOVE_4G makes
+        // QEMU derive the initrd address from available low memory.
+        kernel[0x206..0x208].copy_from_slice(&0x020cu16.to_le_bytes());
+        kernel[0x236..0x238].copy_from_slice(&0x0002u16.to_le_bytes());
+
+        let below_2g = patch_kernel(&kernel, 0x100000, 0x80000000 - 0x1000, 0x28000).unwrap();
+        let at_2g = patch_kernel(&kernel, 0x100000, 0x80000000, 0x28000).unwrap();
+        let between_2g_and_high_mem = patch_kernel(
+            &kernel,
+            0x100000,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY - 0x1000,
+            0x28000,
+        )
+        .unwrap();
+        let at_threshold = patch_kernel(
+            &kernel,
+            0x100000,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY,
+            0x28000,
+        )
+        .unwrap();
+        let above_threshold = patch_kernel(
+            &kernel,
+            0x100000,
+            TDX_KERNEL_HASH_STABLE_MIN_MEMORY + 0x4000_0000,
+            0x28000,
+        )
+        .unwrap();
+
+        assert_ne!(initrd_addr(&below_2g), initrd_addr(&at_2g));
+        assert_ne!(
+            initrd_addr(&between_2g_and_high_mem),
+            initrd_addr(&at_threshold)
+        );
+        assert_eq!(initrd_addr(&at_2g), initrd_addr(&at_threshold));
+        assert_eq!(initrd_addr(&at_threshold), initrd_addr(&above_threshold));
+    }
+}

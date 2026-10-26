@@ -1,18 +1,22 @@
 # Deploying dstack
 
-This guide covers deploying dstack on bare metal TDX hosts.
+> **This guide is for self-hosted deployments** on your own TDX or AMD SEV-SNP hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+
+This guide covers the full manual deployment path for self-hosted dstack. Before deploying, prepare the host with [Hardware enablement](./hardware-enablement.md). If you want the shortest path to a first app on one host, start with [Self-hosted quick onboarding](./onboarding.md).
 
 ## Overview
 
 dstack can be deployed in two ways:
 
-- **Dev Deployment**: All components run directly on the host. For local development and testing only - no security guarantees.
-- **Production Deployment**: KMS and Gateway run as CVMs with hardware-rooted security. Uses auth server for authorization and OS image whitelisting. Required for any deployment where security matters.
+- **Single-node deployment**: `dstackup` downloads a verified guest image, renders host config, starts the VMM and auth webhook, bootstraps a KMS CVM, and deploys apps through direct port mappings. Use [Self-hosted quick onboarding](./onboarding.md) for the first-app path.
+- **Production deployment**: KMS and Gateway run as CVMs with hardware-rooted security. Uses an auth server for authorization and OS image allowlisting. Required for multi-node deployments, Gateway routing, custom domains, or on-chain governance.
+
+For local development and contribution workflows, see [Contributing](../CONTRIBUTING.md).
 
 ## Prerequisites
 
 **Hardware:**
-- Bare metal TDX server ([setup guide](https://github.com/canonical/tdx))
+- Bare metal TDX or AMD SEV-SNP server. See [Hardware enablement](./hardware-enablement.md).
 - At least 16GB RAM, 100GB free disk space
 - Public IPv4 address
 - Optional: NVIDIA H100 or Blackwell GPU for [Confidential Computing](https://www.nvidia.com/en-us/data-center/solutions/confidential-computing/) workloads
@@ -22,94 +26,26 @@ dstack can be deployed in two ways:
 
 > **Note:** See [Hardware Requirements](https://docs.phala.network/dstack/hardware-requirements) for server recommendations.
 
----
-
-## Dev Deployment
-
-This approach runs all components directly on the host for local development and testing.
-
-> **Warning:** Dev deployment uses KMS in dev mode with no security guarantees. Do NOT use for production.
-
-### Install Dependencies
-
-```bash
-# Ubuntu 24.04
-sudo apt install -y build-essential chrpath diffstat lz4 wireguard-tools xorriso
-
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-### Build Configuration
-
-```bash
-git clone https://github.com/Dstack-TEE/meta-dstack.git --recursive
-cd meta-dstack/
-mkdir build && cd build
-../build.sh hostcfg
-```
-
-Edit the generated `build-config.sh` for your environment. The minimal required changes are:
-
-| Variable | Description |
-|----------|-------------|
-| `KMS_DOMAIN` | DNS domain for KMS RPC (e.g., `kms.example.com`) |
-| `GATEWAY_DOMAIN` | DNS domain for Gateway RPC (e.g., `gateway.example.com`) |
-| `GATEWAY_PUBLIC_DOMAIN` | Public base domain for app routing (e.g., `apps.example.com`) |
-
-**TLS Certificates:**
-
-The Gateway requires TLS certificates. Configure Certbot with Cloudflare:
-
-```bash
-CERTBOT_ENABLED=true
-CF_API_TOKEN=<your-cloudflare-token>
-```
-
-The certificates will be obtained automatically via ACME DNS-01 challenge. The KMS auto-generates its own certificates during bootstrap.
-
-Other variables like ports and CID pool settings have sensible defaults.
-
-```bash
-vim ./build-config.sh
-../build.sh hostcfg
-```
-
-### Download Guest Image
-
-```bash
-../build.sh dl 0.5.5
-```
-
-### Run Components
-
-Start in separate terminals:
-
-1. **KMS**: `./dstack-kms -c kms.toml`
-2. **Gateway**: `sudo ./dstack-gateway -c gateway.toml`
-3. **VMM**: `./dstack-vmm -c vmm.toml`
-
-> **Note:** This deployment uses KMS in dev mode without an auth server. For production deployments with proper security, see [Production Deployment](#production-deployment) below.
-
----
-
 ## Production Deployment
 
 For production, deploy KMS and Gateway as CVMs with hardware-rooted security. Production deployments require:
 - KMS running in a CVM (not on the host)
 - Auth server for authorization (webhook mode)
+- KMS measurements allowlisted before bootstrap / onboarding / trusted RPCs can succeed
+
+If you skip the KMS allowlist step, the VM may boot and the onboard UI may still appear, but the KMS will reject bootstrap, onboarding, or later trusted RPCs with authorization errors.
 
 ### Production Checklist
 
 **Required:**
 
 1. Set up TDX host with dstack-vmm
-2. Deploy KMS as CVM (with auth server)
+2. Deploy KMS as CVM (with auth server, capture its attestation info, and allowlist the KMS `mrAggregated` before bootstrap)
 3. Deploy Gateway as CVM
+4. [Zero Trust HTTPS](#4-zero-trust-https) - the gateway cannot serve an app over TLS until it holds a certificate for the domain
 
 **Optional Add-ons:**
 
-4. [Zero Trust HTTPS](#4-zero-trust-https-optional)
 5. [Certificate Transparency monitoring](#5-certificate-transparency-monitoring-optional)
 6. [Multi-node deployment](#6-multi-node-deployment-optional)
 7. [On-chain governance](./onchain-governance.md) - Smart contract-based authorization
@@ -123,10 +59,10 @@ Clone and build dstack-vmm:
 ```bash
 git clone https://github.com/Dstack-TEE/dstack
 cd dstack
-cargo build --release -p dstack-vmm -p supervisor
+cargo build --manifest-path dstack/Cargo.toml --release -p dstack-vmm -p supervisor
 mkdir -p vmm-data
-cp target/release/dstack-vmm vmm-data/
-cp target/release/supervisor vmm-data/
+cp dstack/target/release/dstack-vmm vmm-data/
+cp dstack/target/release/supervisor vmm-data/
 cd vmm-data/
 ```
 
@@ -137,6 +73,11 @@ address = "tcp:0.0.0.0:9080"
 reuse = true
 image_path = "./images"
 run_path = "./run/vm"
+
+[auth]
+enabled = true
+# generate with: openssl rand -hex 32
+tokens = ["<paste output of: openssl rand -hex 32>"]
 
 [cvm]
 kms_urls = []
@@ -157,7 +98,11 @@ address = "vsock:2"
 port = 10000
 ```
 
-Download guest images from [meta-dstack releases](https://github.com/Dstack-TEE/meta-dstack/releases) and extract to `./images/`.
+> **VMM API authentication (required for non-localhost binds).** Since [PR #796](https://github.com/Dstack-TEE/dstack/pull/796), the `[auth]` token guards the *entire* VMM surface — creating and stopping CVMs, the web UI, and all pRPC calls — not just `/logs`. Because the example above binds `tcp:0.0.0.0:9080` (reachable off the host), you MUST enable `[auth]`; otherwise the whole control API is exposed unauthenticated. Auth is fail-closed: with `enabled = true` and no usable credential, requests are rejected.
+>
+> Clients authenticate with `Authorization: Bearer <token>` (or the `X-Admin-Token: <token>` header). Instead of inline `tokens`, you can point to an Apache bcrypt htpasswd file with `htpasswd_file = "/etc/dstack/admin.htpasswd"` (create it with `htpasswd -B -c /etc/dstack/admin.htpasswd admin`). Only bcrypt (`-B`) entries are accepted.
+
+Download guest images from [dstack guest-OS releases](https://github.com/Dstack-TEE/dstack/releases) and extract to `./images/`.
 
 > For reproducible builds and verification, see the [Security Model](./security/security-model.md).
 
@@ -177,10 +122,12 @@ Production KMS requires:
 
 #### Auth Server Options
 
+> **Note:** the boot-authorization webhook below (auth-simple / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
-| [auth-simple](../kms/auth-simple/) | Config-file-based whitelisting | JSON config file |
-| [auth-eth](../kms/auth-eth/) | On-chain governance via smart contracts | Ethereum RPC + contract |
+| [auth-simple](../dstack/kms/auth-simple/) | Config-file-based whitelisting | JSON config file |
+| [auth-eth](../dstack/kms/auth-eth/) | On-chain governance via smart contracts | Ethereum RPC + contract |
 | Custom | Your own authorization logic | Implement webhook interface |
 
 All auth servers implement the same webhook interface:
@@ -197,15 +144,20 @@ Create `auth-config.json` for initial KMS deployment:
 ```json
 {
   "osImages": ["0x<os-image-hash>"],
-  "kms": { "allowAnyDevice": true },
+  "kms": {
+    "mrAggregated": ["0x<kms-mr-aggregated>"],
+    "allowAnyDevice": true
+  },
   "apps": {}
 }
 ```
 
+> **Important:** `auth-simple` now treats an empty `kms.mrAggregated` allowlist as deny-all for KMS. Capture the current KMS measurement with `Onboard.GetAttestationInfo` and add it before bootstrap.
+
 Run auth-simple:
 
 ```bash
-cd kms/auth-simple
+cd dstack/kms/auth-simple
 bun install
 PORT=3001 AUTH_CONFIG_PATH=/path/to/auth-config.json bun run start
 ```
@@ -265,7 +217,7 @@ Then run:
 **Monitor startup:**
 
 ```bash
-tail -f ../../vmm-data/run/vm/<vm-id>/serial.log
+tail -f ../../../vmm-data/run/vm/<vm-id>/serial.log
 ```
 
 Wait for `[  OK  ] Finished App Compose Service.`
@@ -355,7 +307,7 @@ Continue? [y/N]
 
 **Before pressing 'y'**, add the compose hash to your auth server whitelist:
 - For auth-simple: Add to `composeHashes` array in `auth-config.json`
-- For auth-eth: Use `app:add-hash` (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
+- For auth-eth: Use Foundry scripts (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
 
 Then return to the first terminal and press 'y' to deploy.
 
@@ -369,33 +321,103 @@ kms_urls = ["https://kms.example.com:9201"]
 gateway_urls = ["https://gateway.example.com:9202"]
 ```
 
+`gateway_urls` is a failover list for one gateway cluster. To register a CVM
+with independently operated clusters, configure explicit groups instead. Each
+cluster gets a separate WireGuard interface and key pair; their WireGuard
+address ranges must not overlap. All clusters must run the gateway app identity
+authorized by the CVM's KMS-issued app keys.
+
+Clusters refresh independently. If one cluster is unavailable, its last
+working WireGuard configuration remains active while other clusters continue
+to register and update normally.
+
+`gateway_urls` and `gateway_clusters` are mutually exclusive in the VMM
+configuration. The VMM refuses to start if both are non-empty. For compatibility
+with sys-config files produced elsewhere, the guest prefers `gateway_clusters`
+and logs a warning when both forms are present.
+
+```toml
+[cvm]
+kms_urls = ["https://kms.example.com:9201"]
+
+[[cvm.gateway_clusters]]
+name = "primary"
+urls = [
+  "https://gateway-a.example.com:9202",
+  "https://gateway-b.example.com:9202",
+]
+[[cvm.gateway_clusters]]
+name = "secondary"
+urls = ["https://gateway-c.example.com:9202"]
+```
+
 Restart dstack-vmm to apply changes.
 
 ---
 
-### 4. Zero Trust HTTPS (Optional)
+### 4. Zero Trust HTTPS
 
-Generate TLS certificates inside the TEE with automatic CAA record management.
+The gateway issues its own certificates from inside the CVM. `dstack-gateway`
+links the `certbot` crate directly: it answers dns-01 challenges with the
+Cloudflare credential you give it, and keeps the ACME account key and every
+certificate in the CVM's WaveKV store. Neither key is ever written to the host,
+which is what makes the monitoring in step 5 worth running — every certificate
+the CT logs show for your domain should carry a public key the gateway
+published. Nothing on the host issues or holds these certificates; the `certbot`
+CLI under `dstack/certbot/cli` is a testing tool for the same crate and has no
+part in this path.
 
-Configure in `build-config.sh`:
+`bootstrap-cluster.sh` configures all of it, reading `CF_API_TOKEN`,
+`SRV_DOMAIN` and `ACME_STAGING` from the `.env` you filled in during step 3 and
+calling the gateway's admin API:
 
 ```bash
-GATEWAY_CERT=${CERTBOT_WORKDIR}/live/cert.pem
-GATEWAY_KEY=${CERTBOT_WORKDIR}/live/key.pem
-CF_API_TOKEN=<your-cloudflare-token>
-ACME_URL=https://acme-v02.api.letsencrypt.org/directory
+cd dstack/gateway/dstack-app/
+bash bootstrap-cluster.sh
 ```
 
-Run certbot:
+| RPC | What it sets |
+|---|---|
+| `SetCertbotConfig` | ACME directory URL and the renewal schedule |
+| `CreateDnsCredential` | the Cloudflare token used for dns-01, as the default credential |
+| `AddZtDomain` | a domain to keep a wildcard certificate for |
+
+Run it once per cluster. Additional nodes receive all three through cluster
+sync, so do not repeat it per node.
+
+Every name the gateway terminates TLS on needs its own ZT domain. The script
+adds `SRV_DOMAIN`; if app URLs sit one level deeper — `<id>-<port>.gateway.example.com`
+— then `gateway.example.com` needs an entry of its own, because a wildcard
+certificate for `*.example.com` does not cover subdomains of subdomains.
+
+Certificates are requested on the next renewal round rather than the moment a
+domain is added. Watch for them to arrive:
 
 ```bash
-RUST_LOG=info,certbot=debug ./certbot renew -c certbot.toml
+ADMIN_ADDR=127.0.0.1:9203  # GATEWAY_ADMIN_RPC_ADDR in .env
+curl -sf -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+  "http://$ADMIN_ADDR/prpc/ListZtDomains" | jq '.domains[] | {domain: .config.domain, cert: .cert_status}'
 ```
 
-This will:
-- Create an ACME account
-- Set CAA DNS records on Cloudflare
-- Request and auto-renew certificates
+`has_cert: true` with a `not_after` roughly 90 days out means the domain is
+served. `POST /prpc/RenewCert` forces a round immediately instead of waiting
+for `renew_interval_secs`.
+
+Pin issuance to your own ACME account with `POST /prpc/SetCaa`, which writes
+CAA records naming Let's Encrypt and the gateway's account URI for every
+configured domain. Any other account is then refused by the CA rather than
+merely noticed after the fact by step 5.
+
+Start on Let's Encrypt staging (`ACME_STAGING=yes`), whose certificates are not
+browser-trusted but whose rate limits leave room for mistakes. Switching to
+production takes two calls: `SetCertbotConfig` with the production directory
+URL, then `RotateAcmeCredentials` to register an account there and re-pin every
+domain's CAA to it. Renewals refuse to run while the stored account and the
+configured ACME URL disagree, so do not skip the rotation.
+
+For the same flow driven by hand, one curl at a time, see the
+[Gateway service setup tutorial](./tutorials/gateway-service-setup.md#step-4-bootstrap-admin-api).
+For a multi-node cluster, see [Cluster deployment](../dstack/gateway/docs/cluster-deployment.md).
 
 ---
 
@@ -404,8 +426,9 @@ This will:
 Monitor for unauthorized certificates issued to your domain.
 
 ```bash
-cargo build --release -p ct_monitor
-./target/release/ct_monitor \
+cd /path/to/dstack
+cargo build --manifest-path dstack/Cargo.toml --release -p ct_monitor
+./dstack/target/release/ct_monitor \
   --gateway-uri https://<gateway-domain> \
   --domain <your-domain>
 ```
@@ -460,7 +483,6 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""   # Empty = onboard mode
-quote_enabled = true         # Require TDX attestation
 address = "0.0.0.0"
 port = 9203                  # HTTP port for onboard UI
 ```
@@ -470,7 +492,7 @@ port = 9203                  # HTTP port for onboard UI
 ```bash
 curl -X POST http://<new-kms>:9203/prpc/Onboard.Onboard?json \
   -H "Content-Type: application/json" \
-  -d '{"source_url": "https://<existing-kms>:9201/prpc", "domain": "kms2.example.com"}'
+  -d '{"source_url": "https://<existing-kms-admin>:9202/prpc", "source_token": "<optional-admin-token>", "domain": "kms2.example.com"}'
 ```
 
 **Finish and restart:**
@@ -480,7 +502,16 @@ curl http://<new-kms>:9203/finish
 # Restart KMS - it will now serve as a full KMS with shared keys
 ```
 
-> **Note:** For KMS onboarding with `quote_enabled = true`, add the KMS mrAggregated hash to your auth server's `kms.mrAggregated` whitelist.
+> **Note:** KMS onboarding requires attested KMS instances, and both sides must already be authorized. Add the relevant KMS `mrAggregated` hashes to your auth backend first:
+>
+> - the destination KMS must allow the source KMS
+> - the source KMS must allow the destination KMS
+>
+> If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
+
+> **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+>
+> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`.
 
 ---
 

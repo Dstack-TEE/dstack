@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: Apache-2.0
+# shellcheck shell=bash disable=SC2034
+COMPONENT_NAME=kernel
+COMPONENT_CACHE_PATHS=("linux-$KERNEL_VERSION" kernel-build component-stages/kernel
+  component-stages/kernel-devel)
+# Staged via the rootfs tree; mkosi.finalize moves it out before measurement.
+COMPONENT_ROOTFS_TREES=(component-stages/kernel-devel)
+COMPONENT_KERNEL_TREES=(component-stages/kernel)
+
+component_cache_key() {
+    key_value "$KERNEL_VERSION" "$KERNEL_SHA256"
+    key_file "$COMPONENT_PATH/kernel-build.sh" "$COMPONENT_PATH/kernel.config" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0002-acpi-sandbox-block-aml-systemmemory-ram-access.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0003-dma-direct-return-struct-page-from-alloc-from-pool.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0004-dma-pool-free-atomic-pool-pages-by-physical-address.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0005-swiotlb-preserve-allocation-virtual-address.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0006-swiotlb-free-dynamic-pools-from-process-context.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0007-sched-smp-batch-wake-q-ipis-in-tdx-guests.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0008-x86-kvm-runtime-pv-single-target-ipi-in-tdx-guests.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0009-mm-page-alloc-keep-accepted-reserve-before-watermarks.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0010-x86-tdx-convert-swiotlb-to-shared-after-smp-bringup.patch"
+    key_tools gcc ld make pahole
+    key_packages binutils dwarves bc bison flex libssl-dev libelf-dev
+}
+
+component_build() {
+    "$COMPONENT_PATH/kernel-build.sh" "$WORK" "$WORK/component-stages/kernel" \
+      "$WORK/component-stages/kernel-devel"
+}

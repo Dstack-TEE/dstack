@@ -107,7 +107,7 @@ func main() {
 		return
 	}
 	fmt.Println("Deterministic JSON:", string(jsonBytes))
-	
+
 	// This JSON string can now be used to generate a compose hash
 }
 ```
@@ -243,4 +243,3 @@ Here's how each language handles deterministic JSON serialization for compose ha
 Getting deterministic JSON serialization across different languages for compose hash generation isn't the default behavior. It needs careful setup. Go works well with compact output and special value handling, but needs custom key sorting for maps. Python and JavaScript both need explicit setup for key sorting and compact output. JavaScript notably requires manual recursive sorting of object keys.
 
 By following these recommendations, dstack can ensure that the same `app-compose.json` file produces the same SHA256 compose hash across all its Go, Python, and JavaScript components. This provides a reliable foundation for the project's distributed architecture and change detection system.
-

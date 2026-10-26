@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+FROM rust:1.92.0@sha256:48851a839d6a67370c9dbe0e709bedc138e3e404b161c5233aedcf2b717366e4 AS kms-builder
+COPY --from=build-shared /pin-packages.sh /build/
+COPY ./shared/*-pinned-packages.txt /build/
+ARG DSTACK_REV
+ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
+WORKDIR /build
+RUN ./pin-packages.sh ./builder-pinned-packages.txt
+RUN apt-get update -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    musl-tools \
+    libssl-dev \
+    protobuf-compiler \
+    libprotobuf-dev \
+    clang \
+    libclang-dev
+RUN git clone ${DSTACK_SRC_URL} repo && \
+    cd repo && \
+    git checkout ${DSTACK_REV}
+RUN rustup target add x86_64-unknown-linux-musl
+RUN cd repo/dstack && cargo build --release --locked -p dstack-kms --target x86_64-unknown-linux-musl
+RUN echo "${DSTACK_REV}" > /build/.GIT_REV
+
+FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
+COPY --from=build-shared /pin-packages.sh /build/
+COPY ./shared/pinned-packages.txt /build/
+WORKDIR /build
+# reqwest is built against rustls-platform-verifier, which reads the system
+# trust store and errors out when it finds none. The KMS builds its collateral
+# and AMD KDS clients eagerly at startup, so a base image without CA
+# certificates fails to boot before it serves anything.
+RUN ./pin-packages.sh ./pinned-packages.txt && \
+    apt-get update -o APT::Update::Error-Mode=any && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
+WORKDIR /
+COPY --from=kms-builder /build/repo/dstack/target/x86_64-unknown-linux-musl/release/dstack-kms /usr/local/bin/dstack-kms
+COPY --from=kms-builder /build/.GIT_REV /etc/
+# The OCI metadata is generated once by build-lib.sh and injected here, as
+# the config labels and as the manifest annotations, so the three views of
+# the image can never disagree.
+ARG IMAGE_METADATA
+RUN mkdir -p /etc/dstack-kms && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-kms/build-info
+CMD ["dstack-kms"]

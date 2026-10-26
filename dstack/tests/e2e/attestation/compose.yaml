@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
+x-attestation-test: &attestation-test
+  image: dstack-tests-attestation:local
+  build:
+    context: ../../..
+    dockerfile: tests/e2e/attestation/Dockerfile
+  privileged: true
+  network_mode: bridge
+  volumes:
+    - /lib/modules:/lib/modules:ro
+    - ./run-platform.sh:/usr/local/bin/run-platform:ro
+  tmpfs:
+    - /run
+    - /dstack/.host-shared
+    - /tmp
+
+services:
+  dstack-tdx-legacy:
+    <<: *attestation-test
+    environment: { TEE_PLATFORM: dstack-tdx, TDX_ATTESTATION_VARIANT: legacy }
+  dstack-tdx-lite:
+    <<: *attestation-test
+    environment: { TEE_PLATFORM: dstack-tdx, TDX_ATTESTATION_VARIANT: lite }
+  gcp-tdx:
+    <<: *attestation-test
+    environment: { TEE_PLATFORM: dstack-gcp-tdx }
+  amd-sev-snp:
+    <<: *attestation-test
+    environment: { TEE_PLATFORM: dstack-amd-sev-snp }
+  aws-nitro-enclave:
+    <<: *attestation-test
+    environment: { TEE_PLATFORM: dstack-nitro-enclave }
+  aws-nitro-tpm:
+    <<: *attestation-test
+    environment: { TEE_PLATFORM: dstack-aws-nitro-tpm }

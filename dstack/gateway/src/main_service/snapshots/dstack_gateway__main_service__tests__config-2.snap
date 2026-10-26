@@ -1,0 +1,24 @@
+---
+source: gateway/src/main_service/tests.rs
+assertion_line: 71
+expression: info1
+---
+InstanceInfo {
+    id: "test-id-1",
+    app_id: "app-id-1",
+    ip: 10.0.0.3,
+    public_key: "dGVzdC1wdWJrZXktMXRlc3QtcHVia2V5LTF0ZXN0LXA=",
+    reg_time: SystemTime {
+        tv_sec: 0,
+        tv_nsec: 0,
+    },
+    port_policy: None,
+    port_policy_hash: "",
+    admin_port_policy: None,
+    ready: None,
+    health: Health {
+        gated: false,
+        state: Ungated,
+    },
+    connections: 0,
+}

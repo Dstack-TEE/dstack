@@ -1,8 +1,14 @@
-# Design and Hardening Decisions in meta-dstack Layer
+# Design and Hardening Decisions in the dstack Yocto Layer
+
+> [!NOTE]
+> This document describes the deprecated Yocto backend. The default guest-OS
+> backend is mkosi (`os/mkosi/`); see
+> [`../os/mkosi/README.md`](../os/mkosi/README.md) for how its image is built
+> and where it differs.
 
 ## Overview
 
-The meta-dstack layer is designed to create a minimally secure image for booting Confidential Virtual Machines (CVMs). Our design philosophy prioritizes attack surface reduction while maintaining TDX-aware functionality. This document outlines the architectural decisions and trade-offs made during development.
+The dstack-owned Yocto layer under `os/yocto/layers/meta-dstack/` is designed to create a minimally secure image for booting Confidential Virtual Machines (CVMs). Our design philosophy prioritizes attack surface reduction while maintaining TDX-aware functionality. This document outlines the architectural decisions and trade-offs made during development.
 
 ## Key Design Decisions
 
@@ -24,11 +30,11 @@ The meta-dstack layer is designed to create a minimally secure image for booting
 
 ### 3. TDX Guest Driver Implementation
 
-**Decision**: We disable the built-in TDX guest driver (`CONFIG_TDX_GUEST_DRIVER=n`) and use a custom implementation.
+**Decision**: We use the in-tree confidential guest drivers and the Linux TSM report interface where they are available. For Intel TDX, the dstack kernel configuration enables `CONFIG_TDX_GUEST_DRIVER=y` and `CONFIG_TSM_REPORTS=y`.
 
-**Rationale**: **Primary Goal** is to enable RTMR3 extension capabilities. **Custom Driver Benefits** include enhanced measurement and attestation features, better integration with our security architecture, and flexibility for dstack-specific optimizations.
+**Rationale**: The in-tree TDX guest driver exposes the standard `/dev/tdx_guest` device and configfs-tsm report interface. Newer kernels also expose RTMR extension through the TSM measurement sysfs path, which dstack uses for RTMR3 runtime events. This keeps dstack aligned with the standard Linux kernel ABI while preserving measured runtime events.
 
-**Implementation Notes**: Builds upon proven meta-confidential-compute foundation. Maintains compatibility with TDX specifications. Adds value-specific functionality without compromising security.
+**Implementation Notes**: The unified dstack confidential-guest image also includes AMD SEV-SNP kernel features. Platform-specific native TEE interfaces are advanced compatibility surfaces for applications that need the kernel ABI directly. The dstack socket remains the normal application API for quotes, keys, application information, and runtime events.
 
 ### 4. Randomness Generation and Seeding
 
@@ -49,7 +55,7 @@ See [here](https://intel.github.io/ccc-linux-guest-hardening-docs/security-spec.
 
 ### 5. Secure System Time
 
-**Implementation**: dstack OS enforces the guest kernel uses TSC as the only timer source by appending `tsc=reliable no-kvmclock` to the kernel cmdline. It also enforces the use of NTS with built-in [trusted servers](https://github.com/Dstack-TEE/meta-dstack/blob/bef2dfa850f4116ae4ece96d8c0948965c5874b3/meta-dstack/recipes-core/chrony/files/chrony.conf#L13-L20) to synchronize system time.
+**Implementation**: dstack OS enforces the guest kernel uses TSC as the only timer source by appending `tsc=reliable no-kvmclock` to the kernel cmdline. It also enforces the use of NTS with built-in [trusted servers](../os/yocto/layers/meta-dstack/recipes-core/chrony/files/chrony.conf) to synchronize system time.
 
 **Behavior**: When `secure_time` is enabled in the app-compose.json configuration, the system ensures time synchronization is completed before requesting application keys. If `secure_time` is disabled, time synchronization is not enforced before application launch.
 

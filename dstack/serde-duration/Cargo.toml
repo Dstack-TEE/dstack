@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: © 2025 Daniel Sharifi <daniel.sharifi@nearone.org>
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "serde-duration"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "alloc"] }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["std"] }

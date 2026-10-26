@@ -1,0 +1,3 @@
+define KFEATURE_DESCRIPTION "dstack Docker configuration"
+
+kconf non-hardware dstack-docker.cfg

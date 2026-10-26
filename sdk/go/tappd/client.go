@@ -11,7 +11,6 @@ package tappd
 import (
 	"bytes"
 	"context"
-	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -100,63 +99,6 @@ type TappdInfoResponse struct {
 	AppName    string  `json:"app_name"`
 }
 
-const INIT_MR = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-
-// Replays the RTMR history to calculate final RTMR values
-func replayRTMR(history []string) (string, error) {
-	if len(history) == 0 {
-		return INIT_MR, nil
-	}
-
-	mr := make([]byte, 48)
-
-	for _, content := range history {
-		contentBytes, err := hex.DecodeString(content)
-		if err != nil {
-			return "", err
-		}
-
-		if len(contentBytes) < 48 {
-			padding := make([]byte, 48-len(contentBytes))
-			contentBytes = append(contentBytes, padding...)
-		}
-
-		h := sha512.New384()
-		h.Write(append(mr, contentBytes...))
-		mr = h.Sum(nil)
-	}
-
-	return hex.EncodeToString(mr), nil
-}
-
-// Replays the RTMR history to calculate final RTMR values
-func (r *TdxQuoteResponse) ReplayRTMRs() (map[int]string, error) {
-	var eventLog []struct {
-		IMR    int    `json:"imr"`
-		Digest string `json:"digest"`
-	}
-	json.Unmarshal([]byte(r.EventLog), &eventLog)
-
-	rtmrs := make(map[int]string, 4)
-	for idx := 0; idx < 4; idx++ {
-		history := make([]string, 0)
-		for _, event := range eventLog {
-			if event.IMR == idx {
-				history = append(history, event.Digest)
-			}
-		}
-
-		rtmr, err := replayRTMR(history)
-		if err != nil {
-			return nil, err
-		}
-
-		rtmrs[idx] = rtmr
-	}
-
-	return rtmrs, nil
-}
-
 // Handles communication with the Tappd service.
 type TappdClient struct {
 	endpoint   string
@@ -184,8 +126,8 @@ func WithLogger(logger *slog.Logger) TappdClientOption {
 
 // Creates a new TappdClient instance based on the provided endpoint.
 // If the endpoint is empty, it will use the simulator endpoint if it is
-// set in the environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it
-// will try /var/run/dstack/tappd.sock first, falling back to /var/run/tappd.sock
+// set in the environment through TAPPD_SIMULATOR_ENDPOINT. Otherwise, it
+// will try /var/run/tappd.sock first, falling back to other known paths
 // for backward compatibility.
 func NewTappdClient(opts ...TappdClientOption) *TappdClient {
 	client := &TappdClient{
@@ -219,15 +161,15 @@ func NewTappdClient(opts ...TappdClientOption) *TappdClient {
 
 // Returns the appropriate endpoint based on environment and input. If the
 // endpoint is empty, it will use the simulator endpoint if it is set in the
-// environment through DSTACK_SIMULATOR_ENDPOINT. Otherwise, it will try
-// /var/run/dstack/tappd.sock first, falling back to /var/run/tappd.sock
+// environment through TAPPD_SIMULATOR_ENDPOINT. Otherwise, it will try
+// /var/run/tappd.sock first, falling back to other known paths
 // for backward compatibility.
 func (c *TappdClient) getEndpoint() string {
 	if c.endpoint != "" {
 		return c.endpoint
 	}
-	if simEndpoint, exists := os.LookupEnv("DSTACK_SIMULATOR_ENDPOINT"); exists {
-		c.logger.Info("using simulator endpoint", "endpoint", simEndpoint)
+	if simEndpoint, exists := os.LookupEnv("TAPPD_SIMULATOR_ENDPOINT"); exists {
+		c.logger.Info("using tappd simulator endpoint", "endpoint", simEndpoint)
 		return simEndpoint
 	}
 	// Try paths in order: legacy paths first, then namespaced paths

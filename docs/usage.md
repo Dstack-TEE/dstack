@@ -1,8 +1,10 @@
 # dstack Usage Guide
 
-This guide covers deploying and managing applications on dstack. For infrastructure setup and self-hosting, see the [Deployment Guide](./deployment.md).
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
 
-You can manage VMs via the dashboard or [CLI](./vmm-cli-user-guide.md).
+This guide covers deploying and managing applications on self-hosted dstack infrastructure. For initial setup, see the [Deployment Guide](./deployment.md).
+
+You can manage VMs via the VMM dashboard or [CLI](./vmm-cli-user-guide.md).
 
 ## Deploy an App
 
@@ -54,11 +56,11 @@ For development images (`dstack-x.x.x-dev`), you can SSH into the CVM for inspec
 ssh root@10.0.3.2
 ```
 
-## Getting TDX Quote in Docker Container
+## Get Attestation Evidence in Containers
 
-To get a TDX quote within app containers:
+Most applications should use the dstack socket to get attestation evidence from inside a container.
 
-**1. Mount the socket in `docker-compose.yaml`**
+**1. Mount the socket in your Compose file**
 
 ```yaml
 version: '3'
@@ -76,9 +78,23 @@ services:
 
 ```bash
 # The argument report_data accepts binary data encoding in hex string.
-# The actual report_data passing to the underlying TDX driver is sha2_256(report_data).
+# The report_data passed to the underlying TEE is padded to 64 bytes.
 curl --unix-socket /var/run/dstack.sock http://localhost/GetQuote?report_data=0x1234deadbeef | jq .
 ```
+
+`GetQuote` needs Intel TDX. On platforms without it (AMD SEV-SNP, AWS Nitro) it
+returns an error. On GCP Confidential VMs it answers, but with the TDX quote
+alone -- GCP's verification also binds a vTPM quote, which this response has no
+field for, so a verifier that takes it at face value checks less than it should.
+
+`Attest` is the replacement in both cases. It returns a platform-adaptive
+attestation carrying whatever evidence the platform actually produces:
+
+```bash
+curl --unix-socket /var/run/dstack.sock http://localhost/Attest?report_data=0x1234deadbeef | jq .
+```
+
+For advanced compatibility with unmodified binaries that expect native Linux TEE interfaces such as `/dev/tdx_guest`, `/dev/sev-guest`, or configfs-tsm, see [Advanced Native TEE Interfaces in Containers](./native-tee-interfaces.md).
 
 ## Container Logs
 

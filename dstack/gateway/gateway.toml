@@ -1,0 +1,227 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+workers = 8
+max_blocking = 64
+ident = "dstack Gateway"
+temp_dir = "/tmp"
+keep_alive = 10
+log_level = "info"
+address = "127.0.0.1:8010"
+
+[core]
+# auto set soft ulimit to hard ulimit
+set_ulimit = true
+rpc_domain = ""
+
+# Required before any root_ca entry is accepted. Development/CI only;
+# production should retain vendor roots.
+[core.attestation]
+insecure_allow_external_trust_anchors = false
+# Hosts the GCP TPM AK issuer certificates and CRLs may be fetched from; `*`
+# matches within one DNS label. Unset keeps Google's Private CA hosts.
+# allowed_collateral_hosts = ["privateca-content-*.storage.googleapis.com"]
+
+[core.attestation.urls]
+# pccs = "https://pccs.phala.network"
+# amd_kds = "https://kdsintf.amd.com/vcek/v1"
+
+[core.attestation.root_ca]
+# tdx = "/etc/dstack/roots/intel-sgx-root-ca.der"
+# gcp_tpm = "/etc/dstack/roots/gcp-tpm-root-ca.pem"
+# aws_nitro_enclave = "/etc/dstack/roots/aws-nitro-enclave-root-ca.pem"
+# aws_nitro_tpm = "/etc/dstack/roots/aws-nitro-tpm-root-ca.pem"
+# sev_snp_milan = "/etc/dstack/roots/amd-milan-ark.pem"
+# sev_snp_genoa = "/etc/dstack/roots/amd-genoa-ark.pem"
+# sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
+
+[core.auth]
+enabled = false
+url = "http://localhost/app-auth"
+timeout = "5s"
+
+[core.admin]
+enabled = false
+address = "127.0.0.1:8011"
+# Shared secret required by every admin endpoint (RPC + dashboard). Can also
+# be supplied via the `DSTACK_GATEWAY_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env
+# vars. Clients send it as `Authorization: Bearer <token>`, `X-Admin-Token`,
+# or (GET only, for dashboard links) `?token=...`. Required unless
+# `insecure_no_auth = true`. (The legacy key `admin_token` is still accepted.)
+auth_token = ""
+# Optional Apache htpasswd file for HTTP Basic authentication.
+htpasswd_file = ""
+# Development/testing escape hatch only. Never enable this on an admin
+# interface that is reachable from the network.
+insecure_no_auth = false
+
+[core.debug]
+insecure_enable_debug_rpc = false
+# Route the app address "localhost" to 127.0.0.1 on the gateway host. Off by
+# default: the app address also comes from the _dstack-app-address TXT record of
+# arbitrary custom domains, so enabling this lets any DNS zone owner reach the
+# gateway's own loopback on a port of their choosing, bypassing port_policy.
+insecure_localhost_backend = false
+address = "127.0.0.1:8012"
+
+[core.wg]
+public_key = ""
+private_key = ""
+listen_port = 51820
+ip = "10.0.0.1/24"
+reserved_net = ["10.0.0.1/32"]
+client_ip_range = "10.0.0.0/25"
+config_path = "/etc/wireguard/wg0.conf"
+interface = "wg0"
+endpoint = "10.0.2.2:51820"
+
+[core.proxy]
+tls_crypto_provider = "aws-lc-rs"
+tls_versions = ["1.2"]
+listen_addr = "0.0.0.0"
+listen_port = 8443
+agent_port = 8090
+buffer_size = 65536
+# number of hosts to try to connect to
+connect_top_n = 3
+app_address_ns_prefix = "_dstack-app-address"
+app_address_ns_compat = true
+workers = 32
+# One runtime + SO_REUSEPORT listener per worker (thread-per-core). Linux only.
+thread_per_core = true
+# Hand new connections to a less loaded core when SO_REUSEPORT skews them.
+connection_rebalance = true
+# Maximum concurrent connections per app. 0 means unlimited.
+max_connections_per_app = 2000
+# Whether to read PROXY protocol from inbound connections (e.g. from Cloudflare).
+inbound_pp_enabled = false
+# splice(2) zero-copy relaying for the TLS-passthrough path (Linux only), and
+# kernel TLS offload for the terminate path, are both configured by an optional
+# section. Omitting the section disables the optimisation; an empty section
+# engages it from the first byte; `after_bytes` / `after_duration` are two
+# independent gates and whichever fires first engages it.
+#
+# [core.proxy.tcp_splice]
+# # Bulk transfers trip this within milliseconds.
+# after_bytes = 65536
+# # Long-lived low-rate streams (e.g. LLM token streaming) never accumulate
+# # bytes fast enough for the gate above, so they need this one instead.
+# after_duration = "5s"
+# # Park a relay's pipe in the pool while it waits for the next chunk. A spliced
+# # connection otherwise pins 4 descriptors for its whole lifetime, so bursty
+# # traffic (a token every 25 ms) holds them >99% idle.
+# release_idle_pipes = true
+#
+# kTLS hands session keys to the kernel; see config.rs for the security note.
+# Gated offload also requires [core.proxy.tcp_splice].
+#
+# [core.proxy.ktls]
+# after_bytes = 65536
+
+# Application-level health polling. The gateway asks each CVM's guest agent
+# whether the app is serving, and keeps instances that say no out of app-id
+# load balancing. Instances stay reachable by instance id regardless.
+#
+# Safe to leave on: only CVMs whose app-compose sets `requirements.health_check`
+# are polled at all, and if every instance of an app reports unhealthy the
+# gateway routes to all of them anyway rather than blackholing the app.
+# Note the two are different keys with similar names: `enabled` below switches
+# polling on for this gateway, `requirements.health_check` is how an app asks
+# to be polled.
+[core.proxy.health_check]
+enabled = true
+interval = "5s"
+timeout = "2s"
+concurrency = 16
+failure_threshold = 2
+
+[core.proxy.port_policy_fetch]
+# Background lazy-fetch of port_policy from legacy CVM agents.
+# Single Info() RPC timeout.
+timeout = "10s"
+# Retries cover the WireGuard / agent warmup window after registration.
+max_retries = 5
+# Exponential backoff between retries; doubles each attempt up to backoff_max.
+backoff_initial = "1s"
+backoff_max = "30s"
+
+[core.proxy.timeouts]
+# Timeout for establishing a connection to the target app.
+connect = "5s"
+# TLS-termination handshake timeout or SNI extraction timeout.
+handshake = "5s"
+
+# Timeout for top n hosts selection
+cache_top_n = "30s"
+# Maximum WireGuard handshake age for a healthy upstream instance.
+handshake_stale = "30m"
+# Timeout for DNS TXT record resolution (app address lookup).
+dns_resolve = "5s"
+
+# Enable data transfer timeouts below. This might impact performance. Turn off if
+# bad performance is observed.
+data_timeout_enabled = true
+# Timeout for a connection without any data transfer.
+idle = "10m"
+# Timeout for writing data to the target app or to the client.
+write = "5s"
+# Timeout for shutting down a connection.
+shutdown = "5s"
+# Timeout for total connection duration.
+total = "5h"
+# Timeout for proxy protocol header.
+pp_header = "5s"
+
+[core.recycle]
+enabled = true
+interval = "5m"
+timeout = "10h"
+node_timeout = "10m"
+
+[core.sync]
+enabled = false
+# WaveKV node ID for this gateway (must be unique across cluster)
+node_id = 0
+my_url = "https://localhost:8011"
+interval = "1m"
+timeout = "30s"
+# The URL of the bootnode used to fetch initial peer list when joining the network.
+# Leave empty if this is the first node or peers are managed via Admin.SetNodeInfo RPC.
+bootnode = ""
+# Data directory for WaveKV persistence (WAL and snapshots)
+data_dir = "/dstack-gateway/data"
+# Interval for periodic persistence of WaveKV data (e.g., "5s", "1m", "1h")
+persist_interval = "5m"
+# How long a KV write may sit in the page cache before the write-ahead log is
+# forced to disk.
+#
+# An fsync costs about 100us on an NVMe host and milliseconds on the virtio disk
+# a CVM gets, and it runs under the store lock, so paying one per write bounds
+# how fast this gateway can accept registrations and stalls its readers while it
+# does. Deferring it bounds what losing the *machine* costs — writes made in the
+# last window — and changes nothing about losing the process: a panic, an OOM
+# kill or a restart loses nothing either way, because the bytes are already with
+# the kernel.
+#
+# A cluster recovers the window from its peers on restart. A single-node gateway
+# does not, which is the case for setting this to "0s".
+#
+# Note that "0s" is the strictest setting here, not the cheapest: no window
+# means every write is forced before it returns, as releases before WaveKV 2.1
+# always did. That is the opposite of the "*_interval" settings either side of
+# it, where zero turns the work off — which is why this one is a window.
+wal_sync_window = "5s"
+# Enable periodic sync of instance connections to KV store
+sync_connections_enabled = true
+# Interval for syncing instance connections to KV store
+sync_connections_interval = "30s"
+# Collect tombstones every peer has already acknowledged once every this many
+# replicated writes, per store. Zero keeps every delete on disk for the life of
+# the deployment. The trigger counts replicated writes rather than reading a
+# clock so that every node in a cluster collects in the same window -- the
+# state digest covers tombstones, so nodes collecting on their own phase
+# report a mismatch and pay a full re-exchange. An operator override stored in
+# the KV itself (SetTombstoneGcConfig) replicates everywhere and takes
+# precedence over this per-node default.
+tombstone_gc_writes = 10000

@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=heartbeat (dstack self-contained app)
+After=dstack-guest-agent.service
+
+[Service]
+ExecStart=/run/sca/bin/entrypoint.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

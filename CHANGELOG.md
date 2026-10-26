@@ -5,6 +5,442 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- SEV-SNP: coalesce concurrent endorsement-certificate fetches and preserve typed collateral errors. The verifier returns HTTP 503 for unavailable AMD endorsements instead of declaring a quote invalid; cryptographic failures still fail verification.
+
+### Added
+- guest: `requirements.ephemeral_data_disk` in `app-compose.json` starts every boot with an empty data disk. The guest formats the data disk before any app code runs (#1461)
+
+### Fixed
+- guest: a fresh CVM with a verity volume could take the volume for its data disk and try to LUKS-format it: volumes labelled their data partition `dstack-data`, the data disk's label. `dstack verity` now labels it `dstack-volume-data`, and the guest skips disks that carry a `dstack-volume` partition, so volumes built by older releases are safe too
+
+### Changed
+- vmm: `qmp_socket` now defaults to `true`. Each CVM's QEMU exposes `qmp.sock` in its work dir, so the host can change disk options or compact a bloated `hda.img` (`blockdev-mirror`) without stopping the CVM. Applies to CVMs started after the change; set `qmp_socket = false` to opt out
+
+## [0.6.1] - 2026-10-12
+
+dstack 0.6.1 is a security release. Upgrade the guest OS, KMS, and verifier.
+
+### Upgrade notes
+
+- **New guest image.** Register the 0.6.1 `os_image_hash` on chain before
+  deploying 0.6.1 images
+
+### Security
+
+- guest-agent: `/logs/<container_name>` rejects names that are not valid Docker
+  container names, so a crafted name can no longer reach a different Docker
+  API endpoint (#1442)
+- KMS and verifier: a request `vm_config` must match the attested copy, and a
+  config has one layout. On AMD SEV-SNP the competing copies let a `SignCert`
+  request pass authorization with one `os_image_hash` and obtain a certificate
+  claiming another (#1430)
+
+### Added
+
+- verifier: measure multi-node NUMA layouts of hugepage VMs through
+  `vm_config.numa_nodes`; the VMM orders guest NUMA nodes by host node and
+  records the memory QEMU actually allocates, so such VMs now verify (#1418)
+- verifier: `vm_config.extra_root_devices` describes root-bus devices that a
+  `qemu_path` wrapper appends, so their DSDT entries can be measured (#1424)
+- vmm: `passt` networking is back. Each passt runs as a sidecar of the VM
+  launcher and talks to QEMU over a socketpair; see
+  `docs/passt-networking.md` (#1422, #1423)
+- vmm: per-VM `annotations` for host-side tooling, stored in the VM manifest
+  and never passed to the guest or measured (#1419, #1421)
+
+### Changed
+
+- sdk/simulator: use the GHCR openssh installer image (#1417)
+- dependency updates: rustls 0.23.45 in the Rust SDK, hickory-resolver 0.26.2,
+  and npm packages in KMS auth-eth and the VMM UI (#1429, #1432, #1434, #1436,
+  #1438, #1439, #1440)
+
+## [0.6.0] - 2026-09-28
+
+> [!IMPORTANT]
+> dstack 0.6.0 is the first release from the monorepo. Each component is
+> released under its own tag in `Dstack-TEE/dstack`: `mkosi-os-v0.6.0` for the
+> guest OS image, and `kms-v0.6.0`, `gateway-v0.6.0` and `verifier-v0.6.0` for
+> the services, whose container images now publish to `ghcr.io/dstack-tee`.
+> Guest OS releases before 0.6.0 remain in `Dstack-TEE/meta-dstack`.
+
+### Highlights
+
+- a versioned guest API, `dstack.guest.v1`, with domain-separated key
+  derivation, GPU evidence, and one attestation entry point on every platform.
+  The v0 API is frozen at v0.5.11 and keeps working unchanged
+- a unified attestation model for Intel TDX, AMD SEV-SNP, AWS Nitro Enclaves,
+  AWS NitroTPM, GCP Confidential VMs, and development simulators
+- canonical event log v2 and manifest-based OS and workload policy
+  verification
+- a Debian/mkosi guest OS as the default, reproducible build backend,
+  superseding Yocto
+- VMM-managed networking with netd, macvtap, vhost-net multiqueue, and libvirt
+  network filters
+- Gateway application health checks, WaveKV v2, simultaneous CVM connections
+  to multiple Gateway clusters, and credential-free certificate issuance with
+  `dns-persist-01` (experimental)
+- local key providers, external attestation root CAs, dm-verity volumes, and
+  data disks that return deleted blocks to the host
+- shared authentication across the VMM, Gateway, and KMS administrative APIs
+- a security hardening pass across every component
+
+### Upgrade notes
+
+See [docs/upgrading-to-0.6.md](docs/upgrading-to-0.6.md) for the upgrade
+procedure.
+
+- **Every measurement changes.** Register the new `os_image_hash` on chain
+  before deploying 0.6.0 images. The VMM now defaults `qemu_hotplug_off` to
+  `true`, which changes the ACPI tables and RTMRs of every CVM on its next
+  start, whatever its image; update any allowlist that pins MRs, or set it
+  back to `false` on hosts without GPUs (#1387)
+- **Apps on the 0.6.0 guest image:** `pre_launch_script` runs under
+  `set -euo pipefail`; a GPU CVM must pass GPU attestation to boot unless
+  `requirements.gpu_policy.attest_gpu` is false; legacy iptables is gone;
+  environment variables arrive byte for byte instead of with `\n` escaped;
+  and an encrypted environment that cannot be decrypted stops the boot
+- **v1 keys differ from v0 keys.** Existing apps keep their keys on the
+  unversioned (v0) paths. Moving to v1 `GetKey` needs an asset migration
+  signed by the old key; see `docs/guest-api-v1.md`. v1 attestations and
+  v1-issued RA-TLS certificates need KMS and verifiers 0.5.9 or later
+- **SDKs:** `DstackClient` now means `DstackClientV1`; name `DstackClientV0`
+  to stay on v0. Deep imports of the v0 modules gain a `_v0` suffix, and the
+  Python v0 client emits a `DeprecationWarning`
+- **Guest agent:** `EmitEvent` always fails; bind app data through
+  `report_data` instead. `GetQuote` answers on Intel TDX only; use `Attest`
+  elsewhere
+- **KMS:** Nitro Enclave key release needs `nitro_enclave_key_release = true`
+  (#1303), and the Nitro Enclave `device_id` is now `sha256(PCR4)`, so
+  `DstackApp` contracts with `allowAnyDevice = false` must add the new value
+  (#1302). Root-key handover moves to the admin listener; turn off
+  `core.onboard.public_key_handover` once every node is upgraded (#1307)
+- **Admin APIs fail closed:** a KMS or Gateway with its admin API enabled
+  but no `auth_token` or `htpasswd_file` refuses to start. The VMM's `[auth]`
+  now guards the whole API and web UI
+- **Gateway:** roll nodes one at a time; 0.5.x and 0.6.0 nodes serve traffic
+  but do not sync until every node is upgraded.
+  `core.debug.insecure_skip_attestation` is gone, and a gateway
+  without a guest agent no longer starts (#1148). A certificate configured in
+  `[core.proxy]` is ignored; install it with `Admin.ImportCert` (#1239)
+- **VMM:** a 0.5.x app that sets `key_provider_id` cannot boot its 0.5.x
+  image on a 0.6.0 VMM; move it to the 0.6.0 image with the host. Upgrade
+  netd together with the VMM, and before it on hosts running
+  bridge or macvtap VMs (#1145, #1217)
+- **Images:** component images publish to `ghcr.io/dstack-tee/<component>`
+  (#1222). `dstackup` digest-pins its default KMS image, so fresh installs
+  register a different KMS app id
+- **certbot:** every renewal uses a new private key; update DANE/TLSA or SPKI
+  pins on each renewal
+
+### Added
+
+#### Guest API v1 and SDKs
+
+- guest-agent: the versioned API `dstack.guest.v1`, served at `/v1` on the
+  internal socket (`IssueCert`, `GetKey`, `Attest`, `AttestGpu`, `Info`,
+  `Version`) and at `/prpc/v1` on the external listener (`Info`, `Version`,
+  `Health`). Specified byte for byte in `docs/guest-api-v1.md` (#1116)
+- guest-agent: v1 `GetKey` derives keys with a domain-separated KDF, so the
+  two curves no longer share a secret, and its signature-chain claim cannot be
+  forged through the v0 surface (#1116)
+- guest-agent: v1 `Attest` returns the boot-time GPU attestation evidence on
+  request, and `AttestGpu` collects fresh GPU evidence against a caller's
+  nonce (#1111, #1112)
+- guest-agent: v1 `Attest` and `IssueCert` always use the MessagePack
+  attestation schema (#1207)
+- guest-agent: a `GpuInfo` RPC for GPU telemetry (#1178)
+- sdk: every SDK ships `DstackClientV0` for the frozen v0 surface and
+  `DstackClientV1` for v1. Neither verifies signature chains locally; relying
+  parties verify against `docs/guest-api-v1.md` (#1110, #1120)
+- sdk: the Go SDK's `AppCompose` gains `init_script`, `storage_fs`,
+  `swap_size`, `event_log_version`, `port_policy` and `verity_volumes`, and
+  Go and Python gain `gpu_policy` (#1092)
+
+#### Attestation and platform support
+
+- AMD SEV-SNP image conversion, measurement, verification, and simulator
+  support (#703)
+- AWS Nitro Enclave attestation platform specification and simulator support
+  (#753)
+- GCP instance identity binding and unified OS image hash verification
+  (#726, #757)
+- native TEE interfaces and a common TEE variant API (#743, #808)
+- unified Intel TDX measurement and attestation handling, including ACPI
+  measurement support (#742, #762, #769)
+- manifest-versioned OS policy, launch token, and GPU verification requirements
+  (#754, #763, #765)
+- canonical JSON event log v2 with stricter event integrity validation
+  (#646, #879, #1038)
+- external attestation root CA support (#806)
+- seeded and deterministic simulator attestation for reproducible tests (#964)
+- ACPI measurement and diagnosis implemented in Rust, including DSDT
+  generation for lite TDX images (#943, #1048, #1051, #1052, #1053)
+- the TDX measurement document carries the kernel command line, and `auto`
+  TDX attestation follows the image rather than guest RAM (#1199, #1200)
+- guest images normalize the Linux setup header, so the kernel measurement no
+  longer depends on the host's QEMU (#1189, #1229)
+- the measured `gpu-attestation` event reports the GPUs' debug and secure
+  boot status (#1318), and a measured event records whether the data disk is
+  encrypted (#1326)
+
+#### VMM and networking
+
+- VMM networking RPCs for preparing and managing guest networking (#756)
+- a netd-based macvtap networking backend with systemd socket activation
+  (#1061, #1068, #1069)
+- libvirt network filters and guest netfilter support (#837, #1042)
+- validation and restriction of requested guest networking modes (#1068)
+- virtio-net on vhost-net with configurable queue pairs, off by default
+  (#1145)
+- port mappings can name a NIC index (#1213)
+- local key provider support (#788)
+- development TDX and software TPM environments (#780, #798)
+- TSM provider configuration through environment variables (#782)
+- release discovery API for `dstackup` (#805)
+- array-form `init_script` support (#975)
+- image backend provenance tracking (#1073)
+- a host-side data disk preallocation option (#1230)
+- GPU listing for Hopper and Blackwell GPUs (#1161)
+- a status filter in the console instance list (#1193)
+- shared API authentication (`dstack-api-auth`) for the VMM HTTP, pRPC and UI
+  surface and for Gateway and KMS administration (#796)
+
+#### Gateway and certificates
+
+- opt-in application health checks: an app sets
+  `requirements.health_check`, and the Gateway keeps instances that report
+  unhealthy out of app-id load balancing. Health comes from the app's Compose
+  healthchecks or from a `health_status_file` the app writes. See
+  `docs/app-health-checks.md` (#1079)
+- `Admin.SetInstanceReady` takes an instance out of rotation without stopping
+  it, and `Admin.Status` reports whether health gating is on (#1078)
+- opt-in `dns-persist-01` certificate validation, which issues certificates
+  without DNS provider credentials. Experimental; see
+  `docs/certbot-dns-persist-01.md` (#1132)
+- WaveKV v2 with deterministic conflict resolution. A 0.5.x data directory
+  is migrated in place; 0.5.x and 0.6.0 nodes do not sync with each other
+  (#1031, #1067)
+- simultaneous CVM connections to multiple Gateway clusters (#1060)
+- a Prometheus metrics endpoint (#1037), with sync rejection and node
+  liveness metrics (#1100, #1102)
+- administrative recovery APIs (#1046)
+- DNS-based application address resolution (#921)
+- Certbot DNS API endpoint (#925)
+- `Admin.ImportCert` installs a certificate issued elsewhere into the
+  replicated store (#1239)
+
+#### Storage and guest OS
+
+- integrity-protected dm-verity volumes (#752)
+- production and development OS image flavors
+- a Debian/mkosi guest OS build with Docker caching and parallel SquashFS
+  generation, now the default backend (#816, #828, #833, #834, #1208)
+- the guest kernel build tree and a matching kernel module builder image,
+  `ghcr.io/dstack-tee/dstack-kernel-builder`, for out-of-tree modules (#1226)
+- NVIDIA kernel module options derived from the GPU topology (#1157)
+- TDX guest scaling knobs: batched wake-queue IPIs and paravirtual single
+  IPIs, on by default (#1219)
+- the traffic control and checkpoint/restore kernel features Incus needs
+  (#1182)
+- SELinux policy parity for guest services (#1043)
+- reproducible NVIDIA attestation tooling and improved GPU certificate
+  verification (#789, #791, #813)
+
+#### Tooling
+
+- tag-driven release workflows for the Rust, JavaScript, Python, and Go SDKs
+  (#686, #691, #692)
+- Rust SDK releases decoupled from the main workspace (#785)
+- API parity improvements for the JavaScript and Python SDKs (#690, #695)
+- `dstack-util decrypt` for decrypting protected payloads (#1054)
+- measured boot and attestation diagnostics (#943)
+- OCI source metadata on published images (#1190)
+
+### Changed
+
+- merged the former dstack and guest OS repositories into one monorepo (#770)
+- renamed the default development branch to `next` and updated CI accordingly
+  (#1025, #1026)
+- unified platform-specific attestation paths behind common verification and
+  policy interfaces
+- moved KMS administrative APIs to a dedicated administration listener (#802)
+- allowed application IDs to be derived without KMS availability (#714)
+- added failover and multiple-service support to Gateway and KMS endpoint
+  configuration
+- changed event serialization to canonical, named encodings with stricter
+  validation
+- added explicit release identity and backend provenance to OS artifacts
+- guest-agent: the unversioned API is frozen at v0.5.11. Additions made after
+  v0.5.11 that never shipped in a release moved to v1 (#1116)
+- guest-agent: `GetQuote` answers on Intel TDX only, and its `attestation`
+  field is removed; use `Attest` on other platforms (#1107)
+- guest-agent: the `/metrics` endpoint adds conventional `dstack_guest_*`
+  names; the old names remain for one release (#1103)
+- sdk: v1 byte fields use each language's byte type instead of hex strings;
+  the JSON wire format is unchanged (#1124)
+- sdk: the v0 modules are renamed with a `_v0` suffix, and the v0 clients are
+  marked deprecated in each language's tooling (#1122)
+- sdk: the v1 SDKs agree with each other: Go's `IssueCert` defaults
+  `usage_server_auth` to true, and JavaScript drops its `asUint8Array()`
+  accessors (#1120)
+- vmm: `qemu_hotplug_off` defaults to `true`, and ACPI generation rejects PCI
+  hotplug with GPU or NVSwitch root ports (#1387)
+- vmm: the KMS and Gateway URL lists written to each CVM are shuffled, so new
+  CVMs spread their requests across service nodes (#1097)
+- vmm: netd is served as a pRPC service with one method per operation (#1217)
+- dstack-util: a CVM re-registers with the Gateway node that last accepted it
+  before trying the others (#1093)
+- kms: RA-TLS clients are authenticated by their attestation rather than by
+  certificate issuer; `[rpc.tls.mutual]` is dropped from `kms.toml` (#1106)
+- kms: root-key handover is served as `Admin.GetKmsKey`, and onboarding takes
+  the source operator's token (#1307)
+- kms: key release for AWS Nitro Enclaves is opt-in, like SEV-SNP and NitroTPM
+  (#1303)
+- attest: the AWS Nitro Enclave `device_id` is derived from the attested PCR4
+  (#1302)
+- gateway: WireGuard configuration is applied by a background worker instead
+  of under the routing lock (#1308)
+- certbot: every renewal is issued under a new private key, and the live
+  certificate and key are swapped atomically (#1241)
+- http-client: HTTP clients are shared instead of built per request (#1079)
+- dstackup: the default KMS image is pinned by digest (#1250)
+- release: component images publish to `ghcr.io/dstack-tee` instead of
+  Docker Hub (#1222)
+- os: the guest kernel's SWIOTLB bounce buffer grows at runtime, and upstream
+  DMA fixes for confidential guests are backported (#1192, #1194)
+- os: mkosi images use an NTS-only chrony configuration (#1354)
+- os/yocto: nerdctl 2.3.5, which honours Compose `healthcheck:` (#1083)
+
+### Deprecated
+
+- os: the Yocto guest OS backend (`os/yocto/`), in favor of mkosi. `make
+  os-image` builds with mkosi; Yocto builds move to `make os-image-yocto`
+  (#1208)
+
+### Removed
+
+- guest-agent: `EmitEvent` no longer records anything and always fails, since
+  runtime RTMR3 events are system-owned (#1116)
+- gateway: `core.debug.insecure_skip_attestation` (#1148)
+- gateway: the `[core.proxy]` `cert_chain`, `cert_key`, `base_domain`,
+  `external_port` and `tappd_port` settings, none of which took effect any
+  more (#1239, #1375)
+- gateway: the legacy debug key (#999)
+- vmm: legacy port-forward management, in favor of VMM-managed networking
+  (#795)
+- vmm: pulling guest images from an OCI registry (#1282)
+- verifier: the `debug` request field and the `acpi_tables` and `rtmr_debug`
+  response fields (#1332)
+- sdk: `TlsKeyOptions.path` in the JavaScript SDK, which was never read
+  (#1120)
+- obsolete SEV text digest handling (#764)
+
+### Security
+
+- added LUKS2 keyslot bounds checking and stopped passing storage keys through
+  process arguments (#799, #886)
+- enforced restrictive permissions and atomic updates for KMS, guest, Gateway,
+  certificate, attestation, and TPM key material, including boot-time secrets,
+  certbot keys and the `vmm-cli` credential file (#1233, #1241, #1390)
+- added archive extraction, image artifact, console log, registry layer, and
+  filesystem path confinement
+- strengthened RA-TLS validation, including certificate/key matching, security
+  profiles, application extensions, and unattested certificate rejection; an
+  app certificate can no longer authenticate as the KMS (#1255)
+- hardened KMS node authorization, Ethereum authentication, policy auditing,
+  endpoint redaction, and bootstrap. The KMS refuses to auto-bootstrap over
+  existing root keys (#1305), bounds its inputs to the auth backend (#1310,
+  #1311, #1365), reads each auth-eth decision from a single block (#1314), and
+  fails closed on an empty device allowlist or an unknown `MOCK_POLICY`
+  (#1344, #1391)
+- removed the Gateway debug key and restricted private host APIs
+- added stricter quote size, report-data, trailing-byte, event ordering, and
+  event-preimage validation
+- improved WireGuard public key validation and Gateway registration collision
+  handling
+- bounded parsing of untrusted bytes in `dstack-mr`, SEV-SNP and TPM
+  verification, and collateral fetching, which only reaches allowlisted hosts
+  (#1231, #1236, #1238, #1267, #1279, #1404)
+- the verifier rejects SEV-SNP guests with unsupported `SEV_FEATURES` such as
+  `DebugSwap`, and checks downloaded OS images end to end before caching them
+  (#1275, #1337)
+- the key provider re-checks TD attributes before provisioning (#1242)
+- the guest fails closed when an encrypted environment cannot be decrypted
+  (#1340), and a container can no longer crash the guest agent or make an
+  anonymous `Info` call trigger a quote (#1256, #1263)
+- `docker compose --remove-orphans` no longer deletes live containers when a
+  compose file uses `include` (#1254)
+- the Gateway rejects malformed SNI values and sync envelopes that claim its
+  own node id, and a short TLS record on port 443 no longer aborts it (#1278,
+  #1284, #1380)
+- the VMM enforces the port mapping policy on `update_vm`, restricts listed
+  GPUs to the node's offered devices, and bounds guest-reported event names
+  (#1286, #1346, #1363)
+- guest-agent calls from the VMM and the Gateway are bounded in time and
+  response size (#1095)
+- caller-supplied text can no longer forge log lines (#1401, #1407)
+- release builds use `--locked`, CI actions and the release BuildKit image are
+  pinned by digest, and the KMS onboarding page and VMM console pin their
+  front-end dependencies by integrity (#1389, #1393, #1395, #1396, #1398,
+  #1403)
+
+### Fixed
+
+- data disks release deleted blocks back to the host through ZFS or ext4,
+  dm-crypt and QEMU. Discard is on by default; set `storage_discard: false`
+  to disable it (#1175)
+- a GPU CVM using the TPM key provider can reboot again (#1410)
+- sdk: compose-hash helpers in Go and Python no longer drop unknown
+  app-compose fields, Go no longer HTML-escapes `<`, `>` and `&`, and Python
+  no longer mutates its input, so every SDK produces the digest that is
+  whitelisted on chain (#1079, #1092)
+- sdk: the Python and JavaScript wallet adapters reject TLS-key responses,
+  which derived the same wallet from different keys (#1283)
+- sdk: the JavaScript and Rust clients report HTTP errors with the status and
+  the server's message, and JavaScript v0 methods reject on failure instead
+  of resolving to empty objects (#1120)
+- sdk: the JavaScript transport sends and reads non-ASCII payloads correctly
+  and reports timeouts as timeouts (#1120)
+- certbot: a certificate for both a name and its wildcard can be issued over
+  `dns-01`, and editing `domains` triggers a reissue (#1136, #1137)
+- gateway: a new cluster registers a single ACME account (#1138)
+- gateway: a node removed with `RemoveNode` stays out until an operator
+  re-admits it (#1100)
+- gateway: KV tombstones are garbage-collected (#1099)
+- gateway: `Admin.RemoveCvm` no longer reports a successful removal as failed
+  (#1088)
+- fixed VMM CID allocation and reload behavior, including stopped VMs and
+  bounded allocation windows
+- fixed VM restart policies, one-shot failure handling, stopped-VM resizing,
+  host port conflicts, serial log limits, and encrypted KMS URL propagation;
+  a VM that is still stopping starts once QEMU has exited (#1414)
+- fixed simulator races and measurement inconsistencies across TPM, NitroTPM,
+  Intel TDX, AMD SEV-SNP, and GCP vTPM environments
+- fixed guest startup and credential refresh during temporary Gateway or KMS
+  outages
+- fixed Gateway certificate reload, certificate ordering, ACME credential
+  recovery, CAA reconciliation, DNS timing, peer synchronization, and
+  registration consistency, and moved KV store access off the routing lock
+  (#1253, #1262, #1265, #1385, #1386)
+- fixed KMS CA persistence across restarts, repeated onboarding, authorization
+  locking, endpoint failover, and certificate log handling; an interrupted
+  bootstrap can be redone (#1309)
+- fixed verifier configuration precedence, cache versioning, archive
+  confinement, development trust labels, one-shot output, and historical image
+  verification; the measurement cache is bounded and downloads are retried
+  (#1334, #1369, #1388)
+- fixed GPU reset and VFIO sanitization, including PCI secondary bus reset
+  handling (#1065)
+- fixed guest boot ordering, so the app starts only after `dstack-prepare`
+  and the guest agent, and an interrupted data disk initialization is redone
+  (#1322, #1324, #1328, #1339)
+- fixed OS image release metadata so `/etc/os-release` and release artifacts
+  consistently identify dstack 0.6.0 (#1076)
+
 ## [0.5.5] - 2025-10-20
 
 ### Added
@@ -1270,7 +1706,9 @@ New contributors in this release:
 * @Leechael made their first contribution
 * @nanometerzhu made their first contribution
 * @h4x3rotab made their first contribution
-[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.5.5..HEAD
+[unreleased]: https://github.com/Dstack-TEE/dstack/compare/v0.6.1..HEAD
+[0.6.1]: https://github.com/Dstack-TEE/dstack/compare/v0.6.0..v0.6.1
+[0.6.0]: https://github.com/Dstack-TEE/dstack/compare/v0.5.11..v0.6.0
 [0.5.5]: https://github.com/Dstack-TEE/dstack/compare/v0.5.4..v0.5.5
 [0.5.4]: https://github.com/Dstack-TEE/dstack/compare/v0.5.3..v0.5.4
 [0.5.3]: https://github.com/Dstack-TEE/dstack/compare/v0.5.2..v0.5.3

@@ -1,25 +1,99 @@
-# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
 #
 # SPDX-License-Identifier: Apache-2.0
 
 name: Publish SDK to crates.io
+
 on:
   push:
-    tags: ['rust-sdk-v*']
+    tags: ['dstack-sdk-v*']
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     environment: sdk-release
     permissions:
       id-token: write
+      contents: write
     steps:
-    - uses: actions/checkout@v5
-    - uses: rust-lang/crates-io-auth-action@v1
-      id: auth
-    - run: cargo publish -p dstack-sdk-types
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-    - run: cargo publish -p dstack-sdk
-      env:
-        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      - name: Extract version from tag
+        id: ver
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#dstack-sdk-v}"
+          if [[ -z "$version" || "$version" == "$tag" ]]; then
+            echo "::error::tag '$tag' does not start with 'dstack-sdk-v'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $version"
+
+      - name: Verify Cargo.toml versions match tag
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          python3 <<'PY'
+          import os, sys, tomllib
+
+          want = os.environ["VERSION"]
+
+          def pkg_version(path):
+              with open(path, "rb") as f:
+                  return tomllib.load(f)["package"]["version"]
+
+          def ws_dep_version(path, name):
+              with open(path, "rb") as f:
+                  dep = tomllib.load(f)["workspace"]["dependencies"][name]
+              return dep["version"] if isinstance(dep, dict) else dep
+
+          checks = [
+              ("sdk/rust/types/Cargo.toml [package.version]",
+                  pkg_version("sdk/rust/types/Cargo.toml")),
+              ("sdk/rust/Cargo.toml [package.version]",
+                  pkg_version("sdk/rust/Cargo.toml")),
+              ("sdk/rust/Cargo.toml [workspace.dependencies.dstack-sdk-types.version]",
+                  ws_dep_version("sdk/rust/Cargo.toml", "dstack-sdk-types")),
+          ]
+
+          fail = False
+          for label, got in checks:
+              ok = got == want
+              fail = fail or not ok
+              print(f"  {'OK ' if ok else 'BAD'}  {label}: {got}")
+
+          if fail:
+              print(f"\ntag is dstack-sdk-v{want}; bump SDK package versions to {want} before tagging.",
+                    file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+
+      - name: Publish dstack-sdk-types
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: .github/scripts/cargo-publish-idempotent.sh dstack-sdk-types
+
+      - name: Publish dstack-sdk
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: .github/scripts/cargo-publish-idempotent.sh dstack-sdk
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::GitHub Release $GITHUB_REF_NAME already exists; skipping"
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "dstack-sdk $VERSION" \
+            --notes "Published to crates.io: [dstack-sdk@$VERSION](https://crates.io/crates/dstack-sdk/$VERSION), [dstack-sdk-types@$VERSION](https://crates.io/crates/dstack-sdk-types/$VERSION)" \
+            --verify-tag

@@ -5,7 +5,6 @@
 package tappd_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -70,43 +69,9 @@ func TestTdxQuote(t *testing.T) {
 		t.Errorf("expected event log to be a valid JSON object: %v", err)
 	}
 
-	quoteBytes, err := hex.DecodeString(resp.Quote)
+	_, err = hex.DecodeString(resp.Quote)
 	if err != nil {
 		t.Errorf("expected quote to be a valid hex string: %v", err)
-	}
-
-	// Get quote RTMRs manually
-	quoteRtmrs := [4][48]byte{
-		[48]byte(quoteBytes[376:424]),
-		[48]byte(quoteBytes[424:472]),
-		[48]byte(quoteBytes[472:520]),
-		[48]byte(quoteBytes[520:568]),
-	}
-
-	// Test ReplayRTMRs
-	rtmrs, err := resp.ReplayRTMRs()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(rtmrs) != 4 {
-		t.Errorf("expected 4 RTMRs, got %d", len(rtmrs))
-	}
-
-	// Verify RTMRs
-	for i := 0; i < 4; i++ {
-		if rtmrs[i] == "" {
-			t.Errorf("expected RTMR %d to not be empty", i)
-		}
-
-		rtmrBytes, err := hex.DecodeString(rtmrs[i])
-		if err != nil {
-			t.Errorf("expected RTMR %d to be valid hex: %v", i, err)
-		}
-
-		if !bytes.Equal(rtmrBytes, quoteRtmrs[i][:]) {
-			t.Errorf("expected RTMR %d to be %s, got %s", i, hex.EncodeToString(quoteRtmrs[i][:]), rtmrs[i])
-		}
 	}
 }
 

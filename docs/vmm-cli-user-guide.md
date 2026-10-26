@@ -1,5 +1,7 @@
 # VMM CLI User Guide
 
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+
 Welcome to the **VMM CLI**! This tool helps you manage CVMs in the dstack platform.
 
 ## Table of Contents
@@ -66,28 +68,53 @@ export DSTACK_VMM_URL=unix:/path/to/socket
 
 **Priority Order:** Command line `--url` > `DSTACK_VMM_URL` environment variable > default `http://localhost:8080`
 
+For an `https://` URL (a TLS-terminating proxy in front of the VMM), the
+certificate is verified against the system CA store. Point `SSL_CERT_FILE` at
+your own CA for a private certificate. `--insecure` skips verification, and then
+anyone on the path can read the credentials sent with each request.
+
 ### Authentication
 
-If your dstack-vmm server requires authentication, you can provide credentials using:
+When the dstack-vmm server has `[auth] enabled = true`, the token now guards the
+*entire* management surface (listing/creating/stopping VMs, deploys, logs, and
+the web UI) — not just the logs endpoint. Provide credentials in one of two
+forms.
 
-#### Environment Variables (Recommended)
+#### Bearer token (Recommended)
+
+Pass the VMM API token directly; it is sent as `Authorization: Bearer <token>`.
 
 ```bash
-# Set authentication credentials
-export DSTACK_VMM_AUTH_USER=your-username
-export DSTACK_VMM_AUTH_PASSWORD=your-password
-
-# Then use CLI normally
+# your VMM API token. `dstackup install` writes it to
+# <config-dir>/vmm-auth-token (default /etc/dstack/vmm-auth-token) — and the
+# local `dstack` CLI reads it automatically; a manual setup (see the VMM
+# configuration tutorial) stores it at ~/.dstack/secrets/vmm-auth-token.
+export DSTACK_VMM_TOKEN=$(cat /etc/dstack/vmm-auth-token)
 ./vmm-cli.py lsvm
+
+# or as a flag
+./vmm-cli.py --token "$DSTACK_VMM_TOKEN" lsvm
 ```
 
-#### Command Line Arguments
+#### HTTP Basic
+
+The server also accepts HTTP Basic, where the password may be the shared token
+(any username, e.g. `admin`) or an entry in the server's `htpasswd_file`.
 
 ```bash
-./vmm-cli.py --auth-user your-username --auth-password your-password lsvm
+export DSTACK_VMM_AUTH_USER=admin
+export DSTACK_VMM_AUTH_PASSWORD=$(cat /etc/dstack/vmm-auth-token)
+./vmm-cli.py lsvm
+
+# or as flags
+./vmm-cli.py --auth-user admin --auth-password "$DSTACK_VMM_AUTH_PASSWORD" lsvm
 ```
 
-**Note:** Environment variables take precedence over command line arguments for authentication.
+**Note:** A bearer token takes precedence over Basic when both are set. For each
+setting, command-line flags take precedence over environment variables, which
+take precedence over the config file. Setting only one half of a Basic
+credential (e.g. `DSTACK_VMM_AUTH_PASSWORD` without `DSTACK_VMM_AUTH_USER`) is
+rejected with an error rather than silently sending an unauthenticated request.
 
 
 ## Basic Commands
@@ -203,7 +230,7 @@ First, create an application composition file that describes your application:
 
 - `--name`: Friendly name for your application
 - `--docker-compose`: Path to your Docker Compose file
-- `--prelaunch-script`: Optional script to run before starting containers
+- `--prelaunch-script`: Optional script to run before starting containers. It runs after dockerd, so containers restored by a Docker restart policy may already be running; do not put security gates here (see [security best practices](./security/security-best-practices.md#security-semantics-must-not-depend-on-pre_launch_script-running-first))
 - `--kms`: Enable Key Management Service for secrets
 - `--gateway`: Enable dstack-gateway for external access
 - `--local-key-provider`: Use local key provider
@@ -211,6 +238,7 @@ First, create an application composition file that describes your application:
 - `--public-sysinfo`: Make system info publicly accessible
 - `--env-file`: File with environment variables to encrypt
 - `--no-instance-id`: Disable unique instance identification
+- `--no-storage-discard`: Keep deleted data-disk blocks instead of returning them to the host. Required by `deploy --disk-prealloc falloc|full`, and it also keeps filesystem allocation and deletion patterns from the host. The cost is that the image only ever grows: space freed inside the guest is never given back
 
 #### Example with Security Features
 
@@ -246,6 +274,17 @@ Deploy your application with the compose file:
 - `--vcpu`: Number of virtual CPUs (default: 1)
 - `--memory`: Memory size (e.g., 1G, 512M, 2048M)
 - `--disk`: Disk size (e.g., 20G, 100G)
+- `--disk-prealloc`: Preallocate the disk on the host: `off`, `metadata`, `falloc` or `full`. Omitting it uses the node's `cvm.disk_prealloc`, which ships as `off`. `falloc` reserves the full size up front, so a host that is out of space fails the VM's first start instead of leaving the guest to hit ENOSPC mid-run; `full` also zeroes it, which takes as long as writing the whole disk. The disk is created on first start, not at deploy time, so this is where the reservation -- and any failure to make it -- shows up. The VMM's `cvm.disk_prealloc` provides the default.
+
+  `falloc` and `full` reserve host blocks and therefore require `storage_discard: false` in the compose file (`compose --no-storage-discard`), because a guest that may discard returns the reserved blocks to the host on its first trim. Deploying either with discard still enabled is rejected:
+
+  ```
+  disk preallocation (falloc) reserves host blocks, so app-compose must set
+  storage_discard = false; either turn discard off in the compose file, or redeploy
+  with disk_prealloc = "off" or "metadata" -- the mode is fixed at deployment
+  ```
+
+  Editing app-compose changes its hash and so the app id, which for a KMS-backed app means another on-chain whitelist entry. `metadata` reserves no data blocks, needs no compose change, and is left alone by this check.
 - `--port`: Port mappings (see Port Mapping section)
 - `--gpu`: GPU assignments
 - `--ppcie`: Enable PPCIE mode (attach ALL available GPUs and NVSwitches)
@@ -268,6 +307,11 @@ Expose services running in your VM:
 
 # Multiple ports
 --port tcp:8080:80 --port tcp:8443:443
+
+# Pin a mapping to one NIC: protocol[:host_address]:host_port:vm_port@<nic>
+# Without @<nic> the mapping enters through the first user-mode NIC. A VM
+# with no user-mode NIC has no backend that can publish the mapping.
+--port tcp:0.0.0.0:8443:443@0
 ```
 
 #### GPU Assignment
@@ -323,8 +367,7 @@ After successful deployment, verify your VM is running correctly:
 export DSTACK_VMM_URL=http://127.0.0.1:12000
 
 # If authentication is required
-export DSTACK_VMM_AUTH_USER=your-username
-export DSTACK_VMM_AUTH_PASSWORD=your-password
+export DSTACK_VMM_TOKEN=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 # Create a basic docker-compose.yml
 cat > docker-compose.yml << 'EOF'

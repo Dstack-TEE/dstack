@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+# SPDX-License-Identifier: Apache-2.0
+
+[default]
+workers = 8
+max_blocking = 64
+ident = "dstack Gateway E2E Simulator"
+temp_dir = "/tmp"
+keep_alive = 10
+log_level = "info"
+
+[default.core]
+keys_file = "/opt/dstack-simulator/appkeys.json"
+compose_file = "/opt/dstack-simulator/app-compose.json"
+sys_config_file = "/opt/dstack-simulator/sys-config.json"
+data_disks = ["/"]
+
+[default.core.simulator]
+attestation_file = "/opt/dstack-simulator/attestation.bin"
+patch_report_data = true
+# Re-sign the fixture quote under trust anchors derived from this seed instead
+# of shipping the fixture's original, now-stale signature. The mock collateral
+# service derives the matching roots from the same seed, so the gateways verify
+# each other's quotes through the normal production path rather than skipping
+# the check. Must stay in sync with the `mock_attestation_seed` in
+# `attestation/tee-simulator.json`, which the collateral service reads. Two
+# files, one value: the simulator config is TOML read by the simulator and the
+# collateral config is JSON read by dstack-mock-attestation, so there is nowhere
+# to put it once. They are kept adjacent, and the e2e run fails closed if they
+# drift -- every peer quote stops verifying.
+mock_attestation_seed = "4747474747474747474747474747474747474747474747474747474747474747"
+
+[internal]
+address = "unix:/var/run/dstack/dstack.sock"
+reuse = true

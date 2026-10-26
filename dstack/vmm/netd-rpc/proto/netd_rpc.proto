@@ -1,0 +1,126 @@
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+//
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+import "google/protobuf/empty.proto";
+
+package netd_rpc;
+
+// Names one host interface. The interface name is derived from these fields,
+// so the same identity always refers to the same interface.
+message InterfaceIdentity {
+  string instance_id = 1;
+  string vm_id = 2;
+  uint32 nic_index = 3;
+}
+
+message PrepareBridgeRequest {
+  InterfaceIdentity identity = 1;
+  string bridge = 2;
+  string mac = 3;
+  uint32 qemu_uid = 4;
+  // Whether to bind an nwfilter to the TAP. Which filter, and with what
+  // parameters, comes from netd's own configuration.
+  bool filtered = 5;
+  // virtio-net queue pairs. Zero or one creates a single-queue TAP.
+  uint32 queues = 6;
+  // The VM's working directory on the host. Only logged, so an operator can
+  // get from a TAP name back to the VM; never used for a decision.
+  string workdir = 7;
+}
+
+message PrepareMacvtapRequest {
+  InterfaceIdentity identity = 1;
+  string parent = 2;
+  string mac = 3;
+  uint32 qemu_uid = 4;
+  // macvtap mode; empty selects netd's default.
+  string mode = 5;
+  // virtio-net queue pairs. Zero or one creates a single-queue device.
+  uint32 queues = 6;
+  // The VM's working directory on the host. Only logged; see
+  // PrepareBridgeRequest.workdir.
+  string workdir = 7;
+}
+
+// What netd built, so the caller can verify it before handing it to QEMU.
+message PreparedInterface {
+  string tap = 1;
+  // Character device QEMU opens for a macvtap interface. Empty for a TAP.
+  string device = 2;
+  // Queue pairs the interface was created with.
+  uint32 queues = 3;
+}
+
+// Names one VM of one VMM instance.
+message VmRef {
+  string instance_id = 1;
+  string vm_id = 2;
+}
+
+message RemoveVmResponse {
+  // How many interfaces were deleted.
+  uint32 removed = 1;
+}
+
+message InterfaceName {
+  string tap = 1;
+}
+
+message ListInterfacesRequest {
+  // Only interfaces recorded as this instance's. Empty lists every interface
+  // netd owns, including ones it cannot attribute.
+  string instance_id = 1;
+}
+
+// One host resource netd holds.
+message InterfaceRecord {
+  string tap = 1;
+  // "tap", "macvtap", or "binding" for an nwfilter binding whose interface is
+  // already gone.
+  string kind = 2;
+  // The owner, when the interface carries an ownership record that
+  // re-derives its name. Absent means the owner is unknown, not that there is
+  // none.
+  optional string instance_id = 3;
+  optional string vm_id = 4;
+  optional uint32 nic_index = 5;
+}
+
+message InterfaceList {
+  repeated InterfaceRecord interfaces = 1;
+}
+
+message CheckInterfaceRequest {
+  InterfaceIdentity identity = 1;
+  // Also require the nwfilter binding.
+  bool filtered = 2;
+}
+
+// Privileged broker for bridge TAPs, macvtap devices and libvirt nwfilter
+// bindings.
+service Netd {
+  // Create, or recreate, a bridge TAP and its optional nwfilter binding.
+  rpc PrepareBridge(PrepareBridgeRequest) returns (PreparedInterface);
+  // Create, or recreate, a macvtap device.
+  rpc PrepareMacvtap(PrepareMacvtapRequest) returns (PreparedInterface);
+  // Delete an interface and its binding. Deleting one that does not exist
+  // succeeds.
+  rpc RemoveInterface(InterfaceIdentity) returns (google.protobuf.Empty);
+  // Delete every interface and binding one VM could hold, by deriving each
+  // name its identity can produce. Reaches interfaces the caller has no record
+  // of: one a crash left before it was recorded, or one whose NIC the VM no
+  // longer has.
+  rpc RemoveVm(VmRef) returns (RemoveVmResponse);
+  // Delete one interface by name. For interfaces nothing can attribute, such
+  // as ones built before netd recorded ownership. The name must be one netd
+  // could have created.
+  rpc RemoveInterfaceByName(InterfaceName) returns (google.protobuf.Empty);
+  // Everything netd holds, read off the host.
+  rpc ListInterfaces(ListInterfacesRequest) returns (InterfaceList);
+  // Verify an interface, and optionally its binding, exists. For operations
+  // and integration diagnostics; launches use the Prepare calls.
+  rpc CheckInterface(CheckInterfaceRequest) returns (google.protobuf.Empty);
+}

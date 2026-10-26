@@ -1,0 +1,130 @@
+SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+SPDX-License-Identifier: Apache-2.0
+
+Test-only upstream QEMU instrumentation used to compare the production helper
+ABI. QEMU_DUMP_ACPI_DIR normalizes the same dynamic platform values as the
+production DUMP_ACPI_TABLES patch, bypasses TDX/KVM realization requirements,
+dumps all three measured fw_cfg blobs, and exits. It does not change the ACPI
+builders or version-compatibility logic being tested.
+
+diff --git a/hw/i386/acpi-build.c b/hw/i386/acpi-build.c
+index 9446a9f862..be1a01dbc2 100644
+--- a/hw/i386/acpi-build.c
++++ b/hw/i386/acpi-build.c
+@@ -143,7 +143,8 @@ static void init_common_fadt_data(MachineState *ms, Object *o,
+      */
+     bool smm_enabled = object_property_get_bool(o, "smm-compat", NULL) ?
+         true : x86_machine_is_smm_enabled(x86ms);
+-    uint32_t io = object_property_get_uint(o, ACPI_PM_PROP_PM_IO_BASE, NULL);
++    uint32_t io = getenv("QEMU_DUMP_ACPI_DIR") ? 0x600 :
++        object_property_get_uint(o, ACPI_PM_PROP_PM_IO_BASE, NULL);
+     AmlAddressSpace as = AML_AS_SYSTEM_IO;
+     AcpiFadtData fadt = {
+         .rev = 3,
+@@ -164,7 +165,8 @@ static void init_common_fadt_data(MachineState *ms, Object *o,
+         .plvl2_lat = 0xfff /* C2 state not supported */,
+         .plvl3_lat = 0xfff /* C3 state not supported */,
+         .smi_cmd = smm_enabled ? ACPI_PORT_SMI_CMD : 0,
+-        .sci_int = object_property_get_uint(o, ACPI_PM_PROP_SCI_INT, NULL),
++        .sci_int = getenv("QEMU_DUMP_ACPI_DIR") ? 9 :
++            object_property_get_uint(o, ACPI_PM_PROP_SCI_INT, NULL),
+         .acpi_enable_cmd =
+             smm_enabled ?
+             object_property_get_uint(o, ACPI_PM_PROP_ACPI_ENABLE_CMD, NULL) :
+@@ -179,7 +181,8 @@ static void init_common_fadt_data(MachineState *ms, Object *o,
+         .pm_tmr = { .space_id = as, .bit_width = 4 * 8, .address = io + 0x08 },
+         .gpe0_blk = { .space_id = as, .bit_width =
+             object_property_get_uint(o, ACPI_PM_PROP_GPE0_BLK_LEN, NULL) * 8,
+-            .address = object_property_get_uint(o, ACPI_PM_PROP_GPE0_BLK, NULL)
++            .address = getenv("QEMU_DUMP_ACPI_DIR") ? io + 0x20 :
++                object_property_get_uint(o, ACPI_PM_PROP_GPE0_BLK, NULL)
+         },
+     };
+
+@@ -295,6 +298,16 @@ static void acpi_get_pci_holes(Range *hole, Range *hole64)
+         return;
+     }
+
++    if (getenv("QEMU_DUMP_ACPI_DIR")) {
++        X86MachineState *x86ms = X86_MACHINE(qdev_get_machine());
++        uint64_t hole64_size = object_property_get_uint(
++            pci_host, PCI_HOST_PROP_PCI_HOLE64_SIZE, NULL);
++        range_set_bounds1(hole, x86ms->below_4g_mem_size, 0xfec00000);
++        range_set_bounds1(hole64, 0x380000000000ULL,
++                          0x380000000000ULL + hole64_size);
++        return;
++    }
++
+     range_set_bounds1(hole,
+                       object_property_get_uint(pci_host,
+                                                PCI_HOST_PROP_PCI_HOLE_START,
+@@ -1895,6 +1908,12 @@ struct AcpiBuildState {
+ static bool acpi_get_mcfg(AcpiMcfgInfo *mcfg)
+ {
+     Object *pci_host;
++
++    if (getenv("QEMU_DUMP_ACPI_DIR")) {
++        mcfg->base = 0xe0000000;
++        mcfg->size = 0x10000000;
++        return true;
++    }
+     QObject *o;
+
+     pci_host = acpi_get_i386_pci_host();
+@@ -2204,6 +2223,34 @@ void acpi_setup(void)
+     acpi_build_tables_init(&tables);
+     acpi_build(&tables, MACHINE(pcms));
+
++    {
++        const char *dump_dir = getenv("QEMU_DUMP_ACPI_DIR");
++        struct {
++            const char *name;
++            GArray *blob;
++        } outputs[] = {
++            { "tables.bin", tables.table_data },
++            { "loader.bin", tables.linker->cmd_blob },
++            { "rsdp.bin", tables.rsdp },
++        };
++
++        if (dump_dir) {
++            for (size_t i = 0; i < ARRAY_SIZE(outputs); i++) {
++                g_autofree char *path = g_build_filename(
++                    dump_dir, outputs[i].name, NULL);
++                g_autoptr(GError) error = NULL;
++
++                if (!g_file_set_contents(path, outputs[i].blob->data,
++                                         outputs[i].blob->len, &error)) {
++                    error_report("failed to dump %s: %s", path,
++                                 error->message);
++                    exit(1);
++                }
++            }
++            exit(0);
++        }
++    }
++
+     /* Now expose it all to Guest */
+     build_state->table_mr = acpi_add_rom_blob(acpi_build_update,
+                                               build_state, tables.table_data,
+diff --git a/target/i386/kvm/tdx.c b/target/i386/kvm/tdx.c
+index 7dcf5b4e4e..f2f17f7dcb 100644
+--- a/target/i386/kvm/tdx.c
++++ b/target/i386/kvm/tdx.c
+@@ -748,7 +748,7 @@ static void tdx_cpu_instance_init(X86ConfidentialGuest *cg, CPUState *cpu)
+     X86CPUClass *xcc = X86_CPU_GET_CLASS(cpu);
+     X86CPU *x86cpu = X86_CPU(cpu);
+
+-    if (xcc->model) {
++    if (xcc->model && !getenv("QEMU_DUMP_ACPI_DIR")) {
+         error_report("Named cpu model is not supported for TDX yet!");
+         exit(1);
+     }
+@@ -1505,7 +1505,7 @@ static void tdx_guest_init(Object *obj)
+
+     qemu_mutex_init(&tdx->lock);
+
+-    cgs->require_guest_memfd = true;
++    cgs->require_guest_memfd = getenv("QEMU_DUMP_ACPI_DIR") == NULL;
+     tdx->attributes = TDX_TD_ATTRIBUTES_SEPT_VE_DISABLE;
+
+     object_property_add_uint64_ptr(obj, "attributes", &tdx->attributes,

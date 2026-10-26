@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "dstack-vmm"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rocket = { workspace = true, features = ["mtls"] }
+rocket-vsock-listener = { workspace = true }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow.workspace = true
+libc.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+shared_child.workspace = true
+bon.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+sha2.workspace = true
+hex.workspace = true
+fs-err.workspace = true
+futures.workspace = true
+getrandom = { workspace = true, features = ["std"] }
+nix = { workspace = true, features = ["fs", "process", "signal", "user"] }
+dirs.workspace = true
+which.workspace = true
+clap = { workspace = true, features = ["derive", "string"] }
+humantime.workspace = true
+strip-ansi-escapes.workspace = true
+tailf.workspace = true
+tokio = { workspace = true, features = ["full"] }
+dstack-api-auth.workspace = true
+dstack-build-info.workspace = true
+serde_ini.workspace = true
+
+supervisor-client.workspace = true
+ra-rpc = { workspace = true, features = ["client", "rocket", "openapi"] }
+dstack-vmm-rpc.workspace = true
+dstack-netd-rpc.workspace = true
+http-client = { workspace = true, features = ["prpc"] }
+dstack-kms-rpc.workspace = true
+path-absolutize.workspace = true
+host-api.workspace = true
+safe-write.workspace = true
+guest-api = { workspace = true, features = ["client"] }
+load_config.workspace = true
+key-provider-client.workspace = true
+dstack-types.workspace = true
+dstack-mr.workspace = true
+mock-attestation = { path = "../crates/mock-attestation" }
+hex_fmt.workspace = true
+lspci.workspace = true
+base64.workspace = true
+serde-human-bytes.workspace = true
+size-parser = { workspace = true, features = ["serde"] }
+fatfs.workspace = true
+fscommon.workspace = true
+or-panic.workspace = true
+url.workspace = true
+rand.workspace = true
+tempfile.workspace = true
+wait-timeout.workspace = true
+listenfd.workspace = true
+vfio-ioctls.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[build-dependencies]
+or-panic.workspace = true

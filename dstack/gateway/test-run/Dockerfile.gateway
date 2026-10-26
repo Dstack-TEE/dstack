@@ -1,0 +1,21 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Runtime image for a gateway built as a static musl binary. Shared by the
+# gateway test suites, which each copy their own `dstack-gateway` next to their
+# compose file before building.
+FROM alpine:latest
+
+RUN apk add --no-cache \
+    wireguard-tools \
+    iproute2 \
+    curl \
+    ca-certificates
+
+COPY dstack-gateway /usr/local/bin/dstack-gateway
+
+RUN chmod +x /usr/local/bin/dstack-gateway && \
+    mkdir -p /etc/gateway/certs /var/lib/gateway
+
+ENTRYPOINT ["/usr/local/bin/dstack-gateway", "-c", "/etc/gateway/gateway.toml"]

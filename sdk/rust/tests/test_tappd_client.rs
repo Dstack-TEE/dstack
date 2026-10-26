@@ -3,6 +3,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This file exercises the deprecated v0 surface; that is its purpose.
+#![allow(deprecated)]
+
 use dstack_sdk::tappd_client::TappdClient;
 use dstack_sdk_types::tappd::DeriveKeyResponse;
 use std::env;
@@ -141,19 +144,6 @@ async fn test_tappd_client_get_quote_integration() {
         }
         Err(e) => {
             println!("  Quote decode error: {}", e);
-        }
-    }
-
-    // Test RTMR replay
-    match response.replay_rtmrs() {
-        Ok(rtmrs) => {
-            println!("  Replayed RTMRs: {} entries", rtmrs.len());
-            for (idx, rtmr) in rtmrs.iter() {
-                println!("    RTMR{}: {}", idx, rtmr);
-            }
-        }
-        Err(e) => {
-            println!("  RTMR replay error: {}", e);
         }
     }
 }

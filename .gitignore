@@ -1,14 +1,22 @@
 .DS_Store
 
-/target
+/dstack/target
+/dstack/local-key-provider/build/target
 /certs
 /build-config.sh
-/build
-generated/
+/build/*
+/images
+/run
+/rust-target
+**/generated/*
+!**/generated/mod.rs
 node_modules/
 /.cargo
 .venv
 /tmp
 .claude/settings.local.json
 __pycache__
+/.ruff_cache/
 .planning/
+/dstack/vmm/src/console_v1.html
+.claude/worktrees/

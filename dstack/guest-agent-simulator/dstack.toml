@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[default]
+workers = 8
+max_blocking = 64
+ident = "dstack Simulator"
+temp_dir = "/tmp"
+keep_alive = 10
+log_level = "debug"
+
+[default.core]
+keys_file = "appkeys.json"
+compose_file = "app-compose.json"
+sys_config_file = "sys-config.json"
+data_disks = ["/"]
+
+[default.core.simulator]
+attestation_file = "attestation.bin"
+patch_report_data = true
+
+[internal-v0]
+address = "unix:./tappd.sock"
+reuse = true
+
+[internal]
+address = "unix:./dstack.sock"
+reuse = true
+
+[external]
+address = "unix:./external.sock"
+reuse = true
+
+[guest-api]
+address = "unix:./guest.sock"
+reuse = true

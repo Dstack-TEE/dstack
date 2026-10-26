@@ -1,0 +1,3 @@
+define KFEATURE_DESCRIPTION "dstack AWS EC2 Nitro configuration"
+
+kconf hardware dstack-aws.cfg

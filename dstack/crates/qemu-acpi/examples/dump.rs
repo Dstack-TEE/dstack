@@ -1,0 +1,76 @@
+// SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+// SPDX-License-Identifier: Apache-2.0
+
+use std::error::Error;
+use std::str::FromStr;
+
+use qemu_acpi::{build, MachineConfig, NumaNode, QemuVersion, RootBusDevice};
+
+fn optional<T: FromStr>(args: &mut impl Iterator<Item = String>, default: T) -> Result<T, String> {
+    match args.next() {
+        Some(value) => value.parse().map_err(|_| format!("invalid value: {value}")),
+        None => Ok(default),
+    }
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut args = std::env::args().skip(1);
+    let nics: u32 = optional(&mut args, 1)?;
+    let cpus: u32 = optional(&mut args, 1)?;
+    let version = QemuVersion::from_str(&optional::<String>(&mut args, "11.1.0".into())?)
+        .map_err(|error| format!("invalid QEMU version: {error}"))?;
+    let gpus = optional(&mut args, 0)?;
+    let nvswitches = optional(&mut args, 0)?;
+    let hugepages = optional::<u8>(&mut args, 0)? == 1;
+    let root_verity = optional::<u8>(&mut args, 1)? != 0;
+    let hotplug_off = optional::<u8>(&mut args, 0)? == 1;
+    let smm = optional::<u8>(&mut args, 0)? == 1;
+    let hole = optional::<u64>(&mut args, 0)?;
+    let memory_size = optional(&mut args, 2u64 << 30)?;
+    let volumes = optional(&mut args, 0)?;
+    let pic = optional::<u8>(&mut args, 0)? == 1;
+    // Comma-separated PXB bus of each NUMA node, `-` for none; empty keeps the
+    // legacy layout.
+    let numa_nodes = optional::<String>(&mut args, String::new())?
+        .split(',')
+        .filter(|bus| !bus.is_empty())
+        .map(|bus| match bus {
+            "-" => Ok(NumaNode { pxb_bus: None }),
+            bus => bus.parse().map(|bus| NumaNode { pxb_bus: Some(bus) }),
+        })
+        .collect::<Result<_, _>>()?;
+    // Devices appended after the root ports: `e` endpoint, `r` root port.
+    let extra_root_devices = optional::<String>(&mut args, String::new())?
+        .chars()
+        .map(|kind| match kind {
+            'e' => Ok(RootBusDevice::Endpoint),
+            'r' => Ok(RootBusDevice::RootPort),
+            _ => Err(format!("invalid extra root device kind: {kind}")),
+        })
+        .collect::<Result<_, _>>()?;
+    let blobs = build(&MachineConfig {
+        qemu_version: version,
+        cpu_count: cpus,
+        memory_size,
+        pic,
+        smm,
+        hugepages,
+        numa_nodes,
+        num_gpus: gpus,
+        num_nvswitches: nvswitches,
+        num_nics: nics,
+        num_verity_volumes: volumes,
+        extra_root_devices,
+        hotplug_off,
+        root_verity,
+        pci_hole64_size: (hole != 0).then_some(hole),
+    })?;
+    let output_dir = std::env::var_os("QEMU_ACPI_OUTPUT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    std::fs::create_dir_all(&output_dir)?;
+    std::fs::write(output_dir.join("tables.bin"), blobs.tables)?;
+    std::fs::write(output_dir.join("loader.bin"), blobs.loader)?;
+    std::fs::write(output_dir.join("rsdp.bin"), blobs.rsdp)?;
+    Ok(())
+}

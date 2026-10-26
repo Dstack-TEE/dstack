@@ -19,16 +19,16 @@ This crate is `#![no_std]` compatible and provides two main modules:
 ## Basic Usage
 
 ```rust
-use dstack_sdk_types::dstack::{GetKeyResponse, GetQuoteResponse, InfoResponse};
+use dstack_sdk_types::dstack_v0::{GetKeyResponse, GetQuoteResponse, InfoResponse};
 use dstack_sdk_types::tappd::{DeriveKeyResponse, TdxQuoteResponse, TappdInfoResponse};
 
 // Parse a response from the dstack API
 let key_response: GetKeyResponse = serde_json::from_str(&json_data)?;
 let key_bytes = key_response.decode_key()?;
 
-// Parse a quote response and replay RTMRs
+// Parse a quote response
 let quote_response: GetQuoteResponse = serde_json::from_str(&json_data)?;
-let rtmrs = quote_response.replay_rtmrs()?;
+let events = quote_response.decode_event_log()?;
 
 // Work with legacy tappd types
 let derive_response: DeriveKeyResponse = serde_json::from_str(&json_data)?;

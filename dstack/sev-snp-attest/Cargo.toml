@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "sev-snp-attest"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AMD SEV-SNP guest attestation report library"
+
+[dependencies]
+anyhow.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+sev.workspace = true
+tracing.workspace = true

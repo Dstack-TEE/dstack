@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "ra-tls"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bon.workspace = true
+dcap-qvl.workspace = true
+elliptic-curve.workspace = true
+fs-err.workspace = true
+hex.workspace = true
+hkdf.workspace = true
+k256.workspace = true
+p256.workspace = true
+rcgen = { workspace = true, features = ["x509-parser", "pem"] }
+ring = { workspace = true, features = ["std"] }
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+x509-parser.workspace = true
+yasna.workspace = true
+tracing.workspace = true
+sha3.workspace = true
+tdx-attest.workspace = true
+scale.workspace = true
+
+cc-eventlog.workspace = true
+serde-human-bytes.workspace = true
+flate2.workspace = true
+or-panic.workspace = true
+rand.workspace = true
+tpm-types.workspace = true
+dstack-types.workspace = true
+tpm-qvl.workspace = true
+hex_fmt.workspace = true
+ez-hash.workspace = true
+dstack-attest.workspace = true
+errify.workspace = true
+rmp-serde.workspace = true
+
+[features]
+simulator = ["dstack-attest/simulator"]
+quote = ["dstack-attest/quote"]
+# A self-signed CA and the leaves it signs, for tests that need a certificate but no
+# TEE. Off by default: the keys it mints are test material and must not be reachable
+# from a production binary.
+test-pki = []
+
+[dev-dependencies]
+ed25519-dalek.workspace = true
+# `test_pki`'s own tests write PEMs to a scratch dir; the module itself takes a
+# caller-supplied path and does not depend on this.
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -1,0 +1,20 @@
+[Unit]
+Description=sysbox-mgr (part of the Sysbox container runtime)
+PartOf=sysbox.service
+After=dstack-prepare.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/sysbox-mgr --data-root /var/lib/sysbox --disable-ovfs-on-idmapped-mount
+TimeoutStartSec=45
+TimeoutStopSec=90
+StartLimitInterval=0
+NotifyAccess=main
+OOMScoreAdjust=-500
+LimitNOFILE=infinity
+LimitNPROC=infinity
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysbox.service

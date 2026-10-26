@@ -6,8 +6,8 @@ import unittest.mock
 
 import pytest
 
-from dstack_sdk import AsyncDstackClient
-from dstack_sdk import DstackClient
+from dstack_sdk import AsyncDstackClientV0
+from dstack_sdk import DstackClientV0
 
 
 class TestTCPConnectionValidation:
@@ -16,7 +16,7 @@ class TestTCPConnectionValidation:
     @pytest.mark.asyncio
     async def test_async_client_connection_object_reuse(self):
         """Test that the actual httpx client object is reused in async context manager."""
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
 
         async with client:
             first_client_obj = client._client
@@ -46,7 +46,7 @@ class TestTCPConnectionValidation:
 
     def test_sync_client_connection_object_reuse(self):
         """Test that the actual httpx client object is reused in sync context manager."""
-        client = DstackClient()
+        client = DstackClientV0()
 
         with client:
             # For sync clients, check _sync_client instead of _client
@@ -79,7 +79,7 @@ class TestTCPConnectionValidation:
     async def test_async_transport_configuration_preserved(self):
         """Test that transport configuration is preserved when using context manager."""
         # Test with HTTP endpoint
-        http_client = AsyncDstackClient(endpoint="http://localhost:8080")
+        http_client = AsyncDstackClientV0(endpoint="http://localhost:8080")
 
         async with http_client:
             assert http_client._client is not None
@@ -91,7 +91,7 @@ class TestTCPConnectionValidation:
     def test_sync_transport_configuration_preserved(self):
         """Test that transport configuration is preserved when using context manager."""
         # Test with HTTP endpoint
-        http_client = DstackClient(endpoint="http://localhost:8080")
+        http_client = DstackClientV0(endpoint="http://localhost:8080")
 
         with http_client:
             # For sync clients, check _sync_client instead of _client
@@ -108,7 +108,7 @@ class TestTCPConnectionValidation:
     @pytest.mark.asyncio
     async def test_reference_counting_behavior(self):
         """Test that reference counting works correctly for nested contexts."""
-        client = AsyncDstackClient()
+        client = AsyncDstackClientV0()
 
         # Initially no client and ref count is 0
         assert client._client is None
@@ -138,7 +138,7 @@ class TestTCPConnectionValidation:
 
     def test_sync_reference_counting_behavior(self):
         """Test that reference counting works correctly for nested sync contexts."""
-        client = DstackClient()
+        client = DstackClientV0()
 
         # Initially no client and ref count is 0
         assert client.async_client._sync_client is None

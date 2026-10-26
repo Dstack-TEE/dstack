@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Shared attestation fixture for the gateway test suites.
+#
+# The guest agent simulator signs its quotes under trust anchors derived from
+# `mock_attestation_seed`, and the collateral service reconstructs the matching
+# public roots from the same seed. The two are only useful together and only
+# while the seed matches, so they live in one file that every suite includes
+# rather than being copied per suite, where they would drift apart and leave
+# every peer quote failing to verify for no visible reason.
+#
+# Deliberately network-agnostic: an including file attaches these services to
+# its own network. Compose merges that in while keeping what is defined here.
+
+services:
+  dstack-simulator:
+    networks: [attestation]
+    build:
+      context: ../../../..
+      dockerfile: dstack/gateway/test-run/attestation/Dockerfile.simulator
+    image: dstack-simulator:gateway-e2e
+    volumes:
+      - dstack-socket:/var/run/dstack
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /var/run/dstack/dstack.sock"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+
+  mock-attestation:
+    networks: [attestation]
+    build:
+      context: ../../../..
+      dockerfile: dstack/gateway/test-run/attestation/Dockerfile.mock-attestation
+    image: dstack-mock-attestation:gateway-e2e
+    # No container_name on purpose. A fixed one is global, so pinning it here
+    # would stop two suites -- which all include this file -- from being up at
+    # the same time. Compose still publishes `mock-attestation` as a network
+    # alias, so everything addressing it by name keeps working.
+    command:
+      - serve
+      - --listen
+      - 0.0.0.0:8088
+      - --config
+      - /etc/dstack/tee-simulator.json
+      - --output
+      - /roots
+    volumes:
+      - attestation-roots:/roots
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/tpm/aia/root.pem"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+# Named explicitly, and namespaced per suite.
+#
+# A per-test project has to reference these from outside, and compose's default
+# `<project>_<name>` would make that a guess about which project happened to
+# create them first -- so the names are pinned. `FIXTURE_NS` then keeps each
+# suite's copy to itself.
+#
+# One instance shared by all three suites was the earlier arrangement, on the
+# reasoning that the seed signing the quotes and the seed deriving the verifying
+# roots must not drift apart. They cannot: both come from files in this
+# directory, so three instances started from them agree by construction. What
+# sharing the *running* instance bought instead was a teardown race -- whichever
+# suite finished first tore down a fixture the others were still using -- and,
+# in CI, three workflows that could not run at the same time. Neither is worth
+# paying for something the files already guarantee.
+networks:
+  attestation:
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}
+
+volumes:
+  dstack-socket:
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-socket
+  attestation-roots:
+    name: ${FIXTURE_NS:?FIXTURE_NS must be set}-roots

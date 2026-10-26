@@ -1,5 +1,7 @@
 # auth-simple Operations Guide
 
+> **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
+
 This guide covers day-to-day operations for managing apps and devices with auth-simple.
 
 For initial deployment setup, see [Deployment Guide](./deployment.md).
@@ -36,7 +38,7 @@ The config is re-read on each request, so changes take effect immediately withou
 }
 ```
 
-> **Note:** Only `osImages` is required. Add `gatewayAppId` after deploying the Gateway. Add `apps` entries as you deploy applications.
+> **Note:** `osImages` is always required. For KMS authorization, you must also populate `kms.mrAggregated`; if it is left empty, auth-simple denies all KMS boots. Add `gatewayAppId` after deploying the Gateway. Add `apps` entries as you deploy applications.
 
 ---
 
@@ -225,6 +227,8 @@ The Gateway is a special app that routes traffic to other apps. Once deployed, a
 
 The `gatewayAppId` is returned in boot responses and used by KMS for key derivation.
 
+To trust several gateways, join their App IDs with commas (`"0xaaa...,0xbbb..."`). CVMs accept a gateway whose App ID is contained in this value.
+
 ---
 
 ## KMS Onboarding (Multi-Node)
@@ -240,7 +244,7 @@ The `mrAggregated` is sent by the booting KMS in its auth request. To get this v
    KMS boot auth request: { osImageHash: '0x...', mrAggregated: '0x...', ... }
    ```
 
-2. **Initial setup**: Leave `kms.mrAggregated` empty for the first KMS (empty array allows any). After it boots, check the logs and add the value.
+2. **Initial setup**: capture the first KMS measurement with `Onboard.GetAttestationInfo` or from auth logs, then add it to `kms.mrAggregated` before bootstrap. An empty array now denies all KMS boots.
 
 ### Add to Config
 
@@ -294,5 +298,5 @@ Expected responses:
 ## See Also
 
 - [Deployment Guide](./deployment.md) - Initial setup
-- [auth-simple README](../kms/auth-simple/README.md) - Developer reference
+- [auth-simple README](../dstack/kms/auth-simple/README.md) - Developer reference
 - [On-Chain Governance](./onchain-governance.md) - Smart contract-based alternative

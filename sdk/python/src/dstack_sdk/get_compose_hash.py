@@ -28,11 +28,13 @@ class DockerConfig:
         registry: Optional[str] = None,
         username: Optional[str] = None,
         token_key: Optional[str] = None,
+        **kwargs: Any,
     ) -> None:
         """Initialize a new ``DockerConfig`` instance."""
         self.registry = registry
         self.username = username
         self.token_key = token_key
+        self._extra = dict(kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -43,6 +45,57 @@ class DockerConfig:
             result["username"] = self.username
         if self.token_key is not None:
             result["token_key"] = self.token_key
+        result.update(self._extra)
+        return result
+
+
+class Requirements:
+    """Guest-side requirements for app compose."""
+
+    def __init__(
+        self,
+        platforms: Optional[List[str]] = None,
+        tdx_measure_acpi_tables: Optional[bool] = None,
+        launch_token_hash: Optional[str] = None,
+        health_check: bool = False,
+        health_status_file: Optional[str] = None,
+        gpu_policy: Optional[Dict[str, Any]] = None,
+        ephemeral_data_disk: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize a new ``Requirements`` instance."""
+        self.platforms = platforms
+        self.tdx_measure_acpi_tables = tdx_measure_acpi_tables
+        self.launch_token_hash = launch_token_hash
+        self.health_check = health_check
+        self.health_status_file = health_status_file
+        self.gpu_policy = gpu_policy
+        self.ephemeral_data_disk = ephemeral_data_disk
+        self._extra = dict(kwargs)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a dictionary representation excluding ``None`` fields."""
+        result: Dict[str, Any] = {}
+        if self.platforms is not None:
+            result["platforms"] = self.platforms
+        if self.tdx_measure_acpi_tables is not None:
+            result["tdx_measure_acpi_tables"] = self.tdx_measure_acpi_tables
+        if self.launch_token_hash is not None:
+            result["launch_token_hash"] = self.launch_token_hash
+        # An explicit ``False`` and an absent field are the same request, and
+        # the guest's Rust types skip serializing it in both cases; emitting it
+        # here would give this SDK a digest no other one produces.
+        if self.health_check:
+            result["health_check"] = True
+        # ``""`` and absent stay distinguishable: they are different app
+        # composes, so they must be different hashes in every SDK.
+        if self.health_status_file is not None:
+            result["health_status_file"] = self.health_status_file
+        if self.ephemeral_data_disk:
+            result["ephemeral_data_disk"] = True
+        if self.gpu_policy is not None:
+            result["gpu_policy"] = self.gpu_policy
+        result.update(self._extra)
         return result
 
 
@@ -52,7 +105,7 @@ class AppCompose:
     def __init__(
         self,
         runner: str,
-        manifest_version: Optional[int] = None,
+        manifest_version: Optional[Union[int, str]] = None,
         name: Optional[str] = None,
         features: Optional[List[str]] = None,  # Deprecated
         docker_compose_file: Optional[str] = None,
@@ -69,12 +122,16 @@ class AppCompose:
         allowed_envs: Optional[List[str]] = None,
         no_instance_id: Optional[bool] = None,
         secure_time: Optional[bool] = None,
+        storage_discard: Optional[bool] = None,
+        requirements: Optional[Union[Requirements, Dict[str, Any]]] = None,
         bash_script: Optional[str] = None,  # Legacy
         pre_launch_script: Optional[str] = None,  # Legacy
+        snapshotter: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         """Initialize a new ``AppCompose`` instance with arbitrary extra fields."""
         self.runner = runner
+        self.snapshotter = snapshotter
         self.manifest_version = manifest_version
         self.name = name
         self.features = features
@@ -92,6 +149,8 @@ class AppCompose:
         self.allowed_envs = allowed_envs
         self.no_instance_id = no_instance_id
         self.secure_time = secure_time
+        self.storage_discard = storage_discard
+        self.requirements = requirements
         self.bash_script = bash_script
         self.pre_launch_script = pre_launch_script
 
@@ -108,7 +167,7 @@ class AppCompose:
             if not attr_name.startswith("_") and not callable(getattr(self, attr_name)):
                 value = getattr(self, attr_name)
                 if value is not None:
-                    if isinstance(value, DockerConfig):
+                    if isinstance(value, (DockerConfig, Requirements)):
                         result[attr_name] = value.to_dict()
                     else:
                         # Handle special float values
@@ -126,12 +185,28 @@ class AppCompose:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AppCompose":
-        """Create AppCompose from dictionary."""
+        """Create AppCompose from dictionary.
+
+        The caller's dictionary is left alone. The nested fields below are
+        popped rather than read, and popping the argument made this destructive:
+        hashing the same dictionary twice returned two different digests,
+        because the second call no longer saw ``docker_config`` or
+        ``requirements``. Silent, and the digest is what gets whitelisted on
+        chain.
+        """
+        data = dict(data)
+
         # Handle docker_config
         docker_config: Optional[DockerConfig] = None
         if "docker_config" in data and data["docker_config"] is not None:
             dc = data.pop("docker_config")
             docker_config = DockerConfig(**dc)
+
+        # Handle requirements
+        requirements: Optional[Requirements] = None
+        if "requirements" in data and data["requirements"] is not None:
+            req = data.pop("requirements")
+            requirements = Requirements(**req)
 
         # Handle special float values
         processed_data: Dict[str, Any] = {}
@@ -148,7 +223,12 @@ class AppCompose:
 
         runner_value = processed_data.pop("runner")
         runner: str = str(runner_value)
-        return cls(runner=runner, docker_config=docker_config, **processed_data)
+        return cls(
+            runner=runner,
+            docker_config=docker_config,
+            requirements=requirements,
+            **processed_data,
+        )
 
 
 def sort_object(obj: Any) -> Any:
@@ -173,7 +253,10 @@ def preprocess_app_compose(app_compose: AppCompose) -> AppCompose:
 
     if data.get("runner") == "bash" and "docker_compose_file" in data:
         del data["docker_compose_file"]
-    elif data.get("runner") == "docker-compose" and "bash_script" in data:
+    elif (
+        data.get("runner") in ("docker-compose", "nerdctl-compose")
+        and "bash_script" in data
+    ):
         del data["bash_script"]
 
     if "pre_launch_script" in data and not data["pre_launch_script"]:

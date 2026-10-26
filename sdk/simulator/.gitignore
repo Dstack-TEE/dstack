@@ -1,3 +1,5 @@
 dstack-simulator
 dstack-guest-agent
 *.lock
+*.log
+.simulator-logs-printed

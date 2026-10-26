@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+[Unit]
+Description=Volatile writable state
+Before=local-fs.target
+
+[Mount]
+What=tmpfs
+Where=/var/volatile
+Type=tmpfs
+Options=mode=0755,nosuid,nodev
+
+[Install]
+WantedBy=local-fs.target

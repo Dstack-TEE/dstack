@@ -1,0 +1,2451 @@
+#!/usr/bin/env python3
+"""CLI tool for managing dstack-vmm virtual machines."""
+
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import argparse
+import base64
+import hashlib
+import http.client
+import json
+import os
+import re
+import socket
+import ssl
+import sys
+import tempfile
+import urllib.parse
+from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
+
+# Optional cryptography imports - only needed for encrypted environment variables
+try:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import x25519
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from eth_keys import keys
+    from eth_utils import keccak
+
+    CRYPTO_AVAILABLE = True
+except ImportError:
+    CRYPTO_AVAILABLE = False
+
+# Default config file locations
+DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
+DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.json")
+
+
+# VMM discovery directories
+# A VMM registers in $XDG_RUNTIME_DIR/dstack-vmm, falling back to
+# /run/user/<uid>/dstack-vmm when that variable is unset.
+# Scanning /run/user is what lets an operator see every user's instances, and
+# covers the usual case where the variable holds exactly that path. It does not
+# cover a session that points XDG_RUNTIME_DIR somewhere else, so this VMM's own
+# directory is added by name rather than assumed to be under /run/user.
+def _get_discovery_dirs() -> List[Tuple[str, Optional[str]]]:
+    """Return list of (discovery_dir, username) tuples."""
+    import pwd
+
+    dirs = []
+    seen = set()
+
+    def add(path: str, username: Optional[str]):
+        if not os.path.isdir(path):
+            return
+        key = os.path.realpath(path)
+        if key in seen:
+            return
+        seen.add(key)
+        dirs.append((path, username))
+
+    run_user = "/run/user"
+    if os.path.isdir(run_user):
+        try:
+            for uid_str in os.listdir(run_user):
+                candidate = os.path.join(run_user, uid_str, "dstack-vmm")
+                try:
+                    username = pwd.getpwuid(int(uid_str)).pw_name
+                except (KeyError, ValueError):
+                    username = f"uid:{uid_str}"
+                add(candidate, username)
+        except PermissionError:
+            pass
+
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        try:
+            username = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError:
+            username = f"uid:{os.getuid()}"
+        add(os.path.join(xdg, "dstack-vmm"), username)
+
+    return dirs
+
+
+def _discovery_dirs_scanned() -> List[str]:
+    """Where a listing looked, for a listing that found nothing.
+
+    An empty result means no directory exists yet, so naming the ones that
+    would have been read beats naming none of them.
+    """
+    found = [d for d, _ in _get_discovery_dirs()]
+    if found:
+        return found
+    candidates = ["/run/user/*/dstack-vmm"]
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        candidates.append(os.path.join(xdg, "dstack-vmm"))
+    return candidates
+
+
+def load_config() -> Dict[str, Any]:
+    """Load configuration from the default config file.
+
+    Returns:
+        Dictionary with configuration values (url, auth_user, auth_password,
+        auth_token)
+
+    """
+    if not os.path.exists(DEFAULT_CONFIG_PATH):
+        return {}
+
+    try:
+        with open(DEFAULT_CONFIG_PATH, "r") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        return {}
+
+
+def discover_vmm_instances() -> List[Dict[str, Any]]:
+    """Discover all running VMM instances across all users on the host.
+
+    Returns:
+        List of VMM instance info dicts, sorted by started_at.
+
+    """
+    instances = []
+    for discovery_dir, username in _get_discovery_dirs():
+        for fname in os.listdir(discovery_dir):
+            if not fname.endswith(".json"):
+                continue
+            fpath = os.path.join(discovery_dir, fname)
+            try:
+                with open(fpath, "r") as f:
+                    info = json.load(f)
+                pid = info.get("pid")
+                if pid and not os.path.exists(f"/proc/{pid}"):
+                    continue
+                if username:
+                    info["user"] = username
+                instances.append(info)
+            except (json.JSONDecodeError, FileNotFoundError, PermissionError):
+                continue
+
+    instances.sort(key=lambda x: x.get("started_at", 0))
+    return instances
+
+
+def resolve_vmm_url(
+    instances: List[Dict[str, Any]],
+    config: Dict[str, Any],
+    explicit_url: Optional[str] = None,
+) -> str:
+    """Resolve the VMM URL to connect to.
+
+    Priority:
+    1. Explicit --url flag
+    2. DSTACK_VMM_URL env var
+    3. Config file url
+    4. If exactly one VMM instance is discovered, use that
+    5. If active instance is set in config, use that
+    6. Fall back to default
+
+    Returns the URL string.
+    """
+    # If user explicitly provided --url or env var, honor it
+    env_url = os.environ.get("DSTACK_VMM_URL")
+    if explicit_url and explicit_url != "http://localhost:8080":
+        return explicit_url
+    if env_url:
+        return env_url
+    config_url = config.get("url")
+    if config_url:
+        return config_url
+
+    # Try auto-discovery
+    active_id = config.get("active_vmm")
+    if active_id:
+        for inst in instances:
+            if inst["id"] == active_id or inst["id"].startswith(active_id):
+                return vmm_address_to_url(inst)
+
+    if len(instances) == 1:
+        return vmm_address_to_url(instances[0])
+
+    return "http://localhost:8080"
+
+
+def vmm_address_to_url(instance: Dict[str, Any]) -> str:
+    """Convert a VMM instance info dict to a connection URL."""
+    addr = instance.get("address", "")
+    if addr.startswith("unix:"):
+        # Resolve relative socket path against working directory
+        socket_path = addr[5:]
+        if not os.path.isabs(socket_path):
+            working_dir = instance.get("working_dir", "")
+            socket_path = os.path.join(working_dir, socket_path)
+        return f"unix:{socket_path}"
+    elif addr.startswith("http://") or addr.startswith("https://"):
+        return addr
+    else:
+        # host:port format from discovery
+        host, _, port = addr.rpartition(":")
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        return f"http://{host}:{port}"
+
+
+def write_private_json(path: str, data: Any) -> None:
+    """Atomically replace a JSON file with an owner-only (0600) copy."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
+
+
+def save_active_vmm(vmm_id: str):
+    """Save the active VMM instance ID to the config file."""
+    config = load_config()
+    config["active_vmm"] = vmm_id
+    write_private_json(DEFAULT_CONFIG_PATH, config)
+
+
+def cmd_ls_vmm(args):
+    """List all discovered VMM instances."""
+    instances = discover_vmm_instances()
+    config = load_config()
+    active_id = config.get("active_vmm")
+
+    if not instances:
+        print("No running VMM instances found.")
+        print(f"  (scanned: {', '.join(_discovery_dirs_scanned())})")
+        return
+
+    if getattr(args, "json", False):
+        print(json.dumps(instances, indent=2))
+        return
+
+    # Table output
+
+    fmt = "  {active} {id:<12s} {pid:<8s} {user:<10s} {node:<12s} {address:<24s} {workdir}"
+    print(
+        fmt.format(
+            active="",
+            id="ID",
+            pid="PID",
+            user="USER",
+            node="NAME",
+            address="ADDRESS",
+            workdir="WORKING DIR",
+        )
+    )
+    print("  " + "-" * 100)
+
+    for inst in instances:
+        short_id = inst["id"][:8]
+        is_active = "*" if active_id and inst["id"].startswith(active_id) else " "
+        node_name = inst.get("node_name", "") or "-"
+        address = inst.get("address", "?")
+
+        print(
+            fmt.format(
+                active=is_active,
+                id=short_id,
+                pid=str(inst.get("pid", "?")),
+                user=inst.get("user", "?")[:10],
+                node=node_name[:12],
+                address=address[:24],
+                workdir=inst.get("working_dir", "?"),
+            )
+        )
+
+
+def cmd_switch_vmm(args):
+    """Switch the active VMM instance."""
+    target = args.vmm_id
+    instances = discover_vmm_instances()
+
+    if not instances:
+        print("No running VMM instances found.")
+        return
+
+    # Find matching instance by prefix
+    matches = [i for i in instances if i["id"].startswith(target)]
+    if len(matches) == 0:
+        print(f"No VMM instance matching '{target}'.")
+        print("Available instances:")
+        for inst in instances:
+            print(
+                f"  {inst['id'][:8]}  {inst.get('address', '?')}  {inst.get('working_dir', '?')}"
+            )
+        return
+    if len(matches) > 1:
+        print(f"Ambiguous ID '{target}', matches multiple instances:")
+        for inst in matches:
+            print(f"  {inst['id'][:8]}  {inst.get('address', '?')}")
+        return
+
+    selected = matches[0]
+    save_active_vmm(selected["id"])
+    url = vmm_address_to_url(selected)
+    print(f"Switched to VMM {selected['id'][:8]} ({url})")
+
+
+def encrypt_env(envs, hex_public_key: str) -> str:
+    """Encrypts environment variables using a one-time X25519 key exchange and AES-GCM.
+
+    This function does the following:
+      1. Converts the given environment variables to JSON bytes.
+      2. Removes a leading "0x" from the provided public key (if present) and converts it to bytes.
+      3. Generates an ephemeral X25519 key pair.
+      4. Computes a shared secret using this ephemeral private key and the remote public key.
+      5. Uses the shared key directly as the 32-byte key for AES-GCM.
+      6. Encrypts the JSON string with AES-GCM using a randomly generated IV.
+      7. Concatenates the ephemeral public key, IV, and ciphertext and returns it as a hex string.
+
+    Args:
+        envs: The environment variables to encrypt. This can be any JSON-serializable data structure.
+        hex_public_key: The remote encryption public key in hexadecimal format.
+
+    Returns:
+        A hexadecimal string that is the concatenation of:
+          (ephemeral public key || IV || ciphertext).
+
+    """
+    if not CRYPTO_AVAILABLE:
+        raise ImportError(
+            "Cryptography libraries not available. Please install them with:\n"
+            "pip install cryptography eth-keys eth-utils"
+        )
+
+    # Serialize the environment variables to JSON and encode to bytes.
+    envs_json = json.dumps({"env": envs}).encode("utf-8")
+
+    # Remove the "0x" prefix if present.
+    if hex_public_key.startswith("0x"):
+        hex_public_key = hex_public_key[2:]
+
+    # Convert the hexadecimal public key to bytes.
+    remote_pubkey_bytes = bytes.fromhex(hex_public_key)
+
+    # Generate an ephemeral X25519 key pair.
+    ephemeral_private_key = x25519.X25519PrivateKey.generate()
+    ephemeral_public_key = ephemeral_private_key.public_key()
+
+    # Compute the shared secret using X25519.
+    peer_public_key = x25519.X25519PublicKey.from_public_bytes(remote_pubkey_bytes)
+    shared = ephemeral_private_key.exchange(peer_public_key)
+
+    # Use the shared secret as a key for AES-GCM encryption (AES-256 needs 32 bytes).
+    aesgcm = AESGCM(shared)
+    iv = os.urandom(12)  # 12-byte nonce (IV) for AES-GCM.
+    ciphertext = aesgcm.encrypt(iv, envs_json, None)
+
+    # Serialize the ephemeral public key to raw bytes.
+    ephemeral_public_bytes = ephemeral_public_key.public_bytes(
+        encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
+    )
+
+    # Combine ephemeral public key, IV, and ciphertext.
+    result = ephemeral_public_bytes + iv + ciphertext
+
+    # Return the result as a hexadecimal string.
+    return result.hex()
+
+
+class AnnotationAction(argparse.Action):
+    """Collect repeated KEY=VALUE arguments, refusing a key given twice."""
+
+    def __call__(self, parser, namespace, value, option_string=None):
+        """Add one annotation to the namespace."""
+        key, sep, val = value.partition("=")
+        if not sep or not key:
+            parser.error(f"{option_string}: expected KEY=VALUE, got {value!r}")
+        annotations = getattr(namespace, self.dest) or {}
+        if key in annotations:
+            parser.error(f"{option_string}: {key!r} given twice")
+        annotations[key] = val
+        setattr(namespace, self.dest, annotations)
+
+
+def parse_port_mapping(port_str: str) -> Dict:
+    """Parse a port mapping string into a dictionary.
+
+    Accepts an optional "@<nic>" suffix naming which NIC the traffic enters
+    through. Without it the VMM picks: the first user-mode NIC, else the first
+    bridge NIC. A single-NIC VM never needs it.
+    """
+    nic_index = None
+    if "@" in port_str:
+        port_str, _, nic = port_str.rpartition("@")
+        # `int()` alone would take "1_0" as 10, " 1" as 1, and "+1" as 1. A NIC
+        # index is a position in a list the user wrote, so only digits are it.
+        if not (nic.isascii() and nic.isdigit()):
+            raise argparse.ArgumentTypeError(f"Invalid NIC index: {nic}")
+        nic_index = int(nic)
+    parts = port_str.split(":")
+    if len(parts) == 3:
+        mapping = {
+            "protocol": parts[0],
+            "host_address": "127.0.0.1",
+            "host_port": int(parts[1]),
+            "vm_port": int(parts[2]),
+        }
+    elif len(parts) == 4:
+        mapping = {
+            "protocol": parts[0],
+            "host_address": parts[1],
+            "host_port": int(parts[2]),
+            "vm_port": int(parts[3]),
+        }
+    else:
+        raise argparse.ArgumentTypeError(f"Invalid port mapping format: {port_str}")
+    if nic_index is not None:
+        mapping["nic_index"] = nic_index
+    return mapping
+
+
+def read_utf8(filepath: str) -> str:
+    """Read a file and return its contents as a UTF-8 string."""
+    with open(filepath, "rb") as f:
+        return f.read().decode("utf-8")
+
+
+class UnixSocketHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection that connects to a Unix domain socket."""
+
+    def __init__(self, socket_path, timeout=None):
+        """Initialize with the given Unix socket path."""
+        super().__init__("localhost", timeout=timeout)
+        self.socket_path = socket_path
+
+    def connect(self):
+        """Connect to the Unix domain socket."""
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if self.timeout:
+            sock.settimeout(self.timeout)
+        sock.connect(self.socket_path)
+        self.sock = sock
+
+
+class VmmClient:
+    """A unified HTTP client that supports both regular HTTP and Unix Domain Sockets."""
+
+    def __init__(
+        self,
+        base_url: str,
+        auth_user: Optional[str] = None,
+        auth_password: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        verify_tls: bool = True,
+    ):
+        """Initialize the client with a base URL and optional auth credentials.
+
+        Two credential forms are supported for a VMM with `[auth]` enabled:
+        a bearer token (sent as `Authorization: Bearer <token>`), or HTTP Basic
+        (user + password). A bearer token takes precedence when both are set.
+
+        HTTPS certificates are verified against the system CA store (or
+        `SSL_CERT_FILE`) unless `verify_tls` is False.
+        """
+        self.base_url = base_url.rstrip("/")
+        self.verify_tls = verify_tls
+        self.use_uds = self.base_url.startswith("unix:")
+        self.auth_user = auth_user or None
+        self.auth_password = auth_password or None
+        self.auth_token = auth_token or None
+        # fail fast on a half-configured Basic credential: silently sending no
+        # auth header would make requests fail against `[auth] enabled = true`
+        # in a way that is hard to diagnose.
+        if not self.auth_token and bool(self.auth_user) != bool(self.auth_password):
+            missing = "password" if self.auth_user else "username"
+            raise ValueError(
+                f"incomplete VMM Basic auth credentials: {missing} is missing. "
+                "set both username and password, or use a bearer token "
+                "(--token / DSTACK_VMM_TOKEN)."
+            )
+
+        if self.use_uds:
+            self.uds_path = self.base_url[5:]  # Remove 'unix:' prefix
+        else:
+            # Parse the base URL for regular HTTP connections
+            self.parsed_url = urllib.parse.urlparse(self.base_url)
+            self.host = self.parsed_url.netloc
+            self.is_https = self.parsed_url.scheme == "https"
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        headers: Dict[str, str] = None,
+        body: Any = None,
+        stream: bool = False,
+    ) -> Tuple[int, Union[Dict, str, BinaryIO]]:
+        """Make an HTTP request to the server.
+
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            path: URL path
+            headers: HTTP headers
+            body: Request body (will be JSON serialized if a dict)
+            stream: If True, return a file-like object for reading the response
+
+        Returns:
+            Tuple of (status_code, response_data)
+
+        """
+        if headers is None:
+            headers = {}
+
+        # Add an auth header when credentials are provided. A bearer token wins
+        # over Basic when both happen to be set.
+        if "Authorization" not in headers:
+            if self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+            elif self.auth_user and self.auth_password:
+                credentials = f"{self.auth_user}:{self.auth_password}"
+                encoded_credentials = base64.b64encode(
+                    credentials.encode("utf-8")
+                ).decode("ascii")
+                headers["Authorization"] = f"Basic {encoded_credentials}"
+
+        # Prepare the body
+        if isinstance(body, dict):
+            body = json.dumps(body).encode("utf-8")
+            if "Content-Type" not in headers:
+                headers["Content-Type"] = "application/json"
+
+        # Create the appropriate connection
+        if self.use_uds:
+            conn = UnixSocketHTTPConnection(self.uds_path)
+        else:
+            if self.is_https:
+                context = ssl.create_default_context()
+                if not self.verify_tls:
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                conn = http.client.HTTPSConnection(self.host, context=context)
+            else:
+                conn = http.client.HTTPConnection(self.host)
+
+        try:
+            # Make the request
+            conn.request(method, path, body=body, headers=headers)
+            response = conn.getresponse()
+
+            status = response.status
+
+            # Handle the response based on the stream parameter
+            if stream:
+                return status, response
+            else:
+                data = response.read()
+
+                # Try to parse as JSON if it looks like JSON
+                content_type = response.getheader("Content-Type", "")
+                if (
+                    "application/json" in content_type
+                    or data.startswith(b"{")
+                    or data.startswith(b"[")
+                ):
+                    try:
+                        return status, json.loads(data.decode("utf-8"))
+                    except json.JSONDecodeError:
+                        pass
+
+                # Return as string if not JSON
+                return status, data.decode("utf-8")
+        except Exception as e:
+            if not stream:
+                conn.close()
+            raise e
+
+        # Note: when stream=True, the caller must close the connection when done
+
+
+class VmmCLI:
+    """Command-line interface for the dstack-vmm API."""
+
+    def __init__(
+        self,
+        base_url: str,
+        auth_user: Optional[str] = None,
+        auth_password: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        verify_tls: bool = True,
+    ):
+        """Initialize the CLI with a base URL and optional auth credentials."""
+        self.base_url = base_url.rstrip("/")
+        self.headers = {"Content-Type": "application/json"}
+        self.client = VmmClient(
+            base_url, auth_user, auth_password, auth_token, verify_tls
+        )
+
+    def rpc_call(self, method: str, params: Optional[Dict] = None) -> Dict:
+        """Make an RPC call to the dstack-vmm API."""
+        path = f"/prpc/{method}?json"
+        status, response = self.client.request(
+            "POST", path, headers=self.headers, body=params or {}
+        )
+
+        if status != 200:
+            if isinstance(response, str):
+                error_msg = response
+            else:
+                error_msg = str(response)
+            raise Exception(f"API call failed: {error_msg}")
+
+        return response
+
+    def list_vms(self, verbose: bool = False, json_output: bool = False) -> None:
+        """List all VMs and their status."""
+        response = self.rpc_call("Status")
+        vms = response["vms"]
+
+        if json_output:
+            # Return raw JSON data for automation/testing
+            print(json.dumps(vms, indent=2))
+            return
+
+        if not vms:
+            print("No VMs found")
+            return
+
+        headers = ["VM ID", "App ID", "Name", "Status", "Uptime"]
+        if verbose:
+            headers.extend(["Instance ID", "vCPU", "Memory", "Disk", "Image", "GPUs"])
+
+        rows = []
+        for vm in vms:
+            row = [
+                vm["id"],
+                vm["app_id"],
+                vm["name"],
+                vm["status"],
+                vm.get("uptime", "-"),
+            ]
+
+            if verbose:
+                config = vm.get("configuration", {})
+                gpu_info = self._format_gpu_info(config.get("gpus"))
+                row.extend(
+                    [
+                        vm.get("instance_id", "-") or "-",
+                        config.get("vcpu", "-"),
+                        f"{config.get('memory', '-')}MB",
+                        f"{config.get('disk_size', '-')}GB",
+                        config.get("image", "-"),
+                        gpu_info,
+                    ]
+                )
+
+            rows.append(row)
+
+        print(format_table(rows, headers))
+
+    def _format_gpu_info(self, gpu_config):
+        """Format GPU configuration for display."""
+        if not gpu_config:
+            return "-"
+
+        attach_mode = gpu_config.get("attach_mode", "")
+        gpus = gpu_config.get("gpus", [])
+
+        if attach_mode == "all":
+            return "All GPUs"
+        elif attach_mode == "listed" and gpus:
+            gpu_slots = [gpu.get("slot", "Unknown") for gpu in gpus]
+            return ", ".join(gpu_slots)
+        else:
+            return "-"
+
+    def start_vm(self, vm_id: str) -> None:
+        """Start a VM."""
+        self.rpc_call("StartVm", {"id": vm_id})
+        print(f"Started VM {vm_id}")
+
+    def stop_vm(self, vm_id: str, force: bool = False) -> None:
+        """Stop a VM."""
+        if force:
+            self.rpc_call("StopVm", {"id": vm_id})
+            print(f"Forcefully stopped VM {vm_id}")
+        else:
+            self.rpc_call("ShutdownVm", {"id": vm_id})
+            print(f"Gracefully shutting down VM {vm_id}")
+
+    def remove_vm(self, vm_id: str) -> None:
+        """Remove a VM."""
+        self.rpc_call("RemoveVm", {"id": vm_id})
+        print(f"Removed VM {vm_id}")
+
+    def resize_vm(
+        self,
+        vm_id: str,
+        vcpu: Optional[int] = None,
+        memory: Optional[int] = None,
+        disk_size: Optional[int] = None,
+        image: Optional[str] = None,
+    ) -> None:
+        """Resize a VM."""
+        params = {"id": vm_id}
+        if vcpu is not None:
+            params["vcpu"] = vcpu
+        if memory is not None:
+            params["memory"] = memory
+        if disk_size is not None:
+            params["disk_size"] = disk_size
+        if image is not None:
+            params["image"] = image
+
+        if len(params) == 1:
+            raise Exception(
+                "at least one parameter must be specified for resize: --vcpu, --memory, --disk, or --image"
+            )
+
+        self.rpc_call("ResizeVm", params)
+        print(f"Resized VM {vm_id}")
+
+    def show_logs(self, vm_id: str, lines: int = 20, follow: bool = False) -> None:
+        """Show VM logs."""
+        path = f"/logs?id={vm_id}&follow={str(follow).lower()}&ansi=false&lines={lines}"
+
+        status, response = self.client.request(
+            "GET", path, headers=self.headers, stream=follow
+        )
+
+        if status != 200:
+            if isinstance(response, str):
+                error_msg = response
+            else:
+                error_msg = str(response)
+            print(f"Failed to get logs: {error_msg}")
+            return
+
+        if follow:
+            try:
+                # For streamed responses, response is a file-like object
+                while True:
+                    line = response.readline()
+                    if not line:
+                        break
+                    print(line.decode("utf-8").rstrip())
+            except KeyboardInterrupt:
+                # Allow clean exit with Ctrl+C
+                return
+            finally:
+                # Close the connection when done
+                response.close()
+        else:
+            # For non-streamed responses, response is already the data
+            print(response)
+
+    def list_images(self, json_output: bool = False) -> None:
+        """List available images."""
+        response = self.rpc_call("ListImages")
+        images = response["images"]
+
+        if json_output:
+            # Return raw JSON data for automation/testing
+            print(json.dumps(images, indent=2))
+            return
+
+        if not images:
+            print("No images found")
+            return
+
+        headers = ["Name", "Version"]
+        rows = [[img["name"], img.get("version", "-")] for img in images]
+        print(format_table(rows, headers))
+
+    def get_app_env_encrypt_pub_key(
+        self, app_id: str, kms_url: Optional[str] = None
+    ) -> Dict:
+        """Get the encryption public key for the specified application ID."""
+        if kms_url:
+            # The KMS serves its RA-TLS certificate, which no system CA
+            # issued; the key is trusted through the signature checked below.
+            client = VmmClient(kms_url, verify_tls=False)
+            path = "/prpc/GetAppEnvEncryptPubKey?json"
+            status, response = client.request(
+                "POST",
+                path,
+                headers={"Content-Type": "application/json"},
+                body={"app_id": app_id},
+            )
+            print(f"Getting encryption public key for {app_id} from {kms_url}")
+        else:
+            response = self.rpc_call("GetAppEnvEncryptPubKey", {"app_id": app_id})
+
+        # Verify the signature if available
+        if "signature" not in response and "signature_v1" not in response:
+            if not self.confirm_untrusted_signer("none"):
+                raise Exception("Aborted due to invalid signature")
+            return response["public_key"]
+
+        public_key = bytes.fromhex(response["public_key"])
+
+        # Prefer signature_v1 (with timestamp) if available
+        signer_pubkey = None
+        if "signature_v1" in response and "timestamp" in response:
+            signature_v1 = bytes.fromhex(response["signature_v1"])
+            timestamp = response["timestamp"]
+            signer_pubkey = verify_signature_v1(
+                public_key, signature_v1, app_id, timestamp
+            )
+            if signer_pubkey:
+                print(f"Verified signature_v1 (with timestamp) from: {signer_pubkey}")
+
+        # Fall back to legacy signature if signature_v1 verification failed or not available
+        if not signer_pubkey and "signature" in response:
+            print(
+                "WARNING: Using legacy signature without timestamp protection. "
+                "Consider upgrading your KMS to support signature_v1.",
+                file=sys.stderr,
+            )
+            signature = bytes.fromhex(response["signature"])
+            signer_pubkey = verify_signature(public_key, signature, app_id)
+            if signer_pubkey:
+                print(f"Verified legacy signature from: {signer_pubkey}")
+
+        if signer_pubkey:
+            whitelist = load_whitelist()
+            if whitelist and signer_pubkey not in whitelist:
+                print(
+                    f"WARNING: Signer {signer_pubkey} is not in the trusted whitelist!"
+                )
+                if not self.confirm_untrusted_signer(signer_pubkey):
+                    raise Exception("Aborted due to untrusted signer")
+        else:
+            print("WARNING: Could not verify signature!")
+            if not self.confirm_untrusted_signer("unknown"):
+                raise Exception("Aborted due to invalid signature")
+
+        return response["public_key"]
+
+    def confirm_untrusted_signer(self, signer: str) -> bool:
+        """Ask user to confirm using an untrusted signer."""
+        response = input(f"Continue with untrusted signer {signer}? (y/N): ")
+        return response.lower() in ("y", "yes")
+
+    def manage_kms_whitelist(self, action: str, pubkey: str = None) -> None:
+        """Manage the whitelist of trusted signers."""
+        whitelist = load_whitelist()
+
+        if action == "list":
+            if not whitelist:
+                print("Whitelist is empty")
+            else:
+                print("Trusted signers:")
+                for addr in whitelist:
+                    print(f"  {addr}")
+            return
+
+        # Normalize pubkey format - trim 0x prefix if present
+        if pubkey and pubkey.startswith("0x"):
+            pubkey = pubkey[2:]
+        # Convert to bytes for validation
+        try:
+            pubkey = bytes.fromhex(pubkey)
+        except ValueError:
+            raise Exception(f"Invalid public key format: {pubkey}")
+        if len(pubkey) != 33:
+            raise Exception(f"Invalid public key length: {len(pubkey)}")
+        pubkey = pubkey.hex()
+
+        if action == "add":
+            if pubkey in whitelist:
+                print(f"Public key {pubkey} is already in the whitelist")
+            else:
+                whitelist.append(pubkey)
+                save_whitelist(whitelist)
+                print(f"Added {pubkey} to the whitelist")
+
+        elif action == "remove":
+            if pubkey not in whitelist:
+                print(f"Public key {pubkey} is not in the whitelist")
+            else:
+                whitelist.remove(pubkey)
+                save_whitelist(whitelist)
+                print(f"Removed {pubkey} from the whitelist")
+
+        else:
+            raise Exception(f"Unknown action: {action}")
+
+    def calc_app_id(self, compose_file: str) -> str:
+        """Calculate the application ID from the compose file."""
+        compose_hash = hashlib.sha256(compose_file.encode()).hexdigest()
+        return compose_hash[:40]
+
+    def create_app_compose(self, args) -> None:
+        """Create a new app compose file."""
+        envs = parse_env_file(args.env_file) or {}
+
+        # Validate: --env-file requires --kms
+        if envs and not args.kms:
+            raise Exception(
+                "--env-file requires --kms to enable KMS for environment variable decryption"
+            )
+
+        app_compose = {
+            "manifest_version": 2,
+            "name": args.name,
+            "runner": "docker-compose",
+            "docker_compose_file": open(args.docker_compose, "rb")
+            .read()
+            .decode("utf-8"),
+            "kms_enabled": args.kms,
+            "gateway_enabled": args.gateway,
+            "local_key_provider_enabled": args.local_key_provider,
+            "key_provider_id": args.key_provider_id or "",
+            "public_logs": args.public_logs,
+            "public_sysinfo": args.public_sysinfo,
+            "allowed_envs": [k for k in envs.keys()],
+            "no_instance_id": args.no_instance_id,
+            "secure_time": args.secure_time,
+        }
+        # Only emit the field when it is turned off, so a default compose file
+        # keeps the exact bytes -- and therefore the compose hash -- it had
+        # before this option existed.
+        if args.no_storage_discard:
+            app_compose["storage_discard"] = False
+        if args.key_provider:
+            app_compose["key_provider"] = args.key_provider
+        if args.prelaunch_script:
+            app_compose["pre_launch_script"] = (
+                open(args.prelaunch_script, "rb").read().decode("utf-8")
+            )
+        if args.swap is not None:
+            swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
+            if swap_bytes > 0:
+                app_compose["swap_size"] = swap_bytes
+            else:
+                app_compose.pop("swap_size", None)
+        if args.event_log_version == 2:
+            app_compose["event_log_version"] = args.event_log_version
+        elif args.event_log_version == 1:
+            app_compose.pop("event_log_version", None)
+
+        compose_file = json.dumps(app_compose, indent=4, ensure_ascii=False).encode(
+            "utf-8"
+        )
+        compose_hash = hashlib.sha256(compose_file).hexdigest()
+        with open(args.output, "wb") as f:
+            f.write(compose_file)
+        print(f"App compose file created at: {args.output}")
+        print(f"Compose hash: {compose_hash}")
+
+    def create_vm(self, args) -> None:
+        """Create a new VM."""
+        # Read and validate compose file
+        if not os.path.exists(args.compose):
+            raise Exception(f"Compose file not found: {args.compose}")
+
+        compose_content = read_utf8(args.compose)
+
+        envs = parse_env_file(args.env_file)
+
+        # Validate: --env-file requires --kms-url and kms_enabled in compose
+        if envs:
+            if not args.kms_url:
+                raise Exception(
+                    "--env-file requires --kms-url to encrypt environment variables"
+                )
+            try:
+                compose_json = json.loads(compose_content)
+                if not compose_json.get("kms_enabled", False):
+                    raise Exception(
+                        "--env-file requires kms_enabled=true in the compose file (use --kms when creating compose)"
+                    )
+            except json.JSONDecodeError:
+                pass  # Let the server handle invalid JSON
+
+        # Read user config file if provided
+        user_config = ""
+        if args.user_config:
+            user_config = read_utf8(args.user_config)
+
+        # Create VM request
+        params = {
+            "name": args.name,
+            "image": args.image,
+            "compose_file": compose_content,
+            "vcpu": args.vcpu,
+            "memory": args.memory,
+            "disk_size": args.disk,
+            "app_id": args.app_id,
+            "user_config": user_config,
+            "ports": [parse_port_mapping(port) for port in args.port or []],
+            "hugepages": args.hugepages,
+            "pin_numa": args.pin_numa,
+            "stopped": args.stopped,
+            "no_tee": args.no_tee,
+            "annotations": args.annotation or {},
+        }
+        if args.disk_prealloc:
+            params["disk_prealloc"] = args.disk_prealloc
+        if args.simulated_tee:
+            params["simulated_tee"] = args.simulated_tee
+        if args.swap is not None:
+            swap_bytes = max(0, int(round(args.swap)) * 1024 * 1024)
+            if swap_bytes > 0:
+                params["swap_size"] = swap_bytes
+
+        if args.ppcie or (args.gpu and "all" in args.gpu):
+            params["gpus"] = {"attach_mode": "all"}
+        elif args.gpu:
+            params["gpus"] = {
+                "attach_mode": "listed",
+                "gpus": [{"slot": gpu} for gpu in args.gpu or []],
+            }
+        if args.kms_url:
+            params["kms_urls"] = args.kms_url
+        if args.gateway_url:
+            params["gateway_urls"] = args.gateway_url
+        # "auto" is what a fresh deployment already does, so it only means
+        # something to `update`, where it clears a pinned count.
+        net_queues = None if args.net_queues == "auto" else args.net_queues
+        if args.net or args.net_vhost is not None or net_queues:
+            networking = {}
+            if args.net:
+                networking["mode"] = args.net
+            if args.net_vhost is not None:
+                networking["vhost"] = args.net_vhost
+            if net_queues:
+                networking["queues"] = net_queues
+            params["networking"] = networking
+
+        app_id = args.app_id or self.calc_app_id(compose_content)
+        print(f"App ID: {app_id}")
+        if envs:
+            encrypt_url = args.kms_encrypt_url or (
+                args.kms_url[0] if args.kms_url else None
+            )
+            encrypt_pubkey = self.get_app_env_encrypt_pub_key(app_id, encrypt_url)
+            print(f"Encrypting environment variables with key: {encrypt_pubkey}")
+            envs_list = [{"key": k, "value": v} for k, v in envs.items()]
+            params["encrypted_env"] = encrypt_env(envs_list, encrypt_pubkey)
+        response = self.rpc_call("CreateVm", params)
+        print(f"Created VM with ID: {response.get('id')}")
+        return response.get("id")
+
+    def update_vm_env(
+        self, vm_id: str, envs: Dict[str, str], kms_urls: Optional[List[str]] = None
+    ) -> None:
+        """Update environment variables for a VM."""
+        # Validate: requires --kms-url
+        if not kms_urls:
+            raise Exception("--kms-url is required to encrypt environment variables")
+
+        envs = envs or {}
+        # First get the VM info to retrieve the app_id
+        vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
+
+        if not vm_info_response.get("found", False) or "info" not in vm_info_response:
+            raise Exception(f"VM with ID {vm_id} not found")
+
+        app_id = vm_info_response["info"]["app_id"]
+        print(f"Retrieved app ID: {app_id}")
+        vm_configuration = vm_info_response["info"].get("configuration") or {}
+        compose_file = vm_configuration.get("compose_file")
+
+        # Now get the encryption key for the app
+        encrypt_pubkey = self.get_app_env_encrypt_pub_key(
+            app_id, kms_urls[0] if kms_urls else None
+        )
+        print(f"Encrypting environment variables with key: {encrypt_pubkey}")
+        envs_list = [{"key": k, "value": v} for k, v in envs.items()]
+        encrypted_env = encrypt_env(envs_list, encrypt_pubkey)
+
+        # Use UpdateApp with the VM ID
+        payload = {"id": vm_id, "encrypted_env": encrypted_env}
+
+        if compose_file:
+            try:
+                app_compose = json.loads(compose_file)
+            except json.JSONDecodeError:
+                app_compose = {}
+            compose_changed = False
+            allowed_envs = list(envs.keys())
+            if app_compose.get("allowed_envs") != allowed_envs:
+                app_compose["allowed_envs"] = allowed_envs
+                compose_changed = True
+            launch_token_value = envs.get("APP_LAUNCH_TOKEN")
+            if launch_token_value is not None:
+                launch_token_hash = hashlib.sha256(
+                    launch_token_value.encode("utf-8")
+                ).hexdigest()
+                if app_compose.get("launch_token_hash") != launch_token_hash:
+                    app_compose["launch_token_hash"] = launch_token_hash
+                    compose_changed = True
+            if compose_changed:
+                payload["compose_file"] = json.dumps(
+                    app_compose, indent=4, ensure_ascii=False
+                )
+
+        self.rpc_call("UpgradeApp", payload)
+        print(f"Environment variables updated for VM {vm_id}")
+
+    def update_vm_user_config(self, vm_id: str, user_config: str) -> None:
+        """Update user config for a VM."""
+        self.rpc_call("UpgradeApp", {"id": vm_id, "user_config": user_config})
+        print(f"User config updated for VM {vm_id}")
+
+    def update_vm_app_compose(self, vm_id: str, app_compose: str) -> None:
+        """Update app compose for a VM."""
+        self.rpc_call("UpgradeApp", {"id": vm_id, "compose_file": app_compose})
+        print(f"App compose updated for VM {vm_id}")
+
+    def update_vm_ports(self, vm_id: str, ports: List[str]) -> None:
+        """Update port mapping for a VM."""
+        port_mappings = [parse_port_mapping(port) for port in ports]
+        self.rpc_call(
+            "UpgradeApp", {"id": vm_id, "update_ports": True, "ports": port_mappings}
+        )
+        print(f"Port mapping updated for VM {vm_id}")
+
+    def update_vm(
+        self,
+        vm_id: str,
+        vcpu: Optional[int] = None,
+        memory: Optional[int] = None,
+        disk_size: Optional[int] = None,
+        image: Optional[str] = None,
+        docker_compose_content: Optional[str] = None,
+        prelaunch_script: Optional[str] = None,
+        swap_size: Optional[int] = None,
+        env_file: Optional[str] = None,
+        user_config: Optional[str] = None,
+        ports: Optional[List[str]] = None,
+        no_ports: bool = False,
+        gpu_slots: Optional[List[str]] = None,
+        attach_all: bool = False,
+        no_gpus: bool = False,
+        kms_urls: Optional[List[str]] = None,
+        no_tee: Optional[bool] = None,
+        net: Optional[str] = None,
+        net_vhost: Optional[bool] = None,
+        net_vhost_inherit: bool = False,
+        net_queues: Optional[Union[int, str]] = None,
+        annotations: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Update multiple aspects of a VM in one command."""
+        # Validate: --env-file requires --kms-url
+        if env_file and not kms_urls:
+            raise Exception(
+                "--env-file requires --kms-url to encrypt environment variables"
+            )
+
+        updates = []
+
+        # handle resize operations (vcpu, memory, disk, image)
+        resize_params = {}
+        if vcpu is not None:
+            resize_params["vcpu"] = vcpu
+            updates.append(f"vCPU: {vcpu}")
+        if memory is not None:
+            resize_params["memory"] = memory
+            updates.append(f"memory: {memory}MB")
+        if disk_size is not None:
+            resize_params["disk_size"] = disk_size
+            updates.append(f"disk: {disk_size}GB")
+        if image is not None:
+            resize_params["image"] = image
+            updates.append(f"image: {image}")
+
+        if resize_params:
+            resize_params["id"] = vm_id
+            self.rpc_call("ResizeVm", resize_params)
+
+        # handle upgrade operations (compose, env, user_config, ports, gpu)
+        upgrade_params = {"id": vm_id}
+
+        # handle compose file updates (docker-compose, prelaunch script, swap)
+        needs_compose_update = (
+            docker_compose_content
+            or prelaunch_script is not None
+            or swap_size is not None
+        )
+        vm_info_response = None
+
+        if needs_compose_update or env_file:
+            vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
+            if (
+                not vm_info_response.get("found", False)
+                or "info" not in vm_info_response
+            ):
+                raise Exception(f"VM with ID {vm_id} not found")
+
+        if needs_compose_update:
+            vm_configuration = vm_info_response["info"].get("configuration") or {}
+            compose_file_content = vm_configuration.get("compose_file")
+
+            try:
+                app_compose = (
+                    json.loads(compose_file_content) if compose_file_content else {}
+                )
+            except json.JSONDecodeError:
+                app_compose = {}
+
+            if docker_compose_content:
+                app_compose["docker_compose_file"] = docker_compose_content
+                updates.append("docker compose")
+
+            if prelaunch_script is not None:
+                script_stripped = prelaunch_script.strip()
+                if script_stripped:
+                    app_compose["pre_launch_script"] = script_stripped
+                    updates.append("prelaunch script")
+                elif "pre_launch_script" in app_compose:
+                    del app_compose["pre_launch_script"]
+                    updates.append("prelaunch script (removed)")
+
+            if swap_size is not None:
+                swap_bytes = max(0, int(round(swap_size)) * 1024 * 1024)
+                if swap_bytes > 0:
+                    app_compose["swap_size"] = swap_bytes
+                    updates.append(f"swap: {swap_size}MB")
+                elif "swap_size" in app_compose:
+                    del app_compose["swap_size"]
+                    updates.append("swap (disabled)")
+
+            upgrade_params["compose_file"] = json.dumps(
+                app_compose, indent=4, ensure_ascii=False
+            )
+
+        if env_file:
+            envs = parse_env_file(env_file)
+            if envs:
+                app_id = vm_info_response["info"]["app_id"]
+                vm_configuration = vm_info_response["info"].get("configuration") or {}
+                compose_file_content = vm_configuration.get("compose_file")
+
+                encrypt_pubkey = self.get_app_env_encrypt_pub_key(
+                    app_id, kms_urls[0] if kms_urls else None
+                )
+                envs_list = [{"key": k, "value": v} for k, v in envs.items()]
+                upgrade_params["encrypted_env"] = encrypt_env(envs_list, encrypt_pubkey)
+                updates.append("environment variables")
+
+                # update allowed_envs in compose file if needed
+                if compose_file_content:
+                    try:
+                        app_compose = json.loads(compose_file_content)
+                    except json.JSONDecodeError:
+                        app_compose = {}
+                    compose_changed = False
+                    allowed_envs = list(envs.keys())
+                    if app_compose.get("allowed_envs") != allowed_envs:
+                        app_compose["allowed_envs"] = allowed_envs
+                        compose_changed = True
+                    launch_token_value = envs.get("APP_LAUNCH_TOKEN")
+                    if launch_token_value is not None:
+                        launch_token_hash = hashlib.sha256(
+                            launch_token_value.encode("utf-8")
+                        ).hexdigest()
+                        if app_compose.get("launch_token_hash") != launch_token_hash:
+                            app_compose["launch_token_hash"] = launch_token_hash
+                            compose_changed = True
+                    if compose_changed:
+                        upgrade_params["compose_file"] = json.dumps(
+                            app_compose, indent=4, ensure_ascii=False
+                        )
+
+        if net or net_vhost is not None or net_vhost_inherit or net_queues:
+            # The RPC replaces the whole NIC list, so merge into what the VM
+            # already has rather than silently dropping its other interfaces or
+            # un-pinning a bridge it was deployed with.
+            if vm_info_response is None:
+                vm_info_response = self.rpc_call("GetInfo", {"id": vm_id})
+                if not vm_info_response.get("found", False):
+                    raise Exception(f"VM with ID {vm_id} not found")
+            configuration = vm_info_response["info"].get("configuration") or {}
+            current = configuration.get("networks") or []
+            if not current and configuration.get("networking"):
+                current = [configuration["networking"]]
+            if len(current) > 1:
+                raise Exception(
+                    "this VM has multiple network interfaces; edit them through the "
+                    "web UI or the UpgradeApp API rather than these flags"
+                )
+            # Only the fields the deployment RPC accepts back travel with the
+            # update. macvtap_mode is node-controlled and can never be changed,
+            # so resending it can only fail if the node changed meanwhile. An
+            # empty mode is meaningful: it says the VM never named a backend
+            # and still follows the node's.
+            source = current[0] if current else {}
+            networking = {
+                key: source[key]
+                for key in ("mode", "bridge_name", "parent", "vhost", "queues")
+                if source.get(key) not in (None, "")
+            }
+            if net == "default":
+                # The only way back to "whatever backend the node runs". Without
+                # it a VM that named a mode once is pinned to it for life, since
+                # the merge above carries the reported mode forward on every
+                # later update. The data plane keeps whatever it was told.
+                networking.pop("mode", None)
+                networking.pop("bridge_name", None)
+                networking.pop("parent", None)
+            elif net:
+                networking["mode"] = net
+            # A field belongs to the mode that owns it. Carrying a bridge into
+            # a macvtap request, or a parent into a bridge one, asks the server
+            # about a field the caller never typed and has no flag to clear.
+            mode = networking.get("mode", "")
+            if mode and mode != "bridge":
+                networking.pop("bridge_name", None)
+            if mode and mode != "macvtap":
+                networking.pop("parent", None)
+            # Same rule for the data plane. User and passt networking have
+            # neither a vhost backend nor multiple queues, so carrying an
+            # inherited pin into them is rejected for a flag the operator never
+            # typed -- and the two flags that would clear it are the ones they
+            # have not found yet.
+            # An explicitly typed value still earns the error: that one is
+            # theirs to be wrong about.
+            if mode in ("user", "passt"):
+                if net_vhost is None:
+                    networking.pop("vhost", None)
+                if not net_queues:
+                    networking.pop("queues", None)
+            if net_vhost is not None:
+                networking["vhost"] = net_vhost
+            elif net_vhost_inherit:
+                networking.pop("vhost", None)
+            if net_queues == "auto":
+                networking.pop("queues", None)
+            elif net_queues:
+                networking["queues"] = net_queues
+            upgrade_params["update_networking"] = True
+            upgrade_params["networks"] = [networking]
+            updates.append(f"networking ({networking})")
+
+        if user_config:
+            upgrade_params["user_config"] = user_config
+            updates.append("user config")
+
+        if kms_urls is not None:
+            upgrade_params["update_kms_urls"] = True
+            upgrade_params["kms_urls"] = kms_urls
+            updates.append(f"KMS URLs ({len(kms_urls)})")
+
+        # handle port updates - only update if --port or --no-ports is specified
+        if no_ports or ports is not None:
+            if no_ports:
+                port_mappings = []
+                updates.append("port mappings (removed)")
+            elif ports:
+                port_mappings = [parse_port_mapping(port) for port in ports]
+                updates.append("port mappings")
+            else:
+                # ports is an empty list - shouldn't happen with mutually exclusive group
+                port_mappings = []
+                updates.append("port mappings (none)")
+            upgrade_params["update_ports"] = True
+            upgrade_params["ports"] = port_mappings
+
+        # handle GPU updates - only update if one of the GPU flags is set
+        gpu_all = gpu_slots and "all" in gpu_slots
+        if attach_all or gpu_all or no_gpus or gpu_slots is not None:
+            if attach_all or gpu_all:
+                gpu_config = {"attach_mode": "all"}
+                updates.append("GPUs (all)")
+            elif no_gpus:
+                gpu_config = {"attach_mode": "listed", "gpus": []}
+                updates.append("GPUs (detached)")
+            elif gpu_slots:
+                gpu_config = {
+                    "attach_mode": "listed",
+                    "gpus": [{"slot": gpu} for gpu in gpu_slots],
+                }
+                updates.append(f"GPUs ({len(gpu_slots)} devices)")
+            else:
+                # gpu_slots is an empty list ([] not None) - shouldn't happen with mutually exclusive group
+                gpu_config = {"attach_mode": "listed", "gpus": []}
+                updates.append("GPUs (none)")
+            upgrade_params["gpus"] = gpu_config
+
+        if annotations is not None:
+            upgrade_params["update_annotations"] = True
+            upgrade_params["annotations"] = annotations
+            updates.append(f"annotations ({len(annotations)})")
+
+        if no_tee is not None:
+            upgrade_params["no_tee"] = no_tee
+            updates.append("TEE disabled" if no_tee else "TEE enabled")
+
+        if len(upgrade_params) > 1:  # more than just the id
+            self.rpc_call("UpgradeApp", upgrade_params)
+
+        if updates:
+            print(f"Updated VM {vm_id}: {', '.join(updates)}")
+        else:
+            print(f"No updates specified for VM {vm_id}")
+
+    def show_info(self, vm_id: str, json_output: bool = False) -> None:
+        """Show detailed information about a VM."""
+        response = self.rpc_call("GetInfo", {"id": vm_id})
+
+        if not response.get("found", False) or "info" not in response:
+            print(f"VM with ID {vm_id} not found")
+            return
+
+        info = response["info"]
+
+        if json_output:
+            print(json.dumps(info, indent=2))
+            return
+
+        config = info.get("configuration", {})
+
+        print(f"VM ID:         {info.get('id', '-')}")
+        print(f"Name:          {info.get('name', '-')}")
+        print(f"Status:        {info.get('status', '-')}")
+        print(f"Uptime:        {info.get('uptime', '-')}")
+        print(f"App ID:        {info.get('app_id', '-')}")
+        print(f"Instance ID:   {info.get('instance_id', '-') or '-'}")
+        print(f"App URL:       {info.get('app_url', '-') or '-'}")
+        print(f"Image:         {config.get('image', '-')}")
+        print(f"Image Version: {info.get('image_version', '-')}")
+        print(f"vCPU:          {config.get('vcpu', '-')}")
+        print(f"Memory:        {config.get('memory', '-')}MB")
+        prealloc = config.get("disk_prealloc") or "off"
+        disk_note = "" if prealloc == "off" else f" (prealloc: {prealloc})"
+        print(f"Disk:          {config.get('disk_size', '-')}GB{disk_note}")
+        print(f"GPUs:          {self._format_gpu_info(config.get('gpus'))}")
+        print(f"Boot Progress: {info.get('boot_progress', '-')}")
+        if info.get("boot_error"):
+            print(f"Boot Error:    {info['boot_error']}")
+        if info.get("exited_at"):
+            print(f"Exited At:     {info['exited_at']}")
+        if info.get("shutdown_progress"):
+            print(f"Shutdown:      {info['shutdown_progress']}")
+
+        interfaces = info.get("interfaces") or []
+        if interfaces:
+            print("\nNetwork Interfaces:")
+            for iface in interfaces:
+                parts = [
+                    f"{iface.get('netdev_id') or '-':<6}",
+                    f"{iface.get('mode') or '-'}/{iface.get('backend') or '-'}",
+                    iface.get("mac") or "-",
+                ]
+                if iface.get("bridge_name"):
+                    parts.append(f"bridge={iface['bridge_name']}")
+                if iface.get("macvtap_mode"):
+                    parts.append(f"macvtap_mode={iface['macvtap_mode']}")
+                # Absent, not false: custom mode carries an operator-written
+                # netdev string the VMM never parses, so it reports no data
+                # plane rather than asserting the resolved default over one that
+                # may well say vhost=on,queues=8.
+                vhost = iface.get("vhost")
+                parts.append(
+                    "vhost=" + ("-" if vhost is None else ("on" if vhost else "off"))
+                )
+                parts.append(f"queues={iface.get('queues') or '-'}")
+                print("  " + "  ".join(parts))
+            # A stopped VM has no interfaces to describe, so these are what its
+            # next launch would build -- which can differ from its last one.
+            #
+            # The server's own predicate, not the status string: a VM being
+            # removed with QEMU still up reports the interfaces that process
+            # built, and no status value says so.
+            if not info.get("running", False):
+                print("  (not running; shown as its next launch would build them)")
+
+        events = info.get("events", [])
+        if events:
+            print("\nRecent Events:")
+            for event in events[-10:]:
+                ts = event.get("timestamp", 0)
+                print(
+                    f"  [{event.get('event', '')}] {event.get('body', '')} (ts: {ts})"
+                )
+
+    def list_gpus(self, json_output: bool = False) -> None:
+        """List all available GPUs."""
+        response = self.rpc_call("ListGpus")
+        gpus = response.get("gpus", [])
+
+        if json_output:
+            # Return raw JSON data for automation/testing
+            print(json.dumps(gpus, indent=2))
+            return
+
+        if not gpus:
+            print("No GPUs found")
+            return
+
+        headers = ["Slot", "Product ID", "Description", "Available"]
+        rows = []
+        for gpu in gpus:
+            row = [
+                gpu.get("slot", "-"),
+                gpu.get("product_id", "-"),
+                gpu.get("description", "-"),
+                "Yes" if gpu.get("is_free", False) else "No",
+            ]
+            rows.append(row)
+
+        print(format_table(rows, headers))
+
+
+def format_table(rows, headers):
+    """Format rows and headers into a table string."""
+    if not rows:
+        return ""
+
+    # Calculate column widths
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(str(cell)))
+
+    # Create format string
+    row_format = "│ " + " │ ".join(f"{{:<{w}}}" for w in widths) + " │"
+    separator = "├─" + "─┼─".join("─" * w for w in widths) + "─┤"
+    top_border = "┌─" + "─┬─".join("─" * w for w in widths) + "─┐"
+    bottom_border = "└─" + "─┴─".join("─" * w for w in widths) + "─┘"
+
+    # Build table
+    table = [top_border, row_format.format(*headers), separator]
+    for row in rows:
+        table.append(row_format.format(*[str(cell) for cell in row]))
+    table.append(bottom_border)
+
+    return "\n".join(table)
+
+
+def parse_env_file(file_path: str) -> Dict[str, str]:
+    """Parse an environment file into a dictionary of key-value pairs.
+
+    Each line should be formatted as KEY=Value.
+    Lines that are empty or start with '#' are ignored.
+
+    """
+    if not file_path:
+        return {}
+
+    envs = {}
+    with open(file_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            envs[key.strip()] = value.strip()
+    return envs
+
+
+def parse_size(s: str, target_unit: str) -> int:
+    """Parse a human-readable size string and return the size in the target unit.
+
+    Accept strings like "1G" or "100M".
+
+    Args:
+        s: The size string provided.
+        target_unit: Either "MB" (for memory) or "GB" (for disk).
+
+    Returns:
+        An integer representing the size in the specified unit.
+
+    Raises:
+        argparse.ArgumentTypeError: if the format is invalid or if conversion turns
+                                      out to be fractional.
+
+    """
+    s = s.strip()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([a-zA-Z]{1,2})?", s)
+    if not m:
+        raise argparse.ArgumentTypeError(f"Invalid size format: '{s}'")
+    number_str, unit = m.groups()
+    try:
+        number = float(number_str)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid number in size: '{s}'")
+
+    # If no unit is specified, assume the target unit.
+    if unit is None:
+        unit = target_unit
+    else:
+        unit = unit.upper()
+
+    if target_unit == "MB":
+        # For memory, if no suffix is provided we assume MB.
+        if unit in ["M", "MB"]:
+            factor = 1
+        elif unit in ["G", "GB"]:
+            factor = 1024
+        elif unit in ["T", "TB"]:
+            factor = 1024 * 1024
+        else:
+            raise argparse.ArgumentTypeError(
+                f"Invalid size unit '{unit}' for memory. Use M, G, or T."
+            )
+    elif target_unit == "GB":
+        # For disk, if no suffix is provided we assume GB.
+        if unit in ["G", "GB"]:
+            factor = 1
+        elif unit in ["T", "TB"]:
+            factor = 1024
+        else:
+            raise argparse.ArgumentTypeError(
+                f"Invalid size unit '{unit}' for disk. Use G, T."
+            )
+    else:
+        raise ValueError("Unsupported target unit")
+
+    value = number * factor
+    if not value.is_integer():
+        raise argparse.ArgumentTypeError(
+            f"Size must be an integer number of {target_unit}. Got {value}."
+        )
+    return int(value)
+
+
+def parse_memory_size(s: str) -> int:
+    """Parse a memory size string into MB."""
+    return parse_size(s, "MB")
+
+
+def parse_disk_size(s: str) -> int:
+    """Parse a disk size string into GB."""
+    return parse_size(s, "GB")
+
+
+def verify_signature_v1(
+    public_key: bytes, signature: bytes, app_id: str, timestamp: int
+) -> Optional[str]:
+    """Verify the v1 signature (with timestamp) of a public key.
+
+    Args:
+        public_key: The public key bytes to verify
+        signature: The signature bytes (65 bytes)
+        app_id: The application ID
+        timestamp: Unix timestamp in seconds when the response was generated
+
+    Returns:
+        The compressed public key if valid, None otherwise
+
+    """
+    if not CRYPTO_AVAILABLE:
+        raise ImportError(
+            "Cryptography libraries not available. Please install them with:\n"
+            "pip install cryptography eth-keys eth-utils"
+        )
+
+    if len(signature) != 65:
+        return None
+
+    # Create the message to verify
+    # Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + timestamp_be_bytes + public_key)
+    prefix = b"dstack-env-encrypt-pubkey"
+    if app_id.startswith("0x"):
+        app_id = app_id[2:]
+    timestamp_bytes = timestamp.to_bytes(8, byteorder="big")
+    message = prefix + b":" + bytes.fromhex(app_id) + timestamp_bytes + public_key
+
+    # Hash the message with Keccak-256
+    message_hash = keccak(message)
+
+    # Recover the public key from the signature
+    try:
+        sig = keys.Signature(signature_bytes=signature)
+        recovered_key = sig.recover_public_key_from_msg_hash(message_hash)
+        return "0x" + recovered_key.to_compressed_bytes().hex()
+    except Exception as e:
+        print(f"Signature v1 verification failed: {e}", file=sys.stderr)
+        return None
+
+
+def verify_signature(public_key: bytes, signature: bytes, app_id: str) -> Optional[str]:
+    """Verify the legacy signature (without timestamp) of a public key.
+
+    Args:
+        public_key: The public key bytes to verify
+        signature: The signature bytes
+        app_id: The application ID
+
+    Returns:
+        The compressed public key if valid, None otherwise
+
+    Examples:
+        >>> public_key = bytes.fromhex('e33a1832c6562067ff8f844a61e51ad051f1180b66ec2551fb0251735f3ee90a')
+        >>> signature = bytes.fromhex('8542c49081fbf4e03f62034f13fbf70630bdf256a53032e38465a27c36fd6bed7a5e7111652004aef37f7fd92fbfc1285212c4ae6a6154203a48f5e16cad2cef00')
+        >>> app_id = '00' * 20
+        >>> compressed_pubkey = verify_signature(public_key, signature, app_id)
+        >>> print(compressed_pubkey)
+        0x0217610d74cbd39b6143842c6d8bc310d79da1d82cc9d17f8876376221eda0c38f
+
+    """
+    if not CRYPTO_AVAILABLE:
+        raise ImportError(
+            "Cryptography libraries not available. Please install them with:\n"
+            "pip install cryptography eth-keys eth-utils"
+        )
+
+    if len(signature) != 65:
+        return None
+
+    # Create the message to verify
+    # Signs: Keccak256("dstack-env-encrypt-pubkey" + ":" + app_id + public_key)
+    prefix = b"dstack-env-encrypt-pubkey"
+    if app_id.startswith("0x"):
+        app_id = app_id[2:]
+    message = prefix + b":" + bytes.fromhex(app_id) + public_key
+
+    # Hash the message with Keccak-256
+    message_hash = keccak(message)
+
+    # Recover the public key from the signature
+    try:
+        # Create a Signature object with vrs
+        sig = keys.Signature(signature_bytes=signature)
+
+        recovered_key = sig.recover_public_key_from_msg_hash(message_hash)
+        return "0x" + recovered_key.to_compressed_bytes().hex()
+    except Exception as e:
+        print(f"Signature verification failed: {e}", file=sys.stderr)
+        return None
+
+
+def load_whitelist() -> List[str]:
+    """Load the whitelist of trusted signers from a file.
+
+    Returns:
+        List of trusted Ethereum addresses
+
+    """
+    if not os.path.exists(DEFAULT_KMS_WHITELIST_PATH):
+        os.makedirs(
+            os.path.dirname(DEFAULT_KMS_WHITELIST_PATH), mode=0o700, exist_ok=True
+        )
+        return []
+
+    try:
+        with open(DEFAULT_KMS_WHITELIST_PATH, "r") as f:
+            data = json.load(f)
+            return data.get("trusted_signers", [])
+    except (json.JSONDecodeError, FileNotFoundError):
+        return []
+
+
+def save_whitelist(whitelist: List[str]) -> None:
+    """Save the whitelist of trusted signers to a file.
+
+    Args:
+        whitelist: List of trusted Ethereum addresses
+
+    """
+    write_private_json(DEFAULT_KMS_WHITELIST_PATH, {"trusted_signers": whitelist})
+
+
+def queue_count(value: str) -> Union[int, str]:
+    """Parse a queue pair count the node could act on, or "auto" to stop pinning one.
+
+    Zero would otherwise reach the wire as "unset" and be answered with the
+    default, and a negative one as a decoding error naming a column offset --
+    neither of which tells the caller what they asked for was impossible.
+    """
+    if value == "auto":
+        return "auto"
+    try:
+        count = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a whole number or 'auto'")
+    if count < 1:
+        raise argparse.ArgumentTypeError(
+            f"queue pairs must be at least 1, or 'auto' to follow the vCPU count; got {count}"
+        )
+    return count
+
+
+def main():
+    """Parse arguments and dispatch to the appropriate command handler."""
+    parser = argparse.ArgumentParser(description="dstack-vmm CLI - Manage VMs")
+
+    # Load config file defaults
+    config = load_config()
+
+    # Discover running VMM instances
+    instances = discover_vmm_instances()
+
+    # Priority: command line > environment variable > config file > auto-discovery > default
+    default_url = os.environ.get(
+        "DSTACK_VMM_URL", config.get("url", "http://localhost:8080")
+    )
+    default_auth_user = os.environ.get("DSTACK_VMM_AUTH_USER", config.get("auth_user"))
+    default_auth_password = os.environ.get(
+        "DSTACK_VMM_AUTH_PASSWORD", config.get("auth_password")
+    )
+    default_auth_token = os.environ.get("DSTACK_VMM_TOKEN", config.get("auth_token"))
+
+    parser.add_argument(
+        "--url",
+        default=default_url,
+        help="dstack-vmm API URL (can also be set via DSTACK_VMM_URL env var or config file)",
+    )
+
+    # Basic authentication arguments
+    parser.add_argument(
+        "--auth-user",
+        default=default_auth_user,
+        help="Basic auth username (can also be set via DSTACK_VMM_AUTH_USER env var or config file)",
+    )
+    parser.add_argument(
+        "--auth-password",
+        default=default_auth_password,
+        help="Basic auth password (can also be set via DSTACK_VMM_AUTH_PASSWORD env var or config file)",
+    )
+    parser.add_argument(
+        "--token",
+        default=default_auth_token,
+        help="bearer token for a VMM with `[auth]` enabled, sent as "
+        "`Authorization: Bearer` (can also be set via DSTACK_VMM_TOKEN env var "
+        "or config file). Takes precedence over --auth-user/--auth-password.",
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="skip TLS certificate verification for an https:// VMM URL",
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # VMM discovery commands (vmm ls / vmm switch)
+    vmm_parser = subparsers.add_parser(
+        "vmm", help="VMM instance management (ls, switch)"
+    )
+    vmm_subparsers = vmm_parser.add_subparsers(
+        dest="vmm_command", help="VMM sub-commands"
+    )
+
+    vmm_ls_parser = vmm_subparsers.add_parser(
+        "ls", help="List all running VMM instances on this host"
+    )
+    vmm_ls_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format"
+    )
+
+    vmm_switch_parser = vmm_subparsers.add_parser(
+        "switch", help="Switch active VMM instance"
+    )
+    vmm_switch_parser.add_argument(
+        "vmm_id", help="VMM instance ID (prefix match supported)"
+    )
+
+    # Register nested subcommands for top-level help display
+    _nested_commands = {
+        "vmm ls": "List all running VMM instances on this host",
+        "vmm switch": "Switch active VMM instance",
+    }
+
+    # Patch parser's format_help to show nested subcommands
+    _orig_format_help = parser.format_help
+
+    def _patched_format_help():
+        text = _orig_format_help()
+        # Append nested subcommands after the subparser listing
+        extra = "\nnested commands:\n"
+        for cmd, desc in _nested_commands.items():
+            extra += f"    {cmd:<24s}{desc}\n"
+        return text + extra
+
+    parser.format_help = _patched_format_help
+
+    # List command
+    lsvm_parser = subparsers.add_parser("lsvm", help="List VMs")
+    lsvm_parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Show detailed information"
+    )
+    lsvm_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format for automation"
+    )
+
+    # Info command
+    info_parser = subparsers.add_parser("info", help="Show detailed VM information")
+    info_parser.add_argument("vm_id", help="VM ID to show info for")
+    info_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format for automation"
+    )
+
+    # Start command
+    start_parser = subparsers.add_parser("start", help="Start a VM")
+    start_parser.add_argument("vm_id", help="VM ID to start")
+
+    # Stop command
+    stop_parser = subparsers.add_parser("stop", help="Stop a VM")
+    stop_parser.add_argument("vm_id", help="VM ID to stop")
+    stop_parser.add_argument(
+        "-f", "--force", action="store_true", help="Force stop the VM"
+    )
+
+    # Remove command
+    remove_parser = subparsers.add_parser("remove", help="Remove a VM")
+    remove_parser.add_argument("vm_id", help="VM ID to remove")
+
+    # Resize command
+    resize_parser = subparsers.add_parser("resize", help="Resize a VM")
+    resize_parser.add_argument("vm_id", help="VM ID to resize")
+    resize_parser.add_argument("--vcpu", type=int, help="Number of vCPUs")
+    resize_parser.add_argument(
+        "--memory", type=parse_memory_size, help="Memory size (e.g. 1G, 100M)"
+    )
+    resize_parser.add_argument(
+        "--disk", type=parse_disk_size, help="Disk size (e.g. 20G, 1T)"
+    )
+    resize_parser.add_argument("--image", type=str, help="Image name")
+
+    # Logs command
+    logs_parser = subparsers.add_parser("logs", help="Show VM logs")
+    logs_parser.add_argument("vm_id", help="VM ID to show logs for")
+    logs_parser.add_argument(
+        "-n", "--lines", type=int, default=20, help="Number of lines to show"
+    )
+    logs_parser.add_argument(
+        "-f", "--follow", action="store_true", help="Follow log output"
+    )
+
+    # Compose command
+    compose_parser = subparsers.add_parser(
+        "compose", help="Create a new app-compose.json file"
+    )
+    compose_parser.add_argument("--name", required=True, help="VM image name")
+    compose_parser.add_argument(
+        "--docker-compose", required=True, help="Path to docker-compose.yml file"
+    )
+    compose_parser.add_argument(
+        "--prelaunch-script", default=None, help="Path to prelaunch script"
+    )
+    compose_parser.add_argument("--kms", action="store_true", help="Enable KMS")
+    compose_parser.add_argument(
+        "--gateway", action="store_true", help="Enable dstack-gateway"
+    )
+    compose_parser.add_argument(
+        "--local-key-provider", action="store_true", help="Enable local key provider"
+    )
+    compose_parser.add_argument(
+        "--key-provider",
+        choices=["none", "kms", "local", "tpm"],
+        default=None,
+        help="Override key provider type (none, kms, local, or tpm)",
+    )
+    compose_parser.add_argument(
+        "--key-provider-id",
+        default=None,
+        help="Key provider ID if you want to bind to a specific key provider",
+    )
+    compose_parser.add_argument(
+        "--public-logs", action="store_true", help="Enable public logs"
+    )
+    compose_parser.add_argument(
+        "--public-sysinfo", action="store_true", help="Enable public sysinfo"
+    )
+    compose_parser.add_argument(
+        "--env-file", help="File with environment variables to encrypt", default=None
+    )
+    compose_parser.add_argument(
+        "--no-instance-id", action="store_true", help="Disable instance ID"
+    )
+    compose_parser.add_argument(
+        "--secure-time", action="store_true", help="Enable secure time"
+    )
+    compose_parser.add_argument(
+        "--no-storage-discard",
+        action="store_true",
+        help=(
+            "Keep deleted data-disk blocks instead of returning them to the "
+            "host. Required by 'deploy --disk-prealloc falloc|full', and it "
+            "also stops the host from seeing filesystem allocation patterns"
+        ),
+    )
+    compose_parser.add_argument(
+        "--swap",
+        type=parse_memory_size,
+        default=None,
+        help="Swap size (e.g. 4G). Set to 0 to disable",
+    )
+    compose_parser.add_argument(
+        "--event-log-version",
+        type=int,
+        choices=[1, 2],
+        default=None,
+        help="RTMR3 runtime event-log digest format (1: legacy binary, 2: JCS canonical JSON). Omit to use the guest default (1).",
+    )
+    compose_parser.add_argument(
+        "--output", required=True, help="Path to output app-compose.json file"
+    )
+
+    # Deploy command
+    deploy_parser = subparsers.add_parser("deploy", help="Deploy a new VM")
+    deploy_parser.add_argument("--name", required=True, help="VM name")
+    deploy_parser.add_argument("--image", required=True, help="VM image")
+    deploy_parser.add_argument(
+        "--compose", required=True, help="Path to app-compose.json file"
+    )
+    deploy_parser.add_argument("--vcpu", type=int, default=1, help="Number of vCPUs")
+    deploy_parser.add_argument(
+        "--memory",
+        type=parse_memory_size,
+        default=1024,
+        help="Memory size (e.g. 1G, 100M)",
+    )
+    deploy_parser.add_argument(
+        "--disk", type=parse_disk_size, default=20, help="Disk size (e.g. 1G, 100M)"
+    )
+    deploy_parser.add_argument(
+        "--swap",
+        type=parse_memory_size,
+        default=None,
+        help="Swap size (e.g. 4G). Set to 0 to disable",
+    )
+    deploy_parser.add_argument(
+        "--env-file", help="File with environment variables to encrypt", default=None
+    )
+    deploy_parser.add_argument(
+        "--user-config", help="Path to user config file", default=None
+    )
+    deploy_parser.add_argument("--app-id", help="Application ID", default=None)
+    deploy_parser.add_argument(
+        "--port",
+        action="append",
+        type=str,
+        help="Port mapping in format: protocol[:address]:from:to[@nic]",
+    )
+    deploy_parser.add_argument(
+        "--gpu",
+        action="append",
+        type=str,
+        help='GPU slot to attach (can be used multiple times), or "all" to attach all GPUs',
+    )
+    deploy_parser.add_argument(
+        "--ppcie",
+        action="store_true",
+        help="Enable PPCIE (Protected PCIe) mode - attach all available GPUs",
+    )
+    deploy_parser.add_argument(
+        "--pin-numa", action="store_true", help="Pin VM to specific NUMA node"
+    )
+    deploy_parser.add_argument(
+        "--hugepages", action="store_true", help="Enable hugepages for the VM"
+    )
+    deploy_parser.add_argument(
+        "--annotation",
+        action=AnnotationAction,
+        metavar="KEY=VALUE",
+        help="Annotation for host-side tooling (can be repeated)",
+    )
+    deploy_parser.add_argument(
+        "--disk-prealloc",
+        choices=["off", "metadata", "falloc", "full"],
+        default=None,
+        help=(
+            "Preallocate the data disk on the host: metadata (qcow2 metadata "
+            "only), falloc (reserve space, fast) or full (reserve and zero). "
+            "falloc and full reserve host blocks and require "
+            "storage_discard=false in the compose file (see "
+            "'compose --no-storage-discard'). Defaults to the VMM's "
+            "cvm.disk_prealloc setting"
+        ),
+    )
+    deploy_parser.add_argument("--kms-url", action="append", type=str, help="KMS URL")
+    deploy_parser.add_argument(
+        "--kms-encrypt-url",
+        type=str,
+        help="Controller-reachable KMS URL used only to encrypt --env-file",
+    )
+    deploy_parser.add_argument(
+        "--gateway-url", action="append", type=str, help="Gateway URL"
+    )
+    deploy_parser.add_argument(
+        "--stopped",
+        action="store_true",
+        help="Create VM in stopped state (requires dstack-vmm >= 0.5.4)",
+    )
+    deploy_parser.add_argument(
+        "--no-tee",
+        dest="no_tee",
+        action="store_true",
+        help="Disable Intel TDX / run without TEE",
+    )
+    deploy_parser.add_argument(
+        "--tee",
+        dest="no_tee",
+        action="store_false",
+        help="Force-enable Intel TDX (default)",
+    )
+    deploy_parser.set_defaults(no_tee=False)
+    deploy_parser.add_argument(
+        "--simulated-tee",
+        choices=[
+            "dstack-tdx",
+            "dstack-gcp-tdx",
+            "dstack-amd-sev-snp",
+            "dstack-nitro-enclave",
+            "dstack-aws-nitro-tpm",
+        ],
+        help="Simulate the selected TEE ABI for this VM (development images only)",
+    )
+    deploy_parser.add_argument(
+        "--net",
+        choices=["bridge", "user", "macvtap", "passt"],
+        help="Networking mode (default: use global config)",
+    )
+    net_vhost = deploy_parser.add_mutually_exclusive_group()
+    net_vhost.add_argument(
+        "--net-vhost",
+        dest="net_vhost",
+        action="store_true",
+        default=None,
+        help="Use the host kernel vhost-net data plane (default: use global config)",
+    )
+    net_vhost.add_argument(
+        "--net-no-vhost",
+        dest="net_vhost",
+        action="store_false",
+        help="Keep packet processing in the QEMU main loop",
+    )
+    deploy_parser.add_argument(
+        "--net-queues",
+        type=queue_count,
+        metavar="N",
+        help="virtio-net queue pairs, bounded by the node's max_net_queues. "
+        "Without --net, the node's own networking mode is kept "
+        "(default: use global config)",
+    )
+
+    # Images command
+    lsimage_parser = subparsers.add_parser("lsimage", help="List available images")
+    lsimage_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format for automation"
+    )
+
+    # GPU command
+    lsgpu_parser = subparsers.add_parser("lsgpu", help="List available GPUs")
+    lsgpu_parser.add_argument(
+        "--json", action="store_true", help="Output in JSON format for automation"
+    )
+
+    # Update environment variables command
+    update_env_parser = subparsers.add_parser(
+        "update-env", help="Update environment variables for a VM"
+    )
+    update_env_parser.add_argument("vm_id", help="VM ID to update")
+    update_env_parser.add_argument(
+        "--env-file", required=True, help="File with environment variables to encrypt"
+    )
+    update_env_parser.add_argument(
+        "--kms-url", action="append", type=str, help="KMS URL"
+    )
+
+    # Whitelist command
+    kms_parser = subparsers.add_parser("kms", help="Manage trusted KMS whitelist")
+    kms_subparsers = kms_parser.add_subparsers(dest="kms_action", help="KMS actions")
+
+    # List whitelist
+    kms_subparsers.add_parser("list", help="List trusted signers")
+
+    # Add to whitelist
+    add_kms_parser = kms_subparsers.add_parser(
+        "add", help="Add public key to trusted signers"
+    )
+    add_kms_parser.add_argument("pubkey", help="Public key to add")
+
+    # Remove from whitelist
+    remove_kms_parser = kms_subparsers.add_parser(
+        "remove", help="Remove public key from trusted signers"
+    )
+    remove_kms_parser.add_argument("pubkey", help="Public key to remove")
+
+    # Update app compose
+    update_app_compose_parser = subparsers.add_parser(
+        "update-app-compose", help="Update app compose for a VM"
+    )
+    update_app_compose_parser.add_argument("vm_id", help="VM ID to update")
+    update_app_compose_parser.add_argument(
+        "compose", help="Path to app-compose.json file"
+    )
+
+    # Update user config
+    update_user_config_parser = subparsers.add_parser(
+        "update-user-config", help="Update user config for a VM"
+    )
+    update_user_config_parser.add_argument("vm_id", help="VM ID to update")
+    update_user_config_parser.add_argument(
+        "user_config", help="Path to user config file"
+    )
+
+    # Update port mapping
+    update_ports_parser = subparsers.add_parser(
+        "update-ports", help="Update port mapping for a VM"
+    )
+    update_ports_parser.add_argument("vm_id", help="VM ID to update")
+    update_ports_parser.add_argument(
+        "--port",
+        action="append",
+        type=str,
+        required=True,
+        help="Port mapping in format: protocol[:address]:from:to[@nic] (can be used multiple times)",
+    )
+
+    # Update (all-in-one) command
+    update_parser = subparsers.add_parser(
+        "update", help="Update multiple aspects of a VM in one command"
+    )
+    update_parser.add_argument("vm_id", help="VM ID to update")
+
+    # Resource options (requires VM to be stopped)
+    update_parser.add_argument("--vcpu", type=int, help="Number of vCPUs")
+    update_parser.add_argument(
+        "--memory", type=parse_memory_size, help="Memory size (e.g. 1G, 100M)"
+    )
+    update_parser.add_argument(
+        "--disk", type=parse_disk_size, help="Disk size (e.g. 20G, 1T)"
+    )
+    update_parser.add_argument("--image", type=str, help="Image name")
+
+    # Application options
+    update_parser.add_argument("--compose", help="Path to app-compose.json file")
+    update_parser.add_argument(
+        "--prelaunch-script", help="Path to pre-launch script file"
+    )
+    update_parser.add_argument(
+        "--env-file", help="File with environment variables to encrypt"
+    )
+    update_parser.add_argument("--user-config", help="Path to user config file")
+    update_parser.add_argument(
+        "--net",
+        choices=["bridge", "user", "macvtap", "passt", "default"],
+        help=(
+            "Networking mode (applies from the next boot). 'default' stops "
+            "pinning a mode and follows the node's, the way --net-queues auto "
+            "and --net-vhost-default stop pinning the data plane"
+        ),
+    )
+    update_net_vhost = update_parser.add_mutually_exclusive_group()
+    update_net_vhost.add_argument(
+        "--net-vhost",
+        dest="net_vhost",
+        action="store_true",
+        default=None,
+        help="Use the host kernel vhost-net data plane",
+    )
+    update_net_vhost.add_argument(
+        "--net-no-vhost",
+        dest="net_vhost",
+        action="store_false",
+        help="Keep packet processing in the QEMU main loop",
+    )
+    update_net_vhost.add_argument(
+        "--net-vhost-default",
+        dest="net_vhost_inherit",
+        action="store_true",
+        help="Stop pinning vhost and follow the node default again",
+    )
+    update_parser.add_argument(
+        "--net-queues",
+        type=queue_count,
+        metavar="N",
+        help="virtio-net queue pairs, bounded by the node's max_net_queues. "
+        "Use 'auto' to stop pinning a count and follow the vCPU count again",
+    )
+    # Port mapping options (mutually exclusive with --no-ports)
+    port_group = update_parser.add_mutually_exclusive_group()
+    port_group.add_argument(
+        "--port",
+        action="append",
+        type=str,
+        help="Port mapping in format: protocol[:address]:from:to[@nic] (can be used multiple times)",
+    )
+    port_group.add_argument(
+        "--no-ports",
+        action="store_true",
+        help="Remove all port mappings from the VM",
+    )
+    update_parser.add_argument(
+        "--swap",
+        type=parse_memory_size,
+        help="Swap size (e.g. 4G). Set to 0 to disable",
+    )
+
+    # GPU options (mutually exclusive)
+    gpu_group = update_parser.add_mutually_exclusive_group()
+    gpu_group.add_argument(
+        "--gpu",
+        action="append",
+        type=str,
+        help='GPU slot to attach (can be used multiple times), or "all" to attach all GPUs',
+    )
+    gpu_group.add_argument(
+        "--ppcie",
+        action="store_true",
+        help="Enable PPCIE (Protected PCIe) mode - attach all available GPUs",
+    )
+    gpu_group.add_argument(
+        "--no-gpus",
+        action="store_true",
+        help="Detach all GPUs from the VM",
+    )
+
+    # TDX toggle
+    tee_group = update_parser.add_mutually_exclusive_group()
+    tee_group.add_argument(
+        "--no-tee",
+        dest="no_tee",
+        action="store_true",
+        help="Disable Intel TDX / run without TEE",
+    )
+    tee_group.add_argument(
+        "--tee",
+        dest="no_tee",
+        action="store_false",
+        help="Enable Intel TDX for the VM",
+    )
+    update_parser.set_defaults(no_tee=None)
+
+    # KMS URL for environment encryption
+    update_parser.add_argument("--kms-url", action="append", type=str, help="KMS URL")
+    annotations_group = update_parser.add_mutually_exclusive_group()
+    annotations_group.add_argument(
+        "--annotation",
+        action=AnnotationAction,
+        metavar="KEY=VALUE",
+        help="Replace the annotations with these (can be repeated)",
+    )
+    annotations_group.add_argument(
+        "--no-annotations", action="store_true", help="Remove all annotations"
+    )
+
+    args = parser.parse_args()
+
+    # Handle discovery commands before creating CLI (they don't need a connection)
+    if args.command == "vmm":
+        if args.vmm_command == "ls":
+            cmd_ls_vmm(args)
+        elif args.vmm_command == "switch":
+            cmd_switch_vmm(args)
+        else:
+            vmm_parser.print_help()
+        return
+
+    # Resolve the URL with auto-discovery
+    url = resolve_vmm_url(instances, config, args.url)
+    try:
+        cli = VmmCLI(
+            url,
+            args.auth_user,
+            args.auth_password,
+            args.token,
+            verify_tls=not args.insecure,
+        )
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.command == "lsvm":
+        cli.list_vms(args.verbose, args.json)
+    elif args.command == "info":
+        cli.show_info(args.vm_id, args.json)
+    elif args.command == "start":
+        cli.start_vm(args.vm_id)
+    elif args.command == "stop":
+        cli.stop_vm(args.vm_id, args.force)
+    elif args.command == "remove":
+        cli.remove_vm(args.vm_id)
+    elif args.command == "resize":
+        cli.resize_vm(
+            args.vm_id,
+            vcpu=args.vcpu,
+            memory=args.memory,
+            disk_size=args.disk,
+            image=args.image,
+        )
+    elif args.command == "logs":
+        cli.show_logs(args.vm_id, args.lines, args.follow)
+    elif args.command == "compose":
+        cli.create_app_compose(args)
+    elif args.command == "deploy":
+        cli.create_vm(args)
+    elif args.command == "lsimage":
+        cli.list_images(args.json)
+    elif args.command == "lsgpu":
+        cli.list_gpus(args.json)
+    elif args.command == "update-env":
+        cli.update_vm_env(
+            args.vm_id, parse_env_file(args.env_file), kms_urls=args.kms_url
+        )
+    elif args.command == "update-user-config":
+        cli.update_vm_user_config(args.vm_id, open(args.user_config, "r").read())
+    elif args.command == "update-app-compose":
+        cli.update_vm_app_compose(args.vm_id, open(args.compose, "r").read())
+    elif args.command == "update-ports":
+        cli.update_vm_ports(args.vm_id, args.port)
+    elif args.command == "update":
+        compose_content = None
+        if args.compose:
+            compose_content = read_utf8(args.compose)
+        prelaunch_content = None
+        if hasattr(args, "prelaunch_script") and args.prelaunch_script:
+            prelaunch_content = read_utf8(args.prelaunch_script)
+        user_config_content = None
+        if args.user_config:
+            user_config_content = read_utf8(args.user_config)
+        cli.update_vm(
+            args.vm_id,
+            vcpu=args.vcpu,
+            memory=args.memory,
+            disk_size=args.disk,
+            image=args.image,
+            docker_compose_content=compose_content,
+            prelaunch_script=prelaunch_content,
+            swap_size=args.swap if hasattr(args, "swap") else None,
+            env_file=args.env_file,
+            user_config=user_config_content,
+            ports=args.port,
+            no_ports=args.no_ports if hasattr(args, "no_ports") else False,
+            gpu_slots=args.gpu,
+            attach_all=args.ppcie,
+            no_gpus=args.no_gpus if hasattr(args, "no_gpus") else False,
+            kms_urls=args.kms_url,
+            no_tee=args.no_tee,
+            net=args.net,
+            net_vhost=args.net_vhost,
+            net_vhost_inherit=getattr(args, "net_vhost_inherit", False),
+            net_queues=args.net_queues,
+            annotations={} if args.no_annotations else args.annotation,
+        )
+    elif args.command == "kms":
+        if not args.kms_action:
+            kms_parser.print_help()
+        else:
+            cli.manage_kms_whitelist(
+                action=args.kms_action,
+                pubkey=getattr(args, "pubkey", None),
+            )
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

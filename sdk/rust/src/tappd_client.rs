@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::dstack_client::BaseClient;
+use crate::dstack_client_v0::BaseClient;
 use anyhow::{bail, Result};
 use hex::encode as hex_encode;
 use http_client_unix_domain_socket::{ClientUnix, Method};
@@ -43,6 +43,10 @@ pub enum TappdClientKind {
 }
 
 /// The main client for interacting with the legacy Tappd service
+#[deprecated(
+    since = "0.6.0",
+    note = "the tappd surface was superseded by v0 in dstack 0.3.0; use `DstackClientV1`, which the unsuffixed `DstackClient` now names"
+)]
 pub struct TappdClient {
     /// The base URL for HTTP requests
     base_url: String,
@@ -52,8 +56,12 @@ pub struct TappdClient {
     client: TappdClientKind,
 }
 
+// Same as the v0 client: deprecating the type does not stop its own methods
+// from naming it.
+#[allow(deprecated)]
 impl BaseClient for TappdClient {}
 
+#[allow(deprecated)]
 impl TappdClient {
     pub fn new(endpoint: Option<&str>) -> Self {
         let endpoint = get_tappd_endpoint(endpoint);

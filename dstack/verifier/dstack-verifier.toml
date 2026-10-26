@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: © 2024-2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Server configuration
+address = "0.0.0.0"
+port = 8080
+
+# Image cache directory for OS image verification
+image_cache_dir = "/tmp/dstack-verifier/cache"
+
+# Image download URL template (replace {OS_IMAGE_HASH} with actual hash)
+image_download_url = "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz"
+
+# Image download timeout in seconds
+image_download_timeout_secs = 300
+
+[attestation]
+insecure_allow_external_trust_anchors = false
+# Hosts the GCP TPM AK issuer certificates and CRLs may be fetched from; `*`
+# matches within one DNS label. Unset keeps Google's Private CA hosts.
+# allowed_collateral_hosts = ["privateca-content-*.storage.googleapis.com"]
+
+[attestation.urls]
+# pccs = "https://pccs.phala.network"
+# amd_kds = "https://kdsintf.amd.com/vcek/v1"
+
+[attestation.root_ca]
+# tdx = "/etc/dstack/roots/intel-sgx-root-ca.der"
+# gcp_tpm = "/etc/dstack/roots/gcp-tpm-root-ca.pem"
+# aws_nitro_enclave = "/etc/dstack/roots/aws-nitro-enclave-root-ca.pem"
+# aws_nitro_tpm = "/etc/dstack/roots/aws-nitro-tpm-root-ca.pem"
+# sev_snp_milan = "/etc/dstack/roots/amd-milan-ark.pem"
+# sev_snp_genoa = "/etc/dstack/roots/amd-genoa-ark.pem"
+# sev_snp_turin = "/etc/dstack/roots/amd-turin-ark.pem"
