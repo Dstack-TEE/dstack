@@ -37,6 +37,7 @@ use upgrade_authority::{
 use crate::{
     config::KmsConfig,
     crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    near_kms_client,
 };
 
 pub(crate) mod amd_attest;
@@ -80,6 +81,7 @@ pub struct KmsStateInner {
     self_allowed: Cache<(), ()>,
     auth_api_info: Cache<(), GetInfoResponse>,
     metrics: KmsMetrics,
+    near_signer: Option<near_crypto::InMemorySigner>,
 }
 
 #[derive(Default)]
@@ -188,6 +190,10 @@ impl KmsState {
                 "os image verification is disabled; os_image_hash is caller-supplied and unverified - do not use in production TEE deployments"
             );
         }
+
+        // Load or generate NEAR implicit account signer if using NEAR auth
+        let near_signer = near_kms_client::load_or_generate_near_signer(&config)?;
+
         Ok(Self {
             inner: Arc::new(KmsStateInner {
                 config,
@@ -196,6 +202,7 @@ impl KmsState {
                 temp_ca_cert,
                 temp_ca_key,
                 verifier,
+                near_signer,
                 attestation_verifier,
                 self_boot_info: Cache::builder()
                     .max_capacity(1)
@@ -214,6 +221,11 @@ impl KmsState {
 
     pub(crate) fn attestation_verifier(&self) -> Arc<AttestationVerifier> {
         self.inner.attestation_verifier.clone()
+    }
+
+    /// Get the NEAR implicit account ID used for MPC requests.
+    pub fn near_signer_account_id(&self) -> Option<String> {
+        self.near_signer.as_ref().map(|s| s.account_id.to_string())
     }
 }
 
@@ -558,6 +570,7 @@ impl KmsRpc for RpcHandler {
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
             os_image_verification: Some(self.state.config.image.verify),
+            near_signer_account_id: self.state.near_signer_account_id(),
         })
     }
 

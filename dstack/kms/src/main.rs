@@ -20,9 +20,11 @@ use tracing::{info, warn};
 
 mod admin_auth;
 mod admin_service;
+mod ckd;
 mod config;
 mod crypto;
 mod main_service;
+mod near_kms_client;
 mod onboard_service;
 
 fn app_version() -> String {

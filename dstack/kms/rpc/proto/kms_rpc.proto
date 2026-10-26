@@ -61,6 +61,7 @@ message GetMetaResponse {
   // `[core.image] verify`: whether `os_image_hash` is checked against the
   // booted image. Unset on older KMS; do not treat unset as true.
   optional bool os_image_verification = 10;
+  optional string near_signer_account_id = 11; // NEAR implicit account ID for MPC key derivation
 }
 
 message GetKmsKeyRequest {
