@@ -28,6 +28,10 @@ SRC_URI = " \
     git://github.com/nestybox/sysbox-ipc.git;nobranch=1;name=sysbox-ipc;protocol=https;destsuffix=sysbox-ipc \
     git://github.com/nestybox/sysbox-libs.git;nobranch=1;name=sysbox-libs;protocol=https;destsuffix=sysbox-libs \
     git://github.com/Dstack-TEE/fuse.git;branch=master;name=sysbox-fuse;protocol=https;destsuffix=sysbox-fuse \
+    file://sysbox-libs-idmapped-overlayfs.patch;patchdir=../sysbox-libs \
+    file://sysbox-ipc-idmapped-overlayfs.patch;patchdir=../sysbox-ipc \
+    file://sysbox-mgr-idmapped-overlayfs.patch;patchdir=../sysbox-mgr \
+    file://sysbox-runc-idmapped-overlayfs.patch;patchdir=../sysbox-runc \
     file://sysbox.service \
     file://sysbox-fs.service \
     file://sysbox-mgr.service \
