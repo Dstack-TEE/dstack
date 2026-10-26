@@ -5,18 +5,18 @@ HOMEPAGE = "https://github.com/nestybox/sysbox"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=cf0915b5e4f1337cf5b929ba1e388c42"
 
-SYSBOX_VERSION = "0.6.7"
+SYSBOX_VERSION = "0.7.1"
 
-# Pin all submodule revisions from the v0.6.7 tag for reproducibility.
-SRCREV_sysbox = "3a69811f54f8f83264ebb36dcaf51708e80b9e84"
-SRCREV_sysbox-runc = "c58eba1be027c762c495bc4eeba7c0984beda1ab"
-SRCREV_sysbox-fs = "6a8d71f54e7570e5297af89ff24ed3bafa61659f"
-SRCREV_sysbox-mgr = "aaeff6c5dc70c137e62166474a309ca5fc42d044"
+# Pin all submodule revisions from the v0.7.1 tag for reproducibility.
+SRCREV_sysbox = "82881aaaf2ce22ad0ff81487f458162908cb933f"
+SRCREV_sysbox-runc = "081856cc5d17e7095f066b08d0eca6bb0b515c47"
+SRCREV_sysbox-fs = "c3d2ebc65102e32e74e383675f03b45556326888"
+SRCREV_sysbox-mgr = "2d45af01bcfd8641e6641f76104c6003bf501cd7"
 SRCREV_sysbox-ipc = "f05151f4b4c1df63d7fd241577ca032905c1bd0e"
-SRCREV_sysbox-libs = "6faf00c74d45f7bdff0d1930fe8590c17a2d0a8b"
-# bazil/fuse commit 45cd9a3 is orphaned in nestybox/fuse (not on any branch/tag).
-# We forked it to Dstack-TEE/fuse with a named branch so BitBake can fetch it.
-SRCREV_sysbox-fuse = "45cd9a3d884448418546d8eaa54ee7d772e576d6"
+SRCREV_sysbox-libs = "cacac19395528afa42b467a980b05d8d1c6d646c"
+# bazil/fuse commit 5ce3194 is on nestybox/fuse master. We fetch the same
+# commit from Dstack-TEE/fuse, which mirrors it for a stable BitBake target.
+SRCREV_sysbox-fuse = "5ce319439091b08f33b149cb2482039f1b0a24fe"
 
 SRCREV_FORMAT = "sysbox"
 
@@ -27,7 +27,7 @@ SRC_URI = " \
     git://github.com/nestybox/sysbox-mgr.git;nobranch=1;name=sysbox-mgr;protocol=https;destsuffix=sysbox-mgr \
     git://github.com/nestybox/sysbox-ipc.git;nobranch=1;name=sysbox-ipc;protocol=https;destsuffix=sysbox-ipc \
     git://github.com/nestybox/sysbox-libs.git;nobranch=1;name=sysbox-libs;protocol=https;destsuffix=sysbox-libs \
-    git://github.com/Dstack-TEE/fuse.git;branch=sysbox-v0.6.7;name=sysbox-fuse;protocol=https;destsuffix=sysbox-fuse \
+    git://github.com/Dstack-TEE/fuse.git;branch=master;name=sysbox-fuse;protocol=https;destsuffix=sysbox-fuse \
     file://sysbox.service \
     file://sysbox-fs.service \
     file://sysbox-mgr.service \

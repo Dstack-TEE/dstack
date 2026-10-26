@@ -223,7 +223,7 @@ grep -q '^export GOTOOLCHAIN=local$' "$D/mkosi.build"
 grep -q '^STARGZ_VERSION=0.18.2$' "$D/versions.env"
 grep -q '^NERDCTL_VERSION=2.3.5$' "$D/versions.env"
 grep -q '^[[:space:]]*docker-cli$' "$D/mkosi.conf"
-grep -q '^SYSBOX_VERSION=0.6.7$' "$D/versions.env"
+grep -q '^SYSBOX_VERSION=0.7.1$' "$D/versions.env"
 grep -q '^ZFS_VERSION=2.4.0$' "$D/versions.env"
 grep -q -- '--fuzz=0' "$D/components/zfs/zfs-build.sh"
 # ZFS 2.4.0 declares Linux-Maximum 6.18; no out-of-tree compat patch is carried.
