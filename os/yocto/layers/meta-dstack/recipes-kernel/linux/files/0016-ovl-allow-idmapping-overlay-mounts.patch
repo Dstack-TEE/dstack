@@ -1,0 +1,51 @@
+From adedb6a00a1e4c77b1de9ea1f63b5008ad0c21f5 Mon Sep 17 00:00:00 2001
+From: Christian Brauner <brauner@kernel.org>
+Date: Mon, 15 Jun 2026 15:19:55 +0200
+Subject: [PATCH] ovl: allow idmapping overlay mounts
+
+Now that every overlay inode operation honors the overlay mount idmap,
+allow the merged overlay mount itself to be idmapped by setting
+FS_ALLOW_IDMAP on ovl_fs_type.  mount_setattr(MOUNT_ATTR_IDMAP) can
+then apply an idmapping to an overlay mount, exposing the merged tree
+under a different ownership view.
+
+The composition is clean because overlayfs already normalizes every
+underlying id through the relevant layer idmap when it copies
+attributes into the overlay inode (ovl_copyattr()); the overlay inode's
+i_{u,g}id are thus "overlay-final" ids.  The overlay mount idmap
+composes on top of that pivot: it is applied to (getattr) and removed
+from (setattr, create) those ids at the overlay-inode boundary -
+permission, getattr, setattr, ACL owner checks and inode_init_owner() -
+while the underlying layers keep being accessed with the mounter's
+credentials through their own, possibly idmapped, mounts.  The mount
+idmap therefore only changes how the caller sees the overlay inode and
+never widens the mounter's access to the layers.
+
+This is deliberately the final code patch of the series: only once
+every operation honors the mount idmap is it safe to make overlay
+mounts idmappable.
+
+Upstream-Status: Backport [https://git.kernel.org/linus/adedb6a00a1e]
+Link: https://patch.msgid.link/20260615-work-idmapped-overlayfs-v1-6-7381632aa402@kernel.org
+Reviewed-by: Amir Goldstein <amir73il@gmail.com>
+Signed-off-by: Christian Brauner (Amutable) <brauner@kernel.org>
+---
+ fs/overlayfs/super.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/overlayfs/super.c b/fs/overlayfs/super.c
+index 0e971ea97..d5a84fc89 100644
+--- a/fs/overlayfs/super.c
++++ b/fs/overlayfs/super.c
+@@ -1578,7 +1578,7 @@ struct file_system_type ovl_fs_type = {
+ 	.name			= "overlay",
+ 	.init_fs_context	= ovl_init_fs_context,
+ 	.parameters		= ovl_parameter_spec,
+-	.fs_flags		= FS_USERNS_MOUNT,
++	.fs_flags		= FS_USERNS_MOUNT | FS_ALLOW_IDMAP,
+ 	.kill_sb		= kill_anon_super,
+ };
+ MODULE_ALIAS_FS("overlay");
+-- 
+2.43.0
+

@@ -1,0 +1,60 @@
+From d1f78a3fed4a949db70205719d4b17d97f5e95c0 Mon Sep 17 00:00:00 2001
+From: Christian Brauner <brauner@kernel.org>
+Date: Mon, 15 Jun 2026 15:19:54 +0200
+Subject: [PATCH] ovl: handle idmapped mounts in ovl_set_acl()
+
+The two checks ovl_set_acl() performs on the overlay inode itself -
+inode_owner_or_capable() and the setgid-stripping test - were done with
+&nop_mnt_idmap.  On an idmapped overlay mount this compares the overlay
+inode's id space directly against the caller's: it denies the rightful
+owner (as seen through the mount idmap) the right to set an ACL, and
+evaluates the setgid-drop decision in the wrong id space, which can
+mis-set the mode on the upper inode.
+
+Use the struct mnt_idmap passed in by the VFS for both.  Fold the
+open-coded "caller not in group and not CAP_FSETID privileged" test
+into in_group_or_capable() with i_gid_into_vfsgid(), the same
+idmap-aware helpers used by setattr_should_drop_sgid().
+
+The subsequent internal forced setgid-kill via ovl_setattr() stays on
+&nop_mnt_idmap: it carries only ATTR_KILL_SGID with no uid/gid to
+translate and is overlayfs' own mode change, not a user-driven
+operation through the mount.
+
+No functional change until FS_ALLOW_IDMAP is set on ovl_fs_type.
+
+Upstream-Status: Backport [https://git.kernel.org/linus/d1f78a3fed4a]
+Link: https://patch.msgid.link/20260615-work-idmapped-overlayfs-v1-5-7381632aa402@kernel.org
+Reviewed-by: Amir Goldstein <amir73il@gmail.com>
+Signed-off-by: Christian Brauner (Amutable) <brauner@kernel.org>
+---
+ fs/overlayfs/inode.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
+index af3440216..79dcba612 100644
+--- a/fs/overlayfs/inode.c
++++ b/fs/overlayfs/inode.c
+@@ -562,7 +562,7 @@ int ovl_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
+ 		return -EOPNOTSUPP;
+ 	if (type == ACL_TYPE_DEFAULT && !S_ISDIR(inode->i_mode))
+ 		return acl ? -EACCES : 0;
+-	if (!inode_owner_or_capable(&nop_mnt_idmap, inode))
++	if (!inode_owner_or_capable(idmap, inode))
+ 		return -EPERM;
+ 
+ 	/*
+@@ -570,8 +570,8 @@ int ovl_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
+ 	 * be done with mounter's capabilities and so that won't do it for us).
+ 	 */
+ 	if (unlikely(inode->i_mode & S_ISGID) && type == ACL_TYPE_ACCESS &&
+-	    !in_group_p(inode->i_gid) &&
+-	    !capable_wrt_inode_uidgid(&nop_mnt_idmap, inode, CAP_FSETID)) {
++	    !in_group_or_capable(idmap, inode,
++				 i_gid_into_vfsgid(idmap, inode))) {
+ 		struct iattr iattr = { .ia_valid = ATTR_KILL_SGID };
+ 
+ 		err = ovl_setattr(&nop_mnt_idmap, dentry, &iattr);
+-- 
+2.43.0
+

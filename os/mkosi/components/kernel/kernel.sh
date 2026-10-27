@@ -19,7 +19,13 @@ component_cache_key() {
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0007-sched-smp-batch-wake-q-ipis-in-tdx-guests.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0008-x86-kvm-runtime-pv-single-target-ipi-in-tdx-guests.patch" \
       "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0009-mm-page-alloc-keep-accepted-reserve-before-watermarks.patch" \
-      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0010-x86-tdx-convert-swiotlb-to-shared-after-smp-bringup.patch"
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0010-x86-tdx-convert-swiotlb-to-shared-after-smp-bringup.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0011-ovl-handle-idmapped-mounts-in-create-object-and-tmpfile.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0012-ovl-handle-idmapped-mounts-in-permission.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0013-ovl-handle-idmapped-mounts-in-setattr.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0014-ovl-handle-idmapped-mounts-in-getattr.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0015-ovl-handle-idmapped-mounts-in-set-acl.patch" \
+      "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0016-ovl-allow-idmapping-overlay-mounts.patch"
     key_tools gcc ld make pahole
     key_packages binutils dwarves bc bison flex libssl-dev libelf-dev
 }
