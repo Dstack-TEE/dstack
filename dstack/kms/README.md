@@ -103,7 +103,7 @@ certificate. `core.onboard.public_key_handover = true` (the default) keeps
 
 ### Deployment
 The first two components are deployed as an dstack app on dstack in Local-Key-Provider mode.
-The docker compose file would look like [this](dstack-app/docker-compose.yaml).
+See [`compose-dev.yaml`](dstack-app/compose-dev.yaml) for the compose file and [`deploy-to-vmm.sh`](dstack-app/deploy-to-vmm.sh) for how to deploy it.
 
 The solidity contracts are deployed on an ethereum compatible chain.
 
