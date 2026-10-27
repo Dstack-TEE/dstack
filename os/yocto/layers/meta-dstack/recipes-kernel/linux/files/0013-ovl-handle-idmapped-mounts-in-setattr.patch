@@ -1,0 +1,63 @@
+From 10a16f5b9111da6e553f8533605f7216e13a37b8 Mon Sep 17 00:00:00 2001
+From: Christian Brauner <brauner@kernel.org>
+Date: Mon, 15 Jun 2026 15:19:52 +0200
+Subject: [PATCH] ovl: handle idmapped mounts in ovl_setattr()
+
+Pass the mount's struct mnt_idmap to setattr_prepare() so that the
+permission checks for a chown/chmod performed through an idmapped
+overlay mount are evaluated in the mount's id space.
+
+The ownership requested in @attr is expressed relative to the overlay
+mount idmap.  Before forwarding the change to the upper layer via
+ovl_do_notify_change() - whose notify_change() applies the upper layer
+idmap in turn - rebase ia_vfsuid/ia_vfsgid into the overlay's own id
+space, i.e. the same space as the overlay inode's i_{u,g}id established
+by ovl_copyattr().  Without this rebase the upper layer would interpret
+the caller's mount-relative id as an upper-relative one and store the
+wrong owner on disk, or reject it with -EOVERFLOW.
+
+from_vfsuid() returns INVALID_UID for an id that the overlay mount
+idmap does not map; that invalid id is carried faithfully into the
+forwarded iattr and rejected by the upper notify_change() via
+vfsuid_has_fsmapping(), so no bogus owner can be written.
+
+No functional change until FS_ALLOW_IDMAP is set on ovl_fs_type; until
+then the overlay mount idmap is &nop_mnt_idmap and from_vfsuid() is the
+identity.
+
+Upstream-Status: Backport [https://git.kernel.org/linus/10a16f5b9111]
+Backport note: adapted to 6.18, where old_cred is declared before setattr_prepare().
+Link: https://patch.msgid.link/20260615-work-idmapped-overlayfs-v1-3-7381632aa402@kernel.org
+Reviewed-by: Amir Goldstein <amir73il@gmail.com>
+Signed-off-by: Christian Brauner (Amutable) <brauner@kernel.org>
+---
+ fs/overlayfs/inode.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
+index 5a756203c..ed2011096 100644
+--- a/fs/overlayfs/inode.c
++++ b/fs/overlayfs/inode.c
+@@ -27,10 +27,18 @@ int ovl_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+ 	struct dentry *upperdentry;
+ 	const struct cred *old_cred;
+ 
+-	err = setattr_prepare(&nop_mnt_idmap, dentry, attr);
++	err = setattr_prepare(idmap, dentry, attr);
+ 	if (err)
+ 		return err;
+ 
++	/* Rebase ownership from the mount idmap into overlay id space. */
++	if (attr->ia_valid & ATTR_UID)
++		attr->ia_vfsuid = VFSUIDT_INIT(from_vfsuid(idmap,
++				i_user_ns(d_inode(dentry)), attr->ia_vfsuid));
++	if (attr->ia_valid & ATTR_GID)
++		attr->ia_vfsgid = VFSGIDT_INIT(from_vfsgid(idmap,
++				i_user_ns(d_inode(dentry)), attr->ia_vfsgid));
++
+ 	if (attr->ia_valid & ATTR_SIZE) {
+ 		/* Truncate should trigger data copy up as well */
+ 		full_copy_up = true;
+-- 
+2.43.0
+

@@ -89,6 +89,7 @@ while read -r key want; do
 done < <(sed -n 's/^require_config \(CONFIG_[A-Z0-9_]*\) \([ynm]\)$/\1 \2/p' "$audit")
 [[ $required -ge 10 ]]
 grep -q '0002-acpi-sandbox' "$D/components/kernel/kernel-build.sh"
+grep -q '0016-ovl-allow-idmapping-overlay-mounts' "$D/components/kernel/kernel-build.sh"
 # LXC's own kernel audit runs after the fragment gate; see check-lxc-kernel-config.sh.
 grep -q 'check-lxc-kernel-config.sh' "$D/components/kernel/kernel-build.sh"
 grep -q -- '--fuzz=0' "$D/components/kernel/kernel-build.sh"
@@ -223,7 +224,13 @@ grep -q '^export GOTOOLCHAIN=local$' "$D/mkosi.build"
 grep -q '^STARGZ_VERSION=0.18.2$' "$D/versions.env"
 grep -q '^NERDCTL_VERSION=2.3.5$' "$D/versions.env"
 grep -q '^[[:space:]]*docker-cli$' "$D/mkosi.conf"
-grep -q '^SYSBOX_VERSION=0.6.7$' "$D/versions.env"
+grep -q '^SYSBOX_VERSION=0.7.1$' "$D/versions.env"
+grep -q 'idmapped-overlayfs.patch' "$D/components/sysbox/sysbox-build.sh"
+if grep -q -- '--disable-ovfs-on-idmapped-mount' \
+  "$D/../yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/sysbox-mgr.service"; then
+  echo "sysbox-mgr must not disable ID-mapped overlayfs" >&2
+  exit 1
+fi
 grep -q '^ZFS_VERSION=2.4.0$' "$D/versions.env"
 grep -q -- '--fuzz=0' "$D/components/zfs/zfs-build.sh"
 # ZFS 2.4.0 declares Linux-Maximum 6.18; no out-of-tree compat patch is carried.
