@@ -51,12 +51,14 @@ export RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<your-alchemy-key>"
 
 ## Configure KMS for On-Chain Auth
 
-The KMS CVM includes an auth-api service that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
+The KMS CVM includes an auth-api service that connects to your DstackKms contract. The default [KMS Compose](../dstack/kms/dstack-app/docker-compose.yaml) reads Phala L2 through a proof-verifying light client; see the [light-client guide](../dstack/kms/light-client/README.md). Configure it via environment variables in the KMS CVM:
 
 ```bash
 KMS_CONTRACT_ADDR=<your-dstack-kms-contract-address>
-ETH_RPC_URL=<ethereum-rpc-endpoint>
+ETH_MAX_BLOCK_AGE_SECONDS=300
 ```
+
+For other chains, run auth-api with `ETH_RPC_URL` pointing to your RPC endpoint.
 
 The auth-api validates boot requests against the smart contract. See [Deployment Guide](./deployment.md#2-deploy-kms-as-cvm) for complete setup instructions.
 

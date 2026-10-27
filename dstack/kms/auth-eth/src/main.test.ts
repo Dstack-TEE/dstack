@@ -129,3 +129,25 @@ describe('Server', () => {
     });
   });
 });
+
+describe('verified-read configuration', () => {
+  const settings = ['ETH_CHAIN_ID', 'ETH_BLOCK_LAG', 'ETH_MAX_BLOCK_AGE_SECONDS'];
+  const saved = settings.map(name => process.env[name]);
+
+  afterEach(() => {
+    settings.forEach((name, index) => {
+      if (saved[index] === undefined) delete process.env[name];
+      else process.env[name] = saved[index];
+    });
+  });
+
+  it.each(['ETH_BLOCK_LAG', 'ETH_MAX_BLOCK_AGE_SECONDS'])(
+    'requires an explicit %s when verified reads are enabled', async missing => {
+      Object.assign(process.env, {
+        ETH_CHAIN_ID: '2035', ETH_BLOCK_LAG: '2', ETH_MAX_BLOCK_AGE_SECONDS: '60',
+      });
+      delete process.env[missing];
+      await expect(build()).rejects.toThrow(`invalid ${missing}`);
+    },
+  );
+});
