@@ -39,7 +39,7 @@ RUN cargo test --locked --release -p helios-opstack --lib \
     && install -D target/release/opstack-server /out/opstack-server \
     && rm -rf target
 
-FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS auth-builder
+FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d AS auth-builder
 WORKDIR /app
 COPY --from=kms-builder /build/repo/dstack/kms/auth-eth/package*.json ./
 RUN npm ci --ignore-scripts
