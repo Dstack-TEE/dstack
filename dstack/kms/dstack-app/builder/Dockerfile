@@ -31,7 +31,7 @@ FROM rust:1.94.1-bookworm@sha256:6ae102bdbf528294bc79ad6e1fae682f6f7c2a6e6621506
 ARG SOURCE_DATE_EPOCH
 WORKDIR /build/helios
 RUN git init && git remote add origin https://github.com/Dstack-TEE/helios.git \
-    && git fetch --depth 1 origin 645af74b627e167db22d2b52f2ccc4512e4e80d9 \
+    && git fetch --depth 1 origin ff3820aba2f218c75fae6b542b6067580e9f4ec4 \
     && git checkout --detach FETCH_HEAD
 RUN cargo test --locked --release -p helios-opstack --lib \
     && cargo build --locked --release -p helios-cli -p helios-opstack --bins \
