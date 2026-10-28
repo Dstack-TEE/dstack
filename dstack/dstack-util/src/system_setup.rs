@@ -57,6 +57,7 @@ use crate::{
 };
 use cert_client::{validate_kms_rpc_cert, CertRequestClient};
 use cmd_lib::run_fun as cmd;
+use dstack_api_auth::jwt;
 use dstack_gateway_rpc::{
     gateway_client::GatewayClient, PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy,
     RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
@@ -532,6 +533,37 @@ struct GatewayContext<'a> {
     keys: &'a AppKeys,
 }
 
+/// The gateway only polls `Health`. Port policy reaches it on registration, so
+/// it never needs `Info` from a CVM that can mint this token.
+const GATEWAY_AGENT_SCOPES: &[&str] = &[jwt::scope::HEALTH];
+
+/// Lifetime of the gateway's token. Registration refreshes every three
+/// minutes; this survives a few failed refreshes so a gateway outage does not
+/// also lock the gateway out of the agent.
+const GATEWAY_AGENT_TOKEN_LIFETIME_SECS: u64 = 600;
+
+/// Mint the token the gateway presents to this CVM's guest agent, signed with
+/// the key the agent derives the same way from the app root key.
+fn gateway_agent_token(app_id: &[u8], app_root_key: &[u8]) -> Result<String> {
+    let secret = ra_tls::api_v1::derive_app_key(
+        app_root_key,
+        jwt::INTERNAL_ISSUER_DOMAIN,
+        ra_tls::api_v1::KeyAlgorithm::Ed25519,
+    )?;
+    let app_id = hex::encode(app_id);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let claims = jwt::Claims {
+        iss: jwt::internal_issuer(&app_id),
+        aud: app_id,
+        iat: now,
+        exp: now + GATEWAY_AGENT_TOKEN_LIFETIME_SECS,
+        scope: GATEWAY_AGENT_SCOPES.join(" "),
+    };
+    jwt::sign(&secret, &claims)
+}
+
 impl<'a> GatewayContext<'a> {
     fn new(shared: &'a HostShared, keys: &'a AppKeys) -> Self {
         Self { shared, keys }
@@ -571,6 +603,12 @@ impl<'a> GatewayContext<'a> {
         key_store: &GatewayKeyStore,
         gateway_app_id: &str,
     ) -> Result<RegisterCvmResponse> {
+        // Not fatal: without a token the gateway's health poll is refused, which
+        // costs routing but should not cost the boot.
+        let agent_token =
+            gateway_agent_token(&self.shared.instance_info.app_id, &self.keys.k256_key)
+                .inspect_err(|err| warn!("failed to mint the guest agent token: {err:#}"))
+                .ok();
         let port_policy = RpcPortPolicy {
             ports: self
                 .shared
@@ -597,6 +635,7 @@ impl<'a> GatewayContext<'a> {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy.clone()),
                 health_check,
+                agent_token: agent_token.clone(),
             })
             .await
             .context("Failed to register CVM");
@@ -620,6 +659,7 @@ impl<'a> GatewayContext<'a> {
                 client_public_key: key_store.wg_pk.clone(),
                 port_policy: Some(port_policy),
                 health_check,
+                agent_token,
             })
             .await
             .context("Failed to register CVM")

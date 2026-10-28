@@ -72,6 +72,10 @@ pub struct InstanceInfo {
     /// [`Health`]'s own state is not, so there is no way to build one whose
     /// declaration and verdict disagree.
     pub(crate) health: Health,
+    /// Bearer token for the instance's guest agent external listener, minted
+    /// by the CVM at registration. Absent for a legacy CVM, whose listener
+    /// needs none.
+    pub agent_token: Option<String>,
     pub connections: Arc<AtomicU64>,
 }
 
@@ -93,6 +97,11 @@ pub struct ReportedCapabilities {
     /// instance already declared in place. `Some(false)` is an app that did not
     /// opt in, or an image that predates the field; the gateway polls neither.
     pub health_check: Option<bool>,
+    /// Bearer token for the agent's external listener. `None` leaves whatever
+    /// the instance already carried in place, so a registration without one
+    /// (a legacy CVM, or one that could not mint one yet) does not erase a
+    /// token a previous registration supplied.
+    pub agent_token: Option<String>,
 }
 
 impl From<Option<PortPolicy>> for ReportedCapabilities {
@@ -102,6 +111,7 @@ impl From<Option<PortPolicy>> for ReportedCapabilities {
         Self {
             port_policy,
             health_check: None,
+            agent_token: None,
         }
     }
 }

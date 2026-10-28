@@ -5,8 +5,10 @@
 //! Shared HTTP API authentication for dstack services.
 //!
 //! Supports bearer/shared-secret tokens, HTTP Basic credentials backed by an
-//! Apache htpasswd file, and an optional GET-only query token for compatibility
-//! with browser dashboard links.
+//! Apache htpasswd file, an optional GET-only query token for compatibility
+//! with browser dashboard links, and Ed25519 JWT scope grants (see [`jwt`]).
+
+pub mod jwt;
 
 use std::{collections::HashMap, path::Path, sync::Arc};
 
@@ -21,7 +23,9 @@ use rocket::{
 use sha2::{Digest, Sha256};
 use subtle::{Choice, ConstantTimeEq};
 
-const UNAUTH_URI: &str = "/__dstack_api_auth_unauthorized";
+/// Where a denied request is rewritten to, so every refusal is answered by one
+/// responder regardless of which route it was headed for.
+pub const UNAUTHORIZED_PATH: &str = "/__dstack_api_auth_unauthorized";
 
 #[derive(Debug)]
 struct Htpasswd {
@@ -252,11 +256,11 @@ impl Fairing for HttpAuthFairing {
 
     async fn on_request(&self, req: &mut Request<'_>, _: &mut Data<'_>) {
         req.local_cache(|| RequestRealm(self.config.realm.clone()));
-        if req.uri().path() == UNAUTH_URI {
+        if req.uri().path() == UNAUTHORIZED_PATH {
             return;
         }
         if !self.authorized(req) {
-            if let Ok(uri) = Origin::parse_owned(UNAUTH_URI.to_owned()) {
+            if let Ok(uri) = Origin::parse_owned(UNAUTHORIZED_PATH.to_owned()) {
                 req.set_uri(uri);
             }
         } else if self.config.allow_get_query_token {
@@ -267,17 +271,32 @@ impl Fairing for HttpAuthFairing {
     }
 }
 
-struct Unauthorized;
+/// What a 401 asks the caller for.
+///
+/// A Basic challenge tells a bearer-token client to do something it cannot do,
+/// so a fairing denying on a token denies with `Bearer` instead.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Challenge {
+    #[default]
+    Basic,
+    Bearer,
+}
+
+/// The responder every denied request lands on.
+pub struct Unauthorized;
 
 impl<'r> Responder<'r, 'static> for Unauthorized {
     fn respond_to(self, req: &'r Request<'_>) -> rocket::response::Result<'static> {
-        let realm = &req.local_cache(|| RequestRealm("dstack API".into())).0;
+        let value = match req.local_cache(Challenge::default) {
+            Challenge::Basic => {
+                let realm = &req.local_cache(|| RequestRealm("dstack API".into())).0;
+                format!("Basic realm=\"{realm}\"")
+            }
+            Challenge::Bearer => "Bearer".to_owned(),
+        };
         Response::build()
             .status(Status::Unauthorized)
-            .header(Header::new(
-                "WWW-Authenticate",
-                format!("Basic realm=\"{realm}\""),
-            ))
+            .header(Header::new("WWW-Authenticate", value))
             .ok()
     }
 }

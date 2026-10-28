@@ -130,6 +130,15 @@ pub struct InstanceRecord {
     /// a rollback and forward again.
     #[serde(default)]
     pub health_check: Option<bool>,
+    /// Token this CVM minted for the gateway's `Health` poll. `None` for a CVM
+    /// that predates the field, or one that could not mint it.
+    ///
+    /// Per-instance rather than per-app: the token is bound to the instance's
+    /// app id and expires within the hour, and the CVM re-registers every
+    /// three minutes anyway. `Option` for the same reason as `health_check`:
+    /// a pre-field record has to read as "not known", not "empty token".
+    #[serde(default)]
+    pub agent_token: Option<String>,
 }
 
 /// What an operator has said about an instance's ports, under
@@ -193,6 +202,7 @@ impl From<&InstanceInfo> for InstanceRecord {
             // `Health` is this node's own observation, and a shared one would
             // outlive the instance that earned it.
             health_check: Some(info.health_check()),
+            agent_token: info.agent_token.clone(),
         }
     }
 }
@@ -2729,6 +2739,7 @@ mod value_encoding_tests {
                 port_policy: None,
                 port_policy_hash: String::new(),
                 health_check: None,
+                agent_token: None,
             },
         )
         .expect("sync should succeed");
@@ -3003,6 +3014,7 @@ mod corruption_tests {
                 port_policy: None,
                 port_policy_hash: String::new(),
                 health_check: None,
+                agent_token: None,
             },
         )
         .expect("seed");
@@ -3473,6 +3485,7 @@ mod corruption_tests {
                     port_policy: None,
                     port_policy_hash: String::new(),
                     health_check: None,
+                    agent_token: None,
                 },
             )
             .expect("sync should succeed");
@@ -3659,6 +3672,7 @@ mod tombstone_gc_tests {
                 port_policy: None,
                 port_policy_hash: String::new(),
                 health_check: None,
+                agent_token: None,
             },
         )
         .expect("seed");

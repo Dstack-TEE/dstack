@@ -2060,6 +2060,11 @@ pub(crate) fn make_sys_config(
         "host_api_url": format!("vsock://2:{}/api", cfg.host_api.port),
         "vm_config": serde_json::to_string(&vm_config)?,
     });
+    // Omitted when unconfigured so an existing node's sys-config does not
+    // change shape just because this setting exists.
+    if cfg.cvm.guest_agent_api != Default::default() {
+        sys_config["guest_agent_api"] = serde_json::to_value(&cfg.cvm.guest_agent_api)?;
+    }
     // No attestation trust anchor is ever written here. Simulated deployments
     // receive only the development seed through `.tee-simulator.json`; the
     // in-guest simulator derives the matching roots itself and publishes them

@@ -343,6 +343,12 @@ qemu_hotplug_off = true
 host_share_mode = "{host_share_mode}"
 qgs_port = 4050
 
+# What an unconfigured 8090 serves: the dashboard, and the identity, version
+# and health it publishes. Containers, logs, metrics and app-key attestation
+# need a token. See docs/guest-api-auth.md.
+[cvm.guest_agent_api]
+anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health", "guest:info"]
+
 [cvm.product]
 sys_vendor = "dstack"
 product_name = "dstack"

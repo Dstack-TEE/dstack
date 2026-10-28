@@ -4,6 +4,7 @@
 
 use std::{future::pending, os::unix::net::UnixListener as StdUnixListener, time::Duration};
 
+use crate::api_auth::ScopeFairing;
 use crate::config::BindAddr;
 use crate::guest_api_service::GuestApiHandler;
 use crate::http_routes;
@@ -179,6 +180,9 @@ async fn run_internal(
 async fn run_external(state: AppState, figment: Figment) -> Result<()> {
     let rocket = mount_external(rocket::custom(figment))
         .mount("/", http_routes::external_routes(state.config()))
+        // Where `ScopeFairing` rewrites a denied request.
+        .mount("/", dstack_api_auth::routes())
+        .attach(ScopeFairing::new(state.clone()))
         .attach(AdHoc::on_response("Add app version header", |_req, res| {
             Box::pin(async move {
                 res.set_raw_header("X-App-Version", app_version());
@@ -238,12 +242,21 @@ async fn run_watchdog(port: u16) {
     let mut interval = tokio::time::interval(heatbeat_interval);
 
     let probe_url = format!("http://localhost:{port}/prpc/Worker.Version");
+    // Built once: the loop runs every few seconds for the process's lifetime,
+    // and a fresh client per tick leaks a connection pool each time.
+    let client = reqwest::Client::new();
     loop {
         interval.tick().await;
 
-        let client = reqwest::Client::new();
         match client.get(&probe_url).send().await {
-            Ok(response) if response.status().is_success() => {
+            // 401 is the listener answering a caller with no scope, which is
+            // what happens when the host removes `guest:version` from
+            // `anonymous_scopes`; it proves the listener is up as well as a
+            // 200 does.
+            Ok(response)
+                if response.status().is_success()
+                    || response.status() == reqwest::StatusCode::UNAUTHORIZED =>
+            {
                 if let Err(err) = sd_notify(false, &[NotifyState::Watchdog]) {
                     error!("Failed to notify systemd: {err}");
                 }
@@ -424,5 +437,74 @@ mod tests {
         // A mounted surface, known method, handler says no: 400.
         let (status, _) = get(&pre_v1, "/EmitEvent").await;
         assert_eq!(status, 400);
+    }
+
+    /// With nothing anonymous, no spelling of a route reaches a handler
+    /// without a token.
+    #[tokio::test]
+    async fn the_external_listener_refuses_every_spelling_without_a_token() {
+        let (state, _guard) = setup_test_state().await;
+        let client = Client::tracked(
+            mount_external(rocket::build())
+                .mount("/", dstack_api_auth::routes())
+                .attach(ScopeFairing::new(state.clone()))
+                .manage(state),
+        )
+        .await
+        .expect("rocket failed to ignite");
+        for path in [
+            "/prpc/Info",
+            "/prpc/Worker.Worker.Info",
+            "/prpc/v0/Worker.Worker.GetAttestationForAppKey",
+            "/%70rpc/Version",
+            "/prpc/v1/Health",
+            "/nope",
+        ] {
+            let (status, _) = get(&client, path).await;
+            assert_eq!(status, 401, "{path}");
+        }
+    }
+
+    /// A token from the app's own issuer opens exactly its scopes.
+    #[tokio::test]
+    async fn an_internal_token_grants_only_its_own_scopes() {
+        use dstack_api_auth::jwt;
+
+        let (state, _guard) = setup_test_state().await;
+        let app_id = hex::encode(&state.identity().await.unwrap().app_id);
+        let secret = ra_tls::api_v1::derive_app_key(
+            &crate::rpc_service::tests::DUMMY_K256_KEY,
+            jwt::INTERNAL_ISSUER_DOMAIN,
+            ra_tls::api_v1::KeyAlgorithm::Ed25519,
+        )
+        .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token = jwt::sign(
+            &secret,
+            &jwt::Claims {
+                iss: jwt::internal_issuer(&app_id),
+                aud: app_id,
+                iat: now,
+                exp: now + 60,
+                scope: jwt::scope::INFO.into(),
+            },
+        )
+        .unwrap();
+        let client = Client::tracked(
+            mount_external(rocket::build())
+                .mount("/", dstack_api_auth::routes())
+                .attach(ScopeFairing::new(state.clone()))
+                .manage(state),
+        )
+        .await
+        .expect("rocket failed to ignite");
+        let auth = rocket::http::Header::new("Authorization", format!("bearer {token}"));
+        for (path, expected) in [("/prpc/Info", 200), ("/prpc/Version", 401)] {
+            let response = client.get(path).header(auth.clone()).dispatch().await;
+            assert_eq!(response.status().code, expected, "{path}");
+        }
     }
 }

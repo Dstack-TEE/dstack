@@ -146,7 +146,7 @@ Example app-compose.json:
 
 ## Don't expose unexpected ports
 
-In dstack CVM, dstack-guest-agent listens on port 8090, allowing public access to basic CVM information.
+In dstack CVM, dstack-guest-agent listens on port 8090. It is not anonymous by default; see [guest-api-auth.md](../guest-api-auth.md) for what the host can grant anonymously.
 
 In docker-compose.yaml, all declared ports will be exposed to the public internet. Do not expose unnecessary ports.
 

@@ -45,6 +45,7 @@ cmd_lib.workspace = true
 figment = { workspace = true, features = ["json", "toml"] }
 load_config.workspace = true
 k256 = { workspace = true, features = ["ecdsa"] }
+dstack-api-auth.workspace = true
 dstack-types.workspace = true
 sha3.workspace = true
 strip-ansi-escapes.workspace = true

@@ -282,6 +282,7 @@ mod tests {
             port_policy: None,
             port_policy_hash: String::new(),
             health_check: None,
+            agent_token: None,
         }
     }
 
