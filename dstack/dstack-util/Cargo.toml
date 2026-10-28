@@ -25,6 +25,7 @@ schnorrkel.workspace = true
 serde.workspace = true
 serde-human-bytes.workspace = true
 serde_json.workspace = true
+serde_with.workspace = true
 sd-notify.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["full"] }
@@ -59,7 +60,6 @@ bollard.workspace = true
 binrw.workspace = true
 sodiumbox.workspace = true
 libc.workspace = true
-luks2.workspace = true
 nvml-wrapper.workspace = true
 lspci.workspace = true
 scopeguard.workspace = true
