@@ -1,0 +1,97 @@
+From aed5860e1b5e4726deb968d1da7e8274af962f53 Mon Sep 17 00:00:00 2001
+From: Christian Brauner <brauner@kernel.org>
+Date: Mon, 15 Jun 2026 15:19:50 +0200
+Subject: [PATCH] ovl: handle idmapped mounts in ovl_create_object() and
+ ovl_tmpfile()
+
+In preparation for allowing the overlay mount itself to be idmapped,
+thread the mount's struct mnt_idmap into the inode creation path and
+use it for inode_init_owner() instead of the hardcoded &nop_mnt_idmap.
+
+The preallocated overlay inode's i_{u,g}id are copied into the override
+credentials by ovl_override_creator_creds() to create the real upper
+inode, so honoring the overlay mount idmap here makes newly created
+files, directories, special files, symlinks and tmpfiles get the
+caller's mapped fs{u,g}id once overlay mounts can be idmapped.
+
+No functional change: until FS_ALLOW_IDMAP is set on ovl_fs_type the
+overlay mount idmap is always &nop_mnt_idmap, so inode_init_owner()
+behaves exactly as before.
+
+Upstream-Status: Backport [https://git.kernel.org/linus/aed5860e1b5e]
+Backport note: 6.18 predates inode_state_set(); the context differs only there.
+Link: https://patch.msgid.link/20260615-work-idmapped-overlayfs-v1-1-7381632aa402@kernel.org
+Reviewed-by: Amir Goldstein <amir73il@gmail.com>
+Signed-off-by: Christian Brauner (Amutable) <brauner@kernel.org>
+---
+ fs/overlayfs/dir.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/fs/overlayfs/dir.c b/fs/overlayfs/dir.c
+index e924321b6..e576aee1c 100644
+--- a/fs/overlayfs/dir.c
++++ b/fs/overlayfs/dir.c
+@@ -661,8 +661,8 @@ static int ovl_create_or_link(struct dentry *dentry, struct inode *inode,
+ 	return err;
+ }
+ 
+-static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
+-			     const char *link)
++static int ovl_create_object(struct mnt_idmap *idmap, struct dentry *dentry,
++			     int mode, dev_t rdev, const char *link)
+ {
+ 	int err;
+ 	struct inode *inode;
+@@ -689,7 +689,7 @@ static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
+ 	inode->i_state |= I_CREATING;
+ 	spin_unlock(&inode->i_lock);
+ 
+-	inode_init_owner(&nop_mnt_idmap, inode, dentry->d_parent->d_inode, mode);
++	inode_init_owner(idmap, inode, dentry->d_parent->d_inode, mode);
+ 	attr.mode = inode->i_mode;
+ 
+ 	err = ovl_create_or_link(dentry, inode, &attr, false);
+@@ -706,13 +706,13 @@ static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
+ static int ovl_create(struct mnt_idmap *idmap, struct inode *dir,
+ 		      struct dentry *dentry, umode_t mode, bool excl)
+ {
+-	return ovl_create_object(dentry, (mode & 07777) | S_IFREG, 0, NULL);
++	return ovl_create_object(idmap, dentry, (mode & 07777) | S_IFREG, 0, NULL);
+ }
+ 
+ static struct dentry *ovl_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+ 				struct dentry *dentry, umode_t mode)
+ {
+-	return ERR_PTR(ovl_create_object(dentry, (mode & 07777) | S_IFDIR, 0, NULL));
++	return ERR_PTR(ovl_create_object(idmap, dentry, (mode & 07777) | S_IFDIR, 0, NULL));
+ }
+ 
+ static int ovl_mknod(struct mnt_idmap *idmap, struct inode *dir,
+@@ -722,13 +722,13 @@ static int ovl_mknod(struct mnt_idmap *idmap, struct inode *dir,
+ 	if (S_ISCHR(mode) && rdev == WHITEOUT_DEV)
+ 		return -EPERM;
+ 
+-	return ovl_create_object(dentry, mode, rdev, NULL);
++	return ovl_create_object(idmap, dentry, mode, rdev, NULL);
+ }
+ 
+ static int ovl_symlink(struct mnt_idmap *idmap, struct inode *dir,
+ 		       struct dentry *dentry, const char *link)
+ {
+-	return ovl_create_object(dentry, S_IFLNK, 0, link);
++	return ovl_create_object(idmap, dentry, S_IFLNK, 0, link);
+ }
+ 
+ static int ovl_set_link_redirect(struct dentry *dentry)
+@@ -1412,7 +1412,7 @@ static int ovl_tmpfile(struct mnt_idmap *idmap, struct inode *dir,
+ 	if (!inode)
+ 		goto drop_write;
+ 
+-	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
++	inode_init_owner(idmap, inode, dir, mode);
+ 	err = ovl_create_tmpfile(file, dentry, inode, inode->i_mode);
+ 	if (err)
+ 		goto put_inode;
+-- 
+2.43.0
+

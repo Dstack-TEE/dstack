@@ -68,6 +68,21 @@ SRC_URI:append = " file://0003-dma-direct-return-struct-page-from-alloc-from-poo
 SRC_URI:append = " file://0005-swiotlb-preserve-allocation-virtual-address.patch \
                    file://0006-swiotlb-free-dynamic-pools-from-process-context.patch"
 
+# Overlayfs idmapped mount support, backported from the vfs tree merged for
+# v7.3 and absent from linux-6.18.y. Sysbox needs it to ID-map the merged
+# container rootfs instead of cloning it into its data root; when Sysbox
+# stops, it deletes that clone and with it the container's writable layer.
+#
+# 0011-0016 are the functional half of the upstream series. The upstream
+# docs and selftest patches are omitted because this image does not build
+# them.
+SRC_URI:append = " file://0011-ovl-handle-idmapped-mounts-in-create-object-and-tmpfile.patch \
+                   file://0012-ovl-handle-idmapped-mounts-in-permission.patch \
+                   file://0013-ovl-handle-idmapped-mounts-in-setattr.patch \
+                   file://0014-ovl-handle-idmapped-mounts-in-getattr.patch \
+                   file://0015-ovl-handle-idmapped-mounts-in-set-acl.patch \
+                   file://0016-ovl-allow-idmapping-overlay-mounts.patch"
+
 KERNEL_FEATURES:append = " features/cgroups/cgroups.scc \
                           features/overlayfs/overlayfs.scc \
                           features/netfilter/netfilter.scc \

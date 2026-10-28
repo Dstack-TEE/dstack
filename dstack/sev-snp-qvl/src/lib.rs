@@ -10,12 +10,15 @@
 //! must still bind the verified measurement to app/config identity before
 //! production key release.
 
-use std::time::Duration;
+use std::{fmt, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Context, Result};
-use moka::sync::Cache;
+use moka::future::Cache;
 use sev::certs::snp::{builtin, ca, Certificate, Chain, Verifiable};
 use sev::firmware::{guest::AttestationReport, host::TcbVersion};
+
+#[cfg(test)]
+mod kds_tests;
 
 const ASK_CERT_GUID: [u8; 16] = [
     0x4a, 0xb7, 0xb3, 0x79, 0xbb, 0xac, 0x4f, 0xe4, 0xa0, 0x2f, 0x05, 0xae, 0xf3, 0x27, 0xc7, 0x82,
@@ -35,6 +38,45 @@ const AMD_KDS_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const AMD_KDS_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const AMD_KDS_CA_CACHE_CAPACITY: u64 = 16;
 const AMD_KDS_VCEK_CACHE_CAPACITY: u64 = 1024;
+
+/// Verification could not obtain its required AMD endorsement collateral.
+/// This is not evidence that a quote is cryptographically invalid.
+#[derive(Debug)]
+pub struct CollateralUnavailable(anyhow::Error);
+
+impl fmt::Display for CollateralUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "AMD endorsement collateral unavailable: {:#}", self.0)
+    }
+}
+
+impl std::error::Error for CollateralUnavailable {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+/// Preserve typed causes when a coalesced cache initialization fails.
+#[derive(Debug)]
+struct SharedFetchError(Arc<anyhow::Error>);
+
+impl fmt::Display for SharedFetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for SharedFetchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref().as_ref())
+    }
+}
+
+pub fn collateral_unavailable(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.is::<CollateralUnavailable>())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AmdSnpProduct {
@@ -147,6 +189,7 @@ impl QuoteVerifier {
         }
         let report_obj = decode_amd_snp_report(report)?;
         let mut errors = Vec::new();
+        let mut unavailable = None;
         for product in amd_snp_product_candidates_for_report(&report_obj)? {
             match kds_client
                 .fetch_collateral_for_product(product, &report_obj)
@@ -165,10 +208,19 @@ impl QuoteVerifier {
                     Ok(_) => bail!("amd sev-snp report_data mismatch"),
                     Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
                 },
-                Err(err) => errors.push(format!("{}: {err:#}", product.kds_name())),
+                Err(err) => {
+                    errors.push(format!("{}: {err:#}", product.kds_name()));
+                    if collateral_unavailable(&err) {
+                        unavailable = Some(err);
+                    }
+                }
             }
         }
-        bail!("amd sev-snp verification failed: {}", errors.join("; "))
+        let reason = format!("amd sev-snp verification failed: {}", errors.join("; "));
+        if let Some(err) = unavailable {
+            return Err(err.context(reason));
+        }
+        bail!(reason)
     }
 }
 
@@ -352,19 +404,18 @@ impl AmdKdsClient {
 
     async fn fetch_ca_chain(&self, product: AmdSnpProduct) -> Result<(CertBytes, CertBytes)> {
         let key = AmdKdsCaCacheKey { product };
-        if let Some(cached) = self.ca_cache.get(&key) {
-            return Ok(cached);
-        }
-
-        let url = join_amd_kds_url(
-            &self.base_url,
-            &format!("{}/cert_chain", product.kds_name()),
-        );
-        let chain = self.fetch_url(&url, "cert_chain").await?;
-        let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
-        let collateral = (product.builtin_ark(), ask);
-        self.ca_cache.insert(key, collateral.clone());
-        Ok(collateral)
+        self.ca_cache
+            .try_get_with(key, async {
+                let url = join_amd_kds_url(
+                    &self.base_url,
+                    &format!("{}/cert_chain", product.kds_name()),
+                );
+                let chain = self.fetch_url(&url, "cert_chain").await?;
+                let (_fetched_ark, ask) = extract_ark_ask_from_amd_kds_cert_chain(&chain)?;
+                Ok::<_, anyhow::Error>((product.builtin_ark(), ask))
+            })
+            .await
+            .map_err(|err| SharedFetchError(err).into())
     }
 
     async fn fetch_vcek(
@@ -378,32 +429,35 @@ impl AmdKdsClient {
             chip_id: *chip_id,
             tcb,
         };
-        if let Some(cached) = self.vcek_cache.get(&key) {
-            return Ok(cached);
-        }
-
-        let vcek_url = amd_kds_vcek_url_with_base(&self.base_url, product, chip_id, tcb)?;
-        let vcek = CertBytes {
-            bytes: self.fetch_url(&vcek_url, "vcek").await?,
-            encoding: CertEncoding::Der,
-        };
-        self.vcek_cache.insert(key, vcek.clone());
-        Ok(vcek)
+        self.vcek_cache
+            .try_get_with(key, async {
+                let vcek_url = amd_kds_vcek_url_with_base(&self.base_url, product, chip_id, tcb)?;
+                Ok::<_, anyhow::Error>(CertBytes {
+                    bytes: self.fetch_url(&vcek_url, "vcek").await?,
+                    encoding: CertEncoding::Der,
+                })
+            })
+            .await
+            .map_err(|err| SharedFetchError(err).into())
     }
 
     async fn fetch_url(&self, url: &str, label: &str) -> Result<Vec<u8>> {
-        Ok(self
-            .http_client
-            .get(url)
-            .send()
-            .await
-            .with_context(|| format!("failed to request amd sev-snp {label} from {url}"))?
-            .error_for_status()
-            .with_context(|| format!("amd sev-snp {label} request failed for {url}"))?
-            .bytes()
-            .await
-            .with_context(|| format!("failed to read amd sev-snp {label} response"))?
-            .to_vec())
+        let result = async {
+            Ok(self
+                .http_client
+                .get(url)
+                .send()
+                .await
+                .with_context(|| format!("failed to request amd sev-snp {label} from {url}"))?
+                .error_for_status()
+                .with_context(|| format!("amd sev-snp {label} request failed for {url}"))?
+                .bytes()
+                .await
+                .with_context(|| format!("failed to read amd sev-snp {label} response"))?
+                .to_vec())
+        }
+        .await;
+        result.map_err(|err| CollateralUnavailable(err).into())
     }
 }
 

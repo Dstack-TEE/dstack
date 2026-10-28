@@ -142,6 +142,7 @@ impl TpmContext {
             offset += read_size;
         }
 
+        result.truncate(total_size);
         Ok(Some(result))
     }
 
@@ -425,6 +426,9 @@ impl TpmContext {
 
             let mut buf = response.data_buffer();
             let random_bytes = buf.get_tpm2b()?;
+            if random_bytes.is_empty() {
+                anyhow::bail!("TPM returned no random bytes");
+            }
             result.extend_from_slice(&random_bytes);
         }
 
@@ -482,6 +486,10 @@ impl TpmContext {
 
             if !more_data || last_seen >= last {
                 break;
+            }
+            // Resuming below `property` would ask for the same range forever.
+            if last_seen < property {
+                anyhow::bail!("TPM returned handle 0x{last_seen:08x} below 0x{property:08x}");
             }
             property = last_seen.saturating_add(1);
         }
@@ -862,6 +870,46 @@ impl TpmContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn get_handles_stops_when_the_tpm_goes_backwards() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut requests = 0;
+            let mut header = [0u8; 10];
+            while server.read_exact(&mut header).is_ok() {
+                let size = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+                let mut body = vec![0; size - 10];
+                server.read_exact(&mut body).unwrap();
+                requests += 1;
+                if requests > 3 {
+                    break;
+                }
+                // more_data, TPM_CAP_HANDLES, one handle just below the range.
+                let mut data = vec![1];
+                data.extend_from_slice(&(TpmCap::Handles as u32).to_be_bytes());
+                data.extend_from_slice(&1u32.to_be_bytes());
+                data.extend_from_slice(&0x80ff_ffffu32.to_be_bytes());
+                let response = TpmResponse {
+                    tag: TpmSt::NoSessions,
+                    response_code: 0,
+                    data,
+                };
+                server.write_all(&response.to_bytes()).unwrap();
+            }
+            requests
+        });
+
+        let mut ctx = TpmContext {
+            device: TpmDevice::from_stream(client, "test stream"),
+        };
+        assert!(ctx.get_handles(0x8100_0000, 0x81ff_ffff).is_err());
+        drop(ctx);
+        assert_eq!(server.join().unwrap(), 1);
+    }
 
     #[test]
     fn test_pcr_selection() {

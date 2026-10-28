@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::{
-    path::Path,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -29,7 +28,7 @@ use ra_tls::{
     kdf,
 };
 use scale::Decode;
-use tracing::{debug, warn};
+use tracing::warn;
 use upgrade_authority::{
     build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
 };
@@ -120,42 +119,12 @@ fn short_lived_cache<V: Clone + Send + Sync + 'static>() -> Cache<(), V> {
         .build()
 }
 
-/// remove a single cache entry (a hex-named subdir/file) under `parent_dir`, or
-/// everything when `sub_dir == "all"`. A non-hex key is rejected to keep the
-/// deletion confined to the cache.
-fn remove_cache(parent_dir: &Path, sub_dir: &str) -> Result<()> {
-    if sub_dir.is_empty() {
-        return Ok(());
-    }
-    if sub_dir == "all" {
-        if parent_dir.exists() {
-            fs::remove_dir_all(parent_dir)?;
-        }
-        return Ok(());
-    }
-    if !sub_dir.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!("invalid cache key");
-    }
-    let path = parent_dir.join(sub_dir);
-    if path.is_dir() {
-        fs::remove_dir_all(path)?;
-    } else if path.is_file() {
-        fs::remove_file(path)?;
-    }
-    Ok(())
-}
-
 impl KmsState {
     /// clear cached image and measurement material for the given hashes. Used by
     /// the admin `ClearImageCache` RPC; authorization is enforced by the admin
     /// listener's HTTP authenticator, not here.
     pub(crate) fn clear_image_cache(&self, image_hash: &str, config_hash: &str) -> Result<()> {
-        let images_dir = self.config.image.cache_dir.join("images");
-        remove_cache(&images_dir, image_hash).context("failed to clear image cache")?;
-        // measurement cache is kept by the verifier under measurements/.
-        let mr_cache_dir = self.config.image.cache_dir.join("measurements");
-        remove_cache(&mr_cache_dir, config_hash).context("failed to clear measurement cache")?;
-        Ok(())
+        self.verifier.clear_cache(image_hash, config_hash)
     }
 
     pub fn new(config: KmsConfig) -> Result<Self> {
@@ -181,11 +150,6 @@ impl KmsState {
         if !config.enforce_self_authorization {
             warn!(
                 "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
-            );
-        }
-        if !config.image.verify {
-            warn!(
-                "os image verification is disabled; os_image_hash is caller-supplied and unverified - do not use in production TEE deployments"
             );
         }
         Ok(Self {
@@ -366,24 +330,6 @@ impl RpcHandler {
             .await
     }
 
-    async fn verify_os_image_hash(
-        &self,
-        vm_config: String,
-        report: &VerifiedAttestation,
-    ) -> Result<()> {
-        if !self.state.config.image.verify {
-            debug!("os image verification is disabled");
-            return Ok(());
-        }
-        let mut detail = VerificationDetails::default();
-        self.state
-            .verifier
-            .verify_os_image_hash(vm_config, report, &mut detail)
-            .await
-            .context("Failed to verify os image hash")?;
-        Ok(())
-    }
-
     async fn ensure_app_attestation_allowed(
         &self,
         att: &VerifiedAttestation,
@@ -405,7 +351,13 @@ impl RpcHandler {
         // helper above. The legacy OS-image verifier is TDX-oriented and still
         // rejects SNP quotes; keep SNP on the explicit fail-closed helper path.
         if boot_info.tee_variant != TeeVariant::DstackAmdSevSnp {
-            self.verify_os_image_hash(vm_config_str.into(), att)
+            self.state
+                .verifier
+                .verify_os_image_hash(
+                    vm_config_str.into(),
+                    att,
+                    &mut VerificationDetails::default(),
+                )
                 .await
                 .context("Failed to verify os image hash")?;
         }
@@ -557,7 +509,7 @@ impl KmsRpc for RpcHandler {
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
-            os_image_verification: Some(self.state.config.image.verify),
+            os_image_verification: Some(true),
         })
     }
 
@@ -666,7 +618,7 @@ mod tests {
     };
     use cc_eventlog::RuntimeEvent;
     use sha2::{Digest, Sha256, Sha384};
-    use std::time::Duration;
+    use std::{path::Path, time::Duration};
 
     const SNP_ENABLED: KeyReleasePolicy = KeyReleasePolicy {
         snp: true,
@@ -679,28 +631,6 @@ mod tests {
         nitro_enclave: true,
     };
 
-    #[test]
-    fn remove_cache_only_deletes_the_named_hex_entry() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let keep = root.join("cafe");
-        let drop = root.join("beef");
-        fs::create_dir_all(&keep).unwrap();
-        fs::create_dir_all(&drop).unwrap();
-
-        remove_cache(root, "beef").unwrap();
-        assert!(!drop.exists(), "named entry must be removed");
-        assert!(keep.exists(), "other entries must be kept");
-
-        // empty key is a no-op; a non-hex key is rejected before touching disk.
-        remove_cache(root, "").unwrap();
-        assert!(remove_cache(root, "../escape").is_err());
-        assert!(keep.exists());
-
-        // "all" clears the whole cache dir.
-        remove_cache(root, "all").unwrap();
-        assert!(!root.exists());
-    }
     use std::collections::BTreeMap;
 
     fn hex_of(byte: u8, len: usize) -> String {

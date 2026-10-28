@@ -289,6 +289,21 @@ def test_health_check_off_hashes_as_if_it_were_absent():
     assert get_compose_hash(absent) == get_compose_hash(disabled)
 
 
+def test_ephemeral_data_disk_off_hashes_as_if_it_were_absent():
+    """The guest's Rust types skip a false `ephemeral_data_disk`."""
+    from dstack_sdk.get_compose_hash import Requirements
+
+    absent = AppCompose(
+        runner="docker-compose", requirements=Requirements(launch_token_hash="ff00")
+    )
+    disabled = AppCompose(
+        runner="docker-compose",
+        requirements=Requirements(launch_token_hash="ff00", ephemeral_data_disk=False),
+    )
+
+    assert get_compose_hash(absent) == get_compose_hash(disabled)
+
+
 def test_health_status_file_is_part_of_the_hash():
     """`health_status_file` selects the verdict source, so it is not cosmetic."""
     from dstack_sdk.get_compose_hash import Requirements

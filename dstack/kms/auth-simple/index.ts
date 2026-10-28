@@ -316,7 +316,10 @@ const defaultConfigPath = process.env.AUTH_CONFIG_PATH || './auth-config.json';
 console.log(`starting auth-simple server on port ${port}`);
 console.log(`config path: ${defaultConfigPath}`);
 
+// Bun defaults idleTimeout to 10s and closes the socket while a handler is
+// still awaiting work. Stay above the KMS webhook timeout (60s). Bun max: 255.
 export default {
   port,
+  idleTimeout: 255,
   fetch: app.fetch,
 };

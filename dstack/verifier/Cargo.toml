@@ -43,6 +43,7 @@ x509-parser = { workspace = true, features = ["verify"] }
 dstack-attest.workspace = true
 dstack-types.workspace = true
 dstack-mr.workspace = true
+sev-snp-qvl.workspace = true
 
 # Crypto/verification dependencies
 dcap-qvl.workspace = true

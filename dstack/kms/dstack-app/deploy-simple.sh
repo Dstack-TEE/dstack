@@ -38,9 +38,6 @@ else
 # Required: The URL of the dstack app image download URL
 # IMAGE_DOWNLOAD_URL=https://github.com/Dstack-TEE/meta-dstack/releases/download/v0.5.5/dstack-0.5.5.tar.gz
 
-# Image hash verification feature flag
-VERIFY_IMAGE=true
-
 # The dstack OS image name to use for the KMS app
 OS_IMAGE=dstack-0.5.5
 
@@ -60,7 +57,6 @@ required_env_vars=(
   "KMS_RPC_ADDR"
   "GUEST_AGENT_ADDR"
   "IMAGE_DOWNLOAD_URL"
-  "VERIFY_IMAGE"
 )
 
 for var in "${required_env_vars[@]}"; do
@@ -88,7 +84,6 @@ subvar() {
 subvar AUTH_WEBHOOK_URL
 subvar IMAGE_DOWNLOAD_URL
 subvar ADMIN_TOKEN_HASH
-subvar VERIFY_IMAGE
 subvar KMS_IMAGE
 
 echo "Docker compose file:"

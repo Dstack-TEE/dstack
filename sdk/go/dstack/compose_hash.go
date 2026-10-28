@@ -70,6 +70,10 @@ type Requirements struct {
 	// pointer for the same reason.
 	HealthStatusFile *string `json:"health_status_file,omitempty"`
 
+	// EphemeralDataDisk formats the data disk on every boot. Like HealthCheck,
+	// a false value must stay out of the manifest.
+	EphemeralDataDisk bool `json:"ephemeral_data_disk,omitempty"`
+
 	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
 
 	// Extra carries fields this SDK does not know; see AppCompose.Extra.
@@ -198,7 +202,35 @@ func toDeterministicJSON(v interface{}) (string, error) {
 		return "", err
 	}
 	// Encode appends a newline that Marshal does not.
-	return strings.TrimSuffix(buf.String(), "\n"), nil
+	return unescapeLineSeparators(strings.TrimSuffix(buf.String(), "\n")), nil
+}
+
+// unescapeLineSeparators undoes the one escape SetEscapeHTML(false) leaves on:
+// encoding/json always writes U+2028 and U+2029 as `\u2028` and `\u2029`, which
+// Rust, Python and JS write raw. It walks escape pairs so that an escaped
+// backslash followed by the text `u2028` is left alone.
+func unescapeLineSeparators(s string) string {
+	if !strings.Contains(s, `\u202`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch {
+		case strings.HasPrefix(s[i:], `\u2028`):
+			b.WriteRune('\u2028')
+			i += 5
+		case strings.HasPrefix(s[i:], `\u2029`):
+			b.WriteRune('\u2029')
+			i += 5
+		case s[i] == '\\':
+			b.WriteString(s[i : i+2])
+			i++
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 // GetComposeHash computes the SHA256 hash of the application composition
