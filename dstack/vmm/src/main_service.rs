@@ -1007,8 +1007,10 @@ impl VmmRpc for RpcHandler {
             .context("Failed to load VM")
         {
             // Never started, so netd holds nothing for it.
-            if let Err(err) = fs::remove_dir_all(&work_dir) {
-                warn!("Failed to remove work dir: {}", err);
+            match tokio::task::spawn_blocking(move || fs::remove_dir_all(&work_dir)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => warn!("failed to remove work dir: {err:#}"),
+                Err(err) => warn!("work directory cleanup task failed: {err:#}"),
             }
             return Err(err);
         }
@@ -1456,9 +1458,13 @@ impl VmmRpc for RpcHandler {
             bail!("image '{}' not found", name);
         }
 
-        fs_err::remove_dir_all(&image_dir).with_context(|| {
-            format!("failed to delete image directory: {}", image_dir.display())
-        })?;
+        tokio::task::spawn_blocking(move || {
+            fs_err::remove_dir_all(&image_dir).with_context(|| {
+                format!("failed to delete image directory: {}", image_dir.display())
+            })
+        })
+        .await
+        .context("image deletion task failed")??;
 
         info!("deleted local image: {name}");
         Ok(())
@@ -1512,6 +1518,87 @@ mod tests {
             disk_prealloc: None,
             annotations: Default::default(),
         }
+    }
+
+    fn deletion_test_app(path: &Path) -> App {
+        let mut config: crate::config::Config =
+            Figment::from(crate::config::load_config_figment(None))
+                .extract()
+                .unwrap();
+        config.run_path = path.join("vms");
+        config.image.path = path.join("images");
+        fs::create_dir_all(&config.run_path).unwrap();
+        fs::create_dir_all(&config.image.path).unwrap();
+        App::new(
+            config,
+            supervisor_client::SupervisorClient::new("http://127.0.0.1:0"),
+        )
+    }
+
+    /// Invariant: failed loading cleans up the new VM's workdir and returns the
+    /// original load error rather than a cleanup-task result.
+    #[tokio::test]
+    async fn create_vm_load_failure_removes_workdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = deletion_test_app(dir.path());
+        let mut request = test_vm_configuration();
+        request.stopped = true;
+        let error = RpcHandler { app: app.clone() }
+            .create_vm(request)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Failed to load VM");
+        assert!(format!("{error:#}").contains("Failed to load image"));
+        assert_eq!(fs::read_dir(app.vm_dir()).unwrap().count(), 0);
+        assert_eq!(app.lock().iter_vms().count(), 0);
+    }
+
+    /// Invariant: image deletion removes the selected tree only, reports a
+    /// filesystem failure with its path, and retains name/missing-image checks.
+    #[tokio::test]
+    async fn delete_image_removes_selected_tree_and_preserves_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = deletion_test_app(dir.path());
+        let image = app.config.image.path.join("test-image");
+        let other = app.config.image.path.join("other-image");
+        fs::create_dir_all(image.join("nested")).unwrap();
+        fs::write(image.join("nested/rootfs.img"), b"image contents").unwrap();
+        fs::write(&other, b"untouched").unwrap();
+        RpcHandler { app: app.clone() }
+            .delete_image(Id {
+                id: "test-image".into(),
+            })
+            .await
+            .unwrap();
+        assert!(!image.exists());
+        assert_eq!(fs::read(&other).unwrap(), b"untouched");
+
+        let error = RpcHandler { app: app.clone() }
+            .delete_image(Id {
+                id: "test-image".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "image 'test-image' not found");
+        let error = RpcHandler { app: app.clone() }
+            .delete_image(Id {
+                id: "../other-image".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "invalid image name");
+        let error = RpcHandler { app }
+            .delete_image(Id {
+                id: "other-image".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("failed to delete image directory: {}", other.display())
+        );
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert_eq!(fs::read(&other).unwrap(), b"untouched");
     }
 
     fn pinned(nic_index: Option<usize>) -> PortMapping {
