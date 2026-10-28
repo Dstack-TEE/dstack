@@ -4,7 +4,7 @@
 
 use dcap_qvl::{
     collateral::CollateralClient,
-    quote::{Quote, TDAttributes, TDReport10},
+    quote::{Quote, TDReport10},
 };
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
@@ -76,30 +76,30 @@ impl KeyProvider {
     }
 }
 
+/// `TD_ATTRIBUTES` bit 28; every TD must set it.
+const SEPT_VE_DISABLE: u64 = 1 << 28;
+/// The `TD_ATTRIBUTES` bits a TD may set: SEPT_VE_DISABLE, PKS, KL and PERFMON.
+const ALLOWED_TD_ATTRIBUTES: u64 = SEPT_VE_DISABLE | 1 << 30 | 1 << 31 | 1 << 63;
+
 /// Refuse a TD that the host launched in a state that does not protect it.
 ///
 /// `fetch_and_verify` already rejects these TDs under dcap-qvl's default
-/// policy. The check is repeated here, following dcap-qvl's `validate_td10`,
-/// so that the sealing key does not depend on that default: the key
-/// derivation does not cover `td_attributes`, so a debug TD running the same
-/// image would derive the production TD's key. The `mr_signer_seam` check
-/// matches the guest's `validate_tcb`.
+/// policy. The check is repeated here, at least as strict as dcap-qvl's
+/// `validate_td10`, so that the sealing key does not depend on that default:
+/// the key derivation does not cover `td_attributes`, so a debug TD running
+/// the same image would derive the production TD's key. The `mr_signer_seam`
+/// check matches the guest's `validate_tcb`.
 fn require_production_td(report: &TDReport10) -> Result<(), ProviderError> {
-    let attributes = TDAttributes::parse(report.td_attributes)
-        .map_err(|error| ProviderError::QuoteVerification(error.to_string()))?;
-    if attributes.tud & 0x01 != 0 {
+    let attributes = u64::from_le_bytes(report.td_attributes);
+    if attributes & 0x01 != 0 {
         return Err(ProviderError::UntrustedTd("debug mode is enabled"));
     }
-    if attributes.tud != 0
-        || attributes.sec.reserved_lower != 0
-        || attributes.sec.reserved_bit29
-        || attributes.other.reserved != 0
-    {
+    if attributes & !ALLOWED_TD_ATTRIBUTES != 0 {
         return Err(ProviderError::UntrustedTd(
             "reserved bits in TD attributes are set",
         ));
     }
-    if !attributes.sec.sept_ve_disable {
+    if attributes & SEPT_VE_DISABLE == 0 {
         return Err(ProviderError::UntrustedTd("SEPT_VE_DISABLE is not enabled"));
     }
     if report.mr_signer_seam != [0_u8; 48] {
