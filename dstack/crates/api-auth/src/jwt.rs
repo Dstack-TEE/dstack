@@ -21,9 +21,9 @@ use serde::{Deserialize, Serialize};
 /// Longest lifetime a token may claim between `iat` and `exp`.
 ///
 /// There is no revocation list: a token is trusted until it expires, so the
-/// lifetime is the whole of the exposure control. The gateway re-registers
-/// every three minutes and mints a fresh token each time, so this costs it
-/// nothing.
+/// lifetime is the whole of the exposure control. The CVM re-registers with
+/// the gateway every three minutes and mints a fresh token every half hour, so
+/// this costs it nothing.
 pub const MAX_TOKEN_LIFETIME_SECS: u64 = 3600;
 
 /// Tolerance for clock skew in either direction.

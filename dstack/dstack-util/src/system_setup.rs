@@ -537,10 +537,12 @@ struct GatewayContext<'a> {
 /// it never needs `Info` from a CVM that can mint this token.
 const GATEWAY_AGENT_SCOPES: &[&str] = &[jwt::scope::HEALTH];
 
-/// Lifetime of the gateway's token. Registration refreshes every three
-/// minutes; this survives a few failed refreshes so a gateway outage does not
-/// also lock the gateway out of the agent.
-const GATEWAY_AGENT_TOKEN_LIFETIME_SECS: u64 = 600;
+/// How often the gateway's token changes. `iat` is rounded down to this, and
+/// Ed25519 signatures are deterministic, so every registration within one
+/// period carries the same token: the stored record stays unchanged instead of
+/// changing every three minutes. With `exp` an hour after `iat`, a token always
+/// has at least half an hour left, which outlasts many failed refreshes.
+const GATEWAY_AGENT_TOKEN_PERIOD_SECS: u64 = 1800;
 
 /// Mint the token the gateway presents to this CVM's guest agent, signed with
 /// the key the agent derives the same way from the app root key.
@@ -554,11 +556,12 @@ fn gateway_agent_token(app_id: &[u8], app_root_key: &[u8]) -> Result<String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
+    let iat = now - now % GATEWAY_AGENT_TOKEN_PERIOD_SECS;
     let claims = jwt::Claims {
         iss: jwt::internal_issuer(&app_id),
         aud: app_id,
-        iat: now,
-        exp: now + GATEWAY_AGENT_TOKEN_LIFETIME_SECS,
+        iat,
+        exp: iat + jwt::MAX_TOKEN_LIFETIME_SECS,
         scope: GATEWAY_AGENT_SCOPES.join(" "),
     };
     jwt::sign(&secret, &claims)
