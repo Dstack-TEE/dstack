@@ -27,9 +27,9 @@ use dstack_types::{
     GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
-use luks2::{
-    LuksAf, LuksConfig, LuksDigest, LuksHeader, LuksJson, LuksKdf, LuksKeyslot, LuksSegment,
-    LuksSegmentSize,
+use luks::{
+    LuksAf, LuksArea, LuksConfig, LuksDigest, LuksHeader, LuksJson, LuksKdf, LuksKeyslot,
+    LuksSegment, BINARY_HEADER_SIZE,
 };
 use ra_rpc::{
     client::{CertInfo, RaClient, RaClientConfig},
@@ -94,6 +94,7 @@ async fn sign_cert_request(
 }
 
 mod config_id_verifier;
+mod luks;
 
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
@@ -3354,26 +3355,19 @@ fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<bool> {
 }
 
 fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<bool> {
-    let mut hdr_data = vec![0u8; 4096];
+    let mut hdr_data = vec![0u8; BINARY_HEADER_SIZE as usize];
     reader
         .read_exact(&mut hdr_data)
         .context("Failed to read LUKS header")?;
-    let header =
-        LuksHeader::read_from(&mut &hdr_data[..]).context("Failed to decode LUKS header")?;
     let LuksHeader {
         magic,
         version,
         hdr_size,
-        seqid: _,
         label,
         csum_alg,
-        salt: _,
-        uuid: _,
         subsystem,
         hdr_offset,
-        csum: _,
-        ..
-    } = header;
+    } = LuksHeader::parse(&hdr_data).context("Failed to decode LUKS header")?;
 
     let expected_magic = match hdr_ind {
         0 => [76, 85, 75, 83, 186, 190],
@@ -3404,7 +3398,7 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     }
 
     // Check JSON
-    let json_size = hdr_size - 4096;
+    let json_size = hdr_size - BINARY_HEADER_SIZE;
     let mut jsn_data = vec![0u8; json_size as usize];
     reader
         .read_exact(&mut jsn_data)
@@ -3415,7 +3409,6 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         .unwrap_or(jsn_data.len());
     jsn_data.truncate(json_end);
 
-    let json = LuksJson::read_from(&mut &jsn_data[..]).context("Failed to decode LUKS JSON")?;
     let LuksJson {
         keyslots,
         tokens,
@@ -3423,12 +3416,11 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         digests,
         config:
             LuksConfig {
-                json_size: _,
-                keyslots_size: _,
+                keyslots_size,
                 flags,
                 requirements,
             },
-    } = json;
+    } = serde_json::from_slice(&jsn_data).context("Failed to decode LUKS JSON")?;
 
     if keyslots.len() != 1 {
         bail!("Invalid LUKS keyslots");
@@ -3442,6 +3434,9 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     if digests.len() != 1 {
         bail!("Invalid LUKS digests");
     }
+    if keyslots_size % 4096 != 0 {
+        bail!("Invalid LUKS keyslots size: {keyslots_size}");
+    }
     if flags.is_some() {
         bail!("Invalid LUKS flags");
     }
@@ -3450,58 +3445,50 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     }
 
     {
-        let first_keyslot = keyslots.get(&0).context("no LUKS keyslot")?;
-        let LuksKeyslot::luks2 {
+        let LuksKeyslot::Luks2 {
             key_size,
-            area,
+            area:
+                LuksArea::Raw {
+                    encryption,
+                    key_size: area_key_size,
+                    offset,
+                    size,
+                },
             kdf,
-            af,
+            af:
+                LuksAf::Luks1 {
+                    hash: af_hash,
+                    stripes,
+                },
             priority,
-        } = first_keyslot;
-        if area.encryption() != "aes-xts-plain64" {
-            bail!("Invalid LUKS keyslot encryption: {}", area.encryption());
+        } = keyslots.get(&0).context("no LUKS keyslot")?;
+        if encryption != "aes-xts-plain64" {
+            bail!("Invalid LUKS keyslot encryption: {encryption}");
         }
         // Pin where the encrypted key material is read from. The binary area
         // must sit between the two header copies and the encrypted payload;
         // otherwise a host with raw disk access could redirect it elsewhere.
-        let area_end = area.offset().checked_add(area.size());
-        if area.offset() < 2 * hdr_size || area_end.is_none_or(|end| end > PAYLOAD_OFFSET) {
-            bail!(
-                "Invalid LUKS keyslot area: offset={} size={}",
-                area.offset(),
-                area.size()
-            );
+        let area_end = offset.checked_add(*size);
+        if *offset < 2 * hdr_size || area_end.is_none_or(|end| end > PAYLOAD_OFFSET) {
+            bail!("Invalid LUKS keyslot area: offset={offset} size={size}");
         }
         if *key_size != 64 {
             bail!("Invalid LUKS keyslot key size: {key_size}");
         }
-        if area.key_size() != 64 {
-            bail!("Invalid LUKS keyslot key size: {}", area.key_size());
+        if *area_key_size != 64 {
+            bail!("Invalid LUKS keyslot key size: {area_key_size}");
         }
-        {
-            let LuksKdf::pbkdf2 {
-                hash,
-                iterations: _,
-                // Salts are left unchecked on purpose: the passphrase is
-                // high-entropy and KMS-derived, so an attacker-chosen salt
-                // buys nothing without it (see security report #552).
-                salt: _,
-            } = kdf
-            else {
-                bail!("Invalid LUKS keyslot KDF");
-            };
-            if hash != "sha256" {
-                bail!("Invalid LUKS keyslot hash: {hash}");
-            }
+        let LuksKdf::Pbkdf2 { hash: kdf_hash } = kdf else {
+            bail!("Invalid LUKS keyslot KDF");
+        };
+        if kdf_hash != "sha256" {
+            bail!("Invalid LUKS keyslot hash: {kdf_hash}");
         }
-        {
-            let LuksAf::luks1 { hash, stripes } = af;
-            if hash != "sha256" {
-                bail!("Invalid LUKS keyslot hash: {hash}");
-            }
-            if *stripes != 4000 {
-                bail!("Invalid LUKS keyslot stripes: {stripes}");
-            }
+        if af_hash != "sha256" {
+            bail!("Invalid LUKS keyslot hash: {af_hash}");
+        }
+        if *stripes != 4000 {
+            bail!("Invalid LUKS keyslot stripes: {stripes}");
         }
         if priority.is_some() {
             bail!("Invalid LUKS keyslot priority");
@@ -3509,8 +3496,7 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     }
 
     {
-        let first_segment = segments.get(&0).context("no LUKS segment")?;
-        let LuksSegment::crypt {
+        let LuksSegment::Crypt {
             offset,
             size,
             iv_tweak,
@@ -3518,11 +3504,11 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
             sector_size,
             integrity,
             flags,
-        } = first_segment;
+        } = segments.get(&0).context("no LUKS segment")?;
         if *offset != PAYLOAD_OFFSET {
             bail!("Invalid LUKS segment offset");
         }
-        if *size != LuksSegmentSize::dynamic {
+        if size != "dynamic" {
             bail!("Invalid LUKS segment size");
         }
         if *iv_tweak != 0 {
@@ -3542,15 +3528,11 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
         }
     }
     {
-        let first_digest = digests.get(&0).context("no LUKS digest")?;
-        let LuksDigest::pbkdf2 {
+        let LuksDigest::Pbkdf2 {
             keyslots,
             segments,
             hash,
-            digest: _,
-            iterations: _,
-            salt: _,
-        } = first_digest;
+        } = digests.get(&0).context("no LUKS digest")?;
         if hash != "sha256" {
             bail!("Invalid LUKS digest hash: {hash}");
         }
