@@ -1,0 +1,33 @@
+{
+  "id": "tc-vmm-compute-ne-009",
+  "title": "Macvtap simulator launch and external connectivity",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-compute-ne-009"
+  ],
+  "risks": [
+    "risk-vmm-compute-ne-009"
+  ],
+  "tags": [
+    "vmm",
+    "compute-network-image",
+    "macvtap",
+    "simulation"
+  ],
+  "fixture": {
+    "profile": "vmm-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Macvtap simulator launch and external connectivity"
+  ]
+}

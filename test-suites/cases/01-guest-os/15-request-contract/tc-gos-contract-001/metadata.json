@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-contract-001",
+  "title": "Tappd request-contract matrix",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-contract-001"
+  ],
+  "risks": [
+    "risk-gos-contract-001"
+  ],
+  "tags": [
+    "guest",
+    "request-contract"
+  ],
+  "fixture": {
+    "profile": "no-tee-dev",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Tappd.DeriveKey"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/api-contract-matrix-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

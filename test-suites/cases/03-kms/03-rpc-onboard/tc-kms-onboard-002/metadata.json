@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-onboard-002",
+  "title": "Onboard.Onboard",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-onboard-002"
+  ],
+  "risks": [
+    "risk-kms-onboard-002"
+  ],
+  "tags": [
+    "kms",
+    "onboard-rpc"
+  ],
+  "fixture": {
+    "profile": "kms-onboard",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Onboard.Onboard"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

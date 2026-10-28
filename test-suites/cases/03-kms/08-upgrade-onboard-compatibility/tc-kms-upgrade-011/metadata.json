@@ -1,0 +1,37 @@
+{
+  "id": "tc-kms-upgrade-011",
+  "title": "Measurement cache across KMS upgrade boundaries",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-upgrade-011"
+  ],
+  "risks": [
+    "risk-kms-upgrade-011"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Measurement cache across KMS upgrade boundaries"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 1200
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-007",
+  "title": "Data disk encryption filesystem repair and mount",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-007"
+  ],
+  "risks": [
+    "risk-gos-setup-007"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "profile": "guest-readonly",
+    "simulation_allowed": true,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Data disk encryption filesystem repair and mount"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

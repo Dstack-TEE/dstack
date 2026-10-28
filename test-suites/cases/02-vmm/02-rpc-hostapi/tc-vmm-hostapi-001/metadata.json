@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-hostapi-001",
+  "title": "HostApi.Info",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-hostapi-001"
+  ],
+  "risks": [
+    "risk-vmm-hostapi-001"
+  ],
+  "tags": [
+    "vmm",
+    "hostapi-rpc"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "HostApi.Info"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

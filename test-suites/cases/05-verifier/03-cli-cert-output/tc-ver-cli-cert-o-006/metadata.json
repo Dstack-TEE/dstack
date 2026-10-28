@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-cli-cert-o-006",
+  "title": "Offline fixtures regression suite",
+  "priority": "P1",
+  "requirements": [
+    "req-ver-cli-cert-o-006"
+  ],
+  "risks": [
+    "risk-ver-cli-cert-o-006"
+  ],
+  "tags": [
+    "verifier",
+    "cli-cert-output"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Offline fixtures regression suite"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-verifier-case.py",
+    "args": [],
+    "timeout_seconds": 420
+  }
+}

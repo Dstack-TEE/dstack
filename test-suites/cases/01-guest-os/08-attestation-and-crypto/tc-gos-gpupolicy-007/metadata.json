@@ -1,0 +1,35 @@
+{
+  "id": "tc-gos-gpupolicy-007",
+  "title": "GPU attestation proxy nonce claim and Rego policy enforcement",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-gpupolicy-007"
+  ],
+  "risks": [
+    "risk-gos-gpupolicy-007"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "gpu-policy",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "GPU attestation proxy nonce claim and Rego policy enforcement"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/capability-probe-case.py",
+    "args": [],
+    "timeout_seconds": 60
+  }
+}

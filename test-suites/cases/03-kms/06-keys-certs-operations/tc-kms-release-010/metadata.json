@@ -1,0 +1,35 @@
+{
+  "id": "tc-kms-release-010",
+  "title": "Platform-specific key-release feature gates",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-release-010"
+  ],
+  "risks": [
+    "risk-kms-release-010"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Platform-specific key-release feature gates"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-platform-release-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

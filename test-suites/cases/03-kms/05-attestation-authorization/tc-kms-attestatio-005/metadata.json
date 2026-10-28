@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-attestatio-005",
+  "title": "Authorization backend matrix",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-attestatio-005"
+  ],
+  "risks": [
+    "risk-kms-attestatio-005"
+  ],
+  "tags": [
+    "kms",
+    "attestation-authorization"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Authorization backend matrix"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-auth-backend-matrix-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

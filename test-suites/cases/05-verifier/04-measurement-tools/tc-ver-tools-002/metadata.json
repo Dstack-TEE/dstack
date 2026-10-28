@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-tools-002",
+  "title": "dstack-mr boot artifact and cmdline boundaries",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-tools-002"
+  ],
+  "risks": [
+    "risk-ver-tools-002"
+  ],
+  "tags": [
+    "ver",
+    "measurement-tools-and-library-apis"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "dstack-mr boot artifact and cmdline boundaries"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/dstack-mr-shared-matrix-case.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

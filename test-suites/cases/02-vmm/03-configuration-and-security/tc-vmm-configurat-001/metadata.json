@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-configurat-001",
+  "title": "Configuration defaults and validation",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-configurat-001"
+  ],
+  "risks": [
+    "risk-vmm-configurat-001"
+  ],
+  "tags": [
+    "vmm",
+    "configuration-and-security"
+  ],
+  "fixture": {
+    "profile": "vmm-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Configuration defaults and validation"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 60
+  }
+}

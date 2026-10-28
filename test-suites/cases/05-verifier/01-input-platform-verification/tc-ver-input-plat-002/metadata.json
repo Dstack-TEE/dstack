@@ -1,0 +1,23 @@
+{
+  "id": "tc-ver-input-plat-002",
+  "title": "TDX quote signature collateral and TCB",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-input-plat-002"
+  ],
+  "risks": [
+    "risk-ver-input-plat-002"
+  ],
+  "tags": [
+    "verifier",
+    "input-platform-verification"
+  ],
+  "actions_under_test": [
+    "TDX quote signature collateral and TCB"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

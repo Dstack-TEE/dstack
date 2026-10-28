@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-configurat-004",
+  "title": "TPM attachment decision materialization",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-configurat-004"
+  ],
+  "risks": [
+    "risk-vmm-configurat-004"
+  ],
+  "tags": [
+    "vmm",
+    "configuration-and-security"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "TPM attachment decision materialization"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-vmm-swtpm-decision-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

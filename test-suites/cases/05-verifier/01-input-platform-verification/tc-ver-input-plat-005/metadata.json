@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-input-plat-005",
+  "title": "SEV-SNP certificate and report verification",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-input-plat-005"
+  ],
+  "risks": [
+    "risk-ver-input-plat-005"
+  ],
+  "tags": [
+    "verifier",
+    "input-platform-verification"
+  ],
+  "fixture": {
+    "profile": "cross-platform-attestation",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "SEV-SNP certificate and report verification"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 2700
+  }
+}

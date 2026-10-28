@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-compute-ne-004",
+  "title": "GPU discovery attach modes and ownership",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-compute-ne-004"
+  ],
+  "risks": [
+    "risk-vmm-compute-ne-004"
+  ],
+  "tags": [
+    "vmm",
+    "compute-network-image"
+  ],
+  "fixture": {
+    "profile": "gpu-policy",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "GPU discovery attach modes and ownership"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/capability-probe-case.py",
+    "args": [],
+    "timeout_seconds": 60
+  }
+}

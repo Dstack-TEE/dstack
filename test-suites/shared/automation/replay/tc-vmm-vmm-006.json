@@ -1,0 +1,96 @@
+{
+  "case_id": "tc-vmm-vmm-006",
+  "remarks": "Initial exploratory positive rows used malformed repeated-field/GpuConfig shapes and are preserved as probe-correction evidence; final grading is based on corrected inventory-shaped requests.",
+  "schema_version": "1.0",
+  "source_run": "central-fixtures-20260724T032131Z",
+  "steps": [
+    {
+      "evidence": "Replays the operations that produced: Declared VMM endpoint responded to public list commands, candidate image listing was available, and the baseline VM list did not contain the run-scoped object.",
+      "id": "tc-vmm-vmm-006-step-01",
+      "observed": "Declared VMM endpoint responded to public list commands, candidate image listing was available, and the baseline VM list did not contain the run-scoped object.",
+      "ops": [
+        {
+          "argv": [
+            "${python}",
+            "${repository}/dstack/vmm/src/vmm-cli.py",
+            "--url",
+            "http://127.0.0.1:${ports.rpc}",
+            "info",
+            "--json"
+          ],
+          "expect": {
+            "returncode": 2
+          },
+          "kind": "argv",
+          "label": "argv"
+        },
+        {
+          "argv": [
+            "${python}",
+            "${repository}/dstack/vmm/src/vmm-cli.py",
+            "--url",
+            "http://127.0.0.1:${ports.rpc}",
+            "lsimage",
+            "--json"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "argv"
+        },
+        {
+          "argv": [
+            "${python}",
+            "${repository}/dstack/vmm/src/vmm-cli.py",
+            "--url",
+            "http://127.0.0.1:${ports.rpc}",
+            "lsvm",
+            "--json"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "argv"
+        },
+        {
+          "argv": [
+            "${python}",
+            "${repository}/dstack/vmm/src/vmm-cli.py",
+            "--url",
+            "http://127.0.0.1:${ports.rpc}",
+            "status",
+            "--json"
+          ],
+          "expect": {
+            "returncode": 2
+          },
+          "kind": "argv",
+          "label": "argv"
+        }
+      ]
+    },
+    {
+      "evidence": "Replays the operations that produced: Exact helper created a stopped lease-owned VM; corrected UpdateVm JSON pRPC valid and unknown-field rows returned HTTP 200 with Id, while wrong-type, truncated JSON, and unknown-object rows returned HTTP 400 structured errors.",
+      "id": "tc-vmm-vmm-006-step-02",
+      "observed": "Exact helper created a stopped lease-owned VM; corrected UpdateVm JSON pRPC valid and unknown-field rows returned HTTP 200 with Id, while wrong-type, truncated JSON, and unknown-object rows returned HTTP 400 structured errors.",
+      "ops": [
+        {
+          "argv": [
+            "${python}",
+            "${plan_root}/shared/automation/vmm-create-stopped.py",
+            "--stopped",
+            "--no-tee"
+          ],
+          "expect": {
+            "returncode": 0
+          },
+          "kind": "argv",
+          "label": "argv"
+        }
+      ]
+    }
+  ],
+  "summary": "Vmm.UpdateVm accepted a valid stopped-VM update and unknown-field-compatible JSON pRPC request, returned the documented Id response, rejected malformed and invalid requests with structured errors, preserved scoped state, and cleanup removed the lease-owned VM."
+}

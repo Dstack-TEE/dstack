@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-admin-012",
+  "title": "Admin.GetGlobalConnections",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-admin-012"
+  ],
+  "risks": [
+    "risk-gw-admin-012"
+  ],
+  "tags": [
+    "gateway",
+    "admin-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Admin.GetGlobalConnections"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

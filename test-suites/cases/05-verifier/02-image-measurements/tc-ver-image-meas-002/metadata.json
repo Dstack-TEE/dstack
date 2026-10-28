@@ -1,0 +1,36 @@
+{
+  "id": "tc-ver-image-meas-002",
+  "title": "Measurement computation determinism",
+  "priority": "P1",
+  "requirements": [
+    "req-ver-image-meas-002"
+  ],
+  "risks": [
+    "risk-ver-image-meas-002"
+  ],
+  "tags": [
+    "verifier",
+    "image-measurements"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Measurement computation determinism"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-verifier-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}
