@@ -89,7 +89,7 @@
     "@types/node": "latest",
     "tsup": "^8.5.1",
     "typescript": "^5.7.0",
-    "viem": "^2.43.3",
+    "viem": "^2.57.12",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"
   },
@@ -104,5 +104,9 @@
     "viem": {
       "optional": true
     }
+  },
+  "overrides": {
+    "jayson": "^5.0.0",
+    "postcss": "^8.5.32"
   }
 }
