@@ -42,6 +42,12 @@ fn default_api_url() -> String {
     DEFAULT_CLOUDFLARE_API_URL.to_string()
 }
 
+fn resolve_api_url(api_url: Option<String>) -> String {
+    api_url
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(default_api_url)
+}
+
 #[derive(Deserialize)]
 struct Response {
     result: ApiResult,
@@ -84,7 +90,7 @@ impl CloudflareClient {
         api_token: String,
         api_url: Option<String>,
     ) -> Result<Self> {
-        let api_url = api_url.unwrap_or_else(|| DEFAULT_CLOUDFLARE_API_URL.to_string());
+        let api_url = resolve_api_url(api_url);
         let zone_id = Self::resolve_zone_id(&api_token, &base_domain, &api_url).await?;
         Ok(Self {
             zone_id,
@@ -442,10 +448,27 @@ mod tests {
 #[cfg(test)]
 mod zone_discovery_tests {
     use super::*;
+
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[test]
+    fn blank_cloudflare_url_uses_the_default_endpoint() {
+        for url in ["", " \t\n"] {
+            let resolved = resolve_api_url(Some(url.into()));
+            assert_eq!(resolved, DEFAULT_CLOUDFLARE_API_URL, "URL: {url:?}");
+            assert!(reqwest::Url::parse(&format!("{resolved}/zones")).is_ok());
+        }
+    }
+
+    #[test]
+    fn cloudflare_url_resolution_preserves_nonblank_overrides() {
+        assert_eq!(resolve_api_url(None), DEFAULT_CLOUDFLARE_API_URL);
+        let custom = "http://localhost:8080/client/v4";
+        assert_eq!(resolve_api_url(Some(custom.into())), custom);
+    }
 
     /// A page of zones that says there are a million more of them.
     const A_MILLION_PAGES: &str = r#"{"result":[],"result_info":{"page":1,"per_page":50,"total_pages":1000000,"count":0,"total_count":0}}"#;

@@ -701,7 +701,8 @@ message CreateDnsCredentialRequest {
   string cf_zone_id = 4;
   // If true, set this as the default credential
   bool set_as_default = 5;
-  // Optional Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4)
+  // Optional Cloudflare API URL (defaults to https://api.cloudflare.com/client/v4).
+  // Empty or whitespace-only values also select the default.
   optional string cf_api_url = 6;
   // Optional Cloudflare DNS TXT record TTL (defaults to 60)
   optional uint32 dns_txt_ttl = 7;
@@ -718,7 +719,8 @@ message UpdateDnsCredentialRequest {
   optional string cf_api_token = 3;
   // Optional new Cloudflare zone id
   optional string cf_zone_id = 4;
-  // Optional new Cloudflare API URL
+  // Optional new Cloudflare API URL. Omitted keeps the stored override;
+  // empty or whitespace-only clears it to use the default endpoint.
   optional string cf_api_url = 5;
 }
 
