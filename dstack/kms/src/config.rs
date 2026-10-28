@@ -25,7 +25,6 @@ const BOOTSTRAP_INFO: &str = "bootstrap-info.json";
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ImageConfig {
-    pub verify: bool,
     pub cache_dir: PathBuf,
     pub download_url: String,
     #[serde(with = "serde_duration")]

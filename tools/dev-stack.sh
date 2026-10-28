@@ -185,9 +185,6 @@ type = "dev"
 address = "127.0.0.1"
 port = $KMS_RPC_LISTEN_PORT
 auto_bootstrap_domain = "$KMS_DOMAIN"
-
-[core.image]
-verify = false
 EOF
 
     # dstack-gateway

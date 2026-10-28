@@ -173,18 +173,15 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
         ..Default::default()
     });
     // the KMS-in-CVM reaches the host auth webhook at 10.0.2.2:<auth_port>.
-    // The KMS's own image download-verify stays off for the single-node flow
-    // (it would need a published image source), but we PIN the app OS image in
-    // the webhook allowlist (resolved in preflight, fail-closed): digest.txt
-    // holds the measured image hash the KMS reports for an app (with
-    // platform measurement material such as measurement.snp.cbor committed by
-    // sha256sum.txt), so an app cannot boot under a different, unmeasured image
-    // and still receive keys.
+    // We also PIN the app OS image in the webhook allowlist (resolved in
+    // preflight, fail-closed): digest.txt holds the measured image hash the
+    // KMS reports for an app (with platform measurement material such as
+    // measurement.snp.cbor committed by sha256sum.txt), so an app cannot boot
+    // under a different, unmeasured image and still receive keys.
     // bootAuth/kms ignores osImages, so the KMS bootstrap itself is unaffected.
     let host_cfg = HostConfig {
         auth_webhook_url: format!("http://10.0.2.2:{}", o.auth_port),
         os_image_hash: os_image_hash.unwrap_or_default(),
-        verify_os_image: false,
         platform,
         ..Default::default()
     };

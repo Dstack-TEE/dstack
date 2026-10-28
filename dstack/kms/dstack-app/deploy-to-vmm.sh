@@ -38,9 +38,6 @@ else
 # The URL of the dstack app image download URL
 # IMAGE_DOWNLOAD_URL=https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz
 
-# Image hash verification feature flag
-VERIFY_IMAGE=true
-
 # The URL of the Ethereum RPC service
 ETH_RPC_URL=https://rpc.phala.network
 
@@ -71,7 +68,6 @@ required_env_vars=(
   "KMS_CONTRACT_ADDR"
   "ETH_RPC_URL"
   "IMAGE_DOWNLOAD_URL"
-  "VERIFY_IMAGE"
   "GIT_REPOSITORY"
 )
 
@@ -103,7 +99,6 @@ subvar KMS_CONTRACT_ADDR
 subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL
 subvar ADMIN_TOKEN_HASH
-subvar VERIFY_IMAGE
 subvar GIT_REPOSITORY
 subvar KMS_IMAGE
 
