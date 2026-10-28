@@ -18,7 +18,7 @@
     "@hono/zod-validator": "0.9.1",
     "hono": "4.13.13",
     "viem": "2.57.5",
-    "zod": "3.25.76"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/bun": "1.4.2",

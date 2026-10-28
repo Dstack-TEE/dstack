@@ -1,0 +1,44 @@
+From 21b9aa3b8025445a71d5715458ea88457ca9e43f Mon Sep 17 00:00:00 2001
+From: Christian Brauner <brauner@kernel.org>
+Date: Mon, 15 Jun 2026 15:19:51 +0200
+Subject: [PATCH] ovl: handle idmapped mounts in ovl_permission()
+
+When the overlay mount is idmapped, the permission check on the overlay
+inode must account for the mount's idmapping.  Use the struct mnt_idmap
+passed in by the VFS instead of the hardcoded &nop_mnt_idmap when
+checking the overlay inode against the caller's credentials.
+
+The second check, which verifies that the mounter may access the
+underlying real inode, continues to use the real layer's idmap
+mnt_idmap(realpath.mnt) under the mounter's credentials and is
+deliberately left unchanged.  The overlay mount idmap only affects how
+the caller views the overlay inode, not the mounter's access to the
+layers, so it cannot widen access to the real files.
+
+No functional change until FS_ALLOW_IDMAP is set on ovl_fs_type; until
+then the overlay mount idmap is always &nop_mnt_idmap.
+
+Upstream-Status: Backport [https://git.kernel.org/linus/21b9aa3b8025]
+Link: https://patch.msgid.link/20260615-work-idmapped-overlayfs-v1-2-7381632aa402@kernel.org
+Reviewed-by: Amir Goldstein <amir73il@gmail.com>
+Signed-off-by: Christian Brauner (Amutable) <brauner@kernel.org>
+---
+ fs/overlayfs/inode.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/overlayfs/inode.c b/fs/overlayfs/inode.c
+index 1cc1b60fc..5a756203c 100644
+--- a/fs/overlayfs/inode.c
++++ b/fs/overlayfs/inode.c
+@@ -305,7 +305,7 @@ int ovl_permission(struct mnt_idmap *idmap,
+ 	 * Check overlay inode with the creds of task and underlying inode
+ 	 * with creds of mounter
+ 	 */
+-	err = generic_permission(&nop_mnt_idmap, inode, mask);
++	err = generic_permission(idmap, inode, mask);
+ 	if (err)
+ 		return err;
+ 
+-- 
+2.43.0
+

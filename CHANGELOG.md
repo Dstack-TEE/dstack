@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- SEV-SNP: coalesce concurrent endorsement-certificate fetches and preserve typed collateral errors. The verifier returns HTTP 503 for unavailable AMD endorsements instead of declaring a quote invalid; cryptographic failures still fail verification.
+
 ### Added
 - guest: `requirements.ephemeral_data_disk` in `app-compose.json` starts every boot with an empty data disk. The guest formats the data disk before any app code runs (#1461)
 

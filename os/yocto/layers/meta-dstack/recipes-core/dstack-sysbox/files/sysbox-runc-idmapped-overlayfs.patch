@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 26 Oct 2026 19:54:55 -0700
+Subject: [PATCH] rootfs: ID-map the merged overlayfs mount when supported
+
+When the kernel can ID-map an overlayfs mount, ID-map the container's
+existing rootfs overlay mount as a whole instead of ID-mapping its lower
+layers and chowning the upper layer. Nothing on disk is chowned, so
+there is no ownership state to revert when the container stops, pauses
+or fails to start.
+
+This fixes retries after a failed start: the upper layer used to stay
+chowned to the container's host UID, the retry then concluded that no
+shifting was needed, and image files showed up as nobody:nogroup.
+
+Kernels without the feature keep using the lower-layer mode.
+
+Signed-off-by: Kevin Wang <wy721@qq.com>
+---
+ libcontainer/rootfs_init_linux.go   | 11 +++++++----
+ libcontainer/rootfs_linux.go        | 12 +++++++-----
+ libcontainer/standard_init_linux.go |  3 +++
+ libsysbox/sysbox/sysbox.go          | 14 +++++++++++---
+ 4 files changed, 28 insertions(+), 12 deletions(-)
+
+diff --git a/libcontainer/rootfs_init_linux.go b/libcontainer/rootfs_init_linux.go
+index 88fe7b9..80696bd 100644
+--- a/libcontainer/rootfs_init_linux.go
++++ b/libcontainer/rootfs_init_linux.go
+@@ -328,7 +328,7 @@ func (l *linuxRootfsInit) Init() error {
+ 			return err
+ 		}
+ 
+-		if fsName == "overlayfs" {
++		if fsName == "overlayfs" && !l.reqs[0].IDMapOverlayfs {
+ 
+ 			// Get info about the ovfs mount (layers, mount opts, propagation, etc.)
+ 			mounts, err := sysboxmount.GetMountsPid(uint32(os.Getpid()))
+@@ -468,9 +468,12 @@ func (l *linuxRootfsInit) Init() error {
+ 		}
+ 
+ 		// ID-mapping by itself won't allow the container to write to "/"; must
+-		// chown the rootfs dir so that it can write there.
+-		if err := unix.Chown(rootfs, uid, gid); err != nil {
+-			return newSystemErrorWithCausef(err, "failed to chown %s to %v:%v", rootfs, uid, gid)
++		// chown the rootfs dir so that it can write there. Not needed for an
++		// ID-mapped overlayfs mount, which must leave on-disk ownership intact.
++		if !l.reqs[0].IDMapOverlayfs {
++			if err := unix.Chown(rootfs, uid, gid); err != nil {
++				return newSystemErrorWithCausef(err, "failed to chown %s to %v:%v", rootfs, uid, gid)
++			}
+ 		}
+ 
+ 	case bind:
+diff --git a/libcontainer/rootfs_linux.go b/libcontainer/rootfs_linux.go
+index 314d27b..feb6243 100644
+--- a/libcontainer/rootfs_linux.go
++++ b/libcontainer/rootfs_linux.go
+@@ -62,7 +62,8 @@ func needsSetupDev(config *configs.Config) bool {
+ func prepareRootfs(pipe io.ReadWriter, iConfig *initConfig) (err error) {
+ 	config := iConfig.Config
+ 
+-	if config.RootfsUidShiftType == sh.IDMappedMount {
++	if config.RootfsUidShiftType == sh.IDMappedMount ||
++		config.RootfsUidShiftType == sh.IDMappedOverlayfs {
+ 		if err := doRootfsIDMapping(config, pipe); err != nil {
+ 			return newSystemErrorWithCause(err, "ID-mapping rootfs")
+ 		}
+@@ -1308,10 +1309,11 @@ func mountPropagate(m *configs.Mount, rootfs string, mountLabel string) error {
+ func doRootfsIDMapping(config *configs.Config, pipe io.ReadWriter) error {
+ 	reqs := []opReq{
+ 		{
+-			Op:     rootfsIDMap,
+-			Rootfs: config.Rootfs,
+-			Uid:    config.UidMappings[0].HostID,
+-			Gid:    config.GidMappings[0].HostID,
++			Op:             rootfsIDMap,
++			Rootfs:         config.Rootfs,
++			Uid:            config.UidMappings[0].HostID,
++			Gid:            config.GidMappings[0].HostID,
++			IDMapOverlayfs: config.RootfsUidShiftType == sh.IDMappedOverlayfs,
+ 		},
+ 	}
+ 
+diff --git a/libcontainer/standard_init_linux.go b/libcontainer/standard_init_linux.go
+index 6c0ecb1..ab1f9c1 100644
+--- a/libcontainer/standard_init_linux.go
++++ b/libcontainer/standard_init_linux.go
+@@ -63,6 +63,9 @@ type opReq struct {
+ 	Uid  int         `json:"uid"`
+ 	Gid  int         `json:"gid"`
+ 	Mode os.FileMode `json:"mode"`
++
++	// rootfsIDMap
++	IDMapOverlayfs bool `json:"idmap_overlayfs"`
+ }
+ 
+ func (l *linuxStandardInit) getSessionRingParams() (string, uint32, uint32) {
+diff --git a/libsysbox/sysbox/sysbox.go b/libsysbox/sysbox/sysbox.go
+index a287366..d100f80 100644
+--- a/libsysbox/sysbox/sysbox.go
++++ b/libsysbox/sysbox/sysbox.go
+@@ -155,6 +155,7 @@ func CheckUidShifting(sysMgr *Mgr, spec *specs.Spec) (sh.IDShiftType, sh.IDShift
+ 
+ 	idMapMountOk := sysMgr.Config.IDMapMountOk
+ 	ovfsOnIDMapMountOk := sysMgr.Config.OverlayfsOnIDMapMountOk
++	idMapMountOnOvfsOk := sysMgr.Config.IDMapMountOnOverlayfsOk
+ 
+ 	rootfsShiftType := sysMgr.Config.RootfsUidShiftType
+ 
+@@ -162,6 +163,7 @@ func CheckUidShifting(sysMgr *Mgr, spec *specs.Spec) (sh.IDShiftType, sh.IDShift
+ 
+ 		useShiftfsOnRootfs := false
+ 		useIDMapMountOnRootfs := false
++		useIDMappedOvfsOnRootfs := false
+ 
+ 		rootPathFs, err := libutils.GetFsName(spec.Root.Path)
+ 		if err != nil {
+@@ -169,7 +171,9 @@ func CheckUidShifting(sysMgr *Mgr, spec *specs.Spec) (sh.IDShiftType, sh.IDShift
+ 		}
+ 
+ 		if idMapMountOk {
+-			if rootPathFs == "overlayfs" && ovfsOnIDMapMountOk {
++			if rootPathFs == "overlayfs" && idMapMountOnOvfsOk {
++				useIDMappedOvfsOnRootfs = true
++			} else if rootPathFs == "overlayfs" && ovfsOnIDMapMountOk {
+ 				useIDMapMountOnRootfs = true
+ 			}
+ 		}
+@@ -188,12 +192,16 @@ func CheckUidShifting(sysMgr *Mgr, spec *specs.Spec) (sh.IDShiftType, sh.IDShift
+ 		// Check uid shifting type to be used for the container's rootfs.
+ 		//
+ 		// We do it via ID-mapping (preferably) or via shiftfs (if available on
+-		// the host) or by chown'ing the rootfs hierarchy. Chowning is the least
++		// the host) or by chown'ing the rootfs hierarchy. ID-mapping the merged
++		// overlayfs mount is preferred over ID-mapping its lower layers, since
++		// the latter requires chown'ing the upper layer. Chowning is the least
+ 		// preferred and slowest approach, but won't disrupt anything on the host
+ 		// since the container's rootfs is dedicated to the container (no other
+ 		// entity in the system will use it while the container is running).
+ 		if needShiftOnRootfs {
+-			if useIDMapMountOnRootfs {
++			if useIDMappedOvfsOnRootfs {
++				rootfsShiftType = sh.IDMappedOverlayfs
++			} else if useIDMapMountOnRootfs {
+ 				rootfsShiftType = sh.IDMappedMount
+ 			} else if useShiftfsOnRootfs {
+ 				rootfsShiftType = sh.Shiftfs

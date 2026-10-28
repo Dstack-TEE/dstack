@@ -18,7 +18,7 @@
       "usr/lib/systemd/system/containerd-stargz-grpc.service",
       "etc/docker/daemon.json"
     ],
-    "sysbox-0.6.7": [
+    "sysbox-0.7.1": [
       "usr/bin/sysbox-runc",
       "usr/bin/sysbox-fs",
       "usr/bin/sysbox-mgr",

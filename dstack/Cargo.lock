@@ -2388,6 +2388,7 @@ dependencies = [
  "serde",
  "serde-human-bytes",
  "serde_json",
+ "sev-snp-qvl",
  "sha2 0.10.9",
  "tar",
  "tempfile",

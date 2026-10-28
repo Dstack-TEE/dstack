@@ -707,6 +707,7 @@ impl CvmVerifier {
                 details.report_data = Some(hex::encode(att.report_data));
                 att
             }
+            Err(e) if sev_snp_qvl::collateral_unavailable(&e) => return Err(e),
             Err(e) => {
                 return Ok(VerificationResponse {
                     is_valid: false,

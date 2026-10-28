@@ -61,7 +61,6 @@ configs:
       cert_dir = "/kms/certs"
 
       [core.image]
-      verify = true
       cache_dir = "/kms/images"
       download_url = "${IMAGE_DOWNLOAD_URL}"
       download_timeout = "2m"
