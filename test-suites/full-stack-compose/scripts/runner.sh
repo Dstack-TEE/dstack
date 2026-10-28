@@ -1009,7 +1009,7 @@ phase_upgrade() {
     "$WORK_DIR/artifacts-access.log" || true)
   (( os_archive_gets >= 1 )) \
     || die "expected a verified v0.5.11 OS image archive download, saw ${os_archive_gets}"
-  if grep -E 'Image verification is disabled|self-authorization is disabled' \
+  if grep -F 'self-authorization is disabled' \
     "$WORK_DIR/kms-"*.vm.log; then
     die "KMS logs contain a forbidden disabled verification path"
   fi

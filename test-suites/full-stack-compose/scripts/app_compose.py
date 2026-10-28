@@ -67,7 +67,6 @@ pccs_url = ""
 enforce_self_authorization = true
 
 [core.image]
-verify = true
 cache_dir = "/kms/images"
 download_url = "http://10.0.2.2:{args.artifact_port}/os/mr_{{OS_IMAGE_HASH}}.tar.gz"
 download_timeout = "2m"

@@ -29,7 +29,7 @@ use ra_tls::{
     kdf,
 };
 use scale::Decode;
-use tracing::{debug, warn};
+use tracing::warn;
 use upgrade_authority::{
     build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
 };
@@ -181,11 +181,6 @@ impl KmsState {
         if !config.enforce_self_authorization {
             warn!(
                 "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
-            );
-        }
-        if !config.image.verify {
-            warn!(
-                "os image verification is disabled; os_image_hash is caller-supplied and unverified - do not use in production TEE deployments"
             );
         }
         Ok(Self {
@@ -366,24 +361,6 @@ impl RpcHandler {
             .await
     }
 
-    async fn verify_os_image_hash(
-        &self,
-        vm_config: String,
-        report: &VerifiedAttestation,
-    ) -> Result<()> {
-        if !self.state.config.image.verify {
-            debug!("os image verification is disabled");
-            return Ok(());
-        }
-        let mut detail = VerificationDetails::default();
-        self.state
-            .verifier
-            .verify_os_image_hash(vm_config, report, &mut detail)
-            .await
-            .context("Failed to verify os image hash")?;
-        Ok(())
-    }
-
     async fn ensure_app_attestation_allowed(
         &self,
         att: &VerifiedAttestation,
@@ -405,7 +382,13 @@ impl RpcHandler {
         // helper above. The legacy OS-image verifier is TDX-oriented and still
         // rejects SNP quotes; keep SNP on the explicit fail-closed helper path.
         if boot_info.tee_variant != TeeVariant::DstackAmdSevSnp {
-            self.verify_os_image_hash(vm_config_str.into(), att)
+            self.state
+                .verifier
+                .verify_os_image_hash(
+                    vm_config_str.into(),
+                    att,
+                    &mut VerificationDetails::default(),
+                )
                 .await
                 .context("Failed to verify os image hash")?;
         }
@@ -557,7 +540,7 @@ impl KmsRpc for RpcHandler {
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
-            os_image_verification: Some(self.state.config.image.verify),
+            os_image_verification: Some(true),
         })
     }
 
