@@ -2582,6 +2582,7 @@ pub fn validate_tcb(report: &TdxVerifiedReport) -> Result<()> {
     }
     match &report.report {
         Report::TD15(report) => validate_td15(report),
+        Report::TD15Ex(report) => validate_td15(&report.base),
         Report::TD10(report) => validate_td10(report),
         Report::SgxEnclave(report) => validate_sgx(report),
     }
