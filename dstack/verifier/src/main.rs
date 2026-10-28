@@ -15,7 +15,7 @@ use figment::{
     Figment,
 };
 use ra_tls::attestation::AttestationVerifier;
-use rocket::{fairing::AdHoc, get, post, serde::json::Json, State};
+use rocket::{fairing::AdHoc, get, http::Status, post, response::status, serde::json::Json, State};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
@@ -96,16 +96,24 @@ fn load_config(figment: &Figment) -> Result<Config> {
 async fn verify_cvm(
     verifier: &State<Arc<CvmVerifier>>,
     request: Json<VerificationRequest>,
-) -> Json<VerificationResponse> {
+) -> status::Custom<Json<VerificationResponse>> {
     match verifier.verify(request.into_inner()).await {
-        Ok(response) => Json(response),
+        Ok(response) => status::Custom(Status::Ok, Json(response)),
         Err(e) => {
             error!("Verification failed: {:?}", e);
-            Json(VerificationResponse {
-                is_valid: false,
-                details: VerificationDetails::default(),
-                reason: Some(format!("Internal error: {}", e)),
-            })
+            let status = if sev_snp_qvl::collateral_unavailable(&e) {
+                Status::ServiceUnavailable
+            } else {
+                Status::InternalServerError
+            };
+            status::Custom(
+                status,
+                Json(VerificationResponse {
+                    is_valid: false,
+                    details: VerificationDetails::default(),
+                    reason: Some(format!("Internal error: {}", e)),
+                }),
+            )
         }
     }
 }
@@ -401,6 +409,68 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod config_tests {
     use super::*;
+
+    #[rocket::async_test]
+    async fn unavailable_collateral_is_503_but_invalid_quote_stays_invalid() {
+        use ra_tls::attestation::{AttestationQuote, VersionedAttestation};
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut config = AttestationVerifierConfig::default();
+        config.urls.amd_kds = Some(format!("http://{}", listener.local_addr().unwrap()));
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            stream.read(&mut buffer).await.unwrap();
+            stream.write_all(b"HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        let verifier = Arc::new(CvmVerifier::new(
+            String::new(),
+            String::new(),
+            std::time::Duration::from_secs(1),
+            Arc::new(AttestationVerifier::load(&config).unwrap()),
+        ));
+        let client = rocket::local::asynchronous::Client::tracked(
+            rocket::build()
+                .manage(verifier)
+                .mount("/", rocket::routes![verify_cvm]),
+        )
+        .await
+        .unwrap();
+        let mut request: VerificationRequest =
+            serde_json::from_str(include_str!("../fixtures/sev-snp-attestation.json")).unwrap();
+        let mut attestation =
+            VersionedAttestation::from_bytes(request.attestation.as_ref().unwrap())
+                .unwrap()
+                .into_v1()
+                .try_into_legacy()
+                .unwrap();
+        let AttestationQuote::DstackAmdSevSnp(quote) = &mut attestation.quote else {
+            panic!("SNP fixture")
+        };
+        let original_chain = std::mem::take(&mut quote.cert_chain);
+        request.attestation = Some(attestation.clone().into_versioned().to_bytes().unwrap());
+        let response = client.post("/verify").json(&request).dispatch().await;
+        assert_eq!(response.status(), Status::ServiceUnavailable);
+        server.await.unwrap();
+
+        // A real signature failure with supplied collateral must not become
+        // retryable or contact the (now closed) certificate server.
+        let AttestationQuote::DstackAmdSevSnp(quote) = &mut attestation.quote else {
+            unreachable!()
+        };
+        quote.cert_chain = original_chain;
+        quote.report[672] ^= 1; // SNP report signature r component
+        request.attestation = Some(attestation.into_versioned().to_bytes().unwrap());
+        let response = client.post("/verify").json(&request).dispatch().await;
+        assert_eq!(response.status(), Status::Ok);
+        let body: serde_json::Value = response.into_json().await.unwrap();
+        assert_eq!(body["is_valid"], false);
+        assert_eq!(body["details"]["quote_verified"], false);
+    }
 
     fn valid_config(extra: &str) -> String {
         format!(

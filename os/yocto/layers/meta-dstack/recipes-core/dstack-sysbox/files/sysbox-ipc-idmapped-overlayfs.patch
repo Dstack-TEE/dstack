@@ -1,0 +1,64 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 26 Oct 2026 19:54:55 -0700
+Subject: [PATCH] sysbox-mgr: report ID-mapped overlayfs support to sysbox-runc
+
+Add ContainerConfig.IDMapMountOnOverlayfsOk so sysbox-runc can choose
+the ID-mapped overlayfs rootfs mode.
+
+Signed-off-by: Kevin Wang <wy721@qq.com>
+---
+ sysboxMgrGrpc/grpcClient.go                             | 1 +
+ sysboxMgrGrpc/grpcServer.go                             | 1 +
+ sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto | 1 +
+ sysboxMgrLib/sysboxMgrLib.go                            | 1 +
+ 4 files changed, 4 insertions(+)
+
+diff --git a/sysboxMgrGrpc/grpcClient.go b/sysboxMgrGrpc/grpcClient.go
+index ec38e82..e860d3c 100644
+--- a/sysboxMgrGrpc/grpcClient.go
++++ b/sysboxMgrGrpc/grpcClient.go
+@@ -84,6 +84,7 @@ func Register(regInfo *ipcLib.RegistrationInfo) (*ipcLib.ContainerConfig, error)
+ 		ShiftfsOnOverlayfsOk:    resp.ContainerConfig.GetShiftfsOnOverlayfsOk(),
+ 		IDMapMountOk:            resp.ContainerConfig.GetIDMapMountOk(),
+ 		OverlayfsOnIDMapMountOk: resp.ContainerConfig.GetOverlayfsOnIDMapMountOk(),
++		IDMapMountOnOverlayfsOk: resp.ContainerConfig.GetIDMapMountOnOverlayfsOk(),
+ 		NoRootfsCloning:         resp.ContainerConfig.GetNoRootfsCloning(),
+ 		IgnoreSysfsChown:        resp.ContainerConfig.GetIgnoreSysfsChown(),
+ 		AllowTrustedXattr:       resp.ContainerConfig.GetAllowTrustedXattr(),
+diff --git a/sysboxMgrGrpc/grpcServer.go b/sysboxMgrGrpc/grpcServer.go
+index 009fb6b..177db64 100644
+--- a/sysboxMgrGrpc/grpcServer.go
++++ b/sysboxMgrGrpc/grpcServer.go
+@@ -128,6 +128,7 @@ func (s *ServerStub) Register(ctx context.Context, req *pb.RegisterReq) (*pb.Reg
+ 		ShiftfsOnOverlayfsOk:    config.ShiftfsOnOverlayfsOk,
+ 		IDMapMountOk:            config.IDMapMountOk,
+ 		OverlayfsOnIDMapMountOk: config.OverlayfsOnIDMapMountOk,
++		IDMapMountOnOverlayfsOk: config.IDMapMountOnOverlayfsOk,
+ 		NoRootfsCloning:         config.NoRootfsCloning,
+ 		IgnoreSysfsChown:        config.IgnoreSysfsChown,
+ 		AllowTrustedXattr:       config.AllowTrustedXattr,
+diff --git a/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto b/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto
+index 392e4fe..7960641 100644
+--- a/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto
++++ b/sysboxMgrGrpc/sysboxMgrProtobuf/sysboxMgrProtobuf.proto
+@@ -90,6 +90,7 @@ message ContainerConfig {
+     uint32 rootfsUidShiftType = 15;
+     bool noShiftfsOnFuse = 16;
+     bool relaxedReadOnly = 17;
++    bool IDMapMountOnOverlayfsOk = 18;
+ }
+ 
+ message RegisterResp {
+diff --git a/sysboxMgrLib/sysboxMgrLib.go b/sysboxMgrLib/sysboxMgrLib.go
+index 9f8272d..d9ed601 100644
+--- a/sysboxMgrLib/sysboxMgrLib.go
++++ b/sysboxMgrLib/sysboxMgrLib.go
+@@ -51,6 +51,7 @@ type ContainerConfig struct {
+ 	NoShiftfsOnFuse         bool
+ 	IDMapMountOk            bool
+ 	OverlayfsOnIDMapMountOk bool
++	IDMapMountOnOverlayfsOk bool
+ 	NoRootfsCloning         bool
+ 	IgnoreSysfsChown        bool
+ 	AllowTrustedXattr       bool

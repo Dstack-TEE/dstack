@@ -24,7 +24,7 @@ use tracing::{info, warn};
 
 use crate::app::{
     mode_carries_ingress, needs_swtpm, resolve_networking, validate_resolved_network,
-    validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Manifest, PortMapping,
+    validate_resolved_networks, App, AttachMode, GpuConfig, GpuSpec, Image, Manifest, PortMapping,
     VmWorkDir,
 };
 use crate::config::{
@@ -919,6 +919,10 @@ impl RpcHandler {
             manifest.memory = memory;
         }
         if let Some(image) = image {
+            // Checked here because callers write the manifest before
+            // `load_vm` would reject it, leaving a VM that never loads again.
+            let image_dir = self.app.config.image.image_dir(image)?;
+            Image::load(&image_dir).with_context(|| format!("failed to load image {image:?}"))?;
             manifest.image = image.to_string();
         }
         if let Some(disk_size) = disk_size {
@@ -1432,9 +1436,7 @@ impl VmmRpc for RpcHandler {
 
     async fn delete_image(self, request: Id) -> Result<()> {
         let name = &request.id;
-        if name.is_empty() || name.contains("..") || name.contains('/') {
-            bail!("invalid image name");
-        }
+        let image_dir = self.app.config.image.image_dir(name)?;
 
         // Check no VM uses this image
         {
@@ -1450,7 +1452,6 @@ impl VmmRpc for RpcHandler {
             }
         }
 
-        let image_dir = self.app.config.image.path.join(name);
         if !image_dir.exists() {
             bail!("image '{}' not found", name);
         }

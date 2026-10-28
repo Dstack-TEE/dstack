@@ -98,8 +98,6 @@ pub struct HostConfig {
     pub os_image_hash: String,
     /// OS image download URL template (must contain `{OS_IMAGE_HASH}`).
     pub image_download_url: String,
-    /// whether the KMS verifies the OS image hash on app key requests.
-    pub verify_os_image: bool,
     /// confidential-computing platform (selects SNP-specific KMS settings).
     pub platform: Platform,
 }
@@ -111,7 +109,6 @@ impl Default for HostConfig {
             kms_bootstrap_domain: "10.0.2.2".to_string(),
             os_image_hash: String::new(),
             image_download_url: DEFAULT_IMAGE_DOWNLOAD_URL.to_string(),
-            verify_os_image: true,
             platform: Platform::Tdx,
         }
     }
@@ -138,7 +135,6 @@ cert_dir = "/kms/certs"
 enforce_self_authorization = false
 {sev_snp}
 [core.image]
-verify = {verify}
 cache_dir = "/kms/images"
 download_url = "{download_url}"
 download_timeout = "2m"
@@ -165,7 +161,6 @@ port = 8000
             Platform::AmdSevSnp => "sev_snp_key_release = true\namd_kds_base_url = \"\"\n",
             Platform::Tdx => "",
         },
-        verify = cfg.verify_os_image,
         download_url = cfg.image_download_url,
         webhook_url = cfg.auth_webhook_url,
         bootstrap_domain = cfg.kms_bootstrap_domain,

@@ -29,6 +29,9 @@ checkout https://github.com/nestybox/sysbox-mgr.git "$SYSBOX_MGR_REVISION" "$B/s
 checkout https://github.com/nestybox/sysbox-ipc.git "$SYSBOX_IPC_REVISION" "$B/sysbox-ipc"
 checkout https://github.com/nestybox/sysbox-libs.git "$SYSBOX_LIBS_REVISION" "$B/sysbox-libs"
 checkout https://github.com/Dstack-TEE/fuse.git "$SYSBOX_FUSE_REVISION" "$B/sysbox-fuse"
+for repo in sysbox-libs sysbox-ipc sysbox-mgr sysbox-runc; do
+  patch -d "$B/$repo" -p1 --fuzz=0 < "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/$repo-idmapped-overlayfs.patch"
+done
 rm -rf "$B/sysbox-fs/bazil"; ln -s "$B/sysbox-fuse" "$B/sysbox-fs/bazil"
 install -m0644 "$ROOT/os/yocto/layers/meta-dstack/recipes-core/dstack-sysbox/files/sysboxFsProtobuf.pb.go" \
   "$B/sysbox-ipc/sysboxFsGrpc/sysboxFsProtobuf/"

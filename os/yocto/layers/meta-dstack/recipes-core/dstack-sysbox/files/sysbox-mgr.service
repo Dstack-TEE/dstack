@@ -5,7 +5,10 @@ After=dstack-prepare.service
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/sysbox-mgr --data-root /var/lib/sysbox --disable-ovfs-on-idmapped-mount
+# Requires overlayfs idmapped-mount support (backported into this tree from
+# Linux 7.3). Without it Sysbox probes support incorrectly and the runtime
+# mount_setattr() fails with EINVAL.
+ExecStart=/usr/bin/sysbox-mgr --data-root /var/lib/sysbox
 TimeoutStartSec=45
 TimeoutStopSec=90
 StartLimitInterval=0

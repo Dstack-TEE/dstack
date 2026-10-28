@@ -231,7 +231,9 @@ impl Marshal for TpmlPcrSelection {
 impl Unmarshal for TpmlPcrSelection {
     fn unmarshal(buf: &mut ResponseBuffer) -> Result<Self> {
         let count = buf.get_u32()? as usize;
-        let mut pcr_selections = Vec::with_capacity(count);
+        // `count` is the TPM's claim; every entry consumes bytes, so the
+        // remaining buffer bounds the allocation.
+        let mut pcr_selections = Vec::with_capacity(count.min(buf.remaining()));
         for _ in 0..count {
             pcr_selections.push(TpmsPcrSelection::unmarshal(buf)?);
         }
@@ -248,7 +250,7 @@ pub struct TpmlDigest {
 impl Unmarshal for TpmlDigest {
     fn unmarshal(buf: &mut ResponseBuffer) -> Result<Self> {
         let count = buf.get_u32()? as usize;
-        let mut digests = Vec::with_capacity(count);
+        let mut digests = Vec::with_capacity(count.min(buf.remaining()));
         for _ in 0..count {
             digests.push(Tpm2bDigest::unmarshal(buf)?);
         }

@@ -268,6 +268,9 @@ impl TpmResponse {
             .ok_or_else(|| anyhow::anyhow!("invalid response tag: 0x{:04x}", tag_raw))?;
 
         let size = buf.get_u32()? as usize;
+        if size < 10 {
+            bail!("TPM response size {size} is smaller than its header");
+        }
         if response.len() < size {
             bail!(
                 "TPM response size mismatch: expected {}, got {}",
@@ -353,7 +356,7 @@ pub fn add_command_capability(response: &[u8], command_code: u32) -> Result<Vec<
         return Ok(response.to_bytes());
     }
     let count = buf.get_u32()? as usize;
-    let mut attributes = Vec::with_capacity(count + 1);
+    let mut attributes = Vec::with_capacity(count.min(buf.remaining() / 4) + 1);
     for _ in 0..count {
         attributes.push(buf.get_u32()?);
     }
@@ -409,6 +412,27 @@ mod tests {
         assert!(response.is_success());
         assert_eq!(response.data, [0, 0]);
         server_thread.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_a_response_size_smaller_than_the_header() {
+        let mut response = TpmResponse {
+            tag: TpmSt::NoSessions,
+            response_code: 0,
+            data: vec![],
+        }
+        .to_bytes();
+        response[2..6].copy_from_slice(&9u32.to_be_bytes());
+        assert!(TpmResponse::parse(&response).is_err());
+    }
+
+    #[test]
+    fn a_huge_list_count_fails_without_preallocating() {
+        let claims_u32_max = u32::MAX.to_be_bytes();
+        let mut buf = ResponseBuffer::new(&claims_u32_max);
+        assert!(crate::TpmlDigest::unmarshal(&mut buf).is_err());
+        let mut buf = ResponseBuffer::new(&claims_u32_max);
+        assert!(crate::TpmlPcrSelection::unmarshal(&mut buf).is_err());
     }
 
     #[test]

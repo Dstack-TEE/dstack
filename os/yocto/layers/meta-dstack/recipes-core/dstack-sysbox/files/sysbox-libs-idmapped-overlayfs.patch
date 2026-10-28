@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Wang <wy721@qq.com>
+Date: Mon, 26 Oct 2026 19:54:55 -0700
+Subject: [PATCH] idMap: add ID-mapped overlayfs shift type and probe
+
+Add the IDMappedOverlayfs shift type, appended so existing values keep
+their meaning, and IDMapMountSupportedOnOverlayfs(), which mounts a test
+overlay and ID-maps the merged mount. The kernel rejects that with
+EINVAL unless overlayfs supports ID-mapped mounts (Linux 7.3, or a
+backport), so EINVAL reports the feature as unsupported.
+
+IDMapMount now wraps the mount_setattr errno so callers can inspect it.
+
+Signed-off-by: Kevin Wang <wy721@qq.com>
+---
+ idMap/idMapMount.go          | 63 +++++++++++++++++++++++++++---------
+ idShiftUtils/idShiftUtils.go |  1 +
+ 2 files changed, 49 insertions(+), 15 deletions(-)
+
+diff --git a/idMap/idMapMount.go b/idMap/idMapMount.go
+index aaff4c9..9fe790b 100644
+--- a/idMap/idMapMount.go
++++ b/idMap/idMapMount.go
+@@ -86,7 +86,7 @@ func IDMapMount(usernsPath, mountPath string, unmountFirst bool) error {
+ 
+ 	err = unix.MountSetattr(int(fdTree), "", unix.AT_EMPTY_PATH|unix.AT_RECURSIVE, mountAttr)
+ 	if err != nil {
+-		return fmt.Errorf("Failed to set mount attr: %s", err)
++		return fmt.Errorf("Failed to set mount attr: %w", err)
+ 	}
+ 
+ 	// Unmount the original mountPath mount to prevent redundant / stacked mounting
+@@ -120,7 +120,7 @@ func IDMapMountSupported(dir string) (bool, error) {
+ 		return false, nil
+ 	}
+ 
+-	return runIDMapMountCheckOnHost(dir, false)
++	return runIDMapMountCheckOnHost(dir, idMapCheckDir)
+ }
+ 
+ // OverlayfsOnIDMapMountSupported checks if overlayfs over ID-mapped lower
+@@ -137,13 +137,37 @@ func OverlayfsOnIDMapMountSupported(dir string) (bool, error) {
+ 		return false, nil
+ 	}
+ 
+-	return runIDMapMountCheckOnHost(dir, true)
++	return runIDMapMountCheckOnHost(dir, idMapCheckOverlayfsLower)
+ }
+ 
+-// runIDMapMountCheckOnHost runs a quick test on the host to check if ID-mapping is
+-// supported. dir is the path where the test will run. If checkOnOverlayfs
+-// is true, the test checks if overlayfs supports ID-mapped lower layers.
+-func runIDMapMountCheckOnHost(dir string, checkOnOverlayfs bool) (bool, error) {
++// IDMapMountSupportedOnOverlayfs checks if an overlayfs mount itself (i.e., the
++// merged mount rather than its lower layers) can be ID-mapped on the host.
++func IDMapMountSupportedOnOverlayfs(dir string) (bool, error) {
++
++	// This builds on overlayfs over ID-mapped lower layers (Linux >= 5.19)
++	kernelOK, err := checkKernelVersion(5, 19)
++	if err != nil {
++		return false, err
++	}
++
++	if !kernelOK {
++		return false, nil
++	}
++
++	return runIDMapMountCheckOnHost(dir, idMapCheckOverlayfsMerged)
++}
++
++type idMapCheck int
++
++const (
++	idMapCheckDir idMapCheck = iota
++	idMapCheckOverlayfsLower
++	idMapCheckOverlayfsMerged
++)
++
++// runIDMapMountCheckOnHost runs a quick test on the host to check if the given
++// kind of ID-mapping is supported. dir is the path where the test will run.
++func runIDMapMountCheckOnHost(dir string, check idMapCheck) (bool, error) {
+ 	var (
+ 		lowerDir, upperDir, workDir, idMapDir string
+ 	)
+@@ -161,7 +185,7 @@ func runIDMapMountCheckOnHost(dir string, checkOnOverlayfs bool) (bool, error) {
+ 		return false, err
+ 	}
+ 
+-	if checkOnOverlayfs {
++	if check != idMapCheckDir {
+ 		lowerDir = filepath.Join(tmpDir, "lower")
+ 		upperDir = filepath.Join(tmpDir, "upper")
+ 		workDir = filepath.Join(tmpDir, "work")
+@@ -202,25 +226,34 @@ func runIDMapMountCheckOnHost(dir string, checkOnOverlayfs bool) (bool, error) {
+ 	// Create the ID mapped mount associated with the child process user-ns
+ 	usernsPath := fmt.Sprintf("/proc/%d/ns/user", pid)
+ 
+-	if checkOnOverlayfs {
++	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
++
++	switch check {
++	case idMapCheckDir:
++		idMapDir = testDir
++	case idMapCheckOverlayfsLower:
+ 		idMapDir = lowerDir
+-	} else {
++	case idMapCheckOverlayfsMerged:
++		if err := unix.Mount("overlay", testDir, "overlay", 0, opts); err != nil {
++			return false, err
++		}
++		defer unix.Unmount(testDir, unix.MNT_DETACH)
+ 		idMapDir = testDir
+ 	}
+ 
+ 	if err := IDMapMount(usernsPath, idMapDir, false); err != nil {
++		if check == idMapCheckOverlayfsMerged && errors.Is(err, unix.EINVAL) {
++			return false, nil
++		}
+ 		return false, errors.Wrap(err, "create mapped mount")
+ 	}
+ 	defer unix.Unmount(idMapDir, unix.MNT_DETACH)
+ 
+-	if checkOnOverlayfs {
+-		opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+-		flags := uintptr(0)
+-		if err := unix.Mount("overlay", testDir, "overlay", flags, opts); err != nil {
++	if check == idMapCheckOverlayfsLower {
++		if err := unix.Mount("overlay", testDir, "overlay", 0, opts); err != nil {
+ 			return false, err
+ 		}
+ 		unix.Unmount(testDir, unix.MNT_DETACH)
+-		return true, nil
+ 	}
+ 
+ 	return true, nil
+diff --git a/idShiftUtils/idShiftUtils.go b/idShiftUtils/idShiftUtils.go
+index 9e9b410..78d33a3 100644
+--- a/idShiftUtils/idShiftUtils.go
++++ b/idShiftUtils/idShiftUtils.go
+@@ -42,6 +42,7 @@ const (
+ 	IDMappedMount
+ 	IDMappedMountOrShiftfs
+ 	Chown
++	IDMappedOverlayfs
+ )
+ 
+ type aclType int

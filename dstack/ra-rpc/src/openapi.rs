@@ -211,15 +211,24 @@ pub(crate) struct RenderedDoc {
 pub struct SwaggerUiConfig {
     pub title: String,
     pub dark_mode: bool,
-    pub swagger_ui_dist: String,
 }
+
+// Pinned with SRI so a CDN or upstream compromise cannot run script on the
+// page, which shares an origin with the API it documents. Hashes are of the
+// files in the npm tarball for this version.
+const SWAGGER_UI_DIST: &str = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5.32.15";
+const SWAGGER_UI_CSS_SRI: &str =
+    "sha384-fgyWYkUAamzuI8mJFu/xpRP0JWCJRwkwUwsYDoOYVHUJ8NQE5cENn8ib3ppwFFSX";
+const SWAGGER_UI_BUNDLE_SRI: &str =
+    "sha384-m7zaGj7MPzU+G4lz2eyy73GxK9bbRDr9bB2CSdj8wodg2wu/Wnt6wsoLP3JD+RS9";
+const SWAGGER_UI_PRESET_SRI: &str =
+    "sha384-9rDX8vR4ir9/JIiV/XvxMpb5T9tVyFbssk49PV935hrdwmkVNJ7VZMM0RXAm184h";
 
 impl Default for SwaggerUiConfig {
     fn default() -> Self {
         Self {
             title: "pRPC Explorer".to_string(),
             dark_mode: true,
-            swagger_ui_dist: "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5".to_string(),
         }
     }
 }
@@ -1004,18 +1013,6 @@ fn field_type(field: &FieldDescriptorProto) -> FieldType {
 
 fn build_swagger_ui_html(spec_url: &str, cfg: &SwaggerUiConfig) -> String {
     let spec = spec_url.replace('\'', "\\'");
-    let css = format!(
-        "{}/swagger-ui.css",
-        cfg.swagger_ui_dist.trim_end_matches('/')
-    );
-    let bundle = format!(
-        "{}/swagger-ui-bundle.js",
-        cfg.swagger_ui_dist.trim_end_matches('/')
-    );
-    let preset = format!(
-        "{}/swagger-ui-standalone-preset.js",
-        cfg.swagger_ui_dist.trim_end_matches('/')
-    );
     let background = if cfg.dark_mode { "#0b0d10" } else { "#fafafa" };
     format!(
         r#"<!DOCTYPE html>
@@ -1023,7 +1020,7 @@ fn build_swagger_ui_html(spec_url: &str, cfg: &SwaggerUiConfig) -> String {
 <head>
   <meta charset="utf-8" />
   <title>{title}</title>
-  <link rel="stylesheet" href="{css}" />
+  <link rel="stylesheet" href="{SWAGGER_UI_DIST}/swagger-ui.css" integrity="{SWAGGER_UI_CSS_SRI}" crossorigin="anonymous" />
   <style>
     body {{
       margin: 0;
@@ -1036,8 +1033,8 @@ fn build_swagger_ui_html(spec_url: &str, cfg: &SwaggerUiConfig) -> String {
 </head>
 <body>
   <div id="swagger-ui"></div>
-  <script src="{bundle}"></script>
-  <script src="{preset}"></script>
+  <script src="{SWAGGER_UI_DIST}/swagger-ui-bundle.js" integrity="{SWAGGER_UI_BUNDLE_SRI}" crossorigin="anonymous"></script>
+  <script src="{SWAGGER_UI_DIST}/swagger-ui-standalone-preset.js" integrity="{SWAGGER_UI_PRESET_SRI}" crossorigin="anonymous"></script>
   <script>
     window.onload = () => {{
       window.ui = SwaggerUIBundle({{
@@ -1066,9 +1063,6 @@ fn build_swagger_ui_html(spec_url: &str, cfg: &SwaggerUiConfig) -> String {
 </html>
 "#,
         title = cfg.title,
-        css = css,
-        bundle = bundle,
-        preset = preset,
         spec = spec,
         background = background
     )
