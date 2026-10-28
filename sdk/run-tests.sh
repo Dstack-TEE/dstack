@@ -35,7 +35,7 @@ pushd "$ROOT_DIR/python"
 # Ensure PDM is installed
 if ! command -v pdm &> /dev/null; then
     echo "Installing PDM..."
-    pip install pdm
+    pip install pdm 'unearth<0.19'
 fi
 # Install dependencies and setup environment using PDM
 pdm install --dev
