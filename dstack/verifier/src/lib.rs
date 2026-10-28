@@ -16,4 +16,4 @@ mod verification;
 pub use dstack_mr::TdxMeasurements;
 
 pub use types::{PolicyBootInfo, VerificationDetails, VerificationRequest, VerificationResponse};
-pub use verification::{policy_tcb_fields, CvmVerifier, MEASUREMENT_CACHE_SUFFIX};
+pub use verification::{policy_tcb_fields, CvmVerifier};

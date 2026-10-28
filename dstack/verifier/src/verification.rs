@@ -96,9 +96,6 @@ fn decode_key_provider_info(bytes: &[u8]) -> Option<dstack_types::KeyProviderInf
 // cached.
 const MEASUREMENT_CACHE_VERSION: u32 = 3;
 
-/// File-name suffix of a measurement cache entry: `measurements/<key>.json`.
-pub const MEASUREMENT_CACHE_SUFFIX: &str = ".json";
-
 /// Upper bound on both a downloaded image archive and its extracted contents.
 /// Measurement images carry no rootfs; released ones are under 25 MB extracted.
 const MAX_IMAGE_SIZE: u64 = 100 << 20;
@@ -133,6 +130,29 @@ pub struct CvmVerifier {
     pub download_timeout: Duration,
     pub attestation_verifier: Arc<AttestationVerifier>,
     download_locks: Mutex<HashMap<String, Weak<AsyncMutex<()>>>>,
+}
+
+/// Remove the entry for `key` (rejecting non-hex keys so deletion stays inside
+/// the cache), everything under `dir` for `"all"`, or nothing for an empty key.
+fn remove_cache(dir: &Path, key: &str, entry: impl FnOnce(&str) -> PathBuf) -> Result<()> {
+    match key {
+        "" => {}
+        "all" => {
+            if dir.exists() {
+                fs_err::remove_dir_all(dir)?;
+            }
+        }
+        _ if key.chars().all(|c| c.is_ascii_hexdigit()) => {
+            let path = entry(key);
+            if path.is_dir() {
+                fs_err::remove_dir_all(path)?;
+            } else if path.is_file() {
+                fs_err::remove_file(path)?;
+            }
+        }
+        _ => bail!("invalid cache key"),
+    }
+    Ok(())
 }
 
 impl CvmVerifier {
@@ -173,7 +193,7 @@ impl CvmVerifier {
 
     fn measurement_cache_path(&self, cache_key: &str) -> PathBuf {
         self.measurement_cache_dir()
-            .join(format!("{cache_key}{MEASUREMENT_CACHE_SUFFIX}"))
+            .join(format!("{cache_key}.json"))
     }
 
     /// Hash only what the measurement reads: `image` and the measurement documents
@@ -364,6 +384,19 @@ impl CvmVerifier {
 
     fn images_dir(&self) -> PathBuf {
         Path::new(&self.image_cache_dir).join("images")
+    }
+
+    /// Clear the cached image and measurements. Each key is a hex cache key,
+    /// `"all"` to clear the whole cache, or empty to leave it untouched.
+    pub fn clear_cache(&self, image_hash: &str, config_hash: &str) -> Result<()> {
+        remove_cache(&self.images_dir(), image_hash, |key| {
+            self.images_dir().join(key)
+        })
+        .context("failed to clear image cache")?;
+        remove_cache(&self.measurement_cache_dir(), config_hash, |key| {
+            self.measurement_cache_path(key)
+        })
+        .context("failed to clear measurement cache")
     }
 
     fn image_content_digest(image_dir: &Path) -> Result<Option<Vec<u8>>> {
@@ -1700,6 +1733,34 @@ mod tests {
             rtmr1: vec![byte.wrapping_add(2); 48],
             rtmr2: vec![byte.wrapping_add(3); 48],
         }
+    }
+
+    #[test]
+    fn clear_cache_only_deletes_the_named_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut verifier = test_verifier();
+        verifier.image_cache_dir = directory.path().display().to_string();
+        for key in ["cafe", "beef"] {
+            fs_err::create_dir_all(verifier.images_dir().join(key)).unwrap();
+            let path = verifier.measurement_cache_path(key);
+            fs_err::create_dir_all(path.parent().unwrap()).unwrap();
+            fs_err::write(path, "{}").unwrap();
+        }
+
+        verifier.clear_cache("beef", "beef").unwrap();
+        assert!(!verifier.images_dir().join("beef").exists());
+        assert!(!verifier.measurement_cache_path("beef").exists());
+        assert!(verifier.images_dir().join("cafe").exists());
+        assert!(verifier.measurement_cache_path("cafe").exists());
+
+        // empty keys are a no-op; a non-hex key is rejected before touching disk.
+        verifier.clear_cache("", "").unwrap();
+        assert!(verifier.clear_cache("../escape", "").is_err());
+        assert!(verifier.clear_cache("", "../escape").is_err());
+
+        verifier.clear_cache("all", "all").unwrap();
+        assert!(!verifier.images_dir().exists());
+        assert!(!verifier.measurement_cache_dir().exists());
     }
 
     #[test]
