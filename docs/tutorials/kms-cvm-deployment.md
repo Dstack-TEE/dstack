@@ -176,7 +176,6 @@ configs:
       pccs_url = "https://pccs.phala.network/sgx/certification/v4"
 
       [core.image]
-      verify = true
       cache_dir = "/etc/kms/images"
       download_url = "https://download.dstack.org/os-images/mr_{OS_IMAGE_HASH}.tar.gz"
       download_timeout = "2m"

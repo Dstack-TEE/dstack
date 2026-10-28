@@ -29,7 +29,7 @@ use ra_tls::{
     kdf,
 };
 use scale::Decode;
-use tracing::{debug, warn};
+use tracing::warn;
 use upgrade_authority::{
     build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
 };
@@ -181,11 +181,6 @@ impl KmsState {
         if !config.enforce_self_authorization {
             warn!(
                 "self-authorization is disabled; trusted RPCs will not be gated by KMS self-attestation - do not use in production TEE deployments"
-            );
-        }
-        if !config.image.verify {
-            warn!(
-                "os image verification is disabled; os_image_hash is caller-supplied and unverified - do not use in production TEE deployments"
             );
         }
         Ok(Self {
@@ -371,10 +366,6 @@ impl RpcHandler {
         vm_config: String,
         report: &VerifiedAttestation,
     ) -> Result<()> {
-        if !self.state.config.image.verify {
-            debug!("os image verification is disabled");
-            return Ok(());
-        }
         let mut detail = VerificationDetails::default();
         self.state
             .verifier
@@ -557,7 +548,7 @@ impl KmsRpc for RpcHandler {
             chain_id: info.chain_id,
             gateway_app_id: info.gateway_app_id,
             app_auth_implementation: info.app_implementation,
-            os_image_verification: Some(self.state.config.image.verify),
+            os_image_verification: Some(true),
         })
     }
 
