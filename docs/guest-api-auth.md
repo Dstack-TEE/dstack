@@ -98,8 +98,10 @@ public_keys = ["2f8d...c1"]  # hex Ed25519 public keys, 32 bytes each
 ```
 
 `name` is the exact `iss` claim a token must carry; `public_keys` is a list so a
-key can be rotated by publishing the new one beside the old, waiting out the
-longest token lifetime (one hour), then dropping the old one.
+key can be rotated by publishing the new one beside the old, waiting until the
+tokens it signed have expired, then dropping the old one. The agent does not
+cap token lifetimes; there is no revocation list, so `exp` is the issuer's
+only exposure control.
 
 Tokens must be Ed25519. `alg: none`, HMAC, and headers carrying key material
 (`jku`, `x5u`, `jwk`) are not rejected by policy -- the header is a constant,
@@ -108,7 +110,7 @@ so they cannot be expressed.
 ### Where the internal issuer comes from
 
 The gateway does not hold the app root key; the CVM mints its token and hands
-it over on registration, bound to the app id and short-lived:
+it over on registration, bound to the app id:
 
 1. The agent and `dstack-util`, both inside the CVM, derive the same Ed25519
    key: `derive_app_key(app_root_key, "dstack:guest-api:issuer:v1", Ed25519)`.
@@ -117,8 +119,8 @@ it over on registration, bound to the app id and short-lived:
    never versioned again.
 2. `dstack-util` signs a token with `iss = "dstack:guest-api:<app_id>"`,
    `aud = <app_id>`, only the `guest:health` scope, `iat` rounded down to the
-   half hour and `exp` one hour later. Every registration within a half hour
-   carries the same token, and it never has less than 30 minutes left.
+   year and `exp` ten years later. Every registration within a year carries
+   the same token, and it never lapses while registration is down.
 3. Registration carries it to the gateway, which presents it on the v1 `Health`
    poll.
 
