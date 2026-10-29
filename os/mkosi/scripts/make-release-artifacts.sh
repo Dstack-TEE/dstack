@@ -125,7 +125,7 @@ touch -d "@$SOURCE_DATE_EPOCH" "$OUT/files/"*
 is_dev=false; name=dstack
 if [[ $FLAVOR == dev ]]; then is_dev=true; name=dstack-dev; fi
 
-# The kernel build tree is archived beside, not inside, the measured payload.
+# The kernel build tree is also archived beside the measured payload.
 kernel_devel_artifact=
 if [[ ${DSTACK_TAR_RELEASE:-1} == 1 ]]; then
   tar -C "$KERNEL_TREE" --sort=name --mtime="@$SOURCE_DATE_EPOCH" \

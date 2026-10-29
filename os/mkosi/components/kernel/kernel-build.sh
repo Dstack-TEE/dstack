@@ -51,7 +51,7 @@ echo "$KERNEL_SHA256  $tarball" | sha256sum --check --status || {
 }
 src="$BUILD_DIR/linux-$KERNEL_VERSION"
 rm -rf "$src" "$BUILD_DIR/kernel-build" "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack" \
-       "$DEVEL_STAGING/usr/lib/dstack/kernel-devel"
+       "$DEVEL_STAGING/usr/src"
 tar -C "$BUILD_DIR" --no-same-owner -xf "$tarball"
 for patch in \
   "$ROOT/os/yocto/layers/meta-dstack/recipes-kernel/linux/files/0001-x86-tdx-select-dma-direct-remap.patch" \
@@ -90,22 +90,24 @@ if [[ -d $STAGING/lib/modules ]]; then
     cp -a "$STAGING/lib/modules/." "$STAGING/usr/lib/modules/"
     rm -rf "${STAGING:?}/lib"
 fi
-rm -f "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/build" \
-      "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/source"
 install -Dm0644 "$BUILD_DIR/kernel-build/arch/x86/boot/bzImage" \
     "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/vmlinuz"
 install -Dm0644 "$BUILD_DIR/kernel-build/.config" \
     "$STAGING/usr/lib/modules/$KERNEL_VERSION-dstack/config"
-# Export the external-module build tree as a release artifact, using the same
-# upstream helper `make bindeb-pkg` uses for linux-headers. It is staged into
-# the rootfs install tree and moved out by mkosi.finalize before measurement.
-devel="$DEVEL_STAGING/usr/lib/dstack/kernel-devel"
-headers="$devel/linux-headers-$(cat "$BUILD_DIR/kernel-build/include/config/kernel.release")"
+# Install the external-module build tree where Debian's linux-headers package
+# puts it, using the same upstream helper `make bindeb-pkg` uses. mkosi.finalize
+# also archives it as a release artifact.
+release=$(cat "$BUILD_DIR/kernel-build/include/config/kernel.release")
+headers="$DEVEL_STAGING/usr/src/linux-headers-$release"
 make -C "$src" O="$BUILD_DIR/kernel-build" run-command \
     KBUILD_RUN_COMMAND="$src/scripts/package/install-extmod-build $headers"
 install -m0644 "$BUILD_DIR/kernel-build/.config" "$headers/.config"
 # A -fverbose-asm intermediate that records the absolute build path, which no
 # prefix map rewrites. Only its generated .h is needed.
 rm -f "$headers/scripts/mod/devicetable-offsets.s"
+# Relative, so the link also resolves when the rootfs is inspected in place.
+ln -sfn "../../../src/linux-headers-$release" \
+    "$STAGING/usr/lib/modules/$release/build"
+rm -f "$STAGING/usr/lib/modules/$release/source"
 find "$STAGING" "$DEVEL_STAGING" -print0 | \
     xargs -0r touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
