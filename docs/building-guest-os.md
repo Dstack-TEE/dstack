@@ -105,8 +105,7 @@ The bare-metal archive includes the kernel, initramfs, OVMF firmware,
 partitioned dm-verity rootfs, platform measurement CBOR files,
 `sha256sum.txt`, `digest.txt`, and `metadata.json`. The UKI archive
 includes the bootable `disk.raw` plus its identity and measurement files. The
-kernel-devel archive is the build tree for out-of-tree modules; it is not part
-of the image identity (see below).
+kernel-devel archive is the build tree for out-of-tree modules (see below).
 
 Inspect and verify an archive with:
 
@@ -132,8 +131,12 @@ and records `"is_dev": true` in `metadata.json`.
 
 ## Kernel headers for out-of-tree modules
 
-Each release publishes the guest kernel's build tree for building out-of-tree
-modules:
+The guest rootfs ships the kernel's build tree at
+`/usr/src/linux-headers-<release>`, linked from
+`/lib/modules/<release>/build`, so tools that compile against the running
+kernel (for example eBPF tooling) find it at the usual Debian location when it
+is bind-mounted into a container. The same tree is also published for building
+out-of-tree modules outside the CVM:
 
 - `dstack-<version>-kernel-devel.tar.gz`, the exported build tree, and
 - `ghcr.io/dstack-tee/dstack-kernel-builder:<version>`, the same tree plus a
@@ -152,8 +155,8 @@ COPY --from=kmod /src/mymod.ko /opt/
 To build the image locally from a release archive, run
 `os/image/kernel-builder/build.sh <kernel-devel.tar.gz> <image-ref>`.
 
-Neither artifact is part of `sha256sum.txt`, so they do not affect
-`os_image_hash`. A module loaded by an application (which needs
+The in-image tree is part of the dm-verity rootfs and therefore of
+`os_image_hash`; the two release artifacts are not in `sha256sum.txt`. A module loaded by an application (which needs
 `CAP_SYS_MODULE`) is covered by the container image digest and therefore the
 compose hash, but it is not measured separately and dstack does not enforce
 module signatures.
