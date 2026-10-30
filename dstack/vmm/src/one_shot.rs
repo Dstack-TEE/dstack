@@ -92,6 +92,8 @@ pub async fn run_one_shot(
 
     // Create manifest using shared logic
     let manifest = create_manifest_from_vm_config(vm_config.clone(), &config.cvm)?;
+    let gpus = manifest.gpus.as_ref().cloned().unwrap_or_default();
+    crate::app::qemu::check_passthrough_pci64(&gpus, config.cvm.qemu_pci_hole64_size)?;
 
     // Load image
     let image_path = config.image.path.join(&manifest.image);
@@ -268,9 +270,6 @@ Compose file content (first 200 chars):
     vm_work_dir
         .set_started(false)
         .context("Failed to create vm-state.json")?;
-
-    // Get GPU config from the manifest (already processed)
-    let gpus = manifest.gpus.as_ref().cloned().unwrap_or_default();
 
     // Build VM config and generate QEMU command
 
