@@ -58,7 +58,7 @@ mod id_pool;
 mod image;
 mod mr_config;
 pub(crate) mod network;
-mod qemu;
+pub(crate) mod qemu;
 mod vm_info;
 mod workdir;
 
@@ -542,6 +542,14 @@ impl App {
             vm_state.config.clone()
         };
         if !is_running {
+            let devices = self.try_allocate_gpus(&vm_config.manifest)?;
+            if let Err(err) =
+                qemu::check_passthrough_pci64(&devices, self.config.cvm.qemu_pci_hole64_size)
+            {
+                self.set_started(id, false)?;
+                self.vm_event_report(vm_config.cid, "boot.error", format!("{err:#}"))?;
+                return Err(err);
+            }
             let work_dir = self.work_dir(id)?;
             for path in [work_dir.serial_pty(), work_dir.qmp_socket()] {
                 if path.symlink_metadata().is_ok() {
@@ -560,7 +568,6 @@ impl App {
             }
 
             let mut runtime_networks = self.runtime_networks(&vm_config.manifest);
-            let devices = self.try_allocate_gpus(&vm_config.manifest)?;
             let gpu_host_config = self.config.cvm.gpu.clone();
             let devices_to_sanitize = devices.clone();
             tokio::task::spawn_blocking(move || {
