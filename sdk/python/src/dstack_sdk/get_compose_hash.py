@@ -35,6 +35,7 @@ class DockerConfig:
         self.username = username
         self.token_key = token_key
         self._extra = dict(kwargs)
+        self._explicit_nulls: set[str] = set()
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -46,6 +47,9 @@ class DockerConfig:
         if self.token_key is not None:
             result["token_key"] = self.token_key
         result.update(self._extra)
+        for field in getattr(self, "_explicit_nulls", ()):
+            if getattr(self, field, None) is None:
+                result[field] = None
         return result
 
 
@@ -109,7 +113,7 @@ class AppCompose:
         name: Optional[str] = None,
         features: Optional[List[str]] = None,  # Deprecated
         docker_compose_file: Optional[str] = None,
-        docker_config: Optional[DockerConfig] = None,
+        docker_config: Optional[Union[DockerConfig, Dict[str, Any]]] = None,
         public_logs: Optional[bool] = None,
         public_sysinfo: Optional[bool] = None,
         public_tcbinfo: Optional[bool] = None,
@@ -136,7 +140,16 @@ class AppCompose:
         self.name = name
         self.features = features
         self.docker_compose_file = docker_compose_file
-        self.docker_config = docker_config
+        self.docker_config: Optional[DockerConfig]
+        if isinstance(docker_config, dict):
+            self.docker_config = DockerConfig(**docker_config)
+            self.docker_config._explicit_nulls = {
+                key
+                for key in ("registry", "username", "token_key")
+                if key in docker_config and docker_config[key] is None
+            }
+        else:
+            self.docker_config = docker_config
         self.public_logs = public_logs
         self.public_sysinfo = public_sysinfo
         self.public_tcbinfo = public_tcbinfo
@@ -157,6 +170,7 @@ class AppCompose:
         )
         self.bash_script = bash_script
         self.pre_launch_script = pre_launch_script
+        self._explicit_nulls: set[str] = set()
 
         # Add any additional fields
         for key, value in kwargs.items():
@@ -185,6 +199,9 @@ class AppCompose:
                         else:
                             result[attr_name] = value
 
+        for field in getattr(self, "_explicit_nulls", ()):
+            if getattr(self, field, None) is None:
+                result[field] = None
         return result
 
     @classmethod
@@ -199,12 +216,16 @@ class AppCompose:
         chain.
         """
         data = dict(data)
+        if "runner" not in data:
+            raise ValueError("app_compose.runner is required")
+        explicit_nulls = {
+            key
+            for key in ("docker_compose_file", "key_provider", "storage_fs")
+            if key in data and data[key] is None
+        }
 
         # Handle docker_config
-        docker_config: Optional[DockerConfig] = None
-        dc = data.pop("docker_config", None)
-        if dc is not None:
-            docker_config = DockerConfig(**dc)
+        docker_config = data.pop("docker_config", None)
 
         # Handle requirements
         requirements: Optional[Requirements] = None
@@ -227,12 +248,14 @@ class AppCompose:
 
         runner_value = processed_data.pop("runner")
         runner: str = str(runner_value)
-        return cls(
+        result = cls(
             runner=runner,
             docker_config=docker_config,
             requirements=requirements,
             **processed_data,
         )
+        result._explicit_nulls = explicit_nulls
+        return result
 
 
 def sort_object(obj: Any) -> Any:
