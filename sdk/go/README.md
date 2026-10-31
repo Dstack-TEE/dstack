@@ -103,6 +103,17 @@ First, ensure your dstack application is properly configured:
 
 **Note**: The `docker_compose_file` field contains the actual Docker Compose YAML content as a string, not a file path.
 
+### Compose Hash
+
+`GetComposeHash` hashes the SDK's compact, sorted JSON representation of the
+app compose. The SDK compose hash is not a Rust round-trip. SDKs preserve input
+presence and form: they do not add Rust defaults, keep empty lists, and retain
+the input form of `init_script`. The hash matches the deployed/on-chain hash
+only if those exact bytes are deployed.
+
+Numeric edge cases differ across SDKs: Go and JavaScript lose precision for
+`swap_size` values above 2^53, while Python emits `2.0` where they emit `2`.
+
 ### SDK Integration
 
 ```go
@@ -649,7 +660,8 @@ fmt.Println("Trusted KMS identity:", actualKMSIdentity)
    - Validate RTMR measurements against expected values
 
 3. **TLS Configuration**
-   - Enable RA-TLS for attestation-based authentication
+   - The `ratls` package's `TLSConfig` alone is not application authentication; use `WithVerify` to enforce trusted application, OS, and compose policy. Use `VerifyResult.BootEvent` for boot-time identity fields; events after `system-ready` are app-controlled.
+   - The `ratls` verifier supports TDX only: gcp-tdx, nitro, sev-snp, and dstack-pod evidence are rejected.
    - Use appropriate certificate validity periods
    - Implement proper certificate validation
 

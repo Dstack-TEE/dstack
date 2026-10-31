@@ -4,6 +4,18 @@
 
 import { expect, describe, it } from 'vitest'
 import { getComposeHash, AppCompose } from '../get-compose-hash'
+import { readFileSync } from 'fs'
+import { resolve } from 'path'
+
+const fixture = JSON.parse(readFileSync(resolve(__dirname, '../../../tests/compose-hash-fixture.json'), 'utf8')) as {
+  cases: { name: string, app_compose: AppCompose, sha256: string, normalize?: boolean }[]
+}
+
+describe('cross-language compose hash fixture', () => {
+  it.each(fixture.cases)('$name', ({ app_compose, sha256, normalize = false }) => {
+    expect(getComposeHash(app_compose, normalize)).toBe(sha256)
+  })
+})
 
 describe('Deterministic JSON Serialization', () => {
   describe('Key Sorting', () => {
@@ -524,6 +536,31 @@ describe('Deterministic JSON Serialization', () => {
 
       // Without normalization, empty pre_launch_script should remain
       expect(getComposeHash(compose, false)).not.toBe(getComposeHash(composeWithoutEmpty, false))
+    })
+  })
+
+  describe('field-specific serialization', () => {
+    it.each(['requirements', 'snapshotter'])('omits null %s', field => {
+      expect(getComposeHash({ runner: 'docker-compose', [field]: null }))
+        .toBe(getComposeHash({ runner: 'docker-compose' }))
+    })
+
+    it.each(['platforms', 'tdx_measure_acpi_tables', 'launch_token_hash', 'health_status_file'])('omits null requirements.%s', field => {
+      expect(getComposeHash({ runner: 'docker-compose', requirements: { [field]: null } }))
+        .toBe(getComposeHash({ runner: 'docker-compose', requirements: {} }))
+    })
+
+    it('omits null GPU rego without changing other null fields', () => {
+      const compose = { runner: 'docker-compose', requirements: { gpu_policy: { rego: null, extra: null }, health_check: null }, docker_config: { registry: null }, key_provider: null }
+      const expected = { runner: 'docker-compose', requirements: { gpu_policy: { extra: null }, health_check: null }, docker_config: { registry: null }, key_provider: null }
+      expect(getComposeHash(compose as AppCompose)).toBe(getComposeHash(expected as AppCompose))
+      expect(compose.requirements.gpu_policy.rego).toBeNull()
+    })
+
+    it.each([false, true])('omits false requirements fields with normalize=%s without mutating input', normalize => {
+      const compose: AppCompose = { runner: 'docker-compose', requirements: { health_check: false, ephemeral_data_disk: false } }
+      expect(getComposeHash(compose, normalize)).toBe(getComposeHash({ runner: 'docker-compose', requirements: {} }, normalize))
+      expect(compose.requirements).toEqual({ health_check: false, ephemeral_data_disk: false })
     })
   })
 

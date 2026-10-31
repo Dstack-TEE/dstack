@@ -2,7 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
+from pathlib import Path
+
+import pytest
 
 from dstack_sdk.get_compose_hash import AppCompose
 from dstack_sdk.get_compose_hash import DockerConfig
@@ -422,6 +426,117 @@ def test_an_unknown_requirement_still_reaches_the_hash():
     )
 
     assert get_compose_hash(plain) != get_compose_hash(future)
+
+
+def test_cross_language_compose_hash_fixture():
+    path = Path(__file__).resolve().parents[2] / "tests" / "compose-hash-fixture.json"
+    fixture = json.loads(path.read_text())
+    for case in fixture["cases"]:
+        assert (
+            get_compose_hash(
+                case["app_compose"], normalize=case.get("normalize", False)
+            )
+            == case["sha256"]
+        ), case["name"]
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"name": None},
+        {"allowed_envs": None},
+        {"future": None},
+        {"requirements": {"health_check": None}},
+        {"requirements": {"ephemeral_data_disk": None}},
+        {"requirements": {"gpu_policy": None}},
+    ],
+)
+def test_non_option_null_passthrough(manifest):
+    manifest = {"runner": "docker-compose", **manifest}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("policy", [{"rego": None}, {"rego": None, "attest_gpu": True}])
+def test_gpu_null_rego_is_omitted(policy):
+    manifest = {"runner": "docker-compose", "requirements": {"gpu_policy": policy}}
+    expected = {
+        "runner": "docker-compose",
+        "requirements": {
+            "gpu_policy": {k: v for k, v in policy.items() if k != "rego"}
+        },
+    }
+    assert get_compose_hash(manifest) == get_compose_hash(expected)
+
+
+def test_null_runner_passthrough():
+    manifest = {"runner": None}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def test_health_check_false_is_omitted():
+    assert get_compose_hash(
+        {"runner": "docker-compose", "requirements": {"health_check": False}}
+    ) == get_compose_hash({"runner": "docker-compose", "requirements": {}})
+
+
+def test_null_nested_fields():
+    assert get_compose_hash(
+        {"runner": "docker-compose", "requirements": None}
+    ) == get_compose_hash({"runner": "docker-compose"})
+
+
+def test_null_docker_config_is_kept():
+    manifest = {"runner": "docker-compose", "docker_config": None}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("manifest", [{}, {"name": "x"}])
+def test_missing_runner_is_a_value_error(manifest):
+    with pytest.raises(ValueError, match="app_compose.runner is required"):
+        get_compose_hash(manifest)
+
+
+@pytest.mark.parametrize("field", ["docker_compose_file", "key_provider", "storage_fs"])
+def test_explicit_null_option_without_skip_is_kept(field):
+    manifest = {"runner": "docker-compose", field: None}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+    assert get_compose_hash(manifest, normalize=True) == get_compose_hash(manifest)
+
+
+@pytest.mark.parametrize("field", ["snapshotter", "requirements"])
+def test_explicit_null_option_with_skip_is_omitted(field):
+    assert get_compose_hash(
+        {"runner": "docker-compose", field: None}
+    ) == get_compose_hash({"runner": "docker-compose"})
+
+
+@pytest.mark.parametrize("field", ["registry", "username", "token_key"])
+def test_docker_config_explicit_null_is_kept(field):
+    manifest = {"runner": "docker-compose", "docker_config": {field: None}}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def test_dict_and_typed_docker_config_match_with_explicit_null():
+    manifest = {
+        "runner": "docker-compose",
+        "docker_config": {"registry": "r", "username": None},
+    }
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    expected = hashlib.sha256(canonical.encode()).hexdigest()
+    assert get_compose_hash(manifest) == expected
+    typed = AppCompose(**manifest)
+    assert isinstance(typed.docker_config, DockerConfig)
+    assert get_compose_hash(typed) == expected
+
+
+def test_dict_and_typed_requirements_match():
+    manifest = {"runner": "docker-compose", "requirements": {"health_check": False}}
+    assert get_compose_hash(manifest) == get_compose_hash(AppCompose(**manifest))
 
 
 def test_hashing_a_dict_does_not_consume_it():

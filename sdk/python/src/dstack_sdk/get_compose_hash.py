@@ -6,6 +6,12 @@
 
 Provides deterministic JSON serialization and SHA256 hashing of AppCompose configurations,
 compatible with the TypeScript implementation.
+
+This is not a Rust round-trip: input presence and form are preserved, without
+adding Rust defaults (including empty lists and the input form of init_script).
+The result is the deployed hash only when these exact serialized bytes are deployed.
+Numeric edge cases can differ across SDKs: Go and JavaScript lose integer
+precision above 2^53, while Python serializes 2.0 as 2.0 rather than 2.
 """
 
 import hashlib
@@ -35,6 +41,7 @@ class DockerConfig:
         self.username = username
         self.token_key = token_key
         self._extra = dict(kwargs)
+        self._explicit_nulls: set[str] = set()
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -46,6 +53,9 @@ class DockerConfig:
         if self.token_key is not None:
             result["token_key"] = self.token_key
         result.update(self._extra)
+        for field in getattr(self, "_explicit_nulls", ()):
+            if getattr(self, field, None) is None:
+                result[field] = None
         return result
 
 
@@ -72,6 +82,7 @@ class Requirements:
         self.gpu_policy = gpu_policy
         self.ephemeral_data_disk = ephemeral_data_disk
         self._extra = dict(kwargs)
+        self._explicit_nulls: set[str] = set()
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a dictionary representation excluding ``None`` fields."""
@@ -94,8 +105,15 @@ class Requirements:
         if self.ephemeral_data_disk:
             result["ephemeral_data_disk"] = True
         if self.gpu_policy is not None:
-            result["gpu_policy"] = self.gpu_policy
+            result["gpu_policy"] = {
+                key: value
+                for key, value in self.gpu_policy.items()
+                if key != "rego" or value is not None
+            }
         result.update(self._extra)
+        for field in self._explicit_nulls:
+            if getattr(self, field, None) is None:
+                result[field] = None
         return result
 
 
@@ -109,7 +127,7 @@ class AppCompose:
         name: Optional[str] = None,
         features: Optional[List[str]] = None,  # Deprecated
         docker_compose_file: Optional[str] = None,
-        docker_config: Optional[DockerConfig] = None,
+        docker_config: Optional[Union[DockerConfig, Dict[str, Any]]] = None,
         public_logs: Optional[bool] = None,
         public_sysinfo: Optional[bool] = None,
         public_tcbinfo: Optional[bool] = None,
@@ -136,7 +154,16 @@ class AppCompose:
         self.name = name
         self.features = features
         self.docker_compose_file = docker_compose_file
-        self.docker_config = docker_config
+        self.docker_config: Optional[DockerConfig]
+        if isinstance(docker_config, dict):
+            self.docker_config = DockerConfig(**docker_config)
+            self.docker_config._explicit_nulls = {
+                key
+                for key in ("registry", "username", "token_key")
+                if key in docker_config and docker_config[key] is None
+            }
+        else:
+            self.docker_config = docker_config
         self.public_logs = public_logs
         self.public_sysinfo = public_sysinfo
         self.public_tcbinfo = public_tcbinfo
@@ -150,9 +177,20 @@ class AppCompose:
         self.no_instance_id = no_instance_id
         self.secure_time = secure_time
         self.storage_discard = storage_discard
-        self.requirements = requirements
+        self.requirements = (
+            Requirements(**requirements)
+            if isinstance(requirements, dict)
+            else requirements
+        )
+        if isinstance(requirements, dict) and self.requirements is not None:
+            self.requirements._explicit_nulls = {
+                key
+                for key in ("health_check", "ephemeral_data_disk", "gpu_policy")
+                if key in requirements and requirements[key] is None
+            }
         self.bash_script = bash_script
         self.pre_launch_script = pre_launch_script
+        self._explicit_nulls: set[str] = set()
 
         # Add any additional fields
         for key, value in kwargs.items():
@@ -181,6 +219,9 @@ class AppCompose:
                         else:
                             result[attr_name] = value
 
+        for field in getattr(self, "_explicit_nulls", ()):
+            if getattr(self, field, None) is None:
+                result[field] = None
         return result
 
     @classmethod
@@ -195,40 +236,32 @@ class AppCompose:
         chain.
         """
         data = dict(data)
+        if "runner" not in data:
+            raise ValueError("app_compose.runner is required")
+        explicit_nulls = {
+            key
+            for key, value in data.items()
+            if value is None
+            and key not in ("snapshotter", "requirements", "init_script")
+        }
 
         # Handle docker_config
-        docker_config: Optional[DockerConfig] = None
-        if "docker_config" in data and data["docker_config"] is not None:
-            dc = data.pop("docker_config")
-            docker_config = DockerConfig(**dc)
+        docker_config = data.pop("docker_config", None)
 
         # Handle requirements
-        requirements: Optional[Requirements] = None
-        if "requirements" in data and data["requirements"] is not None:
-            req = data.pop("requirements")
-            requirements = Requirements(**req)
+        requirements = data.pop("requirements", None)
 
-        # Handle special float values
-        processed_data: Dict[str, Any] = {}
-        for key, value in data.items():
-            if isinstance(value, float):
-                if value != value:  # NaN check
-                    processed_data[key] = None
-                elif value == float("inf") or value == float("-inf"):
-                    processed_data[key] = None
-                else:
-                    processed_data[key] = value
-            else:
-                processed_data[key] = value
+        processed_data = data
 
-        runner_value = processed_data.pop("runner")
-        runner: str = str(runner_value)
-        return cls(
+        runner = processed_data.pop("runner")
+        result = cls(
             runner=runner,
             docker_config=docker_config,
             requirements=requirements,
             **processed_data,
         )
+        result._explicit_nulls = explicit_nulls
+        return result
 
 
 def sort_object(obj: Any) -> Any:
@@ -305,6 +338,14 @@ def get_compose_hash(
     app_compose: Union[AppCompose, Dict[str, Any]], normalize: bool = False
 ) -> str:
     """Calculate SHA256 hash of app compose configuration.
+
+    This is not a Rust round-trip: SDKs preserve input presence and form,
+    without adding Rust defaults, retaining empty lists and the input form of
+    init_script. The hash matches the deployed/on-chain hash only when those
+    exact bytes are deployed.
+
+    Numeric edge cases differ across SDKs: Go and JavaScript lose precision
+    for swap_size values above 2^53, while Python emits 2.0 where they emit 2.
 
     Args:
         app_compose: AppCompose object or dictionary

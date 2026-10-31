@@ -36,6 +36,9 @@ func EncryptEnvVars(envs []EnvVar, publicKeyHex string) (string, error) {
 		return "", fmt.Errorf("invalid public key length: expected 32 bytes, got %d", len(remotePubKey))
 	}
 
+	if envs == nil {
+		envs = []EnvVar{}
+	}
 	envJSON, err := json.Marshal(struct {
 		Env []EnvVar `json:"env"`
 	}{Env: envs})
