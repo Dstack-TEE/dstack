@@ -632,13 +632,67 @@ func NewTappdClient(opts ...DstackClientOption) *TappdClient {
 	}
 }
 
+func (tc *TappdClient) Info(ctx context.Context) (*InfoResponse, error) {
+	data, err := tc.sendRPCRequest(ctx, "/prpc/Tappd.Info", map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+	var result InfoResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+func (tc *TappdClient) GetVersion(ctx context.Context) (*VersionResponse, error) {
+	data, err := tc.sendRPCRequest(ctx, "/prpc/Tappd.Version", map[string]interface{}{})
+	if err != nil {
+		return nil, err
+	}
+	var result VersionResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+func (tc *TappdClient) Version(ctx context.Context) (*VersionResponse, error) {
+	return tc.GetVersion(ctx)
+}
+func (tc *TappdClient) IsReachable(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	_, err := tc.Info(ctx)
+	return err == nil
+}
+func tappdUnsupported() error {
+	return fmt.Errorf("unsupported on tappd.sock; use DstackClient on dstack.sock")
+}
+func (tc *TappdClient) GetKey(context.Context, string, string, string) (*GetKeyResponse, error) {
+	return nil, tappdUnsupported()
+}
+func (tc *TappdClient) GetQuote(context.Context, []byte) (*GetQuoteResponse, error) {
+	return nil, tappdUnsupported()
+}
+func (tc *TappdClient) GetTlsKey(context.Context, ...TlsKeyOption) (*GetTlsKeyResponse, error) {
+	return nil, tappdUnsupported()
+}
+func (tc *TappdClient) Attest(context.Context, []byte) (*AttestResponse, error) {
+	return nil, tappdUnsupported()
+}
+func (tc *TappdClient) Sign(context.Context, string, []byte) (*SignResponse, error) {
+	return nil, tappdUnsupported()
+}
+func (tc *TappdClient) Verify(context.Context, string, []byte, []byte, []byte) (*VerifyResponse, error) {
+	return nil, tappdUnsupported()
+}
+func (tc *TappdClient) EmitEvent(context.Context, string, []byte) error { return tappdUnsupported() }
+
 // Override deprecated methods to use proper tappd RPC paths
 
-// DeriveKey is deprecated. Use GetKey instead.
+// DeriveKey is deprecated.
 //
-// Deprecated: Use GetKey instead.
+// Deprecated: Use DstackClient on dstack.sock instead.
 func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject string, altNames []string) (*GetTlsKeyResponse, error) {
-	tc.logger.Warn("deriveKey is deprecated, please use GetKey instead")
+	tc.logger.Warn("deriveKey is deprecated, please use DstackClient instead")
 
 	if subject == "" {
 		subject = path
@@ -664,11 +718,11 @@ func (tc *TappdClient) DeriveKey(ctx context.Context, path string, subject strin
 	return &response, nil
 }
 
-// TdxQuote is deprecated. Use GetQuote instead.
+// TdxQuote is deprecated.
 //
-// Deprecated: Use GetQuote instead.
+// Deprecated: Use DstackClient on dstack.sock instead.
 func (tc *TappdClient) TdxQuote(ctx context.Context, reportData []byte, hashAlgorithm string) (*GetQuoteResponse, error) {
-	tc.logger.Warn("tdxQuote is deprecated, please use GetQuote instead")
+	tc.logger.Warn("tdxQuote is deprecated, please use DstackClient instead")
 
 	if hashAlgorithm == "raw" {
 		if len(reportData) > 64 {
