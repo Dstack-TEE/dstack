@@ -112,6 +112,7 @@ type VerityVolume struct {
 }
 
 // InitScripts holds scripts and records whether the input was a single string.
+// Its zero value marshals as an empty array.
 type InitScripts struct {
 	Scripts    []string
 	StringForm bool
@@ -141,10 +142,14 @@ func (s InitScripts) MarshalJSON() ([]byte, error) {
 		}
 		return json.Marshal(s.Scripts[0])
 	}
+	if s.Scripts == nil {
+		return []byte("[]"), nil
+	}
 	return json.Marshal(s.Scripts)
 }
 
 // SwapSize holds either a JSON number or a human-readable size string.
+// Its zero value marshals as the number 0.
 type SwapSize struct {
 	Number json.Number
 	String *string
@@ -240,8 +245,8 @@ func preprocessAppCompose(appCompose AppCompose) AppCompose {
 		delete(appCompose.Extra, "bash_script")
 	}
 
-	if appCompose.PreLaunchScript == "" {
-		// Remove empty pre_launch_script field for deterministic output
+	if value, ok := appCompose.Extra["pre_launch_script"]; ok && (value == nil || value == "") {
+		delete(appCompose.Extra, "pre_launch_script")
 	}
 
 	return appCompose
@@ -318,7 +323,12 @@ func unescapeLineSeparators(s string) string {
 	return b.String()
 }
 
-// GetComposeHash computes the SHA256 hash of the application composition
+// GetComposeHash computes the SHA256 hash of the application composition.
+// This is not a Rust round-trip: input presence and form are preserved, without
+// adding Rust defaults; empty arrays remain arrays and init_script retains its
+// input form. The hash matches the deployed hash only if those exact bytes are
+// deployed. Numeric swap_size values above 2^53 can lose precision in Go and
+// JavaScript; Python serializes floating-point 2.0 as 2.0 rather than 2.
 func GetComposeHash(appCompose AppCompose, normalize ...bool) (string, error) {
 	shouldNormalize := len(normalize) > 0 && normalize[0]
 
