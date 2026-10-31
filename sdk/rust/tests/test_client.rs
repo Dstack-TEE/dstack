@@ -10,7 +10,52 @@
 
 use dcap_qvl::quote::Quote;
 use dstack_sdk::dstack_client_v0::DstackClientV0 as AsyncDstackClient;
+use dstack_sdk_types::dstack_v0::{EventLog, InfoResponse, TlsKeyConfig};
 use sha2::{Digest, Sha256};
+
+#[test]
+fn v0_extended_fields_decode_and_serialize() {
+    let event: EventLog = serde_json::from_value(serde_json::json!({"imr": 3, "event_type": 1, "digest": "ab", "event": "test", "event_payload": "", "version": 2, "preimage": "abcd"})).unwrap();
+    assert_eq!(event.version, Some(2));
+    assert_eq!(event.preimage.as_deref(), Some("abcd"));
+    let legacy: EventLog = serde_json::from_value(serde_json::json!({"imr": 3, "event_type": 1, "digest": "ab", "event": "test", "event_payload": ""})).unwrap();
+    assert_eq!(legacy.version, None);
+    let info = InfoResponse::validated_from_value(serde_json::json!({"app_id":"", "instance_id":"", "app_cert":"", "app_name":"", "device_id":"", "key_provider_info":"", "compose_hash":"", "cloud_vendor":"vendor", "cloud_product":"product", "tcb_info": {"mrtd":null, "rtmr0":null, "rtmr1":null, "rtmr2":null, "rtmr3":null, "mr_aggregated":"abcd", "compose_hash":"", "device_id":"", "app_compose":"", "event_log":[]}})).unwrap();
+    assert_eq!(info.cloud_vendor, "vendor");
+    assert_eq!(info.cloud_product, "product");
+    assert_eq!(info.tcb_info.mrtd, None);
+    assert_eq!(info.tcb_info.mr_aggregated, "abcd");
+    let config = TlsKeyConfig::builder()
+        .not_before(10)
+        .not_after(20)
+        .with_app_info(true)
+        .build();
+    let value = serde_json::to_value(config).unwrap();
+    assert_eq!(value["not_before"], 10);
+    assert_eq!(value["not_after"], 20);
+    assert_eq!(value["with_app_info"], true);
+}
+
+#[tokio::test]
+async fn v0_get_key_supports_ed25519() {
+    let client = AsyncDstackClient::new(None);
+    let key = client
+        .get_key_with_algorithm(None, None, "ed25519")
+        .await
+        .unwrap();
+    assert_eq!(key.decode_key().unwrap().len(), 32);
+    let default = client.get_key(None, None).await.unwrap();
+    let explicit = client
+        .get_key_with_algorithm(None, None, "secp256k1")
+        .await
+        .unwrap();
+    assert_eq!(default.key, explicit.key);
+    assert_ne!(key.signature_chain, default.signature_chain);
+    assert!(client
+        .get_key_with_algorithm(None, None, "invalid")
+        .await
+        .is_err());
+}
 
 #[tokio::test]
 async fn test_async_client_get_key() {
@@ -70,11 +115,11 @@ async fn test_info() {
     assert!(!info.app_id.is_empty());
     assert!(!info.instance_id.is_empty());
     assert!(!info.app_cert.is_empty());
-    assert!(!info.tcb_info.mrtd.is_empty());
-    assert!(!info.tcb_info.rtmr0.is_empty());
-    assert!(!info.tcb_info.rtmr1.is_empty());
-    assert!(!info.tcb_info.rtmr2.is_empty());
-    assert!(!info.tcb_info.rtmr3.is_empty());
+    assert!(!info.tcb_info.mrtd.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr0.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr1.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr2.unwrap().is_empty());
+    assert!(!info.tcb_info.rtmr3.unwrap().is_empty());
     assert!(!info.tcb_info.compose_hash.is_empty());
     assert!(!info.tcb_info.device_id.is_empty());
     assert!(!info.tcb_info.app_compose.is_empty());

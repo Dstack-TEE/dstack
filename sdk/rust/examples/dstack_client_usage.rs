@@ -32,8 +32,8 @@ async fn main() -> anyhow::Result<()> {
     println!("  App Name: {}", info.app_name);
     println!("  Device ID: {}", info.device_id);
     println!("  Compose Hash: {}", info.compose_hash);
-    println!("  TCB Info - MRTD: {}", info.tcb_info.mrtd);
-    println!("  TCB Info - RTMR0: {}", info.tcb_info.rtmr0);
+    println!("  TCB Info - MRTD: {:?}", info.tcb_info.mrtd);
+    println!("  TCB Info - RTMR0: {:?}", info.tcb_info.rtmr0);
 
     // 2. Derive a key
     let response = client
