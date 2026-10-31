@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -59,7 +60,9 @@ type Requirements struct {
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
 
-	// HealthCheck opts into gateway health gating.
+	// HealthCheck opts into gateway health gating. `omitempty` is the point:
+	// the guest's Rust types skip a false `health_check`, so an app that opts
+	// out has to hash exactly as it did before this field existed.
 	HealthCheck bool `json:"health_check,omitempty"`
 	// HealthStatusFile is a pointer because `omitempty` on a string cannot tell
 	// an absent field from an empty one, and Rust, Python and JS all can.
@@ -69,7 +72,8 @@ type Requirements struct {
 	// pointer for the same reason.
 	HealthStatusFile *string `json:"health_status_file,omitempty"`
 
-	// EphemeralDataDisk formats the data disk on every boot.
+	// EphemeralDataDisk formats the data disk on every boot. Like HealthCheck,
+	// a false value must stay out of the manifest.
 	EphemeralDataDisk bool `json:"ephemeral_data_disk,omitempty"`
 
 	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
@@ -79,6 +83,8 @@ type Requirements struct {
 }
 
 // PortAttrs is the per-port policy the gateway applies.
+// After decoding, an absent port remains omitted while Port is zero; assigning
+// zero cannot mark that field as present.
 type PortAttrs struct {
 	missing map[string]bool
 	Port    uint16                 `json:"port"`
@@ -94,6 +100,8 @@ type PortPolicy struct {
 }
 
 // VerityVolume is a read-only, dm-verity-protected volume pre-seeded into the CVM.
+// After decoding, absent source, verity_root and target fields remain omitted
+// while their values are empty; assigning an empty string cannot mark them present.
 type VerityVolume struct {
 	missing map[string]bool
 	Source  string `json:"source"`
@@ -101,6 +109,69 @@ type VerityVolume struct {
 	VerityRoot string                 `json:"verity_root"`
 	Target     string                 `json:"target"`
 	Extra      map[string]interface{} `json:"-"`
+}
+
+// InitScripts holds scripts and records whether the input was a single string.
+type InitScripts struct {
+	Scripts    []string
+	StringForm bool
+}
+
+func (s *InitScripts) UnmarshalJSON(data []byte) error {
+	var single string
+	if len(data) > 0 && data[0] == '"' {
+		if err := json.Unmarshal(data, &single); err != nil {
+			return err
+		}
+		*s = InitScripts{Scripts: []string{single}, StringForm: true}
+		return nil
+	}
+	var scripts []string
+	if err := json.Unmarshal(data, &scripts); err != nil {
+		return err
+	}
+	*s = InitScripts{Scripts: scripts}
+	return nil
+}
+
+func (s InitScripts) MarshalJSON() ([]byte, error) {
+	if s.StringForm {
+		if len(s.Scripts) != 1 {
+			return nil, fmt.Errorf("string form requires exactly one init script")
+		}
+		return json.Marshal(s.Scripts[0])
+	}
+	return json.Marshal(s.Scripts)
+}
+
+// SwapSize holds either a JSON number or a human-readable size string.
+type SwapSize struct {
+	Number json.Number
+	String *string
+}
+
+func (s *SwapSize) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var value string
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		*s = SwapSize{String: &value}
+		return nil
+	}
+	var value json.Number
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*s = SwapSize{Number: value}
+	return nil
+}
+
+func (s SwapSize) MarshalJSON() ([]byte, error) {
+	if s.String != nil {
+		return json.Marshal(*s.String)
+	}
+	return json.Marshal(s.Number)
 }
 
 // AppCompose represents the application composition structure
@@ -127,11 +198,11 @@ type AppCompose struct {
 	NoInstanceID            *bool           `json:"no_instance_id,omitempty"`
 	SecureTime              *bool           `json:"secure_time,omitempty"`
 	Requirements            *Requirements   `json:"requirements,omitempty"`
-	InitScript              interface{}     `json:"init_script,omitempty"`
+	InitScript              *InitScripts    `json:"init_script,omitempty"`
 	StorageFs               string          `json:"storage_fs,omitempty"`
 	StorageDiscard          *bool           `json:"storage_discard,omitempty"`
 	// SwapSize accepts a number or a human size string, e.g. "2G".
-	SwapSize        interface{}    `json:"swap_size,omitempty"`
+	SwapSize        *SwapSize      `json:"swap_size,omitempty"`
 	EventLogVersion *uint32        `json:"event_log_version,omitempty"`
 	PortPolicy      *PortPolicy    `json:"port_policy,omitempty"`
 	VerityVolumes   []VerityVolume `json:"verity_volumes,omitempty"`
@@ -291,8 +362,19 @@ func marshalWithExtra(declared interface{}, extra map[string]interface{}) ([]byt
 		return nil, err
 	}
 	for key, value := range extra {
-		if _, declared := merged[key]; declared && value != nil {
-			continue
+		if _, present := merged[key]; present {
+			field := reflect.ValueOf(declared)
+			for field.Kind() == reflect.Ptr {
+				field = field.Elem()
+			}
+			claimed := value != nil
+			for i := 0; !claimed && i < field.NumField(); i++ {
+				name := strings.Split(field.Type().Field(i).Tag.Get("json"), ",")[0]
+				claimed = name == key && !field.Field(i).IsZero()
+			}
+			if claimed {
+				continue
+			}
 		}
 		merged[key] = value
 	}
@@ -477,6 +559,11 @@ func (a *AppCompose) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	for _, key := range []string{"snapshotter", "requirements", "init_script"} {
+		if value, ok := extra[key]; ok && value == nil {
+			delete(extra, key)
+		}
+	}
 	a.decoded = true
 	_, a.runnerPresent = fields["runner"]
 	a.Extra = extra
@@ -497,6 +584,16 @@ func (r *Requirements) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	for _, key := range []string{"platforms", "tdx_measure_acpi_tables", "launch_token_hash", "health_status_file"} {
+		if value, ok := extra[key]; ok && value == nil {
+			delete(extra, key)
+		}
+	}
+	for _, key := range []string{"health_check", "ephemeral_data_disk"} {
+		if value, ok := extra[key]; ok && value == false {
+			delete(extra, key)
+		}
+	}
 	*r = Requirements(decoded)
 	r.Extra = extra
 	return nil
@@ -515,6 +612,9 @@ func (g *GpuPolicy) UnmarshalJSON(data []byte) error {
 	extra, err := unmarshalWithExtra(data, &decoded, jsonFieldNames(GpuPolicy{}))
 	if err != nil {
 		return err
+	}
+	if value, ok := extra["rego"]; ok && value == nil {
+		delete(extra, "rego")
 	}
 	*g = GpuPolicy(decoded)
 	g.Extra = extra
