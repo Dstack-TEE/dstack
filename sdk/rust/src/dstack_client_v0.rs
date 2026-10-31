@@ -225,10 +225,21 @@ impl DstackClientV0 {
         path: Option<String>,
         purpose: Option<String>,
     ) -> Result<GetKeyResponse> {
+        self.get_key_with_algorithm(path, purpose, "secp256k1")
+            .await
+    }
+
+    /// Derive a key using the requested algorithm, such as `ed25519`.
+    pub async fn get_key_with_algorithm(
+        &self,
+        path: Option<String>,
+        purpose: Option<String>,
+        algorithm: &str,
+    ) -> Result<GetKeyResponse> {
         let data = json!({
             "path": path.unwrap_or_default(),
             "purpose": purpose.unwrap_or_default(),
-            "algorithm": "secp256k1", // Default or specify as needed
+            "algorithm": algorithm,
         });
         let response = self.send_rpc_request("/GetKey", &data).await?;
         let response = serde_json::from_value::<GetKeyResponse>(response)?;

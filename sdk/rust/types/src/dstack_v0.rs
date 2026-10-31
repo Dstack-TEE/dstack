@@ -27,6 +27,12 @@ pub struct EventLog {
     pub event: String,
     /// The payload data associated with the event
     pub event_payload: String,
+    /// Runtime event digest format version, absent for legacy events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    /// Hex-encoded digest preimage, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preimage: Option<String>,
 }
 
 /// Configuration for TLS key generation
@@ -49,6 +55,16 @@ pub struct TlsKeyConfig {
     /// Whether the key should be used for client authentication
     #[builder(default = false)]
     pub usage_client_auth: bool,
+    /// Earliest certificate validity time, as a Unix timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<u64>,
+    /// Latest certificate validity time, as a Unix timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_after: Option<u64>,
+    /// Include application information in the certificate.
+    #[builder(default = false)]
+    #[serde(default)]
+    pub with_app_info: bool,
 }
 
 /// Response containing a key and its signature chain
@@ -145,6 +161,12 @@ pub struct InfoResponse {
     /// VM configuration
     #[serde(default)]
     pub vm_config: String,
+    /// Cloud provider vendor.
+    #[serde(default)]
+    pub cloud_vendor: String,
+    /// Cloud provider product.
+    #[serde(default)]
+    pub cloud_product: String,
 }
 
 impl InfoResponse {
@@ -163,15 +185,18 @@ impl InfoResponse {
 #[cfg_attr(feature = "borsh_schema", derive(BorshSchema))]
 pub struct TcbInfo {
     /// The measurement root of trust
-    pub mrtd: String,
+    pub mrtd: Option<String>,
     /// The value of RTMR0 (Runtime Measurement Register 0)
-    pub rtmr0: String,
+    pub rtmr0: Option<String>,
     /// The value of RTMR1 (Runtime Measurement Register 1)
-    pub rtmr1: String,
+    pub rtmr1: Option<String>,
     /// The value of RTMR2 (Runtime Measurement Register 2)
-    pub rtmr2: String,
+    pub rtmr2: Option<String>,
     /// The value of RTMR3 (Runtime Measurement Register 3)
-    pub rtmr3: String,
+    pub rtmr3: Option<String>,
+    /// The aggregated measurement register.
+    #[serde(default)]
+    pub mr_aggregated: String,
     /// The hash of the OS image. This is empty if the OS image is not measured by KMS.
     #[serde(default)]
     pub os_image_hash: String,
