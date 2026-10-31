@@ -7,11 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- sdk/rust (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` changed from `String` to `Option<String>` because the server emits null on non-TDX backends; new public fields on `TlsKeyConfig`, `EventLog` and `InfoResponse` break struct-literal construction
-- sdk/python (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` are now `Optional[str]`
-- sdk/go (breaking): `AppCompose.InitScript` and `AppCompose.SwapSize` changed to the named types `*InitScripts` and `*SwapSize`
-
 ### Fixed
 - SEV-SNP: coalesce concurrent endorsement-certificate fetches and preserve typed collateral errors. The verifier returns HTTP 503 for unavailable AMD endorsements instead of declaring a quote invalid; cryptographic failures still fail verification.
 
@@ -22,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - guest: a fresh CVM with a verity volume could take the volume for its data disk and try to LUKS-format it: volumes labelled their data partition `dstack-data`, the data disk's label. `dstack verity` now labels it `dstack-volume-data`, and the guest skips disks that carry a `dstack-volume` partition, so volumes built by older releases are safe too
 
 ### Changed
+- sdk/rust (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` changed from `String` to `Option<String>` because the server emits null on non-TDX backends; new public fields on `TlsKeyConfig`, `EventLog` and `InfoResponse` break struct-literal construction
+- sdk/python (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` are now `Optional[str]`
+- sdk/go (breaking): `AppCompose.InitScript` and `AppCompose.SwapSize` changed to the named types `*InitScripts` and `*SwapSize`
 - guest-agent: the external listener (port 8090) is no longer anonymous. Every route needs a scope, granted by a signed Ed25519 JWT or by `[cvm.guest_agent_api].anonymous_scopes` in sys-config. There is no built-in anonymous default; the sample `vmm.toml` opens `guest:dashboard`, `guest:info`, `guest:version` and `guest:health`, which is what an unconfigured 8090 used to serve, while containers, logs, metrics and app-key attestation stay behind a token. The gateway gets its token minted inside the CVM from the app root key. `public_logs` / `public_sysinfo` / `public_tcbinfo` are unchanged and still decide what may leave the TEE. The dashboard is filtered block by block by scope. See `docs/guest-api-auth.md`. An old gateway sees 401s and drops new guests from rotation until it is upgraded
 - vmm: `qmp_socket` now defaults to `true`. Each CVM's QEMU exposes `qmp.sock` in its work dir, so the host can change disk options or compact a bloated `hda.img` (`blockdev-mirror`) without stopping the CVM. Applies to CVMs started after the change; set `qmp_socket = false` to opt out
 
