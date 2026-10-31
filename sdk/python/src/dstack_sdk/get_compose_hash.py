@@ -150,7 +150,11 @@ class AppCompose:
         self.no_instance_id = no_instance_id
         self.secure_time = secure_time
         self.storage_discard = storage_discard
-        self.requirements = requirements
+        self.requirements = (
+            Requirements(**requirements)
+            if isinstance(requirements, dict)
+            else requirements
+        )
         self.bash_script = bash_script
         self.pre_launch_script = pre_launch_script
 
@@ -198,14 +202,14 @@ class AppCompose:
 
         # Handle docker_config
         docker_config: Optional[DockerConfig] = None
-        if "docker_config" in data and data["docker_config"] is not None:
-            dc = data.pop("docker_config")
+        dc = data.pop("docker_config", None)
+        if dc is not None:
             docker_config = DockerConfig(**dc)
 
         # Handle requirements
         requirements: Optional[Requirements] = None
-        if "requirements" in data and data["requirements"] is not None:
-            req = data.pop("requirements")
+        req = data.pop("requirements", None)
+        if req is not None:
             requirements = Requirements(**req)
 
         # Handle special float values

@@ -3,6 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
+
+import pytest
 
 from dstack_sdk.get_compose_hash import AppCompose
 from dstack_sdk.get_compose_hash import DockerConfig
@@ -422,6 +425,27 @@ def test_an_unknown_requirement_still_reaches_the_hash():
     )
 
     assert get_compose_hash(plain) != get_compose_hash(future)
+
+
+def test_cross_language_compose_hash_fixture():
+    path = Path(__file__).resolve().parents[2] / "tests" / "compose-hash-fixture.json"
+    fixture = json.loads(path.read_text())
+    for case in fixture["cases"]:
+        assert (
+            get_compose_hash(case["app_compose"], normalize=False) == case["sha256"]
+        ), case["name"]
+
+
+@pytest.mark.parametrize("field", ["requirements", "docker_config"])
+def test_null_nested_fields(field):
+    assert get_compose_hash(
+        {"runner": "docker-compose", field: None}
+    ) == get_compose_hash({"runner": "docker-compose"})
+
+
+def test_dict_and_typed_requirements_match():
+    manifest = {"runner": "docker-compose", "requirements": {"health_check": False}}
+    assert get_compose_hash(manifest) == get_compose_hash(AppCompose(**manifest))
 
 
 def test_hashing_a_dict_does_not_consume_it():
