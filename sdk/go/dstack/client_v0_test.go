@@ -20,6 +20,46 @@ import (
 	"github.com/Dstack-TEE/dstack/sdk/go/dstack"
 )
 
+func TestTappdRoutes(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { paths = append(paths, r.URL.Path); w.Write([]byte(`{}`)) }))
+	defer server.Close()
+	client := dstack.NewTappdClient(dstack.WithEndpoint(server.URL))
+	ctx := context.Background()
+	if _, err := client.Info(ctx); err != nil {
+		t.Error(err)
+	}
+	if _, err := client.GetVersion(ctx); err != nil {
+		t.Error(err)
+	}
+	if !client.IsReachable(ctx) {
+		t.Error("unreachable")
+	}
+	want := []string{"/prpc/Tappd.Info", "/prpc/Tappd.Version", "/prpc/Tappd.Info"}
+	if fmt.Sprint(paths) != fmt.Sprint(want) {
+		t.Errorf("paths %v want %v", paths, want)
+	}
+	paths = nil
+	checks := []func() error{
+		func() error { _, e := client.GetKey(ctx, "x", "", "secp256k1"); return e },
+		func() error { _, e := client.GetQuote(ctx, nil); return e },
+		func() error { _, e := client.GetTlsKey(ctx); return e },
+		func() error { _, e := client.Attest(ctx, nil); return e },
+		func() error { _, e := client.Sign(ctx, "x", nil); return e },
+		func() error { _, e := client.Verify(ctx, "x", nil, nil, nil); return e },
+		func() error { return client.EmitEvent(ctx, "x", nil) },
+	}
+	for _, check := range checks {
+		err := check()
+		if err == nil || !strings.Contains(err.Error(), "DstackClient") || !strings.Contains(err.Error(), "dstack.sock") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	if len(paths) != 0 {
+		t.Errorf("unexpected requests: %v", paths)
+	}
+}
+
 func TestGetKey(t *testing.T) {
 	client := dstack.NewDstackClientV0()
 	resp, err := client.GetKey(context.Background(), "/", "test", "ed25519")

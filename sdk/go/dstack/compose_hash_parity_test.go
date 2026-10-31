@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -50,6 +51,56 @@ const fullAppCompose = `{
     "gpu_policy": {"attest_gpu": true, "rego": "package policy", "allow_devtools": true}
   }
 }`
+
+func TestComposeHashFixture(t *testing.T) {
+	data, err := os.ReadFile("../../tests/compose-hash-fixture.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name       string          `json:"name"`
+			AppCompose json.RawMessage `json:"app_compose"`
+			SHA256     string          `json:"sha256"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			var compose AppCompose
+			if err := json.Unmarshal(tc.AppCompose, &compose); err != nil {
+				t.Fatal(err)
+			}
+			got, err := GetComposeHash(compose)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.SHA256 {
+				t.Fatalf("got %s want %s", got, tc.SHA256)
+			}
+		})
+	}
+}
+
+func TestComposePresenceAndNestedExtras(t *testing.T) {
+	for _, raw := range []string{`{"name":"x"}`, `{"runner":"bash","port_policy":{"ports":[{}]},"verity_volumes":[{}]}`, `{"runner":null}`, `{"runner":"docker-compose","key_provider_id":"","allowed_envs":[],"public_logs":false,"requirements":null}`, `{"runner":"docker-compose","requirements":{"health_check":false,"ephemeral_data_disk":false,"launch_token_hash":""},"docker_config":{"registry":"","future":1},"port_policy":{"ports":[{"port":1,"pp":false,"future":2}],"restrict_mode":false,"future":3},"verity_volumes":[{"source":"","target":"","verity_root":"","future":4}]}`, `{"runner":"bash","swap_size":123,"init_script":"hello"}`} {
+		var compose AppCompose
+		if err := json.Unmarshal([]byte(raw), &compose); err != nil {
+			t.Error(err)
+			continue
+		}
+		got, err := GetComposeHash(compose)
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		if want := hashOfRawJSON(t, raw); got != want {
+			t.Errorf("%s: got %s want %s", raw, got, want)
+		}
+	}
+}
 
 func hashOfRawJSON(t *testing.T, raw string) string {
 	t.Helper()

@@ -25,9 +25,10 @@ const (
 
 // DockerConfig represents Docker configuration
 type DockerConfig struct {
-	Registry string `json:"registry,omitempty"`
-	Username string `json:"username,omitempty"`
-	TokenKey string `json:"token_key,omitempty"`
+	Registry string                 `json:"registry,omitempty"`
+	Username string                 `json:"username,omitempty"`
+	TokenKey string                 `json:"token_key,omitempty"`
+	Extra    map[string]interface{} `json:"-"`
 }
 
 // RequirementPlatform represents an allowed guest attestation platform.
@@ -58,9 +59,7 @@ type Requirements struct {
 	TdxMeasureAcpiTables *bool                  `json:"tdx_measure_acpi_tables,omitempty"`
 	LaunchTokenHash      string                 `json:"launch_token_hash,omitempty"`
 
-	// HealthCheck opts into gateway health gating. `omitempty` is the point:
-	// the guest's Rust types skip a false `health_check`, so an app that opts
-	// out has to hash exactly as it did before this field existed.
+	// HealthCheck opts into gateway health gating.
 	HealthCheck bool `json:"health_check,omitempty"`
 	// HealthStatusFile is a pointer because `omitempty` on a string cannot tell
 	// an absent field from an empty one, and Rust, Python and JS all can.
@@ -70,8 +69,7 @@ type Requirements struct {
 	// pointer for the same reason.
 	HealthStatusFile *string `json:"health_status_file,omitempty"`
 
-	// EphemeralDataDisk formats the data disk on every boot. Like HealthCheck,
-	// a false value must stay out of the manifest.
+	// EphemeralDataDisk formats the data disk on every boot.
 	EphemeralDataDisk bool `json:"ephemeral_data_disk,omitempty"`
 
 	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
@@ -82,26 +80,33 @@ type Requirements struct {
 
 // PortAttrs is the per-port policy the gateway applies.
 type PortAttrs struct {
-	Port uint16 `json:"port"`
-	Pp   bool   `json:"pp,omitempty"`
+	missing map[string]bool
+	Port    uint16                 `json:"port"`
+	Pp      bool                   `json:"pp,omitempty"`
+	Extra   map[string]interface{} `json:"-"`
 }
 
 // PortPolicy is the per-port policy consumed by the gateway.
 type PortPolicy struct {
-	Ports        []PortAttrs `json:"ports,omitempty"`
-	RestrictMode bool        `json:"restrict_mode,omitempty"`
+	Ports        []PortAttrs            `json:"ports,omitempty"`
+	RestrictMode bool                   `json:"restrict_mode,omitempty"`
+	Extra        map[string]interface{} `json:"-"`
 }
 
 // VerityVolume is a read-only, dm-verity-protected volume pre-seeded into the CVM.
 type VerityVolume struct {
-	Source string `json:"source"`
+	missing map[string]bool
+	Source  string `json:"source"`
 	// VerityRoot is the dm-verity root hash, hex encoded.
-	VerityRoot string `json:"verity_root"`
-	Target     string `json:"target"`
+	VerityRoot string                 `json:"verity_root"`
+	Target     string                 `json:"target"`
+	Extra      map[string]interface{} `json:"-"`
 }
 
 // AppCompose represents the application composition structure
 type AppCompose struct {
+	decoded                 bool
+	runnerPresent           bool
 	ManifestVersion         interface{}     `json:"manifest_version,omitempty"`
 	Name                    string          `json:"name,omitempty"`
 	Features                []string        `json:"features,omitempty"` // Deprecated
@@ -122,11 +127,11 @@ type AppCompose struct {
 	NoInstanceID            *bool           `json:"no_instance_id,omitempty"`
 	SecureTime              *bool           `json:"secure_time,omitempty"`
 	Requirements            *Requirements   `json:"requirements,omitempty"`
-	InitScript              []string        `json:"init_script,omitempty"`
+	InitScript              interface{}     `json:"init_script,omitempty"`
 	StorageFs               string          `json:"storage_fs,omitempty"`
 	StorageDiscard          *bool           `json:"storage_discard,omitempty"`
-	// SwapSize is a human size string, e.g. "2G", matching what the guest reads.
-	SwapSize        string         `json:"swap_size,omitempty"`
+	// SwapSize accepts a number or a human size string, e.g. "2G".
+	SwapSize        interface{}    `json:"swap_size,omitempty"`
 	EventLogVersion *uint32        `json:"event_log_version,omitempty"`
 	PortPolicy      *PortPolicy    `json:"port_policy,omitempty"`
 	VerityVolumes   []VerityVolume `json:"verity_volumes,omitempty"`
@@ -149,10 +154,19 @@ type AppCompose struct {
 
 // preprocessAppCompose removes conflicting fields based on runner type
 func preprocessAppCompose(appCompose AppCompose) AppCompose {
+	if appCompose.Extra != nil {
+		extra := make(map[string]interface{}, len(appCompose.Extra))
+		for key, value := range appCompose.Extra {
+			extra[key] = value
+		}
+		appCompose.Extra = extra
+	}
 	if appCompose.Runner == "bash" {
 		appCompose.DockerComposeFile = ""
+		delete(appCompose.Extra, "docker_compose_file")
 	} else if appCompose.Runner == "docker-compose" || appCompose.Runner == "nerdctl-compose" {
 		appCompose.BashScript = ""
+		delete(appCompose.Extra, "bash_script")
 	}
 
 	if appCompose.PreLaunchScript == "" {
@@ -277,7 +291,7 @@ func marshalWithExtra(declared interface{}, extra map[string]interface{}) ([]byt
 		return nil, err
 	}
 	for key, value := range extra {
-		if _, declared := merged[key]; declared {
+		if _, declared := merged[key]; declared && value != nil {
 			continue
 		}
 		merged[key] = value
@@ -294,10 +308,20 @@ func unmarshalWithExtra(data []byte, declared interface{}, known map[string]stru
 	if err := json.Unmarshal(data, &all); err != nil {
 		return nil, err
 	}
+	encoded, err := json.Marshal(declared)
+	if err != nil {
+		return nil, err
+	}
+	var emitted map[string]interface{}
+	if err := json.Unmarshal(encoded, &emitted); err != nil {
+		return nil, err
+	}
 	var extra map[string]interface{}
 	for key, value := range all {
 		if _, ok := known[key]; ok {
-			continue
+			if _, present := emitted[key]; present && value != nil {
+				continue
+			}
 		}
 		if extra == nil {
 			extra = map[string]interface{}{}
@@ -326,10 +350,118 @@ func jsonFieldNames(v interface{}) map[string]struct{} {
 	return names
 }
 
+func missingFields(data []byte, names ...string) map[string]bool {
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(data, &fields)
+	missing := make(map[string]bool)
+	for _, name := range names {
+		if _, ok := fields[name]; !ok {
+			missing[name] = true
+		}
+	}
+	return missing
+}
+
+func omitMissing(data []byte, missing map[string]bool) ([]byte, error) {
+	if len(missing) == 0 {
+		return data, nil
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	for name := range missing {
+		if fields[name] == "" || fields[name] == float64(0) {
+			delete(fields, name)
+		}
+	}
+	return json.Marshal(fields)
+}
+
+func (d DockerConfig) MarshalJSON() ([]byte, error) {
+	type inner DockerConfig
+	return marshalWithExtra(inner(d), d.Extra)
+}
+func (d *DockerConfig) UnmarshalJSON(data []byte) error {
+	type inner DockerConfig
+	var v inner
+	extra, err := unmarshalWithExtra(data, &v, jsonFieldNames(DockerConfig{}))
+	if err != nil {
+		return err
+	}
+	*d = DockerConfig(v)
+	d.Extra = extra
+	return nil
+}
+func (p PortPolicy) MarshalJSON() ([]byte, error) {
+	type inner PortPolicy
+	return marshalWithExtra(inner(p), p.Extra)
+}
+func (p *PortPolicy) UnmarshalJSON(data []byte) error {
+	type inner PortPolicy
+	var v inner
+	extra, err := unmarshalWithExtra(data, &v, jsonFieldNames(PortPolicy{}))
+	if err != nil {
+		return err
+	}
+	*p = PortPolicy(v)
+	p.Extra = extra
+	return nil
+}
+func (p PortAttrs) MarshalJSON() ([]byte, error) {
+	type inner PortAttrs
+	data, err := marshalWithExtra(inner(p), p.Extra)
+	if err != nil {
+		return nil, err
+	}
+	return omitMissing(data, p.missing)
+}
+func (p *PortAttrs) UnmarshalJSON(data []byte) error {
+	type inner PortAttrs
+	var v inner
+	extra, err := unmarshalWithExtra(data, &v, jsonFieldNames(PortAttrs{}))
+	if err != nil {
+		return err
+	}
+	*p = PortAttrs(v)
+	p.missing = missingFields(data, "port")
+	p.Extra = extra
+	return nil
+}
+func (v VerityVolume) MarshalJSON() ([]byte, error) {
+	type inner VerityVolume
+	data, err := marshalWithExtra(inner(v), v.Extra)
+	if err != nil {
+		return nil, err
+	}
+	return omitMissing(data, v.missing)
+}
+func (v *VerityVolume) UnmarshalJSON(data []byte) error {
+	type inner VerityVolume
+	var x inner
+	extra, err := unmarshalWithExtra(data, &x, jsonFieldNames(VerityVolume{}))
+	if err != nil {
+		return err
+	}
+	*v = VerityVolume(x)
+	v.missing = missingFields(data, "source", "verity_root", "target")
+	v.Extra = extra
+	return nil
+}
+
 // MarshalJSON writes the declared fields plus anything in Extra.
 func (a AppCompose) MarshalJSON() ([]byte, error) {
 	type inner AppCompose
-	return marshalWithExtra(inner(a), a.Extra)
+	data, err := marshalWithExtra(inner(a), a.Extra)
+	if err != nil || !a.decoded || a.runnerPresent || a.Runner != "" {
+		return data, err
+	}
+	var values map[string]interface{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, err
+	}
+	delete(values, "runner")
+	return json.Marshal(values)
 }
 
 // UnmarshalJSON fills the declared fields and keeps the rest in Extra.
@@ -341,6 +473,12 @@ func (a *AppCompose) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*a = AppCompose(decoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	a.decoded = true
+	_, a.runnerPresent = fields["runner"]
 	a.Extra = extra
 	return nil
 }
