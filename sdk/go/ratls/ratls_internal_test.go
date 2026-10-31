@@ -34,6 +34,19 @@ func TestBootEventLookup(t *testing.T) {
 	}
 }
 
+func TestBootEventsLookup(t *testing.T) {
+	result := VerifyResult{RuntimeEvents: []RuntimeEvent{
+		{Event: "init-script-hash", Payload: []byte("first")},
+		{Event: "init-script-hash", Payload: []byte("second")},
+		{Event: "system-ready"},
+		{Event: "init-script-hash", Payload: []byte("injected")},
+	}}
+	values := result.BootEvents("init-script-hash")
+	if len(values) != 2 || string(values[0]) != "first" || string(values[1]) != "second" {
+		t.Fatalf("unexpected boot events: %q", values)
+	}
+}
+
 func TestNilVerifyRejected(t *testing.T) {
 	if err := buildConfig([]Option{WithVerify(nil)}).applyPolicy(&VerifyResult{}); err == nil {
 		t.Fatal("nil policy accepted")
