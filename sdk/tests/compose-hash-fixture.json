@@ -1,0 +1,100 @@
+{
+  "description": "Canonical SDK compose hashes with normalize=false. Excludes explicit top-level null values and requirements health_check:false or ephemeral_data_disk:false because Python and JavaScript differ.",
+  "cases": [
+    {
+      "name": "empty_key_provider_id",
+      "app_compose": {
+        "runner": "docker-compose",
+        "key_provider_id": ""
+      },
+      "sha256": "36bc4c19396219c19da36438d1c50531c8d31f20ebde629cd0d0896b2f760743"
+    },
+    {
+      "name": "empty_allowed_envs",
+      "app_compose": {
+        "runner": "docker-compose",
+        "allowed_envs": []
+      },
+      "sha256": "840fd8ae67acfeffbe70ea6e3b187c303941d036c0ce0dbd376396fcc0bc8f12"
+    },
+    {
+      "name": "false_public_logs",
+      "app_compose": {
+        "runner": "docker-compose",
+        "public_logs": false
+      },
+      "sha256": "fdfde75b7ebcc930d26203e091660dfaaafc455992829aad48b4b79138ebd16c"
+    },
+    {
+      "name": "integer_swap_size",
+      "app_compose": {
+        "runner": "docker-compose",
+        "swap_size": 1024
+      },
+      "sha256": "fddf42f9ef77f9cc2d3afe65d4bd5a1e1ee26b72a00612fd8926a86605636595"
+    },
+    {
+      "name": "string_init_script",
+      "app_compose": {
+        "runner": "docker-compose",
+        "init_script": "echo hello"
+      },
+      "sha256": "22c0131c096d02e845e8bafb6a13cda126878c364c2663eb69a9c0a4142cb383"
+    },
+    {
+      "name": "docker_config_extra",
+      "app_compose": {
+        "runner": "docker-compose",
+        "docker_config": {
+          "registry": "example.org",
+          "future": {
+            "enabled": false,
+            "values": []
+          }
+        }
+      },
+      "sha256": "21fbdc1b71d9b62427f964728e29c299e70b1972d0e2d4a3dfa3a129249a411e"
+    },
+    {
+      "name": "fully_populated",
+      "app_compose": {
+        "runner": "docker-compose",
+        "manifest_version": 2,
+        "name": "example",
+        "docker_compose_file": "services:\n  web:\n    image: nginx\n",
+        "docker_config": {
+          "registry": "example.org",
+          "username": "user",
+          "token_key": "token"
+        },
+        "public_logs": true,
+        "public_sysinfo": true,
+        "public_tcbinfo": true,
+        "kms_enabled": true,
+        "gateway_enabled": true,
+        "key_provider": "kms",
+        "key_provider_id": "provider",
+        "allowed_envs": [
+          "FOO",
+          "BAR"
+        ],
+        "no_instance_id": true,
+        "secure_time": true,
+        "storage_discard": true,
+        "requirements": {
+          "platforms": [
+            "tdx"
+          ],
+          "health_check": true,
+          "health_status_file": "/health",
+          "launch_token_hash": "abcd"
+        },
+        "swap_size": 2048,
+        "init_script": [
+          "echo ready"
+        ]
+      },
+      "sha256": "7c0db6c258626ac4a5d200d5c91d58c36cb77af0399fd4eff9aaf4965290dd54"
+    }
+  ]
+}

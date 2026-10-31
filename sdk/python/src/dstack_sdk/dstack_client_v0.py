@@ -194,11 +194,11 @@ class EventLog(BaseModel):
 class TcbInfo(BaseModel):
     """Base TCB (Trusted Computing Base) information structure."""
 
-    mrtd: str
-    rtmr0: str
-    rtmr1: str
-    rtmr2: str
-    rtmr3: str
+    mrtd: Optional[str] = None
+    rtmr0: Optional[str] = None
+    rtmr1: Optional[str] = None
+    rtmr2: Optional[str] = None
+    rtmr3: Optional[str] = None
     app_compose: str
     event_log: List[EventLog]
 
@@ -454,6 +454,10 @@ class AsyncDstackClientV0(AsyncBaseClient):
             )
         super().__init__(endpoint, use_sync_http=use_sync_http, timeout=timeout)
 
+    def _require_dstack_socket(self) -> None:
+        if isinstance(self, AsyncTappdClient):
+            raise RuntimeError("use DstackClient on dstack.sock for this method")
+
     async def _ensure_algorithm_supported(self, algorithm: str) -> None:
         """Check OS version when a non-secp256k1 algorithm is requested."""
         if algorithm in ("secp256k1", "k256", ""):
@@ -484,6 +488,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
         algorithm: str = "secp256k1",
     ) -> GetKeyResponse:
         """Derive a key from the given path, purpose, and algorithm."""
+        self._require_dstack_socket()
         await self._ensure_algorithm_supported(algorithm)
         data: Dict[str, Any] = {
             "path": path or "",
@@ -504,6 +509,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
         the vTPM quote GCP's verification also binds. Use ``attest()`` in both
         cases.
         """
+        self._require_dstack_socket()
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
         report_bytes: bytes = (
@@ -520,6 +526,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
         report_data: str | bytes,
     ) -> AttestResponse:
         """Request a versioned attestation for the provided report data."""
+        self._require_dstack_socket()
         if not report_data or not isinstance(report_data, (bytes, str)):
             raise ValueError("report_data can not be empty")
         report_bytes: bytes = (
@@ -547,6 +554,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
         agent now fails every call. The method stays so that a caller written
         against 0.5.x gets the agent's own explanation rather than a 404.
         """
+        self._require_dstack_socket()
         if not event:
             raise ValueError("event name cannot be empty")
 
@@ -576,6 +584,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
         the SDK probes the guest agent ``Version`` RPC first and raises a
         clear error on older OS images.
         """
+        self._require_dstack_socket()
         new_features: List[str] = []
         if not_before is not None:
             new_features.append("not_before")
@@ -606,6 +615,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
 
     async def sign(self, algorithm: str, data: str | bytes) -> SignResponse:
         """Signs data using a derived key."""
+        self._require_dstack_socket()
         data_bytes = data.encode() if isinstance(data, str) else data
         if algorithm == "secp256k1_prehashed" and len(data_bytes) != 32:
             raise ValueError(
@@ -625,6 +635,7 @@ class AsyncDstackClientV0(AsyncBaseClient):
         public_key: str | bytes,
     ) -> VerifyResponse:
         """Verify a signature."""
+        self._require_dstack_socket()
         data_bytes = data.encode() if isinstance(data, str) else data
         sig_bytes = signature.encode() if isinstance(signature, str) else signature
         pk_bytes = public_key.encode() if isinstance(public_key, str) else public_key
@@ -818,8 +829,10 @@ class AsyncTappdClient(AsyncDstackClientV0):
         subject: str | None = None,
         alt_names: List[str] | None = None,
     ) -> GetTlsKeyResponse:
-        """Use ``get_key`` instead (deprecated)."""
-        emit_deprecation_warning("derive_key is deprecated, please use get_key instead")
+        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
+        emit_deprecation_warning(
+            "derive_key is deprecated, use DstackClient on dstack.sock instead"
+        )
 
         data: Dict[str, Any] = {
             "path": path or "",
@@ -836,9 +849,9 @@ class AsyncTappdClient(AsyncDstackClientV0):
         report_data: str | bytes,
         hash_algorithm: str | None = None,
     ) -> GetQuoteResponse:
-        """Use ``get_quote`` instead (deprecated)."""
+        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
         emit_deprecation_warning(
-            "tdx_quote is deprecated, please use get_quote instead"
+            "tdx_quote is deprecated, use DstackClient on dstack.sock instead"
         )
 
         if not report_data or not isinstance(report_data, (bytes, str)):
@@ -857,7 +870,9 @@ class AsyncTappdClient(AsyncDstackClientV0):
             if len(hex_data) < 128:
                 hex_data = hex_data.zfill(128)
 
-        payload = {"report_data": hex_data, "hash_algorithm": hash_algorithm or "raw"}
+        payload = {"report_data": hex_data}
+        if hash_algorithm is not None:
+            payload["hash_algorithm"] = hash_algorithm
 
         result = await self._send_rpc_request("TdxQuote", payload)
 
@@ -895,7 +910,7 @@ class TappdClient(DstackClientV0):
         subject: str | None = None,
         alt_names: List[str] | None = None,
     ) -> GetTlsKeyResponse:
-        """Use ``get_key`` instead (deprecated)."""
+        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
         raise NotImplementedError
 
     @call_async
@@ -904,7 +919,7 @@ class TappdClient(DstackClientV0):
         report_data: str | bytes,
         hash_algorithm: str | None = None,
     ) -> GetQuoteResponse:
-        """Use ``get_quote`` instead (deprecated)."""
+        """Use ``DstackClient`` on dstack.sock instead (deprecated)."""
         raise NotImplementedError
 
     @call_async
