@@ -481,11 +481,16 @@ def test_health_check_false_is_omitted():
     ) == get_compose_hash({"runner": "docker-compose", "requirements": {}})
 
 
-@pytest.mark.parametrize("field", ["requirements", "docker_config"])
-def test_null_nested_fields(field):
+def test_null_nested_fields():
     assert get_compose_hash(
-        {"runner": "docker-compose", field: None}
+        {"runner": "docker-compose", "requirements": None}
     ) == get_compose_hash({"runner": "docker-compose"})
+
+
+def test_null_docker_config_is_kept():
+    manifest = {"runner": "docker-compose", "docker_config": None}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
 
 
 @pytest.mark.parametrize("manifest", [{}, {"name": "x"}])
