@@ -1,5 +1,5 @@
 {
-  "description": "Canonical SDK compose hashes with normalize=false. Excludes explicit top-level null values and requirements health_check:false or ephemeral_data_disk:false because Python and JavaScript differ.",
+  "description": "Canonical SDK compose hashes with normalize=false. Explicit null is kept for Option fields without skip_serializing_if and omitted for Option fields with it; false is omitted for is_false fields and otherwise kept.",
   "cases": [
     {
       "name": "empty_key_provider_id",
@@ -95,6 +95,53 @@
         ]
       },
       "sha256": "7c0db6c258626ac4a5d200d5c91d58c36cb77af0399fd4eff9aaf4965290dd54"
+    },
+    {
+      "name": "null_key_provider",
+      "app_compose": {
+        "runner": "docker-compose",
+        "key_provider": null
+      },
+      "sha256": "2c2493967c69dbccffcba847892048676098dda2b96c292349cf824c55f7706c"
+    },
+    {
+      "name": "null_requirements",
+      "app_compose": {
+        "runner": "docker-compose",
+        "requirements": null
+      },
+      "sha256": "1120e42a7b5f2ca50128696ea414771441b4fa92373427108a7173181cc80b55"
+    },
+    {
+      "name": "false_health_check",
+      "app_compose": {
+        "runner": "docker-compose",
+        "requirements": {
+          "health_check": false
+        }
+      },
+      "sha256": "63f51e97d2205a09f709b463cc4f1e3e16b04b1a5d70d69379dd2b1e6f3f50e1"
+    },
+    {
+      "name": "false_ephemeral_data_disk",
+      "app_compose": {
+        "runner": "docker-compose",
+        "requirements": {
+          "ephemeral_data_disk": false
+        }
+      },
+      "sha256": "63f51e97d2205a09f709b463cc4f1e3e16b04b1a5d70d69379dd2b1e6f3f50e1"
+    },
+    {
+      "name": "false_restrict_mode",
+      "app_compose": {
+        "runner": "docker-compose",
+        "port_policy": {
+          "ports": [],
+          "restrict_mode": false
+        }
+      },
+      "sha256": "3b647a53cded50c2d33f29bc07dd2ce7871d08cdff6e41d76f915d262c58bf57"
     }
   ]
 }

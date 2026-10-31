@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -441,6 +442,47 @@ def test_null_nested_fields(field):
     assert get_compose_hash(
         {"runner": "docker-compose", field: None}
     ) == get_compose_hash({"runner": "docker-compose"})
+
+
+@pytest.mark.parametrize("manifest", [{}, {"name": "x"}])
+def test_missing_runner_is_a_value_error(manifest):
+    with pytest.raises(ValueError, match="app_compose.runner is required"):
+        get_compose_hash(manifest)
+
+
+@pytest.mark.parametrize("field", ["docker_compose_file", "key_provider", "storage_fs"])
+def test_explicit_null_option_without_skip_is_kept(field):
+    manifest = {"runner": "docker-compose", field: None}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+    assert get_compose_hash(manifest, normalize=True) == get_compose_hash(manifest)
+
+
+@pytest.mark.parametrize("field", ["snapshotter", "requirements"])
+def test_explicit_null_option_with_skip_is_omitted(field):
+    assert get_compose_hash(
+        {"runner": "docker-compose", field: None}
+    ) == get_compose_hash({"runner": "docker-compose"})
+
+
+@pytest.mark.parametrize("field", ["registry", "username", "token_key"])
+def test_docker_config_explicit_null_is_kept(field):
+    manifest = {"runner": "docker-compose", "docker_config": {field: None}}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def test_dict_and_typed_docker_config_match_with_explicit_null():
+    manifest = {
+        "runner": "docker-compose",
+        "docker_config": {"registry": "r", "username": None},
+    }
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    expected = hashlib.sha256(canonical.encode()).hexdigest()
+    assert get_compose_hash(manifest) == expected
+    typed = AppCompose(**manifest)
+    assert isinstance(typed.docker_config, DockerConfig)
+    assert get_compose_hash(typed) == expected
 
 
 def test_dict_and_typed_requirements_match():
