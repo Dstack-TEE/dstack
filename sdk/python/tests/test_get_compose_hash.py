@@ -433,8 +433,52 @@ def test_cross_language_compose_hash_fixture():
     fixture = json.loads(path.read_text())
     for case in fixture["cases"]:
         assert (
-            get_compose_hash(case["app_compose"], normalize=False) == case["sha256"]
+            get_compose_hash(
+                case["app_compose"], normalize=case.get("normalize", False)
+            )
+            == case["sha256"]
         ), case["name"]
+
+
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"name": None},
+        {"allowed_envs": None},
+        {"future": None},
+        {"requirements": {"health_check": None}},
+        {"requirements": {"ephemeral_data_disk": None}},
+        {"requirements": {"gpu_policy": None}},
+    ],
+)
+def test_non_option_null_passthrough(manifest):
+    manifest = {"runner": "docker-compose", **manifest}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+@pytest.mark.parametrize("policy", [{"rego": None}, {"rego": None, "attest_gpu": True}])
+def test_gpu_null_rego_is_omitted(policy):
+    manifest = {"runner": "docker-compose", "requirements": {"gpu_policy": policy}}
+    expected = {
+        "runner": "docker-compose",
+        "requirements": {
+            "gpu_policy": {k: v for k, v in policy.items() if k != "rego"}
+        },
+    }
+    assert get_compose_hash(manifest) == get_compose_hash(expected)
+
+
+def test_null_runner_passthrough():
+    manifest = {"runner": None}
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    assert get_compose_hash(manifest) == hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def test_health_check_false_is_omitted():
+    assert get_compose_hash(
+        {"runner": "docker-compose", "requirements": {"health_check": False}}
+    ) == get_compose_hash({"runner": "docker-compose", "requirements": {}})
 
 
 @pytest.mark.parametrize("field", ["requirements", "docker_config"])
