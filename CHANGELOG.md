@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- sdk/rust (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` changed from `String` to `Option<String>` because the server emits null on non-TDX backends; new public fields on `TlsKeyConfig`, `EventLog` and `InfoResponse` break struct-literal construction
+- sdk/python (breaking): `TcbInfo` fields `mrtd` and `rtmr0`-`rtmr3` are now `Optional[str]`
+- sdk/go (breaking): `AppCompose.InitScript` and `AppCompose.SwapSize` changed to the named types `*InitScripts` and `*SwapSize`
+
 ### Upgrade notes
 
 - **KMS state moves to `/var/lib/kms`.** The root keys of every epoch move out
