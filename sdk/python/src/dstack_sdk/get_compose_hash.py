@@ -242,8 +242,7 @@ class AppCompose:
             key
             for key, value in data.items()
             if value is None
-            and key
-            not in ("snapshotter", "requirements", "docker_config", "init_script")
+            and key not in ("snapshotter", "requirements", "init_script")
         }
 
         # Handle docker_config
@@ -339,6 +338,14 @@ def get_compose_hash(
     app_compose: Union[AppCompose, Dict[str, Any]], normalize: bool = False
 ) -> str:
     """Calculate SHA256 hash of app compose configuration.
+
+    This is not a Rust round-trip: SDKs preserve input presence and form,
+    without adding Rust defaults, retaining empty lists and the input form of
+    init_script. The hash matches the deployed/on-chain hash only when those
+    exact bytes are deployed.
+
+    Numeric edge cases differ across SDKs: Go and JavaScript lose precision
+    for swap_size values above 2^53, while Python emits 2.0 where they emit 2.
 
     Args:
         app_compose: AppCompose object or dictionary

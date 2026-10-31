@@ -2,6 +2,14 @@
   "description": "Canonical SDK compose hashes. The per-case normalize flag defaults to false. Explicit null is kept for Option fields without skip_serializing_if and omitted for Option fields with it; non-Option nulls pass through, false is omitted for is_false fields and otherwise kept.",
   "cases": [
     {
+      "name": "docker_config_null",
+      "app_compose": {
+        "runner": "docker-compose",
+        "docker_config": null
+      },
+      "sha256": "c40dd5519d34ba1e49f64461689fb0de9a1db1882c2651a0eebe7b4d3a0e4c05"
+    },
+    {
       "name": "empty_key_provider_id",
       "app_compose": {
         "runner": "docker-compose",
