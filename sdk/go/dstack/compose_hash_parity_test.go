@@ -12,6 +12,20 @@ import (
 	"testing"
 )
 
+func TestZeroComposePointers(t *testing.T) {
+	data, err := json.Marshal(AppCompose{InitScript: &InitScripts{}, SwapSize: &SwapSize{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["init_script"]) != "[]" || string(fields["swap_size"]) != "0" {
+		t.Fatalf("unexpected zero pointer values: %s", data)
+	}
+}
+
 // Every field the guest's AppCompose can carry, with a non-default value.
 //
 // A closed struct drops what it does not know, and what this package computes
@@ -62,6 +76,7 @@ func TestComposeHashFixture(t *testing.T) {
 			Name       string          `json:"name"`
 			AppCompose json.RawMessage `json:"app_compose"`
 			SHA256     string          `json:"sha256"`
+			Normalize  bool            `json:"normalize"`
 		} `json:"cases"`
 	}
 	if err := json.Unmarshal(data, &fixture); err != nil {
@@ -73,7 +88,7 @@ func TestComposeHashFixture(t *testing.T) {
 			if err := json.Unmarshal(tc.AppCompose, &compose); err != nil {
 				t.Fatal(err)
 			}
-			got, err := GetComposeHash(compose)
+			got, err := GetComposeHash(compose, tc.Normalize)
 			if err != nil {
 				t.Fatal(err)
 			}
