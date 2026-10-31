@@ -8,12 +8,12 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
 const fixture = JSON.parse(readFileSync(resolve(__dirname, '../../../tests/compose-hash-fixture.json'), 'utf8')) as {
-  cases: { name: string, app_compose: AppCompose, sha256: string }[]
+  cases: { name: string, app_compose: AppCompose, sha256: string, normalize?: boolean }[]
 }
 
 describe('cross-language compose hash fixture', () => {
-  it.each(fixture.cases)('$name', ({ app_compose, sha256 }) => {
-    expect(getComposeHash(app_compose)).toBe(sha256)
+  it.each(fixture.cases)('$name', ({ app_compose, sha256, normalize = false }) => {
+    expect(getComposeHash(app_compose, normalize)).toBe(sha256)
   })
 })
 

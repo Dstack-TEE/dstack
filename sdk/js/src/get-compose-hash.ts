@@ -112,7 +112,7 @@ export interface AppCompose extends SortableObject {
   no_instance_id?: boolean;
   secure_time?: boolean;
   requirements?: Requirements | null;
-  init_script?: string | string[];
+  init_script?: string | string[] | null;
   storage_fs?: string | null;
   /** Reclaim unused data-disk blocks; disable to hide allocation changes. */
   storage_discard?: boolean;
@@ -159,7 +159,7 @@ function toDeterministicJson(dic: AppCompose): string {
 
 function serializeFields(appCompose: AppCompose): AppCompose {
   const result = { ...appCompose };
-  for (const field of ['snapshotter', 'requirements']) {
+  for (const field of ['snapshotter', 'requirements', 'init_script']) {
     if (result[field] === null) delete result[field];
   }
   if (result.requirements && typeof result.requirements === 'object' && !Array.isArray(result.requirements)) {
@@ -180,6 +180,16 @@ function serializeFields(appCompose: AppCompose): AppCompose {
   return result;
 }
 
+/**
+ * Hash the SDK's compact, sorted JSON representation, not a Rust round-trip.
+ * Apart from the documented field omissions and optional normalization, input
+ * presence and form are preserved: no Rust defaults are added, empty arrays
+ * remain, and init_script retains its string or array form. This matches the
+ * deployed hash only when the exact serialized bytes are deployed.
+ *
+ * Numeric values beyond 2^53 can lose precision in Go and JavaScript. Python
+ * serializes a float such as 2.0 as `2.0`, while Go and JavaScript emit `2`.
+ */
 export function getComposeHash(app_compose: AppCompose, normalize: boolean = false): string {
   app_compose = serializeFields(app_compose);
   if (normalize) {

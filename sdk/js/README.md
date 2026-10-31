@@ -191,6 +191,10 @@ const normalized = getComposeHash(compose, true) // strip bash_script/docker_com
 
 Pure function — no TEE call required. Its SHA-256 matches the on-chain KMS allowlist only when the exact serialized bytes it hashes are deployed. Otherwise, use the provisioned compose hash or hash the verbatim deployed file.
 
+The SDK hash is not a Rust parse-and-reserialize round-trip. Apart from field-specific omissions and optional normalization, SDKs preserve input presence and form: they do not add Rust defaults, retain empty arrays, and keep `init_script` in its input string or array form.
+
+Numeric edge cases can differ across SDKs: Go and JavaScript can lose precision for numeric `swap_size` values above 2^53, and Python serializes a float such as `2.0` as `2.0` while Go and JavaScript emit `2`.
+
 ## Encrypted environment variables
 
 The full deployment flow mirrors `vmm-cli.py`: fetch the env-encrypt public key from KMS, verify its signature locally, then ECIES-encrypt the env vars against it.
