@@ -60,6 +60,21 @@ func (r *VerifyResult) BootEvent(name string) ([]byte, bool) {
 	return nil, false
 }
 
+// BootEvents returns all matching boot-time event payloads in event order.
+// Events at and after system-ready are excluded because the application can emit them.
+func (r *VerifyResult) BootEvents(name string) [][]byte {
+	var payloads [][]byte
+	for _, event := range r.RuntimeEvents {
+		if event.Event == "system-ready" {
+			break
+		}
+		if event.Event == name {
+			payloads = append(payloads, bytes.Clone(event.Payload))
+		}
+	}
+	return payloads
+}
+
 // Option configures RA-TLS verification.
 type Option func(*config)
 
