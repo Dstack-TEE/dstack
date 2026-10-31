@@ -40,17 +40,34 @@ type VerifyResult struct {
 	Report *dcap.VerifiedReport
 	// Quote is the parsed TDX quote structure with measurements and report data.
 	Quote *dcap.Quote
-	// RuntimeEvents are authenticated by replay against RTMR3, in order.
+	// RuntimeEvents are authenticated by replay against RTMR3, in order. Events
+	// after system-ready are app-controlled and untrusted for identity policy;
+	// use BootEvent for boot-time identity lookup.
 	RuntimeEvents []RuntimeEvent
+}
+
+// BootEvent returns the first matching boot-time event payload. Events at and
+// after system-ready are excluded because the application can emit them.
+func (r *VerifyResult) BootEvent(name string) ([]byte, bool) {
+	for _, event := range r.RuntimeEvents {
+		if event.Event == "system-ready" {
+			break
+		}
+		if event.Event == name {
+			return bytes.Clone(event.Payload), true
+		}
+	}
+	return nil, false
 }
 
 // Option configures RA-TLS verification.
 type Option func(*config)
 
 type config struct {
-	pccsURL    string
-	onVerified func(*VerifyResult)
-	verify     func(*VerifyResult) error
+	pccsURL     string
+	onVerified  func(*VerifyResult)
+	verify      func(*VerifyResult) error
+	verifyQuote func([]byte, string) (*dcap.VerifiedReport, *dcap.Quote, error)
 }
 
 // WithPCCSURL sets the PCCS server URL for collateral fetching.
@@ -65,9 +82,16 @@ func WithOnVerified(fn func(*VerifyResult)) Option {
 }
 
 // WithVerify rejects an attested peer when fn returns an error. Use it to
-// enforce the expected application, OS and compose identity.
+// enforce the expected application, OS and compose identity. A nil function
+// rejects verification rather than silently disabling policy.
 func WithVerify(fn func(*VerifyResult) error) Option {
-	return func(c *config) { c.verify = fn }
+	return func(c *config) {
+		if fn == nil {
+			c.verify = func(*VerifyResult) error { return fmt.Errorf("ratls: nil verification policy") }
+			return
+		}
+		c.verify = fn
+	}
 }
 
 func (c *config) applyPolicy(result *VerifyResult) error {
@@ -77,8 +101,24 @@ func (c *config) applyPolicy(result *VerifyResult) error {
 	return nil
 }
 
+func withQuoteVerifier(fn func([]byte, string) (*dcap.VerifiedReport, *dcap.Quote, error)) Option {
+	return func(c *config) { c.verifyQuote = fn }
+}
+
+func verifyQuote(raw []byte, pccsURL string) (*dcap.VerifiedReport, *dcap.Quote, error) {
+	report, err := dcap.GetCollateralAndVerify(raw, pccsURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("quote verification failed: %w", err)
+	}
+	quote, err := dcap.ParseQuote(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse quote structure: %w", err)
+	}
+	return report, quote, nil
+}
+
 func buildConfig(opts []Option) *config {
-	cfg := &config{pccsURL: DefaultPCCSURL}
+	cfg := &config{pccsURL: DefaultPCCSURL, verifyQuote: verifyQuote}
 	for _, o := range opts {
 		o(cfg)
 	}
@@ -90,6 +130,9 @@ func buildConfig(opts []Option) *config {
 // It extracts the embedded TDX quote, verifies it via dcap-qvl, checks that the
 // quote's report_data binds to the certificate's public key, validates TCB
 // attributes (debug mode, signer), and replays RTMR3 from the event log.
+// Only dstack TDX is supported: gcp-tdx, nitro, sev-snp, and dstack-pod
+// evidence are rejected. TLSConfig alone is not application authentication;
+// use WithVerify to enforce trusted application, OS, and compose policy.
 func VerifyCert(cert *x509.Certificate, opts ...Option) (*VerifyResult, error) {
 	cfg := buildConfig(opts)
 
@@ -99,16 +142,10 @@ func VerifyCert(cert *x509.Certificate, opts ...Option) (*VerifyResult, error) {
 		return nil, err
 	}
 
-	// 2. Verify quote via dcap-qvl (fetch collateral from PCCS + verify Intel signature)
-	report, err := dcap.GetCollateralAndVerify(rawQuote, cfg.pccsURL)
+	// Verify the quote and parse the report fields.
+	report, quote, err := cfg.verifyQuote(rawQuote, cfg.pccsURL)
 	if err != nil {
-		return nil, fmt.Errorf("ratls: quote verification failed: %w", err)
-	}
-
-	// 3. Parse quote structure to access report fields
-	quote, err := dcap.ParseQuote(rawQuote)
-	if err != nil {
-		return nil, fmt.Errorf("ratls: failed to parse quote structure: %w", err)
+		return nil, fmt.Errorf("ratls: %w", err)
 	}
 
 	if quote.Report.Type != "TD10" && quote.Report.Type != "TD15" {
@@ -229,7 +266,8 @@ func verifyRTMR3(cert *x509.Certificate, quote *dcap.Quote) error {
 // Standard CA chain verification is skipped because RA-TLS certificates are
 // self-signed; trust is established through hardware attestation instead.
 // TLSConfig alone does not authenticate the application, OS, or compose. Use
-// WithVerify to compare verified measurements and runtime events to trusted policy.
+// WithVerify to compare verified measurements and boot-time events to trusted policy.
+// Use VerifyResult.BootEvent rather than scanning events after system-ready.
 func TLSConfig(opts ...Option) *tls.Config {
 	return tlsConfigWithVerifier(VerifyCert, opts...)
 }

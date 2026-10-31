@@ -102,7 +102,7 @@ func extractAttestation(cert *x509.Certificate) ([]byte, []RuntimeEvent, error) 
 			if err == nil && reader.Len() != 0 {
 				err = fmt.Errorf("trailing attestation bytes")
 			}
-			if err == nil && (wire.Version != 1 || wire.Platform.Kind != "tdx" || (wire.Stack.Kind != "dstack" && wire.Stack.Kind != "dstack-pod")) {
+			if err == nil && (wire.Version != 1 || wire.Platform.Kind != "tdx" || wire.Stack.Kind != "dstack") {
 				err = fmt.Errorf("unsupported attestation version or platform")
 			}
 			quote, events, reportData = wire.Platform.Data.Quote, wire.Stack.Data.RuntimeEvents, wire.Stack.Data.ReportData

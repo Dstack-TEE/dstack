@@ -649,7 +649,8 @@ fmt.Println("Trusted KMS identity:", actualKMSIdentity)
    - Validate RTMR measurements against expected values
 
 3. **TLS Configuration**
-   - Enable RA-TLS for attestation-based authentication
+   - The `ratls` package's `TLSConfig` alone is not application authentication; use `WithVerify` to enforce trusted application, OS, and compose policy. Use `VerifyResult.BootEvent` for boot-time identity fields; events after `system-ready` are app-controlled.
+   - The `ratls` verifier supports TDX only: gcp-tdx, nitro, sev-snp, and dstack-pod evidence are rejected.
    - Use appropriate certificate validity periods
    - Implement proper certificate validation
 

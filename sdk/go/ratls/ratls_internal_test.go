@@ -17,7 +17,105 @@ import (
 	"testing"
 
 	dcap "github.com/Phala-Network/dcap-qvl/golang-bindings"
+	"github.com/vmihailenco/msgpack/v5"
 )
+
+func TestBootEventLookup(t *testing.T) {
+	result := VerifyResult{RuntimeEvents: []RuntimeEvent{{Event: "compose-hash", Payload: []byte("boot")}, {Event: "system-ready"}, {Event: "compose-hash", Payload: []byte("fake")}, {Event: "late-only", Payload: []byte("fake")}}}
+	value, ok := result.BootEvent("compose-hash")
+	if !ok || string(value) != "boot" {
+		t.Fatalf("got %q %v", value, ok)
+	}
+	if _, ok := result.BootEvent("late-only"); ok {
+		t.Fatal("accepted an app event")
+	}
+	if _, ok := result.BootEvent("system-ready"); ok {
+		t.Fatal("accepted the boundary event")
+	}
+}
+
+func TestNilVerifyRejected(t *testing.T) {
+	if err := buildConfig([]Option{WithVerify(nil)}).applyPolicy(&VerifyResult{}); err == nil {
+		t.Fatal("nil policy accepted")
+	}
+}
+
+func TestVerifyCertOffline(t *testing.T) {
+	for _, path := range []string{"tdx-lite-v1-issue-cert.pem", "tdx-lite-v0-get-tls-key.pem"} {
+		t.Run(path, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			block, _ := pem.Decode(data)
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, scenario := range []string{"valid", "tampered-spki", "tampered-report", "tampered-rtmr3", "debug", "signer", "quote-error", "policy-reject"} {
+				t.Run(scenario, func(t *testing.T) {
+					copyCert := *cert
+					if scenario == "tampered-spki" {
+						copyCert.RawSubjectPublicKeyInfo = []byte("wrong key")
+					}
+					called := false
+					denied := errors.New("policy denied")
+					expectedReport := &dcap.VerifiedReport{}
+					var expectedQuote *dcap.Quote
+					stub := withQuoteVerifier(func(raw []byte, _ string) (*dcap.VerifiedReport, *dcap.Quote, error) {
+						if scenario == "quote-error" {
+							return nil, nil, errors.New("invalid quote")
+						}
+						quote, err := dcap.ParseQuote(raw)
+						if err != nil {
+							return nil, nil, err
+						}
+						if scenario == "tampered-report" {
+							quote.Report.ReportData[0] ^= 1
+						}
+						if scenario == "debug" {
+							quote.Report.TdAttributes[0] |= 1
+						}
+						if scenario == "signer" {
+							quote.Report.MrSignerSeam[0] = 1
+						}
+						if scenario == "tampered-rtmr3" {
+							quote.Report.RTMR3[0] ^= 1
+						}
+						expectedQuote = quote
+						return expectedReport, quote, nil
+					})
+					result, err := VerifyCert(&copyCert, stub, WithVerify(func(result *VerifyResult) error {
+						called = true
+						if result.Quote != expectedQuote || result.Report != expectedReport || len(result.RuntimeEvents) == 0 {
+							t.Error("incomplete result")
+						}
+						if scenario == "policy-reject" {
+							return denied
+						}
+						return nil
+					}))
+					if scenario == "valid" {
+						if err != nil || result == nil || !called {
+							t.Fatalf("result %v error %v called %v", result, err, called)
+						}
+						return
+					}
+					if err == nil || result != nil {
+						t.Fatalf("accepted %s", scenario)
+					}
+					if scenario == "policy-reject" {
+						if !called || !errors.Is(err, denied) {
+							t.Fatalf("policy error %v called %v", err, called)
+						}
+					} else if called {
+						t.Fatal("policy invoked before verification")
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestTLSRejectingPolicy(t *testing.T) {
 	denied := errors.New("policy rejected")
@@ -81,6 +179,43 @@ func testCurrentCertificate(t *testing.T, path string) {
 	}
 	if len(events) == 0 {
 		t.Fatal("no authenticated runtime events")
+	}
+}
+
+func TestRejectDstackPod(t *testing.T) {
+	data, err := os.ReadFile("tdx-lite-v1-issue-cert.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(data)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := getExtensionBytes(cert, oidAttestation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]interface{}
+	if err := msgpack.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	wire["stack"].(map[string]interface{})["kind"] = "dstack-pod"
+	raw, err = msgpack.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext, err := asn1.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range cert.Extensions {
+		if cert.Extensions[i].Id.Equal(oidAttestation) {
+			cert.Extensions[i].Value = ext
+		}
+	}
+	if _, _, err := extractAttestation(cert); err == nil {
+		t.Fatal("accepted dstack-pod evidence")
 	}
 }
 
