@@ -175,10 +175,20 @@ const SECP256K1_ALGORITHMS = new Set(['secp256k1', 'k256', ''])
  */
 export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   protected endpoint: string
+  protected timeoutMs?: number
+  protected infoPath = '/Info'
+  protected versionPath = '/Version'
 
-  constructor(endpoint: string | undefined = undefined) {
+  constructor(endpoint: string | undefined = undefined, options: { timeoutMs?: number } = {}) {
     this.endpoint = resolveDstackEndpoint(endpoint)
+    this.timeoutMs = options.timeoutMs
   }
+
+  protected request<T = any>(endpoint: string, path: string, payload: string, timeoutMs = this.timeoutMs): Promise<T> {
+    return send_rpc_request<T>(endpoint, path, payload, timeoutMs)
+  }
+
+  protected ensureDstackRoute(): void {}
 
   private async ensureAlgorithmSupported(algorithm: string): Promise<void> {
     if (SECP256K1_ALGORITHMS.has(algorithm)) return
@@ -198,13 +208,14 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   }
 
   async getKey(path: string = '', purpose: string = '', algorithm: string = 'secp256k1'): Promise<GetKeyResponse> {
+    this.ensureDstackRoute()
     await this.ensureAlgorithmSupported(algorithm)
     const payload = JSON.stringify({
       path: path,
       purpose: purpose,
       algorithm: algorithm
     })
-    const result = await send_rpc_request<{ key: string, signature_chain: string[] }>(this.endpoint, '/GetKey', payload)
+    const result = await this.request<{ key: string, signature_chain: string[] }>(this.endpoint, '/GetKey', payload)
     throwOnRpcError(result)
     return Object.freeze({
       key: from_hex(result.key, 'key'),
@@ -215,6 +226,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   }
 
   async getTlsKey(options: TlsKeyOptions = {}): Promise<GetTlsKeyResponse> {
+    this.ensureDstackRoute()
     const {
       subject = '',
       altNames = [],
@@ -253,7 +265,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
       raw['with_app_info'] = withAppInfo
     }
     const payload = JSON.stringify(raw)
-    const result = await send_rpc_request<GetTlsKeyResponse>(this.endpoint, '/GetTlsKey', payload)
+    const result = await this.request<GetTlsKeyResponse>(this.endpoint, '/GetTlsKey', payload)
     const asUint8Array = (length?: number) => x509key_to_uint8array(result.key, length)
     return Object.freeze({
       ...result,
@@ -271,12 +283,13 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
    * in both cases.
    */
   async getQuote(report_data: string | Buffer | Uint8Array): Promise<GetQuoteResponse> {
+    this.ensureDstackRoute()
     let hex = to_hex(report_data)
     if (hex.length > 128) {
       throw new Error(`Report data is too large, it should be less than 64 bytes.`)
     }
     const payload = JSON.stringify({ report_data: hex })
-    const result = await send_rpc_request<GetQuoteResponse>(this.endpoint, '/GetQuote', payload)
+    const result = await this.request<GetQuoteResponse>(this.endpoint, '/GetQuote', payload)
     if ('error' in result) {
       const err = result['error'] as string
       throw new Error(err)
@@ -291,12 +304,13 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
    * shape. Use `DstackClientV1.attest` or `DstackClientV1.attestGpu`.
    */
   async attest(report_data: string | Buffer | Uint8Array): Promise<AttestResponse> {
+    this.ensureDstackRoute()
     let hex = to_hex(report_data)
     if (hex.length > 128) {
       throw new Error(`Report data is too large, it should be less than 64 bytes.`)
     }
     const payload = JSON.stringify({ report_data: hex })
-    const result = await send_rpc_request<{ attestation: string }>(this.endpoint, '/Attest', payload)
+    const result = await this.request<{ attestation: string }>(this.endpoint, '/Attest', payload)
     throwOnRpcError(result)
     return Object.freeze({
       __name__: 'AttestResponse',
@@ -305,7 +319,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   }
 
   async info(): Promise<InfoResponse<T>> {
-    const result = await send_rpc_request<Omit<InfoResponse<TcbInfo>, 'tcb_info'> & { tcb_info: string }>(this.endpoint, '/Info', '{}')
+    const result = await this.request<Omit<InfoResponse<TcbInfo>, 'tcb_info'> & { tcb_info: string }>(this.endpoint, this.infoPath, '{}')
     throwOnRpcError(result)
     return Object.freeze({
       ...result,
@@ -320,7 +334,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
    * Throws on older OS versions that lack the Version RPC.
    */
   async version(): Promise<VersionResponse> {
-    const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/Version', '{}')
+    const result = await this.request<{ version: string, rev: string }>(this.endpoint, this.versionPath, '{}')
     return Object.freeze({
       ...result,
       __name__: 'VersionResponse',
@@ -330,7 +344,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
   async isReachable(): Promise<boolean> {
     try {
       // Use info endpoint to test connectivity with 500ms timeout
-      await send_rpc_request(this.endpoint, '/Info', '{}', 500)
+      await this.request(this.endpoint, '/Info', '{}', 500)
       return true
     } catch (error) {
       return false
@@ -349,12 +363,13 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
    * @param payload The event data as string or Buffer or Uint8Array
    */
   async emitEvent(event: string, payload: string | Buffer | Uint8Array): Promise<void> {
+    this.ensureDstackRoute()
     if (!event) {
       throw new Error('Event name cannot be empty')
     }
 
     const hexPayload = to_hex(payload)
-    const result = await send_rpc_request(
+    const result = await this.request(
       this.endpoint,
       '/EmitEvent',
       JSON.stringify({
@@ -372,6 +387,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
    * @returns A SignResponse containing the signature, signature chain, and public key.
    */
   async sign(algorithm: string, data: string | Buffer | Uint8Array): Promise<SignResponse> {
+    this.ensureDstackRoute()
     const hexData = to_hex(data);
     if (algorithm === 'secp256k1_prehashed' && hexData.length !== 64) {
         throw new Error(`Pre-hashed signing requires a 32-byte digest, but received ${hexData.length / 2} bytes`);
@@ -382,7 +398,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
         data: hexData
     });
 
-    const result = await send_rpc_request<{ signature: string, signature_chain: string[], public_key: string }>(this.endpoint, '/Sign', payload);
+    const result = await this.request<{ signature: string, signature_chain: string[], public_key: string }>(this.endpoint, '/Sign', payload);
 
     throwOnRpcError(result)
 
@@ -409,6 +425,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
     signature: string | Buffer | Uint8Array,
     publicKey: string | Buffer | Uint8Array
   ): Promise<VerifyResponse> {
+    this.ensureDstackRoute()
     const payload = JSON.stringify({
         algorithm: algorithm,
         data: to_hex(data),
@@ -416,7 +433,7 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
         public_key: to_hex(publicKey)
     });
 
-    const result = await send_rpc_request<{ valid: boolean }>(this.endpoint, '/Verify', payload);
+    const result = await this.request<{ valid: boolean }>(this.endpoint, '/Verify', payload);
     throwOnRpcError(result)
 
     return Object.freeze({
@@ -466,7 +483,14 @@ export class DstackClientV0<T extends TcbInfo = TcbInfoV05x> {
  * `DstackClientV1` for anything new.
  */
 export class TappdClient extends DstackClientV0<TcbInfoV03x> {
-  constructor(endpoint: string | undefined = undefined) {
+  protected infoPath = '/prpc/Tappd.Info'
+  protected versionPath = '/prpc/Tappd.Version'
+
+  protected ensureDstackRoute(): void {
+    throw new Error('unsupported on tappd.sock; use DstackClient on dstack.sock')
+  }
+
+  constructor(endpoint: string | undefined = undefined, options: { timeoutMs?: number } = {}) {
     if (endpoint === undefined) {
       if (process.env.TAPPD_SIMULATOR_ENDPOINT) {
         console.warn(`Using tappd endpoint: ${process.env.TAPPD_SIMULATOR_ENDPOINT}`)
@@ -482,25 +506,25 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
         endpoint = socketPaths.find(p => fs.existsSync(p)) ?? socketPaths[0]
       }
     }
-    console.warn('TappdClient is deprecated, please use DstackClientV0 instead')
-    super(endpoint)
+    console.warn('TappdClient is deprecated, please use DstackClient on dstack.sock instead')
+    super(endpoint, options)
   }
 
   /**
-   * @deprecated Use getKey instead.
+   * @deprecated Use DstackClient on dstack.sock instead.
    * @param path The path to the key.
    * @param subject The subject of the key.
    * @param altNames The alternative names of the key.
    * @returns The key.
    */
   async deriveKey(path?: string, subject?: string, alt_names?: string[]): Promise<GetTlsKeyResponse> {
-    console.warn('deriveKey is deprecated, please use getKey instead');
+    console.warn('deriveKey is deprecated, please use DstackClient on dstack.sock instead');
     let raw: Record<string, any> = { path: path || '', subject: subject || path || '' }
     if (alt_names && alt_names.length) {
       raw['alt_names'] = alt_names
     }
     const payload = JSON.stringify(raw)
-    const result = await send_rpc_request<GetTlsKeyResponse>(this.endpoint, '/prpc/Tappd.DeriveKey', payload)
+    const result = await this.request<GetTlsKeyResponse>(this.endpoint, '/prpc/Tappd.DeriveKey', payload)
     const asUint8Array = (length?: number) => x509key_to_uint8array(result.key, length)
     return Object.freeze({
       ...result,
@@ -510,13 +534,13 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
   }
 
   /**
-   * @deprecated Use getQuote instead.
+   * @deprecated Use DstackClient on dstack.sock instead.
    * @param report_data The report data.
    * @param hash_algorithm The hash algorithm.
    * @returns The quote.
    */
   async tdxQuote(report_data: string | Buffer | Uint8Array, hash_algorithm?: TdxQuoteHashAlgorithms): Promise<GetQuoteResponse> {
-    console.warn('tdxQuote is deprecated, please use getQuote instead');
+    console.warn('tdxQuote is deprecated, please use DstackClient on dstack.sock instead');
     let hex = to_hex(report_data)
     if (hash_algorithm === 'raw') {
       if (hex.length > 128) {
@@ -527,7 +551,7 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
       }
     }
     const payload = JSON.stringify({ report_data: hex, hash_algorithm })
-    const result = await send_rpc_request<GetQuoteResponse>(this.endpoint, '/prpc/Tappd.TdxQuote', payload)
+    const result = await this.request<GetQuoteResponse>(this.endpoint, '/prpc/Tappd.TdxQuote', payload)
     if ('error' in result) {
       const err = result['error'] as string
       throw new Error(err)
@@ -538,7 +562,7 @@ export class TappdClient extends DstackClientV0<TcbInfoV03x> {
   async isReachable(): Promise<boolean> {
     try {
       // Use info endpoint to test connectivity with 500ms timeout
-      await send_rpc_request(this.endpoint, '/prpc/Tappd.Info', '{}', 500)
+      await this.request(this.endpoint, '/prpc/Tappd.Info', '{}', 500)
       return true
     } catch (error) {
       return false

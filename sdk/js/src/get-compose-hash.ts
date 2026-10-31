@@ -116,12 +116,12 @@ export interface AppCompose extends SortableObject {
   no_instance_id?: boolean;
   secure_time?: boolean;
   requirements?: Requirements;
-  init_script?: string[];
+  init_script?: string | string[];
   storage_fs?: string;
   /** Reclaim unused data-disk blocks; disable to hide allocation changes. */
   storage_discard?: boolean;
-  /** Human size string, e.g. "2G", matching what the guest reads. */
-  swap_size?: string;
+  /** Size in bytes or a human-readable string, e.g. "2G". */
+  swap_size?: number | string;
   event_log_version?: number;
   port_policy?: PortPolicy;
   verity_volumes?: VerityVolume[];

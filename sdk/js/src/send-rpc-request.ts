@@ -132,6 +132,8 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
         res.on('data', (chunk) => {
           chunks.push(chunk)
         })
+        res.on('aborted', () => { cleanup(); safeReject(new Error('response aborted')) })
+        res.on('error', (error) => { cleanup(); safeReject(error) })
         res.on('end', () => {
           cleanup()
           settle(res.statusCode ?? 0, Buffer.concat(chunks).toString('utf8'))
@@ -181,6 +183,8 @@ export function send_rpc_request<T = any>(endpoint: string, path: string, payloa
           res.on('data', (chunk) => {
             chunks.push(chunk)
           })
+          res.on('aborted', () => { cleanup(); safeReject(new Error('response aborted')) })
+          res.on('error', (error) => { cleanup(); safeReject(error) })
           res.on('end', () => {
             cleanup()
             settle(res.statusCode ?? 0, Buffer.concat(chunks).toString('utf8'))

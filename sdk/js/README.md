@@ -164,6 +164,10 @@ Flat, with no `tcb_info` blob and no `app_cert`. The measurement registers and t
 
 Do not parse and re-serialize `app_compose` before hashing it — key order, whitespace and unknown fields all change the digest, and that digest is what gets whitelisted on chain.
 
+Client requests default to a 30-second timeout. For long-running GPU attestation,
+pass milliseconds: `new DstackClient(endpoint, { timeoutMs: 300_000 })`.
+`DstackClientV0` and `TappdClient` accept the same option.
+
 ### `version()`
 
 Returns `{ version, rev }` of the guest agent.
@@ -185,7 +189,7 @@ const hash = getComposeHash(compose)
 const normalized = getComposeHash(compose, true) // strip bash_script/docker_compose_file overlap
 ```
 
-Pure function — no TEE call required. Produces the canonical SHA-256 used by the on-chain KMS allowlist.
+Pure function — no TEE call required. Its SHA-256 matches the on-chain KMS allowlist only when the exact serialized bytes it hashes are deployed. Otherwise, use the provisioned compose hash or hash the verbatim deployed file.
 
 ## Encrypted environment variables
 
