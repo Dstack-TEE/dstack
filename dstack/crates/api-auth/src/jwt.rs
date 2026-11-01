@@ -18,14 +18,6 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
-/// Longest lifetime a token may claim between `iat` and `exp`.
-///
-/// There is no revocation list: a token is trusted until it expires, so the
-/// lifetime is the whole of the exposure control. The CVM re-registers with
-/// the gateway every three minutes and mints a fresh token every half hour, so
-/// this costs it nothing.
-pub const MAX_TOKEN_LIFETIME_SECS: u64 = 3600;
-
 /// Tolerance for clock skew in either direction.
 pub const CLOCK_LEEWAY_SECS: u64 = 30;
 
@@ -201,7 +193,7 @@ pub fn sign(signing_key: &[u8; 32], claims: &Claims) -> Result<String> {
 /// The public keys one issuer may sign with.
 ///
 /// A list so a key can be rotated without a flag day: publish the new key
-/// alongside the old, wait out [`MAX_TOKEN_LIFETIME_SECS`], drop the old one.
+/// alongside the old, wait out the tokens signed by the old one, drop it.
 #[derive(Clone, Debug)]
 pub struct IssuerKeys {
     /// The exact `iss` this issuer's tokens must carry.
@@ -262,9 +254,6 @@ impl Verifier {
         }
         if claims.exp < now.saturating_sub(CLOCK_LEEWAY_SECS) {
             bail!("token has expired");
-        }
-        if claims.exp.saturating_sub(claims.iat) > MAX_TOKEN_LIFETIME_SECS {
-            bail!("token lifetime exceeds {MAX_TOKEN_LIFETIME_SECS}s");
         }
         if claims.iat > now + CLOCK_LEEWAY_SECS {
             bail!("token was issued in the future");
@@ -363,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_expired_overlong_and_future_tokens() {
+    fn rejects_expired_and_future_tokens() {
         let expired = mint(
             1,
             &internal_issuer(APP_ID),
@@ -373,16 +362,6 @@ mod tests {
             "guest:info",
         );
         assert!(verifier(1).verify(&expired, APP_ID, 1200).is_err());
-
-        let overlong = mint(
-            1,
-            &internal_issuer(APP_ID),
-            APP_ID,
-            1000,
-            1000 + 7200,
-            "guest:info",
-        );
-        assert!(verifier(1).verify(&overlong, APP_ID, 1100).is_err());
 
         let future = mint(
             1,

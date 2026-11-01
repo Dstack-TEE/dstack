@@ -539,10 +539,11 @@ const GATEWAY_AGENT_SCOPES: &[&str] = &[jwt::scope::HEALTH];
 
 /// How often the gateway's token changes. `iat` is rounded down to this, and
 /// Ed25519 signatures are deterministic, so every registration within one
-/// period carries the same token: the stored record stays unchanged instead of
-/// changing every three minutes. With `exp` an hour after `iat`, a token always
-/// has at least half an hour left, which outlasts many failed refreshes.
-const GATEWAY_AGENT_TOKEN_PERIOD_SECS: u64 = 1800;
+/// period carries the same token. With `exp` ten years after `iat`, a token
+/// never lapses while registration is down.
+const GATEWAY_AGENT_TOKEN_PERIOD_SECS: u64 = 365 * 24 * 3600;
+
+const GATEWAY_AGENT_TOKEN_LIFETIME_SECS: u64 = 10 * GATEWAY_AGENT_TOKEN_PERIOD_SECS;
 
 /// Mint the token the gateway presents to this CVM's guest agent, signed with
 /// the key the agent derives the same way from the app root key.
@@ -561,7 +562,7 @@ fn gateway_agent_token(app_id: &[u8], app_root_key: &[u8]) -> Result<String> {
         iss: jwt::internal_issuer(&app_id),
         aud: app_id,
         iat,
-        exp: iat + jwt::MAX_TOKEN_LIFETIME_SECS,
+        exp: iat + GATEWAY_AGENT_TOKEN_LIFETIME_SECS,
         scope: GATEWAY_AGENT_SCOPES.join(" "),
     };
     jwt::sign(&secret, &claims)
