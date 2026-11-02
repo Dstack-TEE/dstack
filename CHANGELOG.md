@@ -7,18 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- SEV-SNP: coalesce concurrent endorsement-certificate fetches and preserve typed collateral errors. The verifier returns HTTP 503 for unavailable AMD endorsements instead of declaring a quote invalid; cryptographic failures still fail verification.
+## [0.6.3] - 2026-11-01
+
+### Upgrade notes
+
+- **Upgrade every Gateway node before deploying the new guest image.** The
+  guest-agent external API now requires scoped access. Older Gateways cannot
+  authenticate health probes and drop new guests from rotation; mixed-version
+  clusters can also lose guest tokens during replication. See
+  [Guest Agent API access control](docs/guest-api-auth.md).
+- **New guest image.** Register the 0.6.3 `os_image_hash` on chain before
+  deploying it. The guest kernel, rootfs, and their measurements have changed.
+- **KMS always verifies the OS image hash.** The `[core.image] verify` option
+  has been removed; a leftover key is ignored (#1497).
+
+### Security
+
+- guest-agent: gate every external API route by scopes granted through signed
+  Ed25519 JWTs or `[cvm.guest_agent_api].anonymous_scopes`. No scopes are
+  anonymous by default; app SDKs keep using the internal Unix socket. The
+  measured `public_logs`, `public_sysinfo`, and `public_tcbinfo` settings still
+  control what may leave the TEE (#1469).
+- KMS: always verify `os_image_hash`, including its policy and identity-event
+  bindings (#1497).
+- TPM: bound allocations and loops driven by TPM replies, reject undersized
+  response headers, and handle non-progressing handle enumeration (#1477,
+  #1481).
+- guest OS, service images, KMS auth backends, and SDK locks: update CA trust
+  stores and TLS dependencies for emSign distrust; remove the obsolete KMS
+  compose file that pinned vulnerable images (#1463–#1467, #1470, #1492).
+- guest OS: update the mkosi kernel to 6.18.59; update Rust and npm dependencies
+  for published security advisories (#1473, #1493–#1496, #1502).
 
 ### Added
-- guest: `requirements.ephemeral_data_disk` in `app-compose.json` starts every boot with an empty data disk. The guest formats the data disk before any app code runs (#1461)
+
+- guest: `requirements.ephemeral_data_disk` starts every boot with an empty
+  data disk, formatted before app code runs (#1461).
+- guest OS: ship the kernel build tree under `/usr/src/linux-headers-<release>`
+  with `/lib/modules/<release>/build` pointing to it (#1501).
+- guest OS: enable transparent huge pages with the `madvise` default, read-only
+  file THP, opt-in Multi-Gen LRU and BBR, and deferred page initialization
+  (#1503, #1504).
+- guest OS: enable EROFS, ublk, and alternative streamed container-layer
+  backends (#1509).
+- KMS: publish the Bun-based auth-eth backend image (#1452).
 
 ### Fixed
-- guest: a fresh CVM with a verity volume could take the volume for its data disk and try to LUKS-format it: volumes labelled their data partition `dstack-data`, the data disk's label. `dstack verity` now labels it `dstack-volume-data`, and the guest skips disks that carry a `dstack-volume` partition, so volumes built by older releases are safe too
+
+- guest: keep verity volumes out of data-disk discovery, including volumes
+  created by older releases, and use distinct partition labels (#1459).
+- guest OS: update Sysbox to 0.7.1 and use idmapped overlay mounts so container
+  rootfs writes persist across restarts and failed starts do not corrupt
+  ownership (#1489).
+- SEV-SNP: coalesce concurrent endorsement-certificate fetches and return HTTP
+  503 for unavailable AMD endorsements rather than declaring quotes invalid
+  (#1484).
+- KMS: recover onboarding after repeated clicks or lost provisioning responses,
+  clear measurement cache entries by their actual filenames, and increase the
+  Bun auth webhook idle timeout (#1453, #1460, #1471).
+- guest-agent: saturate oversized log durations instead of overflowing (#1478).
+- vmm/verifier: measure guest NUMA nodes without PXB expanders; validate image
+  names before writing VM manifests (#1458, #1476).
+- gateway: require canonical port numbers in SNI; validate gateway WireGuard
+  fields before rendering configuration (#1451, #1472).
+- TDX: add read/write timeouts for QGS vsock requests (#1454).
+- Go SDK: match compose hashing for U+2028 and U+2029 (#1479).
 
 ### Changed
-- guest-agent: the external listener (port 8090) is no longer anonymous. Every route needs a scope, granted by a signed Ed25519 JWT or by `[cvm.guest_agent_api].anonymous_scopes` in sys-config. There is no built-in anonymous default; the sample `vmm.toml` opens `guest:dashboard`, `guest:info`, `guest:version` and `guest:health`, which is what an unconfigured 8090 used to serve, while containers, logs, metrics and app-key attestation stay behind a token. The gateway gets its token minted inside the CVM from the app root key. `public_logs` / `public_sysinfo` / `public_tcbinfo` are unchanged and still decide what may leave the TEE. The dashboard is filtered block by block by scope. See `docs/guest-api-auth.md`. An old gateway sees 401s and drops new guests from rotation until it is upgraded
-- vmm: `qmp_socket` now defaults to `true`. Each CVM's QEMU exposes `qmp.sock` in its work dir, so the host can change disk options or compact a bloated `hda.img` (`blockdev-mirror`) without stopping the CVM. Applies to CVMs started after the change; set `qmp_socket = false` to opt out
+
+- vmm: enable the QMP socket by default for newly started CVMs; set
+  `qmp_socket = false` to opt out (#1450).
+- vmm: disable GPU `sanitize_on_attach` by default (#1455).
+- guest OS: decompress squashfs file data directly into the page cache using
+  per-CPU decompressors (#1506).
+- gateway: use a guest-issued, ten-year API token that remains valid while
+  registration is unavailable (#1499, #1500).
+- dependencies: update dcap-qvl to 0.7.0; build JS and Python SDK releases from
+  locked dependencies (#1480, #1498).
 
 ## [0.6.1] - 2026-10-12
 
