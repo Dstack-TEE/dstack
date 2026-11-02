@@ -95,6 +95,33 @@ to build it locally:
 docker build -t dstack-kms-auth-eth-bun .
 ```
 
+### Reproducing a release image
+
+Use a clean checkout of the release tag and BuildKit 0.20.2, matching the
+workflow. COPY permissions are fixed independently of the checkout umask.
+Export with the commit timestamp and timestamp rewriting; a plain
+`docker build` does not reproduce the release digest.
+
+```bash
+docker buildx create --name auth-repro --driver docker-container \
+  --driver-opt image=moby/buildkit:v0.20.2@sha256:c457984bd29f04d6acc90c8d9e717afe3922ae14665f3187e0096976fe37b1c8
+
+git_revision=$(git rev-parse HEAD)
+source_date_epoch=$(git show -s --format=%ct HEAD)
+docker buildx build --builder auth-repro --platform linux/amd64 \
+  --provenance=false \
+  --build-arg "GIT_REV=$git_revision" \
+  --build-arg "SOURCE_DATE_EPOCH=$source_date_epoch" \
+  --label org.opencontainers.image.source=https://github.com/Dstack-TEE/dstack \
+  --label "org.opencontainers.image.revision=$git_revision" \
+  --label 'org.opencontainers.image.description=dstack KMS auth webhook backed by the DstackKms contract' \
+  --tag ghcr.io/dstack-tee/dstack-kms-auth-eth-bun:VERSION \
+  --output type=oci,rewrite-timestamp=true,dest=/tmp/auth-eth-bun.oci.tar .
+```
+
+Replace `VERSION` with the release version. These settings apply to releases
+that include timestamp normalization; earlier tags used a different workflow.
+
 ## API endpoints
 
 ### GET /
