@@ -8,8 +8,23 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"os"
 	"testing"
 )
+
+func TestZeroComposePointers(t *testing.T) {
+	data, err := json.Marshal(AppCompose{InitScript: &InitScripts{}, SwapSize: &SwapSize{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if string(fields["init_script"]) != "[]" || string(fields["swap_size"]) != "0" {
+		t.Fatalf("unexpected zero pointer values: %s", data)
+	}
+}
 
 // Every field the guest's AppCompose can carry, with a non-default value.
 //
@@ -50,6 +65,64 @@ const fullAppCompose = `{
     "gpu_policy": {"attest_gpu": true, "rego": "package policy", "allow_devtools": true}
   }
 }`
+
+func TestComposeHashFixture(t *testing.T) {
+	data, err := os.ReadFile("../../tests/compose-hash-fixture.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name       string          `json:"name"`
+			AppCompose json.RawMessage `json:"app_compose"`
+			SHA256     string          `json:"sha256"`
+			Normalize  bool            `json:"normalize"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			var compose AppCompose
+			if err := json.Unmarshal(tc.AppCompose, &compose); err != nil {
+				t.Fatal(err)
+			}
+			got, err := GetComposeHash(compose, tc.Normalize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.SHA256 {
+				t.Fatalf("got %s want %s", got, tc.SHA256)
+			}
+		})
+	}
+}
+
+func TestComposePresenceAndNestedExtras(t *testing.T) {
+	for _, raw := range []string{`{"name":"x"}`, `{"runner":"bash","port_policy":{"ports":[{}]},"verity_volumes":[{}]}`, `{"runner":null}`, `{"runner":"docker-compose","key_provider_id":"","allowed_envs":[],"public_logs":false,"requirements":null}`, `{"runner":"docker-compose","requirements":{"health_check":false,"ephemeral_data_disk":false,"launch_token_hash":""},"docker_config":{"registry":"","future":1},"port_policy":{"ports":[{"port":1,"pp":false,"future":2}],"restrict_mode":false,"future":3},"verity_volumes":[{"source":"","target":"","verity_root":"","future":4}]}`, `{"runner":"bash","swap_size":123,"init_script":"hello"}`} {
+		var compose AppCompose
+		if err := json.Unmarshal([]byte(raw), &compose); err != nil {
+			t.Error(err)
+			continue
+		}
+		got, err := GetComposeHash(compose)
+		if err != nil {
+			t.Error(err)
+			continue
+		}
+		wantRaw := raw
+		switch raw {
+		case `{"runner":"docker-compose","key_provider_id":"","allowed_envs":[],"public_logs":false,"requirements":null}`:
+			wantRaw = `{"runner":"docker-compose","key_provider_id":"","allowed_envs":[],"public_logs":false}`
+		case `{"runner":"docker-compose","requirements":{"health_check":false,"ephemeral_data_disk":false,"launch_token_hash":""},"docker_config":{"registry":"","future":1},"port_policy":{"ports":[{"port":1,"pp":false,"future":2}],"restrict_mode":false,"future":3},"verity_volumes":[{"source":"","target":"","verity_root":"","future":4}]}`:
+			wantRaw = `{"runner":"docker-compose","requirements":{"launch_token_hash":""},"docker_config":{"registry":"","future":1},"port_policy":{"ports":[{"port":1,"pp":false,"future":2}],"restrict_mode":false,"future":3},"verity_volumes":[{"source":"","target":"","verity_root":"","future":4}]}`
+		}
+		if want := hashOfRawJSON(t, wantRaw); got != want {
+			t.Errorf("%s: got %s want %s", raw, got, want)
+		}
+	}
+}
 
 func hashOfRawJSON(t *testing.T, raw string) string {
 	t.Helper()
@@ -180,5 +253,87 @@ func TestADeclaredFieldWinsOverExtra(t *testing.T) {
 	}
 	if decoded["runner"] != "docker-compose" {
 		t.Fatalf("the declared field should win, got %v", decoded["runner"])
+	}
+}
+
+func TestComposeNullThenSetTypedField(t *testing.T) {
+	var compose AppCompose
+	if err := json.Unmarshal([]byte(`{"name":null}`), &compose); err != nil {
+		t.Fatal(err)
+	}
+	compose.Name = "foo"
+	data, err := json.Marshal(compose)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]interface{}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["name"] != "foo" {
+		t.Fatalf("name = %v, want foo", got["name"])
+	}
+}
+
+func TestTypedInitScriptAndSwapSize(t *testing.T) {
+	for _, raw := range []string{`{"runner":"bash","init_script":"hello","swap_size":123}`, `{"runner":"bash","init_script":["a","b"],"swap_size":"2G"}`} {
+		var compose AppCompose
+		if err := json.Unmarshal([]byte(raw), &compose); err != nil {
+			t.Fatal(err)
+		}
+		if len(compose.InitScript.Scripts) == 0 {
+			t.Fatal("missing scripts")
+		}
+		if compose.SwapSize.Number == "" && compose.SwapSize.String == nil {
+			t.Fatal("missing swap size")
+		}
+		got, err := GetComposeHash(compose)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := hashOfRawJSON(t, raw); got != want {
+			t.Fatalf("got %s want %s", got, want)
+		}
+	}
+	data, err := json.Marshal(AppCompose{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"init_script", "swap_size"} {
+		if _, ok := fields[key]; ok {
+			t.Errorf("zero value included %s", key)
+		}
+	}
+}
+
+func TestRustOptionNullAndSkippedFalse(t *testing.T) {
+	cases := []struct{ name, input, want string }{
+		{"app_omitted_options", `{"runner":"bash","snapshotter":null,"requirements":null}`, `{"runner":"bash"}`},
+		{"app_kept_options", `{"runner":"bash","docker_compose_file":null,"key_provider":null,"storage_fs":null}`, `{"runner":"bash","docker_compose_file":null,"key_provider":null,"storage_fs":null}`},
+		{"requirements_omitted_options", `{"runner":"bash","requirements":{"platforms":null,"tdx_measure_acpi_tables":null,"launch_token_hash":null,"health_status_file":null}}`, `{"runner":"bash","requirements":{}}`},
+		{"requirements_false", `{"runner":"bash","requirements":{"health_check":false,"ephemeral_data_disk":false}}`, `{"runner":"bash","requirements":{}}`},
+		{"gpu_rego", `{"runner":"bash","requirements":{"gpu_policy":{"rego":null}}}`, `{"runner":"bash","requirements":{"gpu_policy":{}}}`},
+		{"docker_options", `{"runner":"bash","docker_config":{"registry":null,"username":null,"token_key":null}}`, `{"runner":"bash","docker_config":{"registry":null,"username":null,"token_key":null}}`},
+		{"non_option_null", `{"runner":"bash","name":null,"port_policy":{"restrict_mode":null},"requirements":{"health_check":null}}`, `{"runner":"bash","name":null,"port_policy":{"restrict_mode":null},"requirements":{"health_check":null}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var compose AppCompose
+			if err := json.Unmarshal([]byte(tc.input), &compose); err != nil {
+				t.Fatal(err)
+			}
+			got, err := GetComposeHash(compose)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := hashOfRawJSON(t, tc.want); got != want {
+				data, _ := json.Marshal(compose)
+				t.Fatalf("got %s want %s", data, tc.want)
+			}
+		})
 	}
 }

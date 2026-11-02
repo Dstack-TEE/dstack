@@ -43,35 +43,31 @@ export type RequirementPlatform =
   | "dstack-nitro-enclave";
 
 export interface DockerConfig extends SortableObject {
-  registry?: string;
-  username?: string;
-  token_key?: string;
+  registry?: string | null;
+  username?: string | null;
+  token_key?: string | null;
 }
 
 export interface GpuPolicy extends SortableObject {
   attest_gpu?: boolean;
-  rego?: string;
+  rego?: string | null;
   allow_devtools?: boolean;
   allow_debug?: boolean;
   allow_insecure_boot?: boolean;
 }
 
 export interface Requirements extends SortableObject {
-  platforms?: RequirementPlatform[];
-  tdx_measure_acpi_tables?: boolean;
-  launch_token_hash?: string;
-  /**
-   * Opt-in gateway health gating. Leave it out rather than passing `false`: the
-   * guest's Rust types skip a false `health_check`, and this hash has to be the
-   * one that gets whitelisted on chain.
-   */
+  platforms?: RequirementPlatform[] | null;
+  tdx_measure_acpi_tables?: boolean | null;
+  launch_token_hash?: string | null;
+  /** Opt-in gateway health gating. A false value is omitted when hashing. */
   health_check?: boolean;
   /**
    * Path to a file the app writes its own verdict into. `""` and absent are
    * different app composes and hash differently, in every SDK.
    */
-  health_status_file?: string;
-  /** Format the data disk on every boot. Leave it out rather than passing `false`. */
+  health_status_file?: string | null;
+  /** Format the data disk on every boot. A false value is omitted when hashing. */
   ephemeral_data_disk?: boolean;
   gpu_policy?: GpuPolicy;
 }
@@ -99,8 +95,8 @@ export interface AppCompose extends SortableObject {
   // Deprecated
   features?: string[];
   runner: string;
-  snapshotter?: "overlayfs" | "stargz";
-  docker_compose_file?: string;
+  snapshotter?: "overlayfs" | "stargz" | null;
+  docker_compose_file?: string | null;
   docker_config?: DockerConfig;
   public_logs?: boolean;
   public_sysinfo?: boolean;
@@ -110,18 +106,18 @@ export interface AppCompose extends SortableObject {
   // For backward compatibility with tproxy_enabled
   tproxy_enabled?: boolean;
   local_key_provider_enabled?: boolean;
-  key_provider?: KeyProviderKind;
+  key_provider?: KeyProviderKind | null;
   key_provider_id?: string; // hex string
   allowed_envs?: string[];
   no_instance_id?: boolean;
   secure_time?: boolean;
-  requirements?: Requirements;
-  init_script?: string[];
-  storage_fs?: string;
+  requirements?: Requirements | null;
+  init_script?: string | string[] | null;
+  storage_fs?: string | null;
   /** Reclaim unused data-disk blocks; disable to hide allocation changes. */
   storage_discard?: boolean;
-  /** Human size string, e.g. "2G", matching what the guest reads. */
-  swap_size?: string;
+  /** Size in bytes or a human-readable string, e.g. "2G". */
+  swap_size?: number | string;
   event_log_version?: number;
   port_policy?: PortPolicy;
   verity_volumes?: VerityVolume[];
@@ -161,7 +157,41 @@ function toDeterministicJson(dic: AppCompose): string {
   }); // Omit the 'space' argument for compact output
 }
 
+function serializeFields(appCompose: AppCompose): AppCompose {
+  const result = { ...appCompose };
+  for (const field of ['snapshotter', 'requirements', 'init_script']) {
+    if (result[field] === null) delete result[field];
+  }
+  if (result.requirements && typeof result.requirements === 'object' && !Array.isArray(result.requirements)) {
+    const requirements = { ...result.requirements };
+    for (const field of ['platforms', 'tdx_measure_acpi_tables', 'launch_token_hash', 'health_status_file']) {
+      if (requirements[field] === null) delete requirements[field];
+    }
+    for (const field of ['health_check', 'ephemeral_data_disk']) {
+      if (requirements[field] === false) delete requirements[field];
+    }
+    if (requirements.gpu_policy && typeof requirements.gpu_policy === 'object' && !Array.isArray(requirements.gpu_policy)) {
+      const gpuPolicy = { ...requirements.gpu_policy };
+      if (gpuPolicy.rego === null) delete gpuPolicy.rego;
+      requirements.gpu_policy = gpuPolicy;
+    }
+    result.requirements = requirements;
+  }
+  return result;
+}
+
+/**
+ * Hash the SDK's compact, sorted JSON representation, not a Rust round-trip.
+ * Apart from the documented field omissions and optional normalization, input
+ * presence and form are preserved: no Rust defaults are added, empty arrays
+ * remain, and init_script retains its string or array form. This matches the
+ * deployed hash only when the exact serialized bytes are deployed.
+ *
+ * Numeric values beyond 2^53 can lose precision in Go and JavaScript. Python
+ * serializes a float such as 2.0 as `2.0`, while Go and JavaScript emit `2`.
+ */
 export function getComposeHash(app_compose: AppCompose, normalize: boolean = false): string {
+  app_compose = serializeFields(app_compose);
   if (normalize) {
     app_compose = preprocessAppCompose(app_compose);
   }

@@ -270,9 +270,15 @@ function to_gpu_evidence_bundles(
  */
 export class DstackClientV1 {
   protected endpoint: string
+  protected timeoutMs?: number
 
-  constructor(endpoint: string | undefined = undefined) {
+  constructor(endpoint: string | undefined = undefined, options: { timeoutMs?: number } = {}) {
     this.endpoint = resolveDstackEndpoint(endpoint)
+    this.timeoutMs = options.timeoutMs
+  }
+
+  protected request<T = any>(endpoint: string, path: string, payload: string): Promise<T> {
+    return send_rpc_request<T>(endpoint, path, payload, this.timeoutMs)
   }
 
   /**
@@ -312,7 +318,7 @@ export class DstackClientV1 {
     if (notAfter !== undefined) {
       raw['not_after'] = notAfter
     }
-    const result = await send_rpc_request<{ key: string, certificate_chain: string[] }>(
+    const result = await this.request<{ key: string, certificate_chain: string[] }>(
       this.endpoint, '/v1/IssueCert', JSON.stringify(raw))
     throwOnRpcError(result)
     return Object.freeze({
@@ -340,7 +346,7 @@ export class DstackClientV1 {
       throw new Error('algorithm is required, use "secp256k1" or "ed25519"')
     }
     const payload = JSON.stringify({ domain, algorithm })
-    const result = await send_rpc_request<{ key: string, public_key: string, signature_chain: string[] }>(
+    const result = await this.request<{ key: string, public_key: string, signature_chain: string[] }>(
       this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)
     return Object.freeze({
@@ -378,7 +384,7 @@ export class DstackClientV1 {
     }
     const hex = to_hex(bytes)
     const payload = JSON.stringify({ report_data: hex, include_boottime_gpu_evidence })
-    const result = await send_rpc_request<{
+    const result = await this.request<{
       attestation: string,
       boottime_gpu_evidence?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/Attest', payload)
@@ -410,7 +416,7 @@ export class DstackClientV1 {
       throw new Error(`nonce must be exactly 32 bytes, but received ${bytes.length}`)
     }
     const payload = JSON.stringify({ nonce: to_hex(bytes) })
-    const result = await send_rpc_request<{
+    const result = await this.request<{
       bundles?: GpuEvidenceBundleV1Wire[],
     }>(this.endpoint, '/v1/AttestGpu', payload)
     throwOnRpcError(result)
@@ -422,7 +428,7 @@ export class DstackClientV1 {
 
   /** Return this application's identity and configuration. */
   async info(): Promise<InfoResponseV1> {
-    const result = await send_rpc_request<InfoResponseV1Wire>(this.endpoint, '/v1/Info', '{}')
+    const result = await this.request<InfoResponseV1Wire>(this.endpoint, '/v1/Info', '{}')
     throwOnRpcError(result)
     return Object.freeze({
       app_id: from_hex(result.app_id, 'app_id'),
@@ -443,7 +449,7 @@ export class DstackClientV1 {
 
   /** Return the guest agent version. Also the cheapest probe for v1 support. */
   async version(): Promise<VersionResponseV1> {
-    const result = await send_rpc_request<{ version: string, rev: string }>(this.endpoint, '/v1/Version', '{}')
+    const result = await this.request<{ version: string, rev: string }>(this.endpoint, '/v1/Version', '{}')
     throwOnRpcError(result)
     return Object.freeze({
       version: to_string(result.version, 'version'),

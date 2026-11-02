@@ -6,6 +6,9 @@ import { x25519 } from "@noble/curves/ed25519"
 
 function hexToUint8Array(hex: string): Uint8Array {
   hex = hex.startsWith("0x") ? hex.slice(2) : hex
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error("invalid hex string")
+  }
   return new Uint8Array(
     hex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? [],
   )

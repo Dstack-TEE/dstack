@@ -323,6 +323,14 @@ from dstack_sdk import get_compose_hash
 hash_value = get_compose_hash(app_compose_dict)
 ```
 
+The SDK compose hash is not a Rust round-trip. SDKs preserve input presence and
+form: they do not add Rust defaults, keep empty lists, and retain the input form
+of `init_script`. The hash matches the deployed/on-chain hash only if those exact
+bytes are deployed.
+
+Numeric edge cases differ across SDKs: Go and JavaScript lose precision for
+`swap_size` values above 2^53, while Python emits `2.0` where they emit `2`.
+
 ---
 
 ## Compatibility

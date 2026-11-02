@@ -309,7 +309,7 @@ describe('DstackClientV0', () => {
       const result = await client.deriveKey('/', 'test')
       expect(result).toHaveProperty('key')
       expect(result).toHaveProperty('certificate_chain')
-      expect(consoleSpy).toHaveBeenCalledWith('deriveKey is deprecated, please use getKey instead')
+      expect(consoleSpy).toHaveBeenCalledWith('deriveKey is deprecated, please use DstackClient on dstack.sock instead')
 
       consoleSpy.mockRestore()
     })
@@ -321,7 +321,7 @@ describe('DstackClientV0', () => {
       const result = await client.tdxQuote('test data')
       expect(result).toHaveProperty('quote')
       expect(result).toHaveProperty('event_log')
-      expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use getQuote instead')
+      expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use DstackClient on dstack.sock instead')
 
       consoleSpy.mockRestore()
     })
@@ -333,7 +333,7 @@ describe('DstackClientV0', () => {
       const result = await client.tdxQuote('test data', 'sha256')
       expect(result).toHaveProperty('quote')
       expect(result).toHaveProperty('event_log')
-      expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use getQuote instead')
+      expect(consoleSpy).toHaveBeenCalledWith('tdxQuote is deprecated, please use DstackClient on dstack.sock instead')
 
       consoleSpy.mockRestore()
     })
