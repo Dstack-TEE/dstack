@@ -24,6 +24,16 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          df -h /
+
       - name: Parse and check version
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
