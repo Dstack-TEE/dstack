@@ -45,6 +45,11 @@ that tag, rather than building the branch selected in the workflow UI.
 
 ## Reproducing a released image
 
+Files copied from the checkout have explicit permissions in the Dockerfile,
+so the caller's clone-time umask does not affect their image layers. For older
+release tags without these permissions, set `umask 0022` before cloning to
+match the release checkout.
+
 Release CI runs this same script, so a published image can be rebuilt and
 checked digest-for-digest. Use a clean checkout of the release commit so the
 Dockerfile, package lists, shared scripts and copied files also match the release.
