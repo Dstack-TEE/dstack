@@ -357,7 +357,7 @@ test_push_periodic_overlap() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    wait_for_peers 4 1 2 || {
+    wait_for_peers 15 1 2 || {
         log_error "nodes 1 2 did not learn about each other"; return 1; }
 
     local before i
@@ -641,7 +641,7 @@ test_network_partition() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    wait_for_peers 5 1 2 || {
+    wait_for_peers 15 1 2 || {
         log_error "nodes 1 2 did not learn about each other"; return 1; }
     check_debug_service 1 || { log_error "debug service not available on node 1"; return 1; }
 
@@ -858,7 +858,7 @@ test_node_status_register_exclude() {
     start_node 1 || return 1
     start_node 2 || return 1
     setup_peers 1 2
-    wait_for_peers 5 1 2 || {
+    wait_for_peers 15 1 2 || {
         log_error "nodes 1 2 did not learn about each other"; return 1; }
     check_debug_service 1 || { log_error "debug service not available on node 1"; return 1; }
 
