@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 FROM rust:1.92.0-bookworm@sha256:e90e846de4124376164ddfbaab4b0774c7bdeef5e738866295e5a90a34a307a2 AS verifier-builder
-COPY --from=build-shared pin-packages.sh /build/
-COPY builder/shared/*-pinned-packages.txt /build/
+COPY --chmod=0755 --from=build-shared pin-packages.sh /build/
+COPY --chmod=0644 builder/shared/*-pinned-packages.txt /build/
 ARG DSTACK_REV
 ARG DSTACK_SRC_URL=https://github.com/Dstack-TEE/dstack.git
 WORKDIR /build
@@ -31,8 +31,8 @@ RUN cd repo/dstack && cargo build --release --locked -p dstack-verifier --target
 RUN echo "${DSTACK_REV}" > /build/.GIT_REV
 
 FROM debian:bookworm@sha256:0d8498a0e9e6a60011df39aab78534cfe940785e7c59d19dfae1eb53ea59babe
-COPY --from=build-shared pin-packages.sh /build/
-COPY builder/shared/pinned-packages.txt /build/
+COPY --chmod=0755 --from=build-shared pin-packages.sh /build/
+COPY --chmod=0644 builder/shared/pinned-packages.txt /build/
 WORKDIR /build
 RUN ./pin-packages.sh ./pinned-packages.txt && \
     apt-get update -o APT::Update::Error-Mode=any && \
@@ -48,7 +48,7 @@ COPY --from=verifier-builder /build/.GIT_REV /etc/
 ARG IMAGE_METADATA
 RUN mkdir -p /etc/dstack-verifier && printf '%s\n' "${IMAGE_METADATA}" > /etc/dstack-verifier/build-info
 RUN mkdir -p /etc/dstack
-COPY dstack-verifier.toml /etc/dstack/dstack-verifier.toml
+COPY --chmod=0644 dstack-verifier.toml /etc/dstack/dstack-verifier.toml
 WORKDIR /var/lib/dstack-verifier
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/dstack-verifier"]
