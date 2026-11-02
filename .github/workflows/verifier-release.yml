@@ -24,16 +24,6 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Reclaim runner disk space
-        run: |
-          sudo rm -rf \
-            /opt/ghc \
-            /opt/hostedtoolcache/CodeQL \
-            /usr/local/.ghcup \
-            /usr/local/lib/android \
-            /usr/share/dotnet
-          df -h /
-
       - name: Parse and check version
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
@@ -52,6 +42,16 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "RELEASE_TAG=verifier-v$VERSION" >> "$GITHUB_ENV"
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          df -h /
 
       # Manual runs rebuild an existing release tag, not the selected branch.
       - name: Checkout repository
