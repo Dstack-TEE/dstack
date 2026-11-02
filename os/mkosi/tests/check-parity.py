@@ -75,6 +75,23 @@ else:
     for path in spec.get("prod_forbidden_paths", []):
         if os.path.lexists(os.path.join(rootfs, path)):
             missing.append(f"prod contains forbidden path:/{path}")
+    # Generators run as root before any unit and act on whatever they find, so
+    # prod pins the exact set: a package upgrade that ships a new one fails the
+    # build instead of silently widening what the host can influence.
+    generators = {
+        os.path.basename(path)
+        for pattern in (
+            "usr/lib/systemd/system-generators/*",
+            "usr/local/lib/systemd/system-generators/*",
+            "etc/systemd/system-generators/*",
+        )
+        for path in glob.glob(os.path.join(rootfs, pattern))
+    }
+    allowed = set(spec["prod_allowed_generators"])
+    for name in sorted(generators - allowed):
+        missing.append(f"prod contains unexpected generator: {name}")
+    for name in sorted(allowed - generators):
+        missing.append(f"prod is missing allowed generator: {name}")
 for path, expected in spec.get("required_symlink_resolutions", {}).items():
     # Which netfilter frontend the image programs is decided by a symlink, and
     # on this backend that symlink comes from the distribution's default rather
