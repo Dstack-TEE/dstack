@@ -186,9 +186,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
     }
 
-    // Make the next registered root epoch the one KMS instances serve
-    function activateRootEpoch(uint256 epoch) external onlyOwner {
+    // Make the next registered root epoch the one KMS instances serve. Bind
+    // activation to its chain hash in case a pending epoch has been replaced.
+    function activateRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
         require(epoch == _currentRootEpoch + 1 && epoch < _rootEpochs.length, "Invalid root epoch activation");
+        require(_rootEpochs[epoch].chainHash == chainHash, "root epoch chain hash mismatch");
         _currentRootEpoch = epoch;
         _useRootEpoch(epoch);
         _emitPolicy("root-epoch-activated", bytes32(epoch), true);

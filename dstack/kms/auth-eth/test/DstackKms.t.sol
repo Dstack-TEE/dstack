@@ -128,21 +128,24 @@ contract DstackKmsTest is Test {
     }
 
     function test_ActivateRootEpochMovesForwardOneAtATime() public {
+        bytes32 h0 = chainHash(bytes32(0), ca(0xa0), k256(0xb0));
+        bytes32 h1 = chainHash(h0, ca(0xa1), k256(0xb1));
+        bytes32 h2 = chainHash(h1, ca(0xa2), k256(0xb2));
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
         vm.expectRevert("Invalid root epoch activation");
-        kms.activateRootEpoch(1);
+        kms.activateRootEpoch(1, h1);
         kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
         kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2");
         vm.expectRevert("Invalid root epoch activation");
-        kms.activateRootEpoch(2);
+        kms.activateRootEpoch(2, h2);
         vm.expectEmit(true, true, true, true);
         emit RootEpochActivated(1);
-        kms.activateRootEpoch(1);
+        kms.activateRootEpoch(1, h1);
         vm.expectRevert("Invalid root epoch activation");
-        kms.activateRootEpoch(1);
+        kms.activateRootEpoch(1, h1);
         vm.expectRevert("Invalid root epoch activation");
-        kms.activateRootEpoch(0);
+        kms.activateRootEpoch(0, h0);
         vm.stopPrank();
 
         (uint256 current,) = kms.currentRootEpoch();
@@ -150,7 +153,36 @@ contract DstackKmsTest is Test {
 
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
-        kms.activateRootEpoch(2);
+        kms.activateRootEpoch(2, h2);
+    }
+
+    function test_activate_root_epoch_rejects_replaced_pending_epoch() public {
+        bytes32 h0 = chainHash(bytes32(0), ca(0xa0), k256(0xb0));
+        bytes32 h1 = chainHash(h0, ca(0xa1), k256(0xb1));
+        bytes32 replacementHash = chainHash(h0, ca(0xa2), k256(0xb2));
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
+        kms.popRootEpoch(1, h1);
+        kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://replacement");
+
+        vm.expectRevert("root epoch chain hash mismatch");
+        kms.activateRootEpoch(1, h1);
+        (uint256 current, bytes32 currentHash) = kms.currentRootEpoch();
+        assertEq(current, 0);
+        assertEq(currentHash, h0);
+        (bytes memory k256Key, bytes memory caKey,,) = kms.kmsInfo();
+        assertEq(caKey, ca(0xa0));
+        assertEq(k256Key, k256(0xb0));
+
+        kms.activateRootEpoch(1, replacementHash);
+        (current, currentHash) = kms.currentRootEpoch();
+        assertEq(current, 1);
+        assertEq(currentHash, replacementHash);
+        (k256Key, caKey,,) = kms.kmsInfo();
+        assertEq(caKey, ca(0xa2));
+        assertEq(k256Key, k256(0xb2));
+        vm.stopPrank();
     }
 
     function test_RegisterRootEpochZeroMustMatchKmsInfo() public {
@@ -192,7 +224,7 @@ contract DstackKmsTest is Test {
         assertEq(kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2"), 1);
         vm.expectRevert("Root epoch chain hash mismatch");
         kms.popRootEpoch(1, h1);
-        kms.activateRootEpoch(1);
+        kms.activateRootEpoch(1, h1b);
         vm.expectRevert("Not the pending root epoch");
         kms.popRootEpoch(1, h1b);
         vm.stopPrank();
@@ -240,7 +272,8 @@ contract DstackKmsTest is Test {
         kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
         (k256Key, caKey,,) = kms.kmsInfo();
         assertEq(caKey, ca(0xa0));
-        kms.activateRootEpoch(1);
+        (,,, bytes32 h1) = kms.rootEpoch(1);
+        kms.activateRootEpoch(1, h1);
         (k256Key, caKey,,) = kms.kmsInfo();
         assertEq(caKey, ca(0xa1));
         assertEq(k256Key, k256(0xb1));
