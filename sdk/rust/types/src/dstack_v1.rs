@@ -125,6 +125,9 @@ pub struct GetKeyResponse {
     /// steps. Verifying is the relying party's job; this SDK does not do it.
     #[serde(with = "hex_vec")]
     pub signature_chain: Vec<Vec<u8>>,
+    /// KMS root key epoch the key was derived from.
+    #[serde(default)]
+    pub root_epoch: u32,
 }
 
 /// The value an attestation binds to: bytes, and only bytes.
