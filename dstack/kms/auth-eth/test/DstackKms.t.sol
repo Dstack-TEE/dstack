@@ -507,7 +507,9 @@ contract DstackKmsTest is Test {
         assertFalse(result.isAllowed);
         assertEq(result.rejectReason, "App not registered");
         assertEq(result.currentRootEpoch, 1);
-        assertEq(result.currentRootEpochHash, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1)));
+        assertEq(
+            result.currentRootEpochHash, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1))
+        );
     }
 
     function test_IsKmsAllowed() public {
