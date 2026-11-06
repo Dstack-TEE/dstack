@@ -126,9 +126,10 @@ contract RegisterRootEpoch is BaseScript {
 contract ActivateRootEpoch is BaseScript {
     function run() external {
         uint256 epoch = vm.envUint("ROOT_EPOCH");
+        bytes32 chainHash = vm.envBytes32("CHAIN_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.activateRootEpoch(epoch);
+        kms.activateRootEpoch(epoch, chainHash);
         vm.stopBroadcast();
 
         console.log("Activated KMS root epoch", epoch);

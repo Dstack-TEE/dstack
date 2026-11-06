@@ -77,8 +77,10 @@ forge script script/Manage.s.sol:RegisterRootEpoch --broadcast --rpc-url $RPC_UR
 Makes the next registered root epoch the one KMS instances serve. Activate it
 only once every KMS node holds it; nodes still at the previous epoch stop
 serving, and nodes holding it restart to switch. Epochs only move forward.
+`CHAIN_HASH` is the expected epoch chain hash (see `Query.s.sol`),
+so a stale activation cannot activate replacement keys at the same epoch.
 ```bash
-KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=1 \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=1 CHAIN_HASH=0x... \
 forge script script/Manage.s.sol:ActivateRootEpoch --broadcast --rpc-url $RPC_URL
 ```
 
