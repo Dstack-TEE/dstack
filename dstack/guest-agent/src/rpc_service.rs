@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -94,38 +93,21 @@ pub struct AppState {
     inner: Arc<AppStateInner>,
 }
 
-/// The app root key of one KMS root epoch.
-pub(crate) struct AppRoot<'a> {
-    pub epoch: u32,
-    pub k256_key: Cow<'a, [u8]>,
-    pub signing_key: Cow<'a, SigningKey>,
-    pub kms_signature: Cow<'a, [u8]>,
-}
-
-/// The app root key of an older KMS root epoch, fetched from the KMS on first
-/// use.
+/// The app root key of one KMS root epoch, with its KMS signature.
 #[derive(Clone)]
-pub(crate) struct HistoricalRoot {
-    k256_key: Vec<u8>,
-    signing_key: SigningKey,
-    kms_signature: Vec<u8>,
+pub(crate) struct AppRoot {
+    pub epoch: u32,
+    pub k256_key: Vec<u8>,
+    pub signing_key: SigningKey,
+    pub kms_signature: Vec<u8>,
 }
 
-impl HistoricalRoot {
-    #[cfg(test)]
-    pub(crate) fn k256_key(&self) -> &[u8] {
-        &self.k256_key
-    }
-
-    #[cfg(test)]
-    pub(crate) fn kms_signature(&self) -> &[u8] {
-        &self.kms_signature
-    }
-
-    fn new(k256_key: Vec<u8>, kms_signature: Vec<u8>) -> Result<Self> {
+impl AppRoot {
+    fn new(epoch: u32, k256_key: Vec<u8>, kms_signature: Vec<u8>) -> Result<Self> {
         let signing_key = SigningKey::from_slice(&k256_key)
             .context("the app root k256 key is not a valid secp256k1 scalar")?;
         Ok(Self {
+            epoch,
             k256_key,
             signing_key,
             kms_signature,
@@ -139,7 +121,7 @@ struct AppStateInner {
     vm_config: String,
     cert_client: CertRequestClient,
     /// Held across a fetch so concurrent requests for one epoch fetch it once.
-    historical_roots: tokio::sync::Mutex<HashMap<u32, HistoricalRoot>>,
+    historical_roots: tokio::sync::Mutex<HashMap<u32, AppRoot>>,
     demo_cert: tokio::sync::OnceCell<String>,
     /// When the last demo-cert request failed; held while one is running.
     demo_cert_last_failure: tokio::sync::Mutex<Option<Instant>>,
@@ -429,30 +411,24 @@ impl AppState {
     /// The app root key and its KMS signature of `root_epoch`; the current
     /// ones when unset. An older epoch is requested from the KMS once and kept
     /// in memory.
-    pub(crate) async fn app_root(&self, root_epoch: Option<u32>) -> Result<AppRoot<'_>> {
+    pub(crate) async fn app_root(&self, root_epoch: Option<u32>) -> Result<AppRoot> {
         let current = self.root_epoch();
         let epoch = root_epoch.unwrap_or(current);
         if epoch == current {
             return Ok(AppRoot {
                 epoch,
-                k256_key: Cow::Borrowed(self.app_root_k256_key()),
-                signing_key: Cow::Borrowed(self.app_root_signing_key()?),
-                kms_signature: Cow::Borrowed(self.kms_k256_signature()),
+                k256_key: self.app_root_k256_key().to_vec(),
+                signing_key: self.app_root_signing_key()?.clone(),
+                kms_signature: self.kms_k256_signature().to_vec(),
             });
         }
         if epoch > current {
             anyhow::bail!("root epoch {epoch} is newer than the current one, {current}");
         }
-        let root = self.historical_root(epoch).await?;
-        Ok(AppRoot {
-            epoch,
-            k256_key: Cow::Owned(root.k256_key),
-            signing_key: Cow::Owned(root.signing_key),
-            kms_signature: Cow::Owned(root.kms_signature),
-        })
+        self.historical_root(epoch).await
     }
 
-    pub(crate) async fn historical_root(&self, epoch: u32) -> Result<HistoricalRoot> {
+    pub(crate) async fn historical_root(&self, epoch: u32) -> Result<AppRoot> {
         let mut roots = self.inner.historical_roots.lock().await;
         if let Some(root) = roots.get(&epoch) {
             return Ok(root.clone());
@@ -463,7 +439,7 @@ impl AppState {
             .get_app_key(epoch)
             .await
             .with_context(|| format!("failed to fetch the app keys of root epoch {epoch}"))?;
-        let root = HistoricalRoot::new(keys.k256_key, keys.k256_signature)?;
+        let root = AppRoot::new(epoch, keys.k256_key, keys.k256_signature)?;
         roots.insert(epoch, root.clone());
         Ok(root)
     }
@@ -475,7 +451,7 @@ impl AppState {
         k256_key: Vec<u8>,
         kms_signature: Vec<u8>,
     ) {
-        let root = HistoricalRoot::new(k256_key, kms_signature).unwrap();
+        let root = AppRoot::new(epoch, k256_key, kms_signature).unwrap();
         self.inner.historical_roots.lock().await.insert(epoch, root);
     }
 

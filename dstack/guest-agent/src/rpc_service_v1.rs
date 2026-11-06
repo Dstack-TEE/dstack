@@ -170,10 +170,7 @@ impl V1RpcHandler {
         let algorithm = Algorithm::parse(algorithm)?;
         let root = self.state.app_root(root_epoch).await?;
         let key = AppKey::derive(&root.k256_key, domain, algorithm)?;
-        let chain = vec![
-            key.claim_signature(&root.signing_key)?,
-            root.kms_signature.to_vec(),
-        ];
+        let chain = vec![key.claim_signature(&root.signing_key)?, root.kms_signature];
         Ok((key, chain, root.epoch))
     }
 }
@@ -383,8 +380,8 @@ mod tests {
             .insert_historical_root(1, key.clone(), vec![0xab; 65])
             .await;
         let root = state.historical_root(1).await.unwrap();
-        assert_eq!(root.k256_key(), &key[..]);
-        assert_eq!(root.kms_signature(), &[0xab; 65][..]);
+        assert_eq!(root.k256_key, key);
+        assert_eq!(root.kms_signature, [0xab; 65]);
         // An uncached epoch needs the KMS, which a local key provider lacks.
         assert!(state.historical_root(2).await.is_err());
     }

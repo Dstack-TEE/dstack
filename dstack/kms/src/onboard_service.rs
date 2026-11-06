@@ -36,7 +36,7 @@ use tracing::info;
 use crate::{
     config::KmsConfig,
     main_service::{
-        build_boot_info_for_attestation,
+        build_boot_info_for_attestation, root_chain_hashes, servable_epoch,
         upgrade_authority::{
             app_attest, dstack_client, ensure_kms_allowed, ensure_self_kms_allowed, pad64,
             RootEpochRegistry,
@@ -1280,52 +1280,25 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifi
 /// Check the handed-over roots against governance: they must include the
 /// current epoch with a matching chain hash. A rotation must start from the
 /// current epoch with nothing pending activation, or it would collide with the
-/// next registered epoch. Deployments that never registered epochs can still
-/// join at epoch 0.
+/// next registered epoch.
 fn ensure_handover_registered(
     roots: &[(KeyPair, SigningKey)],
     registry: RootEpochRegistry,
     rotate: bool,
 ) -> Result<()> {
+    if rotate && registry == RootEpochRegistry::Empty {
+        bail!("register root epoch 0 before rotating");
+    }
+    let hashes = root_chain_hashes(roots.iter().map(|(ca, k256)| (ca, k256)));
+    let current = servable_epoch(&hashes, registry)?;
     let latest = roots.len() as u32 - 1;
-    let current = match registry {
-        RootEpochRegistry::Unchecked => return Ok(()),
-        RootEpochRegistry::Empty if latest == 0 && !rotate => return Ok(()),
-        RootEpochRegistry::Empty => {
-            bail!("register root epoch 0 before rotating or joining past it")
-        }
-        RootEpochRegistry::Current(current) => current,
-    };
-    if rotate && current.epoch != latest {
+    if rotate && current != latest {
         bail!(
-            "the source holds root epochs up to {latest}, but {} is current; rotate from a \
-             source at the current epoch with no epoch pending activation",
-            current.epoch
+            "the source holds root epochs up to {latest}, but {current} is current; rotate from \
+             a source at the current epoch with no epoch pending activation"
         );
     }
-    let pubkeys: Vec<_> = roots
-        .iter()
-        .map(|(ca_key, k256_key)| {
-            (
-                ca_key.public_key_der(),
-                k256_key.verifying_key().to_sec1_bytes().to_vec(),
-            )
-        })
-        .collect();
-    let hashes = dstack_types::root_epoch::chain_hashes(
-        pubkeys.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
-    );
-    match hashes.get(current.epoch as usize) {
-        Some(hash) if *hash == current.chain_hash => Ok(()),
-        Some(_) => bail!(
-            "the source's root keys up to epoch {} are not the registered ones",
-            current.epoch
-        ),
-        None => bail!(
-            "the source holds root epochs up to {latest}, but {} is current",
-            current.epoch
-        ),
-    }
+    Ok(())
 }
 
 fn self_signed_root_ca(ca_key: &KeyPair) -> Result<Certificate> {

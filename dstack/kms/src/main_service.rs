@@ -26,6 +26,7 @@ use ra_tls::{
     attestation::{resolve_vm_config, AttestationVerifier, TeeVariant, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
+    rcgen::KeyPair,
 };
 use scale::Decode;
 use tracing::warn;
@@ -99,18 +100,7 @@ impl Keyring {
                     .with_context(|| format!("failed to load root keys of epoch {epoch}"))
             })
             .collect::<Result<Vec<_>>>()?;
-        let pubkeys: Vec<_> = roots
-            .iter()
-            .map(|root| {
-                (
-                    root.ca.key.public_key_der(),
-                    root.k256.verifying_key().to_sec1_bytes().to_vec(),
-                )
-            })
-            .collect();
-        let chain_hashes = dstack_types::root_epoch::chain_hashes(
-            pubkeys.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
-        );
+        let chain_hashes = root_chain_hashes(roots.iter().map(|root| (&root.ca.key, &root.k256)));
         Ok(Self {
             roots,
             chain_hashes,
@@ -121,33 +111,53 @@ impl Keyring {
         self.roots.len() as u32 - 1
     }
 
-    /// The epoch to serve under `registry`: its current epoch, which this
-    /// keyring must hold with a matching chain hash. A keyring nobody
-    /// registered is servable only at epoch 0, as before root epochs existed.
     pub(crate) fn servable_epoch(&self, registry: RootEpochRegistry) -> Result<u32> {
-        let latest = self.latest();
-        match registry {
-            RootEpochRegistry::Unchecked => Ok(latest),
-            RootEpochRegistry::Empty if latest == 0 => Ok(0),
-            RootEpochRegistry::Empty => {
-                bail!("this KMS holds root epoch {latest}, but no root epoch is registered")
-            }
-            RootEpochRegistry::Current(current) => {
-                let Some(local) = self.chain_hashes.get(current.epoch as usize) else {
-                    bail!(
-                        "root epoch {} is current, but this KMS holds only up to {latest}",
-                        current.epoch
-                    );
-                };
-                if *local != current.chain_hash {
-                    bail!(
-                        "the root keys up to epoch {} do not match the registered ones",
-                        current.epoch
-                    );
-                }
-                Ok(current.epoch)
-            }
+        servable_epoch(&self.chain_hashes, registry)
+    }
+}
+
+/// Chain hashes of the root keys of epochs 0, 1, ...
+pub(crate) fn root_chain_hashes<'a>(
+    roots: impl Iterator<Item = (&'a KeyPair, &'a SigningKey)>,
+) -> Vec<[u8; 32]> {
+    let pubkeys: Vec<_> = roots
+        .map(|(ca, k256)| {
+            (
+                ca.public_key_der(),
+                k256.verifying_key().to_sec1_bytes().to_vec(),
+            )
+        })
+        .collect();
+    dstack_types::root_epoch::chain_hashes(pubkeys.iter().map(|(ca, k256)| (&ca[..], &k256[..])))
+}
+
+/// The epoch a keyring with `chain_hashes` serves under `registry`: the
+/// current epoch, which the keyring must hold with a matching chain hash. A
+/// keyring nobody registered is servable only at epoch 0, as before root
+/// epochs existed.
+pub(crate) fn servable_epoch(
+    chain_hashes: &[[u8; 32]],
+    registry: RootEpochRegistry,
+) -> Result<u32> {
+    let latest = chain_hashes.len() as u32 - 1;
+    let current = match registry {
+        RootEpochRegistry::Unchecked => return Ok(latest),
+        RootEpochRegistry::Empty if latest == 0 => return Ok(0),
+        RootEpochRegistry::Empty => {
+            bail!("the keyring holds root epoch {latest}, but no root epoch is registered")
         }
+        RootEpochRegistry::Current(current) => current,
+    };
+    match chain_hashes.get(current.epoch as usize) {
+        Some(hash) if *hash == current.chain_hash => Ok(current.epoch),
+        Some(_) => bail!(
+            "the root keys up to epoch {} are not the registered ones",
+            current.epoch
+        ),
+        None => bail!(
+            "root epoch {} is current, but the keyring holds only up to {latest}",
+            current.epoch
+        ),
     }
 }
 
@@ -300,20 +310,13 @@ impl KmsState {
             return Ok(());
         }
         let serving = self.serving_epoch;
-        match response.root_epoch.registry()? {
-            RootEpochRegistry::Current(current)
-                if current.epoch == serving
-                    && current.chain_hash == self.keyring.chain_hashes[serving as usize] =>
-            {
-                Ok(())
-            }
-            RootEpochRegistry::Empty if serving == 0 => Ok(()),
-            registry => {
-                warn!("governance moved off root epoch {serving} ({registry:?}); restarting");
-                self.restart.notify_one();
-                bail!("root epoch {serving} is no longer current; the KMS is restarting")
-            }
+        let registry = response.root_epoch.registry()?;
+        if self.keyring.servable_epoch(registry).ok() == Some(serving) {
+            return Ok(());
         }
+        warn!("governance moved off root epoch {serving} ({registry:?}); restarting");
+        self.restart.notify_one();
+        bail!("root epoch {serving} is no longer current; the KMS is restarting")
     }
 }
 

@@ -2745,8 +2745,6 @@ impl<'a> Stage0<'a> {
     }
 
     async fn mount_data_disk(&self, keys: &AppKeys, opts: &DstackOptions) -> Result<()> {
-        let disk_crypt_key = &hex::encode(&keys.disk_crypt_key);
-        let root_epoch = kms_root_epoch(keys);
         let name = "dstack_data_disk";
         let mount_point = &self.args.mount_point;
 
@@ -2767,13 +2765,9 @@ impl<'a> Stage0<'a> {
 
         let has_filesystem = if opts.storage_encrypted && disk_initialized {
             info!("Mounting encrypted data disk");
-            if let Some(epoch) = root_epoch {
-                self.migrate_disk_key(keys, disk_crypt_key, epoch)
-                    .await
-                    .context("failed to migrate the data disk key")?;
-            }
-            let initializing =
-                self.open_encrypted_volume(disk_crypt_key, name, opts.storage_discard)?;
+            let initializing = self
+                .open_encrypted_volume(keys, name, opts.storage_discard)
+                .await?;
             if initializing {
                 warn!("data disk initialization was interrupted, initializing it again");
             }
@@ -2791,7 +2785,7 @@ impl<'a> Stage0<'a> {
                 info!("Skipping disk encryption as requested by kernel cmdline");
             } else if !disk_initialized {
                 info!("Setting up disk encryption");
-                self.luks_setup(disk_crypt_key, root_epoch, name, opts.storage_discard)?;
+                self.luks_setup(keys, name, opts.storage_discard).await?;
             }
 
             match opts.storage_fs {
@@ -2920,13 +2914,8 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    fn luks_setup(
-        &self,
-        disk_crypt_key: &str,
-        root_epoch: Option<u32>,
-        name: &str,
-        discard: bool,
-    ) -> Result<()> {
+    async fn luks_setup(&self, keys: &AppKeys, name: &str, discard: bool) -> Result<()> {
+        let disk_crypt_key = hex::encode(&keys.disk_crypt_key);
         let root_hd = &self.args.device;
         let sector_offset = PAYLOAD_OFFSET / 512;
         info!("Formatting encrypted disk");
@@ -2964,14 +2953,15 @@ impl<'a> Stage0<'a> {
         {
             bail!("Failed to setup luks volume");
         }
-        if let Some(epoch) = root_epoch.filter(|epoch| *epoch > 0) {
-            write_luks_root_epoch(root_hd, epoch, false)?;
+        if let Some(epoch) = kms_root_epoch(keys).filter(|epoch| *epoch > 0) {
+            write_luks_root_epoch(root_hd, epoch)?;
         }
-        self.open_encrypted_volume(disk_crypt_key, name, discard)?;
+        self.open_encrypted_volume(keys, name, discard).await?;
         Ok(())
     }
 
-    /// Re-key a data disk still protected by an older KMS epoch.
+    /// Re-key the in-memory `header` of a data disk still protected by an
+    /// older KMS epoch, and write it back to the disk.
     ///
     /// Only the keyslot passphrase changes; the volume key stays. The epoch
     /// is recorded in the header so the right old key is used after the next
@@ -2980,39 +2970,32 @@ impl<'a> Stage0<'a> {
     async fn migrate_disk_key(
         &self,
         keys: &AppKeys,
-        current_key: &str,
-        current: u32,
+        header: &Path,
+        from: u32,
+        to: u32,
     ) -> Result<()> {
-        let device = &self.args.device;
-        let stored = read_luks_root_epoch(device)?;
-        if !luks_unlocks(device, current_key)? {
-            let epoch = stored.unwrap_or(0);
-            if epoch >= current {
-                bail!("the data disk does not unlock with the key of epoch {current}");
-            }
-            info!("re-keying the data disk from key epoch {epoch} to {current}");
-            let old = self.shared.request_historical_keys(keys, epoch).await?;
-            let old_key = hex::encode(&old.disk_crypt_key);
-            luks_change_key(device, &old_key, current_key, Path::new(REKEY_DIR))?;
-            if !luks_unlocks(device, current_key)? {
-                bail!("the data disk does not unlock after re-keying");
-            }
-        }
-        if stored.unwrap_or(0) != current {
-            write_luks_root_epoch(device, current, stored.is_some())?;
-        }
+        info!("re-keying the data disk from root epoch {from} to {to}");
+        let old = self.shared.request_historical_keys(keys, from).await?;
+        rekey_luks_header(
+            header,
+            &hex::encode(&old.disk_crypt_key),
+            &hex::encode(&keys.disk_crypt_key),
+            to,
+        )?;
+        let root_hd = &self.args.device;
+        cmd!(cryptsetup luksHeaderRestore --batch-mode --header-backup-file=$header $root_hd)
+            .context("failed to write the re-keyed LUKS header")?;
         Ok(())
     }
 
-    /// Returns whether the header still carries the initializing label.
-    fn open_encrypted_volume(
+    async fn open_encrypted_volume(
         &self,
-        disk_crypt_key: &str,
+        keys: &AppKeys,
         name: &str,
         discard: bool,
     ) -> Result<bool> {
         let root_hd = &self.args.device;
-        let disk_crypt_key = disk_crypt_key.trim();
+        let disk_crypt_key = hex::encode(&keys.disk_crypt_key);
         // Create a private tmpfs mount to ensure the header stays in-memory.
         let tmp_hdr_dir = "/tmp/dstack-luks-header";
         let in_mem_hdr = format!("{tmp_hdr_dir}/luks-header");
@@ -3034,9 +3017,27 @@ impl<'a> Stage0<'a> {
         }
         .context("Failed to load LUKS2 header")?;
 
-        let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
-        let LuksHeaderState { initializing, .. } =
-            validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
+        let validate = || {
+            let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
+            validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")
+        };
+        let mut header = validate()?;
+        if let Some(current) = kms_root_epoch(keys) {
+            let stored = header.root_epoch.unwrap_or(0);
+            if stored > current {
+                bail!("the data disk is at root epoch {stored}, newer than the current {current}");
+            }
+            if stored < current {
+                self.migrate_disk_key(keys, Path::new(&in_mem_hdr), stored, current)
+                    .await
+                    .context("failed to migrate the data disk key")?;
+                header = validate()?;
+                if header.root_epoch != Some(current) {
+                    bail!("the re-keyed LUKS header does not record root epoch {current}");
+                }
+            }
+        }
+        let initializing = header.initializing;
 
         info!("Opening the device");
         let mut command = Command::new("cryptsetup");
@@ -3518,73 +3519,32 @@ fn run_with_input(mut command: Command, input: &[u8]) -> Result<Option<i32>> {
         .code())
 }
 
-/// Whether `key` unlocks keyslot 0. cryptsetup exits with 2 on a wrong key.
-fn luks_unlocks(device: &Path, key: &str) -> Result<bool> {
-    let command = cryptsetup(
-        &["open", "--test-passphrase", "--key-slot", "0", "-d-"],
-        device,
-    );
-    match run_with_input(command, key.as_bytes())? {
-        Some(0) => Ok(true),
-        Some(2) => Ok(false),
-        code => bail!("cryptsetup failed to test the data disk key: {code:?}"),
-    }
-}
-
-fn read_luks_root_epoch(device: &Path) -> Result<Option<u32>> {
-    #[derive(Deserialize)]
-    struct Metadata {
-        tokens: BTreeMap<u8, luks::LuksToken>,
-    }
-    let output = cryptsetup(&["luksDump", "--dump-json-metadata"], device)
-        .output()
-        .context("failed to run cryptsetup luksDump")?;
-    if !output.status.success() {
-        bail!("cryptsetup luksDump failed");
-    }
-    let metadata: Metadata =
-        serde_json::from_slice(&output.stdout).context("failed to parse LUKS metadata")?;
-    Ok(metadata
-        .tokens
-        .values()
-        .find(|token| token.kind == ROOT_EPOCH_TOKEN_TYPE)
-        .and_then(|token| token.root_epoch))
-}
-
-fn write_luks_root_epoch(device: &Path, epoch: u32, replace: bool) -> Result<()> {
+fn write_luks_root_epoch(device: &Path, epoch: u32) -> Result<()> {
     let token = serde_json::json!({
         "type": ROOT_EPOCH_TOKEN_TYPE,
         "keyslots": ["0"],
         "root_epoch": epoch,
     });
-    let args: &[&str] = if replace {
-        &["token", "import", "--token-id", "0", "--token-replace"]
-    } else {
-        &["token", "import", "--token-id", "0"]
-    };
-    let code = run_with_input(cryptsetup(args, device), token.to_string().as_bytes())?;
+    let args = ["token", "import", "--token-id", "0", "--token-replace"];
+    let code = run_with_input(cryptsetup(&args, device), token.to_string().as_bytes())?;
     if code != Some(0) {
-        bail!("failed to record key epoch {epoch} in the LUKS header: {code:?}");
+        bail!("failed to record root epoch {epoch} in the LUKS header: {code:?}");
     }
     Ok(())
 }
 
-/// Directory on the /run tmpfs for the old key handed to cryptsetup as a file.
-const REKEY_DIR: &str = "/run/dstack-rekey";
+/// Replace the keyslot 0 passphrase of a detached LUKS `header` and record
+/// `epoch` in it. The new key goes over stdin; the old one is written next to
+/// the header, which must be in a private in-memory directory.
+fn rekey_luks_header(header: &Path, old_key: &str, new_key: &str, epoch: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
 
-/// Replace the keyslot 0 passphrase in place. The new key goes over stdin;
-/// the old one is written to a 0700 directory in `secret_dir`, which is
-/// removed before returning.
-fn luks_change_key(device: &Path, old_key: &str, new_key: &str, secret_dir: &Path) -> Result<()> {
-    fs::create_dir_all(secret_dir)?;
+    // luksHeaderBackup leaves the copy read-only.
+    fs::set_permissions(header, std::fs::Permissions::from_mode(0o600))?;
+    let old_file = header.with_file_name("old-key");
     defer! {
-        fs::remove_dir_all(secret_dir).ok();
+        fs::remove_file(&old_file).ok();
     }
-    fs::set_permissions(
-        secret_dir,
-        std::os::unix::fs::PermissionsExt::from_mode(0o700),
-    )?;
-    let old_file = secret_dir.join("old-key");
     safe_write_with_mode(&old_file, old_key, 0o600)?;
     let mut command = cryptsetup(
         &[
@@ -3595,13 +3555,13 @@ fn luks_change_key(device: &Path, old_key: &str, new_key: &str, secret_dir: &Pat
             "--key-slot",
             "0",
         ],
-        device,
+        header,
     );
     command.arg("--key-file").arg(&old_file);
     if run_with_input(command, new_key.as_bytes())? != Some(0) {
         bail!("cryptsetup luksChangeKey failed");
     }
-    Ok(())
+    write_luks_root_epoch(header, epoch)
 }
 
 /// Set by luksFormat and cleared once the filesystem exists, so a disk still
@@ -3929,29 +3889,49 @@ fn test_disk_key_migration_with_cryptsetup() {
         &image,
     );
     assert_eq!(run_with_input(format, b"old").unwrap(), Some(0));
+    let unlocks = |key: &str| {
+        let test = cryptsetup(
+            &["open", "--test-passphrase", "--key-slot", "0", "-d-"],
+            &image,
+        );
+        run_with_input(test, key.as_bytes()).unwrap() == Some(0)
+    };
 
-    assert!(luks_unlocks(&image, "old").unwrap());
-    assert!(!luks_unlocks(&image, "new").unwrap());
-    assert_eq!(read_luks_root_epoch(&image).unwrap(), None);
-
-    let secret_dir = dir.path().join("rekey");
-    luks_change_key(&image, "old", "new", &secret_dir).unwrap();
-    assert!(!secret_dir.exists());
-    assert!(luks_unlocks(&image, "new").unwrap());
-    assert!(!luks_unlocks(&image, "old").unwrap());
-
-    write_luks_root_epoch(&image, 2, false).unwrap();
-    assert_eq!(read_luks_root_epoch(&image).unwrap(), Some(2));
-    write_luks_root_epoch(&image, 3, true).unwrap();
-    assert_eq!(read_luks_root_epoch(&image).unwrap(), Some(3));
-
-    // The re-keyed, tagged header still passes the boot-time validation.
+    // Re-key a detached copy of the header, as the boot does, and restore it.
     let header = dir.path().join("header");
-    let status = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
+    let backup = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
         .arg(&image)
         .status()
         .unwrap();
-    assert!(status.success());
+    assert!(backup.success());
+    rekey_luks_header(&header, "old", "new", 2).unwrap();
+    assert!(!dir.path().join("old-key").exists());
+    assert!(
+        unlocks("old"),
+        "the disk is unchanged until the header is restored"
+    );
+    let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
+    assert_eq!(state.root_epoch, Some(2));
+
+    let restore = cryptsetup(
+        &["luksHeaderRestore", "--batch-mode", "--header-backup-file"],
+        &header,
+    )
+    .arg(&image)
+    .status()
+    .unwrap();
+    assert!(restore.success());
+    assert!(unlocks("new"));
+    assert!(!unlocks("old"));
+
+    // A later rotation replaces the recorded epoch.
+    write_luks_root_epoch(&image, 3).unwrap();
+    fs::remove_file(&header).unwrap();
+    let backup = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
+        .arg(&image)
+        .status()
+        .unwrap();
+    assert!(backup.success());
     let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
     assert_eq!(state.root_epoch, Some(3));
 }
