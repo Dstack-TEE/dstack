@@ -458,7 +458,7 @@ message ApplyReencryptedEnvResponse {
   // Whether the stored encrypted env was replaced.
   bool replaced = 1;
   // KMS key epoch the stored env is now encrypted for, when replaced.
-  uint32 key_epoch = 2;
+  uint32 root_epoch = 2;
 }
 
 // Response containing a list of supervisor processes.

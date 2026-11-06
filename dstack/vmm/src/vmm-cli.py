@@ -696,7 +696,7 @@ class VmmCLI:
         """Swap in the env the guest re-encrypted to the current KMS key epoch."""
         result = self.rpc_call("ApplyReencryptedEnv", {"id": vm_id})
         if result.get("replaced"):
-            print(f"Replaced env of VM {vm_id} (key epoch {result.get('key_epoch', 0)})")
+            print(f"Replaced env of VM {vm_id} (key epoch {result.get('root_epoch', 0)})")
         else:
             print(f"VM {vm_id} has no re-encrypted env to apply")
 

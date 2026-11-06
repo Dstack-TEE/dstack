@@ -107,6 +107,9 @@ class GetKeyResponseV1(BaseModel):
     # Two links: the app root key's signature over the v1 key claim, then the
     # KMS root key's signature over the app root public key.
     signature_chain: List[HexBytes]
+    # KMS root key epoch the key was derived from. 0 from an agent that
+    # predates root epochs, which means epoch 1.
+    root_epoch: int = 0
 
 
 class GpuEvidenceBundleV1(BaseModel):
@@ -237,7 +240,9 @@ class AsyncDstackClientV1(AsyncBaseClient):
         result = await self._send_rpc_request("IssueCert", data)
         return IssueCertResponseV1(**result)
 
-    async def get_key(self, domain: str, algorithm: str) -> GetKeyResponseV1:
+    async def get_key(
+        self, domain: str, algorithm: str, root_epoch: int = 0
+    ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``.
 
         Both arguments are required. Derivation is flat: two domains yield
@@ -245,10 +250,20 @@ class AsyncDstackClientV1(AsyncBaseClient):
         exactly ``secp256k1`` or ``ed25519`` -- there is no default and no
         ``k256`` alias, because in v0 a typo silently produced a key of the
         wrong type under a name the caller thought meant something else.
+
+        ``root_epoch`` selects the KMS root key epoch, counting from 1; the
+        default 0 is the current epoch. Name an older epoch only to reach a key
+        from before a KMS root key rotation, for example to migrate off it.
         """
         if not algorithm:
             raise ValueError("algorithm is required, use `secp256k1` or `ed25519`")
-        data: Dict[str, Any] = {"domain": domain, "algorithm": algorithm}
+        if root_epoch < 0:
+            raise ValueError("root_epoch must be 0 (current) or an epoch number")
+        data: Dict[str, Any] = {
+            "domain": domain,
+            "algorithm": algorithm,
+            "root_epoch": root_epoch,
+        }
         result = await self._send_rpc_request("GetKey", data)
         return GetKeyResponseV1(**result)
 
@@ -350,7 +365,9 @@ class DstackClientV1(BaseClient):
         raise NotImplementedError
 
     @call_async
-    def get_key(self, domain: str, algorithm: str) -> GetKeyResponseV1:
+    def get_key(
+        self, domain: str, algorithm: str, root_epoch: int = 0
+    ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``."""
         raise NotImplementedError
 

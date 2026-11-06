@@ -193,7 +193,7 @@ message ReencryptedEnv {
   // The same env encrypted to the current env public key.
   bytes encrypted_env = 2;
   // KMS key epoch `encrypted_env` is encrypted for.
-  uint32 key_epoch = 3;
+  uint32 root_epoch = 3;
 }
 
 // Direct gRPC surface exposed by the in-guest agent.

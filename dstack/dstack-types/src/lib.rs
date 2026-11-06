@@ -2402,7 +2402,17 @@ pub struct ReencryptedEnv {
     /// The same env encrypted to the current env public key.
     #[serde(with = "hex_bytes")]
     pub encrypted_env: Vec<u8>,
-    pub key_epoch: u32,
+    pub root_epoch: u32,
+}
+
+/// The app root key of an older KMS root epoch.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct HistoricalAppRoot {
+    pub root_epoch: u32,
+    #[serde(with = "hex_bytes")]
+    pub k256_key: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub k256_signature: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -2418,6 +2428,21 @@ pub struct AppKeys {
     pub gateway_app_id: String,
     pub ca_cert: String,
     pub key_provider: KeyProvider,
+    /// App root keys of the KMS root epochs before the current one, from
+    /// epoch 1, for key requests that select one explicitly.
+    #[serde(default)]
+    pub historical_roots: Vec<HistoricalAppRoot>,
+}
+
+impl AppKeys {
+    /// KMS root epoch the keys were derived from; 1 for other key providers,
+    /// which have a single root.
+    pub fn root_epoch(&self) -> u32 {
+        match self.key_provider {
+            KeyProvider::Kms { root_epoch, .. } => root_epoch,
+            _ => first_root_epoch(),
+        }
+    }
 }
 
 /// Maximum length of a framed message exchanged with the local key provider.
@@ -2444,10 +2469,14 @@ pub enum KeyProvider {
         pubkey: Vec<u8>,
         tmp_ca_key: String,
         tmp_ca_cert: String,
-        /// KMS root key epoch the keys were derived from.
-        #[serde(default)]
-        key_epoch: u32,
+        /// KMS root key epoch the keys were derived from, counting from 1.
+        #[serde(default = "first_root_epoch")]
+        root_epoch: u32,
     },
+}
+
+fn first_root_epoch() -> u32 {
+    1
 }
 
 impl KeyProvider {
@@ -2510,7 +2539,7 @@ mod key_provider_tests {
             pubkey: vec![0xab; 32],
             tmp_ca_key: String::new(),
             tmp_ca_cert: String::new(),
-            key_epoch: 0,
+            root_epoch: 1,
         };
         assert_eq!(kms.id(), &[0xab; 32]);
     }

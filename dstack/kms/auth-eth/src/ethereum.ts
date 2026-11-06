@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse, KeyEpoch } from './types';
+import { BootInfo, BootResponse, RootEpoch } from './types';
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
@@ -11,8 +11,8 @@ const DSTACK_KMS_ABI = [
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
   "function appImplementation() view returns (address)",
-  "function keyEpochCount() view returns (uint256)",
-  "function keyEpoch(uint256 epoch) view returns (bytes caPubkey, bytes k256Pubkey)"
+  "function latestRootEpoch() view returns (uint256)",
+  "function rootEpoch(uint256 epoch) view returns (bytes caPubkey, bytes k256Pubkey)"
 ];
 
 // Contracts deployed before key epochs existed lack the registry getters.
@@ -67,30 +67,30 @@ export class EthereumBackend {
     }
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
-    const epochCount = await this.getKeyEpochCount(blockTag);
+    const latestEpoch = await this.getLatestRootEpoch(blockTag);
     return {
       isAllowed,
       reason,
       gatewayAppId,
-      ...(epochCount > 0 && { keyEpoch: epochCount - 1 }),
+      ...(latestEpoch > 0 && { rootEpoch: latestEpoch }),
     }
   }
 
-  private async getKeyEpochCount(blockTag?: number): Promise<number> {
+  private async getLatestRootEpoch(blockTag?: number): Promise<number> {
     try {
-      return Number(await this.kmsContract.keyEpochCount({ blockTag }));
+      return Number(await this.kmsContract.latestRootEpoch({ blockTag }));
     } catch (error) {
       if (isMissingFunction(error)) return 0;
       throw error;
     }
   }
 
-  async getKeyEpochs(): Promise<KeyEpoch[]> {
+  async getRootEpochs(): Promise<RootEpoch[]> {
     const blockTag = await this.provider.getBlockNumber();
-    const count = await this.getKeyEpochCount(blockTag);
+    const latest = await this.getLatestRootEpoch(blockTag);
     return Promise.all(
-      Array.from({ length: count }, async (_, epoch) => {
-        const [caPubkey, k256Pubkey] = await this.kmsContract.keyEpoch(epoch, { blockTag });
+      Array.from({ length: latest }, async (_, index) => {
+        const [caPubkey, k256Pubkey] = await this.kmsContract.rootEpoch(index + 1, { blockTag });
         return { caPubkey, k256Pubkey };
       })
     );

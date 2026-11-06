@@ -94,7 +94,7 @@ describe('Server', () => {
         isAllowed: true,
         reason: '',
         gatewayAppId: '',
-        keyEpoch: 2,
+        rootEpoch: 2,
       });
 
       const response = await app.inject({
@@ -103,22 +103,22 @@ describe('Server', () => {
         payload: mockBootInfo
       });
 
-      expect(JSON.parse(response.payload).keyEpoch).toBe(2);
+      expect(JSON.parse(response.payload).rootEpoch).toBe(2);
     });
 
     it('should list registered key epochs in the info response', async () => {
-      const keyEpochs = [{ caPubkey: '0xa0', k256Pubkey: '0xb0' }];
+      const rootEpochs = [{ caPubkey: '0xa0', k256Pubkey: '0xb0' }];
       Object.assign(app.ethereum, {
         getGatewayAppId: jest.fn().mockResolvedValue('gw'),
         getChainId: jest.fn().mockResolvedValue(1),
         getAppImplementation: jest.fn().mockResolvedValue('0x00'),
-        getKeyEpochs: jest.fn().mockResolvedValue(keyEpochs),
+        getRootEpochs: jest.fn().mockResolvedValue(rootEpochs),
       });
 
       const response = await app.inject({ method: 'GET', url: '/' });
 
       expect(response.statusCode).toBe(200);
-      expect(JSON.parse(response.payload).keyEpochs).toEqual(keyEpochs);
+      expect(JSON.parse(response.payload).rootEpochs).toEqual(rootEpochs);
     });
   });
 

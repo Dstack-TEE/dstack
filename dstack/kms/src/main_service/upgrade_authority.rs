@@ -86,13 +86,13 @@ pub(crate) struct BootResponse {
     pub reason: String,
     /// Latest KMS key epoch registered by governance, if any.
     #[serde(default)]
-    pub key_epoch: Option<u32>,
+    pub root_epoch: Option<u32>,
 }
 
 /// Root public keys governance registered for one KMS key epoch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct KeyEpochPubkeys {
+pub(crate) struct RootEpochPubkeys {
     #[serde(deserialize_with = "deserialize_hex")]
     pub ca_pubkey: Vec<u8>,
     #[serde(deserialize_with = "deserialize_hex")]
@@ -115,7 +115,7 @@ pub(crate) struct AuthApiInfoResponse {
     pub chain_id: u64,
     pub app_implementation: String,
     #[serde(default)]
-    pub key_epochs: Vec<KeyEpochPubkeys>,
+    pub root_epochs: Vec<RootEpochPubkeys>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,7 +128,7 @@ pub(crate) struct GetInfoResponse {
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
     /// Registered key epochs, indexed by epoch. `None` means no registry.
-    pub key_epochs: Option<Vec<KeyEpochPubkeys>>,
+    pub root_epochs: Option<Vec<RootEpochPubkeys>>,
 }
 
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -196,7 +196,7 @@ impl AuthApi {
                 is_allowed: true,
                 reason: "".to_string(),
                 gateway_app_id: dev.gateway_app_id.clone(),
-                key_epoch: None,
+                root_epoch: None,
             }),
             AuthApi::Webhook { webhook } => {
                 let path = if is_kms {
@@ -219,7 +219,7 @@ impl AuthApi {
                 gateway_app_id: Some(dev.gateway_app_id.clone()),
                 chain_id: None,
                 app_implementation: None,
-                key_epochs: None,
+                root_epochs: None,
             }),
             AuthApi::Webhook { webhook } => {
                 let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
@@ -235,7 +235,7 @@ impl AuthApi {
                     chain_id: Some(info.chain_id),
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
-                    key_epochs: Some(info.key_epochs),
+                    root_epochs: Some(info.root_epochs),
                 })
             }
         }
@@ -538,30 +538,30 @@ pub(crate) mod tests {
     }
 
     #[rocket::async_test]
-    async fn key_epochs_are_parsed_from_info_and_boot_responses() {
+    async fn root_epochs_are_parsed_from_info_and_boot_responses() {
         let (url, server) = serve(vec![
             r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
-                "appImplementation":"0x00","keyEpochs":[{"caPubkey":"0xa0","k256Pubkey":"b0"}]}"#,
-            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":"","keyEpoch":3}"#,
+                "appImplementation":"0x00","rootEpochs":[{"caPubkey":"0xa0","k256Pubkey":"b0"}]}"#,
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":"","rootEpoch":3}"#,
             r#"{"isAllowed":true,"gatewayAppId":"gw","reason":""}"#,
         ]);
         let auth = webhook(url);
 
         let info = auth.get_info().await.unwrap();
         assert_eq!(
-            info.key_epochs,
-            Some(vec![KeyEpochPubkeys {
+            info.root_epochs,
+            Some(vec![RootEpochPubkeys {
                 ca_pubkey: vec![0xa0],
                 k256_pubkey: vec![0xb0],
             }])
         );
         let info = boot_info(50);
         assert_eq!(
-            auth.is_app_allowed(&info, false).await.unwrap().key_epoch,
+            auth.is_app_allowed(&info, false).await.unwrap().root_epoch,
             Some(3)
         );
         assert_eq!(
-            auth.is_app_allowed(&info, false).await.unwrap().key_epoch,
+            auth.is_app_allowed(&info, false).await.unwrap().root_epoch,
             None
         );
         server.join().unwrap();

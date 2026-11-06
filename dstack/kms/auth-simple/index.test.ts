@@ -447,23 +447,23 @@ describe('auth-simple', () => {
   });
 
   describe('key epochs', () => {
-    const keyEpochs = [
+    const rootEpochs = [
       { caPubkey: '0xa0', k256Pubkey: '0xb0' },
       { caPubkey: '0xa1', k256Pubkey: '0xb1' }
     ];
 
     it('reports the latest key epoch in boot responses and lists all epochs', async () => {
-      writeTestConfig({ gatewayAppId: '0xgateway', keyEpochs });
+      writeTestConfig({ gatewayAppId: '0xgateway', rootEpochs });
 
       const boot = await app.fetch(new Request('http://localhost/bootAuth/app', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(baseBootInfo)
       }));
-      expect((await boot.json()).keyEpoch).toBe(1);
+      expect((await boot.json()).rootEpoch).toBe(2);
 
       const info = await app.fetch(new Request('http://localhost/', { method: 'GET' }));
-      expect((await info.json()).keyEpochs).toEqual(keyEpochs);
+      expect((await info.json()).rootEpochs).toEqual(rootEpochs);
     });
 
     it('omits the key epoch when none is configured', async () => {
@@ -474,7 +474,7 @@ describe('auth-simple', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(baseBootInfo)
       }));
-      expect((await boot.json()).keyEpoch).toBeUndefined();
+      expect((await boot.json()).rootEpoch).toBeUndefined();
     });
   });
 

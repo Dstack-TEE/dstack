@@ -25,10 +25,10 @@ const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
   gatewayAppId: z.string(),
-  keyEpoch: z.number().optional()
+  rootEpoch: z.number().optional()
 });
 
-const KeyEpochSchema = z.object({
+const RootEpochSchema = z.object({
   caPubkey: z.string(),
   k256Pubkey: z.string()
 });
@@ -59,8 +59,8 @@ const AuthConfigSchema = z.object({
   allowedAdvisoryIds: z.array(z.string()).default([]),
   kms: KmsConfigSchema.default({}),
   apps: z.record(z.string(), AppConfigSchema).default({}),
-  // Root public keys of each KMS key epoch, indexed by epoch; append only.
-  keyEpochs: z.array(KeyEpochSchema).default([])
+  // Root public keys of KMS root epochs 1, 2, ... in order; append only.
+  rootEpochs: z.array(RootEpochSchema).default([])
 });
 
 type BootInfo = z.infer<typeof BootInfoSchema>;
@@ -102,8 +102,8 @@ class ConfigBackend {
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
     const response = this.evaluateBoot(bootInfo, isKms, config);
-    const epochCount = config.keyEpochs.length;
-    return epochCount > 0 ? { ...response, keyEpoch: epochCount - 1 } : response;
+    const latestEpoch = config.rootEpochs.length;
+    return latestEpoch > 0 ? { ...response, rootEpoch: latestEpoch } : response;
   }
 
   private evaluateBoot(bootInfo: BootInfo, isKms: boolean, config: AuthConfig): BootResponse {
@@ -234,7 +234,7 @@ class ConfigBackend {
     kmsContractAddr: string;
     chainId: number;
     appImplementation: string;
-    keyEpochs: AuthConfig['keyEpochs'];
+    rootEpochs: AuthConfig['rootEpochs'];
   }> {
     const config = this.loadConfig();
     return {
@@ -242,7 +242,7 @@ class ConfigBackend {
       kmsContractAddr: config.kmsContractAddr,
       chainId: config.chainId,
       appImplementation: config.appImplementation,
-      keyEpochs: config.keyEpochs,
+      rootEpochs: config.rootEpochs,
     };
   }
 }
@@ -264,7 +264,7 @@ app.get('/', async (c) => {
       chainId: info.chainId,
       appAuthImplementation: info.appImplementation, // backward compat
       appImplementation: info.appImplementation,
-      keyEpochs: info.keyEpochs,
+      rootEpochs: info.rootEpochs,
     });
   } catch (error) {
     console.error('error in health check:', error);

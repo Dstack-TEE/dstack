@@ -11,9 +11,10 @@ package kms;
 message GetAppKeyRequest {
   uint32 api_version = 1;
   string vm_config = 2;
-  // Root key epoch to derive from: 0 (default) = epoch 0, N > 0 = epoch N,
-  // -1 = the current epoch. Older epochs remain available for migration.
-  sint32 key_epoch = 3;
+  // Root key epoch to derive from: 0 (default) = the current epoch, N = epoch N.
+  // Epoch 1 is the original root keys. Older epochs remain available so CVMs
+  // can migrate.
+  uint32 root_epoch = 3;
 }
 
 message AppId {
@@ -49,8 +50,9 @@ message AppKeyResponse {
   string gateway_app_id = 7;
   // OS Image hash
   bytes os_image_hash = 8;
-  // Root key epoch all epoch-dependent fields above were derived from.
-  uint32 key_epoch = 9;
+  // Root key epoch all epoch-dependent fields above were derived from. 0 from a
+  // KMS that predates root epochs, which means epoch 1.
+  uint32 root_epoch = 9;
 }
 
 message GetMetaResponse {
@@ -75,7 +77,8 @@ message GetKmsKeyRequest {
 message KmsKeys {
   string ca_key = 1;
   bytes k256_key = 2;
-  // Root key epoch of this pair.
+  // Root key epoch of this pair. 0 from a KMS that predates root epochs, which
+  // means epoch 1.
   uint32 epoch = 3;
 }
 
@@ -165,7 +168,7 @@ message OnboardRequest {
   string domain = 2;
   // Optional bearer token for the source KMS admin listener.
   string source_token = 3;
-  // Import epochs 0..N-1 from the source and generate epoch N locally, where N
+  // Import epochs 1..N-1 from the source and generate epoch N locally, where N
   // is this KMS's configured current epoch.
   bool rotate = 4;
 }

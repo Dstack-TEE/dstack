@@ -56,7 +56,7 @@ pub(super) struct LuksJson {
 }
 
 /// Type of the only token dstack writes: the KMS key epoch of keyslot 0.
-pub(super) const KEY_EPOCH_TOKEN_TYPE: &str = "dstack-kms";
+pub(super) const ROOT_EPOCH_TOKEN_TYPE: &str = "dstack-kms";
 
 #[derive(Deserialize)]
 pub(super) struct LuksToken {
@@ -64,7 +64,7 @@ pub(super) struct LuksToken {
     pub kind: String,
     pub keyslots: Vec<String>,
     #[serde(default)]
-    pub key_epoch: Option<u32>,
+    pub root_epoch: Option<u32>,
 }
 
 #[derive(Deserialize)]

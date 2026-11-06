@@ -1314,10 +1314,10 @@ impl VmmRpc for RpcHandler {
         }
         safe_write::safe_write(&path, &migrated.encrypted_env)
             .context("Failed to write encrypted env")?;
-        info!(vm_id = %request.id, key_epoch = migrated.key_epoch, "applied re-encrypted env");
+        info!(vm_id = %request.id, root_epoch = migrated.root_epoch, "applied re-encrypted env");
         Ok(ApplyReencryptedEnvResponse {
             replaced: true,
-            key_epoch: migrated.key_epoch,
+            root_epoch: migrated.root_epoch,
         })
     }
 

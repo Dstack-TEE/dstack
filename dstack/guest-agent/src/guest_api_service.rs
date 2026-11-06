@@ -54,7 +54,7 @@ impl GuestApiRpc for GuestApiHandler {
         Ok(ReencryptedEnv {
             source_sha256: migrated.source_sha256,
             encrypted_env: migrated.encrypted_env,
-            key_epoch: migrated.key_epoch,
+            root_epoch: migrated.root_epoch,
         })
     }
 

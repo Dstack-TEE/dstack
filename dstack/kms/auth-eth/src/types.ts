@@ -18,11 +18,11 @@ export interface BootResponse {
   isAllowed: boolean;
   gatewayAppId: string;
   reason: string;
-  // Latest registered KMS key epoch; absent when none is registered.
-  keyEpoch?: number;
+  // Latest registered KMS root epoch (from 1); absent when none is registered.
+  rootEpoch?: number;
 }
 
-export interface KeyEpoch {
+export interface RootEpoch {
   caPubkey: string;
   k256Pubkey: string;
 }

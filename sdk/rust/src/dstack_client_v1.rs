@@ -95,10 +95,22 @@ impl DstackClientV1 {
     /// default and no `k256` alias -- a typo is an error rather than a key of
     /// the wrong type under a name the caller misread.
     pub async fn get_key(&self, domain: &str, algorithm: &str) -> Result<GetKeyResponse> {
+        self.get_key_at_root_epoch(domain, algorithm, 0).await
+    }
+
+    /// [`Self::get_key`] under the KMS root key epoch `root_epoch` (counting
+    /// from 1; 0 is the current epoch). Name an older epoch only to reach a key
+    /// from before a KMS root key rotation, for example to migrate off it.
+    pub async fn get_key_at_root_epoch(
+        &self,
+        domain: &str,
+        algorithm: &str,
+        root_epoch: u32,
+    ) -> Result<GetKeyResponse> {
         if algorithm.is_empty() {
             anyhow::bail!("algorithm is required, use `secp256k1` or `ed25519`")
         }
-        let data = json!({ "domain": domain, "algorithm": algorithm });
+        let data = json!({ "domain": domain, "algorithm": algorithm, "root_epoch": root_epoch });
         let response = self.send_rpc_request("GetKey", &data).await?;
         Ok(serde_json::from_value::<GetKeyResponse>(response)?)
     }

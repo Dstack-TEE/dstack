@@ -520,11 +520,11 @@ can migrate from any of them. See the [rotation design](./kms-emergency-key-rota
 for the full procedure; the KMS steps are:
 
 1. If epochs were never registered, register the current root public keys as
-   epoch 0: `DstackKms.registerKeyEpoch(caPubkey, k256Pubkey)` on chain, or a
-   `keyEpochs` entry in the auth-simple config.
+   epoch 1: `DstackKms.registerRootEpoch(caPubkey, k256Pubkey)` on chain, or a
+   `rootEpochs` entry in the auth-simple config.
 2. Start a fresh KMS with `[core.key_rotation] current_epoch = N` and onboard it
    with `"rotate": true` (the **Rotate** checkbox in the onboard UI) from a KMS
-   at epoch N-1. It imports epochs 0..N-1, generates epoch N, and returns the new
+   at epoch N-1. It imports epochs 1..N-1, generates epoch N, and returns the new
    public keys with an attestation whose report data is
    `keccak256("dstack-kms-generated-keys-v2:{N};{ca_pubkey_hex};{k256_pubkey_hex};")`.
 3. Verify the attestation and register epoch N. A KMS refuses to start until its

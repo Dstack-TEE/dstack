@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
 use rocket::figment::Figment;
@@ -176,7 +176,7 @@ impl KmsConfig {
         self.cert_dir.join(K256_KEY)
     }
 
-    /// Records which epoch the top-level root keys belong to. Absent means 0.
+    /// Records which epoch the top-level root keys belong to. Absent means 1.
     pub fn root_epoch(&self) -> PathBuf {
         self.cert_dir.join(ROOT_EPOCH)
     }
@@ -241,25 +241,35 @@ pub(crate) struct RootKeyPaths {
     pub k256_key: PathBuf,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct KeyRotationConfig {
-    /// Root key epoch served as current. Every KMS holds all epochs up to it.
-    #[serde(default)]
+    /// Root key epoch served as current; epochs count from 1, the original
+    /// roots. Every KMS holds all epochs up to it.
+    #[serde(default = "first_epoch")]
     pub current_epoch: u32,
 }
 
-impl KeyRotationConfig {
-    /// Resolve a GetAppKey epoch selector: `-1` is the current epoch.
-    pub fn resolve_epoch(&self, requested: i32) -> Result<u32> {
-        let current = self.current_epoch;
-        let epoch = match requested {
-            -1 => current,
-            epoch => u32::try_from(epoch).map_err(|_| anyhow!("invalid key epoch {requested}"))?,
-        };
-        if epoch > current {
-            bail!("unknown key epoch {epoch}; the current epoch is {current}");
+impl Default for KeyRotationConfig {
+    fn default() -> Self {
+        Self {
+            current_epoch: first_epoch(),
         }
-        Ok(epoch)
+    }
+}
+
+fn first_epoch() -> u32 {
+    1
+}
+
+impl KeyRotationConfig {
+    /// Resolve a root epoch selector: 0 is the current epoch.
+    pub fn resolve_epoch(&self, requested: u32) -> Result<u32> {
+        let current = self.current_epoch;
+        match requested {
+            0 => Ok(current),
+            epoch if epoch <= current => Ok(epoch),
+            epoch => bail!("unknown root epoch {epoch}; the current epoch is {current}"),
+        }
     }
 }
 
@@ -293,14 +303,13 @@ mod tests {
     }
 
     #[test]
-    fn key_epoch_selector_resolution() {
+    fn root_epoch_selector_resolution() {
         let cfg = KeyRotationConfig { current_epoch: 2 };
-        assert_eq!(cfg.resolve_epoch(-1).unwrap(), 2);
-        assert_eq!(cfg.resolve_epoch(0).unwrap(), 0);
+        assert_eq!(cfg.resolve_epoch(0).unwrap(), 2);
+        assert_eq!(cfg.resolve_epoch(1).unwrap(), 1);
         assert_eq!(cfg.resolve_epoch(2).unwrap(), 2);
         assert!(cfg.resolve_epoch(3).is_err());
-        assert!(cfg.resolve_epoch(-2).is_err());
-        assert_eq!(KeyRotationConfig::default().resolve_epoch(-1).unwrap(), 0);
+        assert_eq!(KeyRotationConfig::default().resolve_epoch(0).unwrap(), 1);
     }
 
     #[test]

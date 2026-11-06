@@ -44,14 +44,14 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // DstackApp implementation contract address for factory deployment
     address public appImplementation;
 
-    struct KeyEpoch {
+    struct RootEpoch {
         bytes caPubkey;
         bytes k256Pubkey;
     }
 
-    // Root public keys of each KMS key epoch, indexed by epoch. Append-only:
-    // a registered epoch is never changed, so the last entry is current.
-    KeyEpoch[] private _keyEpochs;
+    // Root public keys of KMS root epochs 1, 2, ... in order. Append-only: a
+    // registered epoch is never changed, so the last entry is current.
+    RootEpoch[] private _rootEpochs;
 
     // Events
     // appId is unindexed for backward compatibility with deployed log indexers.
@@ -67,7 +67,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event GatewayAppIdSet(string gatewayAppId);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
-    event KeyEpochRegistered(uint256 indexed epoch, bytes caPubkey, bytes k256Pubkey);
+    event RootEpochRegistered(uint256 indexed epoch, bytes caPubkey, bytes k256Pubkey);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
     /// @notice Additive audit event for reconstructing authorization policy.
     /// @dev `value` is the affected bytes32 value, address, or hash of dynamic public data.
@@ -125,8 +125,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         _emitPolicy("kms-info", keccak256(info.k256Pubkey), true);
     }
 
-    // Register the root public keys of the next KMS key epoch
-    function registerKeyEpoch(
+    // Register the root public keys of the next KMS root epoch; epochs count
+    // from 1, the original roots
+    function registerRootEpoch(
         bytes calldata caPubkey,
         bytes calldata k256Pubkey
     )
@@ -135,18 +136,20 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         returns (uint256 epoch)
     {
         require(caPubkey.length > 0 && k256Pubkey.length > 0, "Empty epoch public key");
-        epoch = _keyEpochs.length;
-        _keyEpochs.push(KeyEpoch(caPubkey, k256Pubkey));
-        emit KeyEpochRegistered(epoch, caPubkey, k256Pubkey);
-        _emitPolicy("key-epoch", keccak256(abi.encode(caPubkey, k256Pubkey)), true);
+        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey));
+        epoch = _rootEpochs.length;
+        emit RootEpochRegistered(epoch, caPubkey, k256Pubkey);
+        _emitPolicy("root-epoch", keccak256(abi.encode(caPubkey, k256Pubkey)), true);
     }
 
-    function keyEpochCount() external view returns (uint256) {
-        return _keyEpochs.length;
+    // The latest registered root epoch; 0 when none is registered
+    function latestRootEpoch() external view returns (uint256) {
+        return _rootEpochs.length;
     }
 
-    function keyEpoch(uint256 epoch) external view returns (bytes memory caPubkey, bytes memory k256Pubkey) {
-        KeyEpoch storage keys = _keyEpochs[epoch];
+    function rootEpoch(uint256 epoch) external view returns (bytes memory caPubkey, bytes memory k256Pubkey) {
+        require(epoch > 0 && epoch <= _rootEpochs.length, "Unknown root epoch");
+        RootEpoch storage keys = _rootEpochs[epoch - 1];
         return (keys.caPubkey, keys.k256Pubkey);
     }
 

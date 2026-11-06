@@ -92,6 +92,14 @@ pub struct AppState {
     inner: Arc<AppStateInner>,
 }
 
+/// The app root key of one KMS root epoch.
+pub(crate) struct AppRoot<'a> {
+    pub epoch: u32,
+    pub k256_key: &'a [u8],
+    pub signing_key: std::borrow::Cow<'a, SigningKey>,
+    pub kms_signature: &'a [u8],
+}
+
 struct AppStateInner {
     config: Config,
     keys: AppKeys,
@@ -375,6 +383,37 @@ impl AppState {
             anyhow::bail!("the app root k256 key is not a valid secp256k1 scalar");
         };
         Ok(key)
+    }
+
+    /// The app root key and its KMS signature of `root_epoch`; the current
+    /// ones for 0. The key is parsed for older epochs only, which are
+    /// requested rarely.
+    pub(crate) fn app_root(&self, root_epoch: u32) -> Result<AppRoot<'_>> {
+        let keys = &self.inner.keys;
+        let current = keys.root_epoch();
+        let epoch = if root_epoch == 0 { current } else { root_epoch };
+        if epoch == current {
+            return Ok(AppRoot {
+                epoch,
+                k256_key: self.app_root_k256_key(),
+                signing_key: std::borrow::Cow::Borrowed(self.app_root_signing_key()?),
+                kms_signature: self.kms_k256_signature(),
+            });
+        }
+        let root = keys
+            .historical_roots
+            .iter()
+            .find(|root| root.root_epoch == epoch)
+            .with_context(|| format!("root key epoch {epoch} is not available"))?;
+        Ok(AppRoot {
+            epoch,
+            k256_key: &root.k256_key,
+            signing_key: std::borrow::Cow::Owned(
+                SigningKey::from_slice(&root.k256_key)
+                    .context("the app root k256 key is not a valid secp256k1 scalar")?,
+            ),
+            kms_signature: &root.k256_signature,
+        })
     }
 
     /// The KMS root key's signature over the app root public key: the second
@@ -1152,6 +1191,8 @@ pub(crate) mod tests {
             .expect("certificate carries an attestation")
     }
 
+    pub(crate) const HISTORICAL_K256_KEY: [u8; 32] = [0x11; 32];
+
     pub(crate) async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
         setup_test_state_with_platform(None).await
     }
@@ -1355,6 +1396,13 @@ pNs85uhOZE8z2jr8Pg==
             k256_signature: Vec::new(),
             gateway_app_id: String::new(),
             ca_cert: DUMMY_PEM_CERT.to_string(),
+            // Only selected by tests that name root epoch 2 explicitly; the
+            // fixture's current root is epoch 1.
+            historical_roots: vec![dstack_types::HistoricalAppRoot {
+                root_epoch: 2,
+                k256_key: HISTORICAL_K256_KEY.to_vec(),
+                k256_signature: vec![0xab; 65],
+            }],
             key_provider: KeyProvider::None {
                 key: DUMMY_PEM_KEY.to_string(),
             },

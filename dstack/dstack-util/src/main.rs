@@ -701,7 +701,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         .get_app_key(dstack_kms_rpc::GetAppKeyRequest {
             api_version: 1,
             vm_config: "".to_string(),
-            key_epoch: -1,
+            root_epoch: 0,
         })
         .await
         .context("Failed to get app key")?;
@@ -719,12 +719,13 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         k256_key: response.k256_key,
         k256_signature: response.k256_signature,
         gateway_app_id: response.gateway_app_id,
+        historical_roots: Vec::new(),
         key_provider: KeyProvider::Kms {
             url: kms_url,
             pubkey: root_pubkey,
             tmp_ca_key: tmp_ca.temp_ca_key,
             tmp_ca_cert: tmp_ca.temp_ca_cert,
-            key_epoch: response.key_epoch,
+            root_epoch: response.root_epoch.max(1),
         },
     };
 
@@ -1236,6 +1237,7 @@ fn make_app_keys(
         k256_signature: vec![],
         gateway_app_id: "".to_string(),
         ca_cert: cert.pem(),
+        historical_roots: Vec::new(),
         key_provider,
     })
 }
