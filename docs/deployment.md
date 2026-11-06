@@ -513,6 +513,28 @@ curl http://<new-kms>:9203/finish
 >
 > **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`.
 
+#### Rotating KMS Root Keys
+
+KMS root keys are versioned by epoch, and every KMS keeps all epochs so CVMs
+can migrate from any of them. See the [rotation design](./kms-emergency-key-rotation-protocol.md)
+for the full procedure; the KMS steps are:
+
+1. If epochs were never registered, register the current root public keys as
+   epoch 0: `DstackKms.registerKeyEpoch(caPubkey, k256Pubkey)` on chain, or a
+   `keyEpochs` entry in the auth-simple config.
+2. Start a fresh KMS with `[core.key_rotation] current_epoch = N` and onboard it
+   with `"rotate": true` (the **Rotate** checkbox in the onboard UI) from a KMS
+   at epoch N-1. It imports epochs 0..N-1, generates epoch N, and returns the new
+   public keys with an attestation whose report data is
+   `keccak256("dstack-kms-generated-keys-v2:{N};{ca_pubkey_hex};{k256_pubkey_hex};")`.
+3. Verify the attestation and register epoch N. A KMS refuses to start until its
+   keyring matches the registered epochs, and a KMS still at an older epoch stops
+   serving once a newer one is registered.
+4. Onboard the other KMS nodes from the rotated one with `current_epoch = N`.
+5. Boot CVMs on an OS that supports key epochs. They re-key their data disk and
+   re-encrypt their env at boot; apply the new env with
+   `vmm-cli.py apply-reencrypted-env <vm-id>`.
+
 ---
 
 ## Deploying Apps
