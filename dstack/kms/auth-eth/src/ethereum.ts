@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse, RootEpoch } from './types';
+import { BootInfo, BootResponse, RootEpochInfo } from './types';
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
@@ -11,8 +11,7 @@ const DSTACK_KMS_ABI = [
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
   "function appImplementation() view returns (address)",
-  "function rootEpochCount() view returns (uint256)",
-  "function rootEpoch(uint256 epoch) view returns (bytes caPubkey, bytes k256Pubkey, bytes attestation)"
+  "function currentRootEpoch() view returns (uint256 epoch, bytes32 chainHash)"
 ];
 
 // Contracts deployed before key epochs existed lack the registry getters.
@@ -67,33 +66,24 @@ export class EthereumBackend {
     }
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
-    const epochCount = await this.getRootEpochCount(blockTag);
     return {
       isAllowed,
       reason,
       gatewayAppId,
-      ...(epochCount > 0 && { rootEpoch: epochCount - 1 }),
+      ...await this.getRootEpoch(blockTag),
     }
   }
 
-  private async getRootEpochCount(blockTag?: number): Promise<number> {
+  // The current root epoch and its chain hash; empty when none is registered
+  // or the contract predates root epochs.
+  async getRootEpoch(blockTag?: number): Promise<RootEpochInfo> {
     try {
-      return Number(await this.kmsContract.rootEpochCount({ blockTag }));
+      const [epoch, chainHash] = await this.kmsContract.currentRootEpoch({ blockTag });
+      return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
     } catch (error) {
-      if (isMissingFunction(error)) return 0;
+      if (isMissingFunction(error)) return {};
       throw error;
     }
-  }
-
-  async getRootEpochs(): Promise<RootEpoch[]> {
-    const blockTag = await this.provider.getBlockNumber();
-    const count = await this.getRootEpochCount(blockTag);
-    return Promise.all(
-      Array.from({ length: count }, async (_, epoch) => {
-        const [caPubkey, k256Pubkey] = await this.kmsContract.rootEpoch(epoch, { blockTag });
-        return { caPubkey, k256Pubkey };
-      })
-    );
   }
 
   async getGatewayAppId(): Promise<string> {

@@ -29,14 +29,18 @@ const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
   gatewayAppId: z.string(),
-  rootEpoch: z.number().optional()
+  rootEpoch: z.number().optional(),
+  rootEpochHash: z.string().optional()
 });
 
-const RootEpochsSchema = z.array(z.object({ caPubkey: z.string(), k256Pubkey: z.string() }));
-
-// MOCK_ROOT_EPOCHS: JSON array of {caPubkey, k256Pubkey}, indexed by root epoch
-function getRootEpochs(): z.infer<typeof RootEpochsSchema> {
-  return RootEpochsSchema.parse(JSON.parse(process.env.MOCK_ROOT_EPOCHS || '[]'));
+// MOCK_ROOT_EPOCH and MOCK_ROOT_EPOCH_HASH: the current KMS root epoch and its
+// chain hash; both unset means none is registered
+function getRootEpoch(): { rootEpoch?: number; rootEpochHash?: string } {
+  const epoch = process.env.MOCK_ROOT_EPOCH;
+  const hash = process.env.MOCK_ROOT_EPOCH_HASH;
+  if (!epoch && !hash) return {};
+  if (!epoch || !hash) throw new Error('set both MOCK_ROOT_EPOCH and MOCK_ROOT_EPOCH_HASH');
+  return { rootEpoch: z.coerce.number().int().min(0).parse(epoch), rootEpochHash: hash };
 }
 
 type BootInfo = z.infer<typeof BootInfoSchema>;
@@ -79,8 +83,7 @@ class MockBackend {
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const response = this.evaluateBoot(bootInfo, isKms);
-    const epochCount = getRootEpochs().length;
-    return epochCount > 0 ? { ...response, rootEpoch: epochCount - 1 } : response;
+    return { ...response, ...getRootEpoch() };
   }
 
   private evaluateBoot(bootInfo: BootInfo, isKms: boolean): BootResponse {
@@ -161,7 +164,7 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
-      rootEpochs: getRootEpochs(),
+      ...getRootEpoch(),
       note: 'this is a mock backend - all authentications will succeed'
     });
   } catch (error) {

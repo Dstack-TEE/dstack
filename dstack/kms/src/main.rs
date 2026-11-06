@@ -143,8 +143,13 @@ async fn main() -> Result<()> {
         }
     }
 
+    let keyring = main_service::Keyring::load(&config).context("Failed to load the root keys")?;
+    let serving_epoch = main_service::wait_for_servable_epoch(&config, &keyring).await;
+    info!("Serving root epoch {serving_epoch}");
+
     info!("Updating certs");
-    if let Err(err) = onboard_service::update_certs(&config).await {
+    if let Err(err) = onboard_service::update_certs(&config, serving_epoch, keyring.latest()).await
+    {
         if config.attest_rpc_cert {
             return Err(err).context(
                 "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
@@ -176,11 +181,8 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
-    state
-        .ensure_keyring_registered()
-        .await
-        .context("KMS keyring does not match the registered key epochs")?;
+    let state = main_service::KmsState::new(config, keyring, serving_epoch)
+        .context("Failed to initialize KMS state")?;
     let quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let admin_quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let figment = figment
@@ -217,6 +219,12 @@ async fn main() -> Result<()> {
     rocket = rocket.manage(quote_verifier);
 
     let main_srv = rocket.launch();
+    // A move of the current root epoch on chain ends the process so it can be
+    // restarted onto the new epoch.
+    let restart = {
+        let state = state.clone();
+        async move { state.restart_requested().await }
+    };
     match admin_setup {
         Some((admin_figment, admin_fairing)) => {
             if admin_config.insecure_no_auth {
@@ -237,14 +245,22 @@ async fn main() -> Result<()> {
                 .manage(state)
                 .manage(admin_quote_verifier)
                 .launch();
-            tokio::try_join!(
-                async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
-                async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
-            )?;
+            let servers = async {
+                tokio::try_join!(
+                    async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
+                    async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
+                )
+                .map(drop)
+            };
+            tokio::select! {
+                result = servers => result?,
+                () = restart => bail!("the current root epoch changed; restarting to follow it"),
+            }
         }
-        None => {
-            main_srv.await.map_err(|err| anyhow!(err.to_string()))?;
-        }
+        None => tokio::select! {
+            result = main_srv => result.map(drop).map_err(|err| anyhow!(err.to_string()))?,
+            () = restart => bail!("the current root epoch changed; restarting to follow it"),
+        },
     }
     Ok(())
 }

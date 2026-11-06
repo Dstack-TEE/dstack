@@ -2355,13 +2355,10 @@ struct AppInfo {
 }
 
 impl HostShared {
-    /// Request app keys of `root_epoch` (`None` = current) from one KMS.
-    async fn request_kms_keys(
-        &self,
-        kms_url: String,
-        root_epoch: Option<u32>,
-    ) -> Result<(AppKeys, Vec<u8>)> {
-        info!("Requesting app keys of root epoch {root_epoch:?} from KMS: {kms_url}");
+    /// Request the current app keys from one KMS, with those of every older
+    /// root epoch in order.
+    async fn request_kms_keys(&self, kms_url: String) -> Result<KmsKeys> {
+        info!("Requesting app keys from KMS: {kms_url}");
         let tmp_ca = {
             info!("Getting temp ca cert");
             let client = RaClient::new(kms_url.clone(), true)?;
@@ -2390,14 +2387,15 @@ impl HostShared {
             .get_app_key(rpc::GetAppKeyRequest {
                 api_version: 1,
                 vm_config: self.sys_config.vm_config.clone(),
-                root_epoch,
+                root_epoch: None,
+                include_history: true,
             })
             .await
             .context("Failed to get app key")?;
-        // A KMS predating root epochs ignores the selector and serves epoch 0.
+        // A KMS predating root epochs serves epoch 0 with no history.
         let served = response.root_epoch;
-        if root_epoch.is_some_and(|epoch| epoch != served) {
-            bail!("KMS returned keys of epoch {served} instead of {root_epoch:?}");
+        if !response.history.iter().map(|h| h.root_epoch).eq(0..served) {
+            bail!("KMS returned incomplete key history for root epoch {served}");
         }
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
@@ -2421,24 +2419,19 @@ impl HostShared {
                 root_epoch: served,
             },
         };
-        Ok((keys, response.os_image_hash))
+        Ok(KmsKeys {
+            keys,
+            history: response.history,
+            os_image_hash: response.os_image_hash,
+        })
     }
+}
 
-    /// Request the keys of every root epoch before the one `keys` came from,
-    /// oldest first, from the same KMS. Empty for other key providers.
-    async fn request_key_history(&self, keys: &AppKeys) -> Result<Vec<AppKeys>> {
-        let KeyProvider::Kms {
-            url, root_epoch, ..
-        } = &keys.key_provider
-        else {
-            return Ok(Vec::new());
-        };
-        let mut history = Vec::new();
-        for epoch in 0..*root_epoch {
-            history.push(self.request_kms_keys(url.clone(), Some(epoch)).await?.0);
-        }
-        Ok(history)
-    }
+struct KmsKeys {
+    keys: AppKeys,
+    /// App keys of the root epochs before `keys.root_epoch()`, indexed by epoch.
+    history: Vec<rpc::HistoricalAppKey>,
+    os_image_hash: Vec<u8>,
 }
 
 struct Stage0<'a> {
@@ -2453,7 +2446,7 @@ struct Stage1<'a> {
     shared: HostShared,
     keys: AppKeys,
     /// Keys of the root epochs before `keys.root_epoch()`, indexed by epoch.
-    key_history: Vec<AppKeys>,
+    key_history: Vec<rpc::HistoricalAppKey>,
 }
 
 fn validate_key_provider_inputs(kind: KeyProviderKind, kms_urls: &[String]) -> Result<()> {
@@ -2505,20 +2498,24 @@ impl<'a> Stage0<'a> {
         self.shared.dir.join(APP_KEYS)
     }
 
-    async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
+    async fn request_app_keys_from_kms(&self) -> Result<(AppKeys, Vec<rpc::HistoricalAppKey>)> {
         if self.shared.sys_config.kms_urls.is_empty() {
             bail!("No KMS URLs are set");
         }
         let mut errors = vec![];
         for kms_url in &self.shared.sys_config.kms_urls {
             let kms_url = kms_rpc_url(kms_url);
-            match self.shared.request_kms_keys(kms_url.clone(), None).await {
-                Ok((keys, os_image_hash)) => {
+            match self.shared.request_kms_keys(kms_url.clone()).await {
+                Ok(KmsKeys {
+                    keys,
+                    history,
+                    os_image_hash,
+                }) => {
                     // Measured here, outside the per-URL request, so that a
                     // failover can never extend os-image-hash twice.
                     emit_runtime_event("os-image-hash", &os_image_hash)
                         .context("failed to extend os-image-hash to the launch measurement")?;
-                    return Ok(keys);
+                    return Ok((keys, history));
                 }
                 Err(err) => {
                     warn!("failed to get app keys from KMS {kms_url}: {err:?}");
@@ -2597,11 +2594,12 @@ impl<'a> Stage0<'a> {
             .context("failed to generate TPM app keys")
     }
 
-    async fn request_app_keys(&self) -> Result<AppKeys> {
+    /// The app keys, with those of older KMS root epochs when the KMS has any.
+    async fn request_app_keys(&self) -> Result<(AppKeys, Vec<rpc::HistoricalAppKey>)> {
         let key_provider = self.shared.app_compose.key_provider();
         validate_key_provider_inputs(key_provider, &self.shared.sys_config.kms_urls)?;
-        match key_provider {
-            KeyProviderKind::Kms => self.request_app_keys_from_kms().await,
+        let keys = match key_provider {
+            KeyProviderKind::Kms => return self.request_app_keys_from_kms().await,
             KeyProviderKind::Local => self.get_keys_from_local_key_provider().await,
             KeyProviderKind::None => {
                 info!("No key provider is enabled, generating temporary app keys");
@@ -2613,7 +2611,8 @@ impl<'a> Stage0<'a> {
                 info!("Generating app keys from TPM");
                 self.generate_tpm_app_keys()
             }
-        }
+        };
+        Ok((keys?, Vec::new()))
     }
 
     async fn setup_swap(&self, swap_size: u64, opts: &DstackOptions) -> Result<()> {
@@ -2758,7 +2757,7 @@ impl<'a> Stage0<'a> {
     async fn mount_data_disk(
         &self,
         keys: &AppKeys,
-        key_history: &[AppKeys],
+        key_history: &[rpc::HistoricalAppKey],
         opts: &DstackOptions,
     ) -> Result<()> {
         let disk_crypt_key = &hex::encode(&keys.disk_crypt_key);
@@ -2994,7 +2993,7 @@ impl<'a> Stage0<'a> {
     /// readable by older OS images.
     fn migrate_disk_key(
         &self,
-        key_history: &[AppKeys],
+        key_history: &[rpc::HistoricalAppKey],
         current_key: &str,
         current: u32,
     ) -> Result<()> {
@@ -3244,19 +3243,14 @@ impl<'a> Stage0<'a> {
         self.vmm
             .notify_q("boot.progress", "requesting app keys")
             .await;
-        let mut app_keys = self
+        let (mut app_keys, key_history) = self
             .request_app_keys()
             .await
             .context("Failed to request app keys")?;
-        let key_history = self
-            .shared
-            .request_key_history(&app_keys)
-            .await
-            .context("Failed to request keys of older root epochs")?;
         app_keys.historical_roots = key_history
             .iter()
             .map(|keys| HistoricalAppRoot {
-                root_epoch: keys.root_epoch(),
+                root_epoch: keys.root_epoch,
                 k256_key: keys.k256_key.clone(),
                 k256_signature: keys.k256_signature.clone(),
             })

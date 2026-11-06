@@ -66,9 +66,17 @@ struct BootResponse {
     is_allowed: bool,
     gateway_app_id: String,
     reason: String,
-    /// latest registered KMS root epoch; absent when none is.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    root_epoch: Option<usize>,
+    #[serde(flatten)]
+    root_epoch: Option<CurrentRootEpoch>,
+}
+
+/// the KMS root epoch currently served and its chain hash, which commits to
+/// the root public keys of epochs 0..=root_epoch.
+#[derive(Serialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CurrentRootEpoch {
+    root_epoch: usize,
+    root_epoch_hash: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -80,9 +88,11 @@ struct Allowlist {
     apps: HashMap<String, AppRules>,
     /// root public keys of each KMS root epoch, indexed by epoch; append only.
     root_epochs: Vec<RootEpoch>,
+    /// the root epoch KMS instances serve; raise it once every node holds it.
+    current_root_epoch: usize,
 }
 
-#[derive(Deserialize, Serialize, Default, Clone)]
+#[derive(Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase", default)]
 struct RootEpoch {
     ca_pubkey: String,
@@ -90,8 +100,26 @@ struct RootEpoch {
 }
 
 impl Allowlist {
-    fn latest_root_epoch(&self) -> Option<usize> {
-        self.root_epochs.len().checked_sub(1)
+    /// `None` when no epoch is configured, or the configuration is invalid,
+    /// which a KMS past epoch 0 treats as fail-closed.
+    fn current_root_epoch(&self) -> Option<CurrentRootEpoch> {
+        let epochs = self.root_epochs.get(..=self.current_root_epoch)?;
+        let keys = epochs
+            .iter()
+            .map(|e| {
+                Some((
+                    hex::decode(norm(&e.ca_pubkey)).ok()?,
+                    hex::decode(norm(&e.k256_pubkey)).ok()?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let hashes = dstack_types::root_epoch::chain_hashes(
+            keys.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
+        );
+        Some(CurrentRootEpoch {
+            root_epoch: self.current_root_epoch,
+            root_epoch_hash: format!("0x{}", hex::encode(hashes.last()?)),
+        })
     }
 }
 
@@ -140,7 +168,7 @@ fn deny(al: &Allowlist, reason: &str) -> BootResponse {
         is_allowed: false,
         gateway_app_id: al.gateway_app_id.clone(),
         reason: reason.to_string(),
-        root_epoch: al.latest_root_epoch(),
+        root_epoch: al.current_root_epoch(),
     }
 }
 
@@ -149,7 +177,7 @@ fn allow(al: &Allowlist) -> BootResponse {
         is_allowed: true,
         gateway_app_id: al.gateway_app_id.clone(),
         reason: "ok".to_string(),
-        root_epoch: al.latest_root_epoch(),
+        root_epoch: al.current_root_epoch(),
     }
 }
 
@@ -231,15 +259,19 @@ fn info(cli: &State<Cli>) -> Json<serde_json::Value> {
 }
 
 fn info_json(al: &Allowlist) -> serde_json::Value {
-    json!({
+    let mut info = json!({
         "status": "ok",
         "kmsContractAddr": "",
         "ethRpcUrl": "",
         "gatewayAppId": "",
         "chainId": 0,
         "appImplementation": "",
-        "rootEpochs": al.root_epochs,
-    })
+    });
+    if let Some(epoch) = al.current_root_epoch() {
+        info["rootEpoch"] = epoch.root_epoch.into();
+        info["rootEpochHash"] = epoch.root_epoch_hash.into();
+    }
+    info
 }
 
 #[rocket::main]
@@ -309,20 +341,31 @@ mod tests {
     }
 
     #[test]
-    fn reports_registered_root_epochs() {
-        let al: Allowlist = serde_json::from_str(
+    fn reports_the_current_root_epoch() {
+        let mut al: Allowlist = serde_json::from_str(
             r#"{"kms":{"mrAggregated":["0xMR"]},
-                "rootEpochs":[{"caPubkey":"0xa1","k256Pubkey":"0xb1"},
-                              {"caPubkey":"0xa2","k256Pubkey":"0xb2"}]}"#,
+                "rootEpochs":[{"caPubkey":"0xa0","k256Pubkey":"0xb0"},
+                              {"caPubkey":"0xa1","k256Pubkey":"0xb1"}]}"#,
         )
         .unwrap();
         let info = BootInfo {
             mr_aggregated: "0xMR".into(),
             ..Default::default()
         };
+        // Shared with the DstackKms contract tests.
         let response = serde_json::to_value(check_kms(&info, &al)).unwrap();
-        assert_eq!(response["rootEpoch"], 1);
-        assert_eq!(info_json(&al)["rootEpochs"][1]["k256Pubkey"], "0xb2");
+        assert_eq!(response["rootEpoch"], 0);
+        assert_eq!(
+            response["rootEpochHash"],
+            "0xf5f9a7455970becbb0d8441e53cf06df6290b34419cf783eb5869107867ec9ae"
+        );
+        al.current_root_epoch = 1;
+        assert_eq!(
+            info_json(&al)["rootEpochHash"],
+            "0x2219fc74439588d8f9d514f4e897d4a1dc692519b0899d93f5ac5661b8e2850a"
+        );
+        al.current_root_epoch = 2;
+        assert!(al.current_root_epoch().is_none());
 
         let response = serde_json::to_value(check_kms(&info, &allowlist())).unwrap();
         assert!(response.get("rootEpoch").is_none());

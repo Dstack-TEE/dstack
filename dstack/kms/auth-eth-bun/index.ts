@@ -36,11 +36,13 @@ const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
   gatewayAppId: z.string(),
-  // Latest registered KMS root epoch; absent when none is registered.
-  rootEpoch: z.number().optional()
+  // KMS root epoch currently served and its chain hash, which commits to the
+  // root public keys of epochs 0..=rootEpoch; absent when none is registered.
+  rootEpoch: z.number().optional(),
+  rootEpochHash: z.string().optional()
 });
 
-type RootEpoch = { caPubkey: Hex; k256Pubkey: Hex };
+type RootEpochInfo = { rootEpoch?: number; rootEpochHash?: Hex };
 
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
@@ -114,26 +116,19 @@ const DSTACK_KMS_ABI = [
     outputs: [{ name: '', type: 'address' }]
   },
   {
-    name: 'rootEpochCount',
+    name: 'currentRootEpoch',
     type: 'function',
     stateMutability: 'view',
     inputs: [],
-    outputs: [{ name: '', type: 'uint256' }]
-  },
-  {
-    name: 'rootEpoch',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'epoch', type: 'uint256' }],
     outputs: [
-      { name: 'caPubkey', type: 'bytes' },
-      { name: 'k256Pubkey', type: 'bytes' },
-      { name: 'attestation', type: 'bytes' }
+      { name: 'epoch', type: 'uint256' },
+      { name: 'chainHash', type: 'bytes32' }
     ]
   }
 ] as const;
 
-// Contracts deployed before root epochs lack the registry getters.
+// Contracts deployed before root epochs lack the registry getters, and a
+// registry with no epoch reverts.
 const isMissingFunction = (error: unknown): boolean => {
   for (let cause: any = error; cause; cause = cause.cause) {
     if (cause.name === 'ContractFunctionZeroDataError' || cause.name === 'ContractFunctionRevertedError') {
@@ -225,47 +220,32 @@ class EthereumBackend {
       blockNumber
     });
 
-    const epochCount = await this.getRootEpochCount(blockNumber);
-
     return {
       isAllowed,
       reason,
       gatewayAppId: gatewayAppId as string,
-      ...(epochCount > 0 && { rootEpoch: epochCount - 1 }),
+      ...await this.getRootEpoch(blockNumber),
     };
   }
 
-  private async getRootEpochCount(blockNumber?: bigint): Promise<number> {
+  // The current root epoch and its chain hash; empty when none is registered
+  // or the contract predates root epochs.
+  async getRootEpoch(blockNumber?: bigint): Promise<RootEpochInfo> {
+    blockNumber ??= await this.finalizedBlockNumber();
     try {
-      const count = await this.client.readContract({
+      const current = await this.client.readContract({
         address: this.kmsContractAddr,
         abi: DSTACK_KMS_ABI,
-        functionName: 'rootEpochCount',
+        functionName: 'currentRootEpoch',
         blockNumber
       });
-      return Number(count ?? 0);
+      if (!current) return {};
+      const [epoch, chainHash] = current;
+      return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
     } catch (error) {
-      if (isMissingFunction(error)) return 0;
+      if (isMissingFunction(error)) return {};
       throw error;
     }
-  }
-
-  // Registered root epochs, indexed by epoch.
-  async getRootEpochs(): Promise<RootEpoch[]> {
-    const blockNumber = await this.finalizedBlockNumber();
-    const count = await this.getRootEpochCount(blockNumber);
-    return Promise.all(
-      Array.from({ length: count }, async (_, epoch) => {
-        const [caPubkey, k256Pubkey] = await this.client.readContract({
-          address: this.kmsContractAddr,
-          abi: DSTACK_KMS_ABI,
-          functionName: 'rootEpoch',
-          args: [BigInt(epoch)],
-          blockNumber
-        });
-        return { caPubkey, k256Pubkey };
-      })
-    );
   }
 
   async getGatewayAppId(): Promise<string> {
@@ -346,7 +326,7 @@ app.get('/', async (c) => {
       ethereum.getGatewayAppId(),
       ethereum.getChainId(),
       ethereum.getAppImplementation(),
-      ethereum.getRootEpochs(),
+      ethereum.getRootEpoch(),
     ]);
     console.log('batch', batch);
 
@@ -358,7 +338,7 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
-      rootEpochs: batch[3],
+      ...batch[3],
     });
   } catch {
     console.error('authorization backend health check failed');

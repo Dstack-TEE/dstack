@@ -2567,6 +2567,7 @@ pub struct ImageInfo {
 }
 
 pub mod mr_config;
+pub mod root_epoch;
 pub mod sha256sum;
 pub mod shared_filenames;
 pub mod version;

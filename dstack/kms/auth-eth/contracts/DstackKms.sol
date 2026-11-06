@@ -51,12 +51,19 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         // and both public keys, so anyone can check the keys came from an
         // approved KMS in a TEE.
         bytes attestation;
+        // Commits to the public keys of this epoch and every earlier one:
+        // keccak256(previous chainHash || epoch || keccak256(caPubkey) ||
+        // keccak256(k256Pubkey)), with a zero previous hash for epoch 0.
+        bytes32 chainHash;
     }
 
-    // Root public keys of each KMS root epoch, indexed by epoch; epoch 0 is the
-    // original roots. Append-only: a registered epoch is never changed, so the
-    // last entry is current.
+    // Root keys of each KMS root epoch, indexed by epoch; epoch 0 is the
+    // original roots. Append-only: a registered epoch is never changed.
     RootEpoch[] private _rootEpochs;
+
+    // The epoch KMS instances serve. Registering epoch 0 makes it current;
+    // later epochs take effect only when activated, one at a time.
+    uint256 private _currentRootEpoch;
 
     // Events
     // appId is unindexed for backward compatibility with deployed log indexers.
@@ -72,7 +79,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event GatewayAppIdSet(string gatewayAppId);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
-    event RootEpochRegistered(uint256 indexed epoch, bytes caPubkey, bytes k256Pubkey);
+    event RootEpochRegistered(uint256 indexed epoch, bytes32 chainHash, bytes caPubkey, bytes k256Pubkey);
+    event RootEpochActivated(uint256 indexed epoch);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
     /// @notice Additive audit event for reconstructing authorization policy.
     /// @dev `value` is the affected bytes32 value, address, or hash of dynamic public data.
@@ -131,7 +139,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Register the root public keys of the next KMS root epoch, with the
-    // attestation proving where they were generated
+    // attestation proving where they were generated. It is not served until
+    // activated, except epoch 0, which is current from the start.
     function registerRootEpoch(
         bytes calldata caPubkey,
         bytes calldata k256Pubkey,
@@ -144,24 +153,43 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         require(caPubkey.length > 0 && k256Pubkey.length > 0, "Empty epoch public key");
         require(attestation.length > 0, "Empty epoch attestation");
         epoch = _rootEpochs.length;
-        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, attestation));
-        emit RootEpochRegistered(epoch, caPubkey, k256Pubkey);
-        _emitPolicy("root-epoch", keccak256(abi.encode(caPubkey, k256Pubkey)), true);
+        bytes32 previous = epoch == 0 ? bytes32(0) : _rootEpochs[epoch - 1].chainHash;
+        bytes32 chainHash = keccak256(abi.encodePacked(previous, epoch, keccak256(caPubkey), keccak256(k256Pubkey)));
+        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, attestation, chainHash));
+        emit RootEpochRegistered(epoch, chainHash, caPubkey, k256Pubkey);
+        _emitPolicy("root-epoch", chainHash, true);
+        if (epoch == 0) {
+            emit RootEpochActivated(0);
+        }
     }
 
-    // Number of registered root epochs; the latest is this minus one
+    // Make the next registered root epoch the one KMS instances serve
+    function activateRootEpoch(uint256 epoch) external onlyOwner {
+        require(epoch == _currentRootEpoch + 1 && epoch < _rootEpochs.length, "Invalid root epoch activation");
+        _currentRootEpoch = epoch;
+        emit RootEpochActivated(epoch);
+        _emitPolicy("root-epoch-activated", bytes32(epoch), true);
+    }
+
     function rootEpochCount() external view returns (uint256) {
         return _rootEpochs.length;
+    }
+
+    // The root epoch KMS instances serve and its chain hash
+    function currentRootEpoch() external view returns (uint256 epoch, bytes32 chainHash) {
+        require(_rootEpochs.length > 0, "No root epoch registered");
+        epoch = _currentRootEpoch;
+        chainHash = _rootEpochs[epoch].chainHash;
     }
 
     function rootEpoch(uint256 epoch)
         external
         view
-        returns (bytes memory caPubkey, bytes memory k256Pubkey, bytes memory attestation)
+        returns (bytes memory caPubkey, bytes memory k256Pubkey, bytes memory attestation, bytes32 chainHash)
     {
         require(epoch < _rootEpochs.length, "Unknown root epoch");
         RootEpoch storage keys = _rootEpochs[epoch];
-        return (keys.caPubkey, keys.k256Pubkey, keys.attestation);
+        return (keys.caPubkey, keys.k256Pubkey, keys.attestation, keys.chainHash);
     }
 
     // Function to set KMS quote
@@ -355,7 +383,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[49] private __gap;
+    uint256[48] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

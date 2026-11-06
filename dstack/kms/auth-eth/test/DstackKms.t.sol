@@ -19,7 +19,8 @@ contract DstackKmsTest is Test {
     address public user;
 
     event KmsInfoSet(bytes k256Pubkey);
-    event RootEpochRegistered(uint256 indexed epoch, bytes caPubkey, bytes k256Pubkey);
+    event RootEpochRegistered(uint256 indexed epoch, bytes32 chainHash, bytes caPubkey, bytes k256Pubkey);
+    event RootEpochActivated(uint256 indexed epoch);
 
     event AppRegistered(address appId);
 
@@ -67,27 +68,77 @@ contract DstackKmsTest is Test {
         assertEq(storedEventlog, eventlog);
     }
 
-    function test_RegisterRootEpochAppends() public {
-        assertEq(kms.rootEpochCount(), 0);
+    function chainHash(
+        bytes32 previous,
+        uint256 epoch,
+        bytes memory ca,
+        bytes memory k256
+    )
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(previous, epoch, keccak256(ca), keccak256(k256)));
+    }
 
+    function test_RegisterRootEpochAppendsAndChains() public {
+        assertEq(kms.rootEpochCount(), 0);
+        vm.expectRevert("No root epoch registered");
+        kms.currentRootEpoch();
+
+        bytes32 h0 = chainHash(bytes32(0), 0, hex"a0", hex"b0");
+        bytes32 h1 = chainHash(h0, 1, hex"a1", hex"b1");
+        // Shared with the off-chain implementations' tests.
+        assertEq(h0, 0xf5f9a7455970becbb0d8441e53cf06df6290b34419cf783eb5869107867ec9ae);
+        assertEq(h1, 0x2219fc74439588d8f9d514f4e897d4a1dc692519b0899d93f5ac5661b8e2850a);
         vm.startPrank(owner);
         vm.expectEmit(true, true, true, true);
-        emit RootEpochRegistered(0, hex"a0", hex"b0");
+        emit RootEpochRegistered(0, h0, hex"a0", hex"b0");
+        vm.expectEmit(true, true, true, true);
+        emit RootEpochActivated(0);
         assertEq(kms.registerRootEpoch(hex"a0", hex"b0", hex"c0"), 0);
         assertEq(kms.registerRootEpoch(hex"a1", hex"b1", hex"c1"), 1);
         vm.stopPrank();
 
         assertEq(kms.rootEpochCount(), 2);
-        (bytes memory ca, bytes memory k256, bytes memory attestation) = kms.rootEpoch(0);
-        assertEq(ca, hex"a0");
-        assertEq(k256, hex"b0");
-        assertEq(attestation, hex"c0");
-        (ca, k256, attestation) = kms.rootEpoch(1);
+        (bytes memory ca, bytes memory k256, bytes memory attestation, bytes32 h) = kms.rootEpoch(1);
         assertEq(ca, hex"a1");
         assertEq(k256, hex"b1");
         assertEq(attestation, hex"c1");
+        assertEq(h, h1);
         vm.expectRevert("Unknown root epoch");
         kms.rootEpoch(2);
+
+        // Epoch 1 is registered but epoch 0 is still served.
+        (uint256 current, bytes32 currentHash) = kms.currentRootEpoch();
+        assertEq(current, 0);
+        assertEq(currentHash, h0);
+    }
+
+    function test_ActivateRootEpochMovesForwardOneAtATime() public {
+        vm.startPrank(owner);
+        kms.registerRootEpoch(hex"a0", hex"b0", hex"c0");
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(1);
+        kms.registerRootEpoch(hex"a1", hex"b1", hex"c1");
+        kms.registerRootEpoch(hex"a2", hex"b2", hex"c2");
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(2);
+        vm.expectEmit(true, true, true, true);
+        emit RootEpochActivated(1);
+        kms.activateRootEpoch(1);
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(1);
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(0);
+        vm.stopPrank();
+
+        (uint256 current,) = kms.currentRootEpoch();
+        assertEq(current, 1);
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.activateRootEpoch(2);
     }
 
     function test_RegisterRootEpochOnlyOwner() public {

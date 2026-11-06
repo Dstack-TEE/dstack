@@ -124,12 +124,6 @@ timeout = "60s"
 [core.auth_api.dev]
 gateway_app_id = "any"
 
-[core.key_rotation]
-# Root key epoch served as current; the original roots are epoch 0. Raising it requires a KMS onboarded with
-# `rotate` (or from a source already at this epoch); editing it alone fails.
-# Older epochs stay available so CVMs can migrate their data at any time.
-current_epoch = 0
-
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""

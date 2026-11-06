@@ -6,6 +6,8 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { readFileSync, existsSync } from 'fs';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { bytesToHex, concatBytes, hexToBytes } from '@noble/hashes/utils.js';
 
 // zod schemas for validation - compatible with auth-eth implementation
 const BootInfoSchema = z.object({
@@ -25,7 +27,8 @@ const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
   gatewayAppId: z.string(),
-  rootEpoch: z.number().optional()
+  rootEpoch: z.number().optional(),
+  rootEpochHash: z.string().optional()
 });
 
 const RootEpochSchema = z.object({
@@ -60,12 +63,36 @@ const AuthConfigSchema = z.object({
   kms: KmsConfigSchema.default({}),
   apps: z.record(z.string(), AppConfigSchema).default({}),
   // Root public keys of each KMS root epoch, indexed by epoch; append only.
-  rootEpochs: z.array(RootEpochSchema).default([])
+  rootEpochs: z.array(RootEpochSchema).default([]),
+  // The root epoch KMS instances serve; raise it once every node holds it.
+  currentRootEpoch: z.number().int().min(0).default(0)
 });
 
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 type AuthConfig = z.infer<typeof AuthConfigSchema>;
+
+const bytesOf = (hex: string) => hexToBytes(hex.replace(/^0x/i, ''));
+
+// The current root epoch and its chain hash, as DstackKms computes it:
+// keccak256(previous || epoch || keccak256(caPubkey) || keccak256(k256Pubkey)),
+// with a zero previous hash for epoch 0. Empty when no epoch is configured.
+function currentRootEpoch(config: AuthConfig): { rootEpoch?: number; rootEpochHash?: string } {
+  const current = config.currentRootEpoch;
+  if (config.rootEpochs.length === 0) return {};
+  if (current >= config.rootEpochs.length) {
+    throw new Error('currentRootEpoch is not a configured root epoch');
+  }
+  let hash = new Uint8Array(32);
+  config.rootEpochs.slice(0, current + 1).forEach((keys, epoch) => {
+    const epochBytes = new Uint8Array(32);
+    new DataView(epochBytes.buffer).setUint32(28, epoch);
+    hash = keccak_256(concatBytes(
+      hash, epochBytes, keccak_256(bytesOf(keys.caPubkey)), keccak_256(bytesOf(keys.k256Pubkey))
+    ));
+  });
+  return { rootEpoch: current, rootEpochHash: '0x' + bytesToHex(hash) };
+}
 
 // normalize hex string to lowercase with 0x prefix
 function normalizeHex(hex: string): string {
@@ -102,8 +129,7 @@ class ConfigBackend {
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
     const response = this.evaluateBoot(bootInfo, isKms, config);
-    const epochCount = config.rootEpochs.length;
-    return epochCount > 0 ? { ...response, rootEpoch: epochCount - 1 } : response;
+    return { ...response, ...currentRootEpoch(config) };
   }
 
   private evaluateBoot(bootInfo: BootInfo, isKms: boolean, config: AuthConfig): BootResponse {
@@ -234,7 +260,8 @@ class ConfigBackend {
     kmsContractAddr: string;
     chainId: number;
     appImplementation: string;
-    rootEpochs: AuthConfig['rootEpochs'];
+    rootEpoch?: number;
+    rootEpochHash?: string;
   }> {
     const config = this.loadConfig();
     return {
@@ -242,7 +269,7 @@ class ConfigBackend {
       kmsContractAddr: config.kmsContractAddr,
       chainId: config.chainId,
       appImplementation: config.appImplementation,
-      rootEpochs: config.rootEpochs,
+      ...currentRootEpoch(config),
     };
   }
 }
@@ -264,7 +291,8 @@ app.get('/', async (c) => {
       chainId: info.chainId,
       appAuthImplementation: info.appImplementation, // backward compat
       appImplementation: info.appImplementation,
-      rootEpochs: info.rootEpochs,
+      rootEpoch: info.rootEpoch,
+      rootEpochHash: info.rootEpochHash,
     });
   } catch (error) {
     console.error('error in health check:', error);

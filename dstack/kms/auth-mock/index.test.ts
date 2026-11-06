@@ -161,9 +161,10 @@ describe('Mock Backend Tests', () => {
   });
 
   describe('root epochs', () => {
-    it('reports MOCK_ROOT_EPOCHS', async () => {
-      const rootEpochs = [{ caPubkey: '0xa1', k256Pubkey: '0xb1' }];
-      process.env.MOCK_ROOT_EPOCHS = JSON.stringify(rootEpochs);
+    it('reports MOCK_ROOT_EPOCH and MOCK_ROOT_EPOCH_HASH', async () => {
+      const expected = { rootEpoch: 1, rootEpochHash: '0x' + '11'.repeat(32) };
+      process.env.MOCK_ROOT_EPOCH = '1';
+      process.env.MOCK_ROOT_EPOCH_HASH = expected.rootEpochHash;
       try {
         const boot = await appFetch(new Request('http://localhost:3002/bootAuth/kms', {
           method: 'POST',
@@ -173,11 +174,12 @@ describe('Mock Backend Tests', () => {
             composeHash: '0x04', instanceId: '0x05', deviceId: '0x06',
           }),
         }));
-        expect((await boot.json()).rootEpoch).toBe(0);
+        expect(await boot.json()).toMatchObject(expected);
         const info = await appFetch(new Request('http://localhost:3002/'));
-        expect((await info.json()).rootEpochs).toEqual(rootEpochs);
+        expect(await info.json()).toMatchObject(expected);
       } finally {
-        delete process.env.MOCK_ROOT_EPOCHS;
+        delete process.env.MOCK_ROOT_EPOCH;
+        delete process.env.MOCK_ROOT_EPOCH_HASH;
       }
     });
   });

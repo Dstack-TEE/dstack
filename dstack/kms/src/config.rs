@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{bail, Result};
 use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
 use rocket::figment::Figment;
@@ -41,8 +40,6 @@ pub(crate) struct KmsConfig {
     pub attestation: AttestationVerifierConfig,
     pub auth_api: AuthApi,
     pub onboard: OnboardConfig,
-    #[serde(default)]
-    pub key_rotation: KeyRotationConfig,
     pub image: ImageConfig,
     /// Whether to enable the additional local release gate for AMD SEV-SNP
     /// key/cert material. This is separate from the auth API so production
@@ -176,16 +173,17 @@ impl KmsConfig {
         self.cert_dir.join(K256_KEY)
     }
 
-    /// Records which epoch the top-level root keys belong to. Absent means 0.
+    /// Records the newest epoch this KMS holds, whose roots are the top-level
+    /// root files. Absent means 0.
     pub fn root_epoch(&self) -> PathBuf {
         self.cert_dir.join(ROOT_EPOCH)
     }
 
-    /// The current epoch's roots are the top-level root files, so every path
-    /// that only needs the current roots is unchanged. Older epochs live in
-    /// `epochs/<n>/`.
-    pub fn root_key_paths(&self, epoch: u32) -> RootKeyPaths {
-        let dir = if epoch == self.key_rotation.current_epoch {
+    /// Root key paths of `epoch` in a keyring whose newest epoch is `latest`:
+    /// the newest roots are the top-level root files, so paths that predate
+    /// epochs are unchanged. Older epochs live in `epochs/<n>/`.
+    pub fn root_key_paths(&self, epoch: u32, latest: u32) -> RootKeyPaths {
+        let dir = if epoch == latest {
             self.cert_dir.clone()
         } else {
             self.cert_dir.join(EPOCHS_DIR).join(epoch.to_string())
@@ -241,26 +239,6 @@ pub(crate) struct RootKeyPaths {
     pub k256_key: PathBuf,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-pub(crate) struct KeyRotationConfig {
-    /// Root key epoch served as current; epoch 0 is the original roots. Every
-    /// KMS holds all epochs up to it.
-    #[serde(default)]
-    pub current_epoch: u32,
-}
-
-impl KeyRotationConfig {
-    /// Resolve a root epoch selector: unset is the current epoch.
-    pub fn resolve_epoch(&self, requested: Option<u32>) -> Result<u32> {
-        let current = self.current_epoch;
-        match requested {
-            None => Ok(current),
-            Some(epoch) if epoch <= current => Ok(epoch),
-            Some(epoch) => bail!("unknown root epoch {epoch}; the current epoch is {current}"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct OnboardConfig {
     pub enabled: bool,
@@ -288,16 +266,6 @@ mod tests {
             "default admin token must be empty (fail-closed)"
         );
         assert!(!config.admin.insecure_no_auth);
-    }
-
-    #[test]
-    fn root_epoch_selector_resolution() {
-        let cfg = KeyRotationConfig { current_epoch: 2 };
-        assert_eq!(cfg.resolve_epoch(None).unwrap(), 2);
-        assert_eq!(cfg.resolve_epoch(Some(0)).unwrap(), 0);
-        assert_eq!(cfg.resolve_epoch(Some(2)).unwrap(), 2);
-        assert!(cfg.resolve_epoch(Some(3)).is_err());
-        assert_eq!(KeyRotationConfig::default().resolve_epoch(None).unwrap(), 0);
     }
 
     #[test]

@@ -18,13 +18,15 @@ export interface BootResponse {
   isAllowed: boolean;
   gatewayAppId: string;
   reason: string;
-  // Latest registered KMS root epoch; absent when none is registered.
   rootEpoch?: number;
+  rootEpochHash?: string;
 }
 
-export interface RootEpoch {
-  caPubkey: string;
-  k256Pubkey: string;
+// The KMS root epoch currently served and its chain hash, which commits to the
+// root public keys of epochs 0..=rootEpoch. Both absent when none is registered.
+export interface RootEpochInfo {
+  rootEpoch?: number;
+  rootEpochHash?: string;
 }
 
 // Removed KMS_CONTRACT_ABI and APP_CONTRACT_ABI since we're using typechain types now

@@ -72,7 +72,7 @@ bun run check
 - `MOCK_GATEWAY_APP_ID` - mock gateway app ID (default: 0xmockgateway1234567890123456789012345678)
 - `MOCK_CHAIN_ID` - mock blockchain chain ID (default: 1337)
 - `MOCK_APP_IMPLEMENTATION` - mock app implementation address (default: 0xmockapp9876543210987654321098765432109)
-- `MOCK_ROOT_EPOCHS` - JSON array of `{"caPubkey", "k256Pubkey"}`, indexed by KMS root epoch (default: none registered)
+- `MOCK_ROOT_EPOCH`, `MOCK_ROOT_EPOCH_HASH` - current KMS root epoch and its chain hash reported as `rootEpoch`/`rootEpochHash` (default: none registered)
 
 ## API endpoints
 

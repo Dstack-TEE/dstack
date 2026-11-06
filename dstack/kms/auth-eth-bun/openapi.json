@@ -176,7 +176,11 @@
           },
           "rootEpoch": {
             "type": "integer",
-            "description": "Latest registered KMS root epoch (the original roots are 0); absent when none is registered"
+            "description": "KMS root epoch currently served (the original roots are 0); absent when none is registered"
+          },
+          "rootEpochHash": {
+            "type": "string",
+            "description": "Chain hash committing to the root public keys of epochs 0..=rootEpoch (hex)"
           }
         }
       },
@@ -221,17 +225,13 @@
             "type": "string",
             "description": "App implementation address"
           },
-          "rootEpochs": {
-            "type": "array",
-            "description": "Registered KMS root epochs, indexed by epoch",
-            "items": {
-              "type": "object",
-              "required": ["caPubkey", "k256Pubkey"],
-              "properties": {
-                "caPubkey": { "type": "string", "description": "Root CA public key (hex)" },
-                "k256Pubkey": { "type": "string", "description": "Root secp256k1 public key (hex)" }
-              }
-            }
+          "rootEpoch": {
+            "type": "integer",
+            "description": "KMS root epoch currently served; absent when none is registered"
+          },
+          "rootEpochHash": {
+            "type": "string",
+            "description": "Chain hash committing to the root public keys of epochs 0..=rootEpoch (hex)"
           }
         }
       },

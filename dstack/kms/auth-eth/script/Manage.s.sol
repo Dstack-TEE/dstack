@@ -123,6 +123,18 @@ contract RegisterRootEpoch is BaseScript {
     }
 }
 
+contract ActivateRootEpoch is BaseScript {
+    function run() external {
+        uint256 epoch = vm.envUint("ROOT_EPOCH");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.activateRootEpoch(epoch);
+        vm.stopBroadcast();
+
+        console.log("Activated KMS root epoch", epoch);
+    }
+}
+
 // App Management Scripts
 contract AddComposeHash is BaseScript {
     function run() external {

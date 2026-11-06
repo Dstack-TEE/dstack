@@ -702,6 +702,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
             api_version: 1,
             vm_config: "".to_string(),
             root_epoch: None,
+            include_history: false,
         })
         .await
         .context("Failed to get app key")?;

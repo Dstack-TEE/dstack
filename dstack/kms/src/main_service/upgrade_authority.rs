@@ -84,24 +84,55 @@ pub(crate) struct BootResponse {
     pub is_allowed: bool,
     pub gateway_app_id: String,
     pub reason: String,
-    /// Latest KMS key epoch registered by governance, if any.
-    #[serde(default)]
-    pub root_epoch: Option<u32>,
+    #[serde(flatten)]
+    pub root_epoch: RootEpochFields,
 }
 
-/// Root public keys governance registered for one KMS key epoch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The root epoch fields auth backends add to boot and info responses.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct RootEpochPubkeys {
-    #[serde(deserialize_with = "deserialize_hex")]
-    pub ca_pubkey: Vec<u8>,
-    #[serde(deserialize_with = "deserialize_hex")]
-    pub k256_pubkey: Vec<u8>,
+pub(crate) struct RootEpochFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch_hash: Option<String>,
 }
 
-fn deserialize_hex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
-    let value = String::deserialize(deserializer)?;
-    hex::decode(value.trim_start_matches("0x")).map_err(serde::de::Error::custom)
+impl RootEpochFields {
+    pub fn registry(&self) -> Result<RootEpochRegistry> {
+        match (self.root_epoch, &self.root_epoch_hash) {
+            (None, None) => Ok(RootEpochRegistry::Empty),
+            (Some(epoch), Some(hash)) => {
+                let chain_hash = hex::decode(hash.trim_start_matches("0x"))
+                    .ok()
+                    .and_then(|hash| hash.try_into().ok())
+                    .context("invalid root epoch chain hash")?;
+                Ok(RootEpochRegistry::Current(CurrentRootEpoch {
+                    epoch,
+                    chain_hash,
+                }))
+            }
+            _ => bail!("the auth API reports a root epoch without its chain hash"),
+        }
+    }
+}
+
+/// The root epoch governance made current, with the chain hash committing to
+/// the root public keys of epochs 0..=epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CurrentRootEpoch {
+    pub epoch: u32,
+    pub chain_hash: [u8; 32],
+}
+
+/// What governance says about root epochs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum RootEpochRegistry {
+    /// The dev backend: there is nothing to check against.
+    Unchecked,
+    /// No epoch is registered, or the backend predates root epochs.
+    Empty,
+    Current(CurrentRootEpoch),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,8 +145,8 @@ pub(crate) struct AuthApiInfoResponse {
     pub gateway_app_id: String,
     pub chain_id: u64,
     pub app_implementation: String,
-    #[serde(default)]
-    pub root_epochs: Vec<RootEpochPubkeys>,
+    #[serde(flatten)]
+    pub root_epoch: RootEpochFields,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,8 +158,7 @@ pub(crate) struct GetInfoResponse {
     pub eth_rpc_url: Option<String>,
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
-    /// Registered key epochs, indexed by epoch. `None` means no registry.
-    pub root_epochs: Option<Vec<RootEpochPubkeys>>,
+    pub root_epochs: RootEpochRegistry,
 }
 
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -196,7 +226,7 @@ impl AuthApi {
                 is_allowed: true,
                 reason: "".to_string(),
                 gateway_app_id: dev.gateway_app_id.clone(),
-                root_epoch: None,
+                root_epoch: RootEpochFields::default(),
             }),
             AuthApi::Webhook { webhook } => {
                 let path = if is_kms {
@@ -219,7 +249,7 @@ impl AuthApi {
                 gateway_app_id: Some(dev.gateway_app_id.clone()),
                 chain_id: None,
                 app_implementation: None,
-                root_epochs: None,
+                root_epochs: RootEpochRegistry::Unchecked,
             }),
             AuthApi::Webhook { webhook } => {
                 let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
@@ -235,7 +265,7 @@ impl AuthApi {
                     chain_id: Some(info.chain_id),
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
-                    root_epochs: Some(info.root_epochs),
+                    root_epochs: info.root_epoch.registry()?,
                 })
             }
         }
@@ -547,29 +577,29 @@ pub(crate) mod tests {
     async fn root_epochs_are_parsed_from_info_and_boot_responses() {
         let (url, server) = serve(vec![
             r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
-                "appImplementation":"0x00","rootEpochs":[{"caPubkey":"0xa0","k256Pubkey":"b0"}]}"#,
-            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":"","rootEpoch":3}"#,
+                "appImplementation":"0x00","rootEpoch":3,"rootEpochHash":"0x1111111111111111111111111111111111111111111111111111111111111111"}"#,
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":"","rootEpoch":3,"rootEpochHash":"1111111111111111111111111111111111111111111111111111111111111111"}"#,
             r#"{"isAllowed":true,"gatewayAppId":"gw","reason":""}"#,
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":"","rootEpoch":3}"#,
         ]);
         let auth = webhook(url);
+        let current = RootEpochRegistry::Current(CurrentRootEpoch {
+            epoch: 3,
+            chain_hash: [0x11; 32],
+        });
 
-        let info = auth.get_info().await.unwrap();
-        assert_eq!(
-            info.root_epochs,
-            Some(vec![RootEpochPubkeys {
-                ca_pubkey: vec![0xa0],
-                k256_pubkey: vec![0xb0],
-            }])
-        );
+        assert_eq!(auth.get_info().await.unwrap().root_epochs, current);
         let info = boot_info(50);
-        assert_eq!(
-            auth.is_app_allowed(&info, false).await.unwrap().root_epoch,
-            Some(3)
-        );
-        assert_eq!(
-            auth.is_app_allowed(&info, false).await.unwrap().root_epoch,
-            None
-        );
+        let registry = || async {
+            auth.is_app_allowed(&info, false)
+                .await
+                .unwrap()
+                .root_epoch
+                .registry()
+        };
+        assert_eq!(registry().await.unwrap(), current);
+        assert_eq!(registry().await.unwrap(), RootEpochRegistry::Empty);
+        assert!(registry().await.is_err());
         server.join().unwrap();
     }
 

@@ -446,35 +446,41 @@ describe('auth-simple', () => {
     });
   });
 
-  describe('key epochs', () => {
+  describe('root epochs', () => {
     const rootEpochs = [
       { caPubkey: '0xa0', k256Pubkey: '0xb0' },
       { caPubkey: '0xa1', k256Pubkey: '0xb1' }
     ];
+    // Shared with the DstackKms contract tests.
+    const h0 = '0xf5f9a7455970becbb0d8441e53cf06df6290b34419cf783eb5869107867ec9ae';
+    const h1 = '0x2219fc74439588d8f9d514f4e897d4a1dc692519b0899d93f5ac5661b8e2850a';
 
-    it('reports the latest key epoch in boot responses and lists all epochs', async () => {
-      writeTestConfig({ gatewayAppId: '0xgateway', rootEpochs });
-
+    const bootRootEpoch = async () => {
       const boot = await app.fetch(new Request('http://localhost/bootAuth/app', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(baseBootInfo)
       }));
-      expect((await boot.json()).rootEpoch).toBe(1);
+      const { rootEpoch, rootEpochHash } = await boot.json();
+      return { rootEpoch, rootEpochHash };
+    };
+    const info = async () =>
+      (await app.fetch(new Request('http://localhost/', { method: 'GET' }))).json();
 
-      const info = await app.fetch(new Request('http://localhost/', { method: 'GET' }));
-      expect((await info.json()).rootEpochs).toEqual(rootEpochs);
+    it('reports the current root epoch and its chain hash', async () => {
+      writeTestConfig({ gatewayAppId: '0xgateway', rootEpochs });
+      expect(await bootRootEpoch()).toEqual({ rootEpoch: 0, rootEpochHash: h0 });
+      expect(await info()).toMatchObject({ rootEpoch: 0, rootEpochHash: h0 });
+
+      writeTestConfig({ gatewayAppId: '0xgateway', rootEpochs, currentRootEpoch: 1 });
+      expect(await bootRootEpoch()).toEqual({ rootEpoch: 1, rootEpochHash: h1 });
+      expect(await info()).toMatchObject({ rootEpoch: 1, rootEpochHash: h1 });
     });
 
-    it('omits the key epoch when none is configured', async () => {
+    it('omits the root epoch when none is configured', async () => {
       writeTestConfig({ gatewayAppId: '0xgateway' });
-
-      const boot = await app.fetch(new Request('http://localhost/bootAuth/app', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(baseBootInfo)
-      }));
-      expect((await boot.json()).rootEpoch).toBeUndefined();
+      expect(await bootRootEpoch()).toEqual({ rootEpoch: undefined, rootEpochHash: undefined });
+      expect((await info()).rootEpoch).toBeUndefined();
     });
   });
 
