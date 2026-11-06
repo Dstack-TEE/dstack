@@ -34,7 +34,7 @@ const BootResponseSchema = z.object({
 
 const RootEpochsSchema = z.array(z.object({ caPubkey: z.string(), k256Pubkey: z.string() }));
 
-// MOCK_ROOT_EPOCHS: JSON array of {caPubkey, k256Pubkey} for root epochs 1, 2, ...
+// MOCK_ROOT_EPOCHS: JSON array of {caPubkey, k256Pubkey}, indexed by root epoch
 function getRootEpochs(): z.infer<typeof RootEpochsSchema> {
   return RootEpochsSchema.parse(JSON.parse(process.env.MOCK_ROOT_EPOCHS || '[]'));
 }
@@ -79,8 +79,8 @@ class MockBackend {
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const response = this.evaluateBoot(bootInfo, isKms);
-    const latestEpoch = getRootEpochs().length;
-    return latestEpoch > 0 ? { ...response, rootEpoch: latestEpoch } : response;
+    const epochCount = getRootEpochs().length;
+    return epochCount > 0 ? { ...response, rootEpoch: epochCount - 1 } : response;
   }
 
   private evaluateBoot(bootInfo: BootInfo, isKms: boolean): BootResponse {

@@ -59,7 +59,7 @@ forge script script/Manage.s.sol:SetKmsInfo --broadcast --rpc-url $RPC_URL
 ```
 
 #### Register a KMS Root Epoch
-Appends the next root epoch (the original roots are epoch 1). `ATTESTATION` is
+Appends the next root epoch (the original roots are epoch 0). `ATTESTATION` is
 the one the KMS returned when it generated the keys (Bootstrap, or Onboard with
 `rotate`); verify it before registering. Registered epochs cannot be changed.
 ```bash

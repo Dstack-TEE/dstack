@@ -42,8 +42,7 @@ type GetKeyV1Response struct {
 	// key over the app root public key. See `docs/guest-api-v1.md` for the claim
 	// encoding and the verification steps.
 	SignatureChain [][]byte
-	// KMS root key epoch the key was derived from; 0 from an agent that
-	// predates root epochs, which means epoch 1.
+	// KMS root key epoch the key was derived from.
 	RootEpoch uint32
 }
 
@@ -445,21 +444,28 @@ func (c *DstackClientV1) IssueCert(ctx context.Context, options ...IssueCertV1Op
 // Derivation is flat -- `a/b` is not a child of `a` -- and binds both arguments,
 // so these keys differ from the v0 keys of the same name.
 func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm string) (*GetKeyV1Response, error) {
-	return c.GetKeyAtRootEpoch(ctx, domain, algorithm, 0)
+	return c.getKey(ctx, domain, algorithm, nil)
 }
 
-// GetKeyAtRootEpoch is GetKey under the KMS root key epoch rootEpoch, counting
-// from 1; 0 is the current epoch. Name an older epoch only to reach a key from
-// before a KMS root key rotation, for example to migrate off it.
+// GetKeyAtRootEpoch is GetKey under the KMS root key epoch rootEpoch instead of
+// the current one; epoch 0 is the original root keys. Name an older epoch only
+// to reach a key from before a KMS root key rotation, for example to migrate
+// off it.
 func (c *DstackClientV1) GetKeyAtRootEpoch(ctx context.Context, domain string, algorithm string, rootEpoch uint32) (*GetKeyV1Response, error) {
+	return c.getKey(ctx, domain, algorithm, &rootEpoch)
+}
+
+func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm string, rootEpoch *uint32) (*GetKeyV1Response, error) {
 	if algorithm == "" {
 		return nil, fmt.Errorf("algorithm is required, use `secp256k1` or `ed25519`")
 	}
 
 	payload := map[string]interface{}{
-		"domain":     domain,
-		"algorithm":  algorithm,
-		"root_epoch": rootEpoch,
+		"domain":    domain,
+		"algorithm": algorithm,
+	}
+	if rootEpoch != nil {
+		payload["root_epoch"] = *rootEpoch
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/v1/GetKey", payload)

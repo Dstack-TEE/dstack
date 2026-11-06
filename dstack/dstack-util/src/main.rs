@@ -701,7 +701,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         .get_app_key(dstack_kms_rpc::GetAppKeyRequest {
             api_version: 1,
             vm_config: "".to_string(),
-            root_epoch: 0,
+            root_epoch: None,
         })
         .await
         .context("Failed to get app key")?;
@@ -725,7 +725,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
             pubkey: root_pubkey,
             tmp_ca_key: tmp_ca.temp_ca_key,
             tmp_ca_cert: tmp_ca.temp_ca_cert,
-            root_epoch: response.root_epoch.max(1),
+            root_epoch: response.root_epoch,
         },
     };
 

@@ -391,12 +391,12 @@ impl AppState {
     }
 
     /// The app root key and its KMS signature of `root_epoch`; the current
-    /// ones for 0. The key is parsed for older epochs only, which are
+    /// ones when unset. The key is parsed for older epochs only, which are
     /// requested rarely.
-    pub(crate) fn app_root(&self, root_epoch: u32) -> Result<AppRoot<'_>> {
+    pub(crate) fn app_root(&self, root_epoch: Option<u32>) -> Result<AppRoot<'_>> {
         let keys = &self.inner.keys;
         let current = keys.root_epoch();
-        let epoch = if root_epoch == 0 { current } else { root_epoch };
+        let epoch = root_epoch.unwrap_or(current);
         if epoch == current {
             return Ok(AppRoot {
                 epoch,
@@ -1401,10 +1401,10 @@ pNs85uhOZE8z2jr8Pg==
             k256_signature: Vec::new(),
             gateway_app_id: String::new(),
             ca_cert: DUMMY_PEM_CERT.to_string(),
-            // Only selected by tests that name root epoch 2 explicitly; the
-            // fixture's current root is epoch 1.
+            // Only selected by tests that name root epoch 1 explicitly; the
+            // fixture's current root is epoch 0.
             historical_roots: vec![dstack_types::HistoricalAppRoot {
-                root_epoch: 2,
+                root_epoch: 1,
                 k256_key: HISTORICAL_K256_KEY.to_vec(),
                 k256_signature: vec![0xab; 65],
             }],

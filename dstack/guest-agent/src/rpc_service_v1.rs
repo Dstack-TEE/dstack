@@ -165,7 +165,7 @@ impl V1RpcHandler {
         &self,
         domain: &str,
         algorithm: &str,
-        root_epoch: u32,
+        root_epoch: Option<u32>,
     ) -> Result<(AppKey, Vec<Vec<u8>>, u32)> {
         let algorithm = Algorithm::parse(algorithm)?;
         let root = self.state.app_root(root_epoch)?;
@@ -350,7 +350,7 @@ mod tests {
         GetKeyRequest {
             domain: domain.to_string(),
             algorithm: algorithm.to_string(),
-            root_epoch: 0,
+            root_epoch: None,
         }
     }
 
@@ -363,15 +363,15 @@ mod tests {
             ..get_key_request("storage-encryption", "secp256k1")
         };
 
-        let current = handler().get_key(request(0)).await.unwrap();
-        assert_eq!(current.root_epoch, 1);
+        let current = handler().get_key(request(None)).await.unwrap();
+        assert_eq!(current.root_epoch, 0);
         assert_eq!(
-            handler().get_key(request(1)).await.unwrap().key,
+            handler().get_key(request(Some(0))).await.unwrap().key,
             current.key
         );
 
-        let old = handler().get_key(request(2)).await.unwrap();
-        assert_eq!(old.root_epoch, 2);
+        let old = handler().get_key(request(Some(1))).await.unwrap();
+        assert_eq!(old.root_epoch, 1);
         assert_ne!(old.key, current.key);
         assert_eq!(
             old.key,
@@ -385,7 +385,7 @@ mod tests {
         );
         assert_eq!(old.signature_chain[1], vec![0xab; 65]);
 
-        assert!(handler().get_key(request(3)).await.is_err());
+        assert!(handler().get_key(request(Some(2))).await.is_err());
     }
 
     /// The fixture's app root key is what `keys::tests` committed its vectors

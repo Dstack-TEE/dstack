@@ -59,7 +59,7 @@ const AuthConfigSchema = z.object({
   allowedAdvisoryIds: z.array(z.string()).default([]),
   kms: KmsConfigSchema.default({}),
   apps: z.record(z.string(), AppConfigSchema).default({}),
-  // Root public keys of KMS root epochs 1, 2, ... in order; append only.
+  // Root public keys of each KMS root epoch, indexed by epoch; append only.
   rootEpochs: z.array(RootEpochSchema).default([])
 });
 
@@ -102,8 +102,8 @@ class ConfigBackend {
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
     const response = this.evaluateBoot(bootInfo, isKms, config);
-    const latestEpoch = config.rootEpochs.length;
-    return latestEpoch > 0 ? { ...response, rootEpoch: latestEpoch } : response;
+    const epochCount = config.rootEpochs.length;
+    return epochCount > 0 ? { ...response, rootEpoch: epochCount - 1 } : response;
   }
 
   private evaluateBoot(bootInfo: BootInfo, isKms: boolean, config: AuthConfig): BootResponse {

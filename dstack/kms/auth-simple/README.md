@@ -107,7 +107,7 @@ raw NitroTPM evidence by itself.
 | `apps.<appId>.composeHashes` | No | Allowed compose hashes for this app |
 | `apps.<appId>.devices` | No | Allowed device IDs for this app. Empty denies all unless `allowAnyDevice` is true. |
 | `apps.<appId>.allowAnyDevice` | No | If true, skip device ID check for this app |
-| `rootEpochs` | No | KMS root public keys of root epochs 1, 2, ... in order, `[{"caPubkey": "0x...", "k256Pubkey": "0x..."}]`. Epoch 1 is the original roots. Append only. When set, the KMS checks its keyring against it and boot responses report the latest epoch as `rootEpoch`. |
+| `rootEpochs` | No | KMS root public keys of each root epoch, indexed by epoch, `[{"caPubkey": "0x...", "k256Pubkey": "0x..."}]`. Epoch 0 is the original roots. Append only. When set, the KMS checks its keyring against it and boot responses report the latest epoch as `rootEpoch`. |
 
 For experimental AMD SEV-SNP dry-run authorization, keep the default fail-closed TCB policy unless you intentionally want the auth webhook to accept non-up-to-date verifier-derived SNP `BootInfo`. To exercise the dry-run path without enabling key release, allowlist the recomputed SNP `mrAggregated`, `osImageHash`, app/compose identity, device/chip identity, and any non-default `allowedTcbStatuses`/`allowedAdvisoryIds` values explicitly. KMS still rejects SNP before returning app keys, KMS keys, or app certificates.
 

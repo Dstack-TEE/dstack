@@ -173,7 +173,7 @@ describe('Mock Backend Tests', () => {
             composeHash: '0x04', instanceId: '0x05', deviceId: '0x06',
           }),
         }));
-        expect((await boot.json()).rootEpoch).toBe(1);
+        expect((await boot.json()).rootEpoch).toBe(0);
         const info = await appFetch(new Request('http://localhost:3002/'));
         expect((await info.json()).rootEpochs).toEqual(rootEpochs);
       } finally {

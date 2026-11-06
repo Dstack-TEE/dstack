@@ -68,7 +68,7 @@ export interface GetKeyResponseV1 {
   public_key: Uint8Array
   /** Two links: the app root key over the v1 key claim, then the KMS root key. */
   signature_chain: Uint8Array[]
-  /** KMS root key epoch the key was derived from; 0 from an agent predating root epochs, meaning 1. */
+  /** KMS root key epoch the key was derived from. */
   root_epoch: number
 }
 
@@ -335,17 +335,18 @@ export class DstackClientV1 {
    * @param domain Caller-chosen domain-separation string. May be empty.
    * @param algorithm Exactly `secp256k1` or `ed25519`. No default, no `k256` alias.
    */
-  async getKey(domain: string, algorithm: string, rootEpoch = 0): Promise<GetKeyResponseV1> {
+  async getKey(domain: string, algorithm: string, rootEpoch?: number): Promise<GetKeyResponseV1> {
     // v0 defaulted an empty algorithm to secp256k1, which let a typo hand back a
     // key of the wrong type under a name the caller thought meant something else.
     if (!algorithm) {
       throw new Error('algorithm is required, use "secp256k1" or "ed25519"')
     }
-    // 0 is the current KMS root key epoch; name an older one only to migrate off it.
-    if (!Number.isInteger(rootEpoch) || rootEpoch < 0) {
-      throw new Error('rootEpoch must be 0 (current) or an epoch number')
+    // Unset is the current KMS root key epoch; name an older one only to migrate off it.
+    if (rootEpoch !== undefined && (!Number.isInteger(rootEpoch) || rootEpoch < 0)) {
+      throw new Error('rootEpoch must be a non-negative epoch number')
     }
-    const payload = JSON.stringify({ domain, algorithm, root_epoch: rootEpoch })
+    const payload = JSON.stringify(
+      rootEpoch === undefined ? { domain, algorithm } : { domain, algorithm, root_epoch: rootEpoch })
     const result = await send_rpc_request<{ key: string, public_key: string, signature_chain: string[], root_epoch?: number }>(
       this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)

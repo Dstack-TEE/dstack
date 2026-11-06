@@ -18,7 +18,7 @@ export interface BootResponse {
   isAllowed: boolean;
   gatewayAppId: string;
   reason: string;
-  // Latest registered KMS root epoch (from 1); absent when none is registered.
+  // Latest registered KMS root epoch; absent when none is registered.
   rootEpoch?: number;
 }
 

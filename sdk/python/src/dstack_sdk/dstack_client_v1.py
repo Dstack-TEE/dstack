@@ -107,8 +107,7 @@ class GetKeyResponseV1(BaseModel):
     # Two links: the app root key's signature over the v1 key claim, then the
     # KMS root key's signature over the app root public key.
     signature_chain: List[HexBytes]
-    # KMS root key epoch the key was derived from. 0 from an agent that
-    # predates root epochs, which means epoch 1.
+    # KMS root key epoch the key was derived from.
     root_epoch: int = 0
 
 
@@ -241,7 +240,7 @@ class AsyncDstackClientV1(AsyncBaseClient):
         return IssueCertResponseV1(**result)
 
     async def get_key(
-        self, domain: str, algorithm: str, root_epoch: int = 0
+        self, domain: str, algorithm: str, root_epoch: Optional[int] = None
     ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``.
 
@@ -251,19 +250,18 @@ class AsyncDstackClientV1(AsyncBaseClient):
         ``k256`` alias, because in v0 a typo silently produced a key of the
         wrong type under a name the caller thought meant something else.
 
-        ``root_epoch`` selects the KMS root key epoch, counting from 1; the
-        default 0 is the current epoch. Name an older epoch only to reach a key
-        from before a KMS root key rotation, for example to migrate off it.
+        ``root_epoch`` selects the KMS root key epoch; the default ``None`` is
+        the current epoch, and epoch 0 is the original root keys. Name an older
+        epoch only to reach a key from before a KMS root key rotation, for
+        example to migrate off it.
         """
         if not algorithm:
             raise ValueError("algorithm is required, use `secp256k1` or `ed25519`")
-        if root_epoch < 0:
-            raise ValueError("root_epoch must be 0 (current) or an epoch number")
-        data: Dict[str, Any] = {
-            "domain": domain,
-            "algorithm": algorithm,
-            "root_epoch": root_epoch,
-        }
+        data: Dict[str, Any] = {"domain": domain, "algorithm": algorithm}
+        if root_epoch is not None:
+            if root_epoch < 0:
+                raise ValueError("root_epoch must be a non-negative epoch number")
+            data["root_epoch"] = root_epoch
         result = await self._send_rpc_request("GetKey", data)
         return GetKeyResponseV1(**result)
 
@@ -366,7 +364,7 @@ class DstackClientV1(BaseClient):
 
     @call_async
     def get_key(
-        self, domain: str, algorithm: str, root_epoch: int = 0
+        self, domain: str, algorithm: str, root_epoch: Optional[int] = None
     ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``."""
         raise NotImplementedError

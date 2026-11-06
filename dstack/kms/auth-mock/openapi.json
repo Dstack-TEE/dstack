@@ -227,7 +227,7 @@
           },
           "rootEpochs": {
             "type": "array",
-            "description": "KMS root epochs 1, 2, ... from MOCK_ROOT_EPOCHS",
+            "description": "KMS root epochs from MOCK_ROOT_EPOCHS, indexed by epoch",
             "items": {
               "type": "object",
               "properties": {

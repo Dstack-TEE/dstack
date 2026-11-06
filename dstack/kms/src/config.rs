@@ -176,7 +176,7 @@ impl KmsConfig {
         self.cert_dir.join(K256_KEY)
     }
 
-    /// Records which epoch the top-level root keys belong to. Absent means 1.
+    /// Records which epoch the top-level root keys belong to. Absent means 0.
     pub fn root_epoch(&self) -> PathBuf {
         self.cert_dir.join(ROOT_EPOCH)
     }
@@ -241,34 +241,22 @@ pub(crate) struct RootKeyPaths {
     pub k256_key: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct KeyRotationConfig {
-    /// Root key epoch served as current; epochs count from 1, the original
-    /// roots. Every KMS holds all epochs up to it.
-    #[serde(default = "first_epoch")]
+    /// Root key epoch served as current; epoch 0 is the original roots. Every
+    /// KMS holds all epochs up to it.
+    #[serde(default)]
     pub current_epoch: u32,
 }
 
-impl Default for KeyRotationConfig {
-    fn default() -> Self {
-        Self {
-            current_epoch: first_epoch(),
-        }
-    }
-}
-
-fn first_epoch() -> u32 {
-    1
-}
-
 impl KeyRotationConfig {
-    /// Resolve a root epoch selector: 0 is the current epoch.
-    pub fn resolve_epoch(&self, requested: u32) -> Result<u32> {
+    /// Resolve a root epoch selector: unset is the current epoch.
+    pub fn resolve_epoch(&self, requested: Option<u32>) -> Result<u32> {
         let current = self.current_epoch;
         match requested {
-            0 => Ok(current),
-            epoch if epoch <= current => Ok(epoch),
-            epoch => bail!("unknown root epoch {epoch}; the current epoch is {current}"),
+            None => Ok(current),
+            Some(epoch) if epoch <= current => Ok(epoch),
+            Some(epoch) => bail!("unknown root epoch {epoch}; the current epoch is {current}"),
         }
     }
 }
@@ -305,11 +293,11 @@ mod tests {
     #[test]
     fn root_epoch_selector_resolution() {
         let cfg = KeyRotationConfig { current_epoch: 2 };
-        assert_eq!(cfg.resolve_epoch(0).unwrap(), 2);
-        assert_eq!(cfg.resolve_epoch(1).unwrap(), 1);
-        assert_eq!(cfg.resolve_epoch(2).unwrap(), 2);
-        assert!(cfg.resolve_epoch(3).is_err());
-        assert_eq!(KeyRotationConfig::default().resolve_epoch(0).unwrap(), 1);
+        assert_eq!(cfg.resolve_epoch(None).unwrap(), 2);
+        assert_eq!(cfg.resolve_epoch(Some(0)).unwrap(), 0);
+        assert_eq!(cfg.resolve_epoch(Some(2)).unwrap(), 2);
+        assert!(cfg.resolve_epoch(Some(3)).is_err());
+        assert_eq!(KeyRotationConfig::default().resolve_epoch(None).unwrap(), 0);
     }
 
     #[test]

@@ -36,7 +36,7 @@ const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
   gatewayAppId: z.string(),
-  // Latest registered KMS root epoch (from 1); absent when none is registered.
+  // Latest registered KMS root epoch; absent when none is registered.
   rootEpoch: z.number().optional()
 });
 
@@ -114,7 +114,7 @@ const DSTACK_KMS_ABI = [
     outputs: [{ name: '', type: 'address' }]
   },
   {
-    name: 'latestRootEpoch',
+    name: 'rootEpochCount',
     type: 'function',
     stateMutability: 'view',
     inputs: [],
@@ -225,42 +225,42 @@ class EthereumBackend {
       blockNumber
     });
 
-    const latestEpoch = await this.getLatestRootEpoch(blockNumber);
+    const epochCount = await this.getRootEpochCount(blockNumber);
 
     return {
       isAllowed,
       reason,
       gatewayAppId: gatewayAppId as string,
-      ...(latestEpoch > 0 && { rootEpoch: latestEpoch }),
+      ...(epochCount > 0 && { rootEpoch: epochCount - 1 }),
     };
   }
 
-  private async getLatestRootEpoch(blockNumber?: bigint): Promise<number> {
+  private async getRootEpochCount(blockNumber?: bigint): Promise<number> {
     try {
-      const latest = await this.client.readContract({
+      const count = await this.client.readContract({
         address: this.kmsContractAddr,
         abi: DSTACK_KMS_ABI,
-        functionName: 'latestRootEpoch',
+        functionName: 'rootEpochCount',
         blockNumber
       });
-      return Number(latest ?? 0);
+      return Number(count ?? 0);
     } catch (error) {
       if (isMissingFunction(error)) return 0;
       throw error;
     }
   }
 
-  // Registered root epochs 1, 2, ... in order.
+  // Registered root epochs, indexed by epoch.
   async getRootEpochs(): Promise<RootEpoch[]> {
     const blockNumber = await this.finalizedBlockNumber();
-    const latest = await this.getLatestRootEpoch(blockNumber);
+    const count = await this.getRootEpochCount(blockNumber);
     return Promise.all(
-      Array.from({ length: latest }, async (_, index) => {
+      Array.from({ length: count }, async (_, epoch) => {
         const [caPubkey, k256Pubkey] = await this.client.readContract({
           address: this.kmsContractAddr,
           abi: DSTACK_KMS_ABI,
           functionName: 'rootEpoch',
-          args: [BigInt(index + 1)],
+          args: [BigInt(epoch)],
           blockNumber
         });
         return { caPubkey, k256Pubkey };

@@ -2355,13 +2355,13 @@ struct AppInfo {
 }
 
 impl HostShared {
-    /// Request app keys of `root_epoch` (0 = current) from one KMS.
+    /// Request app keys of `root_epoch` (`None` = current) from one KMS.
     async fn request_kms_keys(
         &self,
         kms_url: String,
-        root_epoch: u32,
+        root_epoch: Option<u32>,
     ) -> Result<(AppKeys, Vec<u8>)> {
-        info!("Requesting app keys of epoch {root_epoch} from KMS: {kms_url}");
+        info!("Requesting app keys of root epoch {root_epoch:?} from KMS: {kms_url}");
         let tmp_ca = {
             info!("Getting temp ca cert");
             let client = RaClient::new(kms_url.clone(), true)?;
@@ -2394,10 +2394,10 @@ impl HostShared {
             })
             .await
             .context("Failed to get app key")?;
-        // A KMS predating root epochs ignores the selector and reports 0: epoch 1.
-        let served = response.root_epoch.max(1);
-        if root_epoch != 0 && served != root_epoch {
-            bail!("KMS returned keys of epoch {served} instead of {root_epoch}");
+        // A KMS predating root epochs ignores the selector and serves epoch 0.
+        let served = response.root_epoch;
+        if root_epoch.is_some_and(|epoch| epoch != served) {
+            bail!("KMS returned keys of epoch {served} instead of {root_epoch:?}");
         }
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
@@ -2434,8 +2434,8 @@ impl HostShared {
             return Ok(Vec::new());
         };
         let mut history = Vec::new();
-        for epoch in 1..*root_epoch {
-            history.push(self.request_kms_keys(url.clone(), epoch).await?.0);
+        for epoch in 0..*root_epoch {
+            history.push(self.request_kms_keys(url.clone(), Some(epoch)).await?.0);
         }
         Ok(history)
     }
@@ -2452,7 +2452,7 @@ struct Stage1<'a> {
     vmm: HostApi,
     shared: HostShared,
     keys: AppKeys,
-    /// Keys of root epochs 1 up to, but not including, `keys.root_epoch()`.
+    /// Keys of the root epochs before `keys.root_epoch()`, indexed by epoch.
     key_history: Vec<AppKeys>,
 }
 
@@ -2512,7 +2512,7 @@ impl<'a> Stage0<'a> {
         let mut errors = vec![];
         for kms_url in &self.shared.sys_config.kms_urls {
             let kms_url = kms_rpc_url(kms_url);
-            match self.shared.request_kms_keys(kms_url.clone(), 0).await {
+            match self.shared.request_kms_keys(kms_url.clone(), None).await {
                 Ok((keys, os_image_hash)) => {
                     // Measured here, outside the per-URL request, so that a
                     // failover can never extend os-image-hash twice.
@@ -2979,7 +2979,7 @@ impl<'a> Stage0<'a> {
         {
             bail!("Failed to setup luks volume");
         }
-        if let Some(epoch) = root_epoch.filter(|epoch| *epoch > 1) {
+        if let Some(epoch) = root_epoch.filter(|epoch| *epoch > 0) {
             write_luks_root_epoch(root_hd, epoch, false)?;
         }
         self.open_encrypted_volume(disk_crypt_key, name, discard)?;
@@ -2990,7 +2990,7 @@ impl<'a> Stage0<'a> {
     ///
     /// Only the keyslot passphrase changes; the volume key stays. The epoch
     /// is recorded in the header so the right old key is used after the next
-    /// rotation. An unrotated epoch-1 disk is left untouched, so it stays
+    /// rotation. An unrotated epoch-0 disk is left untouched, so it stays
     /// readable by older OS images.
     fn migrate_disk_key(
         &self,
@@ -3001,13 +3001,13 @@ impl<'a> Stage0<'a> {
         let device = &self.args.device;
         let stored = read_luks_root_epoch(device)?;
         if !luks_unlocks(device, current_key)? {
-            let epoch = stored.unwrap_or(1);
+            let epoch = stored.unwrap_or(0);
             if epoch >= current {
                 bail!("the data disk does not unlock with the key of epoch {current}");
             }
             info!("re-keying the data disk from key epoch {epoch} to {current}");
             let old = key_history
-                .get(epoch as usize - 1)
+                .get(epoch as usize)
                 .with_context(|| format!("no keys for root epoch {epoch}"))?;
             let old_key = hex::encode(&old.disk_crypt_key);
             luks_change_key(device, &old_key, current_key, Path::new(REKEY_DIR))?;
@@ -3015,7 +3015,7 @@ impl<'a> Stage0<'a> {
                 bail!("the data disk does not unlock after re-keying");
             }
         }
-        if stored.unwrap_or(1) != current {
+        if stored.unwrap_or(0) != current {
             write_luks_root_epoch(device, current, stored.is_some())?;
         }
         Ok(())
@@ -3332,7 +3332,7 @@ impl Stage1<'_> {
         };
         let current = self.keys.root_epoch();
         for (index, old) in self.key_history.iter().enumerate().rev() {
-            let epoch = index as u32 + 1;
+            let epoch = index as u32;
             let Ok(plaintext) = dh_decrypt(env_crypt_key(&old.env_crypt_key)?, ciphertext) else {
                 continue;
             };
@@ -3639,7 +3639,7 @@ const LUKS_INITIALIZING_LABEL: &str = "dstack-initializing";
 struct LuksHeaderState {
     /// The header carries [`LUKS_INITIALIZING_LABEL`].
     initializing: bool,
-    /// Root epoch recorded in the dstack token; `None` means epoch 1.
+    /// Root epoch recorded in the dstack token; `None` means epoch 0.
     root_epoch: Option<u32>,
 }
 
@@ -3733,11 +3733,7 @@ fn validate_single_luks2_header(
             if token.kind != ROOT_EPOCH_TOKEN_TYPE || token.keyslots != ["0"] {
                 bail!("Invalid LUKS token");
             }
-            let epoch = token.root_epoch.context("LUKS token has no root epoch")?;
-            if epoch == 0 {
-                bail!("Invalid LUKS token root epoch");
-            }
-            Some(epoch)
+            Some(token.root_epoch.context("LUKS token has no root epoch")?)
         }
         _ => bail!("Invalid LUKS tokens"),
     };

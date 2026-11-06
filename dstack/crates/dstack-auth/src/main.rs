@@ -66,7 +66,7 @@ struct BootResponse {
     is_allowed: bool,
     gateway_app_id: String,
     reason: String,
-    /// latest registered KMS root epoch (from 1); absent when none is.
+    /// latest registered KMS root epoch; absent when none is.
     #[serde(skip_serializing_if = "Option::is_none")]
     root_epoch: Option<usize>,
 }
@@ -78,7 +78,7 @@ struct Allowlist {
     gateway_app_id: String,
     kms: KmsRules,
     apps: HashMap<String, AppRules>,
-    /// root public keys of KMS root epochs 1, 2, ... in order; append only.
+    /// root public keys of each KMS root epoch, indexed by epoch; append only.
     root_epochs: Vec<RootEpoch>,
 }
 
@@ -91,7 +91,7 @@ struct RootEpoch {
 
 impl Allowlist {
     fn latest_root_epoch(&self) -> Option<usize> {
-        Some(self.root_epochs.len()).filter(|epoch| *epoch > 0)
+        self.root_epochs.len().checked_sub(1)
     }
 }
 
@@ -321,7 +321,7 @@ mod tests {
             ..Default::default()
         };
         let response = serde_json::to_value(check_kms(&info, &al)).unwrap();
-        assert_eq!(response["rootEpoch"], 2);
+        assert_eq!(response["rootEpoch"], 1);
         assert_eq!(info_json(&al)["rootEpochs"][1]["k256Pubkey"], "0xb2");
 
         let response = serde_json::to_value(check_kms(&info, &allowlist())).unwrap();

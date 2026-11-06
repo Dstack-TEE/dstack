@@ -53,8 +53,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         bytes attestation;
     }
 
-    // Root public keys of KMS root epochs 1, 2, ... in order. Append-only: a
-    // registered epoch is never changed, so the last entry is current.
+    // Root public keys of each KMS root epoch, indexed by epoch; epoch 0 is the
+    // original roots. Append-only: a registered epoch is never changed, so the
+    // last entry is current.
     RootEpoch[] private _rootEpochs;
 
     // Events
@@ -130,8 +131,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Register the root public keys of the next KMS root epoch, with the
-    // attestation proving where they were generated; epochs count from 1, the
-    // original roots
+    // attestation proving where they were generated
     function registerRootEpoch(
         bytes calldata caPubkey,
         bytes calldata k256Pubkey,
@@ -143,14 +143,14 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     {
         require(caPubkey.length > 0 && k256Pubkey.length > 0, "Empty epoch public key");
         require(attestation.length > 0, "Empty epoch attestation");
-        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, attestation));
         epoch = _rootEpochs.length;
+        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, attestation));
         emit RootEpochRegistered(epoch, caPubkey, k256Pubkey);
         _emitPolicy("root-epoch", keccak256(abi.encode(caPubkey, k256Pubkey)), true);
     }
 
-    // The latest registered root epoch; 0 when none is registered
-    function latestRootEpoch() external view returns (uint256) {
+    // Number of registered root epochs; the latest is this minus one
+    function rootEpochCount() external view returns (uint256) {
         return _rootEpochs.length;
     }
 
@@ -159,8 +159,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         view
         returns (bytes memory caPubkey, bytes memory k256Pubkey, bytes memory attestation)
     {
-        require(epoch > 0 && epoch <= _rootEpochs.length, "Unknown root epoch");
-        RootEpoch storage keys = _rootEpochs[epoch - 1];
+        require(epoch < _rootEpochs.length, "Unknown root epoch");
+        RootEpoch storage keys = _rootEpochs[epoch];
         return (keys.caPubkey, keys.k256Pubkey, keys.attestation);
     }
 

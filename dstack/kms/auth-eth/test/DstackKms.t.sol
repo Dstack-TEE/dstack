@@ -68,28 +68,26 @@ contract DstackKmsTest is Test {
     }
 
     function test_RegisterRootEpochAppends() public {
-        assertEq(kms.latestRootEpoch(), 0);
+        assertEq(kms.rootEpochCount(), 0);
 
         vm.startPrank(owner);
         vm.expectEmit(true, true, true, true);
-        emit RootEpochRegistered(1, hex"a0", hex"b0");
-        assertEq(kms.registerRootEpoch(hex"a0", hex"b0", hex"c0"), 1);
-        assertEq(kms.registerRootEpoch(hex"a1", hex"b1", hex"c1"), 2);
+        emit RootEpochRegistered(0, hex"a0", hex"b0");
+        assertEq(kms.registerRootEpoch(hex"a0", hex"b0", hex"c0"), 0);
+        assertEq(kms.registerRootEpoch(hex"a1", hex"b1", hex"c1"), 1);
         vm.stopPrank();
 
-        assertEq(kms.latestRootEpoch(), 2);
-        (bytes memory ca, bytes memory k256, bytes memory attestation) = kms.rootEpoch(1);
+        assertEq(kms.rootEpochCount(), 2);
+        (bytes memory ca, bytes memory k256, bytes memory attestation) = kms.rootEpoch(0);
         assertEq(ca, hex"a0");
         assertEq(k256, hex"b0");
         assertEq(attestation, hex"c0");
-        (ca, k256, attestation) = kms.rootEpoch(2);
+        (ca, k256, attestation) = kms.rootEpoch(1);
         assertEq(ca, hex"a1");
         assertEq(k256, hex"b1");
         assertEq(attestation, hex"c1");
         vm.expectRevert("Unknown root epoch");
-        kms.rootEpoch(0);
-        vm.expectRevert("Unknown root epoch");
-        kms.rootEpoch(3);
+        kms.rootEpoch(2);
     }
 
     function test_RegisterRootEpochOnlyOwner() public {

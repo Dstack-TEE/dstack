@@ -176,7 +176,7 @@
           },
           "rootEpoch": {
             "type": "integer",
-            "description": "Latest registered KMS root epoch, counting from 1; absent when none is registered"
+            "description": "Latest registered KMS root epoch (the original roots are 0); absent when none is registered"
           }
         }
       },
@@ -223,7 +223,7 @@
           },
           "rootEpochs": {
             "type": "array",
-            "description": "Registered KMS root epochs 1, 2, ... in order",
+            "description": "Registered KMS root epochs, indexed by epoch",
             "items": {
               "type": "object",
               "required": ["caPubkey", "k256Pubkey"],

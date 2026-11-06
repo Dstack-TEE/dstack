@@ -2428,19 +2428,19 @@ pub struct AppKeys {
     pub gateway_app_id: String,
     pub ca_cert: String,
     pub key_provider: KeyProvider,
-    /// App root keys of the KMS root epochs before the current one, from
-    /// epoch 1, for key requests that select one explicitly.
+    /// App root keys of the KMS root epochs before the current one, indexed by
+    /// epoch, for key requests that select one explicitly.
     #[serde(default)]
     pub historical_roots: Vec<HistoricalAppRoot>,
 }
 
 impl AppKeys {
-    /// KMS root epoch the keys were derived from; 1 for other key providers,
+    /// KMS root epoch the keys were derived from; 0 for other key providers,
     /// which have a single root.
     pub fn root_epoch(&self) -> u32 {
         match self.key_provider {
             KeyProvider::Kms { root_epoch, .. } => root_epoch,
-            _ => first_root_epoch(),
+            _ => 0,
         }
     }
 }
@@ -2469,14 +2469,10 @@ pub enum KeyProvider {
         pubkey: Vec<u8>,
         tmp_ca_key: String,
         tmp_ca_cert: String,
-        /// KMS root key epoch the keys were derived from, counting from 1.
-        #[serde(default = "first_root_epoch")]
+        /// KMS root key epoch the keys were derived from.
+        #[serde(default)]
         root_epoch: u32,
     },
-}
-
-fn first_root_epoch() -> u32 {
-    1
 }
 
 impl KeyProvider {
@@ -2539,7 +2535,7 @@ mod key_provider_tests {
             pubkey: vec![0xab; 32],
             tmp_ca_key: String::new(),
             tmp_ca_cert: String::new(),
-            root_epoch: 1,
+            root_epoch: 0,
         };
         assert_eq!(kms.id(), &[0xab; 32]);
     }

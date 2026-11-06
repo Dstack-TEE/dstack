@@ -246,7 +246,7 @@ describe('API Compatibility Tests', () => {
           case 'isAppAllowed': return [true, ''];
           case 'gatewayAppId': return '0xgateway';
           case 'appImplementation': return '0x9876543210987654321098765432109876543210';
-          case 'latestRootEpoch': return 2n;
+          case 'rootEpochCount': return 2n;
           case 'rootEpoch': return [`0xa${params.args[0]}`, `0xb${params.args[0]}`, '0xc0'];
         }
       });
@@ -256,12 +256,12 @@ describe('API Compatibility Tests', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(validBootInfo),
       }));
-      expect((await boot.json()).rootEpoch).toBe(2);
+      expect((await boot.json()).rootEpoch).toBe(1);
 
       const info = await appFetch(new Request('http://localhost:3001/'));
       expect((await info.json()).rootEpochs).toEqual([
+        { caPubkey: '0xa0', k256Pubkey: '0xb0' },
         { caPubkey: '0xa1', k256Pubkey: '0xb1' },
-        { caPubkey: '0xa2', k256Pubkey: '0xb2' },
       ]);
     });
 
@@ -270,7 +270,7 @@ describe('API Compatibility Tests', () => {
         switch (params.functionName) {
           case 'isAppAllowed': return [true, ''];
           case 'gatewayAppId': return '0xgateway';
-          case 'latestRootEpoch':
+          case 'rootEpochCount':
             throw Object.assign(new Error('call failed'), {
               cause: { name: 'ContractFunctionZeroDataError' },
             });
@@ -507,7 +507,7 @@ describe('Authorization freshness and domain binding', () => {
         return decisions === 1 ? [true, 'initial allow'] : [false, 'policy changed'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
-      if (params.functionName === 'latestRootEpoch') return 0n;
+      if (params.functionName === 'rootEpochCount') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -527,7 +527,7 @@ describe('Authorization freshness and domain binding', () => {
         return [true, 'allowed'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
-      if (params.functionName === 'latestRootEpoch') return 0n;
+      if (params.functionName === 'rootEpochCount') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -552,7 +552,7 @@ describe('Authorization freshness and domain binding', () => {
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
-      if (params.functionName === 'latestRootEpoch') return 0n;
+      if (params.functionName === 'rootEpochCount') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
     const recovered = await postApp();
@@ -583,7 +583,7 @@ describe('Ethereum finalized snapshot authorization', () => {
       expect(params.blockNumber).toBe(98n);
       if (params.functionName === 'isAppAllowed') return [true, 'finalized allow'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
-      if (params.functionName === 'latestRootEpoch') return 0n;
+      if (params.functionName === 'rootEpochCount') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -603,7 +603,7 @@ describe('Ethereum finalized snapshot authorization', () => {
         return decisions === 1 ? [true, 'old canonical allow'] : [false, 'new canonical deny'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
-      if (params.functionName === 'latestRootEpoch') return 0n;
+      if (params.functionName === 'rootEpochCount') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -632,7 +632,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
-      if (params.functionName === 'latestRootEpoch') return 0n;
+      if (params.functionName === 'rootEpochCount') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
     const recovered = await authorize();
@@ -675,7 +675,7 @@ describe('dstack-kms 0.6 bootAuth payload', () => {
         return [true, ''];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
-      if (params.functionName === 'latestRootEpoch') return 0n;
+      if (params.functionName === 'rootEpochCount') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
   });

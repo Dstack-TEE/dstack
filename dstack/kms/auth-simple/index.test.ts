@@ -460,7 +460,7 @@ describe('auth-simple', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(baseBootInfo)
       }));
-      expect((await boot.json()).rootEpoch).toBe(2);
+      expect((await boot.json()).rootEpoch).toBe(1);
 
       const info = await app.fetch(new Request('http://localhost/', { method: 'GET' }));
       expect((await info.json()).rootEpochs).toEqual(rootEpochs);

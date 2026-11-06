@@ -11,7 +11,7 @@ const DSTACK_KMS_ABI = [
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
   "function appImplementation() view returns (address)",
-  "function latestRootEpoch() view returns (uint256)",
+  "function rootEpochCount() view returns (uint256)",
   "function rootEpoch(uint256 epoch) view returns (bytes caPubkey, bytes k256Pubkey, bytes attestation)"
 ];
 
@@ -67,18 +67,18 @@ export class EthereumBackend {
     }
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
-    const latestEpoch = await this.getLatestRootEpoch(blockTag);
+    const epochCount = await this.getRootEpochCount(blockTag);
     return {
       isAllowed,
       reason,
       gatewayAppId,
-      ...(latestEpoch > 0 && { rootEpoch: latestEpoch }),
+      ...(epochCount > 0 && { rootEpoch: epochCount - 1 }),
     }
   }
 
-  private async getLatestRootEpoch(blockTag?: number): Promise<number> {
+  private async getRootEpochCount(blockTag?: number): Promise<number> {
     try {
-      return Number(await this.kmsContract.latestRootEpoch({ blockTag }));
+      return Number(await this.kmsContract.rootEpochCount({ blockTag }));
     } catch (error) {
       if (isMissingFunction(error)) return 0;
       throw error;
@@ -87,10 +87,10 @@ export class EthereumBackend {
 
   async getRootEpochs(): Promise<RootEpoch[]> {
     const blockTag = await this.provider.getBlockNumber();
-    const latest = await this.getLatestRootEpoch(blockTag);
+    const count = await this.getRootEpochCount(blockTag);
     return Promise.all(
-      Array.from({ length: latest }, async (_, index) => {
-        const [caPubkey, k256Pubkey] = await this.kmsContract.rootEpoch(index + 1, { blockTag });
+      Array.from({ length: count }, async (_, epoch) => {
+        const [caPubkey, k256Pubkey] = await this.kmsContract.rootEpoch(epoch, { blockTag });
         return { caPubkey, k256Pubkey };
       })
     );
