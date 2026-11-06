@@ -541,17 +541,21 @@ for the full procedure; the KMS steps are:
 4. Onboard the other KMS nodes from the rotated one; they import 0..N and keep
    serving N-1.
 5. Activate epoch N (`ActivateRootEpoch`, or `currentRootEpoch` for
-   auth-simple). Every KMS restarts onto N; a KMS that does not hold N waits
+   auth-simple). Each KMS restarts onto N on its next uncached authorization
+   check; a KMS that does not hold N waits
    until it is onboarded again.
    If the nodes holding N are lost before N is activated, drop it with
    `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
    that imported the dropped N must be onboarded again.
 
-Each boot check the KMS sends carries the epoch it serves and the chain hash
-committing to the root public keys of epochs 0..epoch; the auth backend denies
-it unless that is the current epoch with the registered keys. On a denial the
-KMS reads the current epoch from the backend's info endpoint and restarts if it
-moved.
+Each `checkAuthorization` result carries the current epoch and its chain hash,
+including when authorization is denied. The KMS compares these directly with
+its serving roots and requests a restart on a mismatch; it does not read the
+cached info endpoint to decide. No registered epoch returns a rejection with
+`rejectReason: "Root epoch not registered"` and a zero hash, which does not
+trigger a restart. Register epoch 0 before normal key release. Bootstrap keeps
+using scoped KMS authorization so it can generate the first roots before
+registration. See the [authorization protocol](../dstack/kms/README.md#authorization-protocol).
 
 ---
 

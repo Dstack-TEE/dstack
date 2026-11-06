@@ -86,6 +86,33 @@ pub(crate) struct BootResponse {
     pub reason: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthorizationResult {
+    pub is_allowed: bool,
+    pub reject_reason: String,
+    pub gateway_app_id: String,
+    pub current_root_epoch: u32,
+    pub current_root_epoch_hash: String,
+}
+
+impl AuthorizationResult {
+    pub fn current_root(&self) -> Result<Option<CurrentRootEpoch>> {
+        let chain_hash: [u8; 32] =
+            hex::decode(self.current_root_epoch_hash.trim_start_matches("0x"))
+                .ok()
+                .and_then(|hash| hash.try_into().ok())
+                .context("invalid authorization root epoch chain hash")?;
+        if chain_hash == [0; 32] {
+            return Ok(None);
+        }
+        Ok(Some(CurrentRootEpoch {
+            epoch: self.current_root_epoch,
+            chain_hash,
+        }))
+    }
+}
+
 /// The root epoch fields: the KMS sends the epoch it serves in boot checks,
 /// and auth backends report the current one in info responses.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -227,8 +254,25 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 }
 
 impl AuthApi {
-    /// `root_epoch` is the epoch this KMS serves, which the backend checks is
-    /// current; unset while onboarding, before the KMS serves any.
+    pub async fn check_authorization(&self, app_info: &BootInfo) -> Result<AuthorizationResult> {
+        ensure_identity_widths(app_info)?;
+        match self {
+            AuthApi::Dev { dev } => Ok(AuthorizationResult {
+                is_allowed: true,
+                reject_reason: String::new(),
+                gateway_app_id: dev.gateway_app_id.clone(),
+                current_root_epoch: 0,
+                current_root_epoch_hash: hex::encode([0; 32]),
+            }),
+            AuthApi::Webhook { webhook } => {
+                let url = url_join(&webhook.url, "checkAuthorization");
+                http_post(&url, app_info, webhook.timeout).await
+            }
+        }
+    }
+
+    /// Legacy scoped checks remain available during bootstrap and onboarding,
+    /// before the first root epoch can be registered.
     pub async fn is_app_allowed(
         &self,
         boot_info: &BootInfo,
@@ -391,7 +435,7 @@ pub(crate) mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    fn boot_info(identity: u8) -> BootInfo {
+    pub(crate) fn boot_info(identity: u8) -> BootInfo {
         BootInfo {
             tee_variant: TeeVariant::DstackTdx,
             mr_aggregated: vec![identity; 32],
@@ -607,6 +651,43 @@ pub(crate) mod tests {
         assert_ne!(requests[0].1["composeHash"], requests[1].1["composeHash"]);
         assert_ne!(requests[0].1["instanceId"], requests[1].1["instanceId"]);
         assert_ne!(requests[0].1["mrAggregated"], requests[1].1["mrAggregated"]);
+    }
+
+    #[rocket::async_test]
+    async fn authorization_returns_the_epoch_with_each_decision() {
+        let response = |allowed: bool, epoch: u32| {
+            format!(
+                r#"{{"isAllowed":{allowed},"rejectReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentRootEpochHash":"0x{}"}}"#,
+                "11".repeat(32)
+            )
+        };
+        let (url, server) = serve(vec![response(true, 0), response(false, 1)]);
+        let auth = webhook(url);
+        let info = boot_info(50);
+        let first = auth.check_authorization(&info).await.unwrap();
+        let second = auth.check_authorization(&info).await.unwrap();
+        assert!(first.is_allowed);
+        assert!(!second.is_allowed);
+        assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
+        assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|(path, _)| path == "/checkAuthorization"));
+        assert_eq!(requests[0].1, serde_json::to_value(info).unwrap());
+    }
+
+    #[rocket::async_test]
+    async fn authorization_without_epoch_fields_is_not_accepted_as_legacy() {
+        let (url, server) = serve(vec![
+            r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
+        ]);
+        assert!(webhook(url)
+            .check_authorization(&boot_info(50))
+            .await
+            .is_err());
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[rocket::async_test]

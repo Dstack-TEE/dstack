@@ -14,6 +14,26 @@ import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeabl
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
+    struct AppInfo {
+        address appId;
+        bytes32 composeHash;
+        address instanceId;
+        bytes32 deviceId;
+        bytes32 mrAggregated;
+        bytes32 mrSystem;
+        bytes32 osImageHash;
+        string tcbStatus;
+        string[] advisoryIds;
+    }
+
+    struct AuthorizationResult {
+        bool isAllowed;
+        string rejectReason;
+        string gatewayAppId;
+        uint256 currentRootEpoch;
+        bytes32 currentRootEpochHash;
+    }
+
     // Struct for KMS information
     struct KmsInfo {
         bytes k256Pubkey;
@@ -390,8 +410,40 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         _emitPolicy("os-image", osImageHash, false);
     }
 
+    /// Authorize an attested identity and return the root epoch from the same state.
+    /// The KMS app ID is this contract's proxy address; all other IDs use app policy.
+    function checkAuthorization(AppInfo calldata appInfo) external view returns (AuthorizationResult memory result) {
+        result.gatewayAppId = gatewayAppId;
+        if (_rootEpochs.length == 0) {
+            result.rejectReason = "Root epoch not registered";
+            return result;
+        }
+        result.currentRootEpoch = _currentRootEpoch;
+        result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        AppBootInfo memory bootInfo = AppBootInfo({
+            appId: appInfo.appId,
+            composeHash: appInfo.composeHash,
+            instanceId: appInfo.instanceId,
+            deviceId: appInfo.deviceId,
+            mrAggregated: appInfo.mrAggregated,
+            mrSystem: appInfo.mrSystem,
+            osImageHash: appInfo.osImageHash,
+            tcbStatus: appInfo.tcbStatus,
+            advisoryIds: appInfo.advisoryIds
+        });
+        if (appInfo.appId == address(this)) {
+            (result.isAllowed, result.rejectReason) = _isKmsAllowed(bootInfo);
+        } else {
+            (result.isAllowed, result.rejectReason) = _isAppAllowed(bootInfo);
+        }
+    }
+
     // Function to check if KMS is allowed to boot
     function isKmsAllowed(AppBootInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+        return _isKmsAllowed(bootInfo);
+    }
+
+    function _isKmsAllowed(AppBootInfo memory bootInfo) private view returns (bool, string memory) {
         // Check if the TCB status is up to date
         if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
@@ -422,6 +474,10 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         override
         returns (bool isAllowed, string memory reason)
     {
+        return _isAppAllowed(bootInfo);
+    }
+
+    function _isAppAllowed(AppBootInfo memory bootInfo) private view returns (bool, string memory) {
         // Check if app is registered
         if (!registeredApps[bootInfo.appId]) {
             return (false, "App not registered");

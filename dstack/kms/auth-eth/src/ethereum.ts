@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse, RootEpochInfo } from './types';
+import { BootInfo, BootResponse, RootEpochInfo, AuthorizationResult } from './types';
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
+  "function checkAuthorization((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo) view returns ((bool isAllowed,string rejectReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash))",
   "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
@@ -61,9 +62,9 @@ export class EthereumBackend {
     return '0x' + hex;
   }
 
-  async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+  private contractAppInfo(bootInfo: BootInfo) {
     // Create boot info struct for contract call
-    const bootInfoStruct = {
+    return {
       appId: this.decodeHex(bootInfo.appId, 20),
       instanceId: this.decodeHex(bootInfo.instanceId, 20),
       composeHash: this.decodeHex(bootInfo.composeHash, 32),
@@ -74,6 +75,21 @@ export class EthereumBackend {
       tcbStatus: bootInfo.tcbStatus,
       advisoryIds: bootInfo.advisoryIds
     };
+  }
+
+  async checkAuthorization(appInfo: BootInfo): Promise<AuthorizationResult> {
+    const result = await this.kmsContract.checkAuthorization(this.contractAppInfo(appInfo));
+    return {
+      isAllowed: result.isAllowed,
+      rejectReason: result.rejectReason,
+      gatewayAppId: result.gatewayAppId,
+      currentRootEpoch: ethers.toNumber(result.currentRootEpoch),
+      currentRootEpochHash: result.currentRootEpochHash,
+    };
+  }
+
+  async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+    const bootInfoStruct = this.contractAppInfo(bootInfo);
     // Read the whole decision from one block.
     const blockTag = await this.provider.getBlockNumber();
     let response;
