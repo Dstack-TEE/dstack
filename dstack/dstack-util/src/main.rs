@@ -701,6 +701,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         .get_app_key(dstack_kms_rpc::GetAppKeyRequest {
             api_version: 1,
             vm_config: "".to_string(),
+            ..Default::default()
         })
         .await
         .context("Failed to get app key")?;
