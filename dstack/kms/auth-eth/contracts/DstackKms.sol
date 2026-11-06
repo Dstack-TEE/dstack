@@ -44,6 +44,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // DstackApp implementation contract address for factory deployment
     address public appImplementation;
 
+    struct KeyEpoch {
+        bytes caPubkey;
+        bytes k256Pubkey;
+    }
+
+    // Root public keys of each KMS key epoch, indexed by epoch. Append-only:
+    // a registered epoch is never changed, so the last entry is current.
+    KeyEpoch[] private _keyEpochs;
+
     // Events
     // appId is unindexed for backward compatibility with deployed log indexers.
     // slither-disable-next-line unindexed-event-address
@@ -58,6 +67,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event GatewayAppIdSet(string gatewayAppId);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
+    event KeyEpochRegistered(uint256 indexed epoch, bytes caPubkey, bytes k256Pubkey);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
     /// @notice Additive audit event for reconstructing authorization policy.
     /// @dev `value` is the affected bytes32 value, address, or hash of dynamic public data.
@@ -113,6 +123,31 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         kmsInfo = info;
         emit KmsInfoSet(info.k256Pubkey);
         _emitPolicy("kms-info", keccak256(info.k256Pubkey), true);
+    }
+
+    // Register the root public keys of the next KMS key epoch
+    function registerKeyEpoch(
+        bytes calldata caPubkey,
+        bytes calldata k256Pubkey
+    )
+        external
+        onlyOwner
+        returns (uint256 epoch)
+    {
+        require(caPubkey.length > 0 && k256Pubkey.length > 0, "Empty epoch public key");
+        epoch = _keyEpochs.length;
+        _keyEpochs.push(KeyEpoch(caPubkey, k256Pubkey));
+        emit KeyEpochRegistered(epoch, caPubkey, k256Pubkey);
+        _emitPolicy("key-epoch", keccak256(abi.encode(caPubkey, k256Pubkey)), true);
+    }
+
+    function keyEpochCount() external view returns (uint256) {
+        return _keyEpochs.length;
+    }
+
+    function keyEpoch(uint256 epoch) external view returns (bytes memory caPubkey, bytes memory k256Pubkey) {
+        KeyEpoch storage keys = _keyEpochs[epoch];
+        return (keys.caPubkey, keys.k256Pubkey);
     }
 
     // Function to set KMS quote
@@ -306,7 +341,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[50] private __gap;
+    uint256[49] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

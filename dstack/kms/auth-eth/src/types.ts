@@ -18,6 +18,13 @@ export interface BootResponse {
   isAllowed: boolean;
   gatewayAppId: string;
   reason: string;
+  // Latest registered KMS key epoch; absent when none is registered.
+  keyEpoch?: number;
+}
+
+export interface KeyEpoch {
+  caPubkey: string;
+  k256Pubkey: string;
 }
 
 // Removed KMS_CONTRACT_ABI and APP_CONTRACT_ABI since we're using typechain types now

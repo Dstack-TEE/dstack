@@ -19,6 +19,7 @@ contract DstackKmsTest is Test {
     address public user;
 
     event KmsInfoSet(bytes k256Pubkey);
+    event KeyEpochRegistered(uint256 indexed epoch, bytes caPubkey, bytes k256Pubkey);
 
     event AppRegistered(address appId);
 
@@ -64,6 +65,40 @@ contract DstackKmsTest is Test {
         assertEq(storedCa, caPubkey);
         assertEq(storedQuote, quote);
         assertEq(storedEventlog, eventlog);
+    }
+
+    function test_RegisterKeyEpochAppends() public {
+        assertEq(kms.keyEpochCount(), 0);
+
+        vm.startPrank(owner);
+        vm.expectEmit(true, true, true, true);
+        emit KeyEpochRegistered(0, hex"a0", hex"b0");
+        assertEq(kms.registerKeyEpoch(hex"a0", hex"b0"), 0);
+        assertEq(kms.registerKeyEpoch(hex"a1", hex"b1"), 1);
+        vm.stopPrank();
+
+        assertEq(kms.keyEpochCount(), 2);
+        (bytes memory ca, bytes memory k256) = kms.keyEpoch(0);
+        assertEq(ca, hex"a0");
+        assertEq(k256, hex"b0");
+        (ca, k256) = kms.keyEpoch(1);
+        assertEq(ca, hex"a1");
+        assertEq(k256, hex"b1");
+    }
+
+    function test_RegisterKeyEpochOnlyOwner() public {
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.registerKeyEpoch(hex"a0", hex"b0");
+    }
+
+    function test_RegisterKeyEpochRejectsEmptyKeys() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Empty epoch public key");
+        kms.registerKeyEpoch("", hex"b0");
+        vm.expectRevert("Empty epoch public key");
+        kms.registerKeyEpoch(hex"a0", "");
+        vm.stopPrank();
     }
 
     function test_SetKmsInfoOnlyOwner() public {

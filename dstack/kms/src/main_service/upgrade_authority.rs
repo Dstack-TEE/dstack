@@ -84,6 +84,24 @@ pub(crate) struct BootResponse {
     pub is_allowed: bool,
     pub gateway_app_id: String,
     pub reason: String,
+    /// Latest KMS key epoch registered by governance, if any.
+    #[serde(default)]
+    pub key_epoch: Option<u32>,
+}
+
+/// Root public keys governance registered for one KMS key epoch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct KeyEpochPubkeys {
+    #[serde(deserialize_with = "deserialize_hex")]
+    pub ca_pubkey: Vec<u8>,
+    #[serde(deserialize_with = "deserialize_hex")]
+    pub k256_pubkey: Vec<u8>,
+}
+
+fn deserialize_hex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    hex::decode(value.trim_start_matches("0x")).map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,6 +114,8 @@ pub(crate) struct AuthApiInfoResponse {
     pub gateway_app_id: String,
     pub chain_id: u64,
     pub app_implementation: String,
+    #[serde(default)]
+    pub key_epochs: Vec<KeyEpochPubkeys>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +127,8 @@ pub(crate) struct GetInfoResponse {
     pub eth_rpc_url: Option<String>,
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
+    /// Registered key epochs, indexed by epoch. `None` means no registry.
+    pub key_epochs: Option<Vec<KeyEpochPubkeys>>,
 }
 
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -174,6 +196,7 @@ impl AuthApi {
                 is_allowed: true,
                 reason: "".to_string(),
                 gateway_app_id: dev.gateway_app_id.clone(),
+                key_epoch: None,
             }),
             AuthApi::Webhook { webhook } => {
                 let path = if is_kms {
@@ -196,6 +219,7 @@ impl AuthApi {
                 gateway_app_id: Some(dev.gateway_app_id.clone()),
                 chain_id: None,
                 app_implementation: None,
+                key_epochs: None,
             }),
             AuthApi::Webhook { webhook } => {
                 let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
@@ -211,6 +235,7 @@ impl AuthApi {
                     chain_id: Some(info.chain_id),
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
+                    key_epochs: Some(info.key_epochs),
                 })
             }
         }
@@ -295,7 +320,7 @@ pub(crate) async fn ensure_kms_allowed(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::Webhook;
     use ra_tls::attestation::TeeVariant;
@@ -320,7 +345,7 @@ mod tests {
         }
     }
 
-    fn serve<S: Into<String>>(
+    pub(crate) fn serve<S: Into<String>>(
         responses: Vec<S>,
     ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
         let responses: Vec<String> = responses.into_iter().map(Into::into).collect();
@@ -364,9 +389,12 @@ mod tests {
                     .nth(1)
                     .unwrap()
                     .to_string();
-                let body =
-                    serde_json::from_slice(&request[header_end..header_end + content_length])
-                        .unwrap();
+                let body = &request[header_end..header_end + content_length];
+                let body = if body.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(body).unwrap()
+                };
                 requests.push((path, body));
                 write!(
                     stream,
@@ -381,7 +409,7 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
-    fn webhook(url: String) -> AuthApi {
+    pub(crate) fn webhook(url: String) -> AuthApi {
         AuthApi::Webhook {
             webhook: Webhook {
                 url,
@@ -507,6 +535,36 @@ mod tests {
         assert_ne!(requests[0].1["composeHash"], requests[1].1["composeHash"]);
         assert_ne!(requests[0].1["instanceId"], requests[1].1["instanceId"]);
         assert_ne!(requests[0].1["mrAggregated"], requests[1].1["mrAggregated"]);
+    }
+
+    #[rocket::async_test]
+    async fn key_epochs_are_parsed_from_info_and_boot_responses() {
+        let (url, server) = serve(vec![
+            r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
+                "appImplementation":"0x00","keyEpochs":[{"caPubkey":"0xa0","k256Pubkey":"b0"}]}"#,
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":"","keyEpoch":3}"#,
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":""}"#,
+        ]);
+        let auth = webhook(url);
+
+        let info = auth.get_info().await.unwrap();
+        assert_eq!(
+            info.key_epochs,
+            Some(vec![KeyEpochPubkeys {
+                ca_pubkey: vec![0xa0],
+                k256_pubkey: vec![0xb0],
+            }])
+        );
+        let info = boot_info(50);
+        assert_eq!(
+            auth.is_app_allowed(&info, false).await.unwrap().key_epoch,
+            Some(3)
+        );
+        assert_eq!(
+            auth.is_app_allowed(&info, false).await.unwrap().key_epoch,
+            None
+        );
+        server.join().unwrap();
     }
 
     #[rocket::async_test]

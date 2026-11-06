@@ -50,6 +50,7 @@ export async function build(): Promise<FastifyInstance> {
       isAllowed: { type: 'boolean' },
       reason: { type: 'string' },
       gatewayAppId: { type: 'string' },
+      keyEpoch: { type: 'integer' },
     }
   });
 
@@ -84,6 +85,7 @@ export async function build(): Promise<FastifyInstance> {
         server.ethereum.getGatewayAppId(),
         server.ethereum.getChainId(),
         server.ethereum.getAppImplementation(),
+        server.ethereum.getKeyEpochs(),
       ]);
       return {
         status: 'ok',
@@ -93,6 +95,7 @@ export async function build(): Promise<FastifyInstance> {
         chainId: batch[1],
         appAuthImplementation: batch[2], // NOTE: for backward compatibility
         appImplementation: batch[2],
+        keyEpochs: batch[3],
       };
     } catch {
       _request.log.error('authorization backend health check failed');

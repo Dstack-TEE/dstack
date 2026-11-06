@@ -295,6 +295,7 @@ mod tests {
     use crate::main_service::amd_attest::{
         compute_expected_measurement, MeasurementInput, OvmfSectionParam,
     };
+    use crate::main_service::upgrade_authority::{BootResponse, KeyEpochPubkeys};
     use dstack_kms_rpc::KmsKeys;
     use sha2::Digest;
 
@@ -594,6 +595,88 @@ mod tests {
             .err()
             .unwrap();
         assert!(format!("{err:#}").contains("belong to epoch 2"), "{err:#}");
+    }
+
+    fn pubkeys_of(res: &KmsKeyResponse) -> Vec<KeyEpochPubkeys> {
+        res.keys
+            .iter()
+            .map(|k| KeyEpochPubkeys {
+                ca_pubkey: KeyPair::from_pem(&k.ca_key).unwrap().public_key_der(),
+                k256_pubkey: SigningKey::from_slice(&k.k256_key)
+                    .unwrap()
+                    .verifying_key()
+                    .to_sec1_bytes()
+                    .to_vec(),
+            })
+            .collect()
+    }
+
+    async fn joined_state(res: KmsKeyResponse, url: String) -> crate::main_service::KmsState {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let mut cfg = epoch_config(cert_dir.path(), res.keys.len() as u32 - 1);
+        Keys::from_key_response(&cfg, res, "kms.example.com", false)
+            .await
+            .unwrap()
+            .store(&cfg)
+            .unwrap();
+        cfg.auth_api = crate::main_service::upgrade_authority::tests::webhook(url);
+        crate::main_service::KmsState::new(cfg).unwrap()
+    }
+
+    fn info_with_epochs(epochs: &[KeyEpochPubkeys]) -> String {
+        let epochs: Vec<_> = epochs
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "caPubkey": hex::encode(&e.ca_pubkey),
+                    "k256Pubkey": hex::encode(&e.k256_pubkey),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "status": "ok", "kmsContractAddr": "0x00", "gatewayAppId": "", "chainId": 1,
+            "appImplementation": "0x00", "keyEpochs": epochs,
+        })
+        .to_string()
+    }
+
+    #[rocket::async_test]
+    async fn keyring_must_match_the_registered_epochs() {
+        use crate::main_service::upgrade_authority::tests::serve;
+
+        type Registered = fn(Vec<KeyEpochPubkeys>) -> Vec<KeyEpochPubkeys>;
+        let cases: [(Registered, bool); 4] = [
+            (|keys| keys, true),
+            (|keys| keys[..1].to_vec(), false),
+            (|keys| vec![keys[0].clone(), keys[0].clone()], false),
+            (|_| Vec::new(), false),
+        ];
+        for (registered, ok) in cases {
+            let res = handover(2);
+            let epochs = registered(pubkeys_of(&res));
+            let (url, server) = serve(vec![info_with_epochs(&epochs)]);
+            let state = joined_state(res, url).await;
+            assert_eq!(
+                state.ensure_keyring_registered().await.is_ok(),
+                ok,
+                "{epochs:?}"
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[rocket::async_test]
+    async fn a_newer_registered_epoch_stops_a_stale_kms() {
+        let state = joined_state(handover(2), "http://127.0.0.1:1".into()).await;
+        let response = |key_epoch| BootResponse {
+            is_allowed: true,
+            gateway_app_id: String::new(),
+            reason: String::new(),
+            key_epoch,
+        };
+        assert!(state.ensure_epoch_current(&response(Some(1))).is_ok());
+        assert!(state.ensure_epoch_current(&response(Some(2))).is_err());
+        assert!(state.ensure_epoch_current(&response(None)).is_err());
     }
 
     #[rocket::async_test]

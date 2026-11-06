@@ -88,6 +88,40 @@ describe('Server', () => {
     });
   });
 
+  describe('key epochs', () => {
+    it('should report the latest registered key epoch', async () => {
+      app.ethereum.checkBoot = jest.fn().mockResolvedValue({
+        isAllowed: true,
+        reason: '',
+        gatewayAppId: '',
+        keyEpoch: 2,
+      });
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/bootAuth/app',
+        payload: mockBootInfo
+      });
+
+      expect(JSON.parse(response.payload).keyEpoch).toBe(2);
+    });
+
+    it('should list registered key epochs in the info response', async () => {
+      const keyEpochs = [{ caPubkey: '0xa0', k256Pubkey: '0xb0' }];
+      Object.assign(app.ethereum, {
+        getGatewayAppId: jest.fn().mockResolvedValue('gw'),
+        getChainId: jest.fn().mockResolvedValue(1),
+        getAppImplementation: jest.fn().mockResolvedValue('0x00'),
+        getKeyEpochs: jest.fn().mockResolvedValue(keyEpochs),
+      });
+
+      const response = await app.inject({ method: 'GET', url: '/' });
+
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.payload).keyEpochs).toEqual(keyEpochs);
+    });
+  });
+
   describe('POST /bootAuth/kms', () => {
     it('should return 200 when backend check passes', async () => {
       // Mock successful response

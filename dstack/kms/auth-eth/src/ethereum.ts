@@ -3,15 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, KeyEpoch } from './types';
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
   "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
-  "function appImplementation() view returns (address)"
+  "function appImplementation() view returns (address)",
+  "function keyEpochCount() view returns (uint256)",
+  "function keyEpoch(uint256 epoch) view returns (bytes caPubkey, bytes k256Pubkey)"
 ];
+
+// Contracts deployed before key epochs existed lack the registry getters.
+function isMissingFunction(error: unknown): boolean {
+  return ethers.isError(error, 'CALL_EXCEPTION') || ethers.isError(error, 'BAD_DATA');
+}
 
 export class EthereumBackend {
   private provider: ethers.JsonRpcProvider;
@@ -60,11 +67,33 @@ export class EthereumBackend {
     }
     const [isAllowed, reason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
+    const epochCount = await this.getKeyEpochCount(blockTag);
     return {
       isAllowed,
       reason,
       gatewayAppId,
+      ...(epochCount > 0 && { keyEpoch: epochCount - 1 }),
     }
+  }
+
+  private async getKeyEpochCount(blockTag?: number): Promise<number> {
+    try {
+      return Number(await this.kmsContract.keyEpochCount({ blockTag }));
+    } catch (error) {
+      if (isMissingFunction(error)) return 0;
+      throw error;
+    }
+  }
+
+  async getKeyEpochs(): Promise<KeyEpoch[]> {
+    const blockTag = await this.provider.getBlockNumber();
+    const count = await this.getKeyEpochCount(blockTag);
+    return Promise.all(
+      Array.from({ length: count }, async (_, epoch) => {
+        const [caPubkey, k256Pubkey] = await this.kmsContract.keyEpoch(epoch, { blockTag });
+        return { caPubkey, k256Pubkey };
+      })
+    );
   }
 
   async getGatewayAppId(): Promise<string> {

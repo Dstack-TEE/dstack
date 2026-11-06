@@ -177,6 +177,10 @@ async fn main() -> Result<()> {
         None
     };
     let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
+    state
+        .ensure_keyring_registered()
+        .await
+        .context("KMS keyring does not match the registered key epochs")?;
     let quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let admin_quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let figment = figment

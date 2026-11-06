@@ -446,6 +446,38 @@ describe('auth-simple', () => {
     });
   });
 
+  describe('key epochs', () => {
+    const keyEpochs = [
+      { caPubkey: '0xa0', k256Pubkey: '0xb0' },
+      { caPubkey: '0xa1', k256Pubkey: '0xb1' }
+    ];
+
+    it('reports the latest key epoch in boot responses and lists all epochs', async () => {
+      writeTestConfig({ gatewayAppId: '0xgateway', keyEpochs });
+
+      const boot = await app.fetch(new Request('http://localhost/bootAuth/app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(baseBootInfo)
+      }));
+      expect((await boot.json()).keyEpoch).toBe(1);
+
+      const info = await app.fetch(new Request('http://localhost/', { method: 'GET' }));
+      expect((await info.json()).keyEpochs).toEqual(keyEpochs);
+    });
+
+    it('omits the key epoch when none is configured', async () => {
+      writeTestConfig({ gatewayAppId: '0xgateway' });
+
+      const boot = await app.fetch(new Request('http://localhost/bootAuth/app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(baseBootInfo)
+      }));
+      expect((await boot.json()).keyEpoch).toBeUndefined();
+    });
+  });
+
   describe('hex normalization', () => {
     it('handles uppercase hex', async () => {
       writeTestConfig({

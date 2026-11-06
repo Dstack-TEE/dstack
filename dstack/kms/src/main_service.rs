@@ -30,7 +30,8 @@ use ra_tls::{
 use scale::Decode;
 use tracing::warn;
 use upgrade_authority::{
-    build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
+    build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, BootResponse,
+    GetInfoResponse, KeyEpochPubkeys,
 };
 
 use crate::{
@@ -80,6 +81,13 @@ impl RootKeys {
         let key_bytes = fs::read(&paths.k256_key).context("failed to read ECDSA root key")?;
         let k256 = SigningKey::from_slice(&key_bytes).context("failed to load ECDSA root key")?;
         Ok(Self { ca, k256 })
+    }
+
+    fn pubkeys(&self) -> KeyEpochPubkeys {
+        KeyEpochPubkeys {
+            ca_pubkey: self.ca.key.public_key_der(),
+            k256_pubkey: self.k256.verifying_key().to_sec1_bytes().to_vec(),
+        }
     }
 }
 
@@ -207,6 +215,52 @@ impl KmsState {
     /// The current epoch's root keys.
     fn root(&self) -> &RootKeys {
         self.roots.last().expect("the keyring always holds epoch 0")
+    }
+
+    /// Refuse to serve a keyring governance has not registered. Deployments
+    /// that never registered epochs keep working while they stay at epoch 0.
+    pub async fn ensure_keyring_registered(&self) -> Result<()> {
+        let current = self.config.key_rotation.current_epoch;
+        let info = match self.config.auth_api.get_info().await {
+            Ok(info) => info,
+            Err(err) if current == 0 => {
+                warn!("skipping key epoch registration check: {err:#}");
+                return Ok(());
+            }
+            Err(err) => return Err(err).context("failed to read registered key epochs"),
+        };
+        let Some(registered) = info.key_epochs else {
+            return Ok(());
+        };
+        if registered.is_empty() && current == 0 {
+            return Ok(());
+        }
+        if registered.len() != current as usize + 1 {
+            bail!(
+                "this KMS serves key epoch {current}, but {} epochs are registered",
+                registered.len()
+            );
+        }
+        for (epoch, (root, registered)) in self.roots.iter().zip(&registered).enumerate() {
+            if root.pubkeys() != *registered {
+                bail!("root keys of epoch {epoch} do not match the registered public keys");
+            }
+        }
+        Ok(())
+    }
+
+    /// Stop serving once governance registers a newer epoch than this KMS has.
+    pub(crate) fn ensure_epoch_current(&self, response: &BootResponse) -> Result<()> {
+        let current = self.config.key_rotation.current_epoch;
+        match response.key_epoch {
+            Some(epoch) if epoch != current => {
+                bail!("the registered key epoch is {epoch}, but this KMS serves epoch {current}")
+            }
+            None if current > 0 && !self.config.auth_api.is_dev() => {
+                bail!("the auth API reports no key epoch, but this KMS serves epoch {current}")
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -344,7 +398,7 @@ impl RpcHandler {
                 if !response.is_allowed {
                     bail!("KMS is not allowed: {}", response.reason);
                 }
-                Ok(())
+                self.state.ensure_epoch_current(&response)
             })
             .await
             .map_err(|err| anyhow!("{err:#}"))?;
@@ -388,6 +442,7 @@ impl RpcHandler {
         if !response.is_allowed {
             bail!("Boot denied: {}", response.reason);
         }
+        self.state.ensure_epoch_current(&response)?;
         // SNP rootfs/app/config binding is handled by the SNP launch-measurement
         // helper above. The legacy OS-image verifier is TDX-oriented and still
         // rejects SNP quotes; keep SNP on the explicit fail-closed helper path.
