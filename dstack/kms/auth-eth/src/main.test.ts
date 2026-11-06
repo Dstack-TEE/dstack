@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { FastifyInstance } from 'fastify';
+import { ethers } from 'ethers';
 import { build } from './server';
 import { rootEpochDenial } from './ethereum';
 import { BootInfo } from './types';
@@ -177,6 +178,123 @@ describe('Server', () => {
       const result = JSON.parse(response.payload);
       expect(result.isAllowed).toBe(false);
       expect(result.reason).toBe('authorization backend unavailable');
+    });
+  });
+});
+
+describe('Ethereum root epoch registry', () => {
+  const { EthereumBackend } = jest.requireActual<typeof import('./ethereum')>('./ethereum');
+  const abi = new ethers.Interface([
+    'function rootEpochCount() view returns (uint256)',
+    'function currentRootEpoch() view returns (uint256, bytes32)',
+    'function gatewayAppId() view returns (string)',
+    'function appImplementation() view returns (address)',
+  ]);
+  const hash = '0x' + '11'.repeat(32);
+  const bootInfo = {
+    mrAggregated: '11'.repeat(32), osImageHash: '22'.repeat(32),
+    appId: '33'.repeat(20), composeHash: '44'.repeat(32),
+    instanceId: '55'.repeat(20), deviceId: '66'.repeat(32),
+  };
+  const getBlockNumber = jest.fn();
+  const call = jest.fn();
+  let app: FastifyInstance;
+  let count: bigint;
+  let epoch: bigint;
+
+  beforeAll(async () => {
+    app = await build();
+    app.ethereum = new EthereumBackend({
+      getBlockNumber, call, getNetwork: async () => ({ chainId: 1337n }),
+    } as unknown as ethers.JsonRpcProvider,
+      '0x' + '11'.repeat(20));
+  });
+  afterAll(async () => { await app.close(); });
+  beforeEach(() => {
+    jest.clearAllMocks();
+    count = 2n;
+    epoch = 1n;
+    getBlockNumber.mockResolvedValue(100);
+    call.mockImplementation(async (tx: ethers.TransactionRequest) => {
+      const fn = abi.getFunction(tx.data!.slice(0, 10));
+      switch (fn?.name) {
+        case 'rootEpochCount': return abi.encodeFunctionResult(fn, [count]);
+        case 'currentRootEpoch': return abi.encodeFunctionResult(fn, [epoch, hash]);
+        case 'gatewayAppId': return abi.encodeFunctionResult(fn, ['gateway-app']);
+        case 'appImplementation': return abi.encodeFunctionResult(fn, ['0x' + '11'.repeat(20)]);
+        default: return ethers.AbiCoder.defaultAbiCoder().encode(['bool', 'string'], [true, '']);
+      }
+    });
+  });
+  const boot = async (path: string, fields = {}) => {
+    const response = await app.inject({
+      method: 'POST', url: `/bootAuth/${path}`, payload: { ...bootInfo, ...fields },
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json();
+  };
+  const registryCalls = () => call.mock.calls.map(([tx]) => ({
+    name: abi.getFunction(tx.data.slice(0, 10))?.name, blockTag: tx.blockTag,
+  })).filter(({ name }) => name === 'rootEpochCount' || name === 'currentRootEpoch');
+
+  it('supports an upgraded empty registry without querying the current epoch', async () => {
+    count = 0n;
+    expect((await boot('app')).isAllowed).toBe(true);
+    expect((await boot('kms')).isAllowed).toBe(true);
+    expect((await boot('app', { rootEpoch: 0, rootEpochHash: hash })).isAllowed).toBe(true);
+    expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).reason).toMatch(/not registered/);
+    expect(await app.ethereum.getRootEpoch()).toEqual({});
+    expect(registryCalls().every(({ name }) => name === 'rootEpochCount')).toBe(true);
+  });
+
+  it('allows old KMS app requests only through epoch 0 while preserving onboarding', async () => {
+    count = 1n;
+    epoch = 0n;
+    expect((await boot('app')).isAllowed).toBe(true);
+    count = 2n;
+    epoch = 1n;
+    expect((await boot('app')).reason).toMatch(/reports none/);
+    expect((await boot('kms')).isAllowed).toBe(true);
+  });
+
+  it.each(['app', 'info'])('pins both registry reads to the same block for %s', async (endpoint) => {
+    if (endpoint === 'app') {
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).isAllowed).toBe(true);
+      expect(call.mock.calls.every(([tx]) => tx.blockTag === 100)).toBe(true);
+    } else {
+      const response = await app.inject({ method: 'GET', url: '/' });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
+    }
+    expect(registryCalls()).toEqual([
+      { name: 'rootEpochCount', blockTag: 100 },
+      { name: 'currentRootEpoch', blockTag: 100 },
+    ]);
+    expect(getBlockNumber).toHaveBeenCalledTimes(1);
+  });
+
+  describe.each(['rootEpochCount', 'currentRootEpoch'])('%s failures', (getter) => {
+    it.each(['missing getter', 'revert', 'RPC failure', 'malformed ABI data'])('fails closed on %s', async (failure) => {
+      const normalCall = call.getMockImplementation()!;
+      call.mockImplementation(async (tx: ethers.TransactionRequest) => {
+        if (abi.getFunction(tx.data!.slice(0, 10))?.name !== getter) return normalCall(tx);
+        if (failure === 'missing getter') return '0x';
+        if (failure === 'malformed ABI data') return '0x1234';
+        if (failure === 'revert') {
+          throw ethers.AbiCoder.getBuiltinCallException('call', {
+            to: '0x' + '11'.repeat(20), data: tx.data!,
+          }, '0x');
+        }
+        throw new Error('RPC unavailable');
+      });
+      for (const path of ['app', 'kms']) {
+        expect(await boot(path)).toEqual({
+          isAllowed: false, reason: 'authorization backend unavailable', gatewayAppId: '',
+        });
+        expect((await boot(path, { rootEpoch: 0, rootEpochHash: hash })).isAllowed).toBe(false);
+      }
+      const info = await app.inject({ method: 'GET', url: '/' });
+      expect(info.statusCode).toBe(500);
     });
   });
 });
