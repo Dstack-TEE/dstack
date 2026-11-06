@@ -20,11 +20,12 @@ use dstack_gateway_rpc::{
     ListZtDomainsResponse, NodeStatusEntry, PeerSyncStatus as ProtoPeerSyncStatus,
     PortAttrs as RpcPortAttrs, PortPolicy as RpcPortPolicy, RejectedInstanceInfo, RemoveCvmRequest,
     RemoveCvmResponse, RemoveNodeRequest, RemoveNodeResponse, RenewCertResponse,
-    RenewZtDomainCertRequest, RenewZtDomainCertResponse, RotateAcmeCredentialsResponse,
-    SetCertbotConfigRequest, SetDefaultDnsCredentialRequest, SetInstancePortPolicyRequest,
-    SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest, SetTombstoneGcConfigRequest,
-    StatusResponse, StoreSyncStatus, TombstoneGcConfigResponse, UpdateDnsCredentialRequest,
-    WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
+    RenewZtDomainCertRequest, RenewZtDomainCertResponse, RotateAcmeCredentialsRequest,
+    RotateAcmeCredentialsResponse, SetCertbotConfigRequest, SetDefaultDnsCredentialRequest,
+    SetInstancePortPolicyRequest, SetInstanceReadyRequest, SetNodeStatusRequest, SetNodeUrlRequest,
+    SetTombstoneGcConfigRequest, StatusResponse, StoreSyncStatus, TombstoneGcConfigResponse,
+    UpdateDnsCredentialRequest, WaveKvStatusResponse, ZtDomainCertStatus,
+    ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
 use tracing::{info, warn};
@@ -41,6 +42,32 @@ use crate::{
     proxy::{stats::accel_status, NUM_CONNECTIONS},
     time::now_secs,
 };
+
+fn external_account_key(
+    request: &RotateAcmeCredentialsRequest,
+) -> Result<Option<certbot::ExternalAccountKey>> {
+    use base64::{
+        engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+        Engine,
+    };
+
+    if request.eab_kid.is_empty() && request.eab_hmac_key.is_empty() {
+        return Ok(None);
+    }
+    ensure!(
+        !request.eab_kid.is_empty() && !request.eab_hmac_key.is_empty(),
+        "EAB requires both eab_kid and eab_hmac_key"
+    );
+    let key = URL_SAFE_NO_PAD
+        .decode(&request.eab_hmac_key)
+        .or_else(|_| URL_SAFE.decode(&request.eab_hmac_key))
+        .context("eab_hmac_key must be base64url encoded")?;
+    ensure!(!key.is_empty(), "EAB HMAC key must not be empty");
+    Ok(Some(certbot::ExternalAccountKey::new(
+        request.eab_kid.clone(),
+        &key,
+    )))
+}
 
 pub struct AdminRpcHandler {
     state: Proxy,
@@ -125,8 +152,15 @@ impl AdminRpc for AdminRpcHandler {
         self.state.reload_all_certs_from_kvstore()
     }
 
-    async fn rotate_acme_credentials(self) -> Result<RotateAcmeCredentialsResponse> {
-        let outcome = self.state.rotate_acme_credentials().await?;
+    async fn rotate_acme_credentials(
+        self,
+        request: RotateAcmeCredentialsRequest,
+    ) -> Result<RotateAcmeCredentialsResponse> {
+        let external_account = external_account_key(&request)?;
+        let outcome = self
+            .state
+            .rotate_acme_credentials(external_account.as_ref())
+            .await?;
         Ok(RotateAcmeCredentialsResponse {
             account_uri: outcome.account_uri,
             domains_updated: outcome.domains_updated.try_into().unwrap_or(u32::MAX),
@@ -1550,5 +1584,45 @@ mod cert_lock_admin_tests {
             kv.try_acquire_cert_lock("app.example.com", 600).is_some(),
             "the lock must actually be released, not merely reported released"
         );
+    }
+}
+
+#[cfg(test)]
+mod eab_tests {
+    use super::*;
+
+    #[test]
+    fn optional_eab_accepts_padded_and_unpadded_base64url() {
+        assert!(external_account_key(
+            &serde_json::from_str::<RotateAcmeCredentialsRequest>("{}").unwrap()
+        )
+        .unwrap()
+        .is_none());
+        for encoded in ["-_8", "-_8="] {
+            let request = RotateAcmeCredentialsRequest {
+                eab_kid: "test-key-id".into(),
+                eab_hmac_key: encoded.into(),
+            };
+            assert!(external_account_key(&request).unwrap().is_some());
+        }
+    }
+
+    #[test]
+    fn invalid_eab_is_rejected_without_echoing_secrets() {
+        for (kid, key) in [
+            ("kid", ""),
+            ("", "test-secret"),
+            ("kid", "test-secret!"),
+            ("kid", "===="),
+        ] {
+            let request = RotateAcmeCredentialsRequest {
+                eab_kid: kid.into(),
+                eab_hmac_key: key.into(),
+            };
+            let error = external_account_key(&request)
+                .err()
+                .expect("invalid EAB accepted");
+            assert!(!format!("{error:#}").contains("test-secret"));
+        }
     }
 }

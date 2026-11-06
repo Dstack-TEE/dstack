@@ -25,7 +25,8 @@ Cloudflare account, no API token, no provider integration.
 > Let's Encrypt has said it will not deploy the challenge to production until
 > that is resolved. It is live on Let's Encrypt **staging** and in
 > [Pebble][pebble]. Treat the record format as unstable, and expect to
-> republish when the draft settles.
+> republish when the draft settles. Google Trust Services also supports draft-01
+> in production; see [Google Public CA](#google-public-ca) below.
 
 [draft]: https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist-01
 [pebble]: https://github.com/letsencrypt/pebble
@@ -180,6 +181,76 @@ it as it is": a caller that predates the field — a cached dashboard bundle, a
 script, an older SDK — cannot downgrade a `dns-persist-01` domain to `dns-01` by
 editing something else, which its hand-published CAA would then refuse. Send the
 field explicitly to switch a domain over.
+
+### Google Public CA
+
+Google Public CA can issue certificates for gateways hosted outside Google Cloud.
+A Google Cloud project is required to register the ACME account, not to host the
+service. GTS supports `dns-persist-01` draft-01 in production as of September 28,
+2026; the protocol is still experimental and a final standard may require DNS
+record changes.
+
+1. Create or select a Google Cloud project, enable `publicca.googleapis.com`, and
+   obtain the `roles/publicca.externalAccountKeyCreator` role. Follow the
+   [Public CA tutorial][gts-tutorial] to create an external account binding (EAB)
+   key. Treat its HMAC value as a secret: do not paste it into logs, shell history,
+   or issue reports.
+2. Call `Admin.SetCertbotConfig` with:
+
+   ```json
+   {
+     "acme_url": "https://dv.acme-v02.api.pki.goog/directory",
+     "issuer_domain_name": "pki.goog"
+   }
+   ```
+
+   For testing, use `https://dv.acme-v02.test-api.pki.goog/directory` instead.
+   Staging certificates are not publicly trusted; use an EAB key created for the
+   corresponding environment as described in the tutorial.
+3. Before adding domains, call the authenticated admin RPC
+   `Admin.RotateAcmeCredentials` with a request body containing:
+
+   ```json
+   {
+     "eab_kid": "<EAB key ID>",
+     "eab_hmac_key": "<base64url-encoded EAB HMAC key>"
+   }
+   ```
+
+   Send the real values through a protected request body over a trusted channel,
+   not as command-line arguments. Both fields are required when using EAB;
+   padded and unpadded base64url are accepted. The gateway uses them only for this
+   registration, never stores them in KV, and never returns them. Existing
+   clients and CAs without EAB can still send `{}`.
+4. Add the ZT domain with `challenge: "dns-persist-01"`, then publish the exact
+   `required_dns_records` returned by the gateway. For example:
+
+   ```dns
+   _validation-persist.app.example.com. IN TXT "pki.goog; accounturi=<returned account URI>; policy=wildcard"
+   ```
+
+   Update existing CAA restrictions as well: they must allow `pki.goog`, the new
+   account URI, and `dns-persist-01`, rather than pinning issuance to the previous
+   CA or account. Renew the domain certificate once DNS has propagated.
+
+Each EAB key can register only one account. Renewals reuse the stored ACME
+account and need neither EAB nor Google Cloud credentials. A later account
+rotation requires a fresh EAB key and republishing persistent TXT and CAA
+records. Every rotation creates a new account; do not repeat it merely because
+manual DNS updates or CAA re-pinning are still outstanding.
+
+The ACME directory and issuer are global to the cluster: switching an existing
+cluster from Let's Encrypt affects every ZT domain, not just newly added ones.
+For `dns-01`, the same EAB registration flow works, but domains still need their
+DNS provider credentials. The dashboard's register-account button sends no EAB;
+use the admin RPC above for Google account registration and rotation.
+
+Google's default `newOrder` quota is 100 requests/hour per project, shared by all
+ACME accounts in that project. Stagger bulk issuance and renewals, and respect
+`Retry-After` on rate-limited responses. See [Public CA quotas][gts-quotas].
+
+[gts-tutorial]: https://docs.cloud.google.com/certificate-manager/docs/public-ca-tutorial
+[gts-quotas]: https://docs.cloud.google.com/certificate-manager/docs/quotas#public_ca_request_quotas
 
 ### Naming the CA
 

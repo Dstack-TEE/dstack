@@ -10,7 +10,7 @@ use hickory_resolver::proto::rr::RData;
 use hickory_resolver::TokioResolver;
 use instant_acme::{
     Account, AccountCredentials, AuthorizationStatus, AuthorizedIdentifier, ChallengeType,
-    Identifier, NewAccount, NewOrder, Order, OrderStatus, Problem,
+    ExternalAccountKey, Identifier, NewAccount, NewOrder, Order, OrderStatus, Problem,
 };
 use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use serde::{Deserialize, Serialize};
@@ -418,7 +418,16 @@ impl AcmeClient {
     /// is forced under `dns-persist-01`: the record an operator publishes names
     /// the account, so the account has to exist first.
     pub async fn register_account(acme_url: &str) -> Result<AcmeAccount> {
-        let (_, credentials) = Self::register(acme_url).await?;
+        Self::register_account_with_eab(acme_url, None).await
+    }
+
+    /// Register an account using optional RFC 8555 external account binding.
+    /// The binding key is used only for registration and is not persisted.
+    pub async fn register_account_with_eab(
+        acme_url: &str,
+        external_account: Option<&ExternalAccountKey>,
+    ) -> Result<AcmeAccount> {
+        let (_, credentials) = Self::register(acme_url, external_account).await?;
         Ok(AcmeAccount {
             account_uri: credentials.account_id.clone(),
             credentials: serde_json::to_string(&credentials)?,
@@ -436,7 +445,7 @@ impl AcmeClient {
         // transient failure there would drop an account that exists at the CA
         // and counts against its registration limit, on a path whose caller has
         // not persisted anything yet.
-        let (account, credentials) = Self::register(acme_url).await?;
+        let (account, credentials) = Self::register(acme_url, None).await?;
         Ok(Self {
             account,
             validation,
@@ -447,7 +456,10 @@ impl AcmeClient {
 
     /// Register an account and keep both halves: the live account and the
     /// credentials that reconstruct it.
-    async fn register(acme_url: &str) -> Result<(Account, Credentials)> {
+    async fn register(
+        acme_url: &str,
+        external_account: Option<&ExternalAccountKey>,
+    ) -> Result<(Account, Credentials)> {
         let http_client = Box::new(ReqwestHttpClient::new()?);
         let (account, credentials) = Account::builder_with_http(http_client)
             .create(
@@ -457,7 +469,7 @@ impl AcmeClient {
                     only_return_existing: false,
                 },
                 acme_url.to_string(),
-                None,
+                external_account,
             )
             .await
             .with_context(|| format!("failed to create ACME account for {acme_url}"))?;
@@ -2088,5 +2100,123 @@ mod publish_tests {
             None,
             "the live pair was observed half published"
         );
+    }
+}
+
+#[cfg(test)]
+mod eab_tests {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn registration_sends_optional_eab_without_persisting_it() {
+        for with_eab in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let server_base = base.clone();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut data = Vec::new();
+                    let header_end = loop {
+                        let mut buf = [0; 4096];
+                        let n = stream.read(&mut buf).await.unwrap();
+                        assert_ne!(n, 0);
+                        data.extend_from_slice(&buf[..n]);
+                        if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break end + 4;
+                        }
+                    };
+                    let headers = String::from_utf8(data[..header_end].to_vec()).unwrap();
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse().unwrap())
+                        })
+                        .unwrap_or(0);
+                    while data.len() < header_end + content_length {
+                        let mut buf = [0; 4096];
+                        let n = stream.read(&mut buf).await.unwrap();
+                        assert_ne!(n, 0);
+                        data.extend_from_slice(&buf[..n]);
+                    }
+                    let is_account = headers.starts_with("POST /account ");
+                    let body = if headers.starts_with("GET /directory ") {
+                        serde_json::json!({
+                            "newNonce": format!("{server_base}/nonce"),
+                            "newAccount": format!("{server_base}/account"),
+                            "newOrder": format!("{server_base}/order")
+                        })
+                        .to_string()
+                    } else if is_account {
+                        let jws: serde_json::Value =
+                            serde_json::from_slice(&data[header_end..]).unwrap();
+                        let payload: serde_json::Value = serde_json::from_slice(
+                            &URL_SAFE_NO_PAD
+                                .decode(jws["payload"].as_str().unwrap())
+                                .unwrap(),
+                        )
+                        .unwrap();
+                        let binding = &payload["externalAccountBinding"];
+                        assert_eq!(!binding.is_null(), with_eab);
+                        if with_eab {
+                            let protected: serde_json::Value = serde_json::from_slice(
+                                &URL_SAFE_NO_PAD
+                                    .decode(binding["protected"].as_str().unwrap())
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                            assert_eq!(protected["kid"], "test-eab-id");
+                            assert_eq!(protected["alg"], "HS256");
+                            assert_eq!(protected["url"], format!("{server_base}/account"));
+                            let outer: serde_json::Value = serde_json::from_slice(
+                                &URL_SAFE_NO_PAD
+                                    .decode(jws["protected"].as_str().unwrap())
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                            let bound_key: serde_json::Value = serde_json::from_slice(
+                                &URL_SAFE_NO_PAD
+                                    .decode(binding["payload"].as_str().unwrap())
+                                    .unwrap(),
+                            )
+                            .unwrap();
+                            assert_eq!(bound_key, outer["jwk"]);
+                            assert!(!binding["signature"].as_str().unwrap().is_empty());
+                        }
+                        "{}".to_string()
+                    } else {
+                        assert!(headers.starts_with("HEAD /nonce "));
+                        String::new()
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nReplay-Nonce: test-nonce\r\nLocation: {server_base}/acct/1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                    if is_account {
+                        break;
+                    }
+                }
+            });
+            let key = ExternalAccountKey::new("test-eab-id".into(), b"synthetic-test-hmac-key");
+            let account = tokio::time::timeout(
+                Duration::from_secs(5),
+                AcmeClient::register_account_with_eab(
+                    &format!("{base}/directory"),
+                    with_eab.then_some(&key),
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            server.await.unwrap();
+            assert_eq!(account.account_uri, format!("{base}/acct/1"));
+            assert!(!account.credentials.contains("test-eab-id"));
+            assert!(!account.credentials.contains("synthetic-test-hmac-key"));
+        }
     }
 }

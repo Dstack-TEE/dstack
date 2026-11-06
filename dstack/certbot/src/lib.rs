@@ -24,6 +24,7 @@ pub use acme_client::{
 pub use bot::{read_pubkey, CertBot, CertBotConfig};
 pub use dns01_client::Dns01Client;
 pub use dns_persist::{resolve_issuer_domain_name, LETS_ENCRYPT_ISSUER_DOMAIN_NAME};
+pub use instant_acme::ExternalAccountKey;
 pub use workdir::WorkDir;
 
 mod acme_client;

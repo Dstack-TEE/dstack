@@ -782,8 +782,9 @@ impl Proxy {
 
     pub(crate) async fn rotate_acme_credentials(
         &self,
+        external_account: Option<&certbot::ExternalAccountKey>,
     ) -> Result<crate::distributed_certbot::RotationOutcome> {
-        self.certbot.rotate_acme_credentials().await
+        self.certbot.rotate_acme_credentials(external_account).await
     }
 
     /// Get ACME info for all managed domains (or a specific domain)

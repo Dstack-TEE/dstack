@@ -301,16 +301,22 @@ impl DistributedCertBot {
     ///
     /// Runs under the shared ACME lock, so a concurrent reconciliation or
     /// first-use registration on any node is refused for the duration.
-    pub async fn rotate_acme_credentials(&self) -> Result<RotationOutcome> {
+    pub async fn rotate_acme_credentials(
+        &self,
+        external_account: Option<&certbot::ExternalAccountKey>,
+    ) -> Result<RotationOutcome> {
         let rotation_lock = self.acquire_acme_lock("rotate ACME credentials")?;
-        let result = self.do_rotate_acme_credentials().await;
+        let result = self.do_rotate_acme_credentials(external_account).await;
         if let Err(err) = self.release_rotation_lock(&rotation_lock) {
             error!("failed to release ACME rotation lock: {err:?}");
         }
         result
     }
 
-    async fn do_rotate_acme_credentials(&self) -> Result<RotationOutcome> {
+    async fn do_rotate_acme_credentials(
+        &self,
+        external_account: Option<&certbot::ExternalAccountKey>,
+    ) -> Result<RotationOutcome> {
         let configs = self.kv_store.list_zt_domain_configs();
         let certbot_config = self.config()?;
         let acme_url = if certbot_config.acme_url.is_empty() {
@@ -338,7 +344,7 @@ impl DistributedCertBot {
         // with no ZT domain yet registers here and gets an account URI, which is
         // what a `dns-persist-01` record has to name before the domain it
         // authorizes can ever be issued.
-        let account = AcmeClient::register_account(acme_url)
+        let account = AcmeClient::register_account_with_eab(acme_url, external_account)
             .await
             .context("failed to create replacement ACME account")?;
         let AcmeAccount {
@@ -1384,7 +1390,7 @@ mod tests {
             .try_acquire_rotation_lock()
             .expect("lock should be free");
         let err = certbot
-            .rotate_acme_credentials()
+            .rotate_acme_credentials(None)
             .await
             .expect_err("a concurrent run should be rejected");
         assert!(
@@ -1402,7 +1408,7 @@ mod tests {
             .try_acquire_rotation_lock(ROTATION_LOCK_TIMEOUT_SECS)
             .is_some());
         let err = certbot
-            .rotate_acme_credentials()
+            .rotate_acme_credentials(None)
             .await
             .expect_err("rotation should be rejected while the KV lock is held");
         assert!(
@@ -1427,7 +1433,7 @@ mod tests {
             })
             .expect("failed to store certbot config");
         let err = certbot
-            .rotate_acme_credentials()
+            .rotate_acme_credentials(None)
             .await
             .expect_err("an unroutable ACME server cannot register an account");
         assert!(

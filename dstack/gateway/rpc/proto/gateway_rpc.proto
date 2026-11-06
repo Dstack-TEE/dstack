@@ -214,6 +214,14 @@ message AcmeInfoResponse {
   string account_attestation = 5;
 }
 
+// Optional one-time external account binding for account registration.
+// Omit both fields for CAs that do not require EAB. Never persisted or returned.
+message RotateAcmeCredentialsRequest {
+  string eab_kid = 1;
+  // Base64url-encoded HMAC key, with or without padding.
+  string eab_hmac_key = 2;
+}
+
 // Result of replacing the shared ACME account credentials.
 message RotateAcmeCredentialsResponse {
   // URI of the newly-created ACME account. The private credentials are never returned.
@@ -579,7 +587,8 @@ service Admin {
   // nodes by a best-effort lock (WaveKV has no compare-and-swap), so still
   // avoid rotating from multiple gateways concurrently. This re-pins issuance
   // to the new account; it does not deactivate the old ACME account at the CA.
-  rpc RotateAcmeCredentials(google.protobuf.Empty) returns (RotateAcmeCredentialsResponse) {}
+  // Optional EAB credentials are used only to register the new account.
+  rpc RotateAcmeCredentials(RotateAcmeCredentialsRequest) returns (RotateAcmeCredentialsResponse) {}
 
   // ==================== Tombstone GC Configuration ====================
   // Get the effective tombstone GC pacing on this node

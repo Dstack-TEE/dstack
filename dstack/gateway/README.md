@@ -1,7 +1,7 @@
 # dstack-gateway
 
 The reverse proxy that gives deployed dstack apps zero-trust network access. It
-terminates TLS, provisions certificates over ACME DNS-01, and routes traffic to
+terminates TLS, provisions certificates over ACME DNS-01 or DNS-PERSIST-01, and routes traffic to
 CVMs across a WireGuard mesh it manages itself.
 
 ## Ingress mapping
@@ -37,6 +37,7 @@ The gateway needs `CAP_NET_ADMIN` to manage its WireGuard interface, hence
 
 ## Further reading
 
+- [Certificate provisioning](../../docs/certbot-dns-persist-01.md) — DNS-PERSIST-01 and Google Public CA
 - [Cluster deployment](docs/cluster-deployment.md) — running a replicated gateway
 - [Builder image](dstack-app/builder/README.md) — reproducible container image
 - [Deployment guide](../../docs/deployment.md)
