@@ -249,9 +249,17 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 Normal KMS operations use `POST /checkAuthorization`. The request carries the
 verified attestation identity (the same identity fields as the legacy
 `/bootAuth/*` requests). The Ethereum backends call
-`DstackKms.checkAuthorization(AppInfo)` once; the contract selects KMS policy when
+`DstackKms.checkAuthorization(AuthorizationRequest)` once; the contract selects KMS policy when
 `appId == address(this)` (the proxy address), and app policy otherwise. KMS-only
 operations also check this identity before accepting the result.
+
+`requestedEpoch` is optional in the JSON request. Omit it to use the epoch in
+this authorization result; an explicit `0` selects epoch 0. Solidity represents
+it as `OptionalEpoch { isSet, value }` alongside `AppInfo` in the request. The
+contract rejects a requested epoch newer than the current one; historical
+epochs remain available for migration. No serving epoch or serving hash is sent.
+KMS-to-KMS handover omits this selector and still transfers the complete keyring,
+including pending epochs.
 
 The response is an `AuthorizationResult`:
 
@@ -271,11 +279,17 @@ registered epoch, the result is `isAllowed: false`,
 `rejectReason: "Root epoch not registered"`, epoch 0 and a zero hash. A zero hash
 never authorizes key release or requests an epoch switch.
 
-The KMS compares each result with its serving epoch and chain hash before
-releasing keys or signing certificates. A mismatch requests a process restart,
-including when policy also denies authorization. This does not consult the
-cached info endpoint. Rotation is detected on authorization requests, not by
-background polling; self-authorization retains its one-second cache.
+The KMS holds no serving-epoch snapshot. It verifies the returned current epoch
+and chain hash against its keyring, then derives keys from `requestedEpoch` when
+specified or the returned current epoch otherwise. Missing or mismatched roots
+fail closed. Self-authorization retains its one-second cache of complete results.
+
+The TLS listener has a separate lifetime: when an authorized current CA differs
+from the running RPC certificate's issuer, the KMS requests a restart to refresh
+that certificate and the caller must retry. The RPC CA does not select key
+epochs. `GetTempCaCert` reports the actual TLS issuer; application key responses
+and signed certificate chains report the selected epoch's CA. CA certificates
+are reloaded after renewal at startup.
 
 Upgrade the contract and auth backend and register epoch 0 before using this
 protocol for key release. Runtime authorization never falls back to the legacy

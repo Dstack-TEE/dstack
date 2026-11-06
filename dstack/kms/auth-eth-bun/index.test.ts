@@ -841,8 +841,8 @@ describe('POST /checkAuthorization', () => {
     mrAggregated: '0x' + '44'.repeat(32), mrSystem: '0x' + '55'.repeat(32),
     osImageHash: '0x' + '66'.repeat(32), tcbStatus: 'UpToDate', advisoryIds: [],
   };
-  const authorize = () => appFetch(new Request('http://localhost/checkAuthorization', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(appInfo),
+  const authorize = (requestedEpoch?: number) => appFetch(new Request('http://localhost/checkAuthorization', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, requestedEpoch }),
   }));
 
   it('reads the complete result with one contract call at configured finality', async () => {
@@ -857,7 +857,18 @@ describe('POST /checkAuthorization', () => {
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       functionName: 'checkAuthorization', blockNumber: 98n,
-      args: [expect.objectContaining({ appId: appInfo.appId })],
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedEpoch: { isSet: false, value: 0n } })],
+    }));
+  });
+
+  it('encodes an explicit epoch zero as present', async () => {
+    mockReadContract.mockResolvedValueOnce({
+      isAllowed: true, rejectReason: '', gatewayAppId: 'gateway',
+      currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
+    });
+    expect((await authorize(0)).status).toBe(200);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      args: [expect.objectContaining({ requestedEpoch: { isSet: true, value: 0n } })],
     }));
   });
 

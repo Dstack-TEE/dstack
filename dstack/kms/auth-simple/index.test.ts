@@ -484,6 +484,11 @@ describe('auth-simple', () => {
       expect(await authorize()).toMatchObject({
         isAllowed: true, rejectReason: '', currentRootEpoch: 1, currentRootEpochHash: h1,
       });
+      expect(await authorize({ requestedEpoch: 0 })).toMatchObject({ isAllowed: true, currentRootEpoch: 1 });
+      expect(await authorize({ requestedEpoch: 1 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedEpoch: 2 })).toMatchObject({
+        isAllowed: false, rejectReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,
+      });
       expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' })).toMatchObject({ isAllowed: true });
       expect(await authorize({ appId: kmsContractAddr, mrAggregated: '0xbad' })).toMatchObject({
         isAllowed: false, currentRootEpoch: 1, currentRootEpochHash: h1,

@@ -36,6 +36,11 @@ const BootInfoSchema = z.object({
   rootEpochHash: boundedHex(32, 'root epoch chain hash').optional()
 });
 
+const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+});
+type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
+
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
@@ -89,7 +94,12 @@ const DSTACK_KMS_ABI = [
     name: 'checkAuthorization',
     type: 'function',
     stateMutability: 'view',
-    inputs: [{ name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS }],
+    inputs: [{ name: 'request', type: 'tuple', components: [
+      { name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS },
+      { name: 'requestedEpoch', type: 'tuple', components: [
+        { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
+      ] },
+    ] }],
     outputs: [{
       name: 'result',
       type: 'tuple',
@@ -223,13 +233,16 @@ class EthereumBackend {
 
   }
 
-  async checkAuthorization(appInfo: BootInfo) {
+  async checkAuthorization(appInfo: AuthorizationRequest) {
     const blockNumber = await this.finalizedBlockNumber();
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
       functionName: 'checkAuthorization',
-      args: [this.contractAppInfo(appInfo)],
+      args: [{
+        appInfo: this.contractAppInfo(appInfo),
+        requestedEpoch: { isSet: appInfo.requestedEpoch !== undefined, value: BigInt(appInfo.requestedEpoch ?? 0) },
+      }],
       blockNumber,
     });
     const currentRootEpoch = Number(result.currentRootEpoch);
@@ -401,7 +414,7 @@ app.get('/', async (c) => {
 
 app.post('/checkAuthorization',
   bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES }),
-  zValidator('json', BootInfoSchema),
+  zValidator('json', AuthorizationRequestSchema),
   async (c) => {
     try {
       return c.json(await ethereum.checkAuthorization(c.req.valid('json')));

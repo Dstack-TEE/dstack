@@ -86,7 +86,7 @@ pub(crate) struct BootResponse {
     pub reason: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthorizationResult {
     pub is_allowed: bool,
@@ -254,7 +254,19 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 }
 
 impl AuthApi {
-    pub async fn check_authorization(&self, app_info: &BootInfo) -> Result<AuthorizationResult> {
+    pub async fn check_authorization(
+        &self,
+        app_info: &BootInfo,
+        requested_epoch: Option<u32>,
+    ) -> Result<AuthorizationResult> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AuthorizationRequest<'a> {
+            #[serde(flatten)]
+            app_info: &'a BootInfo,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            requested_epoch: Option<u32>,
+        }
         ensure_identity_widths(app_info)?;
         match self {
             AuthApi::Dev { dev } => Ok(AuthorizationResult {
@@ -266,7 +278,15 @@ impl AuthApi {
             }),
             AuthApi::Webhook { webhook } => {
                 let url = url_join(&webhook.url, "checkAuthorization");
-                http_post(&url, app_info, webhook.timeout).await
+                http_post(
+                    &url,
+                    &AuthorizationRequest {
+                        app_info,
+                        requested_epoch,
+                    },
+                    webhook.timeout,
+                )
+                .await
             }
         }
     }
@@ -661,21 +681,28 @@ pub(crate) mod tests {
                 "11".repeat(32)
             )
         };
-        let (url, server) = serve(vec![response(true, 0), response(false, 1)]);
+        let (url, server) = serve(vec![
+            response(true, 0),
+            response(false, 1),
+            response(true, 1),
+        ]);
         let auth = webhook(url);
         let info = boot_info(50);
-        let first = auth.check_authorization(&info).await.unwrap();
-        let second = auth.check_authorization(&info).await.unwrap();
+        let first = auth.check_authorization(&info, None).await.unwrap();
+        let second = auth.check_authorization(&info, None).await.unwrap();
         assert!(first.is_allowed);
         assert!(!second.is_allowed);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
+        auth.check_authorization(&info, Some(0)).await.unwrap();
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
         assert!(requests
             .iter()
             .all(|(path, _)| path == "/checkAuthorization"));
         assert_eq!(requests[0].1, serde_json::to_value(info).unwrap());
+        assert!(requests[0].1.get("requestedEpoch").is_none());
+        assert_eq!(requests[2].1["requestedEpoch"], 0);
     }
 
     #[rocket::async_test]
@@ -684,7 +711,7 @@ pub(crate) mod tests {
             r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
         ]);
         assert!(webhook(url)
-            .check_authorization(&boot_info(50))
+            .check_authorization(&boot_info(50), None)
             .await
             .is_err());
         assert_eq!(server.join().unwrap().len(), 1);

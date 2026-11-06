@@ -26,6 +26,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         string[] advisoryIds;
     }
 
+    struct OptionalEpoch {
+        bool isSet;
+        uint256 value;
+    }
+
+    struct AuthorizationRequest {
+        AppInfo appInfo;
+        OptionalEpoch requestedEpoch;
+    }
+
     struct AuthorizationResult {
         bool isAllowed;
         string rejectReason;
@@ -392,7 +402,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     /// Authorize an attested identity and return the root epoch from the same state.
     /// The KMS app ID is this contract's proxy address; all other IDs use app policy.
-    function checkAuthorization(AppInfo calldata appInfo) external view returns (AuthorizationResult memory result) {
+    function checkAuthorization(AuthorizationRequest calldata request)
+        external
+        view
+        returns (AuthorizationResult memory result)
+    {
         result.gatewayAppId = gatewayAppId;
         if (_rootEpochs.length == 0) {
             result.rejectReason = "Root epoch not registered";
@@ -400,6 +414,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         result.currentRootEpoch = _currentRootEpoch;
         result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        if (request.requestedEpoch.isSet && request.requestedEpoch.value > _currentRootEpoch) {
+            result.rejectReason = "Requested root epoch is not active";
+            return result;
+        }
+        AppInfo calldata appInfo = request.appInfo;
         AppBootInfo memory bootInfo = AppBootInfo({
             appId: appInfo.appId,
             composeHash: appInfo.composeHash,

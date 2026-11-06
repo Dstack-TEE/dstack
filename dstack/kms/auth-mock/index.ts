@@ -29,6 +29,11 @@ const BootInfoSchema = z.object({
   rootEpochHash: z.string().optional()
 });
 
+const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+});
+type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
+
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
@@ -106,7 +111,7 @@ class MockBackend {
     this.mockAppImplementation = process.env.MOCK_APP_IMPLEMENTATION || '0xmockapp9876543210987654321098765432109';
   }
 
-  async checkAuthorization(appInfo: BootInfo) {
+  async checkAuthorization(appInfo: AuthorizationRequest) {
     const current = getRootEpoch();
     const epoch = {
       currentRootEpoch: current.rootEpoch ?? 0,
@@ -114,6 +119,9 @@ class MockBackend {
     };
     if (current.rootEpoch === undefined) {
       return { isAllowed: false, rejectReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
+      return { isAllowed: false, rejectReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     const kmsAppId = process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678';
     const result = this.evaluateBoot(appInfo, normHash(appInfo.appId) === normHash(kmsAppId));
@@ -217,7 +225,7 @@ app.get('/', async (c) => {
   }
 });
 
-app.post('/checkAuthorization', zValidator('json', BootInfoSchema), async (c) => {
+app.post('/checkAuthorization', zValidator('json', AuthorizationRequestSchema), async (c) => {
   try {
     return c.json(await mockBackend.checkAuthorization(c.req.valid('json')));
   } catch {
