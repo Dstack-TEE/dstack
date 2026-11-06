@@ -39,6 +39,7 @@ use crate::{
         build_boot_info_for_attestation,
         upgrade_authority::{
             app_attest, dstack_client, ensure_kms_allowed, ensure_self_kms_allowed, pad64,
+            RootEpochPubkeys,
         },
     },
 };
@@ -295,7 +296,7 @@ mod tests {
     use crate::main_service::amd_attest::{
         compute_expected_measurement, MeasurementInput, OvmfSectionParam,
     };
-    use crate::main_service::upgrade_authority::{BootResponse, RootEpochPubkeys};
+    use crate::main_service::upgrade_authority::BootResponse;
     use dstack_kms_rpc::KmsKeys;
     use sha2::Digest;
 
@@ -578,7 +579,7 @@ mod tests {
         let res = handover(3);
         let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
 
-        let keys = Keys::from_key_response(&cfg, res, "kms.example.com", false)
+        let keys = Keys::from_key_response(&cfg, res, "kms.example.com", false, None)
             .await
             .unwrap();
         keys.store(&cfg).unwrap();
@@ -603,7 +604,7 @@ mod tests {
         let cfg = epoch_config(cert_dir.path(), 1);
         let mut res = handover(1);
         res.keys[0].epoch = 0;
-        let keys = Keys::from_key_response(&cfg, res, "kms.example.com", false)
+        let keys = Keys::from_key_response(&cfg, res, "kms.example.com", false, None)
             .await
             .unwrap();
         assert_eq!(keys.epoch, 1);
@@ -626,7 +627,7 @@ mod tests {
     async fn joined_state(res: KmsKeyResponse, url: String) -> crate::main_service::KmsState {
         let cert_dir = tempfile::tempdir().unwrap();
         let mut cfg = epoch_config(cert_dir.path(), res.keys.len() as u32);
-        Keys::from_key_response(&cfg, res, "kms.example.com", false)
+        Keys::from_key_response(&cfg, res, "kms.example.com", false, None)
             .await
             .unwrap()
             .store(&cfg)
@@ -698,7 +699,7 @@ mod tests {
         let res = handover(2);
         let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
 
-        let keys = Keys::from_key_response(&cfg, res, "kms.example.com", true)
+        let keys = Keys::from_key_response(&cfg, res, "kms.example.com", true, None)
             .await
             .unwrap();
         keys.store(&cfg).unwrap();
@@ -715,7 +716,7 @@ mod tests {
         for (epochs, rotate) in [(1, false), (3, false), (2, true), (0, true)] {
             let res = handover(epochs);
             assert!(
-                Keys::from_key_response(&cfg, res, "kms.example.com", rotate)
+                Keys::from_key_response(&cfg, res, "kms.example.com", rotate, None)
                     .await
                     .is_err(),
                 "epochs={epochs} rotate={rotate}"
@@ -723,9 +724,50 @@ mod tests {
         }
         let cfg = epoch_config(cert_dir.path(), 1);
         assert!(
-            Keys::from_key_response(&cfg, handover(0), "kms.example.com", true)
+            Keys::from_key_response(&cfg, handover(0), "kms.example.com", true, None)
                 .await
                 .is_err()
+        );
+    }
+
+    #[rocket::async_test]
+    async fn onboarding_requires_the_registered_keyring() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let join = epoch_config(cert_dir.path(), 2);
+        let rotate = epoch_config(cert_dir.path(), 3);
+        let res = handover(2);
+        let registered = pubkeys_of(&res);
+        let onboard = |cfg: &KmsConfig, rotate: bool, registered: Vec<RootEpochPubkeys>| {
+            let (cfg, res) = (cfg.clone(), res.clone());
+            async move {
+                Keys::from_key_response(&cfg, res, "kms.example.com", rotate, Some(&registered))
+                    .await
+            }
+        };
+
+        assert!(onboard(&join, false, registered.clone()).await.is_ok());
+        assert!(onboard(&rotate, true, registered.clone()).await.is_ok());
+        // A source at an older epoch than the registry.
+        let mut newer = registered.clone();
+        newer.push(registered[0].clone());
+        assert!(onboard(&join, false, newer).await.is_err());
+        // A source holding a keyring other than the registered one.
+        let mut other = registered.clone();
+        other[0] = pubkeys_of(&handover(1))[0].clone();
+        assert!(onboard(&join, false, other.clone()).await.is_err());
+        assert!(onboard(&rotate, true, other).await.is_err());
+        // Epochs must be registered before rotating past epoch 1.
+        assert!(onboard(&rotate, true, Vec::new()).await.is_err());
+    }
+
+    #[rocket::async_test]
+    async fn an_unregistered_deployment_can_still_join_at_epoch_1() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = epoch_config(cert_dir.path(), 1);
+        assert!(
+            Keys::from_key_response(&cfg, handover(1), "kms.example.com", false, Some(&[]))
+                .await
+                .is_ok()
         );
     }
 
@@ -988,7 +1030,7 @@ impl Keys {
             ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier)
                 .await
                 .context("Source KMS is not allowed for onboarding")?;
-            return Self::from_key_response(cfg, keys_res, domain, rotate).await;
+            return Self::from_registered_key_response(cfg, keys_res, domain, rotate).await;
         }
 
         let client = RaClientConfig::builder()
@@ -1021,14 +1063,35 @@ impl Keys {
                 vm_config: info.vm_config,
             })
             .await?;
-        Self::from_key_response(cfg, keys_res, domain, rotate).await
+        Self::from_registered_key_response(cfg, keys_res, domain, rotate).await
     }
 
+    /// [`Self::from_key_response`] after reading the registered epochs, so a
+    /// source holding any keyring other than the registered one is refused.
+    async fn from_registered_key_response(
+        cfg: &KmsConfig,
+        keys_res: KmsKeyResponse,
+        domain: &str,
+        rotate: bool,
+    ) -> Result<Self> {
+        let registered = cfg
+            .auth_api
+            .get_info()
+            .await
+            .context("failed to read the registered root epochs")?
+            .root_epochs;
+        Self::from_key_response(cfg, keys_res, domain, rotate, registered.as_deref()).await
+    }
+
+    /// `registered` is the governance registry; `None` means the auth backend
+    /// has none (dev mode), and an empty one is accepted only while joining at
+    /// epoch 1, as deployments that never registered epochs did before.
     async fn from_key_response(
         cfg: &KmsConfig,
         keys_res: KmsKeyResponse,
         domain: &str,
         rotate: bool,
+        registered: Option<&[RootEpochPubkeys]>,
     ) -> Result<Self> {
         let epoch = cfg.key_rotation.current_epoch;
         // A rotation imports every epoch before the new one; a join imports all.
@@ -1055,6 +1118,7 @@ impl Keys {
                 Ok((ca_key, k256_key))
             })
             .collect::<Result<Vec<_>>>()?;
+        ensure_handover_registered(&roots, registered, last)?;
         let (ca_key, k256_key) = if rotate {
             (
                 KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?,
@@ -1218,6 +1282,35 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifi
         .await
         .context("Failed to generate keys")?;
     keys.store(cfg)?;
+    Ok(())
+}
+
+/// Check that the handed-over roots are exactly the registered epochs 1..=last,
+/// which also proves the source is at the expected epoch.
+fn ensure_handover_registered(
+    roots: &[(KeyPair, SigningKey)],
+    registered: Option<&[RootEpochPubkeys]>,
+    last: u32,
+) -> Result<()> {
+    let Some(registered) = registered else {
+        return Ok(());
+    };
+    if registered.is_empty() && last == 1 {
+        return Ok(());
+    }
+    if registered.len() != last as usize {
+        bail!(
+            "the source hands over root epochs 1..={last}, but {} epochs are registered",
+            registered.len()
+        );
+    }
+    for (epoch, ((ca_key, k256_key), registered)) in (1..).zip(roots.iter().zip(registered)) {
+        if ca_key.public_key_der() != registered.ca_pubkey
+            || k256_key.verifying_key().to_sec1_bytes()[..] != registered.k256_pubkey[..]
+        {
+            bail!("the source's root keys of epoch {epoch} are not the registered ones");
+        }
+    }
     Ok(())
 }
 
