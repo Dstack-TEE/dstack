@@ -176,6 +176,10 @@
             "type": "string",
             "description": "Mock gateway application ID",
             "example": "0xmockgateway1234567890123456789012345678"
+          },
+          "rootEpoch": {
+            "type": "integer",
+            "description": "Latest KMS root epoch from MOCK_ROOT_EPOCHS; absent when none"
           }
         }
       },
@@ -220,6 +224,17 @@
             "type": "string",
             "description": "Mock app implementation address",
             "example": "0xmockapp9876543210987654321098765432109"
+          },
+          "rootEpochs": {
+            "type": "array",
+            "description": "KMS root epochs 1, 2, ... from MOCK_ROOT_EPOCHS",
+            "items": {
+              "type": "object",
+              "properties": {
+                "caPubkey": { "type": "string" },
+                "k256Pubkey": { "type": "string" }
+              }
+            }
           },
           "note": {
             "type": "string",

@@ -160,6 +160,28 @@ describe('Mock Backend Tests', () => {
     });
   });
 
+  describe('root epochs', () => {
+    it('reports MOCK_ROOT_EPOCHS', async () => {
+      const rootEpochs = [{ caPubkey: '0xa1', k256Pubkey: '0xb1' }];
+      process.env.MOCK_ROOT_EPOCHS = JSON.stringify(rootEpochs);
+      try {
+        const boot = await appFetch(new Request('http://localhost:3002/bootAuth/kms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mrAggregated: '0x01', osImageHash: '0x02', appId: '0x03',
+            composeHash: '0x04', instanceId: '0x05', deviceId: '0x06',
+          }),
+        }));
+        expect((await boot.json()).rootEpoch).toBe(1);
+        const info = await appFetch(new Request('http://localhost:3002/'));
+        expect((await info.json()).rootEpochs).toEqual(rootEpochs);
+      } finally {
+        delete process.env.MOCK_ROOT_EPOCHS;
+      }
+    });
+  });
+
   describe('POST /bootAuth/kms', () => {
     const validBootInfo = {
       mrAggregated: '0x1234567890123456789012345678901234567890123456789012345678901234',

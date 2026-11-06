@@ -66,6 +66,9 @@ struct BootResponse {
     is_allowed: bool,
     gateway_app_id: String,
     reason: String,
+    /// latest registered KMS root epoch (from 1); absent when none is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root_epoch: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -75,6 +78,21 @@ struct Allowlist {
     gateway_app_id: String,
     kms: KmsRules,
     apps: HashMap<String, AppRules>,
+    /// root public keys of KMS root epochs 1, 2, ... in order; append only.
+    root_epochs: Vec<RootEpoch>,
+}
+
+#[derive(Deserialize, Serialize, Default, Clone)]
+#[serde(rename_all = "camelCase", default)]
+struct RootEpoch {
+    ca_pubkey: String,
+    k256_pubkey: String,
+}
+
+impl Allowlist {
+    fn latest_root_epoch(&self) -> Option<usize> {
+        Some(self.root_epochs.len()).filter(|epoch| *epoch > 0)
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -122,6 +140,7 @@ fn deny(al: &Allowlist, reason: &str) -> BootResponse {
         is_allowed: false,
         gateway_app_id: al.gateway_app_id.clone(),
         reason: reason.to_string(),
+        root_epoch: al.latest_root_epoch(),
     }
 }
 
@@ -130,6 +149,7 @@ fn allow(al: &Allowlist) -> BootResponse {
         is_allowed: true,
         gateway_app_id: al.gateway_app_id.clone(),
         reason: "ok".to_string(),
+        root_epoch: al.latest_root_epoch(),
     }
 }
 
@@ -206,15 +226,20 @@ fn boot_kms(info: Json<BootInfo>, cli: &State<Cli>) -> Json<BootResponse> {
 
 /// info endpoint the KMS GETs to populate its metadata. Single-node: no chain.
 #[get("/")]
-fn info() -> Json<serde_json::Value> {
-    Json(json!({
+fn info(cli: &State<Cli>) -> Json<serde_json::Value> {
+    Json(info_json(&load(&cli.config)))
+}
+
+fn info_json(al: &Allowlist) -> serde_json::Value {
+    json!({
         "status": "ok",
         "kmsContractAddr": "",
         "ethRpcUrl": "",
         "gatewayAppId": "",
         "chainId": 0,
-        "appImplementation": ""
-    }))
+        "appImplementation": "",
+        "rootEpochs": al.root_epochs,
+    })
 }
 
 #[rocket::main]
@@ -281,6 +306,26 @@ mod tests {
         assert!(check_kms(&info, &al).is_allowed);
         // fail closed: empty allowlist denies (the single-node case never calls this).
         assert!(!check_kms(&info, &Allowlist::default()).is_allowed);
+    }
+
+    #[test]
+    fn reports_registered_root_epochs() {
+        let al: Allowlist = serde_json::from_str(
+            r#"{"kms":{"mrAggregated":["0xMR"]},
+                "rootEpochs":[{"caPubkey":"0xa1","k256Pubkey":"0xb1"},
+                              {"caPubkey":"0xa2","k256Pubkey":"0xb2"}]}"#,
+        )
+        .unwrap();
+        let info = BootInfo {
+            mr_aggregated: "0xMR".into(),
+            ..Default::default()
+        };
+        let response = serde_json::to_value(check_kms(&info, &al)).unwrap();
+        assert_eq!(response["rootEpoch"], 2);
+        assert_eq!(info_json(&al)["rootEpochs"][1]["k256Pubkey"], "0xb2");
+
+        let response = serde_json::to_value(check_kms(&info, &allowlist())).unwrap();
+        assert!(response.get("rootEpoch").is_none());
     }
 
     // wire-contract snapshot: BootInfo as the KMS serializes it (camelCase).

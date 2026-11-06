@@ -230,6 +230,64 @@ describe('API Compatibility Tests', () => {
     });
 });
 
+  describe('root epochs', () => {
+    const validBootInfo = {
+      mrAggregated: '0x' + '12'.repeat(32),
+      osImageHash: '0x' + 'ab'.repeat(32),
+      appId: '0x' + '11'.repeat(20),
+      composeHash: '0x' + '22'.repeat(32),
+      instanceId: '0x' + '33'.repeat(20),
+      deviceId: '0x' + '44'.repeat(32),
+    };
+
+    it('reports the latest registered root epoch and lists all epochs', async () => {
+      mockReadContract.mockImplementation((params) => {
+        switch (params.functionName) {
+          case 'isAppAllowed': return [true, ''];
+          case 'gatewayAppId': return '0xgateway';
+          case 'appImplementation': return '0x9876543210987654321098765432109876543210';
+          case 'latestRootEpoch': return 2n;
+          case 'rootEpoch': return [`0xa${params.args[0]}`, `0xb${params.args[0]}`, '0xc0'];
+        }
+      });
+
+      const boot = await appFetch(new Request('http://localhost:3001/bootAuth/app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validBootInfo),
+      }));
+      expect((await boot.json()).rootEpoch).toBe(2);
+
+      const info = await appFetch(new Request('http://localhost:3001/'));
+      expect((await info.json()).rootEpochs).toEqual([
+        { caPubkey: '0xa1', k256Pubkey: '0xb1' },
+        { caPubkey: '0xa2', k256Pubkey: '0xb2' },
+      ]);
+    });
+
+    it('treats a contract without the registry as having no epochs', async () => {
+      mockReadContract.mockImplementation((params) => {
+        switch (params.functionName) {
+          case 'isAppAllowed': return [true, ''];
+          case 'gatewayAppId': return '0xgateway';
+          case 'latestRootEpoch':
+            throw Object.assign(new Error('call failed'), {
+              cause: { name: 'ContractFunctionZeroDataError' },
+            });
+        }
+      });
+
+      const boot = await appFetch(new Request('http://localhost:3001/bootAuth/app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validBootInfo),
+      }));
+      const data = await boot.json();
+      expect(data.isAllowed).toBe(true);
+      expect(data.rootEpoch).toBeUndefined();
+    });
+  });
+
   describe('POST /bootAuth/kms', () => {
     const validBootInfo = {
       mrAggregated: '0x1234567890123456789012345678901234567890123456789012345678901234',
@@ -449,6 +507,7 @@ describe('Authorization freshness and domain binding', () => {
         return decisions === 1 ? [true, 'initial allow'] : [false, 'policy changed'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'latestRootEpoch') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -468,6 +527,7 @@ describe('Authorization freshness and domain binding', () => {
         return [true, 'allowed'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'latestRootEpoch') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -492,6 +552,7 @@ describe('Authorization freshness and domain binding', () => {
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'latestRootEpoch') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
     const recovered = await postApp();
@@ -522,6 +583,7 @@ describe('Ethereum finalized snapshot authorization', () => {
       expect(params.blockNumber).toBe(98n);
       if (params.functionName === 'isAppAllowed') return [true, 'finalized allow'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'latestRootEpoch') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -541,6 +603,7 @@ describe('Ethereum finalized snapshot authorization', () => {
         return decisions === 1 ? [true, 'old canonical allow'] : [false, 'new canonical deny'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'latestRootEpoch') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -569,6 +632,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'latestRootEpoch') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
     const recovered = await authorize();
@@ -611,6 +675,7 @@ describe('dstack-kms 0.6 bootAuth payload', () => {
         return [true, ''];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'latestRootEpoch') return 0n;
       throw new Error(`unexpected function ${params.functionName}`);
     });
   });

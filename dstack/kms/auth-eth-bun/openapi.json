@@ -173,6 +173,10 @@
           "gatewayAppId": {
             "type": "string",
             "description": "Gateway application ID"
+          },
+          "rootEpoch": {
+            "type": "integer",
+            "description": "Latest registered KMS root epoch, counting from 1; absent when none is registered"
           }
         }
       },
@@ -216,6 +220,18 @@
           "appImplementation": {
             "type": "string",
             "description": "App implementation address"
+          },
+          "rootEpochs": {
+            "type": "array",
+            "description": "Registered KMS root epochs 1, 2, ... in order",
+            "items": {
+              "type": "object",
+              "required": ["caPubkey", "k256Pubkey"],
+              "properties": {
+                "caPubkey": { "type": "string", "description": "Root CA public key (hex)" },
+                "k256Pubkey": { "type": "string", "description": "Root secp256k1 public key (hex)" }
+              }
+            }
           }
         }
       },

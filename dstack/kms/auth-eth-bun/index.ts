@@ -35,8 +35,12 @@ const BootInfoSchema = z.object({
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
-  gatewayAppId: z.string()
+  gatewayAppId: z.string(),
+  // Latest registered KMS root epoch (from 1); absent when none is registered.
+  rootEpoch: z.number().optional()
 });
+
+type RootEpoch = { caPubkey: Hex; k256Pubkey: Hex };
 
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
@@ -108,8 +112,36 @@ const DSTACK_KMS_ABI = [
     stateMutability: 'view',
     inputs: [],
     outputs: [{ name: '', type: 'address' }]
+  },
+  {
+    name: 'latestRootEpoch',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }]
+  },
+  {
+    name: 'rootEpoch',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [{ name: 'epoch', type: 'uint256' }],
+    outputs: [
+      { name: 'caPubkey', type: 'bytes' },
+      { name: 'k256Pubkey', type: 'bytes' },
+      { name: 'attestation', type: 'bytes' }
+    ]
   }
 ] as const;
+
+// Contracts deployed before root epochs lack the registry getters.
+const isMissingFunction = (error: unknown): boolean => {
+  for (let cause: any = error; cause; cause = cause.cause) {
+    if (cause.name === 'ContractFunctionZeroDataError' || cause.name === 'ContractFunctionRevertedError') {
+      return true;
+    }
+  }
+  return false;
+};
 
 // ethereum backend class
 class EthereumBackend {
@@ -193,11 +225,47 @@ class EthereumBackend {
       blockNumber
     });
 
+    const latestEpoch = await this.getLatestRootEpoch(blockNumber);
+
     return {
       isAllowed,
       reason,
       gatewayAppId: gatewayAppId as string,
+      ...(latestEpoch > 0 && { rootEpoch: latestEpoch }),
     };
+  }
+
+  private async getLatestRootEpoch(blockNumber?: bigint): Promise<number> {
+    try {
+      const latest = await this.client.readContract({
+        address: this.kmsContractAddr,
+        abi: DSTACK_KMS_ABI,
+        functionName: 'latestRootEpoch',
+        blockNumber
+      });
+      return Number(latest ?? 0);
+    } catch (error) {
+      if (isMissingFunction(error)) return 0;
+      throw error;
+    }
+  }
+
+  // Registered root epochs 1, 2, ... in order.
+  async getRootEpochs(): Promise<RootEpoch[]> {
+    const blockNumber = await this.finalizedBlockNumber();
+    const latest = await this.getLatestRootEpoch(blockNumber);
+    return Promise.all(
+      Array.from({ length: latest }, async (_, index) => {
+        const [caPubkey, k256Pubkey] = await this.client.readContract({
+          address: this.kmsContractAddr,
+          abi: DSTACK_KMS_ABI,
+          functionName: 'rootEpoch',
+          args: [BigInt(index + 1)],
+          blockNumber
+        });
+        return { caPubkey, k256Pubkey };
+      })
+    );
   }
 
   async getGatewayAppId(): Promise<string> {
@@ -278,6 +346,7 @@ app.get('/', async (c) => {
       ethereum.getGatewayAppId(),
       ethereum.getChainId(),
       ethereum.getAppImplementation(),
+      ethereum.getRootEpochs(),
     ]);
     console.log('batch', batch);
 
@@ -289,6 +358,7 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
+      rootEpochs: batch[3],
     });
   } catch {
     console.error('authorization backend health check failed');
