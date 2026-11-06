@@ -22,9 +22,9 @@ use dstack_types::{
     gpu_policy_hash,
     shared_filenames::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
-        HOST_SHARED_DIR_NAME, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
+        HOST_SHARED_DIR_NAME, INSTANCE_INFO, REENCRYPTED_ENV, SYS_CONFIG, USER_CONFIG,
     },
-    GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
+    GpuPolicy, KeyProvider, KeyProviderInfo, ReencryptedEnv, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
 use luks::{
@@ -47,7 +47,7 @@ use tracing::{info, warn};
 
 use crate::{
     cmd_show_mrs,
-    crypto::dh_decrypt,
+    crypto::{dh_decrypt, dh_encrypt},
     gen_app_keys_from_seed,
     host_api::HostApi,
     host_shared::{mount_host_shared, unmount_host_shared},
@@ -3292,25 +3292,45 @@ impl<'a> Stage0<'a> {
 }
 
 impl Stage1<'_> {
-    fn decrypt_env_vars(
-        &self,
-        key: &[u8],
-        ciphertext: &[u8],
-        allowed: &BTreeSet<String>,
-    ) -> Result<BTreeMap<String, String>> {
-        let vars = if !ciphertext.is_empty() {
-            info!("Processing encrypted env");
-            let env_crypt_key: [u8; 32] = key.try_into().ok().context(
-                "encrypted env is present but the key provider gave no valid env crypt key",
-            )?;
-            let decrypted_json =
-                dh_decrypt(env_crypt_key, ciphertext).context("Failed to decrypt env file")?;
-            crate::parse_env_file::parse_env(&decrypted_json, allowed)?
-        } else {
-            info!("No encrypted env, using default");
-            Default::default()
+    /// Decrypt the host-supplied env. An env still encrypted to an older KMS
+    /// key epoch is re-encrypted to the current one for the host to swap in.
+    async fn decrypt_env(&self) -> Result<Vec<u8>> {
+        let ciphertext = &self.shared.encrypted_env;
+        let current_key = env_crypt_key(&self.keys.env_crypt_key)?;
+        let error = match dh_decrypt(current_key, ciphertext) {
+            Ok(plaintext) => return Ok(plaintext),
+            Err(error) => error,
         };
-        Ok(vars)
+        let current = kms_key_epoch(&self.keys).unwrap_or(0);
+        for epoch in (0..current).rev() {
+            let old = self
+                .shared
+                .request_historical_keys(&self.keys, epoch)
+                .await?;
+            let Ok(plaintext) = dh_decrypt(env_crypt_key(&old.env_crypt_key)?, ciphertext) else {
+                continue;
+            };
+            info!("re-encrypting the env from key epoch {epoch} to {current}");
+            let public_key =
+                x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(current_key));
+            let encrypted_env = dh_encrypt(public_key.to_bytes(), &plaintext)?;
+            if dh_decrypt(current_key, &encrypted_env)? != plaintext {
+                bail!("re-encrypted env does not round-trip");
+            }
+            let migrated = ReencryptedEnv {
+                source_sha256: sha256(ciphertext).to_vec(),
+                encrypted_env,
+                key_epoch: current,
+            };
+            safe_write_with_mode(
+                self.shared.dir.join(REENCRYPTED_ENV),
+                serde_json::to_vec(&migrated)?,
+                0o600,
+            )
+            .context("failed to write the re-encrypted env")?;
+            return Ok(plaintext);
+        }
+        Err(error).context("failed to decrypt env file")
     }
 
     fn write_env_file(&self, env_vars: &BTreeMap<String, String>) -> Result<()> {
@@ -3327,7 +3347,7 @@ impl Stage1<'_> {
         Ok(())
     }
 
-    fn unseal_env_vars(&self) -> Result<BTreeMap<String, String>> {
+    async fn unseal_env_vars(&self) -> Result<BTreeMap<String, String>> {
         let allowed_envs: BTreeSet<String> = self
             .shared
             .app_compose
@@ -3335,18 +3355,20 @@ impl Stage1<'_> {
             .iter()
             .cloned()
             .collect();
-        // Decrypt env file
-        let decrypted_env = self.decrypt_env_vars(
-            &self.keys.env_crypt_key,
-            &self.shared.encrypted_env,
-            &allowed_envs,
-        )?;
+        let decrypted_env = if self.shared.encrypted_env.is_empty() {
+            info!("No encrypted env, using default");
+            Default::default()
+        } else {
+            info!("Processing encrypted env");
+            let plaintext = self.decrypt_env().await?;
+            crate::parse_env_file::parse_env(&plaintext, &allowed_envs)?
+        };
         self.write_env_file(&decrypted_env)?;
         Ok(decrypted_env)
     }
 
     async fn setup(&self) -> Result<()> {
-        let _envs = self.unseal_env_vars()?;
+        let _envs = self.unseal_env_vars().await?;
         self.link_files()?;
         self.setup_socket_dir()?;
         self.setup_guest_agent_config()?;
@@ -3459,6 +3481,12 @@ macro_rules! const_pad {
 }
 
 const PAYLOAD_OFFSET: u64 = 16777216;
+
+fn env_crypt_key(key: &[u8]) -> Result<[u8; 32]> {
+    key.try_into()
+        .ok()
+        .context("encrypted env is present but the key provider gave no valid env crypt key")
+}
 
 fn kms_key_epoch(keys: &AppKeys) -> Option<u32> {
     match keys.key_provider {

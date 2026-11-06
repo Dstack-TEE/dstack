@@ -10,6 +10,7 @@ pub const USER_CONFIG: &str = ".user-config";
 pub const ENCRYPTED_ENV: &str = ".encrypted-env";
 pub const DECRYPTED_ENV: &str = ".decrypted-env";
 pub const DECRYPTED_ENV_JSON: &str = ".decrypted-env.json";
+pub const REENCRYPTED_ENV: &str = ".reencrypted-env.json";
 pub const INSTANCE_INFO: &str = ".instance_info";
 pub const HOST_SHARED_DIR: &str = "/dstack/.host-shared";
 pub const HOST_SHARED_DIR_NAME: &str = ".host-shared";

@@ -7,13 +7,13 @@ use std::{collections::HashSet, fmt::Debug, path::PathBuf, process::ExitStatus, 
 use anyhow::{Context, Result};
 use bollard::{container::ListContainersOptions, Docker};
 use dstack_guest_agent_rpc::v0::worker_server::WorkerRpc as _;
-use dstack_types::shared_filenames::{HOST_SHARED_DIR, SYS_CONFIG};
+use dstack_types::shared_filenames::{HOST_SHARED_DIR, REENCRYPTED_ENV, SYS_CONFIG};
 use dstack_types::SysConfig;
 use fs_err as fs;
 use guest_api::{
     guest_api_server::{GuestApiRpc, GuestApiServer},
     Container, DiskInfo, Gateway, GpuInfoResponse, GuestInfo, Interface, IpAddress,
-    ListContainersResponse, NetworkInformation, SystemInfo,
+    ListContainersResponse, NetworkInformation, ReencryptedEnv, SystemInfo,
 };
 use host_api::Notification;
 use ra_rpc::{CallContext, RpcCall};
@@ -44,6 +44,20 @@ impl RpcCall<AppState> for GuestApiHandler {
 }
 
 impl GuestApiRpc for GuestApiHandler {
+    async fn get_reencrypted_env(self) -> Result<ReencryptedEnv> {
+        let path = PathBuf::from(HOST_SHARED_DIR).join(REENCRYPTED_ENV);
+        let migrated: dstack_types::ReencryptedEnv = match fs::read(&path) {
+            Ok(json) => serde_json::from_slice(&json).context("invalid re-encrypted env")?,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+            Err(err) => return Err(err).context("failed to read the re-encrypted env"),
+        };
+        Ok(ReencryptedEnv {
+            source_sha256: migrated.source_sha256,
+            encrypted_env: migrated.encrypted_env,
+            key_epoch: migrated.key_epoch,
+        })
+    }
+
     async fn info(self) -> Result<GuestInfo> {
         let ext_rpc = ExternalRpcHandler::new(self.state);
         let info = timeout(GUEST_API_HANDLER_TIMEOUT, ext_rpc.info())
