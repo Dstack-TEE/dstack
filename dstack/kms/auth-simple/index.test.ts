@@ -446,6 +446,56 @@ describe('auth-simple', () => {
     });
   });
 
+  describe('root epochs', () => {
+    const rootEpochs = [
+      // Well-formed keys whose point bytes repeat one value.
+      { caPubkey: '0x3059301306072a8648ce3d020106082a8648ce3d03010703420004' + 'a0'.repeat(64), k256Pubkey: '0x02' + 'b0'.repeat(32) },
+      { caPubkey: '0x3059301306072a8648ce3d020106082a8648ce3d03010703420004' + 'a1'.repeat(64), k256Pubkey: '0x02' + 'b1'.repeat(32) }
+    ];
+    // Shared with the DstackKms contract tests.
+    const h0 = '0x10ab6b6c8e7601901b0f1767985bf40d35bf3129e0866fe12dcc7c8f04a298f2';
+    const h1 = '0x50152a82023f2219a31723b476c13bc5f608ab4147946dabdec15d4f3d648ed4';
+
+    const config = {
+      gatewayAppId: '0xgateway',
+      osImages: [baseBootInfo.osImageHash],
+      kms: { mrAggregated: [baseBootInfo.mrAggregated], allowAnyDevice: true },
+      apps: { '0xapp123': { composeHashes: ['0xcompose456'], allowAnyDevice: true } },
+      rootEpochs
+    };
+    const boot = async (path: string, fields: object) =>
+      (await app.fetch(new Request(`http://localhost/bootAuth/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...baseBootInfo, ...fields })
+      }))).json();
+    const info = async () =>
+      (await app.fetch(new Request('http://localhost/', { method: 'GET' }))).json();
+
+    it('allows only a KMS serving the current root epoch', async () => {
+      writeTestConfig(config);
+      expect(await info()).toMatchObject({ rootEpoch: 0, rootEpochHash: h0 });
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).isAllowed).toBe(true);
+      expect((await boot('app', {})).isAllowed).toBe(true);
+
+      writeTestConfig({ ...config, currentRootEpoch: 1 });
+      expect(await info()).toMatchObject({ rootEpoch: 1, rootEpochHash: h1 });
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: h1 })).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).reason).toMatch(/1 is current/);
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: h0 })).reason).toMatch(/not the registered/);
+      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      expect((await boot('app', {})).reason).toMatch(/reports none/);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
+    });
+
+    it('serves only epoch 0 when none is configured', async () => {
+      writeTestConfig({ ...config, rootEpochs: [] });
+      expect((await info()).rootEpoch).toBeUndefined();
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: h1 })).reason).toMatch(/not registered/);
+    });
+  });
+
   describe('hex normalization', () => {
     it('handles uppercase hex', async () => {
       writeTestConfig({

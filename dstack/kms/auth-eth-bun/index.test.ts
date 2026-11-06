@@ -230,6 +230,66 @@ describe('API Compatibility Tests', () => {
     });
 });
 
+  describe('root epochs', () => {
+    const validBootInfo = {
+      mrAggregated: '0x' + '12'.repeat(32),
+      osImageHash: '0x' + 'ab'.repeat(32),
+      appId: '0x' + '11'.repeat(20),
+      composeHash: '0x' + '22'.repeat(32),
+      instanceId: '0x' + '33'.repeat(20),
+      deviceId: '0x' + '44'.repeat(32),
+    };
+
+    const hash = '0x' + '11'.repeat(32);
+    const mockChain = (currentRootEpoch: () => unknown) =>
+      mockReadContract.mockImplementation((params) => {
+        switch (params.functionName) {
+          case 'isAppAllowed': return [true, ''];
+          case 'isKmsAllowed': return [true, ''];
+          case 'gatewayAppId': return '0xgateway';
+          case 'appImplementation': return '0x9876543210987654321098765432109876543210';
+          case 'currentRootEpoch': return currentRootEpoch();
+        }
+      });
+    const boot = async (path: string, fields: object) => {
+      const response = await appFetch(new Request(`http://localhost:3001/bootAuth/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...validBootInfo, ...fields }),
+      }));
+      return response.json();
+    };
+
+    it('allows only a KMS serving the current root epoch', async () => {
+      mockChain(() => [1n, hash]);
+
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).isAllowed).toBe(true);
+      const stale = await boot('app', { rootEpoch: 0, rootEpochHash: hash });
+      expect(stale.isAllowed).toBe(false);
+      expect(stale.reason).toMatch(/1 is current/);
+      const forked = await boot('app', { rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) });
+      expect(forked.reason).toMatch(/not the registered/);
+      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      expect((await boot('app', {})).reason).toMatch(/reports none/);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
+
+      const info = await appFetch(new Request('http://localhost:3001/'));
+      expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
+    });
+
+    it('treats a contract without the registry as having no epochs', async () => {
+      mockChain(() => {
+        throw Object.assign(new Error('call failed'), {
+          cause: { name: 'ContractFunctionZeroDataError' },
+        });
+      });
+
+      expect((await boot('app', {})).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: hash })).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).reason).toMatch(/not registered/);
+    });
+  });
+
   describe('POST /bootAuth/kms', () => {
     const validBootInfo = {
       mrAggregated: '0x1234567890123456789012345678901234567890123456789012345678901234',
@@ -449,6 +509,7 @@ describe('Authorization freshness and domain binding', () => {
         return decisions === 1 ? [true, 'initial allow'] : [false, 'policy changed'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'currentRootEpoch') return undefined;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -468,6 +529,7 @@ describe('Authorization freshness and domain binding', () => {
         return [true, 'allowed'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'currentRootEpoch') return undefined;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -492,6 +554,7 @@ describe('Authorization freshness and domain binding', () => {
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'currentRootEpoch') return undefined;
       throw new Error(`unexpected function ${params.functionName}`);
     });
     const recovered = await postApp();
@@ -522,6 +585,7 @@ describe('Ethereum finalized snapshot authorization', () => {
       expect(params.blockNumber).toBe(98n);
       if (params.functionName === 'isAppAllowed') return [true, 'finalized allow'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'currentRootEpoch') return undefined;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -541,6 +605,7 @@ describe('Ethereum finalized snapshot authorization', () => {
         return decisions === 1 ? [true, 'old canonical allow'] : [false, 'new canonical deny'];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'currentRootEpoch') return undefined;
       throw new Error(`unexpected function ${params.functionName}`);
     });
 
@@ -569,6 +634,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'currentRootEpoch') return undefined;
       throw new Error(`unexpected function ${params.functionName}`);
     });
     const recovered = await authorize();
@@ -611,6 +677,7 @@ describe('dstack-kms 0.6 bootAuth payload', () => {
         return [true, ''];
       }
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
+      if (params.functionName === 'currentRootEpoch') return undefined;
       throw new Error(`unexpected function ${params.functionName}`);
     });
   });

@@ -39,6 +39,8 @@ export async function build(): Promise<FastifyInstance> {
       tcbStatus: { type: 'string', maxLength: 128, default: '' },
       advisoryIds: { type: 'array', maxItems: 128, items: { type: 'string', maxLength: 256 }, default: [] },
       mrSystem: { ...hex(32, 'System MR measurement'), default: '' },
+      rootEpoch: { type: 'integer', minimum: 0 },
+      rootEpochHash: hex(32, 'Chain hash of the root epochs up to rootEpoch'),
     }
   });
 
@@ -84,6 +86,7 @@ export async function build(): Promise<FastifyInstance> {
         server.ethereum.getGatewayAppId(),
         server.ethereum.getChainId(),
         server.ethereum.getAppImplementation(),
+        server.ethereum.getRootEpoch(),
       ]);
       return {
         status: 'ok',
@@ -93,6 +96,7 @@ export async function build(): Promise<FastifyInstance> {
         chainId: batch[1],
         appAuthImplementation: batch[2], // NOTE: for backward compatibility
         appImplementation: batch[2],
+        ...batch[3],
       };
     } catch {
       _request.log.error('authorization backend health check failed');

@@ -151,6 +151,14 @@
           "mrSystem": {
             "type": "string",
             "description": "MR System measurement (optional for compatibility)"
+          },
+          "rootEpoch": {
+            "type": "integer",
+            "description": "KMS root epoch the asking KMS serves; absent from a KMS that predates root epochs and from KMS checks made while onboarding"
+          },
+          "rootEpochHash": {
+            "type": "string",
+            "description": "Chain hash committing to the root public keys of epochs 0..=rootEpoch (hex)"
           }
         }
       },
@@ -216,6 +224,14 @@
           "appImplementation": {
             "type": "string",
             "description": "App implementation address"
+          },
+          "rootEpoch": {
+            "type": "integer",
+            "description": "Current KMS root epoch; absent when none is registered"
+          },
+          "rootEpochHash": {
+            "type": "string",
+            "description": "Chain hash committing to the root public keys of epochs 0..=rootEpoch (hex)"
           }
         }
       },

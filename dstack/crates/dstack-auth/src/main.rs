@@ -58,6 +58,10 @@ struct BootInfo {
     app_id: String,
     compose_hash: String,
     device_id: String,
+    /// the root epoch the asking KMS serves and its chain hash; absent from a
+    /// KMS that predates root epochs, and from KMS checks made while onboarding.
+    root_epoch: Option<usize>,
+    root_epoch_hash: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -68,6 +72,13 @@ struct BootResponse {
     reason: String,
 }
 
+/// the current KMS root epoch and its chain hash, which commits to the root
+/// public keys of epochs 0..=number.
+struct EpochInfo {
+    number: usize,
+    hash: String,
+}
+
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 struct Allowlist {
@@ -75,6 +86,41 @@ struct Allowlist {
     gateway_app_id: String,
     kms: KmsRules,
     apps: HashMap<String, AppRules>,
+    /// root public keys of each KMS root epoch, indexed by epoch; append only.
+    root_epochs: Vec<RootEpoch>,
+    /// the root epoch KMS instances serve; raise it once every node holds it.
+    current_root_epoch: usize,
+}
+
+#[derive(Deserialize, Default, Clone)]
+#[serde(rename_all = "camelCase", default)]
+struct RootEpoch {
+    ca_pubkey: String,
+    k256_pubkey: String,
+}
+
+impl Allowlist {
+    /// `None` when no epoch is configured, or the configuration is invalid,
+    /// which a KMS past epoch 0 treats as fail-closed.
+    fn current_root_epoch(&self) -> Option<EpochInfo> {
+        let epochs = self.root_epochs.get(..=self.current_root_epoch)?;
+        let keys = epochs
+            .iter()
+            .map(|e| {
+                Some((
+                    hex::decode(norm(&e.ca_pubkey)).ok()?,
+                    hex::decode(norm(&e.k256_pubkey)).ok()?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let hashes = dstack_types::root_epoch::chain_hashes(
+            keys.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
+        );
+        Some(EpochInfo {
+            number: self.current_root_epoch,
+            hash: format!("0x{}", hex::encode(hashes.last()?)),
+        })
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -125,11 +171,36 @@ fn deny(al: &Allowlist, reason: &str) -> BootResponse {
     }
 }
 
-fn allow(al: &Allowlist) -> BootResponse {
-    BootResponse {
-        is_allowed: true,
-        gateway_app_id: al.gateway_app_id.clone(),
-        reason: "ok".to_string(),
+/// allow, provided the asking KMS serves the current root epoch with the
+/// registered keys up to it. A KMS that predates root epochs reports none and
+/// holds only epoch 0; KMS checks made while onboarding carry none.
+fn allow(info: &BootInfo, is_kms: bool, al: &Allowlist) -> BootResponse {
+    let current = al.current_root_epoch();
+    let current_epoch = current.as_ref().map_or(0, |c| c.number);
+    let denial = match (info.root_epoch, &current) {
+        (None, _) if is_kms || current_epoch == 0 => None,
+        (None, _) => Some(format!(
+            "root epoch {current_epoch} is current, but the KMS reports none"
+        )),
+        (Some(0), None) => None,
+        (Some(epoch), None) => Some(format!("root epoch {epoch} is not registered")),
+        (Some(epoch), Some(_)) if epoch != current_epoch => Some(format!(
+            "the KMS serves root epoch {epoch}, but {current_epoch} is current"
+        )),
+        (Some(_), Some(c)) if info.root_epoch_hash.as_deref().map(norm) != Some(norm(&c.hash)) => {
+            Some(format!(
+                "the KMS root keys up to epoch {current_epoch} are not the registered ones"
+            ))
+        }
+        _ => None,
+    };
+    match denial {
+        Some(reason) => deny(al, &reason),
+        None => BootResponse {
+            is_allowed: true,
+            gateway_app_id: al.gateway_app_id.clone(),
+            reason: "ok".to_string(),
+        },
     }
 }
 
@@ -152,7 +223,7 @@ fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
     if !device_ok(app.allow_any_device, &app.devices, &info.device_id) {
         return deny(al, "device not allowed");
     }
-    allow(al)
+    allow(info, false, al)
 }
 
 fn check_kms(info: &BootInfo, al: &Allowlist) -> BootResponse {
@@ -162,7 +233,7 @@ fn check_kms(info: &BootInfo, al: &Allowlist) -> BootResponse {
     if !device_ok(al.kms.allow_any_device, &al.kms.devices, &info.device_id) {
         return deny(al, "device not allowed");
     }
-    allow(al)
+    allow(info, true, al)
 }
 
 /// load the allowlist, failing closed (deny-all) if it's missing or invalid.
@@ -206,15 +277,24 @@ fn boot_kms(info: Json<BootInfo>, cli: &State<Cli>) -> Json<BootResponse> {
 
 /// info endpoint the KMS GETs to populate its metadata. Single-node: no chain.
 #[get("/")]
-fn info() -> Json<serde_json::Value> {
-    Json(json!({
+fn info(cli: &State<Cli>) -> Json<serde_json::Value> {
+    Json(info_json(&load(&cli.config)))
+}
+
+fn info_json(al: &Allowlist) -> serde_json::Value {
+    let mut info = json!({
         "status": "ok",
         "kmsContractAddr": "",
         "ethRpcUrl": "",
         "gatewayAppId": "",
         "chainId": 0,
-        "appImplementation": ""
-    }))
+        "appImplementation": "",
+    });
+    if let Some(epoch) = al.current_root_epoch() {
+        info["rootEpoch"] = epoch.number.into();
+        info["rootEpochHash"] = epoch.hash.into();
+    }
+    info
 }
 
 #[rocket::main]
@@ -281,6 +361,61 @@ mod tests {
         assert!(check_kms(&info, &al).is_allowed);
         // fail closed: empty allowlist denies (the single-node case never calls this).
         assert!(!check_kms(&info, &Allowlist::default()).is_allowed);
+    }
+
+    #[test]
+    fn allows_only_a_kms_serving_the_current_root_epoch() {
+        // Shared with the DstackKms contract tests.
+        let h0 = "0x10ab6b6c8e7601901b0f1767985bf40d35bf3129e0866fe12dcc7c8f04a298f2";
+        let h1 = "0x50152a82023f2219a31723b476c13bc5f608ab4147946dabdec15d4f3d648ed4";
+        let mut al: Allowlist = serde_json::from_str(
+            r#"{"kms":{"mrAggregated":["0xMR"]},
+                "rootEpochs":[{"caPubkey":"0x3059301306072a8648ce3d020106082a8648ce3d03010703420004a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0","k256Pubkey":"0x02b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"},
+                              {"caPubkey":"0x3059301306072a8648ce3d020106082a8648ce3d03010703420004a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1","k256Pubkey":"0x02b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"}]}"#,
+        )
+        .unwrap();
+        let info = |epoch: Option<usize>, hash: &str| BootInfo {
+            mr_aggregated: "0xMR".into(),
+            root_epoch: epoch,
+            root_epoch_hash: Some(hash.into()),
+            ..Default::default()
+        };
+        assert_eq!(info_json(&al)["rootEpochHash"], h0);
+        assert!(check_kms(&info(Some(0), h0), &al).is_allowed);
+
+        al.current_root_epoch = 1;
+        assert_eq!(info_json(&al)["rootEpoch"], 1);
+        assert_eq!(info_json(&al)["rootEpochHash"], h1);
+        assert!(check_kms(&info(Some(1), &h1.to_uppercase()), &al).is_allowed);
+        assert!(!check_kms(&info(Some(0), h0), &al).is_allowed);
+        assert!(!check_kms(&info(Some(1), h0), &al).is_allowed);
+        // onboarding checks carry no epoch
+        assert!(check_kms(&info(None, ""), &al).is_allowed);
+
+        al.current_root_epoch = 2;
+        assert!(al.current_root_epoch().is_none());
+        assert!(info_json(&al).get("rootEpoch").is_none());
+        assert!(!check_kms(&info(Some(1), h1), &al).is_allowed);
+    }
+
+    #[test]
+    fn a_kms_predating_root_epochs_is_cut_off_once_one_is_current() {
+        let mut al = allowlist();
+        let info = boot("0xapp1", "0xhash", "0ximg");
+        assert!(check_app(&info, &al).is_allowed);
+        al.root_epochs = vec![
+            RootEpoch {
+                ca_pubkey: "0xa0".into(),
+                k256_pubkey: "0xb0".into(),
+            },
+            RootEpoch {
+                ca_pubkey: "0xa1".into(),
+                k256_pubkey: "0xb1".into(),
+            },
+        ];
+        assert!(check_app(&info, &al).is_allowed);
+        al.current_root_epoch = 1;
+        assert!(!check_app(&info, &al).is_allowed);
     }
 
     // wire-contract snapshot: BootInfo as the KMS serializes it (camelCase).
