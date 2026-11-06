@@ -448,17 +448,6 @@ service Vmm {
 
   // Delete a local guest image by name.
   rpc DeleteImage(Id) returns (google.protobuf.Empty);
-
-  // Replace the VM's encrypted env with the copy the guest re-encrypted to
-  // the current KMS key epoch at boot, if the env has not changed since.
-  rpc ApplyReencryptedEnv(Id) returns (ApplyReencryptedEnvResponse);
-}
-
-message ApplyReencryptedEnvResponse {
-  // Whether the stored encrypted env was replaced.
-  bool replaced = 1;
-  // KMS key epoch the stored env is now encrypted for, when replaced.
-  uint32 root_epoch = 2;
 }
 
 // Response containing a list of supervisor processes.

@@ -692,14 +692,6 @@ class VmmCLI:
             self.rpc_call("ShutdownVm", {"id": vm_id})
             print(f"Gracefully shutting down VM {vm_id}")
 
-    def apply_reencrypted_env(self, vm_id: str) -> None:
-        """Swap in the env the guest re-encrypted to the current KMS key epoch."""
-        result = self.rpc_call("ApplyReencryptedEnv", {"id": vm_id})
-        if result.get("replaced"):
-            print(f"Replaced env of VM {vm_id} (key epoch {result.get('root_epoch', 0)})")
-        else:
-            print(f"VM {vm_id} has no re-encrypted env to apply")
-
     def remove_vm(self, vm_id: str) -> None:
         """Remove a VM."""
         self.rpc_call("RemoveVm", {"id": vm_id})
@@ -2167,12 +2159,6 @@ def main():
         "--kms-url", action="append", type=str, help="KMS URL"
     )
 
-    apply_env_parser = subparsers.add_parser(
-        "apply-reencrypted-env",
-        help="Replace a VM's env with the copy it re-encrypted to the current KMS key epoch",
-    )
-    apply_env_parser.add_argument("vm_id", help="VM ID")
-
     # Whitelist command
     kms_parser = subparsers.add_parser("kms", help="Manage trusted KMS whitelist")
     kms_subparsers = kms_parser.add_subparsers(dest="kms_action", help="KMS actions")
@@ -2409,8 +2395,6 @@ def main():
         cli.update_vm_env(
             args.vm_id, parse_env_file(args.env_file), kms_urls=args.kms_url
         )
-    elif args.command == "apply-reencrypted-env":
-        cli.apply_reencrypted_env(args.vm_id)
     elif args.command == "update-user-config":
         cli.update_vm_user_config(args.vm_id, open(args.user_config, "r").read())
     elif args.command == "update-app-compose":

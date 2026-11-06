@@ -538,8 +538,10 @@ for the full procedure; the KMS steps are:
    auth-simple). Every KMS restarts onto N; a KMS that does not hold N waits
    until it is onboarded again.
 6. Boot CVMs on an OS that supports root epochs. They re-key their data disk and
-   re-encrypt their env at boot; apply the new env with
-   `vmm-cli.py apply-reencrypted-env <vm-id>`.
+   re-encrypt their env at boot; the VMM stores the re-encrypted env, provided
+   it was not changed while the VM booted. The VMM accepts one such update per
+   boot, before application code runs, of at most
+   `[host_api.limits] UpdateEncryptedEnv` (1 MiB by default).
 
 The auth backend reports the current epoch and the chain hash committing to the
 root public keys of epochs 0..current; a KMS serves only while its own keys

@@ -12,11 +12,10 @@ use dstack_types::AppCompose;
 use dstack_vmm_rpc as rpc;
 use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
-    AppId, ApplyReencryptedEnvResponse, ComposeHash as RpcComposeHash, GatewaySettings,
-    GetInfoResponse, GetMetaResponse, Id, ImageInfo as RpcImageInfo, ImageListResponse,
-    KmsSettings, ListGpusResponse, PublicKeyResponse, ReloadVmsResponse, ResizeVmRequest,
-    ResourcesSettings, StatusRequest, StatusResponse, SvListResponse, SvProcessInfo,
-    UpdateVmRequest, VersionResponse, VmConfiguration,
+    AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
+    ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
+    ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
+    SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
 };
 use fs_err as fs;
 use path_absolutize::Absolutize;
@@ -1296,31 +1295,6 @@ impl VmmRpc for RpcHandler {
             .await
             .context("Failed to load VM")?;
         Ok(())
-    }
-
-    async fn apply_reencrypted_env(self, request: Id) -> Result<ApplyReencryptedEnvResponse> {
-        use sha2::Digest;
-        let migrated = self
-            .guest_agent_client(&request.id)?
-            .get_encrypted_env()
-            .await?;
-        if migrated.encrypted_env.is_empty()
-            || sha2::Sha256::digest(&migrated.encrypted_env)[..] == migrated.source_sha256[..]
-        {
-            return Ok(ApplyReencryptedEnvResponse::default());
-        }
-        let path = self.encrypted_env_path(&request.id)?;
-        let stored = fs::read(&path).context("Failed to read encrypted env")?;
-        if sha2::Sha256::digest(&stored)[..] != migrated.source_sha256[..] {
-            bail!("the encrypted env changed since the VM booted; not replacing it");
-        }
-        safe_write::safe_write(&path, &migrated.encrypted_env)
-            .context("Failed to write encrypted env")?;
-        info!(vm_id = %request.id, root_epoch = migrated.root_epoch, "applied re-encrypted env");
-        Ok(ApplyReencryptedEnvResponse {
-            replaced: true,
-            root_epoch: migrated.root_epoch,
-        })
     }
 
     async fn shutdown_vm(self, request: Id) -> Result<()> {

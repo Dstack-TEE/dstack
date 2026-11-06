@@ -530,9 +530,16 @@ impl App {
         }
         self.sync_dynamic_config(id)?;
         self.set_started(id, true)?;
+        // A guest the VMM did not launch may already run application code.
+        let env_update = if is_running {
+            None
+        } else {
+            Some(sha256_of_env(&self.encrypted_env_path(id)?)?)
+        };
         let vm_config = {
             let mut state = self.lock();
             let vm_state = state.get_mut(id).context("VM not found")?;
+            vm_state.state.env_update = env_update;
             // Older images does not support for progress reporting
             if vm_state.config.image.info.shared_ro {
                 vm_state.state.start(is_running);
@@ -1561,7 +1568,22 @@ impl App {
             vm.state.events.pop_front();
         }
         match event {
-            "boot.progress" => vm.state.boot_progress = body,
+            "boot.progress" => {
+                // Application code (init and pre-launch scripts, containers)
+                // runs from here on, so the guest OS can no longer vouch for
+                // an env update.
+                if matches!(
+                    body.as_str(),
+                    "init-script"
+                        | "pre-launch"
+                        | "starting containers"
+                        | "running main script"
+                        | "done"
+                ) {
+                    vm.state.env_update = None;
+                }
+                vm.state.boot_progress = body;
+            }
             "boot.error" => vm.state.boot_error = body,
             "shutdown.progress" => {
                 let powering_off = body == "powering off";
@@ -1579,6 +1601,35 @@ impl App {
             }
             _ => error!("Guest reported unknown event: {event}"),
         }
+        Ok(())
+    }
+
+    /// Store the encrypted env a guest re-encrypted at boot. Accepted once per
+    /// boot, before application code runs, and only over the env the VM booted
+    /// with, so an update made since then is never overwritten.
+    pub(crate) fn update_encrypted_env(&self, cid: u32, encrypted_env: Vec<u8>) -> Result<()> {
+        let (id, boot_env) = {
+            let mut state = self.lock();
+            let vm = state
+                .vms
+                .values_mut()
+                .find(|vm| vm.config.cid == cid)
+                .context("VM not found")?;
+            let boot_env = vm.state.env_update.take();
+            (vm.config.manifest.id.clone(), boot_env)
+        };
+        let Some(boot_env) = boot_env else {
+            bail!("the encrypted env can only be updated once per boot, before applications start");
+        };
+        if encrypted_env.is_empty() {
+            return Ok(());
+        }
+        let path = self.encrypted_env_path(&id)?;
+        if sha256_of_env(&path)? != boot_env {
+            bail!("the encrypted env changed since the VM booted; not replacing it");
+        }
+        safe_write::safe_write(&path, &encrypted_env).context("Failed to write encrypted env")?;
+        info!(id, "stored the encrypted env re-encrypted by the guest");
         Ok(())
     }
 
@@ -2103,6 +2154,15 @@ fn sha256_file(path: impl AsRef<Path>) -> Result<[u8; 32]> {
     Ok(out)
 }
 
+/// SHA-256 of a VM's encrypted env; a VM without one hashes as empty.
+fn sha256_of_env(path: &Path) -> Result<[u8; 32]> {
+    match fs::read(path) {
+        Ok(env) => Ok(Sha256::digest(env).into()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Sha256::digest([]).into()),
+        Err(err) => Err(err).context("Failed to read encrypted env"),
+    }
+}
+
 fn image_supports_tdx_lite(image: &Image) -> bool {
     image
         .digest
@@ -2506,6 +2566,51 @@ mod tests {
             gateway_enabled: false,
         };
         (vm, networks)
+    }
+
+    #[test]
+    fn a_guest_stores_its_env_once_per_boot_before_apps_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let (vm, _) = bridge_vm(&app, "vm-1");
+        let cid = vm.cid;
+        app.lock().vms.insert("vm-1".into(), VmState::new(vm));
+        let env_path = app.encrypted_env_path("vm-1").unwrap();
+        std::fs::create_dir_all(env_path.parent().unwrap()).unwrap();
+        std::fs::write(&env_path, b"old").unwrap();
+        let boot = || {
+            let hash = sha256_of_env(&env_path).unwrap();
+            app.lock().vms.get_mut("vm-1").unwrap().state.env_update = Some(hash);
+        };
+        let stored = || std::fs::read(&env_path).unwrap();
+
+        // Nothing is accepted outside a boot the VMM launched.
+        assert!(app.update_encrypted_env(cid, b"new".to_vec()).is_err());
+
+        boot();
+        app.update_encrypted_env(cid, b"new".to_vec()).unwrap();
+        assert_eq!(stored(), b"new");
+        assert!(app.update_encrypted_env(cid, b"newer".to_vec()).is_err());
+
+        // An empty update consumes the boot's one chance.
+        boot();
+        app.update_encrypted_env(cid, Vec::new()).unwrap();
+        assert!(app.update_encrypted_env(cid, b"newer".to_vec()).is_err());
+
+        // An env updated since the boot is never overwritten.
+        boot();
+        std::fs::write(&env_path, b"updated by the owner").unwrap();
+        assert!(app.update_encrypted_env(cid, b"newer".to_vec()).is_err());
+        assert_eq!(stored(), b"updated by the owner");
+
+        // Once application code runs, the guest OS no longer vouches for it.
+        boot();
+        app.vm_event_report(cid, "boot.progress", "init-script".into())
+            .unwrap();
+        assert!(app.update_encrypted_env(cid, b"newer".to_vec()).is_err());
     }
 
     /// A launch that never reached a netd built nothing, so it must not leave
@@ -3950,6 +4055,10 @@ struct VmStateMut {
     auto_restart: AutoRestartState,
     /// True when the VM is being removed (cleanup in progress).
     removing: bool,
+    /// SHA-256 of the encrypted env this boot started with, while the guest
+    /// may still replace it; taken by the first update and cleared once the
+    /// boot reaches application code.
+    env_update: Option<[u8; 32]>,
 }
 
 impl VmStateMut {

@@ -22,9 +22,9 @@ use dstack_types::{
     gpu_policy_hash,
     shared_filenames::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
-        HOST_SHARED_DIR_NAME, INSTANCE_INFO, REENCRYPTED_ENV, SYS_CONFIG, USER_CONFIG,
+        HOST_SHARED_DIR_NAME, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
     },
-    GpuPolicy, KeyProvider, KeyProviderInfo, ReencryptedEnv, GPU_ATTESTATION_OUTPUT,
+    GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
 use luks::{
@@ -3291,12 +3291,12 @@ impl<'a> Stage0<'a> {
 
 impl Stage1<'_> {
     /// Decrypt the host-supplied env. An env still encrypted to an older KMS
-    /// key epoch is re-encrypted to the current one for the host to swap in.
-    async fn decrypt_env(&self) -> Result<Vec<u8>> {
+    /// root epoch is also returned re-encrypted to the current one.
+    async fn decrypt_env(&self) -> Result<(Vec<u8>, Option<Vec<u8>>)> {
         let ciphertext = &self.shared.encrypted_env;
         let current_key = env_crypt_key(&self.keys.env_crypt_key)?;
         let error = match dh_decrypt(current_key, ciphertext) {
-            Ok(plaintext) => return Ok(plaintext),
+            Ok(plaintext) => return Ok((plaintext, None)),
             Err(error) => error,
         };
         let current = self.keys.root_epoch();
@@ -3315,18 +3315,7 @@ impl Stage1<'_> {
             if dh_decrypt(current_key, &encrypted_env)? != plaintext {
                 bail!("re-encrypted env does not round-trip");
             }
-            let migrated = ReencryptedEnv {
-                source_sha256: sha256(ciphertext).to_vec(),
-                encrypted_env,
-                root_epoch: current,
-            };
-            safe_write_with_mode(
-                self.shared.dir.join(REENCRYPTED_ENV),
-                serde_json::to_vec(&migrated)?,
-                0o600,
-            )
-            .context("failed to write the re-encrypted env")?;
-            return Ok(plaintext);
+            return Ok((plaintext, Some(encrypted_env)));
         }
         Err(error).context("failed to decrypt env file")
     }
@@ -3353,15 +3342,27 @@ impl Stage1<'_> {
             .iter()
             .cloned()
             .collect();
-        let decrypted_env = if self.shared.encrypted_env.is_empty() {
+        let (decrypted_env, reencrypted) = if self.shared.encrypted_env.is_empty() {
             info!("No encrypted env, using default");
-            Default::default()
+            (Default::default(), None)
         } else {
             info!("Processing encrypted env");
-            let plaintext = self.decrypt_env().await?;
-            crate::parse_env_file::parse_env(&plaintext, &allowed_envs)?
+            let (plaintext, reencrypted) = self.decrypt_env().await?;
+            (
+                crate::parse_env_file::parse_env(&plaintext, &allowed_envs)?,
+                reencrypted,
+            )
         };
         self.write_env_file(&decrypted_env)?;
+        // Sent on every boot, empty when nothing changed: the host accepts one
+        // update per boot, and this one comes before any application code.
+        if let Err(err) = self
+            .vmm
+            .update_encrypted_env(reencrypted.unwrap_or_default())
+            .await
+        {
+            warn!("failed to store the re-encrypted env on the host: {err:#}");
+        }
         Ok(decrypted_env)
     }
 

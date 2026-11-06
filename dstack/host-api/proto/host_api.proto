@@ -27,8 +27,17 @@ message GetSealingKeyResponse {
   bytes provider_quote = 2;
 }
 
+// The env the guest re-encrypted to the current KMS root epoch at boot; empty
+// when it needed no change.
+message EncryptedEnv {
+  bytes encrypted_env = 1;
+}
+
 service HostApi {
   rpc Info(google.protobuf.Empty) returns (HostInfo);
   rpc Notify(Notification) returns (google.protobuf.Empty);
   rpc GetSealingKey(GetSealingKeyRequest) returns (GetSealingKeyResponse);
+  // Replace this VM's stored encrypted env. Accepted once per boot, before
+  // application code runs, and only if the stored env is the one it booted with.
+  rpc UpdateEncryptedEnv(EncryptedEnv) returns (google.protobuf.Empty);
 }

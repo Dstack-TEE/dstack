@@ -7,17 +7,16 @@ use std::{collections::HashSet, fmt::Debug, path::PathBuf, process::ExitStatus, 
 use anyhow::{Context, Result};
 use bollard::{container::ListContainersOptions, Docker};
 use dstack_guest_agent_rpc::v0::worker_server::WorkerRpc as _;
-use dstack_types::shared_filenames::{ENCRYPTED_ENV, HOST_SHARED_DIR, REENCRYPTED_ENV, SYS_CONFIG};
+use dstack_types::shared_filenames::{HOST_SHARED_DIR, SYS_CONFIG};
 use dstack_types::SysConfig;
 use fs_err as fs;
 use guest_api::{
     guest_api_server::{GuestApiRpc, GuestApiServer},
-    Container, DiskInfo, EncryptedEnv, Gateway, GpuInfoResponse, GuestInfo, Interface, IpAddress,
+    Container, DiskInfo, Gateway, GpuInfoResponse, GuestInfo, Interface, IpAddress,
     ListContainersResponse, NetworkInformation, SystemInfo,
 };
 use host_api::Notification;
 use ra_rpc::{CallContext, RpcCall};
-use sha2::Digest as _;
 use tokio::{process::Command, task::spawn_blocking, time::timeout};
 use tracing::error;
 
@@ -45,31 +44,6 @@ impl RpcCall<AppState> for GuestApiHandler {
 }
 
 impl GuestApiRpc for GuestApiHandler {
-    async fn get_encrypted_env(self) -> Result<EncryptedEnv> {
-        let read = |name: &str| match fs::read(PathBuf::from(HOST_SHARED_DIR).join(name)) {
-            Ok(data) => Ok(Some(data)),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(err),
-        };
-        if let Some(json) = read(REENCRYPTED_ENV).context("failed to read the re-encrypted env")? {
-            let migrated: dstack_types::ReencryptedEnv =
-                serde_json::from_slice(&json).context("invalid re-encrypted env")?;
-            return Ok(EncryptedEnv {
-                source_sha256: migrated.source_sha256,
-                encrypted_env: migrated.encrypted_env,
-                root_epoch: migrated.root_epoch,
-            });
-        }
-        let Some(env) = read(ENCRYPTED_ENV).context("failed to read the encrypted env")? else {
-            return Ok(Default::default());
-        };
-        Ok(EncryptedEnv {
-            source_sha256: sha2::Sha256::digest(&env).to_vec(),
-            encrypted_env: env,
-            root_epoch: self.state.root_epoch(),
-        })
-    }
-
     async fn info(self) -> Result<GuestInfo> {
         let ext_rpc = ExternalRpcHandler::new(self.state);
         let info = timeout(GUEST_API_HANDLER_TIMEOUT, ext_rpc.info())

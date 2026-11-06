@@ -5,7 +5,7 @@
 use anyhow::{bail, Context, Result};
 use host_api::{
     host_api_server::{HostApiRpc, HostApiServer},
-    GetSealingKeyRequest, GetSealingKeyResponse, HostInfo, Notification,
+    EncryptedEnv, GetSealingKeyRequest, GetSealingKeyResponse, HostInfo, Notification,
 };
 use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 use rocket_vsock_listener::VsockEndpoint;
@@ -44,6 +44,11 @@ impl HostApiRpc for HostApiHandler {
     async fn notify(self, request: Notification) -> Result<()> {
         self.app
             .vm_event_report(self.endpoint.cid, &request.event, request.payload)
+    }
+
+    async fn update_encrypted_env(self, request: EncryptedEnv) -> Result<()> {
+        self.app
+            .update_encrypted_env(self.endpoint.cid, request.encrypted_env)
     }
 
     async fn get_sealing_key(self, request: GetSealingKeyRequest) -> Result<GetSealingKeyResponse> {

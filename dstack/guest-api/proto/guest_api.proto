@@ -185,18 +185,6 @@ message GpuInfoResponse {
   optional uint64 sample_age_ms = 5;
 }
 
-// The encrypted env the host should store for this VM: the env this boot
-// started from, or, if it was encrypted to an older KMS root epoch, the copy
-// boot re-encrypted to the current one. Empty when the VM has no env.
-message EncryptedEnv {
-  // SHA-256 of the encrypted env the host supplied for this boot.
-  bytes source_sha256 = 1;
-  // The env encrypted to the current env public key.
-  bytes encrypted_env = 2;
-  // KMS root epoch `encrypted_env` is encrypted for.
-  uint32 root_epoch = 3;
-}
-
 // Direct gRPC surface exposed by the in-guest agent.
 service GuestApi {
   // Returns attestation material and identifiers for the calling guest.
@@ -211,8 +199,6 @@ service GuestApi {
   rpc ListContainers(google.protobuf.Empty) returns (ListContainersResponse);
   // Initiates a graceful shutdown inside the guest VM.
   rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
-  // Returns the encrypted env the host should store for this VM.
-  rpc GetEncryptedEnv(google.protobuf.Empty) returns (EncryptedEnv);
 }
 
 // Same API surface as GuestApi but multiplexed by VM ID through VMM.
@@ -223,5 +209,4 @@ service ProxiedGuestApi {
   rpc NetworkInfo(Id) returns (NetworkInformation);
   rpc ListContainers(Id) returns (ListContainersResponse);
   rpc Shutdown(Id) returns (google.protobuf.Empty);
-  rpc GetEncryptedEnv(Id) returns (EncryptedEnv);
 }

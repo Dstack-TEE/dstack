@@ -534,17 +534,6 @@ The whitelist is stored in `~/.dstack-vmm/kms-whitelist.json`.
 ./vmm-cli.py update-env <vm-id> --env-file ./new-secrets.env
 ```
 
-After a KMS key rotation, a VM whose env is still encrypted to an older key
-epoch re-encrypts it to the current epoch at boot. Replace the stored env with
-that copy so later boots no longer need the old key:
-
-```bash
-./vmm-cli.py apply-reencrypted-env <vm-id>
-```
-
-The env is only replaced if it has not changed since the VM booted. Rotate
-any secrets the old key could expose separately.
-
 #### Update Application Compose
 
 ```bash

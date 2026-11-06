@@ -346,6 +346,10 @@ ident = "dstack VMM"
 address = "vsock:2"
 port = 10000
 
+[host_api.limits]
+# Largest encrypted env a guest may store after re-encrypting it at boot.
+UpdateEncryptedEnv = "1MiB"
+
 [key_provider]
 enabled = true
 address = "127.0.0.1"

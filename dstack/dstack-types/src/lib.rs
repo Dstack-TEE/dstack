@@ -2392,19 +2392,6 @@ impl OsImageMeasurementDocument {
     }
 }
 
-/// Encrypted env that boot re-encrypted from an older KMS key epoch to the
-/// current one, for the host to swap in place of the env it supplied.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct ReencryptedEnv {
-    /// SHA-256 of the encrypted env the host supplied for this boot.
-    #[serde(with = "hex_bytes")]
-    pub source_sha256: Vec<u8>,
-    /// The same env encrypted to the current env public key.
-    #[serde(with = "hex_bytes")]
-    pub encrypted_env: Vec<u8>,
-    pub root_epoch: u32,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppKeys {
     #[serde(with = "hex_bytes")]
