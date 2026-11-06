@@ -42,6 +42,8 @@ type GetKeyV1Response struct {
 	// key over the app root public key. See `docs/guest-api-v1.md` for the claim
 	// encoding and the verification steps.
 	SignatureChain [][]byte
+	// KMS root key epoch the key was derived from.
+	RootEpoch uint32
 }
 
 // Response from a v1 attestation request.
@@ -442,6 +444,18 @@ func (c *DstackClientV1) IssueCert(ctx context.Context, options ...IssueCertV1Op
 // Derivation is flat -- `a/b` is not a child of `a` -- and binds both arguments,
 // so these keys differ from the v0 keys of the same name.
 func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm string) (*GetKeyV1Response, error) {
+	return c.getKey(ctx, domain, algorithm, nil)
+}
+
+// GetKeyAtRootEpoch is GetKey under the KMS root key epoch rootEpoch instead of
+// the current one; epoch 0 is the original root keys. Name an older epoch only
+// to reach a key from before a KMS root key rotation, for example to migrate
+// off it.
+func (c *DstackClientV1) GetKeyAtRootEpoch(ctx context.Context, domain string, algorithm string, rootEpoch uint32) (*GetKeyV1Response, error) {
+	return c.getKey(ctx, domain, algorithm, &rootEpoch)
+}
+
+func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm string, rootEpoch *uint32) (*GetKeyV1Response, error) {
 	if algorithm == "" {
 		return nil, fmt.Errorf("algorithm is required, use `secp256k1` or `ed25519`")
 	}
@@ -449,6 +463,9 @@ func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm st
 	payload := map[string]interface{}{
 		"domain":    domain,
 		"algorithm": algorithm,
+	}
+	if rootEpoch != nil {
+		payload["root_epoch"] = *rootEpoch
 	}
 
 	data, err := c.sendRPCRequest(ctx, "/v1/GetKey", payload)
@@ -464,6 +481,7 @@ func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm st
 		Key            *string    `json:"key"`
 		PublicKey      *string    `json:"public_key"`
 		SignatureChain *[]*string `json:"signature_chain"`
+		RootEpoch      uint32     `json:"root_epoch"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
@@ -489,7 +507,12 @@ func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm st
 		}
 	}
 
-	return &GetKeyV1Response{Key: key, PublicKey: publicKey, SignatureChain: chain}, nil
+	return &GetKeyV1Response{
+		Key:            key,
+		PublicKey:      publicKey,
+		SignatureChain: chain,
+		RootEpoch:      response.RootEpoch,
+	}, nil
 }
 
 // Attest produces a versioned attestation over reportData, which must be

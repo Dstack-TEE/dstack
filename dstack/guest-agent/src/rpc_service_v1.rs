@@ -159,16 +159,19 @@ impl V1RpcHandler {
         Self { state }
     }
 
-    /// Derive the key named by `(domain, algorithm)` together with its
-    /// signature chain.
-    fn derive(&self, domain: &str, algorithm: &str) -> Result<(AppKey, Vec<Vec<u8>>)> {
+    /// Derive the key named by `(domain, algorithm)` under the app root of
+    /// `root_epoch`, together with its signature chain and that epoch.
+    async fn derive(
+        &self,
+        domain: &str,
+        algorithm: &str,
+        root_epoch: Option<u32>,
+    ) -> Result<(AppKey, Vec<Vec<u8>>, u32)> {
         let algorithm = Algorithm::parse(algorithm)?;
-        let key = AppKey::derive(self.state.app_root_k256_key(), domain, algorithm)?;
-        let chain = vec![
-            key.claim_signature(self.state.app_root_signing_key()?)?,
-            self.state.kms_k256_signature().to_vec(),
-        ];
-        Ok((key, chain))
+        let root = self.state.app_root(root_epoch).await?;
+        let key = AppKey::derive(&root.k256_key, domain, algorithm)?;
+        let chain = vec![key.claim_signature(&root.signing_key)?, root.kms_signature];
+        Ok((key, chain, root.epoch))
     }
 }
 
@@ -196,11 +199,14 @@ impl DstackGuestRpc for V1RpcHandler {
     }
 
     async fn get_key(self, request: GetKeyRequest) -> Result<GetKeyResponse> {
-        let (key, signature_chain) = self.derive(&request.domain, &request.algorithm)?;
+        let (key, signature_chain, root_epoch) = self
+            .derive(&request.domain, &request.algorithm, request.root_epoch)
+            .await?;
         Ok(GetKeyResponse {
             key: key.secret(),
             public_key: key.public_key(),
             signature_chain,
+            root_epoch,
         })
     }
 
@@ -342,7 +348,42 @@ mod tests {
         GetKeyRequest {
             domain: domain.to_string(),
             algorithm: algorithm.to_string(),
+            root_epoch: None,
         }
+    }
+
+    #[tokio::test]
+    async fn get_key_selects_the_root_epoch() {
+        let (state, _guard) = state().await;
+        let handler = || V1RpcHandler::new(state.clone());
+        let request = |root_epoch| GetKeyRequest {
+            root_epoch,
+            ..get_key_request("storage-encryption", "secp256k1")
+        };
+
+        let current = handler().get_key(request(None)).await.unwrap();
+        assert_eq!(current.root_epoch, 0);
+        assert_eq!(
+            handler().get_key(request(Some(0))).await.unwrap().key,
+            current.key
+        );
+        assert!(handler().get_key(request(Some(1))).await.is_err());
+    }
+
+    /// Older epochs come from the KMS once and are then served from memory;
+    /// the fixture has no KMS, so the cache is filled directly.
+    #[tokio::test]
+    async fn an_older_root_is_fetched_once_and_cached() {
+        let (state, _guard) = state().await;
+        let key = crate::rpc_service::tests::HISTORICAL_K256_KEY.to_vec();
+        state
+            .insert_historical_root(1, key.clone(), vec![0xab; 65])
+            .await;
+        let root = state.historical_root(1).await.unwrap();
+        assert_eq!(root.k256_key, key);
+        assert_eq!(root.kms_signature, [0xab; 65]);
+        // An uncached epoch needs the KMS, which a local key provider lacks.
+        assert!(state.historical_root(2).await.is_err());
     }
 
     /// The fixture's app root key is what `keys::tests` committed its vectors

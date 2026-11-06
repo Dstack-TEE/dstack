@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -92,11 +93,35 @@ pub struct AppState {
     inner: Arc<AppStateInner>,
 }
 
+/// The app root key of one KMS root epoch, with its KMS signature.
+#[derive(Clone)]
+pub(crate) struct AppRoot {
+    pub epoch: u32,
+    pub k256_key: Vec<u8>,
+    pub signing_key: SigningKey,
+    pub kms_signature: Vec<u8>,
+}
+
+impl AppRoot {
+    fn new(epoch: u32, k256_key: Vec<u8>, kms_signature: Vec<u8>) -> Result<Self> {
+        let signing_key = SigningKey::from_slice(&k256_key)
+            .context("the app root k256 key is not a valid secp256k1 scalar")?;
+        Ok(Self {
+            epoch,
+            k256_key,
+            signing_key,
+            kms_signature,
+        })
+    }
+}
+
 struct AppStateInner {
     config: Config,
     keys: AppKeys,
     vm_config: String,
     cert_client: CertRequestClient,
+    /// Held across a fetch so concurrent requests for one epoch fetch it once.
+    historical_roots: tokio::sync::Mutex<HashMap<u32, AppRoot>>,
     demo_cert: tokio::sync::OnceCell<String>,
     /// When the last demo-cert request failed; held while one is running.
     demo_cert_last_failure: tokio::sync::Mutex<Option<Instant>>,
@@ -300,6 +325,7 @@ impl AppState {
                 config,
                 keys,
                 cert_client,
+                historical_roots: Default::default(),
                 demo_cert: Default::default(),
                 demo_cert_last_failure: Default::default(),
                 vm_config,
@@ -375,6 +401,58 @@ impl AppState {
             anyhow::bail!("the app root k256 key is not a valid secp256k1 scalar");
         };
         Ok(key)
+    }
+
+    /// KMS root epoch of the app keys this agent serves.
+    pub(crate) fn root_epoch(&self) -> u32 {
+        self.inner.keys.root_epoch()
+    }
+
+    /// The app root key and its KMS signature of `root_epoch`; the current
+    /// ones when unset. An older epoch is requested from the KMS once and kept
+    /// in memory.
+    pub(crate) async fn app_root(&self, root_epoch: Option<u32>) -> Result<AppRoot> {
+        let current = self.root_epoch();
+        let epoch = root_epoch.unwrap_or(current);
+        if epoch == current {
+            return Ok(AppRoot {
+                epoch,
+                k256_key: self.app_root_k256_key().to_vec(),
+                signing_key: self.app_root_signing_key()?.clone(),
+                kms_signature: self.kms_k256_signature().to_vec(),
+            });
+        }
+        if epoch > current {
+            anyhow::bail!("root epoch {epoch} is newer than the current one, {current}");
+        }
+        self.historical_root(epoch).await
+    }
+
+    pub(crate) async fn historical_root(&self, epoch: u32) -> Result<AppRoot> {
+        let mut roots = self.inner.historical_roots.lock().await;
+        if let Some(root) = roots.get(&epoch) {
+            return Ok(root.clone());
+        }
+        let keys = self
+            .inner
+            .cert_client
+            .get_app_key(epoch)
+            .await
+            .with_context(|| format!("failed to fetch the app keys of root epoch {epoch}"))?;
+        let root = AppRoot::new(epoch, keys.k256_key, keys.k256_signature)?;
+        roots.insert(epoch, root.clone());
+        Ok(root)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn insert_historical_root(
+        &self,
+        epoch: u32,
+        k256_key: Vec<u8>,
+        kms_signature: Vec<u8>,
+    ) {
+        let root = AppRoot::new(epoch, k256_key, kms_signature).unwrap();
+        self.inner.historical_roots.lock().await.insert(epoch, root);
     }
 
     /// The KMS root key's signature over the app root public key: the second
@@ -1152,6 +1230,8 @@ pub(crate) mod tests {
             .expect("certificate carries an attestation")
     }
 
+    pub(crate) const HISTORICAL_K256_KEY: [u8; 32] = [0x11; 32];
+
     pub(crate) async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
         setup_test_state_with_platform(None).await
     }
@@ -1442,6 +1522,7 @@ pNs85uhOZE8z2jr8Pg==
             keys: dummy_keys,
             vm_config: String::new(),
             cert_client: dummy_cert_client,
+            historical_roots: Default::default(),
             demo_cert: Default::default(),
             demo_cert_last_failure: Default::default(),
             platform: Arc::new(TestSimulatorPlatform {
