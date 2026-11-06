@@ -262,6 +262,12 @@ SPDX-License-Identifier: Apache-2.0
                                         autocomplete="off">
                                 </div>
                                 <div class="form-group">
+                                    <label>
+                                        <input type="checkbox" v-model="rotate">
+                                        Rotate: import the previous epochs and generate a new root key epoch
+                                    </label>
+                                </div>
+                                <div class="form-group">
                                     <label for="domain">Domain Name:</label>
                                     <input type="text" id="domain" v-model="onboardDomain" required
                                         placeholder="The domain name serving this KMS RPC">
@@ -310,6 +316,7 @@ SPDX-License-Identifier: Apache-2.0
                     sourceUrl: '',
                     sourceToken: '',
                     onboardDomain: '',
+                    rotate: false,
                     error: '',
                     success: '',
                     result: '',
@@ -350,7 +357,7 @@ SPDX-License-Identifier: Apache-2.0
                         return;
                     }
                     if (data.attestation) {
-                        this.success = 'Bootstrap successful!';
+                        this.success = 'New root keys generated!';
                         this.result = JSON.stringify({
                             caPubkey: '0x' + data.ca_pubkey,
                             k256Pubkey: '0x' + data.k256_pubkey,
@@ -391,7 +398,8 @@ SPDX-License-Identifier: Apache-2.0
                         const data = await rpcCall('Onboard', {
                             source_url: this.sourceUrl + "/prpc",
                             source_token: this.sourceToken,
-                            domain: this.onboardDomain
+                            domain: this.onboardDomain,
+                            rotate: this.rotate
                         });
 
                         if (data.error) throw new Error(data.error);

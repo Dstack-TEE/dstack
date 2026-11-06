@@ -2453,6 +2453,7 @@ impl<'a> Stage0<'a> {
             .get_app_key(rpc::GetAppKeyRequest {
                 api_version: 1,
                 vm_config: self.shared.sys_config.vm_config.clone(),
+                root_epoch: None,
             })
             .await
             .context(
