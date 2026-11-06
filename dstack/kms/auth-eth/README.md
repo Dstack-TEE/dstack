@@ -170,3 +170,13 @@ anvil
 ```
 
 Documentation: https://book.getfoundry.sh/
+
+
+### Unified authorization
+
+`POST /checkAuthorization` returns `AuthorizationResult`, including
+`rejectReason`, `gatewayAppId`, `currentRootEpoch`, and `currentRootEpochHash`.
+It selects KMS or app policy from the verified `appId`. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for registration,
+bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
+remain available.

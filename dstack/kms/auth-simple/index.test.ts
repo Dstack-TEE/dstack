@@ -472,6 +472,34 @@ describe('auth-simple', () => {
     const info = async () =>
       (await app.fetch(new Request('http://localhost/', { method: 'GET' }))).json();
 
+    const authorize = async (fields: object = {}) =>
+      (await app.fetch(new Request('http://localhost/checkAuthorization', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...baseBootInfo, ...fields }),
+      }))).json();
+
+    it('selects KMS policy by app ID and returns the epoch on rejection', async () => {
+      const kmsContractAddr = '0x' + '11'.repeat(20);
+      writeTestConfig({ ...config, kmsContractAddr, currentRootEpoch: 1 });
+      expect(await authorize()).toMatchObject({
+        isAllowed: true, rejectReason: '', currentRootEpoch: 1, currentRootEpochHash: h1,
+      });
+      expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ appId: kmsContractAddr, mrAggregated: '0xbad' })).toMatchObject({
+        isAllowed: false, currentRootEpoch: 1, currentRootEpochHash: h1,
+      });
+      expect(await authorize({ appId: '0x' + '22'.repeat(20) })).toMatchObject({ isAllowed: false });
+    });
+
+    it('denies authorization without registered roots, while bootstrap remains available', async () => {
+      writeTestConfig({ ...config, rootEpochs: [] });
+      expect(await authorize()).toMatchObject({
+        isAllowed: false, rejectReason: 'Root epoch not registered',
+        currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32),
+      });
+      expect((await boot('kms', {})).isAllowed).toBe(true);
+    });
+
     it('allows only a KMS serving the current root epoch', async () => {
       writeTestConfig(config);
       expect(await info()).toMatchObject({ rootEpoch: 0, rootEpochHash: h0 });

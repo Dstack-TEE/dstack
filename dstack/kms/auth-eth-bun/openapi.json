@@ -98,6 +98,37 @@
           }
         }
       }
+    },
+    "/checkAuthorization": {
+      "post": {
+        "summary": "Authorize an attested identity and return the current root epoch",
+        "operationId": "checkAuthorization",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppInfo"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorization decision, including the epoch on rejection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationResult"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authorization backend unavailable; no legacy fallback."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -198,7 +229,9 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["ok"],
+            "enum": [
+              "ok"
+            ],
             "description": "System status"
           },
           "kmsContractAddr": {
@@ -244,11 +277,52 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["error"]
+            "enum": [
+              "error"
+            ]
           },
           "message": {
             "type": "string",
             "description": "Error message"
+          }
+        }
+      },
+      "AppInfo": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BootInfo"
+          }
+        ],
+        "description": "Verified attestation identity. The KMS app ID is the KMS contract address."
+      },
+      "AuthorizationResult": {
+        "type": "object",
+        "required": [
+          "isAllowed",
+          "rejectReason",
+          "gatewayAppId",
+          "currentRootEpoch",
+          "currentRootEpochHash"
+        ],
+        "properties": {
+          "isAllowed": {
+            "type": "boolean"
+          },
+          "rejectReason": {
+            "type": "string",
+            "description": "Empty when allowed."
+          },
+          "gatewayAppId": {
+            "type": "string"
+          },
+          "currentRootEpoch": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentRootEpochHash": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "Zero when no epoch is registered; authorization is denied."
           }
         }
       }

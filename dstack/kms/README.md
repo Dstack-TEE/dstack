@@ -242,3 +242,47 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 - Verify the CSR signature
 - Query the smart contract to check if the app is authorized
 - If authorized, sign the CSR with the CA root key and return the certificate chain to the app
+
+
+## Authorization protocol
+
+Normal KMS operations use `POST /checkAuthorization`. The request carries the
+verified attestation identity (the same identity fields as the legacy
+`/bootAuth/*` requests). The Ethereum backends call
+`DstackKms.checkAuthorization(AppInfo)` once; the contract selects KMS policy when
+`appId == address(this)` (the proxy address), and app policy otherwise. KMS-only
+operations also check this identity before accepting the result.
+
+The response is an `AuthorizationResult`:
+
+```json
+{
+  "isAllowed": true,
+  "rejectReason": "",
+  "gatewayAppId": "0x...",
+  "currentRootEpoch": 0,
+  "currentRootEpochHash": "0x..."
+}
+```
+
+Both successful and rejected decisions include the current epoch and chain hash
+from the same contract call or auth-simple configuration snapshot. With no
+registered epoch, the result is `isAllowed: false`,
+`rejectReason: "Root epoch not registered"`, epoch 0 and a zero hash. A zero hash
+never authorizes key release or requests an epoch switch.
+
+The KMS compares each result with its serving epoch and chain hash before
+releasing keys or signing certificates. A mismatch requests a process restart,
+including when policy also denies authorization. This does not consult the
+cached info endpoint. Rotation is detected on authorization requests, not by
+background polling; self-authorization retains its one-second cache.
+
+Upgrade the contract and auth backend and register epoch 0 before using this
+protocol for key release. Runtime authorization never falls back to the legacy
+API if the new endpoint or contract method is unavailable. The old contract
+methods and `/bootAuth/app` and `/bootAuth/kms` endpoints remain available for
+older clients. Bootstrap and onboarding retain scoped KMS checks so the first
+root keys can be generated and attested before registering epoch 0. For
+`auth-simple`, set `kmsContractAddr` to the attested KMS app ID and configure
+`rootEpochs`; for `auth-mock`, set `KMS_CONTRACT_ADDR`, `MOCK_ROOT_EPOCH`, and
+`MOCK_ROOT_EPOCH_HASH`.

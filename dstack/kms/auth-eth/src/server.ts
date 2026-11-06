@@ -4,7 +4,7 @@
 
 import fastify, { FastifyInstance } from 'fastify';
 import { EthereumBackend } from './ethereum';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, AuthorizationResult } from './types';
 import { ethers } from 'ethers';
 
 declare module 'fastify' {
@@ -103,6 +103,25 @@ export async function build(): Promise<FastifyInstance> {
       return reply.code(500).send({ status: 'error', message: backendUnavailable });
     }
   });
+
+  server.post<{ Body: BootInfo; Reply: AuthorizationResult }>('/checkAuthorization', {
+    schema: {
+      body: { $ref: 'bootInfo#' },
+      response: {
+        200: {
+          type: 'object',
+          required: ['isAllowed', 'rejectReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash'],
+          properties: {
+            isAllowed: { type: 'boolean' },
+            rejectReason: { type: 'string' },
+            gatewayAppId: { type: 'string' },
+            currentRootEpoch: { type: 'integer', minimum: 0 },
+            currentRootEpochHash: hex(32, 'Current root epoch chain hash'),
+          },
+        },
+      },
+    },
+  }, async (request) => server.ethereum.checkAuthorization(request.body));
 
   // Define routes
   server.post<{

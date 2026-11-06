@@ -252,3 +252,13 @@ bun run test:run
 - [auth-eth](../auth-eth/) - On-chain governance auth server
 - [auth-mock](../auth-mock/) - Development/testing auth server (always allows)
 - [Deployment Guide](../../../docs/deployment.md) - Full deployment instructions
+
+
+### Unified authorization
+
+`POST /checkAuthorization` returns `AuthorizationResult`, including
+`rejectReason`, `gatewayAppId`, `currentRootEpoch`, and `currentRootEpochHash`.
+It selects KMS or app policy from the verified `appId`. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for registration,
+bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
+remain available.

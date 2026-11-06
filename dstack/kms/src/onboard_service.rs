@@ -737,44 +737,6 @@ mod tests {
     }
 
     #[rocket::async_test]
-    async fn a_denial_restarts_the_kms_if_the_current_epoch_moved() {
-        use crate::main_service::upgrade_authority::tests::{serve, webhook};
-        use crate::main_service::{Keyring, KmsState};
-
-        let (_dir, cfg, res) = stored_keyring(3).await;
-        let restarts = |registry: RootEpochRegistry| {
-            let mut cfg = cfg.clone();
-            async move {
-                let epoch = match registry {
-                    RootEpochRegistry::Current(current) => format!(
-                        r#","rootEpoch":{},"rootEpochHash":"{}""#,
-                        current.epoch,
-                        hex::encode(current.chain_hash)
-                    ),
-                    _ => String::new(),
-                };
-                let (url, server) = serve(vec![format!(
-                    r#"{{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
-                        "appImplementation":"0x00"{epoch}}}"#
-                )]);
-                cfg.auth_api = webhook(url);
-                let keyring = Keyring::load(&cfg).unwrap();
-                let state = KmsState::new(cfg, keyring, 1).unwrap();
-                state.restart_if_epoch_moved().await;
-                server.join().unwrap();
-                let restart =
-                    tokio::time::timeout(Duration::from_millis(100), state.restart_requested());
-                restart.await.is_ok()
-            }
-        };
-
-        assert!(!restarts(current_of(&res, 1)).await);
-        assert!(restarts(current_of(&res, 2)).await);
-        assert!(restarts(RootEpochRegistry::Empty).await);
-        assert!(restarts(current_of(&handover(3), 1)).await);
-    }
-
-    #[rocket::async_test]
     async fn setup_status_includes_bootstrap_info_when_present() {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(cert_dir.path());

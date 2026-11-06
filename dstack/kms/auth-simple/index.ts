@@ -152,6 +152,21 @@ class ConfigBackend {
     }
   }
 
+  async checkAuthorization(appInfo: BootInfo) {
+    const config = this.loadConfig();
+    const current = currentRootEpoch(config);
+    const epoch = {
+      currentRootEpoch: current.rootEpoch ?? 0,
+      currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
+    };
+    if (current.rootEpoch === undefined) {
+      return { isAllowed: false, rejectReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
+    }
+    const isKms = normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr);
+    const result = this.evaluateBoot(appInfo, isKms, config);
+    return { isAllowed: result.isAllowed, rejectReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
+  }
+
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
     const response = this.evaluateBoot(bootInfo, isKms, config);
@@ -329,6 +344,15 @@ app.get('/', async (c) => {
       status: 'error',
       message: error instanceof Error ? error.message : String(error)
     }, 500);
+  }
+});
+
+app.post('/checkAuthorization', zValidator('json', BootInfoSchema), async (c) => {
+  try {
+    return c.json(await backend.checkAuthorization(c.req.valid('json')));
+  } catch {
+    console.error('authorization backend failed');
+    return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
   }
 });
 

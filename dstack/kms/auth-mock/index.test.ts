@@ -382,3 +382,32 @@ describe('Mock Behavior Verification', () => {
     }
   });
 });
+
+
+describe('POST /checkAuthorization', () => {
+  const authorize = (appId: string) => appFetch(new Request('http://localhost/checkAuthorization', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appId, mrAggregated: '', osImageHash: '', composeHash: '', instanceId: '', deviceId: '' }),
+  }));
+
+  it('requires registered roots and selects policy by app ID', async () => {
+    vi.stubEnv('MOCK_ROOT_EPOCH', '');
+    vi.stubEnv('MOCK_ROOT_EPOCH_HASH', '');
+    vi.stubEnv('MOCK_POLICY', 'deny-kms');
+    try {
+      expect(await (await authorize('app')).json()).toMatchObject({
+        isAllowed: false, rejectReason: 'Root epoch not registered',
+        currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32),
+      });
+      vi.stubEnv('MOCK_ROOT_EPOCH', '1');
+      vi.stubEnv('MOCK_ROOT_EPOCH_HASH', '0x' + '11'.repeat(32));
+      expect(await (await authorize('app')).json()).toMatchObject({ isAllowed: true, rejectReason: '', currentRootEpoch: 1 });
+      expect(await (await authorize(process.env.KMS_CONTRACT_ADDR!)).json()).toMatchObject({
+        isAllowed: false, rejectReason: 'mock policy: deny-kms', currentRootEpoch: 1,
+        currentRootEpochHash: '0x' + '11'.repeat(32),
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});

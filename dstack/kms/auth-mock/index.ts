@@ -106,6 +106,21 @@ class MockBackend {
     this.mockAppImplementation = process.env.MOCK_APP_IMPLEMENTATION || '0xmockapp9876543210987654321098765432109';
   }
 
+  async checkAuthorization(appInfo: BootInfo) {
+    const current = getRootEpoch();
+    const epoch = {
+      currentRootEpoch: current.rootEpoch ?? 0,
+      currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
+    };
+    if (current.rootEpoch === undefined) {
+      return { isAllowed: false, rejectReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    const kmsAppId = process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678';
+    const result = this.evaluateBoot(appInfo, normHash(appInfo.appId) === normHash(kmsAppId));
+    return { isAllowed: result.isAllowed, rejectReason: result.isAllowed ? '' : result.reason,
+      gatewayAppId: this.mockGatewayAppId, ...epoch };
+  }
+
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const response = this.evaluateBoot(bootInfo, isKms);
     const epochDenial = response.isAllowed ? rootEpochDenial(bootInfo, isKms) : undefined;
@@ -199,6 +214,14 @@ app.get('/', async (c) => {
       status: 'error',
       message: error instanceof Error ? error.message : String(error)
     }, 500);
+  }
+});
+
+app.post('/checkAuthorization', zValidator('json', BootInfoSchema), async (c) => {
+  try {
+    return c.json(await mockBackend.checkAuthorization(c.req.valid('json')));
+  } catch {
+    return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
   }
 });
 
