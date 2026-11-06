@@ -38,7 +38,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     struct AuthorizationResult {
         bool isAllowed;
-        string rejectReason;
+        string rejectionReason;
         string gatewayAppId;
         uint256 currentRootEpoch;
         bytes32 currentRootEpochHash;
@@ -429,13 +429,13 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     {
         result.gatewayAppId = gatewayAppId;
         if (_rootEpochs.length == 0) {
-            result.rejectReason = "Root epoch not registered";
+            result.rejectionReason = "Root epoch not registered";
             return result;
         }
         result.currentRootEpoch = _currentRootEpoch;
         result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
         if (request.requestedEpoch.isSet && request.requestedEpoch.value > _currentRootEpoch) {
-            result.rejectReason = "Requested root epoch is not active";
+            result.rejectionReason = "Requested root epoch is not active";
             return result;
         }
         AppInfo calldata appInfo = request.appInfo;
@@ -451,9 +451,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             advisoryIds: appInfo.advisoryIds
         });
         if (appInfo.appId == address(this)) {
-            (result.isAllowed, result.rejectReason) = _isKmsAllowed(bootInfo);
+            (result.isAllowed, result.rejectionReason) = _isKmsAllowed(bootInfo);
         } else {
-            (result.isAllowed, result.rejectReason) = _isAppAllowed(bootInfo);
+            (result.isAllowed, result.rejectionReason) = _isAppAllowed(bootInfo);
         }
     }
 

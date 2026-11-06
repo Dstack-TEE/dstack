@@ -35,7 +35,7 @@ export interface RootEpochInfo {
 
 export interface AuthorizationResult {
   isAllowed: boolean;
-  rejectReason: string;
+  rejectionReason: string;
   gatewayAppId: string;
   currentRootEpoch: number;
   currentRootEpochHash: string;

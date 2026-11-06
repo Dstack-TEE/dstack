@@ -340,7 +340,7 @@ impl KmsState {
                 .servable_epoch(RootEpochRegistry::Current(current))?
         };
         if !result.is_allowed {
-            bail!("Authorization denied: {}", result.reject_reason);
+            bail!("Authorization denied: {}", result.rejection_reason);
         }
         let epoch = requested.unwrap_or(current);
         if epoch > current {
@@ -1589,7 +1589,7 @@ mod tests {
             KmsState::new(initial.config.clone(), keyring, initial.rpc_ca_cert.clone()).unwrap();
         let result = |epoch: u32| AuthorizationResult {
             is_allowed: true,
-            reject_reason: String::new(),
+            rejection_reason: String::new(),
             gateway_app_id: String::new(),
             current_root_epoch: epoch,
             current_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
@@ -1611,7 +1611,7 @@ mod tests {
 
         let mut rejected = result(1);
         rejected.is_allowed = false;
-        rejected.reject_reason = "Policy denied".into();
+        rejected.rejection_reason = "Policy denied".into();
         assert!(state.authorized_epoch(&rejected, Some(0)).is_err());
         rejected.is_allowed = true;
         for hash in [

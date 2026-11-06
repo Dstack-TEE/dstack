@@ -553,7 +553,7 @@ including when authorization is denied. KMS verifies these against its keyring;
 there is no cached serving epoch. An optional `requestedEpoch` selects historical
 keys, and omission selects the returned current epoch. Requests for future
 epochs are denied. No registered epoch returns a rejection with
-`rejectReason: "Root epoch not registered"` and a zero hash.
+`rejectionReason: "Root epoch not registered"` and a zero hash.
 
 RPC certificates still require a listener restart when their root CA changes;
 callers retry after the certificate is refreshed. Register epoch 0 before normal

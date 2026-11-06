@@ -7,7 +7,7 @@ import { BootInfo, BootResponse, RootEpochInfo, AuthorizationResult, Authorizati
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
-  "function checkAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,(bool isSet,uint256 value) requestedEpoch) request) view returns ((bool isAllowed,string rejectReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash))",
+  "function checkAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,(bool isSet,uint256 value) requestedEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash))",
   "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
@@ -84,7 +84,7 @@ export class EthereumBackend {
     });
     return {
       isAllowed: result.isAllowed,
-      rejectReason: result.rejectReason,
+      rejectionReason: result.rejectionReason,
       gatewayAppId: result.gatewayAppId,
       currentRootEpoch: ethers.toNumber(result.currentRootEpoch),
       currentRootEpochHash: result.currentRootEpochHash,

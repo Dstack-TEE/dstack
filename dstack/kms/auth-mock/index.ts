@@ -118,14 +118,14 @@ class MockBackend {
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
     if (current.rootEpoch === undefined) {
-      return { isAllowed: false, rejectReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
+      return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
-      return { isAllowed: false, rejectReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
+      return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     const kmsAppId = process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678';
     const result = this.evaluateBoot(appInfo, normHash(appInfo.appId) === normHash(kmsAppId));
-    return { isAllowed: result.isAllowed, rejectReason: result.isAllowed ? '' : result.reason,
+    return { isAllowed: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
       gatewayAppId: this.mockGatewayAppId, ...epoch };
   }
 

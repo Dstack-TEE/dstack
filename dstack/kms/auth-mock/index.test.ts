@@ -396,14 +396,14 @@ describe('POST /checkAuthorization', () => {
     vi.stubEnv('MOCK_POLICY', 'deny-kms');
     try {
       expect(await (await authorize('app')).json()).toMatchObject({
-        isAllowed: false, rejectReason: 'Root epoch not registered',
+        isAllowed: false, rejectionReason: 'Root epoch not registered',
         currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32),
       });
       vi.stubEnv('MOCK_ROOT_EPOCH', '1');
       vi.stubEnv('MOCK_ROOT_EPOCH_HASH', '0x' + '11'.repeat(32));
-      expect(await (await authorize('app')).json()).toMatchObject({ isAllowed: true, rejectReason: '', currentRootEpoch: 1 });
+      expect(await (await authorize('app')).json()).toMatchObject({ isAllowed: true, rejectionReason: '', currentRootEpoch: 1 });
       expect(await (await authorize(process.env.KMS_CONTRACT_ADDR!)).json()).toMatchObject({
-        isAllowed: false, rejectReason: 'mock policy: deny-kms', currentRootEpoch: 1,
+        isAllowed: false, rejectionReason: 'mock policy: deny-kms', currentRootEpoch: 1,
         currentRootEpochHash: '0x' + '11'.repeat(32),
       });
     } finally {
