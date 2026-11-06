@@ -140,6 +140,13 @@ const DSTACK_KMS_ABI = [
     outputs: [{ name: '', type: 'address' }]
   },
   {
+    name: 'rootEpochCount',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }]
+  },
+  {
     name: 'currentRootEpoch',
     type: 'function',
     stateMutability: 'view',
@@ -150,17 +157,6 @@ const DSTACK_KMS_ABI = [
     ]
   }
 ] as const;
-
-// Contracts deployed before root epochs lack the registry getters, and a
-// registry with no epoch reverts.
-const isMissingFunction = (error: unknown): boolean => {
-  for (let cause: any = error; cause; cause = cause.cause) {
-    if (cause.name === 'ContractFunctionZeroDataError' || cause.name === 'ContractFunctionRevertedError') {
-      return true;
-    }
-  }
-  return false;
-};
 
 // ethereum backend class
 class EthereumBackend {
@@ -254,24 +250,23 @@ class EthereumBackend {
     };
   }
 
-  // The current root epoch and its chain hash; empty when none is registered
-  // or the contract predates root epochs.
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
   async getRootEpoch(blockNumber?: bigint): Promise<RootEpochInfo> {
     blockNumber ??= await this.finalizedBlockNumber();
-    try {
-      const current = await this.client.readContract({
-        address: this.kmsContractAddr,
-        abi: DSTACK_KMS_ABI,
-        functionName: 'currentRootEpoch',
-        blockNumber
-      });
-      if (!current) return {};
-      const [epoch, chainHash] = current;
-      return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
-    } catch (error) {
-      if (isMissingFunction(error)) return {};
-      throw error;
-    }
+    const count = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'rootEpochCount',
+      blockNumber
+    });
+    if (count === 0n) return {};
+    const [epoch, chainHash] = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'currentRootEpoch',
+      blockNumber
+    });
+    return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
   }
 
   async getGatewayAppId(): Promise<string> {

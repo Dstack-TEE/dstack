@@ -11,6 +11,7 @@ const DSTACK_KMS_ABI = [
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
   "function appImplementation() view returns (address)",
+  "function rootEpochCount() view returns (uint256)",
   "function currentRootEpoch() view returns (uint256 epoch, bytes32 chainHash)"
 ];
 
@@ -34,11 +35,6 @@ export function rootEpochDenial(bootInfo: BootInfo, isKms: boolean, current: Roo
     return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
   }
   return undefined;
-}
-
-// Contracts deployed before key epochs existed lack the registry getters.
-function isMissingFunction(error: unknown): boolean {
-  return ethers.isError(error, 'CALL_EXCEPTION') || ethers.isError(error, 'BAD_DATA');
 }
 
 export class EthereumBackend {
@@ -98,16 +94,13 @@ export class EthereumBackend {
     }
   }
 
-  // The current root epoch and its chain hash; empty when none is registered
-  // or the contract predates root epochs.
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
   async getRootEpoch(blockTag?: number): Promise<RootEpochInfo> {
-    try {
-      const [epoch, chainHash] = await this.kmsContract.currentRootEpoch({ blockTag });
-      return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
-    } catch (error) {
-      if (isMissingFunction(error)) return {};
-      throw error;
-    }
+    blockTag ??= await this.provider.getBlockNumber();
+    const count = await this.kmsContract.rootEpochCount({ blockTag });
+    if (count === 0n) return {};
+    const [epoch, chainHash] = await this.kmsContract.currentRootEpoch({ blockTag });
+    return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
   }
 
   async getGatewayAppId(): Promise<string> {
