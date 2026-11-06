@@ -4,11 +4,13 @@
 
 import { FastifyInstance } from 'fastify';
 import { build } from './server';
+import { rootEpochDenial } from './ethereum';
 import { BootInfo } from './types';
 
 // Mock EthereumBackend
 jest.mock('./ethereum', () => {
   return {
+    ...jest.requireActual('./ethereum'),
     EthereumBackend: jest.fn().mockImplementation(() => ({
       checkBoot: jest.fn()
     }))
@@ -85,6 +87,55 @@ describe('Server', () => {
       });
 
       expect(response.statusCode).toBe(400);
+    });
+  });
+
+  describe('key epochs', () => {
+    it('should pass the KMS root epoch through to the backend', async () => {
+      const mockCheckBoot = jest.fn().mockResolvedValue({ isAllowed: true, reason: '', gatewayAppId: '' });
+      app.ethereum.checkBoot = mockCheckBoot;
+      const rootEpoch = { rootEpoch: 1, rootEpochHash: '0x' + '11'.repeat(32) };
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/bootAuth/app',
+        payload: { ...mockBootInfo, ...rootEpoch }
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(mockCheckBoot).toHaveBeenCalledWith(expect.objectContaining(rootEpoch), false);
+    });
+
+    it('should allow only a KMS serving the current root epoch', () => {
+      const hash = '0x' + '11'.repeat(32);
+      const current = { rootEpoch: 1, rootEpochHash: hash };
+      const info = (fields: object) => ({ ...mockBootInfo, ...fields });
+
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash.toUpperCase().replace('0X', '') }), false, current)).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), false, current)).toMatch(/1 is current/);
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) }), false, current)).toMatch(/not the registered/);
+      // A KMS predating root epochs is cut off once a rotation is current.
+      expect(rootEpochDenial(info({}), false, current)).toMatch(/reports none/);
+      expect(rootEpochDenial(info({}), false, { rootEpoch: 0, rootEpochHash: hash })).toBeUndefined();
+      expect(rootEpochDenial(info({}), true, current)).toBeUndefined();
+      // Nothing registered: only epoch 0 serves.
+      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), false, {})).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash }), false, {})).toMatch(/not registered/);
+    });
+
+    it('should list registered key epochs in the info response', async () => {
+      const rootEpoch = { rootEpoch: 1, rootEpochHash: '0x' + '11'.repeat(32) };
+      Object.assign(app.ethereum, {
+        getGatewayAppId: jest.fn().mockResolvedValue('gw'),
+        getChainId: jest.fn().mockResolvedValue(1),
+        getAppImplementation: jest.fn().mockResolvedValue('0x00'),
+        getRootEpoch: jest.fn().mockResolvedValue(rootEpoch),
+      });
+
+      const response = await app.inject({ method: 'GET', url: '/' });
+
+      expect(response.statusCode).toBe(200);
+      expect(JSON.parse(response.payload)).toMatchObject(rootEpoch);
     });
   });
 

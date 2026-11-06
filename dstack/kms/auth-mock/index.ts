@@ -22,7 +22,11 @@ const BootInfoSchema = z.object({
   // optional fields (for full compatibility with BootInfo interface)
   tcbStatus: z.string().optional().default(''),
   advisoryIds: z.array(z.string()).optional().default([]),
-  mrSystem: z.string().optional().default('')
+  mrSystem: z.string().optional().default(''),
+  // The root epoch the asking KMS serves and its chain hash; absent from a KMS
+  // that predates root epochs, and from KMS checks made while onboarding.
+  rootEpoch: z.number().int().min(0).optional(),
+  rootEpochHash: z.string().optional()
 });
 
 const BootResponseSchema = z.object({
@@ -31,8 +35,41 @@ const BootResponseSchema = z.object({
   gatewayAppId: z.string()
 });
 
+// MOCK_ROOT_EPOCH and MOCK_ROOT_EPOCH_HASH: the current KMS root epoch and its
+// chain hash; both unset means none is registered
+function getRootEpoch(): { rootEpoch?: number; rootEpochHash?: string } {
+  const epoch = process.env.MOCK_ROOT_EPOCH;
+  const hash = process.env.MOCK_ROOT_EPOCH_HASH;
+  if (!epoch && !hash) return {};
+  if (!epoch || !hash) throw new Error('set both MOCK_ROOT_EPOCH and MOCK_ROOT_EPOCH_HASH');
+  return { rootEpoch: z.coerce.number().int().min(0).parse(epoch), rootEpochHash: hash };
+}
+
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
+
+const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
+
+// Only a KMS serving the current root epoch, with the registered keys up to it,
+// may authorize. A KMS that predates root epochs reports none and holds only
+// epoch 0; KMS checks made while onboarding carry none and are not limited.
+function rootEpochDenial(bootInfo: BootInfo, isKms: boolean): string | undefined {
+  const current = getRootEpoch();
+  const currentEpoch = current.rootEpoch ?? 0;
+  if (bootInfo.rootEpoch === undefined) {
+    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+  }
+  if (current.rootEpoch === undefined) {
+    return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
+  }
+  if (bootInfo.rootEpoch !== currentEpoch) {
+    return `the KMS serves root epoch ${bootInfo.rootEpoch}, but ${currentEpoch} is current`;
+  }
+  if (normHash(bootInfo.rootEpochHash) !== normHash(current.rootEpochHash)) {
+    return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
+  }
+  return undefined;
+}
 
 // authorization policy - configurable via environment variables
 // MOCK_POLICY: "allow-all" (default), "deny-kms", "deny-app", "deny-all",
@@ -70,6 +107,12 @@ class MockBackend {
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+    const response = this.evaluateBoot(bootInfo, isKms);
+    const epochDenial = response.isAllowed ? rootEpochDenial(bootInfo, isKms) : undefined;
+    return epochDenial ? { isAllowed: false, reason: epochDenial, gatewayAppId: '' } : response;
+  }
+
+  private evaluateBoot(bootInfo: BootInfo, isKms: boolean): BootResponse {
     const policy = getPolicy();
     const deny = (reason: string): BootResponse => ({
       isAllowed: false,
@@ -147,6 +190,7 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
+      ...getRootEpoch(),
       note: 'this is a mock backend - all authentications will succeed'
     });
   } catch (error) {

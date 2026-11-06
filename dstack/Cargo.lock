@@ -1899,6 +1899,8 @@ version = "0.6.3"
 dependencies = [
  "anyhow",
  "clap",
+ "dstack-types",
+ "hex",
  "rocket",
  "serde",
  "serde_json",

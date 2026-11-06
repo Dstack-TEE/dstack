@@ -53,9 +53,50 @@ forge script script/Manage.s.sol:SetGatewayAppId --broadcast --rpc-url $RPC_URL
 ```
 
 #### Set KMS Info
+Only before root epochs are registered; afterwards `kmsInfo` holds the current
+epoch's keys, with no quote or event log.
 ```bash
 KMS_CONTRACT_ADDR=0x... K256_PUBKEY=0x... CA_PUBKEY=0x... QUOTE=0x... EVENTLOG=0x... \
 forge script script/Manage.s.sol:SetKmsInfo --broadcast --rpc-url $RPC_URL
+```
+
+#### Register a KMS Root Epoch
+Appends the next root epoch (the original roots are epoch 0). Epoch 0 takes
+effect when registered; later epochs take effect when activated, and each takes
+over `kmsInfo` then, clearing its quote and event log. `EVIDENCE_URL`
+points to the attestation the KMS returned when it generated the keys (Bootstrap,
+or Onboard with `rotate`), published where verifiers can fetch it; verify it
+before registering. Registered keys cannot be changed, only a pending epoch popped;
+the evidence URL can be updated when the evidence moves.
+```bash
+KMS_CONTRACT_ADDR=0x... CA_PUBKEY=0x... K256_PUBKEY=0x... EVIDENCE_URL=ipfs://... \
+forge script script/Manage.s.sol:RegisterRootEpoch --broadcast --rpc-url $RPC_URL
+```
+
+#### Activate a KMS Root Epoch
+Makes the next registered root epoch the one KMS instances serve. Activate it
+only once every KMS node holds it; nodes still at the previous epoch stop
+serving, and nodes holding it restart to switch. Epochs only move forward.
+```bash
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=1 \
+forge script script/Manage.s.sol:ActivateRootEpoch --broadcast --rpc-url $RPC_URL
+```
+
+#### Update a Root Epoch's Evidence URL
+Points an epoch at a new copy of its attestation, e.g. when the old host goes away.
+```bash
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 EVIDENCE_URL=ipfs://... \
+forge script script/Manage.s.sol:SetRootEpochEvidenceUrl --broadcast --rpc-url $RPC_URL
+```
+
+#### Pop a Pending KMS Root Epoch
+Drops the last registered epoch while it is not yet current, e.g. when the nodes
+holding it are lost before it could be activated. Re-rotate to register a new one.
+`CHAIN_HASH` is the epoch's chain hash (see `Query.s.sol`), so only that exact
+registration is dropped.
+```bash
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=1 CHAIN_HASH=0x... \
+forge script script/Manage.s.sol:PopRootEpoch --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove KMS Aggregated MR

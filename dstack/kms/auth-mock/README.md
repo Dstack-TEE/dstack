@@ -72,6 +72,7 @@ bun run check
 - `MOCK_GATEWAY_APP_ID` - mock gateway app ID (default: 0xmockgateway1234567890123456789012345678)
 - `MOCK_CHAIN_ID` - mock blockchain chain ID (default: 1337)
 - `MOCK_APP_IMPLEMENTATION` - mock app implementation address (default: 0xmockapp9876543210987654321098765432109)
+- `MOCK_ROOT_EPOCH`, `MOCK_ROOT_EPOCH_HASH` - current KMS root epoch and its chain hash, reported by the info endpoint as `rootEpoch`/`rootEpochHash`; boot checks from a KMS serving another epoch are denied (default: none registered, only epoch 0 serves)
 
 ## API endpoints
 
