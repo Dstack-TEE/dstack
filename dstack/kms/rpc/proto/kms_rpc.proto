@@ -11,6 +11,9 @@ package kms;
 message GetAppKeyRequest {
   uint32 api_version = 1;
   string vm_config = 2;
+  // Root key epoch to derive from; unset means the current epoch. Epoch 0 is
+  // the original root keys. Older epochs remain available so CVMs can migrate.
+  optional uint32 root_epoch = 3;
 }
 
 message AppId {
@@ -46,6 +49,8 @@ message AppKeyResponse {
   string gateway_app_id = 7;
   // OS Image hash
   bytes os_image_hash = 8;
+  // Root key epoch all epoch-dependent fields above were derived from.
+  uint32 root_epoch = 9;
 }
 
 message GetMetaResponse {
@@ -74,6 +79,7 @@ message KmsKeys {
 
 message KmsKeyResponse {
   string temp_ca_key = 1;
+  // Root keys of every epoch the KMS holds; the index is the epoch.
   repeated KmsKeys keys = 2;
 }
 
@@ -158,11 +164,18 @@ message OnboardRequest {
   string domain = 2;
   // Optional bearer token for the source KMS admin listener.
   string source_token = 3;
+  // Import the source's epochs 0..N-1 and generate epoch N locally. The source
+  // must be at the current epoch N-1.
+  bool rotate = 4;
 }
 
 message OnboardResponse {
-  // k256 public key (secp256k1) inherited from source KMS
+  // k256 public key (secp256k1) of the current epoch
   bytes k256_pubkey = 1;
+  // Set only by a rotation: the generated CA public key and the attestation
+  // binding the new epoch's public keys.
+  bytes ca_pubkey = 2;
+  bytes attestation = 3;
 }
 
 // Attestation info needed for on-chain KMS authorization.

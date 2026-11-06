@@ -513,6 +513,46 @@ curl http://<new-kms>:9203/finish
 >
 > **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`.
 
+#### Rotating KMS Root Keys
+
+KMS root keys are versioned by epoch; epoch 0 is the original roots. Every KMS
+keeps all epochs so CVMs can migrate from any of them, and serves the epoch
+governance made current. See the [rotation design](./kms-emergency-key-rotation-protocol.md)
+for the full procedure; the KMS steps are:
+
+1. If epochs were never registered, publish the attestation the KMS produced at
+   bootstrap (kept in `bootstrap-info.json` on the bootstrapped node) and
+   register the current root public keys as epoch 0:
+   `DstackKms.registerRootEpoch(caPubkey, k256Pubkey, evidenceUrl)`, via
+   `script/Manage.s.sol:RegisterRootEpoch`, or a `rootEpochs` entry in the
+   auth-simple config. Epoch 0 is current once registered, and must be the
+   `kmsInfo` keys when those are set. A deployment whose `kmsInfo` holds a
+   legacy `quote` and `eventlog` instead of an attestation converts them with
+   `dstack-kms legacy-attestation --quote <hex> --eventlog <hex>` and publishes
+   the result first: from then on `kmsInfo` follows the current epoch's keys and
+   its quote and event log are cleared.
+2. Onboard a fresh KMS with `"rotate": true` (the **Rotate** checkbox in the
+   onboard UI) from a KMS at the current epoch N-1. It imports epochs 0..N-1,
+   generates epoch N, and returns the new public keys with an attestation whose
+   report data is
+   `keccak256("dstack-kms-generated-keys-v2:{N};{ca_pubkey_hex};{k256_pubkey_hex};")`.
+3. Verify the attestation, publish it, and register epoch N with its URL. The
+   cluster keeps serving N-1.
+4. Onboard the other KMS nodes from the rotated one; they import 0..N and keep
+   serving N-1.
+5. Activate epoch N (`ActivateRootEpoch`, or `currentRootEpoch` for
+   auth-simple). Every KMS restarts onto N; a KMS that does not hold N waits
+   until it is onboarded again.
+   If the nodes holding N are lost before N is activated, drop it with
+   `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
+   that imported the dropped N must be onboarded again.
+
+Each boot check the KMS sends carries the epoch it serves and the chain hash
+committing to the root public keys of epochs 0..epoch; the auth backend denies
+it unless that is the current epoch with the registered keys. On a denial the
+KMS reads the current epoch from the backend's info endpoint and restarts if it
+moved.
+
 ---
 
 ## Deploying Apps
