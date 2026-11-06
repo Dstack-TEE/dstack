@@ -289,10 +289,13 @@ pub(crate) async fn ensure_self_kms_allowed(
     Ok(())
 }
 
+/// `allow_legacy_cert` accepts a source whose certificate predates the unified
+/// attestation format, judging its image by mrAggregated alone.
 pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
     verifier: &AttestationVerifier,
+    allow_legacy_cert: bool,
 ) -> Result<()> {
     let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
@@ -302,6 +305,9 @@ pub(crate) async fn ensure_kms_allowed(
     // A source that presents a config but no os_image_hash is not legacy and gets no fallback.
     // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
     if boot_info.os_image_hash.is_empty() && attestation.config.is_empty() {
+        if !allow_legacy_cert {
+            bail!("the source KMS certificate does not carry its OS image hash");
+        }
         warn!("source KMS uses the legacy cert format, falling back to the local os_image_hash");
         let local_info = local_kms_boot_info(verifier)
             .await

@@ -761,6 +761,30 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn rotation_refuses_a_dev_auth_backend() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let mut cfg = epoch_config(cert_dir.path(), 2);
+        cfg.auth_api = crate::config::AuthApi::Dev {
+            dev: crate::config::Dev {
+                gateway_app_id: String::new(),
+            },
+        };
+        let verifier = Arc::new(AttestationVerifier::load(&cfg.attestation).unwrap());
+        let err = Keys::onboard(
+            &cfg,
+            "http://127.0.0.1:1",
+            "",
+            "kms.example.com",
+            true,
+            verifier,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(format!("{err:#}").contains("rotation needs"), "{err:#}");
+    }
+
+    #[rocket::async_test]
     async fn an_unregistered_deployment_can_still_join_at_epoch_1() {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = epoch_config(cert_dir.path(), 1);
@@ -981,6 +1005,12 @@ impl Keys {
         rotate: bool,
         attestation_verifier: Arc<AttestationVerifier>,
     ) -> Result<Self> {
+        // A new epoch is built on the source's keyring, so a rotation must be
+        // able to authorize the source on chain; a plain join is also checked,
+        // but only as a safeguard, since the source authorizes the receiver.
+        if rotate && cfg.auth_api.is_dev() {
+            bail!("rotation needs an auth backend that authorizes KMS instances and registers root epochs");
+        }
         let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
         let attestation_slot_out = attestation_slot.clone();
         let capture_source_attestation = Box::new(move |info: Option<CertInfo>| {
@@ -1027,7 +1057,7 @@ impl Keys {
                 .await?;
             // The attestation is only captured by that first request; nothing
             // received is used before the source passes this check.
-            ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier)
+            ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier, !rotate)
                 .await
                 .context("Source KMS is not allowed for onboarding")?;
             return Self::from_registered_key_response(cfg, keys_res, domain, rotate).await;
@@ -1053,7 +1083,7 @@ impl Keys {
         )
         .context("Failed to create client")?;
         kms_client = KmsClient::new(ra_client);
-        ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier)
+        ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier, !rotate)
             .await
             .context("Source KMS is not allowed for onboarding")?;
 
