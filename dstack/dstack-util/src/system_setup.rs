@@ -29,7 +29,7 @@ use dstack_types::{
 use fs_err as fs;
 use luks::{
     LuksAf, LuksArea, LuksConfig, LuksDigest, LuksHeader, LuksJson, LuksKdf, LuksKeyslot,
-    LuksSegment, BINARY_HEADER_SIZE,
+    LuksSegment, BINARY_HEADER_SIZE, KEY_EPOCH_TOKEN_TYPE,
 };
 use ra_rpc::{
     client::{CertInfo, RaClient, RaClientConfig},
@@ -2353,6 +2353,87 @@ struct AppInfo {
     gpu_attestation_event: Option<Vec<u8>>,
 }
 
+impl HostShared {
+    /// Request app keys of `key_epoch` (`-1` = current) from one KMS.
+    async fn request_kms_keys(
+        &self,
+        kms_url: String,
+        key_epoch: i32,
+    ) -> Result<(AppKeys, Vec<u8>)> {
+        info!("Requesting app keys of epoch {key_epoch} from KMS: {kms_url}");
+        let tmp_ca = {
+            info!("Getting temp ca cert");
+            let client = RaClient::new(kms_url.clone(), true)?;
+            let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(client);
+            kms_client
+                .get_temp_ca_cert()
+                .await
+                .context("Failed to get temp ca cert")?
+        };
+        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
+        let attestation_verifier = attestation_verifier(&self.sys_config)?;
+        let ra_client = RaClientConfig::builder()
+            .tls_no_check(false)
+            .tls_built_in_root_certs(false)
+            .remote_uri(kms_url.clone())
+            .tls_client_cert(cert_pair.cert_pem)
+            .tls_client_key(cert_pair.key_pem)
+            .tls_ca_cert(tmp_ca.ca_cert.clone())
+            .attestation_verifier(attestation_verifier)
+            .cert_validator(Box::new(validate_kms_rpc_cert))
+            .build()
+            .into_client()
+            .context("Failed to create client")?;
+        let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(ra_client);
+        let response = kms_client
+            .get_app_key(rpc::GetAppKeyRequest {
+                api_version: 1,
+                vm_config: self.sys_config.vm_config.clone(),
+                key_epoch,
+            })
+            .await
+            .context("Failed to get app key")?;
+        // A KMS predating key epochs ignores the selector and serves epoch 0.
+        if key_epoch >= 0 && response.key_epoch as i32 != key_epoch {
+            bail!(
+                "KMS returned keys of epoch {} instead of {key_epoch}",
+                response.key_epoch
+            );
+        }
+
+        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
+            .context("Failed to parse ca cert")?;
+        let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
+        let root_pubkey = x509.public_key().raw.to_vec();
+
+        let keys = AppKeys {
+            ca_cert: tmp_ca.ca_cert,
+            disk_crypt_key: response.disk_crypt_key,
+            env_crypt_key: response.env_crypt_key,
+            k256_key: response.k256_key,
+            k256_signature: response.k256_signature,
+            gateway_app_id: response.gateway_app_id,
+            key_provider: KeyProvider::Kms {
+                url: kms_url,
+                pubkey: root_pubkey,
+                tmp_ca_key: tmp_ca.temp_ca_key,
+                tmp_ca_cert: tmp_ca.temp_ca_cert,
+                key_epoch: response.key_epoch,
+            },
+        };
+        Ok((keys, response.os_image_hash))
+    }
+
+    /// Request keys of an older epoch from the KMS that served `keys`.
+    async fn request_historical_keys(&self, keys: &AppKeys, epoch: u32) -> Result<AppKeys> {
+        let KeyProvider::Kms { url, .. } = &keys.key_provider else {
+            bail!("only KMS-provided keys have historical epochs");
+        };
+        let epoch = i32::try_from(epoch).context("key epoch out of range")?;
+        Ok(self.request_kms_keys(url.clone(), epoch).await?.0)
+    }
+}
+
 struct Stage0<'a> {
     args: &'a SetupArgs,
     shared: HostShared,
@@ -2415,63 +2496,6 @@ impl<'a> Stage0<'a> {
         self.shared.dir.join(APP_KEYS)
     }
 
-    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<(AppKeys, Vec<u8>)> {
-        info!("Requesting app keys from KMS: {kms_url}");
-        let tmp_ca = {
-            info!("Getting temp ca cert");
-            let client = RaClient::new(kms_url.clone(), true)?;
-            let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(client);
-            kms_client
-                .get_temp_ca_cert()
-                .await
-                .context("Failed to get temp ca cert")?
-        };
-        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
-        let attestation_verifier = attestation_verifier(&self.shared.sys_config)?;
-        let ra_client = RaClientConfig::builder()
-            .tls_no_check(false)
-            .tls_built_in_root_certs(false)
-            .remote_uri(kms_url.clone())
-            .tls_client_cert(cert_pair.cert_pem)
-            .tls_client_key(cert_pair.key_pem)
-            .tls_ca_cert(tmp_ca.ca_cert.clone())
-            .attestation_verifier(attestation_verifier)
-            .cert_validator(Box::new(validate_kms_rpc_cert))
-            .build()
-            .into_client()
-            .context("Failed to create client")?;
-        let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(ra_client);
-        let response = kms_client
-            .get_app_key(rpc::GetAppKeyRequest {
-                api_version: 1,
-                vm_config: self.shared.sys_config.vm_config.clone(),
-                ..Default::default()
-            })
-            .await
-            .context("Failed to get app key")?;
-
-        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
-            .context("Failed to parse ca cert")?;
-        let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
-        let root_pubkey = x509.public_key().raw.to_vec();
-
-        let keys = AppKeys {
-            ca_cert: tmp_ca.ca_cert,
-            disk_crypt_key: response.disk_crypt_key,
-            env_crypt_key: response.env_crypt_key,
-            k256_key: response.k256_key,
-            k256_signature: response.k256_signature,
-            gateway_app_id: response.gateway_app_id,
-            key_provider: KeyProvider::Kms {
-                url: kms_url,
-                pubkey: root_pubkey,
-                tmp_ca_key: tmp_ca.temp_ca_key,
-                tmp_ca_cert: tmp_ca.temp_ca_cert,
-            },
-        };
-        Ok((keys, response.os_image_hash))
-    }
-
     async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
         if self.shared.sys_config.kms_urls.is_empty() {
             bail!("No KMS URLs are set");
@@ -2479,7 +2503,7 @@ impl<'a> Stage0<'a> {
         let mut errors = vec![];
         for kms_url in &self.shared.sys_config.kms_urls {
             let kms_url = kms_rpc_url(kms_url);
-            match self.request_app_keys_from_kms_url(kms_url.clone()).await {
+            match self.shared.request_kms_keys(kms_url.clone(), -1).await {
                 Ok((keys, os_image_hash)) => {
                     // Measured here, outside the per-URL request, so that a
                     // failover can never extend os-image-hash twice.
@@ -2722,7 +2746,9 @@ impl<'a> Stage0<'a> {
         initialized
     }
 
-    async fn mount_data_disk(&self, disk_crypt_key: &str, opts: &DstackOptions) -> Result<()> {
+    async fn mount_data_disk(&self, keys: &AppKeys, opts: &DstackOptions) -> Result<()> {
+        let disk_crypt_key = &hex::encode(&keys.disk_crypt_key);
+        let key_epoch = kms_key_epoch(keys);
         let name = "dstack_data_disk";
         let mount_point = &self.args.mount_point;
 
@@ -2743,6 +2769,11 @@ impl<'a> Stage0<'a> {
 
         let has_filesystem = if opts.storage_encrypted && disk_initialized {
             info!("Mounting encrypted data disk");
+            if let Some(epoch) = key_epoch {
+                self.migrate_disk_key(keys, disk_crypt_key, epoch)
+                    .await
+                    .context("failed to migrate the data disk key")?;
+            }
             let initializing =
                 self.open_encrypted_volume(disk_crypt_key, name, opts.storage_discard)?;
             if initializing {
@@ -2762,7 +2793,7 @@ impl<'a> Stage0<'a> {
                 info!("Skipping disk encryption as requested by kernel cmdline");
             } else if !disk_initialized {
                 info!("Setting up disk encryption");
-                self.luks_setup(disk_crypt_key, name, opts.storage_discard)?;
+                self.luks_setup(disk_crypt_key, key_epoch, name, opts.storage_discard)?;
             }
 
             match opts.storage_fs {
@@ -2891,7 +2922,13 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    fn luks_setup(&self, disk_crypt_key: &str, name: &str, discard: bool) -> Result<()> {
+    fn luks_setup(
+        &self,
+        disk_crypt_key: &str,
+        key_epoch: Option<u32>,
+        name: &str,
+        discard: bool,
+    ) -> Result<()> {
         let root_hd = &self.args.device;
         let sector_offset = PAYLOAD_OFFSET / 512;
         info!("Formatting encrypted disk");
@@ -2929,7 +2966,43 @@ impl<'a> Stage0<'a> {
         {
             bail!("Failed to setup luks volume");
         }
+        if let Some(epoch) = key_epoch.filter(|epoch| *epoch > 0) {
+            write_luks_key_epoch(root_hd, epoch, false)?;
+        }
         self.open_encrypted_volume(disk_crypt_key, name, discard)?;
+        Ok(())
+    }
+
+    /// Re-key a data disk still protected by an older KMS epoch.
+    ///
+    /// Only the keyslot passphrase changes; the volume key stays. The epoch
+    /// is recorded in the header so the old key can be requested next time
+    /// the KMS rotates. An unrotated epoch-0 disk is left untouched, so it
+    /// stays readable by older OS images.
+    async fn migrate_disk_key(
+        &self,
+        keys: &AppKeys,
+        current_key: &str,
+        current: u32,
+    ) -> Result<()> {
+        let device = &self.args.device;
+        let stored = read_luks_key_epoch(device)?;
+        if !luks_unlocks(device, current_key)? {
+            let epoch = stored.unwrap_or(0);
+            if epoch >= current {
+                bail!("the data disk does not unlock with the key of epoch {current}");
+            }
+            info!("re-keying the data disk from key epoch {epoch} to {current}");
+            let old = self.shared.request_historical_keys(keys, epoch).await?;
+            let old_key = hex::encode(&old.disk_crypt_key);
+            luks_change_key(device, &old_key, current_key, Path::new(REKEY_DIR))?;
+            if !luks_unlocks(device, current_key)? {
+                bail!("the data disk does not unlock after re-keying");
+            }
+        }
+        if stored.unwrap_or(0) != current {
+            write_luks_key_epoch(device, current, stored.is_some())?;
+        }
         Ok(())
     }
 
@@ -2964,7 +3037,7 @@ impl<'a> Stage0<'a> {
         .context("Failed to load LUKS2 header")?;
 
         let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
-        let initializing =
+        let LuksHeaderState { initializing, .. } =
             validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
 
         info!("Opening the device");
@@ -3194,8 +3267,7 @@ impl<'a> Stage0<'a> {
             opts.storage_encrypted, opts.storage_fs
         );
 
-        self.mount_data_disk(&hex::encode(&app_keys.disk_crypt_key), &opts)
-            .await?;
+        self.mount_data_disk(&app_keys, &opts).await?;
         self.setup_swap(self.shared.app_compose.swap_size, &opts)
             .await?;
         self.vmm
@@ -3388,18 +3460,148 @@ macro_rules! const_pad {
 
 const PAYLOAD_OFFSET: u64 = 16777216;
 
+fn kms_key_epoch(keys: &AppKeys) -> Option<u32> {
+    match keys.key_provider {
+        KeyProvider::Kms { key_epoch, .. } => Some(key_epoch),
+        _ => None,
+    }
+}
+
+fn cryptsetup(args: &[&str], device: &Path) -> Command {
+    let mut command = Command::new("cryptsetup");
+    command.args(args).arg(device);
+    command
+}
+
+/// Run `command` with `input` on stdin and return its exit code.
+fn run_with_input(mut command: Command, input: &[u8]) -> Result<Option<i32>> {
+    let mut child = command
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("failed to start cryptsetup")?;
+    child
+        .stdin
+        .take()
+        .context("cryptsetup stdin is unavailable")?
+        .write_all(input)
+        .context("failed to write to cryptsetup")?;
+    Ok(child
+        .wait()
+        .context("failed to wait for cryptsetup")?
+        .code())
+}
+
+/// Whether `key` unlocks keyslot 0. cryptsetup exits with 2 on a wrong key.
+fn luks_unlocks(device: &Path, key: &str) -> Result<bool> {
+    let command = cryptsetup(
+        &["open", "--test-passphrase", "--key-slot", "0", "-d-"],
+        device,
+    );
+    match run_with_input(command, key.as_bytes())? {
+        Some(0) => Ok(true),
+        Some(2) => Ok(false),
+        code => bail!("cryptsetup failed to test the data disk key: {code:?}"),
+    }
+}
+
+fn read_luks_key_epoch(device: &Path) -> Result<Option<u32>> {
+    #[derive(Deserialize)]
+    struct Metadata {
+        tokens: BTreeMap<u8, luks::LuksToken>,
+    }
+    let output = cryptsetup(&["luksDump", "--dump-json-metadata"], device)
+        .output()
+        .context("failed to run cryptsetup luksDump")?;
+    if !output.status.success() {
+        bail!("cryptsetup luksDump failed");
+    }
+    let metadata: Metadata =
+        serde_json::from_slice(&output.stdout).context("failed to parse LUKS metadata")?;
+    Ok(metadata
+        .tokens
+        .values()
+        .find(|token| token.kind == KEY_EPOCH_TOKEN_TYPE)
+        .and_then(|token| token.key_epoch))
+}
+
+fn write_luks_key_epoch(device: &Path, epoch: u32, replace: bool) -> Result<()> {
+    let token = serde_json::json!({
+        "type": KEY_EPOCH_TOKEN_TYPE,
+        "keyslots": ["0"],
+        "key_epoch": epoch,
+    });
+    let args: &[&str] = if replace {
+        &["token", "import", "--token-id", "0", "--token-replace"]
+    } else {
+        &["token", "import", "--token-id", "0"]
+    };
+    let code = run_with_input(cryptsetup(args, device), token.to_string().as_bytes())?;
+    if code != Some(0) {
+        bail!("failed to record key epoch {epoch} in the LUKS header: {code:?}");
+    }
+    Ok(())
+}
+
+/// Directory on the /run tmpfs for the old key handed to cryptsetup as a file.
+const REKEY_DIR: &str = "/run/dstack-rekey";
+
+/// Replace the keyslot 0 passphrase in place. The new key goes over stdin;
+/// the old one is written to a 0700 directory in `secret_dir`, which is
+/// removed before returning.
+fn luks_change_key(device: &Path, old_key: &str, new_key: &str, secret_dir: &Path) -> Result<()> {
+    fs::create_dir_all(secret_dir)?;
+    defer! {
+        fs::remove_dir_all(secret_dir).ok();
+    }
+    fs::set_permissions(
+        secret_dir,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )?;
+    let old_file = secret_dir.join("old-key");
+    safe_write_with_mode(&old_file, old_key, 0o600)?;
+    let mut command = cryptsetup(
+        &[
+            "luksChangeKey",
+            "--batch-mode",
+            "--pbkdf",
+            "pbkdf2",
+            "--key-slot",
+            "0",
+        ],
+        device,
+    );
+    command.arg("--key-file").arg(&old_file);
+    if run_with_input(command, new_key.as_bytes())? != Some(0) {
+        bail!("cryptsetup luksChangeKey failed");
+    }
+    Ok(())
+}
+
 /// Set by luksFormat and cleared once the filesystem exists, so a disk still
 /// carrying it was interrupted mid-initialization and holds no data.
 const LUKS_INITIALIZING_LABEL: &str = "dstack-initializing";
 
-/// Returns whether the primary header carries [`LUKS_INITIALIZING_LABEL`].
-fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<bool> {
-    let initializing = validate_single_luks2_header(&mut reader, 0)?;
-    validate_single_luks2_header(&mut reader, 1)?;
-    Ok(initializing)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LuksHeaderState {
+    /// The header carries [`LUKS_INITIALIZING_LABEL`].
+    initializing: bool,
+    /// KMS key epoch recorded in the dstack token; `None` predates epochs.
+    key_epoch: Option<u32>,
 }
 
-fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<bool> {
+fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<LuksHeaderState> {
+    let primary = validate_single_luks2_header(&mut reader, 0)?;
+    let secondary = validate_single_luks2_header(&mut reader, 1)?;
+    if primary.key_epoch != secondary.key_epoch {
+        bail!("LUKS header copies disagree on the key epoch");
+    }
+    Ok(primary)
+}
+
+fn validate_single_luks2_header(
+    mut reader: impl std::io::Read,
+    hdr_ind: u64,
+) -> Result<LuksHeaderState> {
     let mut hdr_data = vec![0u8; BINARY_HEADER_SIZE as usize];
     reader
         .read_exact(&mut hdr_data)
@@ -3470,9 +3672,17 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
     if keyslots.len() != 1 {
         bail!("Invalid LUKS keyslots");
     }
-    if !tokens.is_empty() {
-        bail!("Invalid LUKS tokens");
-    }
+    let key_epoch = match tokens.len() {
+        0 => None,
+        1 => {
+            let token = tokens.get(&0).context("Invalid LUKS token id")?;
+            if token.kind != KEY_EPOCH_TOKEN_TYPE || token.keyslots != ["0"] {
+                bail!("Invalid LUKS token");
+            }
+            Some(token.key_epoch.context("LUKS token has no key epoch")?)
+        }
+        _ => bail!("Invalid LUKS tokens"),
+    };
     if segments.len() != 1 {
         bail!("Invalid LUKS segments");
     }
@@ -3588,18 +3798,31 @@ fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) ->
             bail!("Invalid LUKS digest segments: {segments:?}");
         }
     }
-    Ok(initializing)
+    Ok(LuksHeaderState {
+        initializing,
+        key_epoch,
+    })
 }
 
 #[test]
 fn test_validate_luks2_header() {
     let mut header_data = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    assert!(
-        !validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header")
+    let state =
+        validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header");
+    assert_eq!(
+        state,
+        LuksHeaderState {
+            initializing: false,
+            key_epoch: None
+        }
     );
     header_data[24..24 + LUKS_INITIALIZING_LABEL.len()]
         .copy_from_slice(LUKS_INITIALIZING_LABEL.as_bytes());
-    assert!(validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header"));
+    assert!(
+        validate_luks2_headers(&mut &header_data[..])
+            .expect("Failed to validate LUKS2 header")
+            .initializing
+    );
     let header_data = include_bytes!("../tests/fixtures/luks_header_cipher_null").to_vec();
     let error = validate_luks2_headers(&mut &header_data[..]).unwrap_err();
     assert!(error
@@ -3641,6 +3864,89 @@ fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usiz
         i += replacement.len();
     }
     patched
+}
+
+#[test]
+fn test_disk_key_migration_with_cryptsetup() {
+    if Command::new("cryptsetup")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("cryptsetup is unavailable; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("disk.img");
+    fs::File::create(&image)
+        .unwrap()
+        .set_len(2 * PAYLOAD_OFFSET)
+        .unwrap();
+    let offset = (PAYLOAD_OFFSET / 512).to_string();
+    let format = cryptsetup(
+        &[
+            "luksFormat",
+            "--batch-mode",
+            "--type",
+            "luks2",
+            "--offset",
+            &offset,
+            "--cipher",
+            "aes-xts-plain64",
+            "--pbkdf",
+            "pbkdf2",
+            "--sector-size",
+            "512",
+            "-d-",
+        ],
+        &image,
+    );
+    assert_eq!(run_with_input(format, b"old").unwrap(), Some(0));
+
+    assert!(luks_unlocks(&image, "old").unwrap());
+    assert!(!luks_unlocks(&image, "new").unwrap());
+    assert_eq!(read_luks_key_epoch(&image).unwrap(), None);
+
+    let secret_dir = dir.path().join("rekey");
+    luks_change_key(&image, "old", "new", &secret_dir).unwrap();
+    assert!(!secret_dir.exists());
+    assert!(luks_unlocks(&image, "new").unwrap());
+    assert!(!luks_unlocks(&image, "old").unwrap());
+
+    write_luks_key_epoch(&image, 2, false).unwrap();
+    assert_eq!(read_luks_key_epoch(&image).unwrap(), Some(2));
+    write_luks_key_epoch(&image, 3, true).unwrap();
+    assert_eq!(read_luks_key_epoch(&image).unwrap(), Some(3));
+
+    // The re-keyed, tagged header still passes the boot-time validation.
+    let header = dir.path().join("header");
+    let status = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
+        .arg(&image)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
+    assert_eq!(state.key_epoch, Some(3));
+}
+
+#[test]
+fn test_validate_luks2_header_key_epoch_token() {
+    let with_token = |token: &str| {
+        let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
+        let replacement = format!(r#""tokens":{{"0":{token}}}"#);
+        let patched = patch_luks_json(&mut header, br#""tokens":{}"#, replacement.as_bytes());
+        assert_eq!(patched, 2, "expected to patch both header copies");
+        validate_luks2_headers(&mut &header[..])
+    };
+    let state = with_token(r#"{"type":"dstack-kms","keyslots":["0"],"key_epoch":2}"#).unwrap();
+    assert_eq!(state.key_epoch, Some(2));
+    for token in [
+        r#"{"type":"luks2-keyring","keyslots":["0"],"key_epoch":2}"#,
+        r#"{"type":"dstack-kms","keyslots":["1"],"key_epoch":2}"#,
+        r#"{"type":"dstack-kms","keyslots":["0"]}"#,
+    ] {
+        assert!(with_token(token).is_err(), "{token}");
+    }
 }
 
 #[test]

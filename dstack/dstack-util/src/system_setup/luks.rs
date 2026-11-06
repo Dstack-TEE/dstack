@@ -49,10 +49,22 @@ impl LuksHeader {
 #[derive(Deserialize)]
 pub(super) struct LuksJson {
     pub keyslots: HashMap<u8, LuksKeyslot>,
-    pub tokens: HashMap<u8, IgnoredAny>,
+    pub tokens: HashMap<u8, LuksToken>,
     pub segments: HashMap<u8, LuksSegment>,
     pub digests: HashMap<u8, LuksDigest>,
     pub config: LuksConfig,
+}
+
+/// Type of the only token dstack writes: the KMS key epoch of keyslot 0.
+pub(super) const KEY_EPOCH_TOKEN_TYPE: &str = "dstack-kms";
+
+#[derive(Deserialize)]
+pub(super) struct LuksToken {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub keyslots: Vec<String>,
+    #[serde(default)]
+    pub key_epoch: Option<u32>,
 }
 
 #[derive(Deserialize)]

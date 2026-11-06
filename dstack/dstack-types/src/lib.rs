@@ -2431,6 +2431,9 @@ pub enum KeyProvider {
         pubkey: Vec<u8>,
         tmp_ca_key: String,
         tmp_ca_cert: String,
+        /// KMS root key epoch the keys were derived from.
+        #[serde(default)]
+        key_epoch: u32,
     },
 }
 
@@ -2494,6 +2497,7 @@ mod key_provider_tests {
             pubkey: vec![0xab; 32],
             tmp_ca_key: String::new(),
             tmp_ca_cert: String::new(),
+            key_epoch: 0,
         };
         assert_eq!(kms.id(), &[0xab; 32]);
     }
