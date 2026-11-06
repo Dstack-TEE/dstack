@@ -385,6 +385,11 @@ impl AppState {
         Ok(key)
     }
 
+    /// KMS root epoch of the app keys this agent serves.
+    pub(crate) fn root_epoch(&self) -> u32 {
+        self.inner.keys.root_epoch()
+    }
+
     /// The app root key and its KMS signature of `root_epoch`; the current
     /// ones for 0. The key is parsed for older epochs only, which are
     /// requested rarely.

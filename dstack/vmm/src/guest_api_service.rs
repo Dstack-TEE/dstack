@@ -6,7 +6,7 @@ use crate::App as AppState;
 use anyhow::Result;
 use guest_api::{
     proxied_guest_api_server::{ProxiedGuestApiRpc, ProxiedGuestApiServer},
-    GpuInfoResponse, GuestInfo, Id, ListContainersResponse, NetworkInformation, ReencryptedEnv,
+    EncryptedEnv, GpuInfoResponse, GuestInfo, Id, ListContainersResponse, NetworkInformation,
     SystemInfo,
 };
 use ra_rpc::{CallContext, RpcCall};
@@ -61,9 +61,9 @@ impl ProxiedGuestApiRpc for GuestApiHandler {
         self.guest_agent_client(&request.id)?.shutdown().await
     }
 
-    async fn get_reencrypted_env(self, request: Id) -> Result<ReencryptedEnv> {
+    async fn get_encrypted_env(self, request: Id) -> Result<EncryptedEnv> {
         self.guest_agent_client(&request.id)?
-            .get_reencrypted_env()
+            .get_encrypted_env()
             .await
     }
 }

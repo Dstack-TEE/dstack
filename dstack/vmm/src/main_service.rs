@@ -1302,9 +1302,11 @@ impl VmmRpc for RpcHandler {
         use sha2::Digest;
         let migrated = self
             .guest_agent_client(&request.id)?
-            .get_reencrypted_env()
+            .get_encrypted_env()
             .await?;
-        if migrated.encrypted_env.is_empty() {
+        if migrated.encrypted_env.is_empty()
+            || sha2::Sha256::digest(&migrated.encrypted_env)[..] == migrated.source_sha256[..]
+        {
             return Ok(ApplyReencryptedEnvResponse::default());
         }
         let path = self.encrypted_env_path(&request.id)?;
