@@ -353,7 +353,7 @@
         "type": "object",
         "required": [
           "isAllowed",
-          "rejectReason",
+          "rejectionReason",
           "gatewayAppId",
           "currentRootEpoch",
           "currentRootEpochHash"
@@ -362,7 +362,7 @@
           "isAllowed": {
             "type": "boolean"
           },
-          "rejectReason": {
+          "rejectionReason": {
             "type": "string",
             "description": "Empty when allowed."
           },

@@ -474,7 +474,7 @@ contract DstackKmsTest is Test {
             DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(true, 1));
         DstackKms.AuthorizationResult memory result = kms.checkAuthorization(request);
         assertFalse(result.isAllowed);
-        assertEq(result.rejectReason, "Requested root epoch is not active");
+        assertEq(result.rejectionReason, "Requested root epoch is not active");
         bytes32 h1 = chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1));
         vm.prank(owner);
         kms.activateRootEpoch(1, h1);
@@ -493,7 +493,7 @@ contract DstackKmsTest is Test {
     function test_CheckAuthorization_UnregisteredEpochReturnsRejection() public view {
         DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(address(kms)));
         assertFalse(result.isAllowed);
-        assertEq(result.rejectReason, "Root epoch not registered");
+        assertEq(result.rejectionReason, "Root epoch not registered");
         assertEq(result.currentRootEpoch, 0);
         assertEq(result.currentRootEpochHash, bytes32(0));
     }
@@ -511,14 +511,14 @@ contract DstackKmsTest is Test {
 
         DstackKms.AuthorizationResult memory result = authorize(info);
         assertTrue(result.isAllowed);
-        assertEq(result.rejectReason, "");
+        assertEq(result.rejectionReason, "");
         assertEq(result.gatewayAppId, "gateway");
         assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
 
         info.appId = user;
         result = authorize(info);
         assertFalse(result.isAllowed);
-        assertEq(result.rejectReason, "App not registered");
+        assertEq(result.rejectionReason, "App not registered");
 
         info.appId = appId;
         info.mrAggregated = bytes32(0);
@@ -527,7 +527,7 @@ contract DstackKmsTest is Test {
         info.appId = address(kms);
         result = authorize(info);
         assertFalse(result.isAllowed);
-        assertEq(result.rejectReason, "Aggregated MR not allowed");
+        assertEq(result.rejectionReason, "Aggregated MR not allowed");
     }
 
     function test_CheckAuthorization_RejectionIncludesActivatedEpoch() public {
@@ -539,7 +539,7 @@ contract DstackKmsTest is Test {
 
         DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(user));
         assertFalse(result.isAllowed);
-        assertEq(result.rejectReason, "App not registered");
+        assertEq(result.rejectionReason, "App not registered");
         assertEq(result.currentRootEpoch, 1);
         assertEq(
             result.currentRootEpochHash, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1))

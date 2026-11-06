@@ -266,7 +266,7 @@ The response is an `AuthorizationResult`:
 ```json
 {
   "isAllowed": true,
-  "rejectReason": "",
+  "rejectionReason": "",
   "gatewayAppId": "0x...",
   "currentRootEpoch": 0,
   "currentRootEpochHash": "0x..."
@@ -276,7 +276,7 @@ The response is an `AuthorizationResult`:
 Both successful and rejected decisions include the current epoch and chain hash
 from the same contract call or auth-simple configuration snapshot. With no
 registered epoch, the result is `isAllowed: false`,
-`rejectReason: "Root epoch not registered"`, epoch 0 and a zero hash. A zero hash
+`rejectionReason: "Root epoch not registered"`, epoch 0 and a zero hash. A zero hash
 never authorizes key release or requests an epoch switch.
 
 The KMS holds no serving-epoch snapshot. It verifies the returned current epoch

@@ -105,7 +105,7 @@ const DSTACK_KMS_ABI = [
       type: 'tuple',
       components: [
         { name: 'isAllowed', type: 'bool' },
-        { name: 'rejectReason', type: 'string' },
+        { name: 'rejectionReason', type: 'string' },
         { name: 'gatewayAppId', type: 'string' },
         { name: 'currentRootEpoch', type: 'uint256' },
         { name: 'currentRootEpochHash', type: 'bytes32' },

@@ -165,14 +165,14 @@ class ConfigBackend {
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
     if (current.rootEpoch === undefined) {
-      return { isAllowed: false, rejectReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
+      return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
-      return { isAllowed: false, rejectReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
+      return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     const isKms = normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr);
     const result = this.evaluateBoot(appInfo, isKms, config);
-    return { isAllowed: result.isAllowed, rejectReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
+    return { isAllowed: result.isAllowed, rejectionReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {

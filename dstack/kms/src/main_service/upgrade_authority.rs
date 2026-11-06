@@ -90,7 +90,7 @@ pub(crate) struct BootResponse {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthorizationResult {
     pub is_allowed: bool,
-    pub reject_reason: String,
+    pub rejection_reason: String,
     pub gateway_app_id: String,
     pub current_root_epoch: u32,
     pub current_root_epoch_hash: String,
@@ -271,7 +271,7 @@ impl AuthApi {
         match self {
             AuthApi::Dev { dev } => Ok(AuthorizationResult {
                 is_allowed: true,
-                reject_reason: String::new(),
+                rejection_reason: String::new(),
                 gateway_app_id: dev.gateway_app_id.clone(),
                 current_root_epoch: 0,
                 current_root_epoch_hash: hex::encode([0; 32]),
@@ -677,7 +677,7 @@ pub(crate) mod tests {
     async fn authorization_returns_the_epoch_with_each_decision() {
         let response = |allowed: bool, epoch: u32| {
             format!(
-                r#"{{"isAllowed":{allowed},"rejectReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentRootEpochHash":"0x{}"}}"#,
+                r#"{{"isAllowed":{allowed},"rejectionReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentRootEpochHash":"0x{}"}}"#,
                 "11".repeat(32)
             )
         };
