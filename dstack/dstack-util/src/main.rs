@@ -702,7 +702,6 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
             api_version: 1,
             vm_config: "".to_string(),
             root_epoch: None,
-            include_history: false,
         })
         .await
         .context("Failed to get app key")?;
@@ -720,7 +719,6 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         k256_key: response.k256_key,
         k256_signature: response.k256_signature,
         gateway_app_id: response.gateway_app_id,
-        historical_roots: Vec::new(),
         key_provider: KeyProvider::Kms {
             url: kms_url,
             pubkey: root_pubkey,
@@ -1238,7 +1236,6 @@ fn make_app_keys(
         k256_signature: vec![],
         gateway_app_id: "".to_string(),
         ca_cert: cert.pem(),
-        historical_roots: Vec::new(),
         key_provider,
     })
 }

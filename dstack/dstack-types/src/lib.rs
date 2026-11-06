@@ -2405,16 +2405,6 @@ pub struct ReencryptedEnv {
     pub root_epoch: u32,
 }
 
-/// The app root key of an older KMS root epoch.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct HistoricalAppRoot {
-    pub root_epoch: u32,
-    #[serde(with = "hex_bytes")]
-    pub k256_key: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub k256_signature: Vec<u8>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppKeys {
     #[serde(with = "hex_bytes")]
@@ -2428,10 +2418,6 @@ pub struct AppKeys {
     pub gateway_app_id: String,
     pub ca_cert: String,
     pub key_provider: KeyProvider,
-    /// App root keys of the KMS root epochs before the current one, indexed by
-    /// epoch, for key requests that select one explicitly.
-    #[serde(default)]
-    pub historical_roots: Vec<HistoricalAppRoot>,
 }
 
 impl AppKeys {

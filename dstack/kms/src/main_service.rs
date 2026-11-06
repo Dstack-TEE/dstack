@@ -14,8 +14,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
-    GetTempCaCertResponse, HistoricalAppKey, KmsKeyResponse, KmsKeys, PublicKeyResponse,
-    SignCertRequest, SignCertResponse,
+    GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SignCertRequest,
+    SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
@@ -603,33 +603,11 @@ impl KmsRpc for RpcHandler {
             .context("App not allowed")?;
         ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
         let root_epoch = self.state.resolve_epoch(request.root_epoch)?;
-        let derive = |epoch| {
-            derive_app_keys(
-                self.state.epoch_root(epoch),
-                &boot_info.app_id,
-                &boot_info.instance_id,
-            )
-        };
-        let keys = derive(root_epoch)?;
-        let history = if request.include_history {
-            (0..root_epoch)
-                .map(|epoch| {
-                    let keys = derive(epoch)?;
-                    Ok(HistoricalAppKey {
-                        root_epoch: epoch,
-                        disk_crypt_key: keys.disk_crypt_key,
-                        env_crypt_key: keys.env_crypt_key,
-                        k256_key: keys.k256_key,
-                        k256_signature: keys.k256_signature,
-                    })
-                })
-                .collect::<Result<_>>()?
-        } else {
-            Vec::new()
-        };
+        let root = self.state.epoch_root(root_epoch);
+        let keys = derive_app_keys(root, &boot_info.app_id, &boot_info.instance_id)?;
 
         Ok(AppKeyResponse {
-            ca_cert: self.state.epoch_root(root_epoch).ca.pem_cert.clone(),
+            ca_cert: root.ca.pem_cert.clone(),
             disk_crypt_key: keys.disk_crypt_key,
             env_crypt_key: keys.env_crypt_key,
             k256_key: keys.k256_key,
@@ -638,7 +616,6 @@ impl KmsRpc for RpcHandler {
             gateway_app_id,
             os_image_hash: boot_info.os_image_hash,
             root_epoch,
-            history,
         })
     }
 

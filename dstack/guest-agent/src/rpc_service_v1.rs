@@ -161,15 +161,15 @@ impl V1RpcHandler {
 
     /// Derive the key named by `(domain, algorithm)` under the app root of
     /// `root_epoch`, together with its signature chain and that epoch.
-    fn derive(
+    async fn derive(
         &self,
         domain: &str,
         algorithm: &str,
         root_epoch: Option<u32>,
     ) -> Result<(AppKey, Vec<Vec<u8>>, u32)> {
         let algorithm = Algorithm::parse(algorithm)?;
-        let root = self.state.app_root(root_epoch)?;
-        let key = AppKey::derive(root.k256_key, domain, algorithm)?;
+        let root = self.state.app_root(root_epoch).await?;
+        let key = AppKey::derive(&root.k256_key, domain, algorithm)?;
         let chain = vec![
             key.claim_signature(&root.signing_key)?,
             root.kms_signature.to_vec(),
@@ -202,8 +202,9 @@ impl DstackGuestRpc for V1RpcHandler {
     }
 
     async fn get_key(self, request: GetKeyRequest) -> Result<GetKeyResponse> {
-        let (key, signature_chain, root_epoch) =
-            self.derive(&request.domain, &request.algorithm, request.root_epoch)?;
+        let (key, signature_chain, root_epoch) = self
+            .derive(&request.domain, &request.algorithm, request.root_epoch)
+            .await?;
         Ok(GetKeyResponse {
             key: key.secret(),
             public_key: key.public_key(),
@@ -369,23 +370,23 @@ mod tests {
             handler().get_key(request(Some(0))).await.unwrap().key,
             current.key
         );
+        assert!(handler().get_key(request(Some(1))).await.is_err());
+    }
 
-        let old = handler().get_key(request(Some(1))).await.unwrap();
-        assert_eq!(old.root_epoch, 1);
-        assert_ne!(old.key, current.key);
-        assert_eq!(
-            old.key,
-            AppKey::derive(
-                &crate::rpc_service::tests::HISTORICAL_K256_KEY,
-                "storage-encryption",
-                Algorithm::Secp256k1
-            )
-            .unwrap()
-            .secret()
-        );
-        assert_eq!(old.signature_chain[1], vec![0xab; 65]);
-
-        assert!(handler().get_key(request(Some(2))).await.is_err());
+    /// Older epochs come from the KMS once and are then served from memory;
+    /// the fixture has no KMS, so the cache is filled directly.
+    #[tokio::test]
+    async fn an_older_root_is_fetched_once_and_cached() {
+        let (state, _guard) = state().await;
+        let key = crate::rpc_service::tests::HISTORICAL_K256_KEY.to_vec();
+        state
+            .insert_historical_root(1, key.clone(), vec![0xab; 65])
+            .await;
+        let root = state.historical_root(1).await.unwrap();
+        assert_eq!(root.k256_key(), &key[..]);
+        assert_eq!(root.kms_signature(), &[0xab; 65][..]);
+        // An uncached epoch needs the KMS, which a local key provider lacks.
+        assert!(state.historical_root(2).await.is_err());
     }
 
     /// The fixture's app root key is what `keys::tests` committed its vectors

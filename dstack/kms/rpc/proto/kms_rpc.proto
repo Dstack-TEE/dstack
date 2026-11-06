@@ -14,18 +14,6 @@ message GetAppKeyRequest {
   // Root key epoch to derive from; unset means the current epoch. Epoch 0 is
   // the original root keys. Older epochs remain available so CVMs can migrate.
   optional uint32 root_epoch = 3;
-  // Also return the app keys of every epoch before the selected one, so a CVM
-  // migrating off older epochs needs a single request.
-  bool include_history = 4;
-}
-
-// App keys derived from one older root epoch.
-message HistoricalAppKey {
-  uint32 root_epoch = 1;
-  bytes disk_crypt_key = 2;
-  bytes env_crypt_key = 3;
-  bytes k256_key = 4;
-  bytes k256_signature = 5;
 }
 
 message AppId {
@@ -63,8 +51,6 @@ message AppKeyResponse {
   bytes os_image_hash = 8;
   // Root key epoch all epoch-dependent fields above were derived from.
   uint32 root_epoch = 9;
-  // With `include_history`, the app keys of epochs 0..root_epoch in order.
-  repeated HistoricalAppKey history = 10;
 }
 
 message GetMetaResponse {

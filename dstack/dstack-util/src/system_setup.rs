@@ -24,8 +24,7 @@ use dstack_types::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, INSTANCE_INFO, REENCRYPTED_ENV, SYS_CONFIG, USER_CONFIG,
     },
-    GpuPolicy, HistoricalAppRoot, KeyProvider, KeyProviderInfo, ReencryptedEnv,
-    GPU_ATTESTATION_OUTPUT,
+    GpuPolicy, KeyProvider, KeyProviderInfo, ReencryptedEnv, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
 use luks::{
@@ -2355,10 +2354,13 @@ struct AppInfo {
 }
 
 impl HostShared {
-    /// Request the current app keys from one KMS, with those of every older
-    /// root epoch in order.
-    async fn request_kms_keys(&self, kms_url: String) -> Result<KmsKeys> {
-        info!("Requesting app keys from KMS: {kms_url}");
+    /// Request app keys of `root_epoch` (`None` = current) from one KMS.
+    async fn request_kms_keys(
+        &self,
+        kms_url: String,
+        root_epoch: Option<u32>,
+    ) -> Result<(AppKeys, Vec<u8>)> {
+        info!("Requesting app keys of root epoch {root_epoch:?} from KMS: {kms_url}");
         let tmp_ca = {
             info!("Getting temp ca cert");
             let client = RaClient::new(kms_url.clone(), true)?;
@@ -2387,15 +2389,14 @@ impl HostShared {
             .get_app_key(rpc::GetAppKeyRequest {
                 api_version: 1,
                 vm_config: self.sys_config.vm_config.clone(),
-                root_epoch: None,
-                include_history: true,
+                root_epoch,
             })
             .await
             .context("Failed to get app key")?;
-        // A KMS predating root epochs serves epoch 0 with no history.
+        // A KMS predating root epochs ignores the selector and serves epoch 0.
         let served = response.root_epoch;
-        if !response.history.iter().map(|h| h.root_epoch).eq(0..served) {
-            bail!("KMS returned incomplete key history for root epoch {served}");
+        if root_epoch.is_some_and(|epoch| epoch != served) {
+            bail!("KMS returned keys of epoch {served} instead of {root_epoch:?}");
         }
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
@@ -2410,7 +2411,6 @@ impl HostShared {
             k256_key: response.k256_key,
             k256_signature: response.k256_signature,
             gateway_app_id: response.gateway_app_id,
-            historical_roots: Vec::new(),
             key_provider: KeyProvider::Kms {
                 url: kms_url,
                 pubkey: root_pubkey,
@@ -2419,19 +2419,17 @@ impl HostShared {
                 root_epoch: served,
             },
         };
-        Ok(KmsKeys {
-            keys,
-            history: response.history,
-            os_image_hash: response.os_image_hash,
-        })
+        Ok((keys, response.os_image_hash))
     }
-}
 
-struct KmsKeys {
-    keys: AppKeys,
-    /// App keys of the root epochs before `keys.root_epoch()`, indexed by epoch.
-    history: Vec<rpc::HistoricalAppKey>,
-    os_image_hash: Vec<u8>,
+    /// Request the app keys of an older root epoch from the KMS that served
+    /// `keys`.
+    async fn request_historical_keys(&self, keys: &AppKeys, epoch: u32) -> Result<AppKeys> {
+        let KeyProvider::Kms { url, .. } = &keys.key_provider else {
+            bail!("only KMS-provided keys have older root epochs");
+        };
+        Ok(self.request_kms_keys(url.clone(), Some(epoch)).await?.0)
+    }
 }
 
 struct Stage0<'a> {
@@ -2445,8 +2443,6 @@ struct Stage1<'a> {
     vmm: HostApi,
     shared: HostShared,
     keys: AppKeys,
-    /// Keys of the root epochs before `keys.root_epoch()`, indexed by epoch.
-    key_history: Vec<rpc::HistoricalAppKey>,
 }
 
 fn validate_key_provider_inputs(kind: KeyProviderKind, kms_urls: &[String]) -> Result<()> {
@@ -2498,24 +2494,20 @@ impl<'a> Stage0<'a> {
         self.shared.dir.join(APP_KEYS)
     }
 
-    async fn request_app_keys_from_kms(&self) -> Result<(AppKeys, Vec<rpc::HistoricalAppKey>)> {
+    async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
         if self.shared.sys_config.kms_urls.is_empty() {
             bail!("No KMS URLs are set");
         }
         let mut errors = vec![];
         for kms_url in &self.shared.sys_config.kms_urls {
             let kms_url = kms_rpc_url(kms_url);
-            match self.shared.request_kms_keys(kms_url.clone()).await {
-                Ok(KmsKeys {
-                    keys,
-                    history,
-                    os_image_hash,
-                }) => {
+            match self.shared.request_kms_keys(kms_url.clone(), None).await {
+                Ok((keys, os_image_hash)) => {
                     // Measured here, outside the per-URL request, so that a
                     // failover can never extend os-image-hash twice.
                     emit_runtime_event("os-image-hash", &os_image_hash)
                         .context("failed to extend os-image-hash to the launch measurement")?;
-                    return Ok((keys, history));
+                    return Ok(keys);
                 }
                 Err(err) => {
                     warn!("failed to get app keys from KMS {kms_url}: {err:?}");
@@ -2594,12 +2586,11 @@ impl<'a> Stage0<'a> {
             .context("failed to generate TPM app keys")
     }
 
-    /// The app keys, with those of older KMS root epochs when the KMS has any.
-    async fn request_app_keys(&self) -> Result<(AppKeys, Vec<rpc::HistoricalAppKey>)> {
+    async fn request_app_keys(&self) -> Result<AppKeys> {
         let key_provider = self.shared.app_compose.key_provider();
         validate_key_provider_inputs(key_provider, &self.shared.sys_config.kms_urls)?;
-        let keys = match key_provider {
-            KeyProviderKind::Kms => return self.request_app_keys_from_kms().await,
+        match key_provider {
+            KeyProviderKind::Kms => self.request_app_keys_from_kms().await,
             KeyProviderKind::Local => self.get_keys_from_local_key_provider().await,
             KeyProviderKind::None => {
                 info!("No key provider is enabled, generating temporary app keys");
@@ -2611,8 +2602,7 @@ impl<'a> Stage0<'a> {
                 info!("Generating app keys from TPM");
                 self.generate_tpm_app_keys()
             }
-        };
-        Ok((keys?, Vec::new()))
+        }
     }
 
     async fn setup_swap(&self, swap_size: u64, opts: &DstackOptions) -> Result<()> {
@@ -2754,12 +2744,7 @@ impl<'a> Stage0<'a> {
         initialized
     }
 
-    async fn mount_data_disk(
-        &self,
-        keys: &AppKeys,
-        key_history: &[rpc::HistoricalAppKey],
-        opts: &DstackOptions,
-    ) -> Result<()> {
+    async fn mount_data_disk(&self, keys: &AppKeys, opts: &DstackOptions) -> Result<()> {
         let disk_crypt_key = &hex::encode(&keys.disk_crypt_key);
         let root_epoch = kms_root_epoch(keys);
         let name = "dstack_data_disk";
@@ -2783,7 +2768,8 @@ impl<'a> Stage0<'a> {
         let has_filesystem = if opts.storage_encrypted && disk_initialized {
             info!("Mounting encrypted data disk");
             if let Some(epoch) = root_epoch {
-                self.migrate_disk_key(key_history, disk_crypt_key, epoch)
+                self.migrate_disk_key(keys, disk_crypt_key, epoch)
+                    .await
                     .context("failed to migrate the data disk key")?;
             }
             let initializing =
@@ -2991,9 +2977,9 @@ impl<'a> Stage0<'a> {
     /// is recorded in the header so the right old key is used after the next
     /// rotation. An unrotated epoch-0 disk is left untouched, so it stays
     /// readable by older OS images.
-    fn migrate_disk_key(
+    async fn migrate_disk_key(
         &self,
-        key_history: &[rpc::HistoricalAppKey],
+        keys: &AppKeys,
         current_key: &str,
         current: u32,
     ) -> Result<()> {
@@ -3005,9 +2991,7 @@ impl<'a> Stage0<'a> {
                 bail!("the data disk does not unlock with the key of epoch {current}");
             }
             info!("re-keying the data disk from key epoch {epoch} to {current}");
-            let old = key_history
-                .get(epoch as usize)
-                .with_context(|| format!("no keys for root epoch {epoch}"))?;
+            let old = self.shared.request_historical_keys(keys, epoch).await?;
             let old_key = hex::encode(&old.disk_crypt_key);
             luks_change_key(device, &old_key, current_key, Path::new(REKEY_DIR))?;
             if !luks_unlocks(device, current_key)? {
@@ -3243,18 +3227,10 @@ impl<'a> Stage0<'a> {
         self.vmm
             .notify_q("boot.progress", "requesting app keys")
             .await;
-        let (mut app_keys, key_history) = self
+        let app_keys = self
             .request_app_keys()
             .await
             .context("Failed to request app keys")?;
-        app_keys.historical_roots = key_history
-            .iter()
-            .map(|keys| HistoricalAppRoot {
-                root_epoch: keys.root_epoch,
-                k256_key: keys.k256_key.clone(),
-                k256_signature: keys.k256_signature.clone(),
-            })
-            .collect();
         if app_keys.disk_crypt_key.is_empty() {
             bail!("Failed to get valid key phrase from KMS");
         }
@@ -3289,7 +3265,7 @@ impl<'a> Stage0<'a> {
             opts.storage_encrypted, opts.storage_fs
         );
 
-        self.mount_data_disk(&app_keys, &key_history, &opts).await?;
+        self.mount_data_disk(&app_keys, &opts).await?;
         self.setup_swap(self.shared.app_compose.swap_size, &opts)
             .await?;
         self.vmm
@@ -3309,7 +3285,6 @@ impl<'a> Stage0<'a> {
             shared: self.shared,
             vmm: self.vmm,
             keys: app_keys,
-            key_history,
         })
     }
 }
@@ -3317,7 +3292,7 @@ impl<'a> Stage0<'a> {
 impl Stage1<'_> {
     /// Decrypt the host-supplied env. An env still encrypted to an older KMS
     /// key epoch is re-encrypted to the current one for the host to swap in.
-    fn decrypt_env(&self) -> Result<Vec<u8>> {
+    async fn decrypt_env(&self) -> Result<Vec<u8>> {
         let ciphertext = &self.shared.encrypted_env;
         let current_key = env_crypt_key(&self.keys.env_crypt_key)?;
         let error = match dh_decrypt(current_key, ciphertext) {
@@ -3325,8 +3300,11 @@ impl Stage1<'_> {
             Err(error) => error,
         };
         let current = self.keys.root_epoch();
-        for (index, old) in self.key_history.iter().enumerate().rev() {
-            let epoch = index as u32;
+        for epoch in (0..current).rev() {
+            let old = self
+                .shared
+                .request_historical_keys(&self.keys, epoch)
+                .await?;
             let Ok(plaintext) = dh_decrypt(env_crypt_key(&old.env_crypt_key)?, ciphertext) else {
                 continue;
             };
@@ -3380,7 +3358,7 @@ impl Stage1<'_> {
             Default::default()
         } else {
             info!("Processing encrypted env");
-            let plaintext = self.decrypt_env()?;
+            let plaintext = self.decrypt_env().await?;
             crate::parse_env_file::parse_env(&plaintext, &allowed_envs)?
         };
         self.write_env_file(&decrypted_env)?;

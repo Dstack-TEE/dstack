@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -95,9 +97,40 @@ pub struct AppState {
 /// The app root key of one KMS root epoch.
 pub(crate) struct AppRoot<'a> {
     pub epoch: u32,
-    pub k256_key: &'a [u8],
-    pub signing_key: std::borrow::Cow<'a, SigningKey>,
-    pub kms_signature: &'a [u8],
+    pub k256_key: Cow<'a, [u8]>,
+    pub signing_key: Cow<'a, SigningKey>,
+    pub kms_signature: Cow<'a, [u8]>,
+}
+
+/// The app root key of an older KMS root epoch, fetched from the KMS on first
+/// use.
+#[derive(Clone)]
+pub(crate) struct HistoricalRoot {
+    k256_key: Vec<u8>,
+    signing_key: SigningKey,
+    kms_signature: Vec<u8>,
+}
+
+impl HistoricalRoot {
+    #[cfg(test)]
+    pub(crate) fn k256_key(&self) -> &[u8] {
+        &self.k256_key
+    }
+
+    #[cfg(test)]
+    pub(crate) fn kms_signature(&self) -> &[u8] {
+        &self.kms_signature
+    }
+
+    fn new(k256_key: Vec<u8>, kms_signature: Vec<u8>) -> Result<Self> {
+        let signing_key = SigningKey::from_slice(&k256_key)
+            .context("the app root k256 key is not a valid secp256k1 scalar")?;
+        Ok(Self {
+            k256_key,
+            signing_key,
+            kms_signature,
+        })
+    }
 }
 
 struct AppStateInner {
@@ -105,6 +138,8 @@ struct AppStateInner {
     keys: AppKeys,
     vm_config: String,
     cert_client: CertRequestClient,
+    /// Held across a fetch so concurrent requests for one epoch fetch it once.
+    historical_roots: tokio::sync::Mutex<HashMap<u32, HistoricalRoot>>,
     demo_cert: tokio::sync::OnceCell<String>,
     /// When the last demo-cert request failed; held while one is running.
     demo_cert_last_failure: tokio::sync::Mutex<Option<Instant>>,
@@ -308,6 +343,7 @@ impl AppState {
                 config,
                 keys,
                 cert_client,
+                historical_roots: Default::default(),
                 demo_cert: Default::default(),
                 demo_cert_last_failure: Default::default(),
                 vm_config,
@@ -391,34 +427,56 @@ impl AppState {
     }
 
     /// The app root key and its KMS signature of `root_epoch`; the current
-    /// ones when unset. The key is parsed for older epochs only, which are
-    /// requested rarely.
-    pub(crate) fn app_root(&self, root_epoch: Option<u32>) -> Result<AppRoot<'_>> {
-        let keys = &self.inner.keys;
-        let current = keys.root_epoch();
+    /// ones when unset. An older epoch is requested from the KMS once and kept
+    /// in memory.
+    pub(crate) async fn app_root(&self, root_epoch: Option<u32>) -> Result<AppRoot<'_>> {
+        let current = self.root_epoch();
         let epoch = root_epoch.unwrap_or(current);
         if epoch == current {
             return Ok(AppRoot {
                 epoch,
-                k256_key: self.app_root_k256_key(),
-                signing_key: std::borrow::Cow::Borrowed(self.app_root_signing_key()?),
-                kms_signature: self.kms_k256_signature(),
+                k256_key: Cow::Borrowed(self.app_root_k256_key()),
+                signing_key: Cow::Borrowed(self.app_root_signing_key()?),
+                kms_signature: Cow::Borrowed(self.kms_k256_signature()),
             });
         }
-        let root = keys
-            .historical_roots
-            .iter()
-            .find(|root| root.root_epoch == epoch)
-            .with_context(|| format!("root key epoch {epoch} is not available"))?;
+        if epoch > current {
+            anyhow::bail!("root epoch {epoch} is newer than the current one, {current}");
+        }
+        let root = self.historical_root(epoch).await?;
         Ok(AppRoot {
             epoch,
-            k256_key: &root.k256_key,
-            signing_key: std::borrow::Cow::Owned(
-                SigningKey::from_slice(&root.k256_key)
-                    .context("the app root k256 key is not a valid secp256k1 scalar")?,
-            ),
-            kms_signature: &root.k256_signature,
+            k256_key: Cow::Owned(root.k256_key),
+            signing_key: Cow::Owned(root.signing_key),
+            kms_signature: Cow::Owned(root.kms_signature),
         })
+    }
+
+    pub(crate) async fn historical_root(&self, epoch: u32) -> Result<HistoricalRoot> {
+        let mut roots = self.inner.historical_roots.lock().await;
+        if let Some(root) = roots.get(&epoch) {
+            return Ok(root.clone());
+        }
+        let keys = self
+            .inner
+            .cert_client
+            .get_app_key(epoch)
+            .await
+            .with_context(|| format!("failed to fetch the app keys of root epoch {epoch}"))?;
+        let root = HistoricalRoot::new(keys.k256_key, keys.k256_signature)?;
+        roots.insert(epoch, root.clone());
+        Ok(root)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn insert_historical_root(
+        &self,
+        epoch: u32,
+        k256_key: Vec<u8>,
+        kms_signature: Vec<u8>,
+    ) {
+        let root = HistoricalRoot::new(k256_key, kms_signature).unwrap();
+        self.inner.historical_roots.lock().await.insert(epoch, root);
     }
 
     /// The KMS root key's signature over the app root public key: the second
@@ -1401,13 +1459,6 @@ pNs85uhOZE8z2jr8Pg==
             k256_signature: Vec::new(),
             gateway_app_id: String::new(),
             ca_cert: DUMMY_PEM_CERT.to_string(),
-            // Only selected by tests that name root epoch 1 explicitly; the
-            // fixture's current root is epoch 0.
-            historical_roots: vec![dstack_types::HistoricalAppRoot {
-                root_epoch: 1,
-                k256_key: HISTORICAL_K256_KEY.to_vec(),
-                k256_signature: vec![0xab; 65],
-            }],
             key_provider: KeyProvider::None {
                 key: DUMMY_PEM_KEY.to_string(),
             },
@@ -1495,6 +1546,7 @@ pNs85uhOZE8z2jr8Pg==
             keys: dummy_keys,
             vm_config: String::new(),
             cert_client: dummy_cert_client,
+            historical_roots: Default::default(),
             demo_cert: Default::default(),
             demo_cert_last_failure: Default::default(),
             platform: Arc::new(TestSimulatorPlatform {

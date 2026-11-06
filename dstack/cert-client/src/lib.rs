@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
-use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
+use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::{
@@ -99,6 +99,28 @@ impl CertRequestClient {
                 Ok(response.certificate_chain)
             }
         }
+    }
+
+    /// The app keys of an older KMS root epoch, from the KMS that served the
+    /// current ones.
+    pub async fn get_app_key(&self, root_epoch: u32) -> Result<AppKeyResponse> {
+        let CertRequestClient::Kms { client, vm_config } = self else {
+            bail!("only KMS-provided keys have older root epochs");
+        };
+        let response = client
+            .get_app_key(GetAppKeyRequest {
+                api_version: 1,
+                vm_config: vm_config.clone(),
+                root_epoch: Some(root_epoch),
+            })
+            .await?;
+        if response.root_epoch != root_epoch {
+            bail!(
+                "KMS returned keys of root epoch {} instead of {root_epoch}",
+                response.root_epoch
+            );
+        }
+        Ok(response)
     }
 
     pub async fn get_root_ca(&self) -> Result<String> {
