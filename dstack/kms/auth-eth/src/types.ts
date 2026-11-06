@@ -40,3 +40,7 @@ export interface AuthorizationResult {
   currentRootEpoch: number;
   currentRootEpochHash: string;
 }
+
+export interface AuthorizationRequest extends Omit<BootInfo, 'rootEpoch' | 'rootEpochHash'> {
+  requestedEpoch?: number;
+}

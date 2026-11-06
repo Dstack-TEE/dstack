@@ -4,7 +4,7 @@
 
 import fastify, { FastifyInstance } from 'fastify';
 import { EthereumBackend } from './ethereum';
-import { BootInfo, BootResponse, AuthorizationResult } from './types';
+import { BootInfo, BootResponse, AuthorizationResult, AuthorizationRequest } from './types';
 import { ethers } from 'ethers';
 
 declare module 'fastify' {
@@ -25,8 +25,7 @@ export async function build(): Promise<FastifyInstance> {
     description,
   });
 
-  server.addSchema({
-    $id: 'bootInfo',
+  const appInfoSchema = {
     type: 'object',
     required: ['mrAggregated', 'osImageHash', 'appId', 'composeHash', 'instanceId', 'deviceId'],
     properties: {
@@ -39,9 +38,25 @@ export async function build(): Promise<FastifyInstance> {
       tcbStatus: { type: 'string', maxLength: 128, default: '' },
       advisoryIds: { type: 'array', maxItems: 128, items: { type: 'string', maxLength: 256 }, default: [] },
       mrSystem: { ...hex(32, 'System MR measurement'), default: '' },
+    }
+  };
+
+  server.addSchema({
+    ...appInfoSchema,
+    $id: 'bootInfo',
+    properties: {
+      ...appInfoSchema.properties,
       rootEpoch: { type: 'integer', minimum: 0 },
       rootEpochHash: hex(32, 'Chain hash of the root epochs up to rootEpoch'),
-    }
+    },
+  });
+  server.addSchema({
+    ...appInfoSchema,
+    $id: 'authorizationRequest',
+    properties: {
+      ...appInfoSchema.properties,
+      requestedEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
+    },
   });
 
   server.addSchema({
@@ -104,9 +119,9 @@ export async function build(): Promise<FastifyInstance> {
     }
   });
 
-  server.post<{ Body: BootInfo; Reply: AuthorizationResult }>('/checkAuthorization', {
+  server.post<{ Body: AuthorizationRequest; Reply: AuthorizationResult }>('/checkAuthorization', {
     schema: {
-      body: { $ref: 'bootInfo#' },
+      body: { $ref: 'authorizationRequest#' },
       response: {
         200: {
           type: 'object',

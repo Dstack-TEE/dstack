@@ -108,7 +108,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AppInfo"
+                "$ref": "#/components/schemas/AuthorizationRequest"
               }
             }
           }
@@ -297,11 +297,56 @@
         }
       },
       "AppInfo": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/BootInfo"
-          }
+        "type": "object",
+        "required": [
+          "mrAggregated",
+          "osImageHash",
+          "appId",
+          "composeHash",
+          "instanceId",
+          "deviceId"
         ],
+        "properties": {
+          "mrAggregated": {
+            "type": "string",
+            "description": "Aggregated MR measurement"
+          },
+          "osImageHash": {
+            "type": "string",
+            "description": "OS Image hash"
+          },
+          "appId": {
+            "type": "string",
+            "description": "Application ID"
+          },
+          "composeHash": {
+            "type": "string",
+            "description": "Compose hash"
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Instance ID"
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "Device ID"
+          },
+          "tcbStatus": {
+            "type": "string",
+            "description": "TCB status (optional for compatibility)"
+          },
+          "advisoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Advisory IDs (optional for compatibility)"
+          },
+          "mrSystem": {
+            "type": "string",
+            "description": "MR System measurement (optional for compatibility)"
+          }
+        },
         "description": "Verified attestation identity. The KMS app ID is the KMS contract address."
       },
       "AuthorizationResult": {
@@ -332,6 +377,22 @@
             "type": "string",
             "pattern": "^0x[0-9a-fA-F]{64}$",
             "description": "Zero when no epoch is registered; authorization is denied."
+          }
+        }
+      },
+      "AuthorizationRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AppInfo"
+          }
+        ],
+        "type": "object",
+        "properties": {
+          "requestedEpoch": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295,
+            "description": "Omit to use the current epoch. An explicit zero selects epoch 0; future epochs are denied."
           }
         }
       }

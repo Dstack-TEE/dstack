@@ -102,6 +102,8 @@ describe('Server', () => {
       expect(response.statusCode).toBe(200);
       expect(JSON.parse(response.payload)).toEqual(decision);
       expect(app.ethereum.checkAuthorization).toHaveBeenCalledWith(mockBootInfo);
+      await app.inject({ method: 'POST', url: '/checkAuthorization', payload: { ...mockBootInfo, requestedEpoch: 0 } });
+      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...mockBootInfo, requestedEpoch: 0 });
     });
 
     it('fails closed when the new contract method is unavailable', async () => {

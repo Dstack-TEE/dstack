@@ -258,7 +258,9 @@ bun run test:run
 
 `POST /checkAuthorization` returns `AuthorizationResult`, including
 `rejectReason`, `gatewayAppId`, `currentRootEpoch`, and `currentRootEpochHash`.
-It selects KMS or app policy from the verified `appId`. See the
+It selects KMS or app policy from the verified `appId`. The optional
+`requestedEpoch` selects historical keys; omission uses the returned current
+epoch, and an explicit `0` selects epoch 0. See the
 [KMS authorization protocol](../README.md#authorization-protocol) for registration,
 bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
 remain available.

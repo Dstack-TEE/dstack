@@ -27,6 +27,11 @@ const BootInfoSchema = z.object({
   rootEpochHash: z.string().optional()
 });
 
+const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+});
+type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
+
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
@@ -152,7 +157,7 @@ class ConfigBackend {
     }
   }
 
-  async checkAuthorization(appInfo: BootInfo) {
+  async checkAuthorization(appInfo: AuthorizationRequest) {
     const config = this.loadConfig();
     const current = currentRootEpoch(config);
     const epoch = {
@@ -161,6 +166,9 @@ class ConfigBackend {
     };
     if (current.rootEpoch === undefined) {
       return { isAllowed: false, rejectReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
+    }
+    if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
+      return { isAllowed: false, rejectReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     const isKms = normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr);
     const result = this.evaluateBoot(appInfo, isKms, config);
@@ -347,7 +355,7 @@ app.get('/', async (c) => {
   }
 });
 
-app.post('/checkAuthorization', zValidator('json', BootInfoSchema), async (c) => {
+app.post('/checkAuthorization', zValidator('json', AuthorizationRequestSchema), async (c) => {
   try {
     return c.json(await backend.checkAuthorization(c.req.valid('json')));
   } catch {
