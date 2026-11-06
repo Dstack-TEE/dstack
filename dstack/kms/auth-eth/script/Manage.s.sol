@@ -109,6 +109,20 @@ contract SetKmsInfo is BaseScript {
     }
 }
 
+contract RegisterRootEpoch is BaseScript {
+    function run() external {
+        bytes memory caPubkey = vm.envBytes("CA_PUBKEY");
+        bytes memory k256Pubkey = vm.envBytes("K256_PUBKEY");
+        bytes memory attestation = vm.envBytes("ATTESTATION");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        uint256 epoch = kms.registerRootEpoch(caPubkey, k256Pubkey, attestation);
+        vm.stopBroadcast();
+
+        console.log("Registered KMS root epoch", epoch);
+    }
+}
+
 // App Management Scripts
 contract AddComposeHash is BaseScript {
     function run() external {

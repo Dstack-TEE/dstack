@@ -47,6 +47,10 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     struct RootEpoch {
         bytes caPubkey;
         bytes k256Pubkey;
+        // The generating KMS's attestation; its report data binds the epoch
+        // and both public keys, so anyone can check the keys came from an
+        // approved KMS in a TEE.
+        bytes attestation;
     }
 
     // Root public keys of KMS root epochs 1, 2, ... in order. Append-only: a
@@ -125,18 +129,21 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         _emitPolicy("kms-info", keccak256(info.k256Pubkey), true);
     }
 
-    // Register the root public keys of the next KMS root epoch; epochs count
-    // from 1, the original roots
+    // Register the root public keys of the next KMS root epoch, with the
+    // attestation proving where they were generated; epochs count from 1, the
+    // original roots
     function registerRootEpoch(
         bytes calldata caPubkey,
-        bytes calldata k256Pubkey
+        bytes calldata k256Pubkey,
+        bytes calldata attestation
     )
         external
         onlyOwner
         returns (uint256 epoch)
     {
         require(caPubkey.length > 0 && k256Pubkey.length > 0, "Empty epoch public key");
-        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey));
+        require(attestation.length > 0, "Empty epoch attestation");
+        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, attestation));
         epoch = _rootEpochs.length;
         emit RootEpochRegistered(epoch, caPubkey, k256Pubkey);
         _emitPolicy("root-epoch", keccak256(abi.encode(caPubkey, k256Pubkey)), true);
@@ -147,10 +154,14 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return _rootEpochs.length;
     }
 
-    function rootEpoch(uint256 epoch) external view returns (bytes memory caPubkey, bytes memory k256Pubkey) {
+    function rootEpoch(uint256 epoch)
+        external
+        view
+        returns (bytes memory caPubkey, bytes memory k256Pubkey, bytes memory attestation)
+    {
         require(epoch > 0 && epoch <= _rootEpochs.length, "Unknown root epoch");
         RootEpoch storage keys = _rootEpochs[epoch - 1];
-        return (keys.caPubkey, keys.k256Pubkey);
+        return (keys.caPubkey, keys.k256Pubkey, keys.attestation);
     }
 
     // Function to set KMS quote

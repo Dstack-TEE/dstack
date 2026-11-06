@@ -73,17 +73,19 @@ contract DstackKmsTest is Test {
         vm.startPrank(owner);
         vm.expectEmit(true, true, true, true);
         emit RootEpochRegistered(1, hex"a0", hex"b0");
-        assertEq(kms.registerRootEpoch(hex"a0", hex"b0"), 1);
-        assertEq(kms.registerRootEpoch(hex"a1", hex"b1"), 2);
+        assertEq(kms.registerRootEpoch(hex"a0", hex"b0", hex"c0"), 1);
+        assertEq(kms.registerRootEpoch(hex"a1", hex"b1", hex"c1"), 2);
         vm.stopPrank();
 
         assertEq(kms.latestRootEpoch(), 2);
-        (bytes memory ca, bytes memory k256) = kms.rootEpoch(1);
+        (bytes memory ca, bytes memory k256, bytes memory attestation) = kms.rootEpoch(1);
         assertEq(ca, hex"a0");
         assertEq(k256, hex"b0");
-        (ca, k256) = kms.rootEpoch(2);
+        assertEq(attestation, hex"c0");
+        (ca, k256, attestation) = kms.rootEpoch(2);
         assertEq(ca, hex"a1");
         assertEq(k256, hex"b1");
+        assertEq(attestation, hex"c1");
         vm.expectRevert("Unknown root epoch");
         kms.rootEpoch(0);
         vm.expectRevert("Unknown root epoch");
@@ -93,15 +95,17 @@ contract DstackKmsTest is Test {
     function test_RegisterRootEpochOnlyOwner() public {
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
-        kms.registerRootEpoch(hex"a0", hex"b0");
+        kms.registerRootEpoch(hex"a0", hex"b0", hex"c0");
     }
 
     function test_RegisterRootEpochRejectsEmptyKeys() public {
         vm.startPrank(owner);
         vm.expectRevert("Empty epoch public key");
-        kms.registerRootEpoch("", hex"b0");
+        kms.registerRootEpoch("", hex"b0", hex"c0");
         vm.expectRevert("Empty epoch public key");
-        kms.registerRootEpoch(hex"a0", "");
+        kms.registerRootEpoch(hex"a0", "", hex"c0");
+        vm.expectRevert("Empty epoch attestation");
+        kms.registerRootEpoch(hex"a0", hex"b0", "");
         vm.stopPrank();
     }
 

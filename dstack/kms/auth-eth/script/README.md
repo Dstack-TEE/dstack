@@ -58,6 +58,15 @@ KMS_CONTRACT_ADDR=0x... K256_PUBKEY=0x... CA_PUBKEY=0x... QUOTE=0x... EVENTLOG=0
 forge script script/Manage.s.sol:SetKmsInfo --broadcast --rpc-url $RPC_URL
 ```
 
+#### Register a KMS Root Epoch
+Appends the next root epoch (the original roots are epoch 1). `ATTESTATION` is
+the one the KMS returned when it generated the keys (Bootstrap, or Onboard with
+`rotate`); verify it before registering. Registered epochs cannot be changed.
+```bash
+KMS_CONTRACT_ADDR=0x... CA_PUBKEY=0x... K256_PUBKEY=0x... ATTESTATION=0x... \
+forge script script/Manage.s.sol:RegisterRootEpoch --broadcast --rpc-url $RPC_URL
+```
+
 #### Remove KMS Aggregated MR
 ```bash
 KMS_CONTRACT_ADDR=0x... MR_AGGREGATED=0x1234... \

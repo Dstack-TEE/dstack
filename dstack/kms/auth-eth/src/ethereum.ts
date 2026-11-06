@@ -12,7 +12,7 @@ const DSTACK_KMS_ABI = [
   "function gatewayAppId() view returns (string)",
   "function appImplementation() view returns (address)",
   "function latestRootEpoch() view returns (uint256)",
-  "function rootEpoch(uint256 epoch) view returns (bytes caPubkey, bytes k256Pubkey)"
+  "function rootEpoch(uint256 epoch) view returns (bytes caPubkey, bytes k256Pubkey, bytes attestation)"
 ];
 
 // Contracts deployed before key epochs existed lack the registry getters.
