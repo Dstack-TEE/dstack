@@ -20,8 +20,9 @@
 //! (capture `tcbStatus`, deny unless `UpToDate`) if this grows into a
 //! multi-tenant / hosted deployment.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
+use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{get, post, routes, State};
 use serde::{Deserialize, Serialize};
@@ -100,26 +101,32 @@ struct RootEpoch {
 }
 
 impl Allowlist {
-    /// `None` when no epoch is configured, or the configuration is invalid,
-    /// which a KMS past epoch 0 treats as fail-closed.
-    fn current_root_epoch(&self) -> Option<EpochInfo> {
-        let epochs = self.root_epochs.get(..=self.current_root_epoch)?;
+    /// `None` only when no epoch is configured; invalid configuration is an error.
+    fn current_root_epoch(&self) -> Result<Option<EpochInfo>> {
+        if self.root_epochs.is_empty() && self.current_root_epoch == 0 {
+            return Ok(None);
+        }
+        let epochs = self
+            .root_epochs
+            .get(..=self.current_root_epoch)
+            .context("currentRootEpoch is not a configured root epoch")?;
         let keys = epochs
             .iter()
             .map(|e| {
-                Some((
-                    hex::decode(norm(&e.ca_pubkey)).ok()?,
-                    hex::decode(norm(&e.k256_pubkey)).ok()?,
+                Ok((
+                    hex::decode(norm(&e.ca_pubkey)).context("invalid root epoch CA public key")?,
+                    hex::decode(norm(&e.k256_pubkey))
+                        .context("invalid root epoch k256 public key")?,
                 ))
             })
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         let hashes = dstack_types::root_epoch::chain_hashes(
             keys.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
         );
-        Some(EpochInfo {
+        Ok(Some(EpochInfo {
             number: self.current_root_epoch,
-            hash: format!("0x{}", hex::encode(hashes.last()?)),
-        })
+            hash: format!("0x{}", hex::encode(hashes[self.current_root_epoch])),
+        }))
     }
 }
 
@@ -175,7 +182,10 @@ fn deny(al: &Allowlist, reason: &str) -> BootResponse {
 /// registered keys up to it. A KMS that predates root epochs reports none and
 /// holds only epoch 0; KMS checks made while onboarding carry none.
 fn allow(info: &BootInfo, is_kms: bool, al: &Allowlist) -> BootResponse {
-    let current = al.current_root_epoch();
+    let current = match al.current_root_epoch() {
+        Ok(current) => current,
+        Err(error) => return deny(al, &format!("invalid root epoch configuration: {error}")),
+    };
     let current_epoch = current.as_ref().map_or(0, |c| c.number);
     let denial = match (info.root_epoch, &current) {
         (None, _) if is_kms || current_epoch == 0 => None,
@@ -277,11 +287,14 @@ fn boot_kms(info: Json<BootInfo>, cli: &State<Cli>) -> Json<BootResponse> {
 
 /// info endpoint the KMS GETs to populate its metadata. Single-node: no chain.
 #[get("/")]
-fn info(cli: &State<Cli>) -> Json<serde_json::Value> {
-    Json(info_json(&load(&cli.config)))
+fn info(cli: &State<Cli>) -> Result<Json<serde_json::Value>, Status> {
+    info_json(&load(&cli.config)).map(Json).map_err(|error| {
+        rocket::warn!("invalid root epoch configuration: {error}");
+        Status::ServiceUnavailable
+    })
 }
 
-fn info_json(al: &Allowlist) -> serde_json::Value {
+fn info_json(al: &Allowlist) -> Result<serde_json::Value> {
     let mut info = json!({
         "status": "ok",
         "kmsContractAddr": "",
@@ -290,11 +303,11 @@ fn info_json(al: &Allowlist) -> serde_json::Value {
         "chainId": 0,
         "appImplementation": "",
     });
-    if let Some(epoch) = al.current_root_epoch() {
+    if let Some(epoch) = al.current_root_epoch()? {
         info["rootEpoch"] = epoch.number.into();
         info["rootEpochHash"] = epoch.hash.into();
     }
-    info
+    Ok(info)
 }
 
 #[rocket::main]
@@ -380,12 +393,12 @@ mod tests {
             root_epoch_hash: Some(hash.into()),
             ..Default::default()
         };
-        assert_eq!(info_json(&al)["rootEpochHash"], h0);
+        assert_eq!(info_json(&al).unwrap()["rootEpochHash"], h0);
         assert!(check_kms(&info(Some(0), h0), &al).is_allowed);
 
         al.current_root_epoch = 1;
-        assert_eq!(info_json(&al)["rootEpoch"], 1);
-        assert_eq!(info_json(&al)["rootEpochHash"], h1);
+        assert_eq!(info_json(&al).unwrap()["rootEpoch"], 1);
+        assert_eq!(info_json(&al).unwrap()["rootEpochHash"], h1);
         assert!(check_kms(&info(Some(1), &h1.to_uppercase()), &al).is_allowed);
         assert!(!check_kms(&info(Some(0), h0), &al).is_allowed);
         assert!(!check_kms(&info(Some(1), h0), &al).is_allowed);
@@ -393,8 +406,8 @@ mod tests {
         assert!(check_kms(&info(None, ""), &al).is_allowed);
 
         al.current_root_epoch = 2;
-        assert!(al.current_root_epoch().is_none());
-        assert!(info_json(&al).get("rootEpoch").is_none());
+        assert!(al.current_root_epoch().is_err());
+        assert!(info_json(&al).is_err());
         assert!(!check_kms(&info(Some(1), h1), &al).is_allowed);
     }
 
@@ -416,6 +429,34 @@ mod tests {
         assert!(check_app(&info, &al).is_allowed);
         al.current_root_epoch = 1;
         assert!(!check_app(&info, &al).is_allowed);
+    }
+
+    #[test]
+    fn invalid_root_epochs_deny_legacy_and_epoch_aware_kms() {
+        let invalid_configs = [
+            json!({"currentRootEpoch": 1}),
+            json!({"currentRootEpoch": 1, "rootEpochs": [{"caPubkey": "a0", "k256Pubkey": "b0"}]}),
+            json!({"rootEpochs": [{"caPubkey": "invalid", "k256Pubkey": "b0"}]}),
+            json!({"rootEpochs": [{"caPubkey": "a0", "k256Pubkey": "invalid"}]}),
+        ];
+        for config in invalid_configs {
+            let epochs: Allowlist = serde_json::from_value(config).unwrap();
+            let al = Allowlist {
+                root_epochs: epochs.root_epochs,
+                current_root_epoch: epochs.current_root_epoch,
+                ..allowlist()
+            };
+            assert!(info_json(&al).is_err());
+            for epoch in [None, Some(0), Some(1)] {
+                let info = BootInfo {
+                    mr_aggregated: "0xMR".into(),
+                    root_epoch: epoch,
+                    ..boot("0xapp1", "0xhash", "0ximg")
+                };
+                assert!(!check_app(&info, &al).is_allowed);
+                assert!(!check_kms(&info, &al).is_allowed);
+            }
+        }
     }
 
     // wire-contract snapshot: BootInfo as the KMS serializes it (camelCase).

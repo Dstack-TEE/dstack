@@ -488,6 +488,23 @@ describe('auth-simple', () => {
       expect((await boot('kms', {})).isAllowed).toBe(true);
     });
 
+    it.each([
+      { currentRootEpoch: 1, rootEpochs: [] },
+      { currentRootEpoch: 1, rootEpochs: undefined },
+      { currentRootEpoch: 2, rootEpochs },
+      { rootEpochs: [{ ...rootEpochs[0], caPubkey: '0xINVALID' }] },
+      { rootEpochs: [{ ...rootEpochs[0], k256Pubkey: '0xINVALID' }] }
+    ])('fails closed for invalid root epoch config %j', async (epochs) => {
+      writeTestConfig({ ...config, ...epochs });
+      const health = await app.fetch(new Request('http://localhost/'));
+      expect(health.status).toBe(500);
+      for (const path of ['app', 'kms']) {
+        for (const fields of [{}, { rootEpoch: 0 }, { rootEpoch: 1 }]) {
+          expect((await boot(path, fields)).isAllowed).toBe(false);
+        }
+      }
+    });
+
     it('serves only epoch 0 when none is configured', async () => {
       writeTestConfig({ ...config, rootEpochs: [] });
       expect((await info()).rootEpoch).toBeUndefined();

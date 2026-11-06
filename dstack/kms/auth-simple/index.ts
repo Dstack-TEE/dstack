@@ -81,7 +81,7 @@ const bytesOf = (hex: string) => hexToBytes(hex.replace(/^0x/i, ''));
 // with a zero previous hash for epoch 0. Empty when no epoch is configured.
 function currentRootEpoch(config: AuthConfig): { rootEpoch?: number; rootEpochHash?: string } {
   const current = config.currentRootEpoch;
-  if (config.rootEpochs.length === 0) return {};
+  if (config.rootEpochs.length === 0 && current === 0) return {};
   if (current >= config.rootEpochs.length) {
     throw new Error('currentRootEpoch is not a configured root epoch');
   }
