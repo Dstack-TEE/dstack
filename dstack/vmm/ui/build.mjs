@@ -24,6 +24,9 @@ function canonicalId(absPath) {
 }
 
 function resolveModule(parentId, request) {
+  if (request === 'crypto') {
+    return canonicalId(path.join(TS_OUT_DIR, 'lib/browserCrypto.js'));
+  }
   const base = parentId ? path.dirname(path.resolve(ROOT, parentId)) : MODULE_DIR;
   const absPath = nodeRequire.resolve(request, { paths: [base] });
   return canonicalId(absPath);
@@ -162,6 +165,7 @@ async function compileTypeScript() {
   await fs.rm(TS_OUT_DIR, { recursive: true, force: true });
   await run(TSC, ['--project', path.join(ROOT, 'tsconfig.json')]);
   await copyDir(path.join(SOURCE_DIR, 'templates'), path.join(TS_OUT_DIR, 'templates'));
+  await fs.writeFile(path.join(TS_OUT_DIR, 'package.json'), JSON.stringify({ type: 'commonjs' }));
 }
 
 async function build({ watch = false } = {}) {

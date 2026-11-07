@@ -170,6 +170,7 @@ base64 = "0.22.1"
 bcrypt = "0.17.1"
 hex = { version = "0.4.3", default-features = false }
 hex_fmt = "0.3.0"
+hpke = { version = "0.15.1", default-features = false, features = ["alloc", "getrandom", "x25519", "aes"] }
 hex-literal = "1.0.0"
 prost = "0.13.5"
 prost-types = "0.13.5"

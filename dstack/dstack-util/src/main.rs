@@ -677,6 +677,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         ca_cert: root_ca,
         disk_crypt_key: response.disk_crypt_key,
         env_crypt_key: response.env_crypt_key,
+        sealed_env_key: response.sealed_env_key,
         k256_key: response.k256_key,
         k256_signature: response.k256_signature,
         gateway_app_id: response.gateway_app_id,
@@ -1191,6 +1192,7 @@ fn make_app_keys(
     Ok(AppKeys {
         disk_crypt_key: sha256(&disk_key.serialize_der()).to_vec(),
         env_crypt_key: vec![],
+        sealed_env_key: vec![],
         k256_key: k256_key.to_bytes().to_vec(),
         k256_signature: vec![],
         gateway_app_id: "".to_string(),

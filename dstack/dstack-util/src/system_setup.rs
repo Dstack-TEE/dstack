@@ -22,7 +22,7 @@ use dstack_types::{
     gpu_policy_hash,
     shared_filenames::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
-        HOST_SHARED_DIR_NAME, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
+        HOST_SHARED_DIR_NAME, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG, USER_CONFIG,
     },
     GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
 };
@@ -229,6 +229,10 @@ impl HostShareDir {
         self.base_dir.join(ENCRYPTED_ENV)
     }
 
+    fn sealed_env_file(&self) -> PathBuf {
+        self.base_dir.join(SEALED_ENV)
+    }
+
     fn sys_config_file(&self) -> PathBuf {
         self.base_dir.join(SYS_CONFIG)
     }
@@ -242,11 +246,34 @@ impl HostShareDir {
     }
 }
 
+fn env_file_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => bail!("env {} is not a regular file", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect env {}", path.display()))
+        }
+    }
+}
+
+fn read_optional_env(path: &Path) -> Result<Option<Vec<u8>>> {
+    if !env_file_exists(path)? {
+        return Ok(None);
+    }
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to read env {}", path.display())),
+    }
+}
+
 struct HostShared {
     dir: HostShareDir,
     sys_config: SysConfig,
     app_compose: AppCompose,
     encrypted_env: Vec<u8>,
+    sealed_env: Option<Vec<u8>>,
     instance_info: InstanceInfo,
 }
 
@@ -261,12 +288,18 @@ impl HostShared {
         } else {
             InstanceInfo::default()
         };
-        let encrypted_env = fs::read(host_shared_dir.encrypted_env_file()).unwrap_or_default();
+        let sealed_env = read_optional_env(&host_shared_dir.sealed_env_file())?;
+        let encrypted_env = if sealed_env.is_some() {
+            Vec::new()
+        } else {
+            read_optional_env(&host_shared_dir.encrypted_env_file())?.unwrap_or_default()
+        };
         Ok(Self {
             dir: host_shared_dir.clone(),
             sys_config,
             app_compose,
             encrypted_env,
+            sealed_env,
             instance_info,
         })
     }
@@ -315,7 +348,16 @@ impl HostShared {
         copy(APP_COMPOSE, SZ_1MB * 50, false)?;
         copy(SYS_CONFIG, SZ_1KB * 32, false)?;
         copy(INSTANCE_INFO, SZ_1KB * 10, true)?;
-        copy(ENCRYPTED_ENV, SZ_1KB * 256, true)?;
+        if env_file_exists(&host_shared_dir.join(SEALED_ENV))? {
+            copy(SEALED_ENV, SZ_1KB * 384, false)?;
+        } else {
+            match fs::remove_file(host_shared_copy_dir.join(SEALED_ENV)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("failed to remove stale sealed env copy"),
+            }
+            copy(ENCRYPTED_ENV, SZ_1KB * 256, true)?;
+        }
         copy(USER_CONFIG, SZ_1MB * 50, true)?;
         info!("Unmounting host-shared");
         unmount_host_shared(host_shared_dir)?;
@@ -2389,6 +2431,7 @@ impl HostShared {
             ca_cert: root_ca,
             disk_crypt_key: response.disk_crypt_key,
             env_crypt_key: response.env_crypt_key,
+            sealed_env_key: response.sealed_env_key,
             k256_key: response.k256_key,
             k256_signature: response.k256_signature,
             gateway_app_id: response.gateway_app_id,
@@ -3277,25 +3320,71 @@ impl<'a> Stage0<'a> {
 }
 
 impl Stage1<'_> {
-    fn decrypt_env_vars(
-        &self,
-        key: &[u8],
-        ciphertext: &[u8],
-        allowed: &BTreeSet<String>,
-    ) -> Result<BTreeMap<String, String>> {
-        let vars = if !ciphertext.is_empty() {
-            info!("Processing encrypted env");
-            let env_crypt_key: [u8; 32] = key.try_into().ok().context(
-                "encrypted env is present but the key provider gave no valid env crypt key",
+    /// Decrypt the host-supplied env, preferring the sealed format.
+    async fn decrypt_env(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+        let current_secret = self.keys.sealed_env_key.as_slice();
+        if let Some(sealed_env) = &self.shared.sealed_env {
+            let envelope: SealedEnv =
+                serde_json::from_slice(sealed_env).context("failed to parse sealed env")?;
+            if envelope.version != 1 || envelope.app_epoch != 0 {
+                bail!("unsupported sealed env version: {}", envelope.version);
+            }
+            if envelope.enc.len() != 32 {
+                bail!("sealed env encapsulated key must be 32 bytes");
+            }
+            let payload = [envelope.enc, envelope.ciphertext].concat();
+            let current = self.keys.root_epoch();
+            if envelope.root_epoch > current {
+                bail!(
+                    "sealed env epoch {} exceeds current epoch {current}",
+                    envelope.root_epoch
+                );
+            }
+            let historical;
+            let secret = if envelope.root_epoch == current {
+                current_secret
+            } else {
+                historical = self
+                    .shared
+                    .request_historical_keys(&self.keys, envelope.root_epoch)
+                    .await?;
+                historical.sealed_env_key.as_slice()
+            };
+            let plaintext = crate::crypto::sealed_env_decrypt(
+                secret,
+                &sealed_env_info(&envelope.root_epoch),
+                &payload,
             )?;
-            let decrypted_json =
-                dh_decrypt(env_crypt_key, ciphertext).context("Failed to decrypt env file")?;
-            crate::parse_env_file::parse_env(&decrypted_json, allowed)?
-        } else {
-            info!("No encrypted env, using default");
-            Default::default()
+            if envelope.root_epoch == self.keys.root_epoch() {
+                return Ok((plaintext, Vec::new()));
+            }
+            let sealed = seal_env(current_secret, self.keys.root_epoch(), &plaintext)?;
+            return Ok((plaintext, sealed));
+        }
+        let ciphertext = &self.shared.encrypted_env;
+        let current_key = env_crypt_key(&self.keys.env_crypt_key)?;
+        let plaintext = match dh_decrypt(current_key, ciphertext) {
+            Ok(plaintext) => return Ok((plaintext, Vec::new())),
+            Err(error) => {
+                let current = self.keys.root_epoch();
+                let mut recovered = None;
+                for epoch in (0..current).rev() {
+                    let old = self
+                        .shared
+                        .request_historical_keys(&self.keys, epoch)
+                        .await?;
+                    if let Ok(plaintext) =
+                        dh_decrypt(env_crypt_key(&old.env_crypt_key)?, ciphertext)
+                    {
+                        recovered = Some(plaintext);
+                        break;
+                    }
+                }
+                recovered.ok_or(error)?
+            }
         };
-        Ok(vars)
+        let sealed = seal_env(current_secret, self.keys.root_epoch(), &plaintext)?;
+        Ok((plaintext, sealed))
     }
 
     fn write_env_file(&self, env_vars: &BTreeMap<String, String>) -> Result<()> {
@@ -3312,7 +3401,7 @@ impl Stage1<'_> {
         Ok(())
     }
 
-    fn unseal_env_vars(&self) -> Result<BTreeMap<String, String>> {
+    async fn unseal_env_vars(&self) -> Result<BTreeMap<String, String>> {
         let allowed_envs: BTreeSet<String> = self
             .shared
             .app_compose
@@ -3320,18 +3409,29 @@ impl Stage1<'_> {
             .iter()
             .cloned()
             .collect();
-        // Decrypt env file
-        let decrypted_env = self.decrypt_env_vars(
-            &self.keys.env_crypt_key,
-            &self.shared.encrypted_env,
-            &allowed_envs,
-        )?;
+        let (decrypted_env, sealed) =
+            if self.shared.sealed_env.is_none() && self.shared.encrypted_env.is_empty() {
+                info!("No encrypted env, using default");
+                (Default::default(), Vec::new())
+            } else {
+                info!("Processing encrypted env");
+                let (plaintext, sealed) = self.decrypt_env().await?;
+                (
+                    crate::parse_env_file::parse_env(&plaintext, &allowed_envs)?,
+                    sealed,
+                )
+            };
         self.write_env_file(&decrypted_env)?;
+        // Sent on every boot, empty when nothing changed: the host accepts one
+        // update per boot, and this one comes before any application code.
+        if let Err(err) = self.vmm.update_sealed_env(sealed).await {
+            warn!("failed to store the re-encrypted env on the host: {err:#}");
+        }
         Ok(decrypted_env)
     }
 
     async fn setup(&self) -> Result<()> {
-        let _envs = self.unseal_env_vars()?;
+        let _envs = self.unseal_env_vars().await?;
         self.link_files()?;
         self.setup_socket_dir()?;
         self.setup_guest_agent_config()?;
@@ -3444,6 +3544,42 @@ macro_rules! const_pad {
 }
 
 const PAYLOAD_OFFSET: u64 = 16777216;
+
+#[derive(Serialize, Deserialize)]
+struct SealedEnv {
+    version: u32,
+    app_epoch: u32,
+    root_epoch: u32,
+    #[serde(with = "serde_human_bytes::base64")]
+    enc: Vec<u8>,
+    #[serde(with = "serde_human_bytes::base64")]
+    ciphertext: Vec<u8>,
+}
+
+fn sealed_env_info(epoch: &u32) -> Vec<u8> {
+    format!("dstack-sealed-env-v1:{epoch}:0").into_bytes()
+}
+
+fn seal_env(secret: &[u8], epoch: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
+    let secret: [u8; 32] = secret.try_into().context("invalid sealed env key")?;
+    let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
+    let payload =
+        crate::crypto::sealed_env_encrypt(&public.to_bytes(), &sealed_env_info(&epoch), plaintext)?;
+    let (enc, ciphertext) = payload.split_at(32);
+    Ok(serde_json::to_vec(&SealedEnv {
+        version: 1,
+        app_epoch: 0,
+        root_epoch: epoch,
+        enc: enc.to_vec(),
+        ciphertext: ciphertext.to_vec(),
+    })?)
+}
+
+fn env_crypt_key(key: &[u8]) -> Result<[u8; 32]> {
+    key.try_into()
+        .ok()
+        .context("encrypted env is present but the key provider gave no valid env crypt key")
+}
 
 fn kms_root_epoch(keys: &AppKeys) -> Option<u32> {
     match keys.key_provider {
@@ -4721,5 +4857,123 @@ Endpoint = [2001:db8::1]:51822
 
         assert!(parse_wg_ip("10.0.0.2").is_ok());
         assert!(parse_wg_ip("10.0.0.2/32\n[Interface]").is_err());
+    }
+}
+
+#[cfg(test)]
+mod sealed_env_file_tests {
+    use super::*;
+
+    fn stage(args: &SetupArgs, sealed_env: Option<Vec<u8>>, encrypted_env: Vec<u8>) -> Stage1<'_> {
+        Stage1 {
+            args,
+            vmm: HostApi::default(),
+            shared: HostShared {
+                dir: HostShareDir::new(&args.work_dir),
+                sys_config: serde_json::from_value(serde_json::json!({"vm_config": ""})).unwrap(),
+                app_compose: serde_json::from_value(serde_json::json!({
+                    "manifest_version": "2", "name": "sealed-test", "runner": "docker-compose"
+                }))
+                .unwrap(),
+                instance_info: InstanceInfo::default(),
+                sealed_env,
+                encrypted_env,
+            },
+            keys: AppKeys {
+                disk_crypt_key: vec![],
+                env_crypt_key: vec![9; 32],
+                sealed_env_key: vec![7; 32],
+                k256_key: vec![],
+                k256_signature: vec![],
+                gateway_app_id: String::new(),
+                ca_cert: String::new(),
+                key_provider: KeyProvider::Kms {
+                    url: "http://127.0.0.1:1".into(),
+                    pubkey: vec![],
+                    root_epoch: 3,
+                },
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_preserves_env_at_the_current_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        };
+        let plaintext = br#"{"env":[{"key":"MESSAGE","value":"test"}]}"#;
+        let sealed = seal_env(&[7; 32], 3, plaintext).unwrap();
+        let current = stage(&args, Some(sealed), b"invalid legacy".to_vec());
+        let (opened, update) = current.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([9; 32]));
+        let legacy = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let old = stage(&args, None, legacy.clone());
+        let (opened, update) = old.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+        let mut without_sealed_key = stage(&args, None, legacy.clone());
+        without_sealed_key.keys.sealed_env_key.clear();
+        let (opened, update) = without_sealed_key.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+
+        for invalid in [
+            Vec::new(),
+            b"invalid JSON".to_vec(),
+            br#"{"version":2,"root_epoch":3,"enc":"","ciphertext":""}"#.to_vec(),
+        ] {
+            assert!(stage(&args, Some(invalid), legacy.clone())
+                .decrypt_env()
+                .await
+                .is_err());
+        }
+        let future = seal_env(&[7; 32], 4, plaintext).unwrap();
+        assert!(stage(&args, Some(future), legacy)
+            .decrypt_env()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds current"));
+    }
+
+    #[test]
+    fn sealed_file_selection_ignores_legacy_but_rejects_links() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(SYS_CONFIG), br#"{"vm_config":""}"#).unwrap();
+        fs::write(
+            dir.path().join(APP_COMPOSE),
+            br#"{"manifest_version":"2","name":"test","runner":"docker-compose"}"#,
+        )
+        .unwrap();
+        let sealed_path = dir.path().join(SEALED_ENV);
+        fs::write(&sealed_path, b"sealed bytes").unwrap();
+        fs::create_dir(dir.path().join(ENCRYPTED_ENV)).unwrap();
+        let shared = HostShared::load(dir.path()).unwrap();
+        assert_eq!(shared.sealed_env.unwrap(), b"sealed bytes");
+        assert!(shared.encrypted_env.is_empty());
+        fs::remove_file(&sealed_path).unwrap();
+        std::os::unix::fs::symlink("missing-target", &sealed_path).unwrap();
+        assert!(env_file_exists(&sealed_path).is_err());
+        assert!(HostShared::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn missing_empty_and_unreadable_env_are_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SEALED_ENV);
+        assert_eq!(read_optional_env(&path).unwrap(), None);
+        fs::write(&path, []).unwrap();
+        assert_eq!(read_optional_env(&path).unwrap(), Some(Vec::new()));
+        assert!(
+            serde_json::from_slice::<SealedEnv>(&read_optional_env(&path).unwrap().unwrap())
+                .is_err()
+        );
+        assert!(read_optional_env(dir.path()).is_err());
     }
 }

@@ -4,6 +4,7 @@
 declare const Vue: any;
 const { ref, computed, watch, onMounted } = Vue;
 import type { vmm as VmmTypes } from '../proto/vmm_rpc';
+import { encryptEnvPayload } from '../lib/envEncryption';
 
 // Types based on Rust definitions
 type VmConfiguration = VmmTypes.IVmConfiguration;
@@ -379,7 +380,7 @@ fi
 
   const vmForm: Ref<VmFormState> = ref(createVmFormState(preLaunchScript));
 
-  const availableImages = ref([] as Array<{ name: string; version?: string }>);
+  const availableImages = ref([] as Array<{ name: string; version?: string; sealed_env?: boolean }>);
   const availableGpus = ref([] as Array<any>);
   const availableGpuProducts = ref([] as Array<any>);
   const allowAttachAllGpus = ref(false);
@@ -643,6 +644,7 @@ type CreateVmPayloadSource = {
     disk_size: number;
     ports: PortFormEntry[];
     encrypted_env?: Uint8Array;
+    sealed_env?: Uint8Array;
     app_id?: string | null;
     user_config?: string;
   hugepages?: boolean;
@@ -670,6 +672,7 @@ type CreateVmPayloadSource = {
       disk_size: Math.max(0, Number(source.disk_size) || 0),
       ports: normalizedPorts,
       encrypted_env: source.encrypted_env,
+      sealed_env: source.sealed_env,
       app_id: source.app_id || undefined,
       user_config: source.user_config || '',
       hugepages: !!source.hugepages,
@@ -871,6 +874,9 @@ type CreateVmPayloadSource = {
     const image = availableImages.value.find((img) => img.name === imageName);
     return image?.version;
   };
+
+  const supportsSealedEnv = (imageName: string) =>
+    availableImages.value.find((img) => img.name === imageName)?.sealed_env ?? false;
 
   // Mirror of dstack-types::version::Version::parse. The prerelease/build
   // suffix is stripped at the first '-' or '+', then major.minor[.patch] are
@@ -1222,7 +1228,7 @@ type CreateVmPayloadSource = {
 
   async function encryptEnv(envs: EncryptedEnvEntry[], kmsEnabled: boolean, appId: string | null) {
     if (!kmsEnabled || envs.length === 0) {
-      return undefined;
+      return {};
     }
     let appIdToUse = appId;
     if (!appIdToUse) {
@@ -1230,8 +1236,7 @@ type CreateVmPayloadSource = {
       appIdToUse = await calcAppId(appCompose);
     }
     const keyBytes = hexToBytes(appIdToUse);
-    const response = await vmmRpc.getAppEnvEncryptPubKey({ app_id: keyBytes });
-    return encryptEnvWithKey(envs, response.public_key);
+    return encryptEnvPayload(vmmRpc, envs, keyBytes, encryptEnvWithKey, supportsSealedEnv(vmForm.value.image));
   }
 
   async function encryptEnvWithKey(envs: EncryptedEnvEntry[], publicKeyBytes: Uint8Array) {
@@ -1281,7 +1286,7 @@ type CreateVmPayloadSource = {
         memory: vmForm.value.memory,
         disk_size: vmForm.value.disk_size,
         ports: vmForm.value.ports,
-        encrypted_env: encryptedEnv || undefined,
+        ...encryptedEnv,
         app_id: vmForm.value.app_id || undefined,
         user_config: vmForm.value.user_config,
         hugepages: vmForm.value.hugepages,
@@ -1362,14 +1367,16 @@ type CreateVmPayloadSource = {
 
       const composeWasExplicitlyUpdated = updateDialog.value.updateCompose;
       let composeNeedsUpdate = composeWasExplicitlyUpdated;
-      let encryptedEnvPayload;
+      let encryptedEnvPayload = {};
       if (updateDialog.value.resetSecrets) {
-        const keyResponse = await vmmRpc.getAppEnvEncryptPubKey({ app_id: hexToBytes(vm.app_id || '') });
-        encryptedEnvPayload = await encryptEnvWithKey(updateDialog.value.encryptedEnvs, keyResponse.public_key);
+        encryptedEnvPayload = await encryptEnvPayload(
+          vmmRpc, updateDialog.value.encryptedEnvs, hexToBytes(vm.app_id || ''), encryptEnvWithKey,
+          supportsSealedEnv(updated.image),
+        );
         composeNeedsUpdate = true;
       }
       body.compose_file = composeNeedsUpdate ? await makeUpdateComposeFile() : undefined;
-      body.encrypted_env = encryptedEnvPayload;
+      Object.assign(body, encryptedEnvPayload);
       body.user_config = updated.user_config;
       body.update_ports = true;
       body.ports = normalizePorts(updated.ports);

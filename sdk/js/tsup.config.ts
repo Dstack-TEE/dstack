@@ -10,6 +10,7 @@ export default defineConfig({
     "src/viem.ts",
     "src/solana.ts",
     "src/encrypt-env-vars.ts",
+    "src/seal-env.ts",
     "src/get-compose-hash.ts",
     "src/verify-env-encrypt-public-key.ts",
   ],
