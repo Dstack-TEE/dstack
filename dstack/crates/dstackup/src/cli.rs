@@ -222,6 +222,10 @@ pub(crate) struct InstallOpts {
     pub(crate) kms_image: String,
 
     /// Package an existing local Docker image into a verity volume for KMS.
+    ///
+    /// Resolves the tag on every invocation. Unchanged image content produces the
+    /// same volume and can reuse the existing KMS. A changed image requires a
+    /// fresh --prefix and KMS CVM; use onboarding to retain existing KMS roots.
     #[arg(long, value_name = "LOCAL_IMAGE", conflicts_with_all = ["kms_image", "no_kms"])]
     pub(crate) dev_kms: Option<String>,
 
