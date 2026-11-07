@@ -610,7 +610,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
 
         if (ERC165Checker.supportsInterface(bootInfo.appId, type(IAppEpochAuth).interfaceId)) {
-            return IAppEpochAuth(bootInfo.appId).isAppAllowedAtEpoch(bootInfo, appEpoch);
+            return IAppEpochAuth(bootInfo.appId).authorizeApp(bootInfo, appEpoch);
         }
         if (appEpoch != 0) return (false, "App policy does not support epoch authorization");
 

@@ -10,7 +10,7 @@ import "./IAppAuth.sol";
 
 /// Optional epoch-aware policy capability. Legacy policies only authorize app epoch zero.
 interface IAppEpochAuth {
-    function isAppAllowedAtEpoch(
+    function authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
         uint256 appEpoch
     )

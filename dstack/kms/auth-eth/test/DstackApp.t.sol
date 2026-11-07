@@ -425,7 +425,7 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         (bool allowed,) = app.isAppAllowed(info);
         assertFalse(allowed);
-        (allowed,) = app.isAppAllowedAtEpoch(info, 0);
+        (allowed,) = app.authorizeApp(info, 0);
         assertTrue(allowed);
         app.addComposeHash(info.composeHash);
         (allowed,) = app.isAppAllowed(info);
@@ -436,16 +436,16 @@ contract DstackAppTest is Test {
         app.removeComposeHash(info.composeHash);
         assertFalse(app.allowedComposeHashesAtEpoch(1, info.composeHash));
         assertTrue(app.allowedComposeHashes(info.composeHash));
-        (allowed,) = app.isAppAllowedAtEpoch(info, 0);
+        (allowed,) = app.authorizeApp(info, 0);
         assertTrue(allowed);
         app.addComposeHash(info.composeHash);
         app.removeDeviceAtEpoch(0, info.deviceId);
         assertFalse(app.allowedDeviceIds(info.deviceId));
-        (allowed,) = app.isAppAllowedAtEpoch(info, 0);
+        (allowed,) = app.authorizeApp(info, 0);
         assertFalse(allowed);
         (allowed,) = app.isAppAllowed(info);
         assertTrue(allowed, "revoking epoch zero must not revoke epoch one");
-        (allowed,) = app.isAppAllowedAtEpoch(info, 2);
+        (allowed,) = app.authorizeApp(info, 2);
         assertFalse(allowed);
         vm.stopPrank();
     }
@@ -460,15 +460,15 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         app.addComposeHash(newInfo.composeHash);
         app.addDevice(newInfo.deviceId);
-        (bool allowed,) = app.isAppAllowedAtEpoch(newInfo, 0);
+        (bool allowed,) = app.authorizeApp(newInfo, 0);
         assertFalse(allowed, "new epoch approval must not imply historical access");
         app.addComposeHashAtEpoch(0, newInfo.composeHash);
-        (allowed,) = app.isAppAllowedAtEpoch(newInfo, 0);
+        (allowed,) = app.authorizeApp(newInfo, 0);
         assertTrue(allowed);
         (allowed,) = app.isAppAllowed(oldInfo);
         assertFalse(allowed, "old image cannot read new keys");
         app.removeComposeHashAtEpoch(0, oldInfo.composeHash);
-        (allowed,) = app.isAppAllowedAtEpoch(oldInfo, 0);
+        (allowed,) = app.authorizeApp(oldInfo, 0);
         assertFalse(allowed);
         (allowed,) = app.isAppAllowed(newInfo);
         assertTrue(allowed);
@@ -492,7 +492,7 @@ contract DstackAppTest is Test {
         app.setAllowAnyDeviceAtEpoch(0, false);
         assertFalse(app.allowAnyDevice());
         assertTrue(app.allowAnyDeviceAtEpoch(1));
-        (allowed,) = app.isAppAllowedAtEpoch(info, 0);
+        (allowed,) = app.authorizeApp(info, 0);
         assertFalse(allowed);
         (allowed,) = app.isAppAllowed(info);
         assertTrue(allowed);
@@ -542,7 +542,7 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(row, info.composeHash);
         app.addDeviceAtEpoch(row, info.deviceId);
         vm.stopPrank();
-        (bool allowed,) = app.isAppAllowedAtEpoch(info, selected);
+        (bool allowed,) = app.authorizeApp(info, selected);
         assertEq(allowed, selected == row);
     }
 }

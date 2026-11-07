@@ -1002,9 +1002,7 @@ contract DstackKmsTest is Test {
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "App policy does not support epoch authorization");
         vm.clearMockedCalls();
-        vm.mockCallRevert(
-            info.appId, abi.encodeCall(IAppEpochAuth.isAppAllowedAtEpoch, (info, 0)), "policy unavailable"
-        );
+        vm.mockCallRevert(info.appId, abi.encodeCall(IAppEpochAuth.authorizeApp, (info, 0)), "policy unavailable");
         vm.expectRevert(bytes("policy unavailable"));
         kms.authorizeApp(epochRequest(info, 0, 0));
     }

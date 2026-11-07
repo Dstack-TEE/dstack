@@ -260,10 +260,10 @@ contract DstackApp is
         override
         returns (bool isAllowed, string memory reason)
     {
-        return _isAppAllowedAtEpoch(bootInfo, currentAppEpoch);
+        return _authorizeApp(bootInfo, currentAppEpoch);
     }
 
-    function isAppAllowedAtEpoch(
+    function authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
         uint256 appEpoch
     )
@@ -272,10 +272,10 @@ contract DstackApp is
         override
         returns (bool isAllowed, string memory reason)
     {
-        return _isAppAllowedAtEpoch(bootInfo, appEpoch);
+        return _authorizeApp(bootInfo, appEpoch);
     }
 
-    function _isAppAllowedAtEpoch(
+    function _authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
         uint256 appEpoch
     )
