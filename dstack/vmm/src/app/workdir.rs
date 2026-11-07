@@ -28,6 +28,8 @@ pub struct InstanceInfo {
     pub instance_id: Vec<u8>,
     #[serde(default, with = "hex_bytes")]
     pub app_id: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snp_sealing: Option<dstack_types::SnpSealingParameters>,
 }
 
 #[derive(Deserialize, Serialize)]

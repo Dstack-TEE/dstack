@@ -1,10 +1,10 @@
 # AMD SEV-SNP hardware key provider plan
 
-Status: proposed, updated 2026-11-07. Native SNP derivation and fresh-launch
-recovery are validated. Provider integration is pending; native TDX sealing is
-deferred.
+Status: provider implemented, updated 2026-11-07. Native SNP KMS boot and
+fresh-launch recovery are validated. Host reboot and firmware-update tests are
+pending; native TDX sealing is deferred.
 
-Add a `snp` hardware key provider so an AMD CVM can run dstack KMS with
+A `snp` hardware key provider lets an AMD CVM run dstack KMS with
 persistent local state. The deployment follows the existing SGX-backed model:
 
 - The KMS CVM selects `key_provider: snp` and recovers its local disk key from
@@ -15,7 +15,8 @@ persistent local state. The deployment follows the existing SGX-backed model:
 Protect KMS root and local sealing keys under the existing KMS isolation and
 authorization model. Authorized applications retain their app-specific key
 access. KMS service logic and application CVM protocols remain unchanged;
-shared provider types require rebuilding affected binaries.
+shared provider types require rebuilding affected binaries, including older
+strict attestation verifiers that do not recognize `snp`.
 
 ## Findings that determine scope
 
@@ -122,9 +123,19 @@ configuration binding. On real SNP hardware, verify:
 Update [AMD deployment documentation](amd-sev-snp.md) with provider selection,
 metadata preservation, and the validated hardware requirements.
 
-Physical-host reboot and firmware-update tests remain pending and require a
-separate maintenance window. The disposable guest probe does not establish
-end-to-end KMS root or disk recovery with the new provider.
+Implementation validation passed 438 unit tests, Clippy, documentation hooks,
+and the VMM UI build. An isolated SNP VM selected `snp` with SGX provisioning
+disabled and no external KMS URLs. A fresh QEMU launch recovered the same disk
+key, native CA, KMS CA and K256 identities, application keys through the existing
+`GetAppKey` API, and persisted disk data. The KMS retained self-authorization.
+
+Removing sealing metadata or changing HOST_DATA stopped boot without
+reformatting the disk. Restoring the original inputs recovered all identities
+and data. Only fingerprints were recorded; existing deployments were untouched.
+
+Physical-host reboot and firmware-update tests still require a maintenance
+window. Cross-hardware recovery, onboarding/replication, and the malicious
+guest copying the victim's HOST_DATA remain separate validation work.
 
 References: [AMD firmware ABI, section 7.2](https://docs.amd.com/v/u/en-US/56860_PUB_SEV_SNP)
 and [Linux SNP guest API](https://www.kernel.org/doc/html/latest/virt/coco/sev-guest.html#snp-get-derived-key).

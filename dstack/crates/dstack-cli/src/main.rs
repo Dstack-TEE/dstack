@@ -15,7 +15,13 @@ use clap::{Parser, Subcommand, ValueEnum};
 use dstack_cli_core::layout::InstallLayout;
 use dstack_cli_core::vmm::{Vmm, DEFAULT_HOST};
 use dstack_cli_core::{compose, ports, rpc};
+use dstack_types::KeyProviderKind;
 use fs_err as fs;
+
+fn parse_key_provider(value: &str) -> std::result::Result<KeyProviderKind, String> {
+    serde_json::from_value(serde_json::Value::String(value.to_string()))
+        .map_err(|_| "expected kms, local, snp, tpm, or none".to_string())
+}
 
 #[derive(Parser)]
 #[command(
@@ -115,6 +121,9 @@ enum Command {
         /// deploy in non-KMS mode (ephemeral keys; no KMS required).
         #[arg(long)]
         no_kms: bool,
+        /// key provider: kms (default), local (SGX), snp, tpm, or none.
+        #[arg(long, value_parser = parse_key_provider, conflicts_with = "no_kms")]
+        key_provider: Option<KeyProviderKind>,
         /// register the app's compose hash in this auth-allowlist.json. Defaults
         /// to the local allowlist from `dstackup install`.
         #[arg(long, value_name = "PATH")]
@@ -236,11 +245,17 @@ async fn main() -> Result<()> {
             ports,
             volumes,
             no_kms,
+            key_provider,
             allowlist,
             dry_run,
             runner,
             snapshotter,
         } => {
+            let key_provider = key_provider.unwrap_or(if no_kms {
+                KeyProviderKind::None
+            } else {
+                KeyProviderKind::Kms
+            });
             let compose = resolve_compose_arg(compose, compose_file)?;
             let image = if use_local_defaults {
                 image.or_else(|| defaults.as_ref().and_then(|d| d.image.clone()))
@@ -249,7 +264,8 @@ async fn main() -> Result<()> {
             };
             let allowlist = if use_local_defaults {
                 allowlist.or_else(|| {
-                    (!no_kms)
+                    key_provider
+                        .is_kms()
                         .then(|| defaults.as_ref().and_then(LocalDefaults::allowlist_path))
                         .flatten()
                 })
@@ -267,7 +283,7 @@ async fn main() -> Result<()> {
                 disk,
                 &ports,
                 &volumes,
-                no_kms,
+                key_provider,
                 allowlist.as_deref(),
                 dry_run,
                 json,
@@ -446,7 +462,7 @@ async fn cmd_deploy(
     disk: u32,
     port_specs: &[String],
     volume_specs: &[String],
-    no_kms: bool,
+    key_provider: KeyProviderKind,
     allowlist: Option<&str>,
     dry_run: bool,
     json: bool,
@@ -474,11 +490,21 @@ async fn cmd_deploy(
     let app_compose = compose::build_app_compose_with_runtime_and_volumes(
         name,
         &yaml,
-        !no_kms,
+        key_provider.is_kms(),
         runner.as_str(),
         snapshotter.map(Snapshotter::as_str),
         &parsed_volumes,
     );
+    let app_compose = if matches!(
+        key_provider,
+        KeyProviderKind::Snp | KeyProviderKind::Local | KeyProviderKind::Tpm
+    ) {
+        let mut manifest: serde_json::Value = serde_json::from_str(&app_compose)?;
+        manifest["key_provider"] = serde_json::to_value(key_provider)?;
+        serde_json::to_string_pretty(&manifest)?
+    } else {
+        app_compose
+    };
 
     let mut cfg = rpc::VmConfiguration {
         name: name.to_string(),
@@ -534,7 +560,7 @@ async fn cmd_deploy(
                 "  (the KMS issues keys only if this is the allowlist its auth webhook serves)"
             );
         }
-    } else if !no_kms && !json {
+    } else if key_provider.is_kms() && !json {
         println!("note: no --allowlist given; a KMS-mode app needs its compose hash registered to get keys");
     }
 
@@ -761,6 +787,37 @@ mod tests {
             }
             _ => panic!("expected deploy command"),
         }
+    }
+
+    #[test]
+    fn snp_provider_is_explicit_and_conflicts_with_no_kms_alias() {
+        let cli =
+            Cli::try_parse_from(["dstack", "deploy", "compose.yaml", "--key-provider", "snp"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Deploy {
+                key_provider: Some(KeyProviderKind::Snp),
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from([
+            "dstack",
+            "deploy",
+            "compose.yaml",
+            "--key-provider",
+            "snp",
+            "--no-kms"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "dstack",
+            "deploy",
+            "compose.yaml",
+            "--key-provider",
+            "unknown"
+        ])
+        .is_err());
     }
 
     #[test]

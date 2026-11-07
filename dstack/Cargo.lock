@@ -2438,6 +2438,7 @@ dependencies = [
  "serde-human-bytes",
  "serde_json",
  "serde_with",
+ "sev-snp-attest",
  "sha2 0.10.9",
  "sha3",
  "sodiumbox",
@@ -7361,8 +7362,11 @@ dependencies = [
  "anyhow",
  "fs-err",
  "hex",
+ "libc",
  "sev",
+ "sha2 0.10.9",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

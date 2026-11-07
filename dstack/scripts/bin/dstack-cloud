@@ -3397,7 +3397,7 @@ Examples:
     new_parser.add_argument("--gateway-enabled", "--gw", dest="gateway_enabled", action="store_true", help="Enable dstack-gateway")
     new_parser.add_argument("--no-gateway-enabled", "--no-gw", dest="gateway_enabled", action="store_false")
     new_parser.set_defaults(gateway_enabled=None)
-    new_parser.add_argument("--key-provider", "--kp", type=str, choices=["kms", "local", "tpm", "none"], help="Key provider type")
+    new_parser.add_argument("--key-provider", "--kp", type=str, choices=["kms", "local", "tpm", "none", "snp"], help="Key provider type")
     new_parser.add_argument("--storage-fs", "--fs", dest="storage_fs", type=str, choices=["ext4", "zfs"], help="Storage filesystem")
     new_parser.add_argument("--secure-time", action="store_true", help="Enable secure time synchronization")
     new_parser.add_argument("--no-secure-time", dest="secure_time", action="store_false")

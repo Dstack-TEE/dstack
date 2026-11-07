@@ -50,12 +50,13 @@ preflight does not replace firmware, kernel, QEMU, or OVMF validation.
 
 ## Install dstack on an SNP host
 
-Pull a current unified image and select the platform explicitly:
+For a self-contained KMS installation, use a unified guest image built with
+the native `snp` key provider and matching host tools. Older images that only
+support SNP attestation cannot use this provider. Set `SNP_OS_IMAGE` to the
+name of that image in the VMM image store, then select the platform explicitly:
 
 ```bash
-VERSION=0.6.0
-sudo dstackup image pull --version "$VERSION"
-sudo dstackup install --platform amd-sev-snp --image "dstack-$VERSION"
+sudo dstackup install --platform amd-sev-snp --image "$SNP_OS_IMAGE"
 sudo dstackup status
 ```
 
@@ -64,6 +65,41 @@ advertise `sev_snp`. Explicit selection is preferable while commissioning a
 host because it fails immediately when the required SNP device is absent.
 
 Unlike the TDX path, SEV-SNP does not use the local SGX key provider.
+
+## Persistent local keys
+
+Select `key_provider: snp` in the KMS CVM's app-compose document, or deploy with
+`dstack deploy --key-provider snp`. The VMM UI calls this provider **SEV-SNP
+hardware**. `dstackup` selects it for an AMD KMS installation. Application CVMs
+continue using `key_provider: kms`.
+
+Components that parse shared provider metadata, including attestation
+verifiers, must recognize the new `snp` enum value. Rebuild those components
+with the updated shared types; older strict verifiers reject it. The KMS RPC
+protocol and application configuration are unchanged.
+
+The provider requires a real SNP guest at VMPL0, debugging disabled, encrypted
+storage, and firmware supporting explicit VCEK selection through
+`SNP_GET_DERIVED_KEY`. It derives a seed using legacy VCEK (`KEY_SEL=1`), launch
+measurement, guest policy, and a pinned TCB. HOST_DATA and launch identity also
+bind the key. Derivation failures stop startup.
+
+Before initializing a new disk, the guest saves public versioned
+`snp_sealing` parameters in the existing `.instance_info` record through the
+host API. The TCB is stored as a decimal string to preserve all 64 bits. Later
+boots reuse it. Missing parameters for an existing LUKS disk, unknown parameter
+versions, or failure to save metadata stop startup before disk unlock.
+
+Preserve `.instance_info`, the original MrConfig document, launch identity,
+and launch inputs with the encrypted disk. Recovery requires the same hardware
+and bound configuration. OS or compose changes need a new sealing context;
+preserve KMS roots through the existing onboarding/replication flow. A firmware
+update must still support the saved derivation TCB and satisfy attestation
+policy. Hardware replacement requires KMS onboarding/replication too.
+
+Keep the KMS CVM under the existing operator isolation and authorization
+policy. The hardware seed and KMS root keys stay inside that CVM; authorized
+applications retain access to their own application keys.
 
 ## Attestation and image identity
 
