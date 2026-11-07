@@ -117,8 +117,8 @@ const AUTHORIZATION_ABI = {
 
 // DstackKms contract ABI (minimal required functions)
 const DSTACK_KMS_ABI = [
-  { ...AUTHORIZATION_ABI, name: 'checkKmsAuthorization' },
-  { ...AUTHORIZATION_ABI, name: 'checkAppAuthorization' },
+  { ...AUTHORIZATION_ABI, name: 'authorizeKms' },
+  { ...AUTHORIZATION_ABI, name: 'authorizeApp' },
   {
     name: 'isKmsAllowed',
     type: 'function',
@@ -240,7 +240,7 @@ class EthereumBackend {
 
   }
 
-  async checkAuthorization(appInfo: AuthorizationRequest, method: 'checkKmsAuthorization' | 'checkAppAuthorization') {
+  async checkAuthorization(appInfo: AuthorizationRequest, method: 'authorizeKms' | 'authorizeApp') {
     const blockNumber = await this.finalizedBlockNumber();
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
@@ -422,7 +422,7 @@ app.get('/', async (c) => {
   }
 });
 
-for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+for (const method of ['authorizeKms', 'authorizeApp'] as const) {
   app.post(`/${method}`,
     bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES }),
     zValidator('json', AuthorizationRequestSchema),

@@ -259,7 +259,7 @@ impl AuthApi {
         &self,
         app_info: &BootInfo,
     ) -> Result<AuthorizationResult> {
-        self.check_authorization(app_info, "checkKmsAuthorization", None)
+        self.check_authorization(app_info, "authorizeKms", None)
             .await
     }
 
@@ -268,7 +268,7 @@ impl AuthApi {
         app_info: &BootInfo,
         requested_root_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
-        self.check_authorization(app_info, "checkAppAuthorization", requested_root_epoch)
+        self.check_authorization(app_info, "authorizeApp", requested_root_epoch)
             .await
     }
 
@@ -723,8 +723,8 @@ pub(crate) mod tests {
         assert_eq!(requests.len(), 4);
         assert!(requests[..3]
             .iter()
-            .all(|(path, _)| path == "/checkAppAuthorization"));
-        assert_eq!(requests[3].0, "/checkKmsAuthorization");
+            .all(|(path, _)| path == "/authorizeApp"));
+        assert_eq!(requests[3].0, "/authorizeKms");
         let mut expected = serde_json::to_value(info).unwrap();
         expected["requestedAppEpoch"] = 0.into();
         assert_eq!(requests[0].1, expected);
