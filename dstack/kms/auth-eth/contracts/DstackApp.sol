@@ -188,7 +188,7 @@ contract DstackApp is
     }
 
     // Check if an app is allowed to boot
-    function isAppAllowed(IAppAuth.AppBootInfo calldata bootInfo)
+    function isAppAllowed(IAppAuth.AppInfo calldata bootInfo)
         external
         view
         override

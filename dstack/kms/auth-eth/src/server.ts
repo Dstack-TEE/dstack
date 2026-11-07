@@ -120,7 +120,7 @@ export async function build(): Promise<FastifyInstance> {
     }
   });
 
-  for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+  for (const method of ['authorizeKms', 'authorizeApp'] as const) {
     server.post<{ Body: AuthorizationRequest; Reply: AuthorizationResult }>(`/${method}`, {
       schema: {
         body: { $ref: 'authorizationRequest#' },

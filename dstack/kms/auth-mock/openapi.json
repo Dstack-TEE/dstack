@@ -99,10 +99,10 @@
         }
       }
     },
-    "/checkKmsAuthorization": {
+    "/authorizeKms": {
       "post": {
         "summary": "Authorize a Kms identity and return the current root epoch",
-        "operationId": "checkKmsAuthorization",
+        "operationId": "authorizeKms",
         "requestBody": {
           "required": true,
           "content": {
@@ -130,10 +130,10 @@
         }
       }
     },
-    "/checkAppAuthorization": {
+    "/authorizeApp": {
       "post": {
         "summary": "Authorize a App identity and return the current root epoch",
-        "operationId": "checkAppAuthorization",
+        "operationId": "authorizeApp",
         "requestBody": {
           "required": true,
           "content": {

@@ -174,7 +174,7 @@ Documentation: https://book.getfoundry.sh/
 
 ### Authorization endpoints
 
-`POST /checkKmsAuthorization` and `POST /checkAppAuthorization` return `AuthorizationResult`, including
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
 `rejectionReason`, `gatewayAppId`, `currentRootEpoch`, and `currentRootEpochHash`.
 The selected endpoint determines the policy; the backend checks that the verified
 `appId` matches that scope. `requestedAppEpoch` defaults to 0; nonzero values are currently

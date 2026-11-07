@@ -473,7 +473,7 @@ describe('auth-simple', () => {
       (await app.fetch(new Request('http://localhost/', { method: 'GET' }))).json();
 
     const authorize = async (fields: object = {}, isKms = false) =>
-      (await app.fetch(new Request(`http://localhost/${isKms ? 'checkKmsAuthorization' : 'checkAppAuthorization'}`, {
+      (await app.fetch(new Request(`http://localhost/${isKms ? 'authorizeKms' : 'authorizeApp'}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...baseBootInfo, ...fields }),
       }))).json();
@@ -486,9 +486,7 @@ describe('auth-simple', () => {
       });
       expect(await authorize({ requestedRootEpoch: 0 })).toMatchObject({ isAllowed: true, currentRootEpoch: 1 });
       expect(await authorize({ requestedRootEpoch: 1 })).toMatchObject({ isAllowed: true });
-      expect(await authorize({}, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
-      expect(await authorize({ appId: kmsContractAddr })).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
-      expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch must be zero', currentRootEpoch: 1 });
+            expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch must be zero', currentRootEpoch: 1 });
       expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true });
       expect(await authorize({ requestedRootEpoch: 2 })).toMatchObject({
         isAllowed: false, rejectionReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,

@@ -91,7 +91,7 @@ describe('Server', () => {
     });
   });
 
-  describe('POST /checkAppAuthorization', () => {
+  describe('POST /authorizeApp', () => {
     const appRequest = { ...mockBootInfo, requestedAppEpoch: 0 };
     it('preserves the complete decision, including the epoch on rejection', async () => {
       const decision = {
@@ -99,20 +99,20 @@ describe('Server', () => {
         currentAppEpoch: 0, currentRootEpoch: 1, currentRootEpochHash: '0x' + '11'.repeat(32),
       };
       app.ethereum.checkAuthorization = jest.fn().mockResolvedValue(decision);
-      const response = await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: appRequest });
+      const response = await app.inject({ method: 'POST', url: '/authorizeApp', payload: appRequest });
       expect(response.statusCode).toBe(200);
       expect(JSON.parse(response.payload)).toEqual(decision);
-      expect(app.ethereum.checkAuthorization).toHaveBeenCalledWith(appRequest, 'checkAppAuthorization');
-      await app.inject({ method: 'POST', url: '/checkKmsAuthorization', payload: appRequest });
-      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith(appRequest, 'checkKmsAuthorization');
-      await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: { ...appRequest, requestedRootEpoch: 0 } });
-      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...appRequest, requestedRootEpoch: 0 }, 'checkAppAuthorization');
+      expect(app.ethereum.checkAuthorization).toHaveBeenCalledWith(appRequest, 'authorizeApp');
+      await app.inject({ method: 'POST', url: '/authorizeKms', payload: appRequest });
+      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith(appRequest, 'authorizeKms');
+      await app.inject({ method: 'POST', url: '/authorizeApp', payload: { ...appRequest, requestedRootEpoch: 0 } });
+      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...appRequest, requestedRootEpoch: 0 }, 'authorizeApp');
     });
 
     it('fails closed when the new contract method is unavailable', async () => {
       jest.clearAllMocks();
       app.ethereum.checkAuthorization = jest.fn().mockRejectedValue(new Error('missing contract method'));
-      const response = await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: appRequest });
+      const response = await app.inject({ method: 'POST', url: '/authorizeApp', payload: appRequest });
       expect(response.statusCode).toBe(500);
       expect(app.ethereum.checkBoot).not.toHaveBeenCalled();
     });

@@ -434,8 +434,8 @@ contract DstackKmsTest is Test {
         assertEq(storedEventlog, newEventlog);
     }
 
-    function authorizationInfo(address appId) internal pure returns (DstackKms.AppInfo memory) {
-        return DstackKms.AppInfo({
+    function authorizationInfo(address appId) internal pure returns (IAppAuth.AppInfo memory) {
+        return IAppAuth.AppInfo({
             appId: appId,
             composeHash: bytes32(uint256(789)),
             instanceId: address(0),
@@ -449,7 +449,7 @@ contract DstackKmsTest is Test {
     }
 
     function authorize(
-        DstackKms.AppInfo memory info,
+        IAppAuth.AppInfo memory info,
         bool isKms
     )
         internal
@@ -458,11 +458,11 @@ contract DstackKmsTest is Test {
     {
         DstackKms.AuthorizationRequest memory request =
             DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(false, 0));
-        return isKms ? kms.checkKmsAuthorization(request) : kms.checkAppAuthorization(request);
+        return isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
     }
 
     function test_CheckAuthorization_OptionalEpochDistinguishesZeroFromDefault() public {
-        DstackKms.AppInfo memory info = authorizationInfo(address(kms));
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
         kms.registerRootEpoch(ca(0xa1), k256(0xb1), "https://example.com/epoch-1");
@@ -473,19 +473,19 @@ contract DstackKmsTest is Test {
 
         DstackKms.AuthorizationRequest memory request =
             DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(true, 1));
-        DstackKms.AuthorizationResult memory result = kms.checkKmsAuthorization(request);
+        DstackKms.AuthorizationResult memory result = kms.authorizeKms(request);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested root epoch is not active");
         bytes32 h1 = chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1));
         vm.prank(owner);
         kms.activateRootEpoch(1, h1);
-        assertTrue(kms.checkKmsAuthorization(request).isAllowed);
+        assertTrue(kms.authorizeKms(request).isAllowed);
         request.requestedRootEpoch.value = 0;
-        assertTrue(kms.checkKmsAuthorization(request).isAllowed);
+        assertTrue(kms.authorizeKms(request).isAllowed);
         request.requestedRootEpoch.value = type(uint256).max;
-        assertFalse(kms.checkKmsAuthorization(request).isAllowed);
+        assertFalse(kms.authorizeKms(request).isAllowed);
         request.requestedRootEpoch.isSet = false;
-        result = kms.checkKmsAuthorization(request);
+        result = kms.authorizeKms(request);
         assertTrue(result.isAllowed);
         assertEq(result.currentRootEpoch, 1);
         assertEq(result.currentRootEpochHash, h1);
@@ -500,7 +500,7 @@ contract DstackKmsTest is Test {
     }
 
     function test_CheckAuthorization_ValidatesRequestedPolicy() public {
-        DstackKms.AppInfo memory info = authorizationInfo(address(kms));
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
         kms.setGatewayAppId("gateway");
@@ -527,17 +527,17 @@ contract DstackKmsTest is Test {
         assertTrue(result.isAllowed);
         result = authorize(info, true);
         assertFalse(result.isAllowed);
-        assertEq(result.rejectionReason, "Authorization kind does not match app ID");
+        assertEq(result.rejectionReason, "Aggregated MR not allowed");
         DstackKms.AuthorizationRequest memory appRequest =
             DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(true, 1), DstackKms.OptionalEpoch(false, 0));
-        result = kms.checkAppAuthorization(appRequest);
+        result = kms.authorizeApp(appRequest);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested app epoch must be zero");
         assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
         info.appId = address(kms);
         result = authorize(info, false);
         assertFalse(result.isAllowed);
-        assertEq(result.rejectionReason, "Authorization kind does not match app ID");
+        assertEq(result.rejectionReason, "App not registered");
         result = authorize(info, true);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
@@ -571,7 +571,7 @@ contract DstackKmsTest is Test {
         kms.addOsImageHash(osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -600,7 +600,7 @@ contract DstackKmsTest is Test {
         kms.addOsImageHash(osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -628,7 +628,7 @@ contract DstackKmsTest is Test {
         address appId = kms.deployAndRegisterApp(user, false, false, deviceId, composeHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),

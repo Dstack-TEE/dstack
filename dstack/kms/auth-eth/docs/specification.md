@@ -125,7 +125,7 @@ Signature: `deployAndRegisterApp(address initialOwner, bool disableUpgrades, boo
 - Semantics: equivalent to the 6-arg overload with `requireTcbUpToDate = false`.
 - (verified: `DstackKmsSymbolicTest.check_DeployAndRegisterApp5Arg_DefaultsTcbToFalse`)
 
-### 3.5 `DstackKms.isAppAllowed(AppBootInfo b) external view returns (bool, string)`
+### 3.5 `DstackKms.isAppAllowed(AppInfo b) external view returns (bool, string)`
 
 Decision (in order):
 
@@ -147,7 +147,7 @@ Decision (in order):
   behavior of an adversarial registered app; those propagate to the
   outer call by EVM semantics (§5.1).
 
-### 3.6 `DstackKms.isKmsAllowed(AppBootInfo b) external view returns (bool, string)`
+### 3.6 `DstackKms.isKmsAllowed(AppInfo b) external view returns (bool, string)`
 
 Decision (in order):
 
@@ -195,7 +195,7 @@ For each of `setKmsInfo`, `setKmsQuote`, `setKmsEventlog`, `setGatewayAppId`,
 - (verified: `DstackAppSymbolicTest.check_Initialize5Arg_DefaultsTcbToFalse`,
   `check_Initialize6Arg_HonorsTcbFlag`)
 
-### 3.9 `DstackApp.isAppAllowed(AppBootInfo b) external view returns (bool, string)`
+### 3.9 `DstackApp.isAppAllowed(AppInfo b) external view returns (bool, string)`
 
 Decision (in order, all evaluated under `b.appId == address(this)` by convention):
 

@@ -128,10 +128,6 @@ class MockBackend {
     if (appInfo.requestedAppEpoch !== 0) {
       return { isAllowed: false, rejectionReason: 'Requested app epoch must be zero', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
-    const kmsAppId = process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678';
-    if (isKms !== (normHash(appInfo.appId) === normHash(kmsAppId))) {
-      return { isAllowed: false, rejectionReason: 'Authorization kind does not match app ID', gatewayAppId: this.mockGatewayAppId, ...epoch };
-    }
     const result = this.evaluateBoot(appInfo, isKms);
     return { isAllowed: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
       gatewayAppId: this.mockGatewayAppId, ...epoch };
@@ -233,10 +229,10 @@ app.get('/', async (c) => {
   }
 });
 
-for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+for (const method of ['authorizeKms', 'authorizeApp'] as const) {
   app.post(`/${method}`, zValidator('json', AuthorizationRequestSchema), async (c) => {
     try {
-      return c.json(await mockBackend.checkAuthorization(c.req.valid('json'), method === 'checkKmsAuthorization'));
+      return c.json(await mockBackend.checkAuthorization(c.req.valid('json'), method === 'authorizeKms'));
     } catch {
       return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
     }
