@@ -534,7 +534,7 @@ contract DstackKmsTest is Test {
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
         kms.registerRootEpoch(ca(0xa1), k256(0xb1), "https://example.com/epoch-1");
-        kms.activateRootEpoch(1);
+        kms.activateRootEpoch(1, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1)));
         vm.stopPrank();
 
         DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(user));
