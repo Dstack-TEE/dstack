@@ -15,8 +15,8 @@ persistent local state. The deployment follows the existing SGX-backed model:
 Protect KMS root and local sealing keys under the existing KMS isolation and
 authorization model. Authorized applications retain their app-specific key
 access. KMS service logic and application CVM protocols remain unchanged;
-shared provider types require rebuilding affected binaries, including older
-strict attestation verifiers that do not recognize `snp`.
+shared provider types require rebuilding affected binaries, including the KMS
+container and older strict client verifiers that do not recognize `snp`.
 
 ## Findings that determine scope
 

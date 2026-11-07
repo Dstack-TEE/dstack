@@ -50,13 +50,16 @@ preflight does not replace firmware, kernel, QEMU, or OVMF validation.
 
 ## Install dstack on an SNP host
 
-For a self-contained KMS installation, use a unified guest image built with
-the native `snp` key provider and matching host tools. Older images that only
-support SNP attestation cannot use this provider. Set `SNP_OS_IMAGE` to the
-name of that image in the VMM image store, then select the platform explicitly:
+For a self-contained KMS installation, use matching guest, KMS container, and
+host-tool builds containing the native `snp` provider and updated shared types.
+Older images that only support SNP attestation cannot use this provider. Set
+`SNP_OS_IMAGE` to the guest image's name in the VMM image store and
+`SNP_KMS_IMAGE` to the rebuilt KMS container image, then select the platform
+explicitly:
 
 ```bash
-sudo dstackup install --platform amd-sev-snp --image "$SNP_OS_IMAGE"
+sudo dstackup install --platform amd-sev-snp \
+  --image "$SNP_OS_IMAGE" --kms-image "$SNP_KMS_IMAGE"
 sudo dstackup status
 ```
 
@@ -73,10 +76,10 @@ Select `key_provider: snp` in the KMS CVM's app-compose document, or deploy with
 hardware**. `dstackup` selects it for an AMD KMS installation. Application CVMs
 continue using `key_provider: kms`.
 
-Components that parse shared provider metadata, including attestation
-verifiers, must recognize the new `snp` enum value. Rebuild those components
-with the updated shared types; older strict verifiers reject it. The KMS RPC
-protocol and application configuration are unchanged.
+Components that parse shared provider metadata, including the KMS and client
+attestation verifiers, must recognize the new `snp` enum value. Rebuild those
+components with the updated shared types; older strict verifiers reject it.
+The KMS RPC protocol and application configuration are unchanged.
 
 The provider requires a real SNP guest at VMPL0, debugging disabled, encrypted
 storage, and firmware supporting explicit VCEK selection through
