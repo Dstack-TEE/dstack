@@ -50,16 +50,15 @@ preflight does not replace firmware, kernel, QEMU, or OVMF validation.
 
 ## Install dstack on an SNP host
 
-For a self-contained KMS installation, use matching guest, KMS container, and
-host-tool builds containing the native `snp` provider and updated shared types.
-Older images that only support SNP attestation cannot use this provider. Set
-`SNP_OS_IMAGE` to the guest image's name in the VMM image store and
-`SNP_KMS_IMAGE` to the rebuilt KMS container image, then select the platform
-explicitly:
+Use a unified OS release that includes the `snp` key provider. The same image
+supports TDX and SEV-SNP; older releases lack this provider. Host tools and
+the KMS container must also recognize `snp`. Set `OS_IMAGE` to the unified
+image's name in the VMM image store and `KMS_IMAGE` to the KMS container
+image, then select the platform explicitly:
 
 ```bash
 sudo dstackup install --platform amd-sev-snp \
-  --image "$SNP_OS_IMAGE" --kms-image "$SNP_KMS_IMAGE"
+  --image "$OS_IMAGE" --kms-image "$KMS_IMAGE"
 sudo dstackup status
 ```
 
