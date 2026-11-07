@@ -195,13 +195,7 @@ impl MrConfigV3 {
     }
 
     pub fn key_provider_name(&self) -> &'static str {
-        match self.key_provider {
-            KeyProviderKind::None => "none",
-            KeyProviderKind::Local => "local-sgx",
-            KeyProviderKind::Kms => "kms",
-            KeyProviderKind::Tpm => "tpm",
-            KeyProviderKind::Snp => "snp",
-        }
+        self.key_provider.measurement_name()
     }
 }
 

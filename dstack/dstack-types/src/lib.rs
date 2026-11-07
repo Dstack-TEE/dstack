@@ -768,6 +768,19 @@ pub enum KeyProviderKind {
     Snp,
 }
 
+/// Instance identity and public recovery metadata shared by the VMM and guest.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct InstanceInfo {
+    #[serde(default, with = "hex_bytes")]
+    pub instance_id_seed: Vec<u8>,
+    #[serde(default, with = "hex_bytes")]
+    pub instance_id: Vec<u8>,
+    #[serde(default, with = "hex_bytes")]
+    pub app_id: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snp_sealing: Option<SnpSealingParameters>,
+}
+
 /// Public parameters needed to reproduce the SNP sealing seed after a restart.
 /// Version 1 fixes the root, guest fields, VMPL, and guest SVN in the provider.
 #[serde_with::serde_as]
@@ -781,6 +794,17 @@ pub struct SnpSealingParameters {
 }
 
 impl KeyProviderKind {
+    /// Stable name used in measurements and key-provider events.
+    pub fn measurement_name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Local => "local-sgx",
+            Self::Kms => "kms",
+            Self::Tpm => "tpm",
+            Self::Snp => "snp",
+        }
+    }
+
     pub fn is_none(&self) -> bool {
         matches!(self, KeyProviderKind::None)
     }
@@ -2534,6 +2558,17 @@ mod key_provider_tests {
         .unwrap();
         assert_eq!(compose.key_provider(), KeyProviderKind::Snp);
         assert!(!compose.kms_enabled());
+    }
+
+    #[test]
+    fn legacy_instance_metadata_encoding_is_unchanged() {
+        let raw = r#"{"instance_id_seed":"0102","instance_id":"03","app_id":"04"}"#;
+        let info: InstanceInfo = serde_json::from_str(raw).unwrap();
+        assert_eq!(info.instance_id_seed, [1, 2]);
+        assert!(info.snp_sealing.is_none());
+        assert_eq!(serde_json::to_string(&info).unwrap(), raw);
+        let empty: InstanceInfo = serde_json::from_str("{}").unwrap();
+        assert!(empty.app_id.is_empty());
     }
 
     #[test]

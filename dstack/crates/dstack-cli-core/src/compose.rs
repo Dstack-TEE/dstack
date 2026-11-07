@@ -5,6 +5,7 @@
 //! build the app-compose manifest — the JSON document the VMM hashes (to derive
 //! the app id) and deploys. The raw docker-compose YAML is embedded as a string.
 
+use dstack_types::KeyProviderKind;
 use serde_json::json;
 
 /// build a minimal app-compose manifest from a docker-compose YAML body
@@ -34,7 +35,11 @@ pub fn build_app_compose_with_runtime(
     build_app_compose_with_runtime_and_volumes(
         name,
         docker_compose_yaml,
-        kms_enabled,
+        if kms_enabled {
+            KeyProviderKind::Kms
+        } else {
+            KeyProviderKind::None
+        },
         runner,
         snapshotter,
         &[],
@@ -45,7 +50,7 @@ pub fn build_app_compose_with_runtime(
 pub fn build_app_compose_with_runtime_and_volumes(
     name: &str,
     docker_compose_yaml: &str,
-    kms_enabled: bool,
+    key_provider: KeyProviderKind,
     runner: &str,
     snapshotter: Option<&str>,
     verity_volumes: &[dstack_types::VerityVolume],
@@ -55,7 +60,7 @@ pub fn build_app_compose_with_runtime_and_volumes(
         "name": name,
         "runner": runner,
         "docker_compose_file": docker_compose_yaml,
-        "kms_enabled": kms_enabled,
+        "kms_enabled": key_provider.is_kms(),
         "gateway_enabled": false,
         "local_key_provider_enabled": false,
         "public_logs": true,
@@ -74,7 +79,48 @@ pub fn build_app_compose_with_runtime_and_volumes(
     if !verity_volumes.is_empty() {
         manifest["verity_volumes"] = json!(verity_volumes);
     }
+    // Preserve legacy KMS/None manifest bytes, which determine app identity.
+    if !matches!(key_provider, KeyProviderKind::Kms | KeyProviderKind::None) {
+        manifest["key_provider"] = json!(key_provider);
+    }
     // pretty-print via Value's Display (`{:#}`) — infallible, and byte-identical
     // to serde_json::to_string_pretty (avoids an expect on an unfailable Result).
     format!("{manifest:#}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_provider_matches_previous_cli_manifest_encoding() {
+        let volumes = [dstack_types::VerityVolume {
+            source: "test.img".into(),
+            verity_root: [1; 32],
+            target: "/test".into(),
+        }];
+        for volumes in [&[][..], &volumes[..]] {
+            let build = |provider| {
+                build_app_compose_with_runtime_and_volumes(
+                    "test",
+                    "",
+                    provider,
+                    "nerdctl-compose",
+                    Some("soci"),
+                    volumes,
+                )
+            };
+            for provider in [
+                KeyProviderKind::Snp,
+                KeyProviderKind::Local,
+                KeyProviderKind::Tpm,
+            ] {
+                // The old CLI serialized a legacy manifest, then inserted the provider.
+                let mut legacy: serde_json::Value =
+                    serde_json::from_str(&build(KeyProviderKind::None)).unwrap();
+                legacy["key_provider"] = json!(provider);
+                assert_eq!(build(provider), format!("{legacy:#}"));
+            }
+        }
+    }
 }

@@ -16,21 +16,10 @@ use dstack_types::{
 };
 use fs_err as fs;
 use serde::{Deserialize, Serialize};
-use serde_human_bytes as hex_bytes;
 
 use crate::{app::Manifest, config::Networking};
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct InstanceInfo {
-    #[serde(default, with = "hex_bytes")]
-    pub instance_id_seed: Vec<u8>,
-    #[serde(default, with = "hex_bytes")]
-    pub instance_id: Vec<u8>,
-    #[serde(default, with = "hex_bytes")]
-    pub app_id: Vec<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub snp_sealing: Option<dstack_types::SnpSealingParameters>,
-}
+pub use dstack_types::InstanceInfo;
 
 #[derive(Deserialize, Serialize)]
 struct State {
