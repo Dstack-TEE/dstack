@@ -70,7 +70,7 @@ pub async fn request_app_keys(
         .remote_uri(url)
         .tls_client_cert(client_cert.cert_pem)
         .tls_client_key(client_cert.key_pem)
-        .tls_no_check(trusted_ca.is_none())
+        .tls_skip_ca_verification(trusted_ca.is_none())
         .tls_built_in_root_certs(false)
         .maybe_tls_ca_cert(trusted_ca.clone())
         .attestation_verifier(attestation_verifier)

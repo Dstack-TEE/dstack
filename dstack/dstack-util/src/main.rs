@@ -783,7 +783,7 @@ async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
         .transpose()?;
     let client = RaClientConfig::builder()
         .remote_uri(kms_url)
-        .tls_no_check(false)
+        .tls_skip_ca_verification(false)
         .tls_built_in_root_certs(root_ca_pem.is_none())
         .maybe_tls_ca_cert(root_ca_pem)
         .build()

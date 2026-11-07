@@ -939,7 +939,7 @@ impl Keys {
 
         let (ra_cert, ra_key) = gen_ra_cert().await?;
         let client = RaClientConfig::builder()
-            .tls_no_check(true)
+            .tls_skip_ca_verification(true)
             .tls_built_in_root_certs(false)
             .remote_uri(other_kms_url.to_string())
             .tls_client_cert(ra_cert)

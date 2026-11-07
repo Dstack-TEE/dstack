@@ -14,15 +14,11 @@ use ra_tls::{
     traits::CertExt,
 };
 use reqwest::{tls::TlsInfo, Certificate, Client, Identity, Response};
-use rustls::{
-    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    crypto::WebPkiSupportedAlgorithms,
-    pki_types::{CertificateDer, ServerName, UnixTime},
-    DigitallySignedStruct, SignatureScheme,
-};
 use serde::{de::DeserializeOwned, Serialize};
 
 use bon::Builder;
+
+mod tls;
 
 pub struct CertInfo {
     pub cert_der: Vec<u8>,
@@ -36,8 +32,10 @@ type CertValidator = Box<dyn Fn(Option<CertInfo>) -> Result<()> + Send + Sync + 
 #[derive(Builder)]
 pub struct RaClientConfig {
     remote_uri: String,
+    /// Skip CA-based certificate checks (trust chain, hostname, and validity).
+    /// TLS handshake signatures remain verified; attestation is checked separately.
     #[builder(default = false)]
-    tls_no_check: bool,
+    tls_skip_ca_verification: bool,
     #[builder(default = true)]
     verify_server_attestation: bool,
     #[builder(default = false)]
@@ -62,8 +60,8 @@ impl RaClientConfig {
         if self.cert_validator.is_some() {
             builder = builder.tls_info(true);
         }
-        if self.tls_no_check {
-            builder = builder.use_preconfigured_tls(attestation_tls_config(
+        if self.tls_skip_ca_verification {
+            builder = builder.use_preconfigured_tls(tls::config(
                 self.tls_client_cert.as_deref(),
                 self.tls_client_key.as_deref(),
             )?);
@@ -105,68 +103,6 @@ impl RaClientConfig {
     }
 }
 
-/// Attestation is checked on the response, but TLS must still prove possession
-/// of the attested certificate key. Reqwest's no-verifier also skips that proof.
-#[derive(Debug)]
-struct AttestationServerVerifier(WebPkiSupportedAlgorithms);
-
-impl ServerCertVerifier for AttestationServerVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(message, cert, signature, &self.0)
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        signature: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(message, cert, signature, &self.0)
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.supported_schemes()
-    }
-}
-
-fn attestation_tls_config(cert: Option<&str>, key: Option<&str>) -> Result<rustls::ClientConfig> {
-    use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
-    let provider = rustls::crypto::CryptoProvider::get_default()
-        .cloned()
-        .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
-    let verifier = AttestationServerVerifier(provider.signature_verification_algorithms);
-    let builder = rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier));
-    match (cert, key) {
-        (Some(cert), Some(key)) => builder
-            .with_client_auth_cert(
-                CertificateDer::pem_slice_iter(cert.as_bytes()).collect::<Result<Vec<_>, _>>()?,
-                PrivateKeyDer::from_pem_slice(key.as_bytes())?,
-            )
-            .context("invalid RA-TLS client identity"),
-        (None, None) => Ok(builder.with_no_client_auth()),
-        _ => bail!("RA-TLS client identity requires both certificate and key"),
-    }
-}
-
 pub struct RaClient {
     remote_uri: String,
     attestation_verifier: Arc<AttestationVerifier>,
@@ -177,9 +113,9 @@ pub struct RaClient {
 }
 
 impl RaClient {
-    pub fn new(remote_uri: String, tls_no_check: bool) -> Result<Self> {
+    pub fn new(remote_uri: String, tls_skip_ca_verification: bool) -> Result<Self> {
         RaClientConfig::builder()
-            .tls_no_check(tls_no_check)
+            .tls_skip_ca_verification(tls_skip_ca_verification)
             .remote_uri(remote_uri)
             .build()
             .into_client()
