@@ -53,6 +53,14 @@
       },
       "import": "./dist/verify-env-encrypt-public-key.mjs",
       "require": "./dist/verify-env-encrypt-public-key.js"
+    },
+    "./seal-env": {
+      "types": {
+        "import": "./dist/seal-env.d.mts",
+        "require": "./dist/seal-env.d.ts"
+      },
+      "import": "./dist/seal-env.mjs",
+      "require": "./dist/seal-env.js"
     }
   },
   "engines": {
@@ -81,6 +89,8 @@
   "author": "Leechael Yim",
   "license": "Apache-2.0",
   "dependencies": {
+    "@hpke/core": "^1.10.0",
+    "@hpke/dhkem-x25519": "^1.8.0",
     "@noble/curves": "^1.8.1",
     "@noble/hashes": "^1.6.1"
   },

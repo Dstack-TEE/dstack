@@ -5,12 +5,20 @@
 
 from __future__ import annotations
 
+import argparse
+import base64
 import contextlib
 import importlib.util
 import io
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
+
+from eth_keys import keys
+from eth_utils import keccak
+from pyhpke import AEADId, CipherSuite, KDFId, KEMId
 
 
 def load_vmm_cli():
@@ -53,6 +61,262 @@ class UpdateVmTests(unittest.TestCase):
                 )
             ],
         )
+
+
+class SealedEnvTests(unittest.TestCase):
+    def setUp(self):
+        self.app_id = "11" * 20
+        self.epoch = 3
+        self.timestamp = 1700000000
+        self.clock = patch.object(VMM_CLI.time, "time", return_value=self.timestamp)
+        self.clock.start()
+        self.addCleanup(self.clock.stop)
+        self.signer = keys.PrivateKey(b"\x22" * 32)
+        self.pin = self.signer.public_key.to_compressed_bytes().hex()
+        self.suite = CipherSuite.new(
+            KEMId.DHKEM_X25519_HKDF_SHA256, KDFId.HKDF_SHA256, AEADId.AES256_GCM
+        )
+        self.recipient = self.suite.kem.derive_key_pair(b"test recipient key material")
+        self.response = {
+            "public_key": self.recipient.public_key.to_public_bytes().hex(),
+            "root_epoch": self.epoch,
+            "timestamp": self.timestamp,
+        }
+        digest = keccak(
+            b"dstack-sealed-env-pubkey-v1:"
+            + bytes.fromhex(self.app_id)
+            + self.epoch.to_bytes(4, "big")
+            + bytes.fromhex(self.response["public_key"])
+            + self.timestamp.to_bytes(8, "big")
+        )
+        self.response["signature"] = self.signer.sign_msg_hash(digest).to_bytes().hex()
+        self.cli = VMM_CLI.VmmCLI("https://vmm.example")
+        self.cli.client.request = Mock(return_value=(200, self.response))
+        self.cli.get_app_env_encrypt_pub_key = Mock(
+            return_value=self.response["public_key"]
+        )
+        self.pins = patch.object(VMM_CLI, "load_whitelist", return_value=[self.pin])
+        self.pins.start()
+        self.addCleanup(self.pins.stop)
+        self.envs = {"SECRET": "synthetic test value", "UNICODE": "测试"}
+
+    def decrypt(self, payload):
+        self.assertNotIn("encrypted_env", payload)
+        envelope = json.loads(bytes.fromhex(payload["sealed_env"]))
+        self.assertEqual(set(envelope), {"version", "root_epoch", "enc", "ciphertext"})
+        self.assertEqual(envelope["version"], 1)
+        self.assertEqual(envelope["root_epoch"], self.epoch)
+        enc = base64.b64decode(envelope["enc"], validate=True)
+        ciphertext = base64.b64decode(envelope["ciphertext"], validate=True)
+        receiver = self.suite.create_recipient_context(
+            enc,
+            self.recipient.private_key,
+            info=f"dstack-sealed-env-v1:{self.epoch}".encode(),
+        )
+        plaintext = json.loads(receiver.open(ciphertext, aad=b""))
+        self.assertEqual(
+            plaintext, {"env": [{"key": k, "value": v} for k, v in self.envs.items()]}
+        )
+        wrong_epoch = self.suite.create_recipient_context(
+            enc, self.recipient.private_key, info=b"dstack-sealed-env-v1:0"
+        )
+        with self.assertRaises(Exception):
+            wrong_epoch.open(ciphertext, aad=b"")
+
+    def test_sealed_payload_round_trip_and_normalized_pins(self):
+        for pin in [self.pin, "0x" + self.pin.upper()]:
+            with (
+                self.subTest(pin=pin),
+                patch.object(VMM_CLI, "load_whitelist", return_value=[pin]),
+            ):
+                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None))
+        self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_unpinned_signer_never_becomes_trusted(self):
+        for pins in [
+            [],
+            [keys.PrivateKey(b"\x33" * 32).public_key.to_compressed_bytes().hex()],
+        ]:
+            with (
+                self.subTest(pins=pins),
+                patch.object(VMM_CLI, "load_whitelist", return_value=pins),
+                patch.object(self.cli, "confirm_untrusted_signer") as confirm,
+            ):
+                with self.assertRaisesRegex(ValueError, "not pinned"):
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+                confirm.assert_not_called()
+        self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_signature_binds_every_field_and_app(self):
+        cases = [
+            ("public_key", "44" * 32),
+            ("root_epoch", 4),
+            ("timestamp", self.timestamp + 1),
+            ("signature", "00" * 65),
+            ("signature", "00" * 64),
+            ("public_key", "00" * 31),
+            ("root_epoch", -1),
+            ("root_epoch", 2**32),
+            ("root_epoch", True),
+            ("timestamp", -1),
+            ("timestamp", 2**64),
+            ("timestamp", True),
+        ]
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                self.cli.client.request.return_value = (
+                    200,
+                    {**self.response, field: value},
+                )
+                with self.assertRaises(Exception):
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+        self.cli.client.request.return_value = (200, self.response)
+        for app_id in ["55" * 20, "11" * 19]:
+            with self.assertRaises(ValueError):
+                self.cli.encrypt_env_payload(self.envs, app_id, None)
+        self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_pinned_signed_key_timestamp_window(self):
+        for age in [-60, 0, 300]:
+            with self.subTest(age=age), patch.object(
+                VMM_CLI.time, "time", return_value=self.timestamp + age
+            ):
+                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None))
+        for age, reason in [(-61, "future"), (301, "stale")]:
+            with self.subTest(age=age), patch.object(
+                VMM_CLI.time, "time", return_value=self.timestamp + age
+            ):
+                with self.assertRaisesRegex(ValueError, reason):
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+        self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_requested_epoch_is_sent_and_checked(self):
+        self.cli.get_sealed_env_pub_key(self.app_id, root_epoch=3)
+        self.assertEqual(
+            self.cli.client.request.call_args.kwargs["body"],
+            {"app_id": self.app_id, "root_epoch": 3},
+        )
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.cli.get_sealed_env_pub_key(self.app_id, root_epoch=2)
+
+    def test_only_explicit_unsupported_method_falls_back(self):
+        for status in [400, 404]:
+            self.cli.client.request.return_value = (
+                status,
+                {"error": "Service not found: GetSealedEnvPubKey"},
+            )
+            payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+            self.assertEqual(set(payload), {"encrypted_env"})
+            self.cli.get_app_env_encrypt_pub_key.assert_called_with(self.app_id, None)
+        self.cli.get_app_env_encrypt_pub_key.side_effect = ValueError(
+            "legacy trust rejected"
+        )
+        with self.assertRaisesRegex(ValueError, "legacy trust rejected"):
+            self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+
+    def test_errors_and_bad_responses_do_not_downgrade(self):
+        for status, body in [
+            (401, {"error": "Service not found: GetSealedEnvPubKey"}),
+            (403, {"error": "forbidden"}),
+            (404, "Not Found"),
+            (400, {"error": "invalid app"}),
+            (500, {"error": "unavailable"}),
+            (200, {}),
+            (200, "invalid JSON"),
+        ]:
+            with self.subTest(status=status, body=body):
+                self.cli.client.request.return_value = (status, body)
+                with self.assertRaises(Exception):
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+        self.cli.client.request.side_effect = TimeoutError("test timeout")
+        with self.assertRaises(TimeoutError):
+            self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+        self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_direct_kms_verifies_pin_and_does_not_forward_vmm_credentials(self):
+        with patch.object(VMM_CLI, "VmmClient") as client:
+            client.return_value.request.return_value = (200, self.response)
+            self.decrypt(
+                self.cli.encrypt_env_payload(
+                    self.envs, self.app_id, "https://kms.example"
+                )
+            )
+            client.assert_called_once_with("https://kms.example", verify_tls=False)
+        self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_create_update_and_update_env_send_only_the_negotiated_field(self):
+        compose = json.dumps({"kms_enabled": True})
+        args = argparse.Namespace(
+            compose="compose.json",
+            env_file="env",
+            name="vm",
+            image="image",
+            vcpu=1,
+            memory=1024,
+            disk=10,
+            app_id=self.app_id,
+            user_config=None,
+            port=None,
+            hugepages=False,
+            pin_numa=False,
+            stopped=False,
+            no_tee=False,
+            annotation=None,
+            disk_prealloc=None,
+            simulated_tee=None,
+            swap=None,
+            ppcie=False,
+            gpu=None,
+            kms_url=["https://kms.example"],
+            gateway_url=None,
+            net_queues=None,
+            net=None,
+            net_vhost=None,
+            kms_encrypt_url=None,
+        )
+
+        def rpc(method, params=None):
+            if method == "GetInfo":
+                return {
+                    "found": True,
+                    "info": {
+                        "app_id": self.app_id,
+                        "configuration": {"compose_file": compose},
+                    },
+                }
+            return {"id": "vm"}
+
+        self.cli.rpc_call = Mock(side_effect=rpc)
+        with (
+            patch.object(VMM_CLI.os.path, "exists", return_value=True),
+            patch.object(VMM_CLI, "read_utf8", return_value=compose),
+            patch.object(VMM_CLI, "parse_env_file", return_value=self.envs),
+            patch.object(VMM_CLI, "VmmClient") as client,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            for supported in [True, False]:
+                client.return_value.request.return_value = (
+                    (200, self.response)
+                    if supported
+                    else (404, {"error": "Service not found: GetSealedEnvPubKey"})
+                )
+                for action in [
+                    lambda: self.cli.create_vm(args),
+                    lambda: self.cli.update_vm(
+                        "vm", env_file="env", kms_urls=args.kms_url
+                    ),
+                    lambda: self.cli.update_vm_env("vm", self.envs, args.kms_url),
+                ]:
+                    with self.subTest(supported=supported, action=action):
+                        self.cli.rpc_call.reset_mock()
+                        action()
+                        method, payload = self.cli.rpc_call.call_args.args
+                        self.assertIn(method, ["CreateVm", "UpgradeApp"])
+                        if supported:
+                            self.decrypt(payload)
+                        else:
+                            self.assertIn("encrypted_env", payload)
+                            self.assertNotIn("sealed_env", payload)
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@
 [metadata]
 groups = ["default", "dev", "ethereum", "lint", "solana"]
 strategy = ["inherit_metadata"]
-lock_version = "4.5.1"
-content_hash = "sha256:1385af9667052c21cb40fd49db74325b2cb096680c162be549795a89e44c64c0"
+lock_version = "4.5.0"
+content_hash = "sha256:9b0ccafce94289b20729c8e56bd53086c96bced37a5b3c16ef10260c1c830885"
 
 [[metadata.targets]]
 requires_python = ">=3.10"
@@ -910,6 +910,20 @@ groups = ["dev"]
 files = [
     {file = "pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b"},
     {file = "pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887"},
+]
+
+[[package]]
+name = "pyhpke"
+version = "0.6.5"
+requires_python = "<4.0,>=3.10"
+summary = "A Python implementation of HPKE."
+groups = ["default"]
+dependencies = [
+    "cryptography<52,>=42.0.1",
+]
+files = [
+    {file = "pyhpke-0.6.5-py3-none-any.whl", hash = "sha256:e8d794724e43053fe04e8971be55033225d6da904effc748b303cece763a3f3c"},
+    {file = "pyhpke-0.6.5.tar.gz", hash = "sha256:8dac22eb143cd83b8066213b8ad0ecc9d5326ef41f930197197f3bbb5c99cb93"},
 ]
 
 [[package]]

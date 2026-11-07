@@ -2400,6 +2400,8 @@ pub struct AppKeys {
     pub disk_crypt_key: Vec<u8>,
     #[serde(with = "hex_bytes", default)]
     pub env_crypt_key: Vec<u8>,
+    #[serde(with = "hex_bytes", default)]
+    pub sealed_env_key: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub k256_key: Vec<u8>,
     #[serde(with = "hex_bytes")]

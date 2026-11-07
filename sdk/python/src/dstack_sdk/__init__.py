@@ -27,6 +27,7 @@ from .dstack_client_v1 import GpuEvidenceBundleV1
 from .dstack_client_v1 import InfoResponseV1
 from .dstack_client_v1 import IssueCertResponseV1
 from .dstack_client_v1 import VersionResponseV1
+from .seal_env import seal_env
 from .encrypt_env_vars import EnvVar
 from .encrypt_env_vars import encrypt_env_vars
 from .encrypt_env_vars import encrypt_env_vars_sync
@@ -35,9 +36,12 @@ from .get_compose_hash import DockerConfig
 from .get_compose_hash import Requirements
 from .get_compose_hash import get_compose_hash
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key
+from .verify_env_encrypt_public_key import verify_sealed_env_public_key
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key_legacy
 
 __all__ = [
+    "seal_env",
+    "verify_sealed_env_public_key",
     # The default clients: unsuffixed means dstack.guest.v1
     "DstackClient",
     "AsyncDstackClient",

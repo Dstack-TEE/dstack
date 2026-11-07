@@ -1,0 +1,17 @@
+{
+  "description": "Synthetic public test fixture produced by @hpke/core 1.10.0; never use its key in a deployment.",
+  "private_key": "0707070707070707070707070707070707070707070707070707070707070707",
+  "public_key": "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d",
+  "env": [
+    {
+      "key": "MESSAGE",
+      "value": "Hello 世界"
+    }
+  ],
+  "sealed_env": {
+    "version": 1,
+    "root_epoch": 3,
+    "enc": "YkqJCvA9NLRyffdPfAE/pf95HworwoJyO9IGVTPTs20=",
+    "ciphertext": "HPn9zLj74o9RkeKafcHkduDrMUZ+NLeOjzG1rFQC9hAmKhh4YmyKJ4cmjsWeFExAM4qPOUXHc0aZyVZ8qd9RL/Wz"
+  }
+}

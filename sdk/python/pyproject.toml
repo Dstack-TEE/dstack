@@ -16,6 +16,7 @@ dependencies = [
     "asyncio>=3.4.3",
     "pydantic>=2.9.2",
     "cryptography>=43.0.0",
+    "pyhpke==0.6.5",
     "eth-keys>=0.5.0",
     "eth-utils>=4.0.0",
 ]

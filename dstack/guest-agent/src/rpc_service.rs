@@ -1437,6 +1437,7 @@ pNs85uhOZE8z2jr8Pg==
         let dummy_keys = AppKeys {
             disk_crypt_key: Vec::new(),
             env_crypt_key: Vec::new(),
+            sealed_env_key: Vec::new(),
             k256_key: DUMMY_K256_KEY.to_vec(),
             k256_signature: Vec::new(),
             gateway_app_id: String::new(),
