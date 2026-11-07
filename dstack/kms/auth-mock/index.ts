@@ -31,7 +31,7 @@ const BootInfoSchema = z.object({
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
   operation: z.enum(['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys', 'app_get_key', 'app_get_cert']),
-  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).optional(),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
@@ -113,10 +113,14 @@ class MockBackend {
     this.mockAppImplementation = process.env.MOCK_APP_IMPLEMENTATION || '0xmockapp9876543210987654321098765432109';
   }
 
+  async getAppEpoch(_appId: string): Promise<number> {
+    return z.coerce.number().int().min(0).max(0xffffffff).parse(process.env.MOCK_APP_EPOCH ?? 0);
+  }
+
   async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
     const current = getRootEpoch();
     const epoch = {
-      currentAppEpoch: 0,
+      currentAppEpoch: isKms ? 0 : await this.getAppEpoch(appInfo.appId),
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
@@ -130,8 +134,8 @@ class MockBackend {
     if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > (current.rootEpoch ?? 0)) {
       return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
-    if (appInfo.requestedAppEpoch !== 0) {
-      return { isAllowed: false, rejectionReason: 'Requested app epoch must be zero', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    if (appInfo.requestedAppEpoch !== undefined && appInfo.requestedAppEpoch > epoch.currentAppEpoch) {
+      return { isAllowed: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     const result = this.evaluateBoot(appInfo, isKms);
     return { isAllowed: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
@@ -139,6 +143,9 @@ class MockBackend {
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+    if (!isKms && await this.getAppEpoch(bootInfo.appId) !== 0) {
+      return { isAllowed: false, reason: "App epoch requires epoch-aware authorization", gatewayAppId: "" };
+    }
     const response = this.evaluateBoot(bootInfo, isKms);
     const epochDenial = response.isAllowed ? rootEpochDenial(bootInfo, isKms) : undefined;
     return epochDenial ? { isAllowed: false, reason: epochDenial, gatewayAppId: '' } : response;
@@ -231,6 +238,16 @@ app.get('/', async (c) => {
       status: 'error',
       message: error instanceof Error ? error.message : String(error)
     }, 500);
+  }
+});
+
+app.get('/app/:appId', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  try {
+    return c.json({ currentAppEpoch: await mockBackend.getAppEpoch(appId) });
+  } catch {
+    return c.json({ error: 'authorization backend unavailable' }, 503);
   }
 });
 

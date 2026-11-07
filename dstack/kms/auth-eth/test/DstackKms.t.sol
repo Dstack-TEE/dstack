@@ -573,7 +573,7 @@ contract DstackKmsTest is Test {
         );
         result = kms.authorizeApp(appRequest);
         assertFalse(result.isAllowed);
-        assertEq(result.rejectionReason, "Requested app epoch must be zero");
+        assertEq(result.rejectionReason, "Requested app epoch is not active");
         assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
         info.appId = address(kms);
         result = authorize(info, false);
@@ -582,6 +582,62 @@ contract DstackKmsTest is Test {
         result = authorize(info, true);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
+    }
+
+    function test_AppEpochCapabilityIsOptionalButGetterFailuresPropagate() public {
+        address policy = address(new DstackApp());
+        kms.registerApp(policy);
+        vm.mockCall(policy, abi.encodeCall(IERC165.supportsInterface, (type(IAppEpoch).interfaceId)), abi.encode(false));
+        assertEq(kms.currentAppEpoch(policy), 0);
+        vm.clearMockedCalls();
+        vm.mockCallRevert(policy, abi.encodeCall(IAppEpoch.currentAppEpoch, ()), "epoch unavailable");
+        vm.expectRevert("epoch unavailable");
+        kms.currentAppEpoch(policy);
+    }
+
+    function test_AppEpochRotationIsOwnerScopedAndDoesNotChangeRootEpoch() public {
+        DstackKms.AppInfo memory info = authorizationInfo(address(0));
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.addOsImageHash(info.osImageHash);
+        address appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        address otherApp = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        vm.stopPrank();
+        info.appId = appId;
+        assertEq(kms.currentAppEpoch(appId), 0);
+        vm.prank(owner);
+        vm.expectRevert();
+        DstackApp(appId).advanceAppEpoch(0);
+        vm.prank(user);
+        DstackApp(appId).advanceAppEpoch(0);
+        vm.prank(user);
+        vm.expectRevert("App epoch changed");
+        DstackApp(appId).advanceAppEpoch(0);
+        assertEq(kms.currentAppEpoch(appId), 1);
+        assertEq(kms.currentAppEpoch(otherApp), 0);
+        (uint256 rootEpoch,) = kms.currentRootEpoch();
+        assertEq(rootEpoch, 0);
+        DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
+            info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(false, 0)
+        );
+        DstackKms.AuthorizationResult memory result = kms.checkAppAuthorization(request);
+        assertTrue(result.isAllowed);
+        assertEq(result.currentAppEpoch, 1);
+        request.requestedAppEpoch = DstackKms.OptionalEpoch(true, 0);
+        assertTrue(kms.checkAppAuthorization(request).isAllowed);
+        request.requestedAppEpoch.value = 2;
+        result = kms.checkAppAuthorization(request);
+        assertFalse(result.isAllowed);
+        assertEq(result.currentAppEpoch, 1);
+        assertEq(result.rejectionReason, "Requested app epoch is not active");
+        request.requestedAppEpoch = DstackKms.OptionalEpoch(false, 0);
+        request.appInfo.composeHash = bytes32(0);
+        result = kms.checkAppAuthorization(request);
+        assertFalse(result.isAllowed);
+        assertEq(result.currentAppEpoch, 1);
+        vm.prank(user);
+        DstackApp(appId).advanceAppEpoch(1);
+        assertEq(kms.currentAppEpoch(appId), 2);
     }
 
     function test_CheckAuthorization_RejectionIncludesActivatedEpoch() public {

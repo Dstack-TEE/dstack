@@ -38,7 +38,7 @@ use upgrade_authority::{
 
 use crate::{
     config::{KmsConfig, RootKeyPaths},
-    crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    crypto::{app_epoch_context, derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
 pub(crate) mod amd_attest;
@@ -305,9 +305,6 @@ impl KmsState {
         result: &AuthorizationResult,
         requested: Option<u32>,
     ) -> Result<u32> {
-        if result.current_app_epoch != 0 {
-            bail!("this KMS does not support nonzero app epochs");
-        }
         let current = if self.config.auth_api.is_dev() {
             self.keyring.latest()
         } else {
@@ -370,13 +367,13 @@ struct AppKeys {
     sealed_env_key: Vec<u8>,
 }
 
-fn derive_sealed_env_key(root: &RootKeys, app_id: &[u8]) -> Result<[u8; 32]> {
+fn derive_sealed_env_key(root: &RootKeys, app_id: &[u8], app_epoch: u32) -> Result<[u8; 32]> {
     ensure_app_id_len(app_id)?;
     let ca_secret = p256::SecretKey::from_pkcs8_der(root.ca.key.serialized_der())?;
     kdf::derive_key_with_salt(
         b"dstack-sealed-env-v1",
         &ca_secret.to_bytes(),
-        &[app_id],
+        &[app_id, &app_epoch_context(app_epoch)],
         32,
     )
     .map_err(|_| anyhow!("failed to derive sealed env key"))?
@@ -384,16 +381,31 @@ fn derive_sealed_env_key(root: &RootKeys, app_id: &[u8]) -> Result<[u8; 32]> {
     .map_err(|_| anyhow!("invalid sealed env key length"))
 }
 
-fn derive_app_keys(root: &RootKeys, app_id: &[u8], instance_id: &[u8]) -> Result<AppKeys> {
-    let disk_crypt_key =
-        kdf::derive_dh_secret(&root.ca.key, &[app_id, instance_id, b"app-disk-crypt-key"])
-            .context("Failed to derive app disk key")?;
-    let env_crypt_key = kdf::derive_dh_secret(&root.ca.key, &[app_id, b"env-encrypt-key"])
-        .context("Failed to derive env encrypt key")?;
+fn derive_app_keys(
+    root: &RootKeys,
+    app_id: &[u8],
+    instance_id: &[u8],
+    app_epoch: u32,
+) -> Result<AppKeys> {
+    let disk_crypt_key = kdf::derive_dh_secret(
+        &root.ca.key,
+        &[
+            app_id,
+            instance_id,
+            b"app-disk-crypt-key",
+            &app_epoch_context(app_epoch),
+        ],
+    )
+    .context("Failed to derive app disk key")?;
+    let env_crypt_key = kdf::derive_dh_secret(
+        &root.ca.key,
+        &[app_id, b"env-encrypt-key", &app_epoch_context(app_epoch)],
+    )
+    .context("Failed to derive env encrypt key")?;
     let env_crypt_key = x25519_dalek::StaticSecret::from(env_crypt_key).to_bytes();
     let (k256_key, k256_signature) =
-        derive_k256_key(&root.k256, app_id).context("Failed to derive app ecdsa key")?;
-    let sealed_env_key = derive_sealed_env_key(root, app_id)?.to_vec();
+        derive_k256_key(&root.k256, app_id, app_epoch).context("Failed to derive app ecdsa key")?;
+    let sealed_env_key = derive_sealed_env_key(root, app_id, app_epoch)?.to_vec();
     Ok(AppKeys {
         disk_crypt_key: disk_crypt_key.to_vec(),
         env_crypt_key: env_crypt_key.to_vec(),
@@ -446,10 +458,17 @@ impl RpcHandler {
     }
 }
 
+#[derive(Default)]
+struct RequestedAppEpochs {
+    root: Option<u32>,
+    app: Option<u32>,
+}
+
 struct BootConfig {
     boot_info: BootInfo,
     gateway_app_id: String,
     root_epoch: u32,
+    app_epoch: u32,
 }
 
 pub(crate) fn build_boot_info_for_attestation(
@@ -565,7 +584,7 @@ impl RpcHandler {
     async fn ensure_app_boot_allowed(
         &self,
         vm_config: &str,
-        requested_root_epoch: Option<u32>,
+        epochs: RequestedAppEpochs,
     ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
         let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
@@ -574,7 +593,7 @@ impl RpcHandler {
             boot_info,
             vm_config,
             Operation::AppGetKey,
-            requested_root_epoch,
+            epochs,
         )
         .await
     }
@@ -585,23 +604,26 @@ impl RpcHandler {
         boot_info: BootInfo,
         vm_config: &str,
         operation: Operation,
-        requested_root_epoch: Option<u32>,
+        epochs: RequestedAppEpochs,
     ) -> Result<BootConfig> {
         let response = self
             .state
             .config
             .auth_api
-            .authorize_app(&boot_info, operation, requested_root_epoch)
+            .authorize_app(&boot_info, operation, epochs.root, epochs.app)
             .await?;
-        let root_epoch = self
-            .state
-            .authorized_epoch(&response, requested_root_epoch)?;
+        let root_epoch = self.state.authorized_epoch(&response, epochs.root)?;
+        let app_epoch = epochs.app.unwrap_or(response.current_app_epoch);
+        if app_epoch > response.current_app_epoch {
+            bail!("requested app epoch is not active");
+        }
         self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
             .await?;
         Ok(BootConfig {
             boot_info,
             gateway_app_id: response.gateway_app_id,
             root_epoch,
+            app_epoch,
         })
     }
 
@@ -631,8 +653,9 @@ impl RpcHandler {
         Ok(())
     }
 
-    fn derive_app_ca(&self, app_id: &[u8], root: &RootKeys) -> Result<CaCert> {
-        let context_data = vec![app_id, b"app-ca"];
+    fn derive_app_ca(&self, app_id: &[u8], root: &RootKeys, app_epoch: u32) -> Result<CaCert> {
+        let epoch_context = app_epoch_context(app_epoch);
+        let context_data = vec![app_id, b"app-ca", epoch_context.as_slice()];
         let app_key = kdf::derive_p256_key_pair(&root.ca.key, &context_data)
             .context("Failed to derive app disk key")?;
         let req = CertRequest::builder()
@@ -660,13 +683,20 @@ impl KmsRpc for RpcHandler {
             boot_info,
             gateway_app_id,
             root_epoch,
+            app_epoch,
         } = self
-            .ensure_app_boot_allowed(&request.vm_config, request.root_epoch)
+            .ensure_app_boot_allowed(
+                &request.vm_config,
+                RequestedAppEpochs {
+                    root: request.root_epoch,
+                    app: request.app_epoch,
+                },
+            )
             .await
             .context("App not allowed")?;
         ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
         let root = self.state.epoch_root(root_epoch)?;
-        let keys = derive_app_keys(root, &boot_info.app_id, &boot_info.instance_id)?;
+        let keys = derive_app_keys(root, &boot_info.app_id, &boot_info.instance_id, app_epoch)?;
 
         Ok(AppKeyResponse {
             ca_cert: root.ca.pem_cert.clone(),
@@ -679,6 +709,7 @@ impl KmsRpc for RpcHandler {
             os_image_hash: boot_info.os_image_hash,
             root_epoch,
             sealed_env_key: keys.sealed_env_key,
+            app_epoch,
         })
     }
 
@@ -689,11 +720,18 @@ impl KmsRpc for RpcHandler {
             .context("KMS self authorization failed")?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let secret = kdf::derive_dh_secret(
-            &root.ca.key,
-            &[&request.app_id[..], "env-encrypt-key".as_bytes()],
-        )
-        .context("Failed to derive env encrypt key")?;
+        let app_epoch = self
+            .state
+            .config
+            .auth_api
+            .app_epoch(&request.app_id)
+            .await?;
+        if app_epoch != 0 {
+            bail!("epoch-aware applications must use GetSealedEnvPubKey");
+        }
+        let secret =
+            kdf::derive_dh_secret(&root.ca.key, &[&request.app_id[..], b"env-encrypt-key"])
+                .context("Failed to derive env encrypt key")?;
         let secret = x25519_dalek::StaticSecret::from(secret);
         let pubkey = x25519_dalek::PublicKey::from(&secret);
 
@@ -734,7 +772,13 @@ impl KmsRpc for RpcHandler {
         let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let secret = derive_sealed_env_key(root, &request.app_id)?;
+        let app_epoch = self
+            .state
+            .config
+            .auth_api
+            .app_epoch(&request.app_id)
+            .await?;
+        let secret = derive_sealed_env_key(root, &request.app_id, app_epoch)?;
         let public_key =
             x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
         let timestamp = std::time::SystemTime::now()
@@ -743,7 +787,7 @@ impl KmsRpc for RpcHandler {
             .as_secs();
         let mut message = Vec::with_capacity(8 + 32 + 8);
         message.extend_from_slice(&epoch.to_be_bytes());
-        message.extend_from_slice(&0u32.to_be_bytes());
+        message.extend_from_slice(&app_epoch.to_be_bytes());
         message.extend_from_slice(&public_key);
         message.extend_from_slice(&timestamp.to_be_bytes());
         let signature = sign_message(
@@ -753,9 +797,9 @@ impl KmsRpc for RpcHandler {
             &message,
         )?;
         Ok(SealedEnvPubKeyResponse {
-            app_epoch: 0,
             public_key: public_key.to_vec(),
             root_epoch: epoch,
+            app_epoch,
             timestamp,
             signature,
         })
@@ -847,12 +891,12 @@ impl KmsRpc for RpcHandler {
                 boot_info,
                 &request.vm_config,
                 Operation::AppGetCert,
-                None,
+                RequestedAppEpochs::default(),
             )
             .await?;
         ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
         let root = self.state.epoch_root(app_info.root_epoch)?;
-        let app_ca = self.derive_app_ca(&app_info.boot_info.app_id, root)?;
+        let app_ca = self.derive_app_ca(&app_info.boot_info.app_id, root, app_info.app_epoch)?;
         // Stamp the identity verified above, not the requester's own claims.
         // Runtime measurements (`false`) are what certificates have always carried.
         let cert_app_info = attestation
@@ -1588,13 +1632,47 @@ mod tests {
         let state = kms_state(dir.path(), "http://127.0.0.1:1");
         let root = state.epoch_root(0).unwrap();
         let app = [1; 20];
-        let sealed = derive_sealed_env_key(root, &app).unwrap();
-        let app_keys = derive_app_keys(root, &app, &[2; 20]).unwrap();
+        let sealed = derive_sealed_env_key(root, &app, 0).unwrap();
+        let app_keys = derive_app_keys(root, &app, &[2; 20], 0).unwrap();
         assert_eq!(sealed.as_slice(), app_keys.sealed_env_key);
         assert_ne!(sealed.as_slice(), app_keys.env_crypt_key);
         assert_ne!(sealed.as_slice(), app_keys.disk_crypt_key);
-        assert_ne!(sealed, derive_sealed_env_key(root, &[3; 20]).unwrap());
-        assert!(derive_sealed_env_key(root, &[1; 19]).is_err());
+        assert_ne!(sealed, derive_sealed_env_key(root, &[3; 20], 0).unwrap());
+        assert!(derive_sealed_env_key(root, &[1; 19], 0).is_err());
+    }
+
+    #[test]
+    fn app_epoch_derivation_is_separate_and_epoch_zero_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = kms_state(dir.path(), "http://127.0.0.1:1");
+        let root = state.epoch_root(0).unwrap();
+        let app = [1; 20];
+        let instance = [2; 20];
+        let zero = derive_app_keys(root, &app, &instance, 0).unwrap();
+        assert_eq!(
+            zero.disk_crypt_key,
+            kdf::derive_dh_secret(&root.ca.key, &[&app, &instance, b"app-disk-crypt-key"]).unwrap()
+        );
+        assert_eq!(
+            zero.env_crypt_key,
+            x25519_dalek::StaticSecret::from(
+                kdf::derive_dh_secret(&root.ca.key, &[&app, b"env-encrypt-key"]).unwrap()
+            )
+            .to_bytes()
+        );
+        for epoch in [1, 2, u32::MAX] {
+            let rotated = derive_app_keys(root, &app, &instance, epoch).unwrap();
+            let again = derive_app_keys(root, &app, &instance, epoch).unwrap();
+            assert_eq!(rotated.disk_crypt_key, again.disk_crypt_key);
+            assert_ne!(zero.disk_crypt_key, rotated.disk_crypt_key);
+            assert_ne!(zero.env_crypt_key, rotated.env_crypt_key);
+            assert_ne!(zero.sealed_env_key, rotated.sealed_env_key);
+            assert_ne!(zero.k256_key, rotated.k256_key);
+        }
+        assert_ne!(
+            derive_app_keys(root, &app, &instance, 1).unwrap().k256_key,
+            derive_app_keys(root, &app, &instance, 2).unwrap().k256_key
+        );
     }
 
     #[rocket::async_test]

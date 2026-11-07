@@ -266,7 +266,7 @@ impl AuthApi {
         if !operation.is_kms() {
             bail!("invalid KMS authorization operation");
         }
-        self.check_authorization(app_info, "authorizeKms", operation, requested_root_epoch)
+        self.check_authorization(app_info, "authorizeKms", operation, requested_root_epoch, None)
             .await
     }
 
@@ -275,11 +275,12 @@ impl AuthApi {
         app_info: &BootInfo,
         operation: Operation,
         requested_root_epoch: Option<u32>,
+        requested_app_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
         if operation.is_kms() {
             bail!("invalid app authorization operation");
         }
-        self.check_authorization(app_info, "authorizeApp", operation, requested_root_epoch)
+        self.check_authorization(app_info, "authorizeApp", operation, requested_root_epoch, requested_app_epoch)
             .await
     }
 
@@ -289,6 +290,7 @@ impl AuthApi {
         method: &str,
         operation: Operation,
         requested_root_epoch: Option<u32>,
+        requested_app_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -296,7 +298,8 @@ impl AuthApi {
             #[serde(flatten)]
             app_info: &'a BootInfo,
             operation: Operation,
-            requested_app_epoch: u32,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            requested_app_epoch: Option<u32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             requested_root_epoch: Option<u32>,
         }
@@ -317,12 +320,29 @@ impl AuthApi {
                     &AuthorizationRequest {
                         app_info,
                         operation,
-                        requested_app_epoch: 0,
+                        requested_app_epoch,
                         requested_root_epoch,
                     },
                     webhook.timeout,
                 )
                 .await
+            }
+        }
+    }
+
+    pub async fn app_epoch(&self, app_id: &[u8]) -> Result<u32> {
+        ensure_app_id_len(app_id)?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AppEpoch {
+            current_app_epoch: u32,
+        }
+        match self {
+            AuthApi::Dev { .. } => Ok(0),
+            AuthApi::Webhook { webhook } => {
+                let url = url_join(&webhook.url, &format!("app/0x{}", hex::encode(app_id)));
+                let response: AppEpoch = http_get(&url, webhook.timeout).await?;
+                Ok(response.current_app_epoch)
             }
         }
     }
@@ -734,7 +754,7 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
             } else {
-                auth.authorize_app(&boot_info(1), operation, None)
+                auth.authorize_app(&boot_info(1), operation, None, None)
                     .await
                     .unwrap();
             }
@@ -773,18 +793,18 @@ pub(crate) mod tests {
         let auth = webhook(url);
         let info = boot_info(50);
         let first = auth
-            .authorize_app(&info, Operation::AppGetKey, None)
+            .authorize_app(&info, Operation::AppGetKey, None, None)
             .await
             .unwrap();
         let second = auth
-            .authorize_app(&info, Operation::AppGetKey, None)
+            .authorize_app(&info, Operation::AppGetKey, None, None)
             .await
             .unwrap();
         assert!(first.is_allowed);
         assert!(!second.is_allowed);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
-        auth.authorize_app(&info, Operation::AppGetKey, Some(0))
+        auth.authorize_app(&info, Operation::AppGetKey, Some(0), Some(0))
             .await
             .unwrap();
         auth.authorize_kms(&info, Operation::KmsServe, None)
@@ -797,7 +817,6 @@ pub(crate) mod tests {
             .all(|(path, _)| path == "/authorizeApp"));
         assert_eq!(requests[3].0, "/authorizeKms");
         let mut expected = serde_json::to_value(info).unwrap();
-        expected["requestedAppEpoch"] = 0.into();
         expected["operation"] = "app_get_key".into();
         assert_eq!(requests[0].1, expected);
         assert_eq!(requests[2].1["requestedAppEpoch"], 0);
@@ -811,7 +830,7 @@ pub(crate) mod tests {
             r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
         ]);
         assert!(webhook(url)
-            .authorize_app(&boot_info(50), Operation::AppGetKey, None)
+            .authorize_app(&boot_info(50), Operation::AppGetKey, None, None)
             .await
             .is_err());
         assert_eq!(server.join().unwrap().len(), 1);

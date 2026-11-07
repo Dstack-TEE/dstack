@@ -73,6 +73,8 @@ struct LuksToken {
     pub keyslots: Vec<String>,
     #[serde(default)]
     pub root_epoch: Option<u32>,
+    #[serde(default)]
+    pub app_epoch: u32,
 }
 
 #[derive(Deserialize)]
@@ -205,11 +207,12 @@ fn run_with_input(mut command: Command, input: &[u8]) -> Result<Option<i32>> {
         .code())
 }
 
-pub(super) fn write_luks_root_epoch(device: &Path, epoch: u32) -> Result<()> {
+pub(super) fn write_luks_epochs(device: &Path, epoch: u32, app_epoch: u32) -> Result<()> {
     let token = serde_json::json!({
         "type": ROOT_EPOCH_TOKEN_TYPE,
         "keyslots": ["0"],
         "root_epoch": epoch,
+        "app_epoch": app_epoch,
     });
     let args = ["token", "import", "--token-id", "0", "--token-replace"];
     let code = run_with_input(cryptsetup(&args, device), token.to_string().as_bytes())?;
@@ -222,11 +225,12 @@ pub(super) fn write_luks_root_epoch(device: &Path, epoch: u32) -> Result<()> {
 /// Replace the keyslot 0 passphrase of a detached LUKS `header` and record
 /// `epoch` in it. The new key goes over stdin; the old one is written next to
 /// the header, which must be in a private in-memory directory.
-pub(super) fn rekey_luks_header(
+pub(super) fn rekey_luks_header_at_epochs(
     header: &Path,
     old_key: &str,
     new_key: &str,
     epoch: u32,
+    app_epoch: u32,
 ) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -252,7 +256,17 @@ pub(super) fn rekey_luks_header(
     if run_with_input(command, new_key.as_bytes())? != Some(0) {
         bail!("cryptsetup luksChangeKey failed");
     }
-    write_luks_root_epoch(header, epoch)
+    write_luks_epochs(header, epoch, app_epoch)
+}
+
+#[cfg(test)]
+fn write_luks_root_epoch(device: &Path, epoch: u32) -> Result<()> {
+    write_luks_epochs(device, epoch, 0)
+}
+
+#[cfg(test)]
+fn rekey_luks_header(header: &Path, old_key: &str, new_key: &str, epoch: u32) -> Result<()> {
+    rekey_luks_header_at_epochs(header, old_key, new_key, epoch, 0)
 }
 
 /// Set by luksFormat and cleared once the filesystem exists, so a disk still
@@ -265,12 +279,13 @@ pub(super) struct LuksHeaderState {
     pub(super) initializing: bool,
     /// Root epoch recorded in the dstack token; `None` means epoch 0.
     pub(super) root_epoch: Option<u32>,
+    pub(super) app_epoch: u32,
 }
 
 pub(super) fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<LuksHeaderState> {
     let primary = validate_single_luks2_header(&mut reader, 0)?;
     let secondary = validate_single_luks2_header(&mut reader, 1)?;
-    if primary.root_epoch != secondary.root_epoch {
+    if primary.root_epoch != secondary.root_epoch || primary.app_epoch != secondary.app_epoch {
         bail!("LUKS header copies disagree on the key epoch");
     }
     Ok(primary)
@@ -479,6 +494,7 @@ fn validate_single_luks2_header(
     Ok(LuksHeaderState {
         initializing,
         root_epoch,
+        app_epoch: tokens.get(&0).map(|token| token.app_epoch).unwrap_or(0),
     })
 }
 
@@ -491,7 +507,8 @@ fn test_validate_luks2_header() {
         state,
         LuksHeaderState {
             initializing: false,
-            root_epoch: None
+            root_epoch: None,
+            app_epoch: 0
         }
     );
     header_data[24..24 + LUKS_INITIALIZING_LABEL.len()]
@@ -625,6 +642,20 @@ fn test_disk_key_migration_with_cryptsetup() {
     assert!(backup.success());
     let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
     assert_eq!(state.root_epoch, Some(3));
+    rekey_luks_header_at_epochs(&header, "new", "app-epoch-one", 3, 1).unwrap();
+    let rotated = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
+    assert_eq!(rotated.root_epoch, Some(3));
+    assert_eq!(rotated.app_epoch, 1);
+    assert!(cryptsetup(
+        &["luksHeaderRestore", "--batch-mode", "--header-backup-file"],
+        &header
+    )
+    .arg(&image)
+    .status()
+    .unwrap()
+    .success());
+    assert!(!unlocks("new"));
+    assert!(unlocks("app-epoch-one"));
 }
 
 #[test]

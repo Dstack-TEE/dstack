@@ -28,8 +28,8 @@ use dstack_types::{
 };
 use fs_err as fs;
 use luks::{
-    rekey_luks_header, validate_luks2_headers, write_luks_root_epoch, LUKS_INITIALIZING_LABEL,
-    PAYLOAD_OFFSET,
+    rekey_luks_header_at_epochs, validate_luks2_headers, write_luks_epochs,
+    LUKS_INITIALIZING_LABEL, PAYLOAD_OFFSET,
 };
 use ra_rpc::{
     client::{CertInfo, RaClient, RaClientConfig},
@@ -98,7 +98,9 @@ mod config_id_verifier;
 mod luks;
 mod sealed_env;
 
-use sealed_env::{env_crypt_key, seal_env, sealed_env_info, SealedEnv};
+#[cfg(test)]
+use sealed_env::seal_env;
+use sealed_env::{env_crypt_key, seal_env_at_epochs, sealed_env_info_at_epochs, SealedEnv};
 
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
@@ -2404,6 +2406,7 @@ impl HostShared {
         &self,
         kms_url: String,
         root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
         trusted_ca: Option<String>,
     ) -> Result<(AppKeys, Vec<u8>)> {
         info!("Requesting app keys of root epoch {root_epoch:?} from KMS: {kms_url}");
@@ -2412,6 +2415,7 @@ impl HostShared {
         let response = request_app_keys(
             kms_url.clone(),
             rpc::GetAppKeyRequest {
+                app_epoch,
                 api_version: 1,
                 vm_config: self.sys_config.vm_config.clone(),
                 root_epoch,
@@ -2439,6 +2443,7 @@ impl HostShared {
             k256_signature: response.k256_signature,
             gateway_app_id: response.gateway_app_id,
             key_provider: KeyProvider::Kms {
+                app_epoch: response.app_epoch,
                 url: kms_url,
                 pubkey: root_pubkey,
                 root_epoch: served,
@@ -2449,12 +2454,22 @@ impl HostShared {
 
     /// Request the app keys of an older root epoch from the KMS that served
     /// `keys`.
-    async fn request_historical_keys(&self, keys: &AppKeys, epoch: u32) -> Result<AppKeys> {
+    async fn request_historical_keys(
+        &self,
+        keys: &AppKeys,
+        epoch: u32,
+        app_epoch: u32,
+    ) -> Result<AppKeys> {
         let KeyProvider::Kms { url, .. } = &keys.key_provider else {
             bail!("only KMS-provided keys have older root epochs");
         };
         Ok(self
-            .request_app_keys_from_kms(url.clone(), Some(epoch), Some(keys.ca_cert.clone()))
+            .request_app_keys_from_kms(
+                url.clone(),
+                Some(epoch),
+                Some(app_epoch),
+                Some(keys.ca_cert.clone()),
+            )
             .await?
             .0)
     }
@@ -2531,7 +2546,7 @@ impl<'a> Stage0<'a> {
             let kms_url = kms_rpc_url(kms_url);
             match self
                 .shared
-                .request_app_keys_from_kms(kms_url.clone(), None, None)
+                .request_app_keys_from_kms(kms_url.clone(), None, None, None)
                 .await
             {
                 Ok((keys, os_image_hash)) => {
@@ -2985,8 +3000,9 @@ impl<'a> Stage0<'a> {
         {
             bail!("Failed to setup luks volume");
         }
-        if let Some(epoch) = kms_root_epoch(keys).filter(|epoch| *epoch > 0) {
-            write_luks_root_epoch(root_hd, epoch)?;
+        if let Some(epoch) = kms_root_epoch(keys).filter(|epoch| *epoch > 0 || keys.app_epoch() > 0)
+        {
+            write_luks_epochs(root_hd, epoch, keys.app_epoch())?;
         }
         self.open_encrypted_volume(keys, name, discard).await?;
         Ok(())
@@ -3003,16 +3019,20 @@ impl<'a> Stage0<'a> {
         &self,
         keys: &AppKeys,
         header: &Path,
-        from: u32,
-        to: u32,
+        from: (u32, u32),
+        to: (u32, u32),
     ) -> Result<()> {
-        info!("re-keying the data disk from root epoch {from} to {to}");
-        let old = self.shared.request_historical_keys(keys, from).await?;
-        rekey_luks_header(
+        info!("re-keying the data disk from epochs {from:?} to {to:?}");
+        let old = self
+            .shared
+            .request_historical_keys(keys, from.0, from.1)
+            .await?;
+        rekey_luks_header_at_epochs(
             header,
             &hex::encode(&old.disk_crypt_key),
             &hex::encode(&keys.disk_crypt_key),
-            to,
+            to.0,
+            to.1,
         )?;
         let root_hd = &self.args.device;
         cmd!(cryptsetup luksHeaderRestore --batch-mode --header-backup-file=$header $root_hd)
@@ -3056,16 +3076,25 @@ impl<'a> Stage0<'a> {
         let mut header = validate()?;
         if let Some(current) = kms_root_epoch(keys) {
             let stored = header.root_epoch.unwrap_or(0);
-            if stored > current {
-                bail!("the data disk is at root epoch {stored}, newer than the current {current}");
+            let current_app = keys.app_epoch();
+            if stored > current || header.app_epoch > current_app {
+                bail!(
+                    "the data disk epochs ({stored}, {}) exceed current ({current}, {current_app})",
+                    header.app_epoch
+                );
             }
-            if stored < current {
-                self.migrate_disk_key(keys, Path::new(&in_mem_hdr), stored, current)
-                    .await
-                    .context("failed to migrate the data disk key")?;
+            if stored != current || header.app_epoch != current_app {
+                self.migrate_disk_key(
+                    keys,
+                    Path::new(&in_mem_hdr),
+                    (stored, header.app_epoch),
+                    (current, current_app),
+                )
+                .await
+                .context("failed to migrate the data disk key")?;
                 header = validate()?;
-                if header.root_epoch != Some(current) {
-                    bail!("the re-keyed LUKS header does not record root epoch {current}");
+                if header.root_epoch != Some(current) || header.app_epoch != current_app {
+                    bail!("the re-keyed LUKS header does not record epochs ({current}, {current_app})");
                 }
             }
         }
@@ -3329,7 +3358,7 @@ impl Stage1<'_> {
         if let Some(sealed_env) = &self.shared.sealed_env {
             let envelope: SealedEnv =
                 serde_json::from_slice(sealed_env).context("failed to parse sealed env")?;
-            if envelope.version != 1 || envelope.app_epoch != 0 {
+            if envelope.version != 1 {
                 bail!("unsupported sealed env version: {}", envelope.version);
             }
             if envelope.enc.len() != 32 {
@@ -3337,31 +3366,40 @@ impl Stage1<'_> {
             }
             let payload = [envelope.enc, envelope.ciphertext].concat();
             let current = self.keys.root_epoch();
-            if envelope.root_epoch > current {
+            if envelope.root_epoch > current || envelope.app_epoch > self.keys.app_epoch() {
                 bail!(
                     "sealed env epoch {} exceeds current epoch {current}",
                     envelope.root_epoch
                 );
             }
             let historical;
-            let secret = if envelope.root_epoch == current {
+            let secret = if envelope.root_epoch == current
+                && envelope.app_epoch == self.keys.app_epoch()
+            {
                 current_secret
             } else {
                 historical = self
                     .shared
-                    .request_historical_keys(&self.keys, envelope.root_epoch)
+                    .request_historical_keys(&self.keys, envelope.root_epoch, envelope.app_epoch)
                     .await?;
                 historical.sealed_env_key.as_slice()
             };
             let plaintext = crate::crypto::sealed_env_decrypt(
                 secret,
-                &sealed_env_info(&envelope.root_epoch),
+                &sealed_env_info_at_epochs(envelope.root_epoch, envelope.app_epoch),
                 &payload,
             )?;
-            if envelope.root_epoch == self.keys.root_epoch() {
+            if envelope.root_epoch == self.keys.root_epoch()
+                && envelope.app_epoch == self.keys.app_epoch()
+            {
                 return Ok((plaintext, Vec::new()));
             }
-            let sealed = seal_env(current_secret, self.keys.root_epoch(), &plaintext)?;
+            let sealed = seal_env_at_epochs(
+                current_secret,
+                self.keys.root_epoch(),
+                self.keys.app_epoch(),
+                &plaintext,
+            )?;
             return Ok((plaintext, sealed));
         }
         let ciphertext = &self.shared.encrypted_env;
@@ -3369,21 +3407,27 @@ impl Stage1<'_> {
         let plaintext = match dh_decrypt(current_key, ciphertext) {
             Ok(plaintext) => return Ok((plaintext, Vec::new())),
             Err(_) => {
-                decrypt_historical_env(
-                    ciphertext,
-                    (0..self.keys.root_epoch()).rev(),
-                    async |epoch| {
-                        Ok(self
-                            .shared
-                            .request_historical_keys(&self.keys, epoch)
-                            .await?
-                            .env_crypt_key)
-                    },
-                )
+                let current = self.keys.root_epoch();
+                // Legacy encryption is only issued at app epoch zero.
+                let epochs = (0..=current)
+                    .rev()
+                    .filter(|root| *root != current || self.keys.app_epoch() != 0);
+                decrypt_historical_env(ciphertext, epochs, async |root| {
+                    Ok(self
+                        .shared
+                        .request_historical_keys(&self.keys, root, 0)
+                        .await?
+                        .env_crypt_key)
+                })
                 .await?
             }
         };
-        let sealed = seal_env(current_secret, self.keys.root_epoch(), &plaintext)?;
+        let sealed = seal_env_at_epochs(
+            current_secret,
+            self.keys.root_epoch(),
+            self.keys.app_epoch(),
+            &plaintext,
+        )?;
         Ok((plaintext, sealed))
     }
 
@@ -4378,6 +4422,7 @@ mod sealed_env_file_tests {
                 gateway_app_id: String::new(),
                 ca_cert: String::new(),
                 key_provider: KeyProvider::Kms {
+                    app_epoch: 0,
                     url: "http://127.0.0.1:1".into(),
                     pubkey: vec![],
                     root_epoch: 3,
@@ -4461,6 +4506,51 @@ mod sealed_env_file_tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn sealed_env_binds_both_epochs_and_rejects_mislabeled_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        };
+        let plaintext = br#"{"env":[{"key":"VALUE","value":"epoch-test"}]}"#;
+        let sealed = seal_env_at_epochs(&[7; 32], 3, 2, plaintext).unwrap();
+        let mut current = stage(&args, Some(sealed.clone()), vec![]);
+        if let KeyProvider::Kms { app_epoch, .. } = &mut current.keys.key_provider {
+            *app_epoch = 2;
+        }
+        let (opened, update) = current.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+        for (field, value) in [
+            ("version", 2),
+            ("root_epoch", 2),
+            ("app_epoch", 1),
+            ("app_epoch", 3),
+        ] {
+            let mut tampered: Value = serde_json::from_slice(&sealed).unwrap();
+            tampered[field] = value.into();
+            current.shared.sealed_env = Some(serde_json::to_vec(&tampered).unwrap());
+            assert!(current.decrypt_env().await.is_err());
+        }
+        let envelope: SealedEnv = serde_json::from_slice(&sealed).unwrap();
+        assert_eq!(envelope.version, 1);
+        let payload = [envelope.enc.clone(), envelope.ciphertext.clone()].concat();
+        assert!(crate::crypto::sealed_env_decrypt(
+            &[7; 32],
+            &sealed_env_info_at_epochs(3, 1),
+            &payload
+        )
+        .is_err());
+        assert!(crate::crypto::sealed_env_decrypt(
+            &[7; 32],
+            &sealed_env_info_at_epochs(2, 2),
+            &payload
+        )
+        .is_err());
     }
 
     #[test]

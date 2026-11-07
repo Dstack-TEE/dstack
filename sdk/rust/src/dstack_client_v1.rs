@@ -95,7 +95,7 @@ impl DstackClientV1 {
     /// default and no `k256` alias -- a typo is an error rather than a key of
     /// the wrong type under a name the caller misread.
     pub async fn get_key(&self, domain: &str, algorithm: &str) -> Result<GetKeyResponse> {
-        self.request_key(domain, algorithm, None).await
+        self.request_key(domain, algorithm, None, None).await
     }
 
     /// [`Self::get_key`] under the KMS root key epoch `root_epoch` instead of
@@ -108,7 +108,20 @@ impl DstackClientV1 {
         algorithm: &str,
         root_epoch: u32,
     ) -> Result<GetKeyResponse> {
-        self.request_key(domain, algorithm, Some(root_epoch)).await
+        self.request_key(domain, algorithm, Some(root_epoch), None)
+            .await
+    }
+
+    /// Select root and application epochs independently; omitted values use this CVM's current keys.
+    pub async fn get_key_at_epochs(
+        &self,
+        domain: &str,
+        algorithm: &str,
+        root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
+    ) -> Result<GetKeyResponse> {
+        self.request_key(domain, algorithm, root_epoch, app_epoch)
+            .await
     }
 
     async fn request_key(
@@ -116,6 +129,7 @@ impl DstackClientV1 {
         domain: &str,
         algorithm: &str,
         root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
     ) -> Result<GetKeyResponse> {
         if algorithm.is_empty() {
             anyhow::bail!("algorithm is required, use `secp256k1` or `ed25519`")
@@ -124,8 +138,17 @@ impl DstackClientV1 {
         if let Some(root_epoch) = root_epoch {
             data["root_epoch"] = root_epoch.into();
         }
+        if let Some(app_epoch) = app_epoch {
+            data["app_epoch"] = app_epoch.into();
+        }
         let response = self.send_rpc_request("GetKey", &data).await?;
-        Ok(serde_json::from_value::<GetKeyResponse>(response)?)
+        let response = serde_json::from_value::<GetKeyResponse>(response)?;
+        if root_epoch.is_some_and(|epoch| epoch != response.root_epoch)
+            || app_epoch.is_some_and(|epoch| epoch != response.app_epoch)
+        {
+            anyhow::bail!("GetKey returned different epochs than requested");
+        }
+        Ok(response)
     }
 
     /// Produce a versioned attestation over `report_data`.

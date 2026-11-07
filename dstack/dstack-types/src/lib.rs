@@ -2412,6 +2412,13 @@ pub struct AppKeys {
 }
 
 impl AppKeys {
+    pub fn app_epoch(&self) -> u32 {
+        match self.key_provider {
+            KeyProvider::Kms { app_epoch, .. } => app_epoch,
+            _ => 0,
+        }
+    }
+
     /// KMS root epoch the keys were derived from; 0 for other key providers,
     /// which have a single root.
     pub fn root_epoch(&self) -> u32 {
@@ -2447,6 +2454,8 @@ pub enum KeyProvider {
         /// KMS root key epoch the keys were derived from.
         #[serde(default)]
         root_epoch: u32,
+        #[serde(default)]
+        app_epoch: u32,
     },
 }
 
@@ -2509,7 +2518,7 @@ mod key_provider_tests {
         assert_eq!(
             serde_json::to_value(provider).unwrap(),
             serde_json::json!({
-                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd", "root_epoch": 0 }
+                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd", "root_epoch": 0, "app_epoch": 0 }
             })
         );
     }
@@ -2526,6 +2535,7 @@ mod key_provider_tests {
         assert_eq!(tpm.kind(), KeyProviderKind::Tpm);
 
         let kms = KeyProvider::Kms {
+            app_epoch: 0,
             url: "https://kms.example".into(),
             pubkey: vec![0xab; 32],
             root_epoch: 0,

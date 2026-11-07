@@ -655,6 +655,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
     let response = cert_client::request_app_keys(
         kms_url.clone(),
         dstack_kms_rpc::GetAppKeyRequest {
+            app_epoch: None,
             api_version: 1,
             vm_config: String::new(),
             root_epoch: None,
@@ -682,6 +683,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         k256_signature: response.k256_signature,
         gateway_app_id: response.gateway_app_id,
         key_provider: KeyProvider::Kms {
+            app_epoch: response.app_epoch,
             url: kms_url,
             pubkey: root_pubkey,
             root_epoch: response.root_epoch,

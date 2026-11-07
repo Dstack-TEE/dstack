@@ -7,6 +7,7 @@
 pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
+import "./IAppEpoch.sol";
 import "./IAppAuthBasicManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
@@ -19,7 +20,8 @@ contract DstackApp is
     UUPSUpgradeable,
     ERC165Upgradeable,
     IAppAuth,
-    IAppAuthBasicManagement
+    IAppAuthBasicManagement,
+    IAppEpoch
 {
     // Mapping of allowed compose hashes for this app
     mapping(bytes32 => bool) public allowedComposeHashes;
@@ -35,6 +37,9 @@ contract DstackApp is
 
     // Whether to require TCB status to be UpToDate
     bool public requireTcbUpToDate;
+
+    uint256 public override currentAppEpoch;
+    event AppEpochAdvanced(uint256 indexed epoch);
 
     // Additional events specific to DstackApp
     event UpgradesDisabled();
@@ -128,7 +133,7 @@ contract DstackApp is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return interfaceId == 0x1e079198 // IAppAuth
+        return interfaceId == type(IAppEpoch).interfaceId || interfaceId == 0x1e079198 // IAppAuth
             || interfaceId == 0x8fd37527 // IAppAuthBasicManagement
             || super.supportsInterface(interfaceId);
     }
@@ -215,6 +220,15 @@ contract DstackApp is
         return (true, "");
     }
 
+    /// Advance only from the epoch the owner intended, rejecting stale transactions.
+    function advanceAppEpoch(uint256 expectedCurrentEpoch) external onlyOwner {
+        require(currentAppEpoch == expectedCurrentEpoch, "App epoch changed");
+        require(currentAppEpoch < type(uint32).max, "App epoch exhausted");
+        currentAppEpoch++;
+        emit AppEpochAdvanced(currentAppEpoch);
+        _emitPolicy("app-epoch", bytes32(currentAppEpoch), true);
+    }
+
     // Function to permanently disable upgrades
     function disableUpgrades() external onlyOwner {
         _upgradesDisabled = true;
@@ -223,5 +237,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[49] private __gap;
+    uint256[48] private __gap;
 }

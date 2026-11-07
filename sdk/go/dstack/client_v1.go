@@ -44,6 +44,7 @@ type GetKeyV1Response struct {
 	SignatureChain [][]byte
 	// KMS root key epoch the key was derived from.
 	RootEpoch uint32
+	AppEpoch  uint32
 }
 
 // Response from a v1 attestation request.
@@ -444,7 +445,7 @@ func (c *DstackClientV1) IssueCert(ctx context.Context, options ...IssueCertV1Op
 // Derivation is flat -- `a/b` is not a child of `a` -- and binds both arguments,
 // so these keys differ from the v0 keys of the same name.
 func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm string) (*GetKeyV1Response, error) {
-	return c.getKey(ctx, domain, algorithm, nil)
+	return c.getKey(ctx, domain, algorithm, nil, nil)
 }
 
 // GetKeyAtRootEpoch is GetKey under the KMS root key epoch rootEpoch instead of
@@ -452,10 +453,15 @@ func (c *DstackClientV1) GetKey(ctx context.Context, domain string, algorithm st
 // to reach a key from before a KMS root key rotation, for example to migrate
 // off it.
 func (c *DstackClientV1) GetKeyAtRootEpoch(ctx context.Context, domain string, algorithm string, rootEpoch uint32) (*GetKeyV1Response, error) {
-	return c.getKey(ctx, domain, algorithm, &rootEpoch)
+	return c.getKey(ctx, domain, algorithm, &rootEpoch, nil)
 }
 
-func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm string, rootEpoch *uint32) (*GetKeyV1Response, error) {
+// GetKeyAtEpochs selects the two independent key epochs. Nil means current.
+func (c *DstackClientV1) GetKeyAtEpochs(ctx context.Context, domain, algorithm string, rootEpoch, appEpoch *uint32) (*GetKeyV1Response, error) {
+	return c.getKey(ctx, domain, algorithm, rootEpoch, appEpoch)
+}
+
+func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm string, rootEpoch *uint32, appEpoch *uint32) (*GetKeyV1Response, error) {
 	if algorithm == "" {
 		return nil, fmt.Errorf("algorithm is required, use `secp256k1` or `ed25519`")
 	}
@@ -468,6 +474,9 @@ func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm st
 		payload["root_epoch"] = *rootEpoch
 	}
 
+	if appEpoch != nil {
+		payload["app_epoch"] = *appEpoch
+	}
 	data, err := c.sendRPCRequest(ctx, "/v1/GetKey", payload)
 	if err != nil {
 		return nil, err
@@ -482,6 +491,7 @@ func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm st
 		PublicKey      *string    `json:"public_key"`
 		SignatureChain *[]*string `json:"signature_chain"`
 		RootEpoch      uint32     `json:"root_epoch"`
+		AppEpoch       uint32     `json:"app_epoch"`
 	}
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, err
@@ -507,11 +517,15 @@ func (c *DstackClientV1) getKey(ctx context.Context, domain string, algorithm st
 		}
 	}
 
+	if (rootEpoch != nil && response.RootEpoch != *rootEpoch) || (appEpoch != nil && response.AppEpoch != *appEpoch) {
+		return nil, fmt.Errorf("GetKey returned different epochs than requested")
+	}
 	return &GetKeyV1Response{
 		Key:            key,
 		PublicKey:      publicKey,
 		SignatureChain: chain,
 		RootEpoch:      response.RootEpoch,
+		AppEpoch:       response.AppEpoch,
 	}, nil
 }
 

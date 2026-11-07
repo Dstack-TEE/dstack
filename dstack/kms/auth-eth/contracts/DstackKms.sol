@@ -8,6 +8,8 @@ pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
+import "./IAppEpoch.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -393,6 +395,13 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         _emitPolicy("os-image", osImageHash, false);
     }
 
+    /// Legacy policies have epoch zero; an advertised epoch getter must succeed.
+    function currentAppEpoch(address appId) public view returns (uint256) {
+        if (!registeredApps[appId] || appId.code.length == 0) return 0;
+        if (!ERC165Checker.supportsInterface(appId, type(IAppEpoch).interfaceId)) return 0;
+        return IAppEpoch(appId).currentAppEpoch();
+    }
+
     /// Authorize an attested identity and return the root epoch from the same state.
     /// The caller selects KMS or app policy; KMS authorization requires the proxy app ID.
     function authorizeKms(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory) {
@@ -412,6 +421,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         returns (AuthorizationResult memory result)
     {
         result.gatewayAppId = gatewayAppId;
+        result.currentAppEpoch = isKms ? 0 : currentAppEpoch(request.appInfo.appId);
         if (!(isKms
                     ? AuthorizationOperation.isKms(request.operation)
                     : AuthorizationOperation.isApp(request.operation))) {
@@ -431,8 +441,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             result.rejectionReason = "Requested root epoch is not active";
             return result;
         }
-        if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value != 0) {
-            result.rejectionReason = "Requested app epoch must be zero";
+        if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value > result.currentAppEpoch) {
+            result.rejectionReason = "Requested app epoch is not active";
             return result;
         }
         AppInfo calldata appInfo = request.appInfo;
@@ -490,6 +500,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         override
         returns (bool isAllowed, string memory reason)
     {
+        if (currentAppEpoch(bootInfo.appId) != 0) {
+            return (false, "App epoch requires epoch-aware authorization");
+        }
         return _isAppAllowed(bootInfo);
     }
 

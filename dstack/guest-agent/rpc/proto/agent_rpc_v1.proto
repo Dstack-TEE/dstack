@@ -194,6 +194,7 @@ message GetKeyRequest {
   // epoch only to reach a key from before a KMS root key rotation, for example
   // to migrate data or assets off it.
   optional uint32 root_epoch = 3;
+  optional uint32 app_epoch = 4;
 }
 
 message GetKeyResponse {
@@ -217,6 +218,7 @@ message GetKeyResponse {
   // KMS root key epoch the key was derived from. Link [1] is signed by that
   // epoch's KMS root key.
   uint32 root_epoch = 4;
+  uint32 app_epoch = 5;
 }
 
 // ---------------------------------------------------------------------------
