@@ -249,11 +249,17 @@ impl Keys {
         domain: &str,
         pccs_url: Option<String>,
     ) -> Result<Self> {
+        let bootstrap = RaClient::new(other_kms_url.to_string(), true)?;
+        let tmp_ca = KmsClient::new(bootstrap).get_temp_ca_cert().await?;
+        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
         let attestation_slot = Arc::new(Mutex::new(None::<VerifiedAttestation>));
         let attestation_slot_out = attestation_slot.clone();
         let client = RaClientConfig::builder()
             .tls_no_check(true)
             .remote_uri(other_kms_url.to_string())
+            .tls_built_in_root_certs(false)
+            .tls_client_cert(ra_cert)
+            .tls_client_key(ra_key)
             .cert_validator(Box::new(move |info: Option<CertInfo>| {
                 let Some(info) = info else {
                     bail!("Source KMS did not present a TLS certificate");
@@ -270,13 +276,13 @@ impl Keys {
             .maybe_pccs_url(pccs_url.clone())
             .build()
             .into_client()?;
-        let mut kms_client = KmsClient::new(client);
-
-        let tmp_ca = kms_client.get_temp_ca_cert().await?;
-        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key).await?;
-        let ra_client = RaClient::new_mtls(other_kms_url.into(), ra_cert, ra_key, pccs_url)
-            .context("Failed to create client")?;
-        kms_client = KmsClient::new(ra_client);
+        let info = dstack_client().info().await.context("Failed to get info")?;
+        let keys_res = KmsClient::new(client)
+            .get_kms_key(GetKmsKeyRequest {
+                vm_config: info.vm_config,
+            })
+            .await?;
+        // Only trust attestation from the connection that returned these keys.
         let source_attestation = attestation_slot
             .lock()
             .map_err(|_| anyhow::anyhow!("source attestation mutex poisoned"))?
@@ -285,13 +291,6 @@ impl Keys {
         ensure_kms_allowed(cfg, &source_attestation)
             .await
             .context("Source KMS is not allowed for onboarding")?;
-
-        let info = dstack_client().info().await.context("Failed to get info")?;
-        let keys_res = kms_client
-            .get_kms_key(GetKmsKeyRequest {
-                vm_config: info.vm_config,
-            })
-            .await?;
         if keys_res.keys.len() != 1 {
             return Err(anyhow::anyhow!("Invalid keys"));
         }

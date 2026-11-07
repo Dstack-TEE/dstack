@@ -13,6 +13,7 @@ license.workspace = true
 anyhow.workspace = true
 prpc.workspace = true
 rocket = { workspace = true, features = ["mtls"], optional = true }
+rustls = { workspace = true, optional = true }
 serde_json.workspace = true
 tracing.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["rustls-tls", "charset"], optional = true }
@@ -28,5 +29,9 @@ or-panic.workspace = true
 [features]
 default = ["rocket", "client"]
 rocket = ["dep:rocket", "dep:rocket-vsock-listener"]
-client = ["reqwest"]
+client = ["reqwest", "dep:rustls"]
 openapi = ["dep:prost-types"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
+tokio-rustls.workspace = true
