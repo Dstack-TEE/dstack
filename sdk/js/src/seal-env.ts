@@ -29,17 +29,20 @@ export async function sealEnv(
   envs: EnvVar[],
   publicKeyHex: string,
   rootEpoch: number,
+  appEpoch = 0,
 ): Promise<string> {
   if (!Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff) {
     throw new Error('rootEpoch must be a uint32')
   }
+  if (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff) throw new Error('appEpoch must be a uint32')
   const publicKey = await suite.kem.deserializePublicKey(hexToBytes(publicKeyHex))
-  const info = new TextEncoder().encode(`dstack-sealed-env-v1:${rootEpoch}`)
+  const info = new TextEncoder().encode(`dstack-sealed-env-v1:${rootEpoch}:${appEpoch}`)
   const plaintext = new TextEncoder().encode(JSON.stringify({ env: envs }))
   const { enc, ct } = await suite.seal({ recipientPublicKey: publicKey, info }, plaintext)
   return JSON.stringify({
     version: 1,
     root_epoch: rootEpoch,
+    app_epoch: appEpoch,
     enc: base64(enc),
     ciphertext: base64(ct),
   })

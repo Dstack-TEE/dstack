@@ -311,11 +311,13 @@ def cmd_switch_vmm(args):
     print(f"Switched to VMM {selected['id'][:8]} ({url})")
 
 
-def seal_env(envs, hex_public_key: str, root_epoch: int) -> str:
+def seal_env(envs, hex_public_key: str, root_epoch: int, app_epoch: int = 0) -> str:
     """Return hex-encoded SealedEnv JSON using RFC 9180 base mode."""
     from pyhpke import AEADId, CipherSuite, KDFId, KEMId
 
     validate_uint(root_epoch, 32, "root_epoch")
+    validate_uint(app_epoch, 32, "app_epoch")
+    info = f"dstack-sealed-env-v1:{root_epoch}:{app_epoch}"
     suite = CipherSuite.new(
         KEMId.DHKEM_X25519_HKDF_SHA256, KDFId.HKDF_SHA256, AEADId.AES256_GCM
     )
@@ -323,12 +325,13 @@ def seal_env(envs, hex_public_key: str, root_epoch: int) -> str:
         bytes.fromhex(hex_public_key.removeprefix("0x"))
     )
     enc, context = suite.create_sender_context(
-        public_key, info=f"dstack-sealed-env-v1:{root_epoch}".encode("utf-8")
+        public_key, info=info.encode("utf-8")
     )
     plaintext = json.dumps({"env": envs}).encode("utf-8")
     envelope = {
         "version": 1,
         "root_epoch": root_epoch,
+        "app_epoch": app_epoch,
         "enc": base64.b64encode(enc).decode("ascii"),
         "ciphertext": base64.b64encode(context.seal(plaintext, aad=b"")).decode(
             "ascii"
@@ -343,7 +346,7 @@ def validate_uint(value: int, bits: int, name: str) -> None:
 
 
 def verify_sealed_env_pubkey(
-    response: Dict, app_id: str, root_epoch: Optional[int] = None
+    response: Dict, app_id: str, root_epoch: Optional[int] = None, app_epoch: Optional[int] = None
 ) -> None:
     """Authenticate a SealedEnv key against the locally pinned epoch signers."""
     if not CRYPTO_AVAILABLE:
@@ -352,6 +355,12 @@ def verify_sealed_env_pubkey(
     public_key = bytes.fromhex(response["public_key"].removeprefix("0x"))
     signature = bytes.fromhex(response["signature"].removeprefix("0x"))
     epoch, timestamp = response["root_epoch"], response["timestamp"]
+    response_app_epoch = response.get("app_epoch", 0)
+    validate_uint(response_app_epoch, 32, "app_epoch")
+    if app_epoch is not None:
+        validate_uint(app_epoch, 32, "app_epoch")
+        if response_app_epoch != app_epoch:
+            raise ValueError("SealedEnv app epoch does not match the requested epoch")
     validate_uint(epoch, 32, "root_epoch")
     validate_uint(timestamp, 64, "timestamp")
     now = int(time.time())
@@ -369,6 +378,7 @@ def verify_sealed_env_pubkey(
         b"dstack-sealed-env-pubkey-v1:"
         + app_id_bytes
         + epoch.to_bytes(4, "big")
+        + response_app_epoch.to_bytes(4, "big")
         + public_key
         + timestamp.to_bytes(8, "big")
     )
@@ -853,12 +863,16 @@ class VmmCLI:
         app_id: str,
         kms_url: Optional[str] = None,
         root_epoch: Optional[int] = None,
+        app_epoch: Optional[int] = None,
     ) -> Optional[Dict]:
         """Return an authenticated key, or None only for an unsupported RPC."""
         params = {"app_id": app_id}
         if root_epoch is not None:
             validate_uint(root_epoch, 32, "root_epoch")
             params["root_epoch"] = root_epoch
+        if app_epoch is not None:
+            validate_uint(app_epoch, 32, "app_epoch")
+            params["app_epoch"] = app_epoch
         # KMS RA-TLS is authenticated by the pinned signer below. The VMM
         # path retains its configured TLS verification and authentication.
         client = VmmClient(kms_url, verify_tls=False) if kms_url else self.client
@@ -875,7 +889,7 @@ class VmmCLI:
             raise RuntimeError(f"GetSealedEnvPubKey failed with HTTP {status}")
         if not isinstance(response, dict):
             raise ValueError("Invalid GetSealedEnvPubKey response")
-        verify_sealed_env_pubkey(response, app_id, root_epoch)
+        verify_sealed_env_pubkey(response, app_id, root_epoch, app_epoch)
         return response
 
     def encrypt_env_payload(
@@ -886,7 +900,7 @@ class VmmCLI:
         key = self.get_sealed_env_pub_key(app_id, kms_url)
         if key is not None:
             return {
-                "sealed_env": seal_env(envs_list, key["public_key"], key["root_epoch"])
+                "sealed_env": seal_env(envs_list, key["public_key"], key["root_epoch"], key.get("app_epoch", 0))
             }
         public_key = self.get_app_env_encrypt_pub_key(app_id, kms_url)
         return {"encrypted_env": encrypt_env(envs_list, public_key)}

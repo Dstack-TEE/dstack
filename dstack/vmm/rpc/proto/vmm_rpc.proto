@@ -286,12 +286,15 @@ message ImageInfo {
   string description = 2;
   string version = 3;
   bool is_dev = 4;
+  // Whether this guest supports SealedEnv; absent means legacy encryption only.
+  bool sealed_env = 5;
 }
 
 // App identifier used for encrypting env vars and routing telemetry.
 message AppId {
   bytes app_id = 1;
   optional uint32 root_epoch = 2;
+  optional uint32 app_epoch = 3;
 }
 
 // Response with the KMS-backed public key used for env encryption plus audit signature.
@@ -300,6 +303,7 @@ message SealedEnvPubKeyResponse {
   uint32 root_epoch = 2;
   uint64 timestamp = 3;
   bytes signature = 4;
+  uint32 app_epoch = 5;
 }
 
 message PublicKeyResponse {

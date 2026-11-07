@@ -1070,6 +1070,7 @@ impl VmmRpc for RpcHandler {
                     name,
                     description: serde_json::to_string(&info).unwrap_or_default(),
                     version: info.version,
+                    sealed_env: info.sealed_env,
                     is_dev: info.is_dev,
                 })
                 .collect(),
@@ -1231,8 +1232,9 @@ impl VmmRpc for RpcHandler {
         let kms = self.kms_client()?;
         let response = kms
             .get_app_env_encrypt_pub_key(dstack_kms_rpc::AppId {
+                app_epoch: request.app_epoch,
                 app_id: request.app_id,
-                root_epoch: None,
+                root_epoch: request.root_epoch,
             })
             .await?;
         Ok(PublicKeyResponse {
@@ -1247,11 +1249,13 @@ impl VmmRpc for RpcHandler {
         let kms = self.kms_client()?;
         let response = kms
             .get_sealed_env_pub_key(dstack_kms_rpc::AppId {
+                app_epoch: request.app_epoch,
                 app_id: request.app_id,
                 root_epoch: request.root_epoch,
             })
             .await?;
         Ok(SealedEnvPubKeyResponse {
+            app_epoch: response.app_epoch,
             public_key: response.public_key,
             root_epoch: response.root_epoch,
             timestamp: response.timestamp,

@@ -15,5 +15,6 @@ pub mod tappd_client;
 
 pub mod sealed_env;
 pub use sealed_env::{
-    recover_sealed_env_public_key, seal_env, verify_sealed_env_public_key, SealedEnvPublicKey,
+    recover_sealed_env_public_key, seal_env, seal_env_at_epochs, verify_sealed_env_public_key,
+    verify_sealed_env_public_key_at_epochs, SealedEnvPublicKey,
 };

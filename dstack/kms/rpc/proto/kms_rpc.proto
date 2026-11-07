@@ -19,6 +19,7 @@ message GetAppKeyRequest {
 message AppId {
   bytes app_id = 1;
   optional uint32 root_epoch = 2;
+  optional uint32 app_epoch = 3;
 }
 
 message SealedEnvPubKeyResponse {
@@ -26,6 +27,7 @@ message SealedEnvPubKeyResponse {
   uint32 root_epoch = 2;
   uint64 timestamp = 3;
   bytes signature = 4;
+  uint32 app_epoch = 5;
 }
 
 message PublicKeyResponse {

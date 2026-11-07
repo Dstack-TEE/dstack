@@ -11,7 +11,8 @@
   "sealed_env": {
     "version": 1,
     "root_epoch": 3,
-    "enc": "YkqJCvA9NLRyffdPfAE/pf95HworwoJyO9IGVTPTs20=",
-    "ciphertext": "HPn9zLj74o9RkeKafcHkduDrMUZ+NLeOjzG1rFQC9hAmKhh4YmyKJ4cmjsWeFExAM4qPOUXHc0aZyVZ8qd9RL/Wz"
+    "app_epoch": 0,
+    "enc": "UDky3L18JX+ER+SvKjS84lCImL7hB1c384BHvYD5Y3M=",
+    "ciphertext": "kocgwHn2LYl16jj08iIT5e7BjaOtqDlDYBuFAJLa81MF4Gg9fnvSBqQteSGSLNWP3vKt2W6FOv9mMqJlHchFoioP"
   }
 }

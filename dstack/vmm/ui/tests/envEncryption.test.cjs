@@ -31,7 +31,7 @@ async function open(pair, bytes, epoch) {
   const pt = await suite.open({
     recipientKey: pair.privateKey,
     enc: Buffer.from(envelope.enc, 'base64'),
-    info: new TextEncoder().encode(`dstack-sealed-env-v1:${epoch ?? envelope.root_epoch}`),
+    info: new TextEncoder().encode(`dstack-sealed-env-v1:${epoch ?? envelope.root_epoch}:${envelope.app_epoch}`),
   }, Buffer.from(envelope.ciphertext, 'base64'));
   return JSON.parse(new TextDecoder().decode(pt));
 }
@@ -47,7 +47,7 @@ test('seals JSON bytes with HPKE, binds epoch, and rejects tampering', async () 
         return { ...response, root_epoch: epoch };
       },
       getAppEnvEncryptPubKey: noLegacy,
-    }, envs, appId, noLegacy);
+    }, envs, appId, noLegacy, true);
     assert.deepEqual(Object.keys(payload), ['sealed_env']);
     assert.deepEqual(await open(pair, payload.sealed_env), { env: envs });
     await assert.rejects(open(pair, payload.sealed_env, epoch === 0 ? 1 : 0));
@@ -57,6 +57,29 @@ test('seals JSON bytes with HPKE, binds epoch, and rejects tampering', async () 
     modified.ciphertext = ct.toString('base64');
     await assert.rejects(open(pair, new TextEncoder().encode(JSON.stringify(modified))));
   }
+});
+
+test('old or unknown images use legacy encryption even with a capable KMS', async () => {
+  for (const capability of [undefined, false]) {
+    const payload = await encryptEnvPayload({
+      getSealedEnvPubKey: async () => { throw new Error('must not request SealedEnv'); },
+      getAppEnvEncryptPubKey: async () => ({ public_key: new Uint8Array(32) }),
+    }, envs, appId, async () => new Uint8Array([7]), capability);
+    assert.deepEqual(payload, { encrypted_env: new Uint8Array([7]) });
+  }
+});
+
+test('uses and authenticates the app epoch returned by the KMS', async () => {
+  const { pair, response } = await recipient();
+  const payload = await encryptEnvPayload({
+    getSealedEnvPubKey: async () => ({ ...response, app_epoch: 2 }),
+    getAppEnvEncryptPubKey: noLegacy,
+  }, envs, appId, noLegacy, true);
+  assert.deepEqual(await open(pair, payload.sealed_env), { env: envs });
+  const envelope = JSON.parse(new TextDecoder().decode(payload.sealed_env));
+  assert.equal(envelope.app_epoch, 2);
+  envelope.app_epoch = 3;
+  await assert.rejects(open(pair, new TextEncoder().encode(JSON.stringify(envelope))));
 });
 
 test('falls back only on explicit missing RPC, including a forwarded KMS error', async () => {
@@ -76,7 +99,7 @@ test('falls back only on explicit missing RPC, including a forwarded KMS error',
       assert.deepEqual(entries, envs);
       assert.equal(key.length, 32);
       return new Uint8Array([1, 2, 3]);
-    });
+    }, true);
     assert.equal(legacyCalls, 1);
     assert.deepEqual(Object.keys(payload), ['encrypted_env']);
   }
@@ -93,7 +116,7 @@ test('network, HTTP, authentication and unrelated service errors never downgrade
     await assert.rejects(encryptEnvPayload({
       getSealedEnvPubKey: async () => { throw error; },
       getAppEnvEncryptPubKey: noLegacy,
-    }, envs, appId, noLegacy), (actual) => actual === error);
+    }, envs, appId, noLegacy, true), (actual) => actual === error);
   }
 });
 
@@ -108,7 +131,7 @@ test('invalid key or epoch never downgrades after a successful key RPC', async (
     await assert.rejects(encryptEnvPayload({
       getSealedEnvPubKey: async () => ({ ...response, ...invalid }),
       getAppEnvEncryptPubKey: async () => { legacyCalls++; return response; },
-    }, envs, appId, noLegacy));
+    }, envs, appId, noLegacy, true));
     assert.equal(legacyCalls, 0);
   }
 });
@@ -157,10 +180,12 @@ function consoleApp(response, unsupported = false) {
   return { manager, calls, alerts };
 }
 
-for (const unsupported of [false, true]) {
-  test(`browser bundle create and edit use ${unsupported ? 'explicit legacy fallback' : 'sealed_env'}`, async () => {
+for (const [unsupported, capability] of [[false, true], [true, true], [false, false]]) {
+  const legacy = unsupported || !capability;
+  test(`browser bundle create and edit: capability=${capability}, missing RPC=${unsupported}`, async () => {
     const { pair, response } = await recipient();
     const { manager, calls, alerts } = consoleApp(response, unsupported);
+    manager.availableImages.value = [{ name: 'test', sealed_env: capability }];
     Object.assign(manager.vmForm.value, {
       name: 'test', image: 'test', key_provider: 'kms', encryptedEnvs: envs,
       app_id: '',
@@ -169,16 +194,17 @@ for (const unsupported of [false, true]) {
     assert.deepEqual(alerts, []);
     const created = calls.find((call) => call.method === 'CreateVm').request;
     const expectedAppId = new Uint8Array(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(created.compose_file))).slice(0, 20);
-    assert.deepEqual(new Uint8Array(calls[0].request.app_id), expectedAppId);
+    if (capability) assert.deepEqual(new Uint8Array(calls[0].request.app_id), expectedAppId);
+    else assert.equal(calls[0].method, 'GetAppEnvEncryptPubKey');
     Object.assign(manager.updateDialog.value, {
       vm: { id: 'vm', app_id: '11'.repeat(20), configuration: {}, appCompose: { docker_compose_file: '' } },
-      resetSecrets: true, encryptedEnvs: [],
+      image: 'test', resetSecrets: true, encryptedEnvs: [],
     });
     await manager.updateVM();
     assert.deepEqual(alerts, []);
     const edited = calls.find((call) => call.method === 'UpdateVm').request;
     for (const [request, entries] of [[created, envs], [edited, []]]) {
-      if (unsupported) {
+      if (legacy) {
         assert.ok(request.encrypted_env.length > 44);
         assert.equal(request.sealed_env.length, 0);
       } else {

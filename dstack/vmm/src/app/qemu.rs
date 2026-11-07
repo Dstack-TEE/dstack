@@ -1487,6 +1487,7 @@ mod tests {
             },
             image: Image {
                 info: ImageInfo {
+                    sealed_env: false,
                     cmdline: Some("console=hvc0".into()),
                     kernel: "kernel".into(),
                     initrd: "initrd".into(),

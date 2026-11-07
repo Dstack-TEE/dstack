@@ -26,35 +26,39 @@ func TestSealEnvRoundTripAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name   string
-		envs   []dstack.EnvVar
-		epoch  uint32
-		prefix string
-		want   string
+		name     string
+		envs     []dstack.EnvVar
+		epoch    uint32
+		appEpoch uint32
+		prefix   string
+		want     string
 	}{
-		{"unicode", []dstack.EnvVar{{Key: "MESSAGE", Value: "Hello 世界"}}, 42, "", `{"env":[{"key":"MESSAGE","value":"Hello 世界"}]}`},
-		{"empty", []dstack.EnvVar{}, 0, "0x", `{"env":[]}`},
-		{"nil_max_epoch", nil, ^uint32(0), "", `{"env":[]}`},
+		{"unicode", []dstack.EnvVar{{Key: "MESSAGE", Value: "Hello 世界"}}, 42, 0, "", `{"env":[{"key":"MESSAGE","value":"Hello 世界"}]}`},
+		{"app_epoch", nil, 42, 2, "", `{"env":[]}`},
+		{"empty", []dstack.EnvVar{}, 0, 0, "0x", `{"env":[]}`},
+		{"nil_max_epoch", nil, ^uint32(0), 0, "", `{"env":[]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sealed, err := dstack.SealEnv(tc.envs, tc.prefix+hex.EncodeToString(key), tc.epoch)
+			sealed, err := dstack.SealEnvAtEpochs(tc.envs, tc.prefix+hex.EncodeToString(key), tc.epoch, tc.appEpoch)
 			if err != nil {
 				t.Fatal(err)
 			}
 			var envelope struct {
 				Version    uint32 `json:"version"`
 				RootEpoch  uint32 `json:"root_epoch"`
+				AppEpoch   uint32 `json:"app_epoch"`
 				Enc        []byte `json:"enc"`
 				Ciphertext []byte `json:"ciphertext"`
 			}
 			if err := json.Unmarshal([]byte(sealed), &envelope); err != nil {
 				t.Fatal(err)
 			}
-			if envelope.Version != 1 || envelope.RootEpoch != tc.epoch || len(envelope.Enc) != 32 {
+			if envelope.Version != 1 || envelope.AppEpoch != tc.appEpoch || envelope.RootEpoch != tc.epoch || len(envelope.Enc) != 32 {
 				t.Fatal("invalid sealed env envelope")
 			}
 			open := func(enc, ciphertext []byte, epoch uint32, aad []byte) ([]byte, error) {
-				receiver, err := suite.NewReceiver(privateKey, []byte(fmt.Sprintf("dstack-sealed-env-v1:%d", epoch)))
+				info := fmt.Sprintf("dstack-sealed-env-v1:%d:%d", epoch, tc.appEpoch)
+				receiver, err := suite.NewReceiver(privateKey, []byte(info))
 				if err != nil {
 					return nil, err
 				}

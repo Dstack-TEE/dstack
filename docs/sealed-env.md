@@ -1,7 +1,7 @@
 # Sealed environment variables
 
 SealedEnv protects environment variables with HPKE and identifies the KMS root
-key epoch needed to decrypt them. Plaintext remains inside the client and CVM;
+and application key epochs needed to decrypt them. Plaintext remains inside the client and CVM;
 the VMM stores and forwards ciphertext.
 
 ## Wire format
@@ -9,14 +9,14 @@ the VMM stores and forwards ciphertext.
 The `.sealed-env` file contains UTF-8 JSON:
 
 ```json
-{"version":1,"root_epoch":3,"enc":"<base64>","ciphertext":"<base64>"}
+{"version":1,"root_epoch":3,"app_epoch":0,"enc":"<base64>","ciphertext":"<base64>"}
 ```
 
 Version 1 fixes RFC 9180 Base mode with DHKEM(X25519, HKDF-SHA256),
 HKDF-SHA256, and AES-256-GCM. `enc` is a 32-byte encapsulated key; `ciphertext`
 includes the 16-byte authentication tag. Binary fields use standard padded
-Base64. HPKE `info` is UTF-8 `dstack-sealed-env-v1:N`, where `N` is the canonical
-decimal `root_epoch` uint32, with no leading zeros. AAD is empty. Unknown envelope
+Base64. HPKE `info` is UTF-8 `dstack-sealed-env-v1:R:A`, where `R` and `A` are the canonical
+decimal uint32 root and app epochs, with no leading zeros. AAD is empty. Unknown envelope
 versions are rejected; extra JSON fields may be ignored. This provides
 confidentiality, not authentication of the person uploading the environment.
 
@@ -31,9 +31,9 @@ The guest still enforces the application's environment-name allowlist.
 ## Keys and signatures
 
 `GetSealedEnvPubKey` is available on KMS and proxied by VMM. Its request contains
-`app_id` (20 bytes) and optional `root_epoch`; omission selects the current
+`app_id` (20 bytes), optional `root_epoch`, and optional `app_epoch`; omission selects the current
 active epoch, while future epochs are rejected. The response contains
-`public_key`, `root_epoch`, `timestamp`, and `signature`.
+`public_key`, `root_epoch`, `app_epoch`, `timestamp`, and `signature`.
 
 For each app, the KMS derives the 32-byte receiver private key directly from
 that epoch's P-256 CA private scalar using HKDF-SHA256:
@@ -43,13 +43,13 @@ that epoch's P-256 CA private scalar using HKDF-SHA256:
 - info: the raw 20-byte app ID.
 
 `GetAppKey` returns it as `sealed_env_key` alongside the legacy key. The legacy
-key derivation and `GetAppEnvEncryptPubKey` remain unchanged.
+key derivation remains unchanged. This PR reserves app epochs and accepts only zero.
 
 The public-key response signs Keccak256 of this unambiguous byte sequence:
 
 ```text
-"dstack-sealed-env-pubkey-v1:" || app_id[20] || epoch[4, big-endian]
-    || public_key[32] || timestamp[8, big-endian]
+"dstack-sealed-env-pubkey-v1:" || app_id[20] || root_epoch[4, big-endian]
+    || app_epoch[4, big-endian] || public_key[32] || timestamp[8, big-endian]
 ```
 
 The signing key is the selected epoch's secp256k1 root. The signature is
@@ -58,6 +58,19 @@ against an independently trusted epoch root key or pin. Recovering a signer
 alone is not a trust decision. Clients should reject stale responses (default
 maximum age 300 seconds, future clock tolerance 60 seconds).
 
+## Image compatibility
+
+New image `metadata.json` files declare `"sealed_env": true`; `ListImages` exposes
+this flag. Missing metadata means legacy encryption only. The UI uses the target
+image for both creation and environment updates, including image changes.
+Old or unknown images use legacy encryption even with a capable KMS. For capable
+images, legacy fallback is allowed only when the SealedEnv RPC is explicitly absent.
+
+SealedEnv has one format, version 1, with both epoch fields always present.
+This PR accepts app epoch zero only; the field is reserved for application key
+rotation without changing this format. Signature and HPKE contexts always include
+both epochs, including zero. Changing either epoch invalidates authentication.
+
 ## File precedence and migration
 
 A new guest chooses `.sealed-env` whenever that file exists. An empty, invalid,
@@ -65,10 +78,10 @@ or unreadable sealed file is an error; it must not fall back to a legacy file.
 If no sealed file exists, the guest accepts `.encrypted-env` for compatibility.
 The copy limits are 384 KiB for sealed JSON and 256 KiB for legacy ciphertext.
 
-At boot, sealed ciphertext explicitly selects its historical root epoch. The
+At boot, sealed ciphertext explicitly selects its historical root/app epoch pair. The
 guest obtains that epoch's app key over the already trusted KMS connection,
 decrypts, and seals to the current epoch. Legacy ciphertext uses the legacy
-key path, trying earlier epochs when necessary, and is converted to SealedEnv.
+key path at app epoch zero, trying earlier root epochs when necessary, and is converted to SealedEnv.
 A future epoch or failed authentication stops environment provisioning.
 
 The guest sends `UpdateSealedEnv` through the host channel before application
