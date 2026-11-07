@@ -97,17 +97,19 @@ pub struct AppState {
 #[derive(Clone)]
 pub(crate) struct AppRoot {
     pub epoch: u32,
+    pub app_epoch: u32,
     pub k256_key: Vec<u8>,
     pub signing_key: SigningKey,
     pub kms_signature: Vec<u8>,
 }
 
 impl AppRoot {
-    fn new(epoch: u32, k256_key: Vec<u8>, kms_signature: Vec<u8>) -> Result<Self> {
+    fn new(epoch: u32, app_epoch: u32, k256_key: Vec<u8>, kms_signature: Vec<u8>) -> Result<Self> {
         let signing_key = SigningKey::from_slice(&k256_key)
             .context("the app root k256 key is not a valid secp256k1 scalar")?;
         Ok(Self {
             epoch,
+            app_epoch,
             k256_key,
             signing_key,
             kms_signature,
@@ -121,7 +123,7 @@ struct AppStateInner {
     vm_config: String,
     cert_client: CertRequestClient,
     /// Held across a fetch so concurrent requests for one epoch fetch it once.
-    historical_roots: tokio::sync::Mutex<HashMap<u32, AppRoot>>,
+    historical_roots: tokio::sync::Mutex<HashMap<(u32, u32), AppRoot>>,
     demo_cert: tokio::sync::OnceCell<String>,
     /// When the last demo-cert request failed; held while one is running.
     demo_cert_last_failure: tokio::sync::Mutex<Option<Instant>>,
@@ -411,12 +413,22 @@ impl AppState {
     /// The app root key and its KMS signature of `root_epoch`; the current
     /// ones when unset. An older epoch is requested from the KMS once and kept
     /// in memory.
-    pub(crate) async fn app_root(&self, root_epoch: Option<u32>) -> Result<AppRoot> {
+    pub(crate) async fn app_root(
+        &self,
+        root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
+    ) -> Result<AppRoot> {
         let current = self.root_epoch();
         let epoch = root_epoch.unwrap_or(current);
-        if epoch == current {
+        let current_app = self.inner.keys.app_epoch();
+        let app_epoch = app_epoch.unwrap_or(current_app);
+        if app_epoch > current_app {
+            anyhow::bail!("app epoch {app_epoch} is newer than current {current_app}");
+        }
+        if epoch == current && app_epoch == current_app {
             return Ok(AppRoot {
                 epoch,
+                app_epoch,
                 k256_key: self.app_root_k256_key().to_vec(),
                 signing_key: self.app_root_signing_key()?.clone(),
                 kms_signature: self.kms_k256_signature().to_vec(),
@@ -425,22 +437,22 @@ impl AppState {
         if epoch > current {
             anyhow::bail!("root epoch {epoch} is newer than the current one, {current}");
         }
-        self.historical_root(epoch).await
+        self.historical_root(epoch, app_epoch).await
     }
 
-    pub(crate) async fn historical_root(&self, epoch: u32) -> Result<AppRoot> {
+    pub(crate) async fn historical_root(&self, epoch: u32, app_epoch: u32) -> Result<AppRoot> {
         let mut roots = self.inner.historical_roots.lock().await;
-        if let Some(root) = roots.get(&epoch) {
+        if let Some(root) = roots.get(&(epoch, app_epoch)) {
             return Ok(root.clone());
         }
         let keys = self
             .inner
             .cert_client
-            .get_app_key(epoch)
+            .get_app_key(epoch, app_epoch)
             .await
             .with_context(|| format!("failed to fetch the app keys of root epoch {epoch}"))?;
-        let root = AppRoot::new(epoch, keys.k256_key, keys.k256_signature)?;
-        roots.insert(epoch, root.clone());
+        let root = AppRoot::new(epoch, app_epoch, keys.k256_key, keys.k256_signature)?;
+        roots.insert((epoch, app_epoch), root.clone());
         Ok(root)
     }
 
@@ -451,8 +463,12 @@ impl AppState {
         k256_key: Vec<u8>,
         kms_signature: Vec<u8>,
     ) {
-        let root = AppRoot::new(epoch, k256_key, kms_signature).unwrap();
-        self.inner.historical_roots.lock().await.insert(epoch, root);
+        let root = AppRoot::new(epoch, 0, k256_key, kms_signature).unwrap();
+        self.inner
+            .historical_roots
+            .lock()
+            .await
+            .insert((epoch, 0), root);
     }
 
     /// The KMS root key's signature over the app root public key: the second
@@ -1234,6 +1250,39 @@ pub(crate) mod tests {
 
     pub(crate) async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
         setup_test_state_with_platform(None).await
+    }
+
+    #[tokio::test]
+    async fn app_root_selectors_and_cache_keep_epochs_independent() {
+        let (mut state, _guard) = setup_test_state().await;
+        Arc::get_mut(&mut state.inner).unwrap().keys.key_provider = KeyProvider::Kms {
+            url: "https://unused.invalid".into(),
+            pubkey: vec![],
+            root_epoch: 2,
+            app_epoch: 2,
+        };
+        for (root, app, byte) in [(2, 0, 0x11), (0, 2, 0x22), (0, 0, 0x33)] {
+            state.inner.historical_roots.lock().await.insert(
+                (root, app),
+                AppRoot::new(root, app, vec![byte; 32], vec![]).unwrap(),
+            );
+        }
+        let current = state.app_root(None, None).await.unwrap();
+        assert_eq!((current.epoch, current.app_epoch), (2, 2));
+        for (root, app, byte) in [
+            (None, Some(0), 0x11),
+            (Some(0), None, 0x22),
+            (Some(0), Some(0), 0x33),
+        ] {
+            let key = state.app_root(root, app).await.unwrap();
+            assert_eq!(
+                (key.epoch, key.app_epoch),
+                (root.unwrap_or(2), app.unwrap_or(2))
+            );
+            assert_eq!(key.k256_key, vec![byte; 32]);
+        }
+        assert!(state.app_root(Some(3), None).await.is_err());
+        assert!(state.app_root(None, Some(3)).await.is_err());
     }
 
     /// How many times the fixture platform was asked to attest for `Info`, and

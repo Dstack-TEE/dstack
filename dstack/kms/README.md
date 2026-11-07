@@ -257,12 +257,12 @@ sent. The KMS method requires the attested `appId` to equal the proxy address,
 and the app method rejects that address and applies registered app policy.
 KMS callers do not fetch contract metadata to decide which policy to use.
 
-`requestedAppEpoch` reserves the application's own key epoch, independently of KMS root
-epochs. HTTP requests default it to 0; KMS currently sends 0. Solidity uses the same
-`OptionalEpoch` tuple as the root selector, reserving omission for the current
-app epoch. Responses include `currentAppEpoch`, currently 0. Nonzero values are
-rejected until app-epoch support is implemented, and rejection responses still
-carry the current root epoch and chain hash.
+`requestedAppEpoch` selects the application's own key epoch, independently of KMS
+root epochs. Omission uses `currentAppEpoch`; explicit zero selects app epoch zero.
+Solidity uses `OptionalEpoch { isSet, value }` for both selectors. Future epochs
+are denied; historical epochs remain subject to current authorization policy.
+Rejection responses still carry the current epochs and root chain hash. See
+[application key epochs](../../docs/app-key-epochs.md) for rotation and migration.
 
 `requestedRootEpoch` is optional in the JSON request. Omit it to use the epoch in
 this authorization result; an explicit `0` selects epoch 0. Solidity represents

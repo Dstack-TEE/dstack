@@ -259,7 +259,7 @@ impl AuthApi {
         &self,
         app_info: &BootInfo,
     ) -> Result<AuthorizationResult> {
-        self.check_authorization(app_info, "checkKmsAuthorization", None)
+        self.check_authorization(app_info, "checkKmsAuthorization", None, None)
             .await
     }
 
@@ -267,9 +267,15 @@ impl AuthApi {
         &self,
         app_info: &BootInfo,
         requested_root_epoch: Option<u32>,
+        requested_app_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
-        self.check_authorization(app_info, "checkAppAuthorization", requested_root_epoch)
-            .await
+        self.check_authorization(
+            app_info,
+            "checkAppAuthorization",
+            requested_root_epoch,
+            requested_app_epoch,
+        )
+        .await
     }
 
     async fn check_authorization(
@@ -277,13 +283,15 @@ impl AuthApi {
         app_info: &BootInfo,
         method: &str,
         requested_root_epoch: Option<u32>,
+        requested_app_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct AuthorizationRequest<'a> {
             #[serde(flatten)]
             app_info: &'a BootInfo,
-            requested_app_epoch: u32,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            requested_app_epoch: Option<u32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             requested_root_epoch: Option<u32>,
         }
@@ -303,12 +311,29 @@ impl AuthApi {
                     &url,
                     &AuthorizationRequest {
                         app_info,
-                        requested_app_epoch: 0,
+                        requested_app_epoch,
                         requested_root_epoch,
                     },
                     webhook.timeout,
                 )
                 .await
+            }
+        }
+    }
+
+    pub async fn app_epoch(&self, app_id: &[u8]) -> Result<u32> {
+        ensure_app_id_len(app_id)?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AppEpoch {
+            current_app_epoch: u32,
+        }
+        match self {
+            AuthApi::Dev { .. } => Ok(0),
+            AuthApi::Webhook { webhook } => {
+                let url = url_join(&webhook.url, &format!("app/0x{}", hex::encode(app_id)));
+                let response: AppEpoch = http_get(&url, webhook.timeout).await?;
+                Ok(response.current_app_epoch)
             }
         }
     }
@@ -711,13 +736,21 @@ pub(crate) mod tests {
         ]);
         let auth = webhook(url);
         let info = boot_info(50);
-        let first = auth.check_app_authorization(&info, None).await.unwrap();
-        let second = auth.check_app_authorization(&info, None).await.unwrap();
+        let first = auth
+            .check_app_authorization(&info, None, None)
+            .await
+            .unwrap();
+        let second = auth
+            .check_app_authorization(&info, None, None)
+            .await
+            .unwrap();
         assert!(first.is_allowed);
         assert!(!second.is_allowed);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
-        auth.check_app_authorization(&info, Some(0)).await.unwrap();
+        auth.check_app_authorization(&info, Some(0), Some(0))
+            .await
+            .unwrap();
         auth.check_kms_authorization(&info).await.unwrap();
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 4);
@@ -725,8 +758,7 @@ pub(crate) mod tests {
             .iter()
             .all(|(path, _)| path == "/checkAppAuthorization"));
         assert_eq!(requests[3].0, "/checkKmsAuthorization");
-        let mut expected = serde_json::to_value(info).unwrap();
-        expected["requestedAppEpoch"] = 0.into();
+        let expected = serde_json::to_value(info).unwrap();
         assert_eq!(requests[0].1, expected);
         assert_eq!(requests[2].1["requestedAppEpoch"], 0);
         assert!(requests[0].1.get("requestedRootEpoch").is_none());
@@ -739,7 +771,7 @@ pub(crate) mod tests {
             r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
         ]);
         assert!(webhook(url)
-            .check_app_authorization(&boot_info(50), None)
+            .check_app_authorization(&boot_info(50), None, None)
             .await
             .is_err());
         assert_eq!(server.join().unwrap().len(), 1);

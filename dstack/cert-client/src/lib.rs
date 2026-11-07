@@ -86,9 +86,13 @@ pub async fn request_app_keys(
         .build()
         .into_client()?;
     let requested_root_epoch = request.root_epoch;
+    let requested_app_epoch = request.app_epoch;
     let response = KmsClient::new(client).get_app_key(request).await?;
     if requested_root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
         bail!("KMS returned a different root epoch than requested");
+    }
+    if requested_app_epoch.is_some_and(|epoch| epoch != response.app_epoch) {
+        bail!("KMS returned a different app epoch than requested");
     }
     let cert = server_cert
         .lock()
@@ -170,21 +174,23 @@ impl CertRequestClient {
 
     /// The app keys of an older KMS root epoch, from the KMS that served the
     /// current ones.
-    pub async fn get_app_key(&self, root_epoch: u32) -> Result<AppKeyResponse> {
+    pub async fn get_app_key(&self, root_epoch: u32, app_epoch: u32) -> Result<AppKeyResponse> {
         let CertRequestClient::Kms { client, vm_config } = self else {
             bail!("only KMS-provided keys have older root epochs");
         };
         let response = client
             .get_app_key(GetAppKeyRequest {
+                app_epoch: Some(app_epoch),
                 api_version: 1,
                 vm_config: vm_config.clone(),
                 root_epoch: Some(root_epoch),
             })
             .await?;
-        if response.root_epoch != root_epoch {
+        if response.root_epoch != root_epoch || response.app_epoch != app_epoch {
             bail!(
-                "KMS returned keys of root epoch {} instead of {root_epoch}",
-                response.root_epoch
+                "KMS returned key epochs ({}, {}) instead of ({root_epoch}, {app_epoch})",
+                response.root_epoch,
+                response.app_epoch
             );
         }
         Ok(response)
@@ -594,6 +600,7 @@ mod tests {
             }
         };
         let request = || GetAppKeyRequest {
+            app_epoch: None,
             api_version: 1,
             vm_config: String::new(),
             root_epoch: None,
@@ -613,6 +620,7 @@ mod tests {
         let other_ca = kms_root().pem_cert;
         for requested_root_epoch in [None, Some(0), Some(1)] {
             let request = || GetAppKeyRequest {
+                app_epoch: None,
                 api_version: 1,
                 vm_config: String::new(),
                 root_epoch: requested_root_epoch,

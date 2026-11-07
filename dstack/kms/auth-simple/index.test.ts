@@ -488,7 +488,7 @@ describe('auth-simple', () => {
       expect(await authorize({ requestedRootEpoch: 1 })).toMatchObject({ isAllowed: true });
       expect(await authorize({}, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
       expect(await authorize({ appId: kmsContractAddr })).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
-      expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch must be zero', currentRootEpoch: 1 });
+      expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active', currentRootEpoch: 1 });
       expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true });
       expect(await authorize({ requestedRootEpoch: 2 })).toMatchObject({
         isAllowed: false, rejectionReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,
@@ -498,6 +498,18 @@ describe('auth-simple', () => {
         isAllowed: false, currentRootEpoch: 1, currentRootEpochHash: h1,
       });
       expect(await authorize({ appId: '0x' + '22'.repeat(20) })).toMatchObject({ isAllowed: false });
+    });
+
+    it('rotates only the selected app and allows historical app epochs', async () => {
+      writeTestConfig({ ...config, apps: {
+        ...config.apps,
+        '0xapp123': { ...config.apps['0xapp123'], currentAppEpoch: 2 },
+      } });
+      expect(await authorize()).toMatchObject({ isAllowed: true, currentAppEpoch: 2, currentRootEpoch: 0 });
+      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true, currentAppEpoch: 2 });
+      expect(await authorize({ requestedAppEpoch: 2 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedAppEpoch: 3 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active', currentAppEpoch: 2 });
+      expect(await boot('app', {})).toMatchObject({ isAllowed: false, reason: 'App epoch requires epoch-aware authorization' });
     });
 
     it('denies authorization without registered roots, while bootstrap remains available', async () => {

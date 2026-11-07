@@ -109,6 +109,7 @@ class GetKeyResponseV1(BaseModel):
     signature_chain: List[HexBytes]
     # KMS root key epoch the key was derived from.
     root_epoch: int = 0
+    app_epoch: int = 0
 
 
 class GpuEvidenceBundleV1(BaseModel):
@@ -240,7 +241,7 @@ class AsyncDstackClientV1(AsyncBaseClient):
         return IssueCertResponseV1(**result)
 
     async def get_key(
-        self, domain: str, algorithm: str, root_epoch: Optional[int] = None
+        self, domain: str, algorithm: str, root_epoch: Optional[int] = None, app_epoch: Optional[int] = None
     ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``.
 
@@ -262,8 +263,17 @@ class AsyncDstackClientV1(AsyncBaseClient):
             if root_epoch < 0:
                 raise ValueError("root_epoch must be a non-negative epoch number")
             data["root_epoch"] = root_epoch
+        if app_epoch is not None:
+            if type(app_epoch) is not int or not 0 <= app_epoch <= 0xFFFFFFFF:
+                raise ValueError("app_epoch must be a uint32")
+            data["app_epoch"] = app_epoch
         result = await self._send_rpc_request("GetKey", data)
-        return GetKeyResponseV1(**result)
+        response = GetKeyResponseV1(**result)
+        if (root_epoch is not None and response.root_epoch != root_epoch) or (
+            app_epoch is not None and response.app_epoch != app_epoch
+        ):
+            raise ValueError("GetKey returned different epochs than requested")
+        return response
 
     async def attest(
         self,
@@ -364,7 +374,7 @@ class DstackClientV1(BaseClient):
 
     @call_async
     def get_key(
-        self, domain: str, algorithm: str, root_epoch: Optional[int] = None
+        self, domain: str, algorithm: str, root_epoch: Optional[int] = None, app_epoch: Optional[int] = None
     ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``."""
         raise NotImplementedError
