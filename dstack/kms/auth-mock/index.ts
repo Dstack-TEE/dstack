@@ -115,6 +115,7 @@ class MockBackend {
   async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
     const current = getRootEpoch();
     const epoch = {
+      currentAppEpoch: 0,
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };

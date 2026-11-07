@@ -378,7 +378,8 @@
           "rejectionReason",
           "gatewayAppId",
           "currentRootEpoch",
-          "currentRootEpochHash"
+          "currentRootEpochHash",
+          "currentAppEpoch"
         ],
         "properties": {
           "isAllowed": {
@@ -399,6 +400,11 @@
             "type": "string",
             "pattern": "^0x[0-9a-fA-F]{64}$",
             "description": "Zero when no epoch is registered; authorization is denied."
+          },
+          "currentAppEpoch": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current application epoch; zero until app rotation is supported."
           }
         }
       },

@@ -39,6 +39,7 @@ export interface AuthorizationResult {
   gatewayAppId: string;
   currentRootEpoch: number;
   currentRootEpochHash: string;
+  currentAppEpoch: number;
 }
 
 export interface AuthorizationRequest extends Omit<BootInfo, 'rootEpoch' | 'rootEpochHash'> {

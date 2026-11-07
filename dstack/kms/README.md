@@ -258,7 +258,9 @@ and the app method rejects that address and applies registered app policy.
 KMS callers do not fetch contract metadata to decide which policy to use.
 
 `requestedAppEpoch` reserves the application's own key epoch, independently of KMS root
-epochs. HTTP requests default it to 0; KMS currently sends 0. Nonzero values are
+epochs. HTTP requests default it to 0; KMS currently sends 0. Solidity uses the same
+`OptionalEpoch` tuple as the root selector, reserving omission for the current
+app epoch. Responses include `currentAppEpoch`, currently 0. Nonzero values are
 rejected until app-epoch support is implemented, and rejection responses still
 carry the current root epoch and chain hash.
 

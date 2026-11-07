@@ -848,23 +848,23 @@ describe('POST /checkAppAuthorization', () => {
   it('reads the complete result with one contract call at configured finality', async () => {
     const result = {
       isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
-      currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
     };
     mockReadContract.mockResolvedValueOnce(result);
     const response = await authorize();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2 });
+    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0 });
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       functionName: 'checkAppAuthorization', blockNumber: 98n,
-      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: 0n, requestedRootEpoch: { isSet: false, value: 0n } })],
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: true, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n } })],
     }));
   });
 
   it('encodes an explicit epoch zero as present', async () => {
     mockReadContract.mockResolvedValueOnce({
       isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
-      currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      currentAppEpoch: 0n, currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
     });
     expect((await authorize(0)).status).toBe(200);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({

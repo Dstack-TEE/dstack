@@ -297,6 +297,9 @@ impl KmsState {
         result: &AuthorizationResult,
         requested: Option<u32>,
     ) -> Result<u32> {
+        if result.current_app_epoch != 0 {
+            bail!("this KMS does not support nonzero app epochs");
+        }
         let current = if self.config.auth_api.is_dev() {
             self.keyring.latest()
         } else {
@@ -1505,6 +1508,7 @@ mod tests {
             rejection_reason: String::new(),
             gateway_app_id: String::new(),
             current_root_epoch: epoch,
+            current_app_epoch: 0,
             current_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
         };
         assert_eq!(state.authorized_epoch(&result(0), None).unwrap(), 0);

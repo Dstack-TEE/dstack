@@ -7,8 +7,8 @@ import { BootInfo, BootResponse, RootEpochInfo, AuthorizationResult, Authorizati
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
-  "function checkKmsAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,uint256 requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash))",
-  "function checkAppAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,uint256 requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash))",
+  "function checkKmsAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",
+  "function checkAppAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",
   "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
@@ -81,7 +81,7 @@ export class EthereumBackend {
   async checkAuthorization(appInfo: AuthorizationRequest, method: 'checkKmsAuthorization' | 'checkAppAuthorization'): Promise<AuthorizationResult> {
     const result = await this.kmsContract[method]({
       appInfo: this.contractAppInfo(appInfo),
-      requestedAppEpoch: appInfo.requestedAppEpoch ?? 0,
+      requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: appInfo.requestedAppEpoch ?? 0 },
       requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: appInfo.requestedRootEpoch ?? 0 },
     });
     return {
@@ -90,6 +90,7 @@ export class EthereumBackend {
       gatewayAppId: result.gatewayAppId,
       currentRootEpoch: ethers.toNumber(result.currentRootEpoch),
       currentRootEpochHash: result.currentRootEpochHash,
+      currentAppEpoch: ethers.toNumber(result.currentAppEpoch),
     };
   }
 

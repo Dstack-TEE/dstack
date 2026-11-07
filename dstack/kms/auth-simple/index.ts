@@ -162,6 +162,7 @@ class ConfigBackend {
     const config = this.loadConfig();
     const current = currentRootEpoch(config);
     const epoch = {
+      currentAppEpoch: 0,
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
