@@ -2397,7 +2397,7 @@ struct AppInfo {
 
 impl HostShared {
     /// Request app keys of `root_epoch` (`None` = current) from one KMS.
-    async fn request_kms_keys(
+    async fn request_app_keys_from_kms_url(
         &self,
         kms_url: String,
         root_epoch: Option<u32>,
@@ -2459,7 +2459,7 @@ impl HostShared {
             bail!("only KMS-provided keys have older root epochs");
         };
         Ok(self
-            .request_kms_keys(
+            .request_app_keys_from_kms_url(
                 url.clone(),
                 Some(epoch),
                 Some(app_epoch),
@@ -2541,7 +2541,7 @@ impl<'a> Stage0<'a> {
             let kms_url = kms_rpc_url(kms_url);
             match self
                 .shared
-                .request_kms_keys(kms_url.clone(), None, None, None)
+                .request_app_keys_from_kms_url(kms_url.clone(), None, None, None)
                 .await
             {
                 Ok((keys, os_image_hash)) => {
