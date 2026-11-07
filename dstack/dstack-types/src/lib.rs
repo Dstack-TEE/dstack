@@ -2477,6 +2477,26 @@ mod key_provider_tests {
     use super::*;
 
     #[test]
+    fn legacy_kms_provider_drops_temp_ca_material_when_reserialized() {
+        let provider: KeyProvider = serde_json::from_value(serde_json::json!({
+            "Kms": {
+                "url": "https://kms.example/prpc",
+                "pubkey": "abcd",
+                "tmp_ca_key": "obsolete test key",
+                "tmp_ca_cert": "obsolete test certificate"
+            }
+        }))
+        .unwrap();
+        assert_eq!(provider.id(), &[0xab, 0xcd]);
+        assert_eq!(
+            serde_json::to_value(provider).unwrap(),
+            serde_json::json!({
+                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd" }
+            })
+        );
+    }
+
+    #[test]
     fn tpm_key_provider_id_is_empty() {
         let tpm = KeyProvider::Tpm {
             key: "dummy".into(),

@@ -6,8 +6,8 @@
 //! clients by the attestation in their certificate rather than by its issuer.
 //!
 //! The cases that matter:
-//!   * a certificate minted from a temp CA is accepted (what guests and KMS-to-KMS
-//!     onboarding send today, and what used to be the only accepted shape);
+//!   * a certificate minted from a temp CA is accepted for older guests and
+//!     tokenless KMS onboarding;
 //!   * a self-issued RA-TLS certificate is accepted too, which is what lets clients
 //!     stop fetching CA material;
 //!   * a certificate with no attestation is rejected during the handshake;
@@ -159,16 +159,14 @@ async fn client_certs_are_authenticated_by_attestation_not_issuer() {
     }
     assert!(up, "server never came up on port {port}");
 
-    // A self-issued RA-TLS cert is accepted and reaches the handler. No client sends
-    // one yet; this is the shape the CA pin used to reject.
+    // Current guests present self-issued RA-TLS certificates.
     let self_signed = client_cert(true, None);
     assert_eq!(
         probe(port, Some(&self_signed)).await.unwrap(),
         "cn=test client"
     );
 
-    // A cert minted from the temp CA — what guests and KMS-to-KMS onboarding present
-    // today — keeps working.
+    // Older guests and tokenless KMS onboarding retain temp-CA compatibility.
     let (ca_cert, ca_key) = temp_ca();
     let ca_signed = client_cert(true, Some((&ca_cert, &ca_key)));
     assert_eq!(
