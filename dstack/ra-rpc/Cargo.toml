@@ -28,7 +28,9 @@ prost-types = { workspace = true, optional = true }
 or-panic.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+ra-tls = { workspace = true, features = ["test-pki"] }
+tokio-rustls.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
 reqwest = { workspace = true, default-features = false, features = [
     "rustls",
     "charset",
@@ -37,5 +39,5 @@ reqwest = { workspace = true, default-features = false, features = [
 [features]
 default = ["rocket", "client"]
 rocket = ["dep:rocket", "dep:rocket-vsock-listener", "dep:rustls"]
-client = ["reqwest"]
+client = ["reqwest", "dep:rustls"]
 openapi = ["dep:prost-types"]

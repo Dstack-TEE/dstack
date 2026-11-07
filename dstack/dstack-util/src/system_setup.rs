@@ -592,7 +592,7 @@ impl<'a> GatewayContext<'a> {
             .tls_client_key(client_key.to_string())
             .tls_ca_cert(ca_cert)
             .tls_built_in_root_certs(false)
-            .tls_no_check(gateway_app_id == "any")
+            .tls_skip_ca_verification(gateway_app_id == "any")
             .verify_server_attestation(false)
             .cert_validator(Box::new(move |cert| cert_validator.validate(cert)))
             .build()
@@ -2437,7 +2437,7 @@ impl<'a> Stage0<'a> {
             generate_self_signed_ra_cert(None).context("Failed to generate RA-TLS cert")?;
         let attestation_verifier = attestation_verifier(&self.shared.sys_config)?;
         let ra_client = RaClientConfig::builder()
-            .tls_no_check(false)
+            .tls_skip_ca_verification(false)
             .tls_built_in_root_certs(false)
             .remote_uri(kms_url.clone())
             .tls_client_cert(cert_pair.cert_pem)

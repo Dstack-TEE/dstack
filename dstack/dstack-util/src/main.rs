@@ -655,14 +655,14 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
 
     // Step 1: Fetch the KMS root CA
     eprintln!("Connecting to KMS: {kms_url}");
-    let tls_no_check = root_ca_pem.is_none();
-    if tls_no_check {
+    let tls_skip_ca_verification = root_ca_pem.is_none();
+    if tls_skip_ca_verification {
         eprintln!("Warning: no --root-ca provided, TLS certificate verification is disabled for initial connection");
     }
     let root_ca = {
         let client = RaClientConfig::builder()
             .remote_uri(kms_url.clone())
-            .tls_no_check(tls_no_check)
+            .tls_skip_ca_verification(tls_skip_ca_verification)
             .tls_built_in_root_certs(false)
             .maybe_tls_ca_cert(root_ca_pem.clone())
             .build()
@@ -682,7 +682,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
 
     // Step 3: Create authenticated client and request app keys
     let ra_client = RaClientConfig::builder()
-        .tls_no_check(false)
+        .tls_skip_ca_verification(false)
         .tls_built_in_root_certs(false)
         .remote_uri(kms_url.clone())
         .tls_client_cert(cert_pair.cert_pem)
@@ -819,7 +819,7 @@ async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
         .transpose()?;
     let client = RaClientConfig::builder()
         .remote_uri(kms_url)
-        .tls_no_check(false)
+        .tls_skip_ca_verification(false)
         .tls_built_in_root_certs(root_ca_pem.is_none())
         .maybe_tls_ca_cert(root_ca_pem)
         .build()
