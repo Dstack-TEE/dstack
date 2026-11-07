@@ -345,9 +345,7 @@ def validate_uint(value: int, bits: int, name: str) -> None:
         raise ValueError(f"{name} must be a uint{bits}")
 
 
-def verify_sealed_env_pubkey(
-    response: Dict, app_id: str, root_epoch: Optional[int] = None, app_epoch: Optional[int] = None
-) -> None:
+def verify_sealed_env_pubkey(response: Dict, app_id: str) -> None:
     """Authenticate a SealedEnv key against the locally pinned epoch signers."""
     if not CRYPTO_AVAILABLE:
         raise ImportError("Install the VMM CLI requirements to verify SealedEnv keys")
@@ -357,10 +355,6 @@ def verify_sealed_env_pubkey(
     epoch, timestamp = response["root_epoch"], response["timestamp"]
     response_app_epoch = response.get("app_epoch", 0)
     validate_uint(response_app_epoch, 32, "app_epoch")
-    if app_epoch is not None:
-        validate_uint(app_epoch, 32, "app_epoch")
-        if response_app_epoch != app_epoch:
-            raise ValueError("SealedEnv app epoch does not match the requested epoch")
     validate_uint(epoch, 32, "root_epoch")
     validate_uint(timestamp, 64, "timestamp")
     now = int(time.time())
@@ -370,10 +364,6 @@ def verify_sealed_env_pubkey(
         raise ValueError("SealedEnv public key timestamp is in the future")
     if len(app_id_bytes) != 20 or len(public_key) != 32 or len(signature) != 65:
         raise ValueError("Invalid SealedEnv app ID, public key or signature length")
-    if root_epoch is not None:
-        validate_uint(root_epoch, 32, "root_epoch")
-        if epoch != root_epoch:
-            raise ValueError("SealedEnv root epoch does not match the requested epoch")
     digest = keccak(
         b"dstack-sealed-env-pubkey-v1:"
         + app_id_bytes
@@ -862,17 +852,8 @@ class VmmCLI:
         self,
         app_id: str,
         kms_url: Optional[str] = None,
-        root_epoch: Optional[int] = None,
-        app_epoch: Optional[int] = None,
     ) -> Optional[Dict]:
-        """Return an authenticated key, or None only for an unsupported RPC."""
-        params = {"app_id": app_id}
-        if root_epoch is not None:
-            validate_uint(root_epoch, 32, "root_epoch")
-            params["root_epoch"] = root_epoch
-        if app_epoch is not None:
-            validate_uint(app_epoch, 32, "app_epoch")
-            params["app_epoch"] = app_epoch
+        """Return the authenticated current key, or None only for an unsupported RPC."""
         # KMS RA-TLS is authenticated by the pinned signer below. The VMM
         # path retains its configured TLS verification and authentication.
         client = VmmClient(kms_url, verify_tls=False) if kms_url else self.client
@@ -880,7 +861,7 @@ class VmmCLI:
             "POST",
             "/prpc/GetSealedEnvPubKey?json",
             headers={"Content-Type": "application/json"},
-            body=params,
+            body={"app_id": app_id},
         )
         error = response.get("error") if isinstance(response, dict) else response
         if status in (400, 404) and error == "Service not found: GetSealedEnvPubKey":
@@ -889,7 +870,7 @@ class VmmCLI:
             raise RuntimeError(f"GetSealedEnvPubKey failed with HTTP {status}")
         if not isinstance(response, dict):
             raise ValueError("Invalid GetSealedEnvPubKey response")
-        verify_sealed_env_pubkey(response, app_id, root_epoch, app_epoch)
+        verify_sealed_env_pubkey(response, app_id)
         return response
 
     def encrypt_env_payload(

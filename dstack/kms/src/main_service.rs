@@ -689,9 +689,6 @@ impl KmsRpc for RpcHandler {
             .context("KMS self authorization failed")?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        if request.app_epoch.is_some() || request.root_epoch.is_some() {
-            bail!("epoch-aware applications must use GetSealedEnvPubKey");
-        }
         let secret = kdf::derive_dh_secret(
             &root.ca.key,
             &[&request.app_id[..], "env-encrypt-key".as_bytes()],
@@ -734,17 +731,9 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_sealed_env_pub_key(self, request: AppId) -> Result<SealedEnvPubKeyResponse> {
-        let requested = request.root_epoch;
-        let current = self.ensure_self_allowed(Operation::Serve).await?;
-        let epoch = requested.unwrap_or(current);
-        if epoch > current {
-            bail!("sealed env root epoch {epoch} is not active; current epoch is {current}");
-        }
+        let epoch = self.ensure_self_allowed(Operation::Serve).await?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        if request.app_epoch.unwrap_or(0) != 0 {
-            bail!("requested app epoch is not active");
-        }
         let secret = derive_sealed_env_key(root, &request.app_id)?;
         let public_key =
             x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();

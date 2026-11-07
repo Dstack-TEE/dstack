@@ -1270,9 +1270,7 @@ impl VmmRpc for RpcHandler {
         let kms = self.kms_client()?;
         let response = kms
             .get_app_env_encrypt_pub_key(dstack_kms_rpc::AppId {
-                app_epoch: request.app_epoch,
                 app_id: request.app_id,
-                root_epoch: request.root_epoch,
             })
             .await?;
         Ok(PublicKeyResponse {
@@ -1287,9 +1285,7 @@ impl VmmRpc for RpcHandler {
         let kms = self.kms_client()?;
         let response = kms
             .get_sealed_env_pub_key(dstack_kms_rpc::AppId {
-                app_epoch: request.app_epoch,
                 app_id: request.app_id,
-                root_epoch: request.root_epoch,
             })
             .await?;
         Ok(SealedEnvPubKeyResponse {

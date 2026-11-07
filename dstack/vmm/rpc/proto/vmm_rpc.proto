@@ -293,8 +293,6 @@ message ImageInfo {
 // App identifier used for encrypting env vars and routing telemetry.
 message AppId {
   bytes app_id = 1;
-  optional uint32 root_epoch = 2;
-  optional uint32 app_epoch = 3;
 }
 
 // Response with the KMS-backed public key used for env encryption plus audit signature.

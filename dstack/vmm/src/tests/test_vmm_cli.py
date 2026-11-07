@@ -214,14 +214,13 @@ class SealedEnvTests(unittest.TestCase):
                     self.cli.encrypt_env_payload(self.envs, self.app_id, None)
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
-    def test_requested_epoch_is_sent_and_checked(self):
-        self.cli.get_sealed_env_pub_key(self.app_id, root_epoch=3)
+    def test_public_key_request_contains_only_app_id(self):
+        response = self.cli.get_sealed_env_pub_key(self.app_id)
         self.assertEqual(
             self.cli.client.request.call_args.kwargs["body"],
-            {"app_id": self.app_id, "root_epoch": 3},
+            {"app_id": self.app_id},
         )
-        with self.assertRaisesRegex(ValueError, "does not match"):
-            self.cli.get_sealed_env_pub_key(self.app_id, root_epoch=2)
+        self.assertEqual(response["root_epoch"], self.epoch)
 
     def test_only_explicit_unsupported_method_falls_back(self):
         for status in [400, 404]:
