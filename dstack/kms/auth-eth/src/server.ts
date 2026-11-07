@@ -55,6 +55,7 @@ export async function build(): Promise<FastifyInstance> {
     $id: 'authorizationRequest',
     properties: {
       ...appInfoSchema.properties,
+      appEpoch: { type: 'integer', minimum: 0, maximum: 4294967295, default: 0 },
       requestedEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
     },
   });
@@ -119,24 +120,26 @@ export async function build(): Promise<FastifyInstance> {
     }
   });
 
-  server.post<{ Body: AuthorizationRequest; Reply: AuthorizationResult }>('/checkAuthorization', {
-    schema: {
-      body: { $ref: 'authorizationRequest#' },
-      response: {
-        200: {
-          type: 'object',
-          required: ['isAllowed', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash'],
-          properties: {
-            isAllowed: { type: 'boolean' },
-            rejectionReason: { type: 'string' },
-            gatewayAppId: { type: 'string' },
-            currentRootEpoch: { type: 'integer', minimum: 0 },
-            currentRootEpochHash: hex(32, 'Current root epoch chain hash'),
+  for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+    server.post<{ Body: AuthorizationRequest; Reply: AuthorizationResult }>(`/${method}`, {
+      schema: {
+        body: { $ref: 'authorizationRequest#' },
+        response: {
+          200: {
+            type: 'object',
+            required: ['isAllowed', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash'],
+            properties: {
+              isAllowed: { type: 'boolean' },
+              rejectionReason: { type: 'string' },
+              gatewayAppId: { type: 'string' },
+              currentRootEpoch: { type: 'integer', minimum: 0 },
+              currentRootEpochHash: hex(32, 'Current root epoch chain hash'),
+            },
           },
         },
       },
-    },
-  }, async (request) => server.ethereum.checkAuthorization(request.body));
+    }, async (request) => server.ethereum.checkAuthorization(request.body, method));
+  }
 
   // Define routes
   server.post<{

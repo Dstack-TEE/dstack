@@ -254,11 +254,13 @@ bun run test:run
 - [Deployment Guide](../../../docs/deployment.md) - Full deployment instructions
 
 
-### Unified authorization
+### Authorization endpoints
 
-`POST /checkAuthorization` returns `AuthorizationResult`, including
+`POST /checkKmsAuthorization` and `POST /checkAppAuthorization` return `AuthorizationResult`, including
 `rejectionReason`, `gatewayAppId`, `currentRootEpoch`, and `currentRootEpochHash`.
-It selects KMS or app policy from the verified `appId`. The optional
+The selected endpoint determines the policy; the backend checks that the verified
+`appId` matches that scope. `appEpoch` defaults to 0; nonzero values are currently
+rejected. The optional
 `requestedEpoch` selects historical keys; omission uses the returned current
 epoch, and an explicit `0` selects epoch 0. See the
 [KMS authorization protocol](../README.md#authorization-protocol) for registration,

@@ -30,6 +30,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  appEpoch: z.number().int().min(0).max(0xffffffff).default(0),
   requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
@@ -111,7 +112,7 @@ class MockBackend {
     this.mockAppImplementation = process.env.MOCK_APP_IMPLEMENTATION || '0xmockapp9876543210987654321098765432109';
   }
 
-  async checkAuthorization(appInfo: AuthorizationRequest) {
+  async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
     const current = getRootEpoch();
     const epoch = {
       currentRootEpoch: current.rootEpoch ?? 0,
@@ -123,8 +124,14 @@ class MockBackend {
     if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
       return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
+    if (appInfo.appEpoch !== 0) {
+      return { isAllowed: false, rejectionReason: 'App epoch is not supported', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
     const kmsAppId = process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678';
-    const result = this.evaluateBoot(appInfo, normHash(appInfo.appId) === normHash(kmsAppId));
+    if (isKms !== (normHash(appInfo.appId) === normHash(kmsAppId))) {
+      return { isAllowed: false, rejectionReason: 'Authorization kind does not match app ID', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    const result = this.evaluateBoot(appInfo, isKms);
     return { isAllowed: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
       gatewayAppId: this.mockGatewayAppId, ...epoch };
   }
@@ -225,13 +232,15 @@ app.get('/', async (c) => {
   }
 });
 
-app.post('/checkAuthorization', zValidator('json', AuthorizationRequestSchema), async (c) => {
-  try {
-    return c.json(await mockBackend.checkAuthorization(c.req.valid('json')));
-  } catch {
-    return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
-  }
-});
+for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+  app.post(`/${method}`, zValidator('json', AuthorizationRequestSchema), async (c) => {
+    try {
+      return c.json(await mockBackend.checkAuthorization(c.req.valid('json'), method === 'checkKmsAuthorization'));
+    } catch {
+      return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
+    }
+  });
+}
 
 // app boot authentication
 app.post('/bootAuth/app',

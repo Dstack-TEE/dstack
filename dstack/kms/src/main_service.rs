@@ -291,28 +291,6 @@ impl KmsState {
         self.keyring.servable_epoch(info.root_epochs)
     }
 
-    /// KMS-only operations must not accept an app that passes ordinary app policy.
-    async fn ensure_kms_identity(&self, app_info: &BootInfo) -> Result<()> {
-        if self.config.auth_api.is_dev() {
-            return Ok(());
-        }
-        let info = self
-            .auth_api_info
-            .try_get_with((), self.config.auth_api.get_info())
-            .await
-            .map_err(|err| anyhow!("{err:#}"))?;
-        let address = info
-            .kms_contract_address
-            .as_deref()
-            .context("missing KMS contract address")?;
-        let app_id = hex::decode(address.trim_start_matches("0x"))
-            .context("invalid KMS contract address")?;
-        if app_info.app_id != app_id {
-            bail!("KMS app ID does not match the KMS contract address");
-        }
-        Ok(())
-    }
-
     /// Resolve this request from its authorization result; no serving epoch is cached.
     fn authorized_epoch(
         &self,
@@ -512,7 +490,6 @@ impl RpcHandler {
             .await
             .map_err(|err| anyhow!("{err:#}"))
             .context("Failed to load cached self boot info")?;
-        self.state.ensure_kms_identity(&boot_info).await?;
         let response = self
             .state
             .self_allowed
@@ -521,7 +498,7 @@ impl RpcHandler {
                     .state
                     .config
                     .auth_api
-                    .check_authorization(&boot_info, None)
+                    .check_kms_authorization(&boot_info)
                     .await
                     .context("Failed to call self KMS auth check")?;
                 let epoch = self.state.authorized_epoch(&response, None)?;
@@ -567,15 +544,13 @@ impl RpcHandler {
         requested_epoch: Option<u32>,
     ) -> Result<BootConfig> {
         let boot_info = build_boot_info_for_attestation(att, use_boottime_mr, vm_config_str)?;
-        if is_kms {
-            self.state.ensure_kms_identity(&boot_info).await?;
-        }
-        let response = self
-            .state
-            .config
-            .auth_api
-            .check_authorization(&boot_info, requested_epoch)
-            .await?;
+        let auth = &self.state.config.auth_api;
+        let response = if is_kms {
+            auth.check_kms_authorization(&boot_info).await?
+        } else {
+            auth.check_app_authorization(&boot_info, requested_epoch)
+                .await?
+        };
         let root_epoch = self.state.authorized_epoch(&response, requested_epoch)?;
         let current_epoch = if self.state.config.auth_api.is_dev() {
             self.state.keyring.latest()
@@ -1562,22 +1537,6 @@ mod tests {
         missing.current_root_epoch = u32::MAX;
         assert!(state.authorized_epoch(&missing, Some(0)).is_err());
         assert!(state.epoch_root(u32::MAX).is_err());
-    }
-
-    #[rocket::async_test]
-    async fn kms_identity_cannot_be_replaced_with_an_authorized_app() {
-        use super::upgrade_authority::tests::serve;
-        let app_id = vec![0x11; 20];
-        let response = AUTH_API_INFO.replace("0xkms", &format!("0x{}", hex::encode(&app_id)));
-        let (url, server) = serve(vec![response]);
-        let dir = tempfile::tempdir().unwrap();
-        let state = kms_state(dir.path(), &url);
-        let mut info = super::upgrade_authority::tests::boot_info(1);
-        info.app_id = app_id;
-        state.ensure_kms_identity(&info).await.unwrap();
-        info.app_id[0] ^= 1;
-        assert!(state.ensure_kms_identity(&info).await.is_err());
-        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
