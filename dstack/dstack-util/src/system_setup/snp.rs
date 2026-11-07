@@ -4,6 +4,7 @@
 
 use anyhow::{bail, Context, Result};
 use dstack_types::{KeyProviderKind, SnpSealingParameters};
+use zeroize::Zeroizing;
 
 use super::{detect_tee_variant, parse_dstack_options, AppInfo, Command, Stage0, TeeVariant};
 
@@ -33,7 +34,7 @@ fn parameters_for_boot(
 }
 
 impl Stage0<'_> {
-    pub(super) async fn prepare_snp_sealing(&self, app_info: &mut AppInfo) -> Result<()> {
+    pub(super) async fn get_snp_seed(&self, app_info: &mut AppInfo) -> Result<Zeroizing<[u8; 32]>> {
         if detect_tee_variant()? != TeeVariant::DstackAmdSevSnp {
             bail!("the SNP key provider requires an AMD SEV-SNP guest");
         }
@@ -43,19 +44,15 @@ impl Stage0<'_> {
         if !parse_dstack_options(&self.shared)?.storage_encrypted {
             bail!("the SNP key provider requires encrypted storage");
         }
-        let disk_initialized = if app_info.instance_info.snp_sealing.is_none() {
-            let status = Command::new("cryptsetup")
-                .arg("isLuks")
-                .arg(&self.args.device)
-                .status()
-                .context("failed to inspect disk before SNP sealing initialization")?;
-            match status.code() {
-                Some(0) => true,
-                Some(1) => false,
-                _ => bail!("failed to inspect disk before SNP sealing initialization: {status}"),
-            }
-        } else {
-            true
+        let status = Command::new("cryptsetup")
+            .arg("isLuks")
+            .arg(&self.args.device)
+            .status()
+            .context("failed to inspect disk before SNP sealing initialization")?;
+        let disk_initialized = match status.code() {
+            Some(0) => true,
+            Some(1) => false,
+            _ => bail!("failed to inspect disk before SNP sealing initialization: {status}"),
         };
         let parameters = parameters_for_boot(
             app_info.instance_info.snp_sealing,
@@ -78,7 +75,9 @@ impl Stage0<'_> {
                 &serde_json::to_string(&app_info.instance_info)?,
             )
             .await
-            .context("failed to persist SNP sealing parameters before disk unlock")
+            .context("failed to persist SNP sealing parameters before disk unlock")?;
+        sev_snp_attest::sealing::derive_sealing_seed(parameters.tcb_version)
+            .context("failed to derive SNP sealing seed")
     }
 }
 

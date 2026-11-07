@@ -490,21 +490,11 @@ async fn cmd_deploy(
     let app_compose = compose::build_app_compose_with_runtime_and_volumes(
         name,
         &yaml,
-        key_provider.is_kms(),
+        key_provider,
         runner.as_str(),
         snapshotter.map(Snapshotter::as_str),
         &parsed_volumes,
     );
-    let app_compose = if matches!(
-        key_provider,
-        KeyProviderKind::Snp | KeyProviderKind::Local | KeyProviderKind::Tpm
-    ) {
-        let mut manifest: serde_json::Value = serde_json::from_str(&app_compose)?;
-        manifest["key_provider"] = serde_json::to_value(key_provider)?;
-        serde_json::to_string_pretty(&manifest)?
-    } else {
-        app_compose
-    };
 
     let mut cfg = rpc::VmConfiguration {
         name: name.to_string(),

@@ -32,6 +32,7 @@ tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+zeroize.workspace = true
 x25519-dalek.workspace = true
 
 dstack-kms-rpc.workspace = true
