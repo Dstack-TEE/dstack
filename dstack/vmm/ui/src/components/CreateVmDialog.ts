@@ -217,7 +217,7 @@ const CreateVmDialogComponent = {
                 <option value="none">None</option>
                 <option value="kms">KMS</option>
                 <option value="local">Local (SGX)</option>
-                <option value="snp">SEV-SNP hardware</option>
+                <option value="sev-snp">SEV-SNP hardware</option>
                 <option value="tpm">TPM</option>
               </select>
             </div>

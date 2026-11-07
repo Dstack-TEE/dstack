@@ -233,7 +233,7 @@ volumes:
         "allowed_envs": []
     });
     if platform == Platform::AmdSevSnp {
-        manifest["key_provider"] = json!("snp");
+        manifest["key_provider"] = json!("sev-snp");
     }
     // infallible pretty-print via Value's Display; see compose::build_app_compose.
     format!("{manifest:#}")
@@ -526,7 +526,7 @@ mod tests {
             .contains(r#""local_key_provider_enabled": false"#));
         let snp_compose: serde_json::Value =
             serde_json::from_str(&kms_app_compose("x", "img", Platform::AmdSevSnp)).unwrap();
-        assert_eq!(snp_compose["key_provider"], "snp");
+        assert_eq!(snp_compose["key_provider"], "sev-snp");
         assert_eq!(snp_compose["kms_enabled"], false);
     }
 

@@ -1947,7 +1947,7 @@ def main():
     )
     compose_parser.add_argument(
         "--key-provider",
-        choices=["none", "kms", "local", "tpm", "snp"],
+        choices=["none", "kms", "local", "tpm", "sev-snp"],
         default=None,
         help="Override key provider type (none, kms, local, or tpm)",
     )

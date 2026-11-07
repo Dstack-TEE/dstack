@@ -50,7 +50,7 @@ preflight does not replace firmware, kernel, QEMU, or OVMF validation.
 
 ## Install dstack on an SNP host
 
-Use a release containing the `snp` key provider in the guest OS and VMM. The
+Use a release containing the `sev-snp` key provider in the guest OS and VMM. The
 KMS container and client attestation verifiers must recognize the new provider
 metadata. Set `VERSION` to the OS release version and `KMS_IMAGE` to the KMS
 container reference, then install:
@@ -63,22 +63,22 @@ sudo dstackup status
 ```
 
 Confirm that installation reports `booted` for the KMS CVM. `dstackup` selects
-the `snp` provider for the KMS CVM on AMD hosts. The default
+the `sev-snp` provider for the KMS CVM on AMD hosts. The default
 `--platform auto` also detects SEV-SNP from the host CPU flags. Explicit
 selection checks for the required SNP device before installation. Review the
 [KMS key-release policy](#kms-key-release-policy) before serving applications.
 
 ## Run KMS with persistent local keys
 
-The `snp` provider lets a KMS CVM recover its encrypted disk and stored KMS
+The `sev-snp` provider lets a KMS CVM recover its encrypted disk and stored KMS
 roots after restart on the same AMD hardware. For a manually managed KMS CVM,
 set this field in its app-compose document:
 
 ```json
-{"key_provider": "snp"}
+{"key_provider": "sev-snp"}
 ```
 
-The deployment CLI also accepts `dstack deploy --key-provider snp`. Application
+The deployment CLI also accepts `dstack deploy --key-provider sev-snp`. Application
 CVMs continue using `key_provider: kms` and the existing KMS API.
 
 The guest derives a seed through `SNP_GET_DERIVED_KEY` using legacy VCEK at

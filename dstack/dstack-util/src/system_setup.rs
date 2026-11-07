@@ -2556,7 +2556,7 @@ impl<'a> Stage0<'a> {
                     .context("failed to get SGX sealing key")?;
                 (Zeroizing::new(provision.sk), Some(provision.mr.to_vec()))
             }
-            KeyProviderKind::Snp => (self.get_snp_seed(app_info).await?, None),
+            KeyProviderKind::SevSnp => (self.get_snp_seed(app_info).await?, None),
             KeyProviderKind::Tpm => (self.get_tpm_seed()?, None),
             KeyProviderKind::None => {
                 info!("no key provider is enabled, generating temporary app keys");

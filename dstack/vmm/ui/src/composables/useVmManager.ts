@@ -77,7 +77,7 @@ function compatibleInitScripts(initScripts: string[]): string | string[] | undef
   return scripts.length === 0 ? undefined : scripts.length === 1 ? scripts[0] : scripts;
 }
 
-type KeyProviderKind = 'none' | 'kms' | 'local' | 'tpm' | 'snp';
+type KeyProviderKind = 'none' | 'kms' | 'local' | 'tpm' | 'sev-snp';
 type RequirementPlatform =
   | 'dstack-tdx'
   | 'dstack-gcp-tdx'
