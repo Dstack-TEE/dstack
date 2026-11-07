@@ -9,7 +9,7 @@ use crate::cli::{InstallOpts, DEFAULT_AUTH_BIN, DEFAULT_SUPERVISOR_BIN, DEFAULT_
 use crate::state::{read_state, write, write_state, State};
 use crate::systemd::{auth_unit_file, install_unit, tool, unit_active, unit_name, vmm_unit_file};
 use anyhow::{bail, Context, Result};
-use dstack_cli_core::config::{self, HostConfig, VmmRender};
+use dstack_cli_core::config::{self, HostConfig, KmsImage, VmmRender};
 use dstack_cli_core::host::Platform;
 use dstack_cli_core::layout::{path_string, InstallLayout};
 use dstack_cli_core::vmm::Vmm;
@@ -117,6 +117,11 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
     )
     .await?;
     let os_image_hash = resolve_image_pin(&o, &images, platform)?;
+    let volumes_dir = layout.state_dir.join("volumes");
+    let kms_image = match o.dev_kms.as_deref() {
+        Some(tag) => crate::dev_kms::package(tag, &volumes_dir).await?,
+        None => KmsImage::Registry(o.kms_image.clone()),
+    };
 
     // 6. install the binaries managed by dstackup. The bootstrap installer only
     //    installs dstackup; this step owns the local dstack CLI and host daemons.
@@ -158,6 +163,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
     let vmm = config::vmm_toml(&VmmRender {
         dashboard_addr: dashboard_addr.clone(),
         image_path: images.clone(),
+        volumes_dir: path_string(&volumes_dir),
         qemu_path: o.qemu.clone(),
         run_dir: layout.run_dir.display().to_string(),
         vm_path: layout.state_dir.join("vm").display().to_string(),
@@ -186,6 +192,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
         ..Default::default()
     };
     let kms = config::kms_toml(&host_cfg);
+    let kms_compose = config::kms_app_compose(&kms, &kms_image, platform);
     let allowlist = config::auth_allowlist_json(&host_cfg);
 
     let vmm_path = layout.config_dir.join("vmm.toml");
@@ -194,6 +201,12 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
     write(&vmm_path, &vmm)?;
     write(&kms_path, &kms)?;
     write(&allow_path, &allowlist)?;
+    if o.dev_kms.is_some() {
+        write(
+            &layout.config_dir.join("kms-app-compose.json"),
+            &kms_compose,
+        )?;
+    }
     println!(
         "  [ok] wrote {}, {}, {}",
         vmm_path.display(),
@@ -272,17 +285,27 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
             _ => None,
         };
         if let Some(id) = existing {
+            if o.dev_kms.is_some() {
+                let info = vmm.info(&id).await?.context("existing KMS was not found")?;
+                let cfg = info
+                    .configuration
+                    .context("existing KMS has no configuration")?;
+                verify_dev_kms_reuse(
+                    &cfg,
+                    &kms_compose,
+                    o.image.as_deref().context("missing KMS OS image")?,
+                )?;
+            }
             println!("  [ok] KMS CVM already deployed (vm {id})");
         } else {
             let img = o
                 .image
                 .clone()
                 .context("kms deploy needs --image <version> (or pass --no-kms)")?;
-            let compose = config::kms_app_compose(&kms, &o.kms_image, platform);
             let cfg = rpc::VmConfiguration {
                 name: "dstack-kms".into(),
                 image: img.clone(),
-                compose_file: compose,
+                compose_file: kms_compose,
                 vcpu: 4,
                 memory: 8192,
                 disk_size: 20,
@@ -297,7 +320,10 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
                 }],
                 ..Default::default()
             };
-            println!("  [..] deploying KMS CVM (os {img}, kms {})", o.kms_image);
+            println!(
+                "  [..] deploying KMS CVM (os {img}, kms {})",
+                kms_image.image()
+            );
             let vm_id = vmm
                 .create_vm(cfg)
                 .await
@@ -335,6 +361,13 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
         "deploy an app with: sudo {dstack_cmd} deploy -c {} --port <host_port>:<vm_port>",
         layout.hello_nginx_compose().display()
     );
+    Ok(())
+}
+
+fn verify_dev_kms_reuse(cfg: &rpc::VmConfiguration, compose: &str, image: &str) -> Result<()> {
+    if cfg.compose_file != compose || cfg.image != image {
+        bail!("existing KMS has a different measured configuration; use a fresh --prefix for the new dev-kms image, and onboard it if its existing keys are needed");
+    }
     Ok(())
 }
 
@@ -1259,6 +1292,18 @@ mod tests {
             port,
             check_free: false,
         }
+    }
+
+    #[test]
+    fn dev_kms_reuse_requires_the_same_measured_inputs() {
+        let cfg = rpc::VmConfiguration {
+            image: "os-v1".into(),
+            compose_file: "same image and volume".into(),
+            ..Default::default()
+        };
+        assert!(verify_dev_kms_reuse(&cfg, "same image and volume", "os-v1").is_ok());
+        assert!(verify_dev_kms_reuse(&cfg, "changed image or volume", "os-v1").is_err());
+        assert!(verify_dev_kms_reuse(&cfg, "same image and volume", "os-v2").is_err());
     }
 
     #[test]

@@ -127,6 +127,38 @@ ssh -L 9080:127.0.0.1:9080 <user>@<host>
 
 Then open `http://127.0.0.1:9080` locally. `dstackup install --expose` is intentionally disabled until the remote TLS and token transport exists.
 
+### Use a local development KMS image
+
+Build a `linux/amd64` KMS image using your local build workflow and tag it
+`my-kms:dev`. The image must be available to Docker on the installation host.
+Install into a separate development prefix:
+
+```bash
+sudo dstackup install --prefix /var/lib/dstack-dev --dev-kms my-kms:dev
+```
+
+This requires Docker, `mksquashfs`, and `veritysetup` on the host, plus a guest
+OS with [verity-volume support](verity-volumes.md). If another installation
+uses the default ports, select free ports with `--dashboard-port`,
+`--auth-port`, and `--host-api-port`.
+
+The installer exports the local image by its immutable image ID, packages it
+in a read-only verity volume, and includes the volume root in the measured
+KMS app-compose. The guest verifies the volume and imports the image before
+Compose starts. Compose selects a local tag derived from the image config hash,
+with registry pulls disabled. No source commit, source upload, or registry
+publication is required.
+`--kms-image` remains the option for a published image and cannot be combined
+with `--dev-kms`.
+
+`--no-start` prepares the volume and writes `etc/dstack/kms-app-compose.json`
+under the prefix without starting services or a CVM. Keep the volume files
+under `var/lib/dstack/volumes` with the development installation for restarts.
+
+Reusing the same image and launch configuration preserves the sealing context.
+A changed image requires a fresh prefix and KMS CVM because it changes the sealing
+context. Use KMS onboarding if the new deployment must retain existing roots.
+
 ## 2. Deploy a first app
 
 Deploy the checked-in nginx example:

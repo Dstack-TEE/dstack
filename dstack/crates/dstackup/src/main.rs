@@ -14,6 +14,7 @@
 mod cid;
 mod cli;
 mod destroy;
+mod dev_kms;
 mod image;
 mod install;
 mod state;
