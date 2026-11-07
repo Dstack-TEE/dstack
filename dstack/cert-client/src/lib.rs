@@ -50,10 +50,10 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
 }
 
 /// Fetch keys directly over the attested connection, without a metadata/CA preflight.
-/// Historical requests must pin the already trusted current KMS CA, since their
-/// response CA belongs to the requested epoch rather than the TLS listener.
-/// Without a supplied CA, the caller must still bind the returned root identity
-/// through its provider pin or launch-measurement policy.
+/// A supplied CA always pins the connection, independently of the epoch selector.
+/// Callers retain the startup KMS CA for the CVM lifetime, including later key
+/// requests. Without a supplied CA, bind the response CA to this connection and
+/// establish its identity through the provider pin or launch-measurement policy.
 pub async fn request_app_keys(
     url: String,
     request: GetAppKeyRequest,
@@ -61,9 +61,6 @@ pub async fn request_app_keys(
     attestation_verifier: Arc<AttestationVerifier>,
     trusted_ca: Option<String>,
 ) -> Result<AppKeyResponse> {
-    if request.root_epoch.is_some() && trusted_ca.is_none() {
-        bail!("historical key requests require the trusted KMS CA");
-    }
     let server_cert = Arc::new(Mutex::new(None));
     let captured = server_cert.clone();
     let client = RaClientConfig::builder()
@@ -98,13 +95,7 @@ pub async fn request_app_keys(
         .map_err(|_| anyhow::anyhow!("KMS certificate lock poisoned"))?;
     validate_kms_root(
         cert.as_deref().context("missing KMS server certificate")?,
-        if requested_epoch.is_some() {
-            trusted_ca
-                .as_deref()
-                .context("historical key requests require the trusted KMS CA")?
-        } else {
-            &response.ca_cert
-        },
+        trusted_ca.as_deref().unwrap_or(&response.ca_cert),
     )?;
     Ok(response)
 }
@@ -577,46 +568,73 @@ mod tests {
         assert_eq!(result.ca_cert, response.ca_cert);
         assert_eq!(result.root_epoch, 1);
 
-        let wrong_root = AppKeyResponse {
-            ca_cert: kms_root().pem_cert,
-            ..response.clone()
-        };
-        *response_body.lock().unwrap() = serde_json::to_string(&wrong_root).unwrap();
-        assert!(request_app_keys(
-            url.clone(),
-            request(),
-            client_cert(),
-            verifier.clone(),
-            None
-        )
-        .await
-        .is_err());
+        let other_ca = kms_root().pem_cert;
+        for requested_epoch in [None, Some(0), Some(1)] {
+            let request = || GetAppKeyRequest {
+                api_version: 1,
+                vm_config: String::new(),
+                root_epoch: requested_epoch,
+            };
+            let selected = AppKeyResponse {
+                root_epoch: requested_epoch.unwrap_or(1),
+                ..response.clone()
+            };
+            *response_body.lock().unwrap() = serde_json::to_string(&selected).unwrap();
+            // Omission and explicit epoch selectors have the same trust semantics.
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                None
+            )
+            .await
+            .is_ok());
+            // An unrelated pin must fail in TLS, before the RPC handler runs.
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                Some(other_ca.clone())
+            )
+            .await
+            .is_err());
+
+            let different_epoch_ca = AppKeyResponse {
+                ca_cert: other_ca.clone(),
+                ..selected
+            };
+            *response_body.lock().unwrap() = serde_json::to_string(&different_epoch_ca).unwrap();
+            // A key response cannot replace the startup CA pin, even for default requests.
+            let result = request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                Some(root.pem_cert.clone()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.ca_cert, other_ca);
+            // First-contact validation still requires the response CA to sign the RPC cert.
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                None
+            )
+            .await
+            .is_err());
+        }
         *response_body.lock().unwrap() = serde_json::to_string(&response).unwrap();
-
-        let mut historical_request = request();
-        historical_request.root_epoch = Some(1);
-        assert!(request_app_keys(
-            url.clone(),
-            historical_request,
-            client_cert(),
-            verifier.clone(),
-            Some(root.pem_cert.clone())
-        )
-        .await
-        .is_ok());
-
         let production = Arc::new(AttestationVerifier::new_prod(None).unwrap());
         assert!(
-            request_app_keys(url.clone(), request(), client_cert(), production, None)
+            request_app_keys(url, request(), client_cert(), production, None)
                 .await
                 .is_err()
         );
-        let mut historical = request();
-        historical.root_epoch = Some(0);
-        let err = request_app_keys(url, historical, client_cert(), verifier, None)
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("require the trusted KMS CA"));
         shutdown.notify();
         let server = task.await.unwrap().unwrap();
         assert_eq!(
@@ -625,7 +643,7 @@ mod tests {
                 .unwrap()
                 .1
                 .load(std::sync::atomic::Ordering::SeqCst),
-            4
+            11
         );
     }
 
