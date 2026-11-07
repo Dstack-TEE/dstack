@@ -52,7 +52,10 @@ impl ServerCertVerifier for SkipCaVerification {
     }
 }
 
-pub(super) fn config(cert: Option<&str>, key: Option<&str>) -> Result<rustls::ClientConfig> {
+pub(super) fn config_without_ca_verification(
+    cert: Option<&str>,
+    key: Option<&str>,
+) -> Result<rustls::ClientConfig> {
     use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
     let provider = rustls::crypto::CryptoProvider::get_default()
         .cloned()
