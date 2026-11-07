@@ -50,14 +50,19 @@ impl RaClientConfig {
     pub fn into_client(self) -> Result<RaClient> {
         let mut builder = Client::builder()
             .tls_sni(true)
-            .danger_accept_invalid_certs(self.tls_no_check)
             .danger_accept_invalid_hostnames(self.tls_no_check_hostname)
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(60));
         if self.cert_validator.is_some() {
             builder = builder.tls_info(true);
         }
-        if let (Some(cert_pem), Some(key_pem)) = (self.tls_client_cert, self.tls_client_key) {
+        if self.tls_no_check {
+            builder = builder.use_preconfigured_tls(attestation_tls_config(
+                self.tls_client_cert.as_deref(),
+                self.tls_client_key.as_deref(),
+            )?);
+        } else if let (Some(cert_pem), Some(key_pem)) = (self.tls_client_cert, self.tls_client_key)
+        {
             let identity_pem = format!("{cert_pem}\n{key_pem}");
             let identity =
                 Identity::from_pem(identity_pem.as_bytes()).context("Failed to parse identity")?;
@@ -91,6 +96,77 @@ impl RaClientConfig {
             verify_server_attestation: self.verify_server_attestation,
             bearer_token: self.bearer_token,
         })
+    }
+}
+
+/// Attestation is checked on the response, but TLS must still prove possession
+/// of the attested certificate key. Reqwest's no-verifier also skips that proof.
+#[derive(Debug)]
+struct AttestationServerVerifier(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AttestationServerVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            signature,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        signature: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            signature,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+fn attestation_tls_config(cert: Option<&str>, key: Option<&str>) -> Result<rustls::ClientConfig> {
+    use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+    let provider = rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
+    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AttestationServerVerifier(provider)));
+    match (cert, key) {
+        (Some(cert), Some(key)) => builder
+            .with_client_auth_cert(
+                CertificateDer::pem_slice_iter(cert.as_bytes()).collect::<Result<Vec<_>, _>>()?,
+                PrivateKeyDer::from_pem_slice(key.as_bytes())?,
+            )
+            .context("invalid RA-TLS client identity"),
+        (None, None) => Ok(builder.with_no_client_auth()),
+        _ => bail!("RA-TLS client identity requires both certificate and key"),
     }
 }
 
