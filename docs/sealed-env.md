@@ -66,6 +66,13 @@ image for both creation and environment updates, including image changes.
 Old or unknown images use legacy encryption even with a capable KMS. For capable
 images, legacy fallback is allowed only when the SealedEnv RPC is explicitly absent.
 
+The VMM also enforces the flag for API callers. Creation, updates and image changes
+through resize reject an effective SealedEnv file when the target image lacks the
+capability, before writing files or changing resources. An update may replace it
+with nonempty legacy `encrypted_env` while switching to an older image. Empty env
+fields preserve the existing format. Guest `UpdateSealedEnv` uploads also require
+a capable running image.
+
 SealedEnv has one format, version 1, with both epoch fields always present.
 This PR accepts app epoch zero only; the field is reserved for application key
 rotation without changing this format. Signature and HPKE contexts always include

@@ -1626,6 +1626,9 @@ impl App {
             if vm.config.cid != cid {
                 bail!("VM CID changed");
             }
+            if !env.is_empty() && !vm.config.image.info.sealed_env {
+                bail!("the VM image does not support sealed_env");
+            }
             vm.state.env_update.take()
         };
         let Some(boot_env) = boot_env else {
@@ -2619,6 +2622,18 @@ mod tests {
         assert!(app.update_sealed_env(cid, b"new".to_vec()).await.is_err());
         workdir.write_env(b"legacy", &[]).unwrap();
         boot();
+        let err = app
+            .update_sealed_env(cid, b"sealed".to_vec())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("does not support sealed_env"));
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"legacy");
+        assert!(!workdir.sealed_env_path().exists());
+        Arc::get_mut(&mut app.lock().vms.get_mut("vm-1").unwrap().config)
+            .unwrap()
+            .image
+            .info
+            .sealed_env = true;
         app.update_sealed_env(cid, b"sealed".to_vec())
             .await
             .unwrap();
