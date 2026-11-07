@@ -210,10 +210,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Point an epoch at a new copy of its evidence, for when the old location
-    // goes away. Bind the update to the keys in case a pending epoch was replaced.
-    function setRootEpochEvidenceUrl(uint256 epoch, bytes32 chainHash, string calldata evidenceUrl) external onlyOwner {
+    // goes away. The evidence proves itself, so only its location changes.
+    function setRootEpochEvidenceUrl(uint256 epoch, string calldata evidenceUrl) external onlyOwner {
         require(epoch < _rootEpochs.length, "Unknown root epoch");
-        require(_rootEpochs[epoch].chainHash == chainHash, "root epoch chain hash mismatch");
         require(bytes(evidenceUrl).length > 0, "Empty epoch evidence URL");
         _rootEpochs[epoch].evidenceUrl = evidenceUrl;
         emit RootEpochEvidenceUrlSet(epoch, evidenceUrl);
