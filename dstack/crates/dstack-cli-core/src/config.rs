@@ -194,13 +194,37 @@ pub fn auth_allowlist_json(cfg: &HostConfig) -> String {
 /// compose hash.
 pub const DEFAULT_KMS_IMAGE: &str = "dstacktee/dstack-kms:0.5.11@sha256:84b793feed825a5b5e70d04386e931e0e110461492793f17ab2128e39808d989";
 
+pub const DEV_KMS_MOUNT: &str = "/run/dstack-dev-kms";
+
+pub enum KmsImage {
+    Registry(String),
+    Dev {
+        image_ref: String,
+        volume: dstack_types::VerityVolume,
+    },
+}
+
+impl KmsImage {
+    pub fn image(&self) -> &str {
+        match self {
+            Self::Registry(image) => image,
+            Self::Dev { image_ref, .. } => image_ref,
+        }
+    }
+}
+
 /// Build the KMS app-compose manifest with an embedded `kms.toml` init script.
 /// Select SGX local provisioning on TDX and native SNP provisioning on AMD.
-pub fn kms_app_compose(kms_toml: &str, kms_image: &str, platform: Platform) -> String {
+pub fn kms_app_compose(kms_toml: &str, image: &KmsImage, platform: Platform) -> String {
+    let pull_policy = match image {
+        KmsImage::Registry(_) => "",
+        KmsImage::Dev { .. } => "    pull_policy: never",
+    };
     let docker_compose = format!(
         r#"services:
   kms:
     image: {kms_image}
+{pull_policy}
     volumes:
       - kms-volume:/kms
       - /var/run/dstack.sock:/var/run/dstack.sock
@@ -211,7 +235,8 @@ pub fn kms_app_compose(kms_toml: &str, kms_image: &str, platform: Platform) -> S
     command: sh -c 'mkdir -p /kms/certs /kms/images && exec dstack-kms -c /kms/kms.toml'
 volumes:
   kms-volume:
-"#
+"#,
+        kms_image = image.image(),
     );
     let init_script = format!(
         "mkdir -p /dstack/kms-config\ncat > /dstack/kms-config/kms.toml <<'KMSTOML'\n{kms_toml}\nKMSTOML\ntrue\n"
@@ -235,6 +260,12 @@ volumes:
     if platform == Platform::AmdSevSnp {
         manifest["key_provider"] = json!("sev-snp");
     }
+    if let KmsImage::Dev { volume, .. } = image {
+        manifest["verity_volumes"] = json!([volume]);
+        manifest["pre_launch_script"] = json!(format!(
+            "set -euo pipefail\ntar -C {DEV_KMS_MOUNT} -cf - . | docker image load\n"
+        ));
+    }
     // infallible pretty-print via Value's Display; see compose::build_app_compose.
     format!("{manifest:#}")
 }
@@ -249,6 +280,8 @@ pub struct VmmRender {
     pub dashboard_addr: String,
     /// guest image directory.
     pub image_path: String,
+    /// Directory containing locally attached verity volumes.
+    pub volumes_dir: String,
     /// qemu binary path.
     pub qemu_path: String,
     /// run directory for the supervisor socket/pid/log.
@@ -283,6 +316,7 @@ impl Default for VmmRender {
         Self {
             dashboard_addr: "tcp:127.0.0.1:9080".to_string(),
             image_path: "/var/lib/dstack/images".to_string(),
+            volumes_dir: String::new(),
             qemu_path: "/usr/bin/qemu-system-x86_64".to_string(),
             run_dir: "/var/lib/dstack/run".to_string(),
             vm_path: "/var/lib/dstack/vm".to_string(),
@@ -327,6 +361,7 @@ registry = ""
 
 [cvm]
 platform = "{platform}"
+volumes_dir = "{volumes_dir}"
 qemu_path = "{qemu_path}"
 kms_urls = [{kms_urls}]
 gateway_urls = []
@@ -410,6 +445,7 @@ port = {kp_port}
 "#,
         dashboard_addr = r.dashboard_addr,
         image_path = r.image_path,
+        volumes_dir = r.volumes_dir,
         vm_path = r.vm_path,
         qemu_path = r.qemu_path,
         platform = r.platform.vmm_str(),
@@ -446,6 +482,53 @@ port = {kp_port}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dev_kms_loads_the_measured_image_without_registry_access() {
+        let id = format!("dstack-dev-kms:{}", "12".repeat(32));
+        for platform in [Platform::Tdx, Platform::AmdSevSnp] {
+            let image = KmsImage::Dev {
+                image_ref: id.clone(),
+                volume: dstack_types::VerityVolume {
+                    source: "dev-kms-test.img".into(),
+                    verity_root: [0x34; 32],
+                    target: DEV_KMS_MOUNT.into(),
+                },
+            };
+            let manifest: serde_json::Value =
+                serde_json::from_str(&kms_app_compose("config", &image, platform)).unwrap();
+            assert_eq!(
+                manifest["verity_volumes"][0]["verity_root"],
+                "34".repeat(32)
+            );
+            assert_eq!(manifest["verity_volumes"][0]["target"], DEV_KMS_MOUNT);
+            assert!(manifest["pre_launch_script"]
+                .as_str()
+                .unwrap()
+                .contains("set -euo pipefail"));
+            let yaml = yaml_rust2::YamlLoader::load_from_str(
+                manifest["docker_compose_file"].as_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                yaml[0]["services"]["kms"]["image"].as_str(),
+                Some(id.as_str())
+            );
+            assert_eq!(
+                yaml[0]["services"]["kms"]["pull_policy"].as_str(),
+                Some("never")
+            );
+        }
+        let registry = KmsImage::Registry("registry.example/kms@sha256:digest".into());
+        let manifest: serde_json::Value =
+            serde_json::from_str(&kms_app_compose("config", &registry, Platform::Tdx)).unwrap();
+        assert!(manifest.get("pre_launch_script").is_none());
+        assert!(manifest.get("verity_volumes").is_none());
+        assert!(!manifest["docker_compose_file"]
+            .as_str()
+            .unwrap()
+            .contains("pull_policy"));
+    }
 
     #[test]
     fn vmm_toml_is_valid_and_parameterized() {
@@ -503,8 +586,10 @@ mod tests {
         assert!(tdx_vmm.contains("use_mrconfigid = false"));
         assert!(tdx_vmm.contains("[key_provider]\nenabled = true"));
         toml::from_str::<toml::Value>(&tdx_vmm).expect("tdx vmm.toml valid");
-        assert!(kms_app_compose("x", "img", Platform::Tdx)
-            .contains(r#""local_key_provider_enabled": true"#));
+        assert!(
+            kms_app_compose("x", &KmsImage::Registry("img".into()), Platform::Tdx)
+                .contains(r#""local_key_provider_enabled": true"#)
+        );
 
         // SNP: key-release gate set, vhd share, mrconfigid on, native sealing.
         let snp = kms_toml(&HostConfig {
@@ -522,10 +607,16 @@ mod tests {
         assert!(snp_vmm.contains("use_mrconfigid = true"));
         assert!(snp_vmm.contains("[key_provider]\nenabled = false"));
         toml::from_str::<toml::Value>(&snp_vmm).expect("snp vmm.toml valid");
-        assert!(kms_app_compose("x", "img", Platform::AmdSevSnp)
-            .contains(r#""local_key_provider_enabled": false"#));
-        let snp_compose: serde_json::Value =
-            serde_json::from_str(&kms_app_compose("x", "img", Platform::AmdSevSnp)).unwrap();
+        assert!(
+            kms_app_compose("x", &KmsImage::Registry("img".into()), Platform::AmdSevSnp)
+                .contains(r#""local_key_provider_enabled": false"#)
+        );
+        let snp_compose: serde_json::Value = serde_json::from_str(&kms_app_compose(
+            "x",
+            &KmsImage::Registry("img".into()),
+            Platform::AmdSevSnp,
+        ))
+        .unwrap();
         assert_eq!(snp_compose["key_provider"], "sev-snp");
         assert_eq!(snp_compose["kms_enabled"], false);
     }

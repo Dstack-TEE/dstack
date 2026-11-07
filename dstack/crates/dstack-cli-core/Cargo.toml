@@ -21,3 +21,4 @@ rustix = { version = "0.38", features = ["fs"] }
 
 [dev-dependencies]
 toml.workspace = true
+yaml-rust2.workspace = true
