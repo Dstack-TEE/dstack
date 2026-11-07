@@ -50,20 +50,55 @@ preflight does not replace firmware, kernel, QEMU, or OVMF validation.
 
 ## Install dstack on an SNP host
 
-Pull a current unified image and select the platform explicitly:
+Use a release containing the `snp` key provider in the guest OS and VMM. The
+KMS container and client attestation verifiers must recognize the new provider
+metadata. Set `VERSION` to the OS release version and `KMS_IMAGE` to the KMS
+container reference, then install:
 
 ```bash
-VERSION=0.6.0
 sudo dstackup image pull --version "$VERSION"
-sudo dstackup install --platform amd-sev-snp --image "dstack-$VERSION"
+sudo dstackup install --platform amd-sev-snp \
+  --image "dstack-$VERSION" --kms-image "$KMS_IMAGE"
 sudo dstackup status
 ```
 
-The default `--platform auto` mode also selects SEV-SNP when the host CPU flags
-advertise `sev_snp`. Explicit selection is preferable while commissioning a
-host because it fails immediately when the required SNP device is absent.
+Confirm that installation reports `booted` for the KMS CVM. `dstackup` selects
+the `snp` provider for the KMS CVM on AMD hosts. The default
+`--platform auto` also detects SEV-SNP from the host CPU flags. Explicit
+selection checks for the required SNP device before installation. Review the
+[KMS key-release policy](#kms-key-release-policy) before serving applications.
 
-Unlike the TDX path, SEV-SNP does not use the local SGX key provider.
+## Run KMS with persistent local keys
+
+The `snp` provider lets a KMS CVM recover its encrypted disk and stored KMS
+roots after restart on the same AMD hardware. For a manually managed KMS CVM,
+set this field in its app-compose document:
+
+```json
+{"key_provider": "snp"}
+```
+
+The deployment CLI also accepts `dstack deploy --key-provider snp`. Application
+CVMs continue using `key_provider: kms` and the existing KMS API.
+
+The guest derives a seed through `SNP_GET_DERIVED_KEY` using legacy VCEK at
+VMPL0. The seed binds to launch measurement, guest policy, HOST_DATA, launch
+identity, and a pinned TCB. The guest requires debugging disabled and encrypted
+storage, and verifies the configuration binding before deriving the seed.
+
+Before initializing a new disk, the guest persists public derivation parameters
+in `.instance_info` through the host API. Preserve this file, the encrypted
+disk, and the original launch configuration together. Missing parameters for
+an existing disk, unknown versions, or derivation/unlock failures stop startup.
+
+Recovery requires the original hardware and bound launch inputs. For OS or
+compose changes, or hardware replacement, preserve KMS roots through the
+existing onboarding/replication flow. Firmware updates must support the stored
+derivation TCB and satisfy attestation policy.
+
+The entire KMS CVM, including its OS, is trusted. Protect KMS root and sealing
+keys by keeping the KMS OS and workload under operator control. Application
+key release continues to follow the existing KMS authorization policy.
 
 ## Attestation and image identity
 

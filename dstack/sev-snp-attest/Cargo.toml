@@ -16,3 +16,5 @@ fs-err.workspace = true
 hex.workspace = true
 sev.workspace = true
 tracing.workspace = true
+libc.workspace = true
+zeroize.workspace = true

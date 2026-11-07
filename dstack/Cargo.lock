@@ -2360,6 +2360,7 @@ dependencies = [
  "serde-human-bytes",
  "serde_json",
  "serde_with",
+ "sev-snp-attest",
  "sha2 0.10.9",
  "sha3",
  "sodiumbox",
@@ -2376,6 +2377,7 @@ dependencies = [
  "x25519-dalek",
  "x509-parser 0.16.0",
  "yaml-rust2",
+ "zeroize",
 ]
 
 [[package]]
@@ -7222,8 +7224,10 @@ dependencies = [
  "anyhow",
  "fs-err",
  "hex",
+ "libc",
  "sev",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

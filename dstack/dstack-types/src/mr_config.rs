@@ -32,6 +32,7 @@ fn key_provider_kind_byte(key_provider: KeyProviderKind) -> u8 {
         KeyProviderKind::Local => 1,
         KeyProviderKind::Kms => 2,
         KeyProviderKind::Tpm => 3,
+        KeyProviderKind::Snp => 4,
     }
 }
 
@@ -194,18 +195,39 @@ impl MrConfigV3 {
     }
 
     pub fn key_provider_name(&self) -> &'static str {
-        match self.key_provider {
-            KeyProviderKind::None => "none",
-            KeyProviderKind::Local => "local-sgx",
-            KeyProviderKind::Kms => "kms",
-            KeyProviderKind::Tpm => "tpm",
-        }
+        self.key_provider.measurement_name()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snp_provider_is_distinct_without_changing_legacy_codes() {
+        let providers = [
+            KeyProviderKind::None,
+            KeyProviderKind::Local,
+            KeyProviderKind::Kms,
+            KeyProviderKind::Tpm,
+            KeyProviderKind::Snp,
+        ];
+        for (code, provider) in providers.into_iter().enumerate() {
+            assert_eq!(key_provider_kind_byte(provider), code as u8);
+        }
+        let snp = MrConfigV3::new(
+            vec![1; 20],
+            vec![2; 32],
+            None,
+            KeyProviderKind::Snp,
+            vec![],
+            vec![3; 20],
+        );
+        let mut other = snp.clone();
+        other.key_provider = KeyProviderKind::None;
+        assert_eq!(snp.key_provider_name(), "snp");
+        assert_ne!(snp.to_snp_host_data(), other.to_snp_host_data());
+    }
 
     #[test]
     fn mr_config_v3_hash_changes_with_app_identity() {

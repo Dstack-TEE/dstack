@@ -1193,6 +1193,9 @@ fn gen_app_keys_from_seed(
             key: key.serialize_pem(),
             pubkey: key.public_key_der(),
         },
+        KeyProviderKind::Snp => KeyProvider::Snp {
+            key: key.serialize_pem(),
+        },
         KeyProviderKind::Kms => {
             anyhow::bail!("KMS keys must be fetched from the KMS server")
         }

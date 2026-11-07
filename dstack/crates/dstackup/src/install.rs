@@ -842,11 +842,10 @@ fn resolve_key_provider(
         println!("  [ok] using existing key provider at {addr}:{port}");
         return Ok((addr, port, None));
     }
-    // AMD SEV-SNP has no SGX local key provider; the rendered [key_provider]
-    // block is unused (the KMS-in-CVM runs with local_key_provider_enabled =
-    // false), so don't require or start one.
+    // AMD SEV-SNP derives its sealing seed inside the KMS CVM. The SGX
+    // service's [key_provider] block is unused, so don't start that service.
     if platform == Platform::AmdSevSnp {
-        println!("  [ok] no local key provider (sev-snp)");
+        println!("  [ok] native guest key provider (sev-snp)");
         return Ok(("127.0.0.1".to_string(), o.key_provider_port, None));
     }
     // TDX: run our in-tree provider under Gramine from the installed assets unless

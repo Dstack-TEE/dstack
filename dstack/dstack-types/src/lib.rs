@@ -763,9 +763,46 @@ pub enum KeyProviderKind {
     Kms,
     Local,
     Tpm,
+    Snp,
+}
+
+/// Instance identity and public recovery metadata shared by the VMM and guest.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct InstanceInfo {
+    #[serde(default, with = "hex_bytes")]
+    pub instance_id_seed: Vec<u8>,
+    #[serde(default, with = "hex_bytes")]
+    pub instance_id: Vec<u8>,
+    #[serde(default, with = "hex_bytes")]
+    pub app_id: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snp_sealing: Option<SnpSealingParameters>,
+}
+
+/// Public parameters needed to reproduce the SNP sealing seed after a restart.
+/// Version 1 fixes the root, guest fields, VMPL, and guest SVN in the provider.
+#[serde_with::serde_as]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SnpSealingParameters {
+    pub version: u32,
+    // A string preserves all 64 bits through JSON consumers using IEEE doubles.
+    #[serde_as(as = "serde_with::DisplayFromStr")]
+    pub tcb_version: u64,
 }
 
 impl KeyProviderKind {
+    /// Stable name used in measurements and key-provider events.
+    pub fn measurement_name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Local => "local-sgx",
+            Self::Kms => "kms",
+            Self::Tpm => "tpm",
+            Self::Snp => "snp",
+        }
+    }
+
     pub fn is_none(&self) -> bool {
         matches!(self, KeyProviderKind::None)
     }
@@ -2425,6 +2462,9 @@ pub enum KeyProvider {
         #[serde(with = "hex_bytes")]
         pubkey: Vec<u8>,
     },
+    Snp {
+        key: String,
+    },
     Kms {
         url: String,
         #[serde(with = "hex_bytes")]
@@ -2438,6 +2478,7 @@ impl KeyProvider {
             KeyProvider::None { .. } => KeyProviderKind::None,
             KeyProvider::Local { .. } => KeyProviderKind::Local,
             KeyProvider::Tpm { .. } => KeyProviderKind::Tpm,
+            KeyProvider::Snp { .. } => KeyProviderKind::Snp,
             KeyProvider::Kms { .. } => KeyProviderKind::Kms,
         }
     }
@@ -2450,11 +2491,13 @@ impl KeyProvider {
     ///   (from a TPM-sealed seed) and must not be treated as a stable provider id
     ///   or measured as one. Mode is already carried by [`Self::kind`].
     /// - None: empty
+    /// - SNP: empty; the fixed hardware policy is identified by the provider kind
     pub fn id(&self) -> &[u8] {
         match self {
             KeyProvider::None { .. } => &[],
             KeyProvider::Local { mr, .. } => mr,
             KeyProvider::Tpm { .. } => &[],
+            KeyProvider::Snp { .. } => &[],
             KeyProvider::Kms { pubkey, .. } => pubkey,
         }
     }
@@ -2475,6 +2518,53 @@ impl KeyProviderInfo {
 #[cfg(test)]
 mod key_provider_tests {
     use super::*;
+
+    #[test]
+    fn snp_provider_has_no_instance_dependent_id() {
+        let provider: KeyProvider = serde_json::from_str(r#"{"Snp":{"key":"test-only"}}"#).unwrap();
+        assert_eq!(provider.kind(), KeyProviderKind::Snp);
+        assert!(provider.id().is_empty());
+        assert_eq!(serde_json::to_string(&provider.kind()).unwrap(), r#""snp""#);
+        let compose: AppCompose = serde_json::from_value(serde_json::json!({
+            "name": "snp-test", "runner": "docker-compose", "manifest_version": "3", "docker_compose_file": "", "key_provider": "snp"
+        }))
+        .unwrap();
+        assert_eq!(compose.key_provider(), KeyProviderKind::Snp);
+        assert!(!compose.kms_enabled());
+    }
+
+    #[test]
+    fn legacy_instance_metadata_encoding_is_unchanged() {
+        let raw = r#"{"instance_id_seed":"0102","instance_id":"03","app_id":"04"}"#;
+        let info: InstanceInfo = serde_json::from_str(raw).unwrap();
+        assert_eq!(info.instance_id_seed, [1, 2]);
+        assert!(info.snp_sealing.is_none());
+        assert_eq!(serde_json::to_string(&info).unwrap(), raw);
+        let empty: InstanceInfo = serde_json::from_str("{}").unwrap();
+        assert!(empty.app_id.is_empty());
+    }
+
+    #[test]
+    fn snp_metadata_preserves_full_tcb_precision() {
+        let metadata = SnpSealingParameters {
+            version: 1,
+            tcb_version: u64::MAX - 1,
+        };
+        let encoded = serde_json::to_value(metadata).unwrap();
+        assert_eq!(encoded["tcb_version"], (u64::MAX - 1).to_string());
+        assert_eq!(
+            serde_json::from_value::<SnpSealingParameters>(encoded).unwrap(),
+            metadata
+        );
+        assert!(
+            serde_json::from_str::<SnpSealingParameters>(r#"{"version":1,"tcb_version":1}"#)
+                .is_err()
+        );
+        assert!(serde_json::from_str::<SnpSealingParameters>(
+            r#"{"version":1,"tcb_version":"1","root_key_select":0}"#
+        )
+        .is_err());
+    }
 
     #[test]
     fn legacy_kms_provider_drops_temp_ca_material_when_reserialized() {

@@ -194,10 +194,8 @@ pub fn auth_allowlist_json(cfg: &HostConfig) -> String {
 /// compose hash.
 pub const DEFAULT_KMS_IMAGE: &str = "dstacktee/dstack-kms:0.5.11@sha256:84b793feed825a5b5e70d04386e931e0e110461492793f17ab2128e39808d989";
 
-/// build the KMS-in-CVM app-compose manifest. An init script writes the
-/// rendered `kms.toml` into the guest and the KMS container mounts it. On TDX
-/// the CVM uses the SGX local key provider to seal the KMS root key; AMD
-/// SEV-SNP has no such provider, so it's disabled there.
+/// Build the KMS app-compose manifest with an embedded `kms.toml` init script.
+/// Select SGX local provisioning on TDX and native SNP provisioning on AMD.
 pub fn kms_app_compose(kms_toml: &str, kms_image: &str, platform: Platform) -> String {
     let docker_compose = format!(
         r#"services:
@@ -218,7 +216,7 @@ volumes:
     let init_script = format!(
         "mkdir -p /dstack/kms-config\ncat > /dstack/kms-config/kms.toml <<'KMSTOML'\n{kms_toml}\nKMSTOML\ntrue\n"
     );
-    let manifest = json!({
+    let mut manifest = json!({
         "manifest_version": 2,
         "name": "dstack-kms",
         "runner": "docker-compose",
@@ -234,6 +232,9 @@ volumes:
         "secure_time": false,
         "allowed_envs": []
     });
+    if platform == Platform::AmdSevSnp {
+        manifest["key_provider"] = json!("snp");
+    }
     // infallible pretty-print via Value's Display; see compose::build_app_compose.
     format!("{manifest:#}")
 }
@@ -403,7 +404,7 @@ address = "vsock:2"
 port = {host_api_port}
 
 [key_provider]
-enabled = true
+enabled = {use_sgx_key_provider}
 address = "{kp_addr}"
 port = {kp_port}
 "#,
@@ -432,6 +433,7 @@ port = {kp_port}
         host_api_port = r.host_api_port,
         kp_addr = r.key_provider_addr,
         kp_port = r.key_provider_port,
+        use_sgx_key_provider = r.platform == Platform::Tdx,
         auth_enabled = r.auth_enabled,
         auth_tokens = if r.auth_token.is_empty() {
             String::new()
@@ -499,11 +501,12 @@ mod tests {
         assert!(tdx_vmm.contains(r#"platform = "tdx""#));
         assert!(tdx_vmm.contains(r#"host_share_mode = "9p""#));
         assert!(tdx_vmm.contains("use_mrconfigid = false"));
+        assert!(tdx_vmm.contains("[key_provider]\nenabled = true"));
         toml::from_str::<toml::Value>(&tdx_vmm).expect("tdx vmm.toml valid");
         assert!(kms_app_compose("x", "img", Platform::Tdx)
             .contains(r#""local_key_provider_enabled": true"#));
 
-        // SNP: key-release gate set, vhd share, mrconfigid on, no local provider.
+        // SNP: key-release gate set, vhd share, mrconfigid on, native sealing.
         let snp = kms_toml(&HostConfig {
             platform: Platform::AmdSevSnp,
             ..Default::default()
@@ -517,9 +520,14 @@ mod tests {
         assert!(snp_vmm.contains(r#"platform = "amd-sev-snp""#));
         assert!(snp_vmm.contains(r#"host_share_mode = "vhd""#));
         assert!(snp_vmm.contains("use_mrconfigid = true"));
+        assert!(snp_vmm.contains("[key_provider]\nenabled = false"));
         toml::from_str::<toml::Value>(&snp_vmm).expect("snp vmm.toml valid");
         assert!(kms_app_compose("x", "img", Platform::AmdSevSnp)
             .contains(r#""local_key_provider_enabled": false"#));
+        let snp_compose: serde_json::Value =
+            serde_json::from_str(&kms_app_compose("x", "img", Platform::AmdSevSnp)).unwrap();
+        assert_eq!(snp_compose["key_provider"], "snp");
+        assert_eq!(snp_compose["kms_enabled"], false);
     }
 
     #[test]

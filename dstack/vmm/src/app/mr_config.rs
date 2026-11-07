@@ -199,6 +199,32 @@ mod tests {
     use super::*;
     use dstack_types::KeyProviderKind;
 
+    #[test]
+    fn relaunch_preserves_snp_sealing_parameters() {
+        let temp = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(temp.path());
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        let mut compose = app_compose(serde_json::json!("3"));
+        compose.key_provider = Some(KeyProviderKind::Snp);
+        fs::write(
+            workdir.app_compose_path(),
+            serde_json::to_vec(&compose).unwrap(),
+        )
+        .unwrap();
+        let original = serde_json::json!({
+            "instance_id_seed": "11".repeat(20),
+            "instance_id": "22".repeat(20),
+            "app_id": "33".repeat(20),
+            "snp_sealing": {"version": 1, "tcb_version": "257"}
+        });
+        fs::write(workdir.instance_info_path(), original.to_string()).unwrap();
+        workdir.prepare_mr_config_v3(&compose, false).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(workdir.instance_info_path()).unwrap()).unwrap();
+        assert_eq!(saved["snp_sealing"], original["snp_sealing"]);
+        assert_eq!(saved["instance_id_seed"], original["instance_id_seed"]);
+    }
+
     fn app_compose(manifest_version: serde_json::Value) -> AppCompose {
         serde_json::from_value(serde_json::json!({
             "manifest_version": manifest_version,
