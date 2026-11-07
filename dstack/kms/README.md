@@ -333,5 +333,9 @@ Onboarding uses the same self-issued client flow with or without an admin token,
 and checks the source attestation captured from the key-carrying connection
 against local KMS policy before importing anything. Retries and reconnects repeat
 verification on the response connection; no assumption relies on one TCP session
-lasting forever. Historical guest key requests use the already trusted current
-KMS CA for TLS, not the historical response CA.
+lasting forever. All subsequent key requests pin the KMS CA established at startup, regardless
+of whether the epoch selector is omitted or explicit. A supplied `trusted_ca`
+always wins over the response CA. The selected epoch's CA never replaces this
+lifetime pin; a TLS CA change requires a fresh boot/trust establishment rather
+than silently trusting another KMS. Without a supplied pin, the response CA
+must sign the actual RPC certificate, even when an epoch is explicitly selected.

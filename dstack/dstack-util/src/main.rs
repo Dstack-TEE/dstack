@@ -661,11 +661,11 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         },
         cert_pair,
         std::sync::Arc::new(ra_tls::attestation::AttestationVerifier::new_prod(None)?),
-        root_ca_pem,
+        root_ca_pem.clone(),
     )
     .await
     .context("Failed to get app keys from the attested KMS")?;
-    let root_ca = response.ca_cert;
+    let root_ca = root_ca_pem.unwrap_or(response.ca_cert);
 
     // Build AppKeys from the authenticated response.
     let (_, ca_pem) =
