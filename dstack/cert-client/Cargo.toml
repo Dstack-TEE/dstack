@@ -23,6 +23,7 @@ tokio.workspace = true
 x509-parser = { workspace = true, features = ["verify"] }
 
 [dev-dependencies]
+ra-rpc = { workspace = true, features = ["rocket", "client"] }
 mock-attestation = { path = "../crates/mock-attestation" }
 hex.workspace = true
 rocket.workspace = true

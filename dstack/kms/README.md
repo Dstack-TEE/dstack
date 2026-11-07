@@ -313,7 +313,9 @@ CA-issued client certificates, are no longer supported.
 Guests and `dstack-util get-keys` generate their self-issued RA-TLS certificate
 locally, then call `GetAppKey` directly. They verify the response connection's
 attestation and `kms:rpc` usage, and verify that the returned root CA signed that
-connection's certificate. There is no `GetMeta` preflight or first unauthenticated
+connection's certificate. Skipping CA-chain validation during this first request
+still verifies the TLS handshake signature, so replaying an attested certificate
+without its private key cannot impersonate the server. There is no `GetMeta` preflight or first unauthenticated
 connection. The optional provider pin and the key-provider launch measurement
 still bind the root identity; a valid quote alone is not a KMS policy decision.
 `--root-ca` additionally pins the CLI connection before sending the request.

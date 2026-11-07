@@ -5922,6 +5922,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "x509-parser 0.16.0",
 ]
