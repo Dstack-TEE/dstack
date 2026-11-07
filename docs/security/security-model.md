@@ -425,7 +425,7 @@ The KMS Rocket TLS listener permits connections without a client certificate bec
 
 App key release and KMS key handover require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and the attestation embedded in the CSR before signing.
 
-The unauthenticated or non-client-certificate surface includes bootstrap and temp-CA bootstrap material retrieval, env-encryption public-key retrieval, metadata, health, and metrics behavior documented for operators. `GetTempCaCert` returns temp CA private material and remains in use by guests and by KMS-to-KMS onboarding, which mint their client certificates from that CA; operators must treat it as bootstrap-sensitive rather than harmless public metadata.
+The unauthenticated or non-client-certificate surface includes bootstrap and temp-CA bootstrap material retrieval, env-encryption public-key retrieval, metadata, health, and metrics behavior documented for operators. `GetTempCaCert` returns temp CA private material and remains in use by older guest images and by KMS-to-KMS onboarding without a `source_token`, which mint their client certificates from that CA; operators must treat it as bootstrap-sensitive rather than harmless public metadata.
 
 KMS-to-KMS root-key handover is served by `Admin.GetKmsKey` on the authenticated
 admin listener, which additionally requires a verified RA-TLS client certificate.

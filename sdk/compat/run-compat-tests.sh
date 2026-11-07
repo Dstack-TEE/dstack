@@ -273,7 +273,7 @@ run_python_suite() {
         cd "$sdk_root/python"
         if ! command -v pdm >/dev/null 2>&1; then
             echo "Installing PDM..."
-            pip install pdm 'unearth<0.19'
+            pip install pdm 'unearth<0.19' 'hishel<2'
         fi
         pdm install --dev
         # `pdm run check` is deliberately not run: it lints the released SDK's
