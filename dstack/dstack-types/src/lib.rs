@@ -2407,6 +2407,17 @@ pub struct AppKeys {
     pub key_provider: KeyProvider,
 }
 
+impl AppKeys {
+    /// KMS root epoch the keys were derived from; 0 for other key providers,
+    /// which have a single root.
+    pub fn root_epoch(&self) -> u32 {
+        match self.key_provider {
+            KeyProvider::Kms { root_epoch, .. } => root_epoch,
+            _ => 0,
+        }
+    }
+}
+
 /// Maximum length of a framed message exchanged with the local key provider.
 pub const KEY_PROVIDER_MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
 
@@ -2429,6 +2440,9 @@ pub enum KeyProvider {
         url: String,
         #[serde(with = "hex_bytes")]
         pubkey: Vec<u8>,
+        /// KMS root key epoch the keys were derived from.
+        #[serde(default)]
+        root_epoch: u32,
     },
 }
 
@@ -2491,7 +2505,7 @@ mod key_provider_tests {
         assert_eq!(
             serde_json::to_value(provider).unwrap(),
             serde_json::json!({
-                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd" }
+                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd", "root_epoch": 0 }
             })
         );
     }
@@ -2510,6 +2524,7 @@ mod key_provider_tests {
         let kms = KeyProvider::Kms {
             url: "https://kms.example".into(),
             pubkey: vec![0xab; 32],
+            root_epoch: 0,
         };
         assert_eq!(kms.id(), &[0xab; 32]);
     }

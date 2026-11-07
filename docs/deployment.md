@@ -547,6 +547,8 @@ for the full procedure; the KMS steps are:
    If the nodes holding N are lost before N is activated, drop it with
    `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
    that imported the dropped N must be onboarded again.
+6. Boot CVMs on an OS that supports root epochs. At boot they re-key their data
+   disk from the epoch recorded in its LUKS header to the current one.
 
 Each `checkKmsAuthorization` or `checkAppAuthorization` result carries the current epoch and its chain hash,
 including when authorization is denied. KMS verifies these against its keyring;

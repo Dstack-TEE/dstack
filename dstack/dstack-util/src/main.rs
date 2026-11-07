@@ -683,6 +683,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         key_provider: KeyProvider::Kms {
             url: kms_url,
             pubkey: root_pubkey,
+            root_epoch: response.root_epoch,
         },
     };
 
