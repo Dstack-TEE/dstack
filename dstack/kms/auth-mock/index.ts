@@ -30,8 +30,8 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
-  appEpoch: z.number().int().min(0).max(0xffffffff).default(0),
-  requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
+  requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
@@ -121,11 +121,11 @@ class MockBackend {
     if (current.rootEpoch === undefined) {
       return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
-    if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
+    if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > current.rootEpoch) {
       return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
-    if (appInfo.appEpoch !== 0) {
-      return { isAllowed: false, rejectionReason: 'App epoch is not supported', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    if (appInfo.requestedAppEpoch !== 0) {
+      return { isAllowed: false, rejectionReason: 'Requested app epoch must be zero', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     const kmsAppId = process.env.KMS_CONTRACT_ADDR || '0xmockcontract1234567890123456789012345678';
     if (isKms !== (normHash(appInfo.appId) === normHash(kmsAppId))) {

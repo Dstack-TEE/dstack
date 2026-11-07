@@ -265,9 +265,9 @@ impl AuthApi {
     pub async fn check_app_authorization(
         &self,
         app_info: &BootInfo,
-        requested_epoch: Option<u32>,
+        requested_root_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
-        self.check_authorization(app_info, "checkAppAuthorization", requested_epoch)
+        self.check_authorization(app_info, "checkAppAuthorization", requested_root_epoch)
             .await
     }
 
@@ -275,16 +275,16 @@ impl AuthApi {
         &self,
         app_info: &BootInfo,
         method: &str,
-        requested_epoch: Option<u32>,
+        requested_root_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct AuthorizationRequest<'a> {
             #[serde(flatten)]
             app_info: &'a BootInfo,
-            app_epoch: u32,
+            requested_app_epoch: u32,
             #[serde(skip_serializing_if = "Option::is_none")]
-            requested_epoch: Option<u32>,
+            requested_root_epoch: Option<u32>,
         }
         ensure_identity_widths(app_info)?;
         match self {
@@ -301,8 +301,8 @@ impl AuthApi {
                     &url,
                     &AuthorizationRequest {
                         app_info,
-                        app_epoch: 0,
-                        requested_epoch,
+                        requested_app_epoch: 0,
+                        requested_root_epoch,
                     },
                     webhook.timeout,
                 )
@@ -724,11 +724,11 @@ pub(crate) mod tests {
             .all(|(path, _)| path == "/checkAppAuthorization"));
         assert_eq!(requests[3].0, "/checkKmsAuthorization");
         let mut expected = serde_json::to_value(info).unwrap();
-        expected["appEpoch"] = 0.into();
+        expected["requestedAppEpoch"] = 0.into();
         assert_eq!(requests[0].1, expected);
-        assert_eq!(requests[2].1["appEpoch"], 0);
-        assert!(requests[0].1.get("requestedEpoch").is_none());
-        assert_eq!(requests[2].1["requestedEpoch"], 0);
+        assert_eq!(requests[2].1["requestedAppEpoch"], 0);
+        assert!(requests[0].1.get("requestedRootEpoch").is_none());
+        assert_eq!(requests[2].1["requestedRootEpoch"], 0);
     }
 
     #[rocket::async_test]

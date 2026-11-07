@@ -528,10 +528,10 @@ impl RpcHandler {
     async fn ensure_app_boot_allowed(
         &self,
         vm_config: &str,
-        requested_epoch: Option<u32>,
+        requested_root_epoch: Option<u32>,
     ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
-        self.ensure_app_attestation_allowed(att, false, false, vm_config, requested_epoch)
+        self.ensure_app_attestation_allowed(att, false, false, vm_config, requested_root_epoch)
             .await
     }
 
@@ -541,17 +541,19 @@ impl RpcHandler {
         is_kms: bool,
         use_boottime_mr: bool,
         vm_config_str: &str,
-        requested_epoch: Option<u32>,
+        requested_root_epoch: Option<u32>,
     ) -> Result<BootConfig> {
         let boot_info = build_boot_info_for_attestation(att, use_boottime_mr, vm_config_str)?;
         let auth = &self.state.config.auth_api;
         let response = if is_kms {
             auth.check_kms_authorization(&boot_info).await?
         } else {
-            auth.check_app_authorization(&boot_info, requested_epoch)
+            auth.check_app_authorization(&boot_info, requested_root_epoch)
                 .await?
         };
-        let root_epoch = self.state.authorized_epoch(&response, requested_epoch)?;
+        let root_epoch = self
+            .state
+            .authorized_epoch(&response, requested_root_epoch)?;
         let current_epoch = if self.state.config.auth_api.is_dev() {
             self.state.keyring.latest()
         } else {

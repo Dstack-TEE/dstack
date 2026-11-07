@@ -550,7 +550,7 @@ for the full procedure; the KMS steps are:
 
 Each `checkKmsAuthorization` or `checkAppAuthorization` result carries the current epoch and its chain hash,
 including when authorization is denied. KMS verifies these against its keyring;
-there is no cached serving epoch. An optional `requestedEpoch` selects historical
+there is no cached serving epoch. An optional `requestedRootEpoch` selects historical
 keys, and omission selects the returned current epoch. Requests for future
 epochs are denied. No registered epoch returns a rejection with
 `rejectionReason: "Root epoch not registered"` and a zero hash.

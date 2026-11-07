@@ -480,11 +480,11 @@ contract DstackKmsTest is Test {
         vm.prank(owner);
         kms.activateRootEpoch(1, h1);
         assertTrue(kms.checkKmsAuthorization(request).isAllowed);
-        request.requestedEpoch.value = 0;
+        request.requestedRootEpoch.value = 0;
         assertTrue(kms.checkKmsAuthorization(request).isAllowed);
-        request.requestedEpoch.value = type(uint256).max;
+        request.requestedRootEpoch.value = type(uint256).max;
         assertFalse(kms.checkKmsAuthorization(request).isAllowed);
-        request.requestedEpoch.isSet = false;
+        request.requestedRootEpoch.isSet = false;
         result = kms.checkKmsAuthorization(request);
         assertTrue(result.isAllowed);
         assertEq(result.currentRootEpoch, 1);
@@ -532,7 +532,7 @@ contract DstackKmsTest is Test {
             DstackKms.AuthorizationRequest(info, 1, DstackKms.OptionalEpoch(false, 0));
         result = kms.checkAppAuthorization(appRequest);
         assertFalse(result.isAllowed);
-        assertEq(result.rejectionReason, "App epoch is not supported");
+        assertEq(result.rejectionReason, "Requested app epoch must be zero");
         assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
         info.appId = address(kms);
         result = authorize(info, false);

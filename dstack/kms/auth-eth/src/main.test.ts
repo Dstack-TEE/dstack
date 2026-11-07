@@ -92,7 +92,7 @@ describe('Server', () => {
   });
 
   describe('POST /checkAppAuthorization', () => {
-    const appRequest = { ...mockBootInfo, appEpoch: 0 };
+    const appRequest = { ...mockBootInfo, requestedAppEpoch: 0 };
     it('preserves the complete decision, including the epoch on rejection', async () => {
       const decision = {
         isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
@@ -105,8 +105,8 @@ describe('Server', () => {
       expect(app.ethereum.checkAuthorization).toHaveBeenCalledWith(appRequest, 'checkAppAuthorization');
       await app.inject({ method: 'POST', url: '/checkKmsAuthorization', payload: appRequest });
       expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith(appRequest, 'checkKmsAuthorization');
-      await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: { ...appRequest, requestedEpoch: 0 } });
-      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...appRequest, requestedEpoch: 0 }, 'checkAppAuthorization');
+      await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: { ...appRequest, requestedRootEpoch: 0 } });
+      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...appRequest, requestedRootEpoch: 0 }, 'checkAppAuthorization');
     });
 
     it('fails closed when the new contract method is unavailable', async () => {

@@ -55,8 +55,8 @@ export async function build(): Promise<FastifyInstance> {
     $id: 'authorizationRequest',
     properties: {
       ...appInfoSchema.properties,
-      appEpoch: { type: 'integer', minimum: 0, maximum: 4294967295, default: 0 },
-      requestedEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
+      requestedAppEpoch: { type: 'integer', minimum: 0, maximum: 4294967295, default: 0 },
+      requestedRootEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
     },
   });
 
