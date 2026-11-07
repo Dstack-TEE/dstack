@@ -76,7 +76,7 @@ Operational notes:
 2. `Boot Progress: done` does **not** guarantee the onboard endpoint is ready.
 3. The onboarding completion endpoint is **GET `/finish`**.
 4. On teepod with gateway, onboard mode usually uses the `-8000` URL, while runtime TLS KMS RPC usually uses the `-8000s` URL. **Port forwarding** (`--port tcp:0.0.0.0:<host-port>:8000`) is simpler than gateway for testing, because gateway requires the auth API to return a `gatewayAppId` at boot time.
-5. If you use a very small custom webhook instead of the real auth service, `KMS.GetMeta` may fail because `auth_api.get_info()` expects extra chain / contract metadata fields. In that case, use `GetTempCaCert` as the runtime readiness probe.
+5. If you use a very small custom webhook instead of the real auth service, `KMS.GetMeta` may fail because `auth_api.get_info()` expects extra chain / contract metadata fields. In that case, use `GetAppEnvEncryptPubKey` as the runtime readiness probe.
 6. dstack CVMs use QEMU user-mode networking — the host is reachable at **`10.0.2.2`** from inside the CVM. The `source_url` in `Onboard.Onboard` must use a CVM-reachable address (e.g., `https://10.0.2.2:<port>/prpc`), not `127.0.0.1`.
 7. **~~Remote KMS attestation has an empty `osImageHash`.~~** Fixed: RA-TLS certs now use the unified `PHALA_RATLS_ATTESTATION` format which preserves `vm_config`. For old source KMS instances, the receiver-side check fills `osImageHash` from the local KMS's own value automatically. No special `"0x"` entry in `osImages` is needed anymore.
 
@@ -205,7 +205,7 @@ curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetMeta?json" \
   - `k256_pubkey`
   - `bootstrap_info`
 
-If `KMS.GetMeta` fails because your minimal webhook does not return chain / contract info, use `GetTempCaCert` below as the runtime readiness probe instead.
+If `KMS.GetMeta` fails because your minimal webhook does not return chain / contract info, use `GetAppEnvEncryptPubKey` below as the runtime readiness probe instead.
 
 ---
 
@@ -273,24 +273,25 @@ This section folds the runtime trusted-RPC verification into the same flow.
 | bootstrap deny | source-side auth leaves `kms.mrAggregated` empty or omits the current `kms-src` MR | `Onboard.Bootstrap` on `kms-src` | `KMS is not allowed to bootstrap`, `MR aggregated not allowed` |
 | onboard deny (receiver-side) | destination-side auth leaves `kms.mrAggregated` empty or omits the current `kms-src` MR | `Onboard.Onboard` on `kms-dst` | source KMS not allowed / onboarding failed |
 | onboard deny (source-side) | source-side auth leaves `kms.mrAggregated` empty or omits the current `kms-dst` MR | `Onboard.Onboard` on `kms-dst` | source rejected destination caller / `GetKmsKey` authorization failed |
-| runtime deny | auth removes the running KMS from `kms.mrAggregated` | `GetTempCaCert` or another trusted RPC | `KMS self authorization failed`, `KMS is not allowed` |
+| runtime deny | auth removes the running KMS from `kms.mrAggregated` | `GetAppEnvEncryptPubKey` or another trusted RPC | `KMS self authorization failed`, `KMS is not allowed` |
 
 Use the happy-path steps below first, then flip policies one by one and rerun the indicated probe.
 
-### 7.1 Minimum canary: `GetTempCaCert`
+### 7.1 Minimum canary: `GetAppEnvEncryptPubKey`
 
 ```bash
-curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-bootstrap-onboard/kms-src-get-temp-ca.json | jq .
+curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetAppEnvEncryptPubKey?json" \
+  -H 'Content-Type: application/json' -d '{"app_id":"1111111111111111111111111111111111111111"}' \
+  | tee /tmp/kms-bootstrap-onboard/kms-src-get-env-pubkey.json | jq .
 ```
 
 Expected result:
 
 - success
 - response contains:
-  - `temp_ca_cert`
-  - `temp_ca_key`
-  - `ca_cert`
+  - `public_key`
+  - `signature_v1`
+  - `timestamp`
 
 ### 7.2 `GetKmsKey`
 
@@ -332,8 +333,9 @@ Expected result:
 After a normal happy-path run, flip source-side auth policy to deny `kms-src` itself and retry:
 
 ```bash
-curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-bootstrap-onboard/kms-src-get-temp-ca-after-deny.json | jq .
+curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetAppEnvEncryptPubKey?json" \
+  -H 'Content-Type: application/json' -d '{"app_id":"1111111111111111111111111111111111111111"}' \
+  | tee /tmp/kms-bootstrap-onboard/kms-src-get-env-pubkey-after-deny.json | jq .
 ```
 
 Expected result:
@@ -405,8 +407,9 @@ Then restore both source-side and destination-side allowlists and rerun the norm
 After a successful bootstrap or onboard, remove the running KMS's own MR from `kms.mrAggregated` and retry:
 
 ```bash
-curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-bootstrap-onboard/kms-src-get-temp-ca-denied.json | jq .
+curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetAppEnvEncryptPubKey?json" \
+  -H 'Content-Type: application/json' -d '{"app_id":"1111111111111111111111111111111111111111"}' \
+  | tee /tmp/kms-bootstrap-onboard/kms-src-get-env-pubkey-denied.json | jq .
 ```
 
 Expected result:
@@ -414,7 +417,7 @@ Expected result:
 - response contains `.error`
 - error indicates KMS self authorization failed or the KMS is not allowed
 
-You can repeat the same check on `kms-dst` after onboard by removing `kms-dst` from destination-side policy and retrying `KMS.GetTempCaCert`.
+You can repeat the same check on `kms-dst` after onboard by removing `kms-dst` from destination-side policy and retrying `KMS.GetAppEnvEncryptPubKey`.
 
 ---
 
@@ -427,8 +430,8 @@ For each run, save:
 3. onboard response
 4. `/finish` responses
 5. runtime `KMS.GetMeta` responses
-6. trusted RPC responses such as `GetTempCaCert`
-7. deny-case responses such as `kms-src-bootstrap-denied.json`, `kms-dst-onboard-denied.json`, `kms-dst-onboard-denied-by-src.json`, and `kms-src-get-temp-ca-denied.json`
+6. trusted RPC responses such as `GetAppEnvEncryptPubKey`
+7. deny-case responses such as `kms-src-bootstrap-denied.json`, `kms-dst-onboard-denied.json`, `kms-dst-onboard-denied-by-src.json`, and `kms-src-get-env-pubkey-denied.json`
 8. auth policy snapshots used during the run
 
 Recommended archive:
@@ -447,8 +450,8 @@ The flow is considered validated if all of the following are true:
 2. `kms-src` transitions to runtime mode successfully
 3. `kms-dst` onboard succeeds against `kms-src`
 4. `kms-dst` transitions to runtime mode successfully
-5. runtime metadata probes succeed on both KMS instances, or `GetTempCaCert` succeeds when `GetMeta` is unavailable with a minimal webhook
-6. at least one trusted runtime RPC such as `GetTempCaCert` succeeds
+5. runtime metadata probes succeed on both KMS instances, or `GetAppEnvEncryptPubKey` succeeds when `GetMeta` is unavailable with a minimal webhook
+6. at least one trusted runtime RPC such as `GetAppEnvEncryptPubKey` succeeds
 7. the selected deny cases fail at the expected RPC with an authorization error
 
 ---

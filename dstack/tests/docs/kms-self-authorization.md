@@ -6,7 +6,7 @@ The goal is to validate the following behaviors without depending on `kms/e2e/` 
 
 1. **Bootstrap self-check**: a KMS must call the auth API and verify that **itself** is allowed before bootstrap succeeds.
 2. **Onboard receiver-side source check**: a new KMS must reject onboarding if the **source KMS** is not allowed by the receiver's auth policy.
-3. **Trusted RPC self-check**: trusted KMS RPCs such as `GetTempCaCert`, `GetKmsKey`, `GetAppKey`, and `SignCert` must fail when the running KMS is no longer allowed by its auth policy.
+3. **Trusted RPC self-check**: trusted KMS RPCs such as `GetAppEnvEncryptPubKey`, `GetKmsKey`, `GetAppKey`, and `SignCert` must fail when the running KMS is no longer allowed by its auth policy.
 4. **Attestation requirement**: KMS always requires attestation; for local development without TDX hardware, use `sdk/simulator`.
 
 This guide is written as a deployment-and-test runbook so an AI agent can follow it end-to-end.
@@ -589,15 +589,16 @@ Verify that a running KMS re-checks its own authorization on trusted RPCs.
 
 ### Recommended canary RPC
 
-Use `GetTempCaCert` first. It is simpler than `GetAppKey` because it does not require preparing an attested app client, but it still exercises the new runtime self-check.
+Use `GetAppEnvEncryptPubKey` first. It is simpler than `GetAppKey` because it does not require preparing an attested app client, but it still exercises the new runtime self-check.
 
 ### Steps
 
 1. While `kms-src` is healthy, confirm the canary RPC works:
 
 ```bash
-curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-self-auth/get-temp-ca-allowed.json | jq .
+curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetAppEnvEncryptPubKey?json" \
+  -H 'Content-Type: application/json' -d '{"app_id":"1111111111111111111111111111111111111111"}' \
+  | tee /tmp/kms-self-auth/get-env-pubkey-allowed.json | jq .
 ```
 
 2. Flip `auth-simple-src` to deny `kms-src` itself:
@@ -609,13 +610,14 @@ cp /tmp/kms-self-auth/auth-src-deny-self.json /tmp/kms-self-auth/auth-src.json
 3. Retry the same RPC:
 
 ```bash
-curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-self-auth/get-temp-ca-denied.json | jq .
+curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetAppEnvEncryptPubKey?json" \
+  -H 'Content-Type: application/json' -d '{"app_id":"1111111111111111111111111111111111111111"}' \
+  | tee /tmp/kms-self-auth/get-env-pubkey-denied.json | jq .
 ```
 
 ### Expected result
 
-- before the policy flip: `GetTempCaCert` succeeds
+- before the policy flip: `GetAppEnvEncryptPubKey` succeeds
 - after the policy flip: the response contains `.error`
 - the error should indicate KMS self-authorization failed, or that the KMS is not allowed
 
@@ -667,7 +669,7 @@ For each run, save:
 2. auth config snapshots used for each step
 3. bootstrap/onboard RPC responses
 4. `KMS.GetMeta` output after successful boot
-5. `GetTempCaCert` allow/deny responses
+5. `GetAppEnvEncryptPubKey` allow/deny responses
 6. relevant CVM logs if a step fails unexpectedly
 
 Recommended archive:

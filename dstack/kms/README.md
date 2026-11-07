@@ -287,8 +287,8 @@ fail closed. Self-authorization retains its one-second cache of complete results
 The TLS listener has a separate lifetime: when an authorized current CA differs
 from the running RPC certificate's issuer, the KMS requests a restart to refresh
 that certificate and the caller must retry. The RPC CA does not select key
-epochs. `GetTempCaCert` reports the actual TLS issuer; application key responses
-and signed certificate chains report the selected epoch's CA. CA certificates
+epochs. Application key responses and signed certificate chains report the
+selected epoch's CA. CA certificates
 are reloaded after renewal at startup.
 
 Upgrade the contract and auth backend and register epoch 0 before using this
@@ -300,3 +300,27 @@ root keys can be generated and attested before registering epoch 0. For
 `auth-simple`, set `kmsContractAddr` to the attested KMS app ID and configure
 `rootEpochs`; for `auth-mock`, set `KMS_CONTRACT_ADDR`, `MOCK_ROOT_EPOCH`, and
 `MOCK_ROOT_EPOCH_HASH`.
+
+
+## Direct attested key retrieval
+
+`GetTempCaCert` and temporary CA generation, persistence, renewal, and handover
+are removed. Its former handover field number and name are reserved in protobuf.
+Existing temporary CA files are ignored; they are not needed to start the KMS.
+Clients that require the removed RPC, and onboarding sources that require
+CA-issued client certificates, are no longer supported.
+
+Guests and `dstack-util get-keys` generate their self-issued RA-TLS certificate
+locally, then call `GetAppKey` directly. They verify the response connection's
+attestation and `kms:rpc` usage, and verify that the returned root CA signed that
+connection's certificate. There is no `GetMeta` preflight or first unauthenticated
+connection. The optional provider pin and the key-provider launch measurement
+still bind the root identity; a valid quote alone is not a KMS policy decision.
+`--root-ca` additionally pins the CLI connection before sending the request.
+
+Onboarding uses the same self-issued client flow with or without an admin token,
+and checks the source attestation captured from the key-carrying connection
+against local KMS policy before importing anything. Retries and reconnects repeat
+verification on the response connection; no assumption relies on one TCP session
+lasting forever. Historical guest key requests use the already trusted current
+KMS CA for TLS, not the historical response CA.
