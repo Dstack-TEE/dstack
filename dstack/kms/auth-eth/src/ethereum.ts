@@ -7,6 +7,7 @@ import { BootInfo, BootResponse, RootEpochInfo, AuthorizationResult, Authorizati
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
+  "function currentAppEpoch(address appId) view returns (uint256)",
   "function checkKmsAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",
   "function checkAppAuthorization(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",
   "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
@@ -123,6 +124,10 @@ export class EthereumBackend {
     if (count === 0n) return {};
     const [epoch, chainHash] = await this.kmsContract.currentRootEpoch({ blockTag });
     return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
+  }
+
+  async getAppEpoch(appId: string): Promise<number> {
+    return ethers.toNumber(await this.kmsContract.currentAppEpoch(this.decodeHex(appId, 20)));
   }
 
   async getGatewayAppId(): Promise<string> {

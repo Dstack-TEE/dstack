@@ -857,7 +857,7 @@ describe('POST /checkAppAuthorization', () => {
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       functionName: 'checkAppAuthorization', blockNumber: 98n,
-      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: true, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n } })],
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: false, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n } })],
     }));
   });
 

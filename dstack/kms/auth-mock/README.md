@@ -172,10 +172,11 @@ the API remains identical, so no client code changes are needed.
 ### Authorization endpoints
 
 `POST /checkKmsAuthorization` and `POST /checkAppAuthorization` return `AuthorizationResult`, including
-`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, and `currentRootEpochHash`.
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
 The selected endpoint determines the policy; the backend checks that the verified
-`appId` matches that scope. `requestedAppEpoch` defaults to 0; nonzero values are currently
-rejected. The optional
+`appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
+omission uses the current app epoch, explicit zero selects epoch zero, and future
+values are denied. The optional
 `requestedRootEpoch` selects historical keys; omission uses the returned current
 epoch, and an explicit `0` selects epoch 0. See the
 [KMS authorization protocol](../README.md#authorization-protocol) for registration,

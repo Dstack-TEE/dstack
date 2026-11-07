@@ -65,6 +65,8 @@ pub(super) struct LuksToken {
     pub keyslots: Vec<String>,
     #[serde(default)]
     pub root_epoch: Option<u32>,
+    #[serde(default)]
+    pub app_epoch: u32,
 }
 
 #[derive(Deserialize)]

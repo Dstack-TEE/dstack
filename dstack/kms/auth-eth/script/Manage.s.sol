@@ -384,3 +384,14 @@ contract DisableAppUpgrades is BaseScript {
 // a live proxy to the current `contracts/DstackKms.sol` / `contracts/DstackApp.sol`
 // source. The `UpgradeKmsToV2` / `UpgradeAppToV2` variants target the V2 test
 // mocks under `contracts/test-utils/` and are for upgrade-flow tests only.
+
+contract AdvanceAppEpoch is BaseScript {
+    function run() external {
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        uint256 expected = vm.envUint("EXPECTED_APP_EPOCH");
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        app.advanceAppEpoch(expected);
+        vm.stopBroadcast();
+        console.log("Current app epoch:", app.currentAppEpoch());
+    }
+}

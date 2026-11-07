@@ -44,7 +44,8 @@ that epoch's P-256 CA private scalar using HKDF-SHA256:
 - info: the raw 20-byte app ID.
 
 `GetAppKey` returns it as `sealed_env_key` alongside the legacy key. The legacy
-key derivation remains unchanged. This PR reserves app epochs and accepts only zero.
+key derivation remains unchanged at app epoch zero. `GetAppEnvEncryptPubKey`
+rejects nonzero app epochs; use `GetSealedEnvPubKey` after app rotation.
 
 The public-key response signs Keccak256 of this unambiguous byte sequence:
 
@@ -74,10 +75,12 @@ with nonempty legacy `encrypted_env` while switching to an older image. Empty en
 fields preserve the existing format. Guest `UpdateSealedEnv` uploads also require
 a capable running image.
 
-SealedEnv has one format, version 1, with both epoch fields always present.
-This PR accepts app epoch zero only; the field is reserved for application key
-rotation without changing this format. Signature and HPKE contexts always include
-both epochs, including zero. Changing either epoch invalidates authentication.
+SealedEnv has one format, version 1, with both epoch fields always present. The
+receiver-key KDF appends `"app-epoch-v1:" || app_epoch[4, big-endian]` to its info
+for nonzero app epochs; at zero its info is just the app ID. Signature and HPKE
+contexts always include both epochs, including zero. Changing either epoch
+invalidates the signature or ciphertext. See [application epochs](app-key-epochs.md)
+for owner operations.
 
 ## File precedence and migration
 

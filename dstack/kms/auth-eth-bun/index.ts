@@ -37,7 +37,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
-  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).optional(),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
@@ -117,6 +117,7 @@ const AUTHORIZATION_ABI = {
 
 // DstackKms contract ABI (minimal required functions)
 const DSTACK_KMS_ABI = [
+  { name: 'currentAppEpoch', type: 'function', stateMutability: 'view', inputs: [{ name: 'appId', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
   { ...AUTHORIZATION_ABI, name: 'checkKmsAuthorization' },
   { ...AUTHORIZATION_ABI, name: 'checkAppAuthorization' },
   {
@@ -321,6 +322,15 @@ class EthereumBackend {
     return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
   }
 
+  async getAppEpoch(appId: string): Promise<number> {
+    const epoch = Number(await this.client.readContract({
+      address: this.kmsContractAddr, abi: DSTACK_KMS_ABI, functionName: 'currentAppEpoch',
+      args: [this.decodeHex(appId, 20)], blockNumber: await this.finalizedBlockNumber(),
+    }));
+    if (!Number.isSafeInteger(epoch)) throw new Error('app epoch exceeds the supported range');
+    return epoch;
+  }
+
   async getGatewayAppId(): Promise<string> {
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
@@ -419,6 +429,16 @@ app.get('/', async (c) => {
       status: 'error',
       message: backendUnavailable
     }, 500);
+  }
+});
+
+app.get('/app/:appId', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  try {
+    return c.json({ currentAppEpoch: await ethereum.getAppEpoch(appId) });
+  } catch {
+    return c.json({ error: 'authorization backend unavailable' }, 503);
   }
 });
 

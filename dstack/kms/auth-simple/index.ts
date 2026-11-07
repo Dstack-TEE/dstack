@@ -28,7 +28,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
-  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).optional(),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
@@ -46,6 +46,7 @@ const RootEpochSchema = z.object({
 
 // config schema
 const AppConfigSchema = z.object({
+  currentAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
   composeHashes: z.array(z.string()).default([]),
   devices: z.array(z.string()).default([]),
   allowAnyDevice: z.boolean().default(false)
@@ -158,11 +159,15 @@ class ConfigBackend {
     }
   }
 
+  async getAppEpoch(appId: string): Promise<number> {
+    return this.loadConfig().apps[normalizeHex(appId)]?.currentAppEpoch ?? 0;
+  }
+
   async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
     const config = this.loadConfig();
     const current = currentRootEpoch(config);
     const epoch = {
-      currentAppEpoch: 0,
+      currentAppEpoch: isKms ? 0 : (config.apps[normalizeHex(appInfo.appId)]?.currentAppEpoch ?? 0),
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
@@ -172,8 +177,8 @@ class ConfigBackend {
     if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > current.rootEpoch) {
       return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
-    if (appInfo.requestedAppEpoch !== 0) {
-      return { isAllowed: false, rejectionReason: 'Requested app epoch must be zero', gatewayAppId: config.gatewayAppId, ...epoch };
+    if (appInfo.requestedAppEpoch !== undefined && appInfo.requestedAppEpoch > epoch.currentAppEpoch) {
+      return { isAllowed: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     if (isKms !== (normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr))) {
       return { isAllowed: false, rejectionReason: 'Authorization kind does not match app ID', gatewayAppId: config.gatewayAppId, ...epoch };
@@ -184,6 +189,9 @@ class ConfigBackend {
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
+    if (!isKms && (config.apps[normalizeHex(bootInfo.appId)]?.currentAppEpoch ?? 0) !== 0) {
+      return { isAllowed: false, reason: 'App epoch requires epoch-aware authorization', gatewayAppId: config.gatewayAppId };
+    }
     const response = this.evaluateBoot(bootInfo, isKms, config);
     const epochDenial = response.isAllowed
       ? rootEpochDenial(bootInfo, isKms, currentRootEpoch(config))
@@ -359,6 +367,16 @@ app.get('/', async (c) => {
       status: 'error',
       message: error instanceof Error ? error.message : String(error)
     }, 500);
+  }
+});
+
+app.get('/app/:appId', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  try {
+    return c.json({ currentAppEpoch: await backend.getAppEpoch(appId) });
+  } catch {
+    return c.json({ error: 'authorization backend unavailable' }, 503);
   }
 });
 

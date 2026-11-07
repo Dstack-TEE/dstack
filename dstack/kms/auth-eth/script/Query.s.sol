@@ -250,3 +250,11 @@ contract GetAppSettings is BaseQueryScript {
         console.log("\nProxy Implementation:", implementation);
     }
 }
+
+contract GetAppEpoch is BaseQueryScript {
+    function run() external view {
+        require(address(kms) != address(0), "KMS_CONTRACT_ADDR not set");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        console.log("Current app epoch:", kms.currentAppEpoch(address(app)));
+    }
+}

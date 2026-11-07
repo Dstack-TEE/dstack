@@ -55,7 +55,7 @@ export async function build(): Promise<FastifyInstance> {
     $id: 'authorizationRequest',
     properties: {
       ...appInfoSchema.properties,
-      requestedAppEpoch: { type: 'integer', minimum: 0, maximum: 4294967295, default: 0 },
+      requestedAppEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
       requestedRootEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
     },
   });
@@ -119,6 +119,10 @@ export async function build(): Promise<FastifyInstance> {
       return reply.code(500).send({ status: 'error', message: backendUnavailable });
     }
   });
+
+  server.get<{ Params: { appId: string } }>('/app/:appId', {
+    schema: { params: { type: 'object', required: ['appId'], properties: { appId: { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' } } } },
+  }, async (request) => ({ currentAppEpoch: await server.ethereum.getAppEpoch(request.params.appId) }));
 
   for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
     server.post<{ Body: AuthorizationRequest; Reply: AuthorizationResult }>(`/${method}`, {

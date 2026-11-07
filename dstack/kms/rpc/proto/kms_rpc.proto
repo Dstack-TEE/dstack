@@ -14,6 +14,7 @@ message GetAppKeyRequest {
   // Root key epoch to derive from; unset means the current epoch. Epoch 0 is
   // the original root keys. Older epochs remain available so CVMs can migrate.
   optional uint32 root_epoch = 3;
+  optional uint32 app_epoch = 4;
 }
 
 message AppId {
@@ -61,6 +62,7 @@ message AppKeyResponse {
   uint32 root_epoch = 9;
   // X25519 private key for the SealedEnv HPKE receiver, derived for this epoch.
   bytes sealed_env_key = 10;
+  uint32 app_epoch = 11;
 }
 
 message GetMetaResponse {
