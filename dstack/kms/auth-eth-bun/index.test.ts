@@ -832,3 +832,49 @@ describe('request hardening', () => {
     expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
   });
 });
+
+
+describe('POST /authorizeApp', () => {
+  const appInfo = {
+    appId: '0x' + '11'.repeat(20), composeHash: '0x' + '22'.repeat(32),
+    instanceId: '', deviceId: '0x' + '33'.repeat(32),
+    mrAggregated: '0x' + '44'.repeat(32), mrSystem: '0x' + '55'.repeat(32),
+    osImageHash: '0x' + '66'.repeat(32), tcbStatus: 'UpToDate', advisoryIds: [],
+  };
+  const authorize = (requestedRootEpoch?: number) => appFetch(new Request('http://localhost/authorizeApp', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, requestedRootEpoch }),
+  }));
+
+  it('reads the complete result with one contract call at configured finality', async () => {
+    const result = {
+      isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
+      currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+    };
+    mockReadContract.mockResolvedValueOnce(result);
+    const response = await authorize();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0 });
+    expect(mockReadContract).toHaveBeenCalledTimes(1);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      functionName: 'authorizeApp', blockNumber: 98n,
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: true, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n } })],
+    }));
+  });
+
+  it('encodes an explicit epoch zero as present', async () => {
+    mockReadContract.mockResolvedValueOnce({
+      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      currentAppEpoch: 0n, currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
+    });
+    expect((await authorize(0)).status).toBe(200);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      args: [expect.objectContaining({ requestedRootEpoch: { isSet: true, value: 0n } })],
+    }));
+  });
+
+  it('does not fall back to legacy authorization on a failed contract call', async () => {
+    mockReadContract.mockRejectedValueOnce(new Error('contract unavailable'));
+    expect((await authorize()).status).toBe(503);
+    expect(mockReadContract).toHaveBeenCalledTimes(1);
+  });
+});

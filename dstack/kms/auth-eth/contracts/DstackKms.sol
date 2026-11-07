@@ -14,6 +14,27 @@ import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeabl
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
+    struct OptionalUint256 {
+        bool isSet;
+        uint256 value;
+    }
+
+    struct AuthorizationRequest {
+        AppInfo appInfo;
+        // Reserved for application key rotation; only zero is currently supported.
+        OptionalUint256 requestedAppEpoch;
+        OptionalUint256 requestedRootEpoch;
+    }
+
+    struct AuthorizationResult {
+        bool isAllowed;
+        string rejectionReason;
+        string gatewayAppId;
+        uint256 currentRootEpoch;
+        bytes32 currentRootEpochHash;
+        uint256 currentAppEpoch;
+    }
+
     // Struct for KMS information
     struct KmsInfo {
         bytes k256Pubkey;
@@ -390,8 +411,72 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         _emitPolicy("os-image", osImageHash, false);
     }
 
+    /// Authorize an attested identity and return the root epoch from the same state.
+    /// The caller selects KMS or app policy; KMS authorization requires the proxy app ID.
+    function authorizeKms(AuthorizationRequest calldata request)
+        external
+        view
+        returns (AuthorizationResult memory)
+    {
+        return _checkAuthorization(request, true);
+    }
+
+    function authorizeApp(AuthorizationRequest calldata request)
+        external
+        view
+        returns (AuthorizationResult memory)
+    {
+        return _checkAuthorization(request, false);
+    }
+
+    function _checkAuthorization(
+        AuthorizationRequest calldata request,
+        bool isKms
+    )
+        private
+        view
+        returns (AuthorizationResult memory result)
+    {
+        result.gatewayAppId = gatewayAppId;
+        if (_rootEpochs.length == 0) {
+            result.rejectionReason = "Root epoch not registered";
+            return result;
+        }
+        result.currentRootEpoch = _currentRootEpoch;
+        result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _currentRootEpoch) {
+            result.rejectionReason = "Requested root epoch is not active";
+            return result;
+        }
+        if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value != 0) {
+            result.rejectionReason = "Requested app epoch must be zero";
+            return result;
+        }
+        AppInfo calldata appInfo = request.appInfo;
+        AppInfo memory bootInfo = AppInfo({
+            appId: appInfo.appId,
+            composeHash: appInfo.composeHash,
+            instanceId: appInfo.instanceId,
+            deviceId: appInfo.deviceId,
+            mrAggregated: appInfo.mrAggregated,
+            mrSystem: appInfo.mrSystem,
+            osImageHash: appInfo.osImageHash,
+            tcbStatus: appInfo.tcbStatus,
+            advisoryIds: appInfo.advisoryIds
+        });
+        if (isKms) {
+            (result.isAllowed, result.rejectionReason) = _isKmsAllowed(bootInfo);
+        } else {
+            (result.isAllowed, result.rejectionReason) = _isAppAllowed(bootInfo);
+        }
+    }
+
     // Function to check if KMS is allowed to boot
-    function isKmsAllowed(AppBootInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+    function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+        return _isKmsAllowed(bootInfo);
+    }
+
+    function _isKmsAllowed(AppInfo memory bootInfo) private view returns (bool, string memory) {
         // Check if the TCB status is up to date
         if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
@@ -416,12 +501,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Function to check if an app is allowed to boot
-    function isAppAllowed(AppBootInfo calldata bootInfo)
+    function isAppAllowed(AppInfo calldata bootInfo)
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
+        return _isAppAllowed(bootInfo);
+    }
+
+    function _isAppAllowed(AppInfo memory bootInfo) private view returns (bool, string memory) {
         // Check if app is registered
         if (!registeredApps[bootInfo.appId]) {
             return (false, "App not registered");

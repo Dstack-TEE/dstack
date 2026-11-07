@@ -434,6 +434,131 @@ contract DstackKmsTest is Test {
         assertEq(storedEventlog, newEventlog);
     }
 
+    function authorizationInfo(address appId) internal pure returns (IAppAuth.AppInfo memory) {
+        return IAppAuth.AppInfo({
+            appId: appId,
+            composeHash: bytes32(uint256(789)),
+            instanceId: address(0),
+            deviceId: bytes32(uint256(123)),
+            mrAggregated: bytes32(uint256(456)),
+            mrSystem: bytes32(0),
+            osImageHash: bytes32(uint256(111)),
+            tcbStatus: "UpToDate",
+            advisoryIds: new string[](0)
+        });
+    }
+
+    function authorize(
+        IAppAuth.AppInfo memory info,
+        bool isKms
+    )
+        internal
+        view
+        returns (DstackKms.AuthorizationResult memory)
+    {
+        DstackKms.AuthorizationRequest memory request =
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0));
+        return isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
+    }
+
+    function test_CheckAuthorization_OptionalUint256DistinguishesZeroFromDefault() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "https://example.com/epoch-1");
+        kms.addOsImageHash(info.osImageHash);
+        kms.addKmsDevice(info.deviceId);
+        kms.addKmsAggregatedMr(info.mrAggregated);
+        vm.stopPrank();
+
+        DstackKms.AuthorizationRequest memory request =
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(true, 1));
+        DstackKms.AuthorizationResult memory result = kms.authorizeKms(request);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "Requested root epoch is not active");
+        bytes32 h1 = chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1));
+        vm.prank(owner);
+        kms.activateRootEpoch(1, h1);
+        assertTrue(kms.authorizeKms(request).isAllowed);
+        request.requestedRootEpoch.value = 0;
+        assertTrue(kms.authorizeKms(request).isAllowed);
+        request.requestedRootEpoch.value = type(uint256).max;
+        assertFalse(kms.authorizeKms(request).isAllowed);
+        request.requestedRootEpoch.isSet = false;
+        result = kms.authorizeKms(request);
+        assertTrue(result.isAllowed);
+        assertEq(result.currentRootEpoch, 1);
+        assertEq(result.currentRootEpochHash, h1);
+    }
+
+    function test_CheckAuthorization_UnregisteredEpochReturnsRejection() public view {
+        DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(address(kms)), true);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "Root epoch not registered");
+        assertEq(result.currentRootEpoch, 0);
+        assertEq(result.currentRootEpochHash, bytes32(0));
+    }
+
+    function test_CheckAuthorization_ValidatesRequestedPolicy() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.setGatewayAppId("gateway");
+        kms.addOsImageHash(info.osImageHash);
+        kms.addKmsDevice(info.deviceId);
+        kms.addKmsAggregatedMr(info.mrAggregated);
+        address appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        vm.stopPrank();
+
+        DstackKms.AuthorizationResult memory result = authorize(info, true);
+        assertTrue(result.isAllowed);
+        assertEq(result.rejectionReason, "");
+        assertEq(result.gatewayAppId, "gateway");
+        assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
+
+        info.appId = user;
+        result = authorize(info, false);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "App not registered");
+
+        info.appId = appId;
+        info.mrAggregated = bytes32(0);
+        result = authorize(info, false);
+        assertTrue(result.isAllowed);
+        result = authorize(info, true);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "Aggregated MR not allowed");
+        DstackKms.AuthorizationRequest memory appRequest =
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalUint256(true, 1), DstackKms.OptionalUint256(false, 0));
+        result = kms.authorizeApp(appRequest);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "Requested app epoch must be zero");
+        assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
+        info.appId = address(kms);
+        result = authorize(info, false);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "App not registered");
+        result = authorize(info, true);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "Aggregated MR not allowed");
+    }
+
+    function test_CheckAuthorization_RejectionIncludesActivatedEpoch() public {
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "https://example.com/epoch-1");
+        kms.activateRootEpoch(1, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1)));
+        vm.stopPrank();
+
+        DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(user), false);
+        assertFalse(result.isAllowed);
+        assertEq(result.rejectionReason, "App not registered");
+        assertEq(result.currentRootEpoch, 1);
+        assertEq(
+            result.currentRootEpochHash, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1))
+        );
+    }
+
     function test_IsKmsAllowed() public {
         bytes32 deviceId = bytes32(uint256(123));
         bytes32 mrAggregated = bytes32(uint256(456));
@@ -446,7 +571,7 @@ contract DstackKmsTest is Test {
         kms.addOsImageHash(osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -475,7 +600,7 @@ contract DstackKmsTest is Test {
         kms.addOsImageHash(osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -503,7 +628,7 @@ contract DstackKmsTest is Test {
         address appId = kms.deployAndRegisterApp(user, false, false, deviceId, composeHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),

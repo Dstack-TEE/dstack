@@ -98,6 +98,68 @@
           }
         }
       }
+    },
+    "/authorizeKms": {
+      "post": {
+        "summary": "Authorize a Kms identity and return the current root epoch",
+        "operationId": "authorizeKms",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorization decision, including the epoch on rejection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationResult"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authorization backend unavailable; no legacy fallback."
+          }
+        }
+      }
+    },
+    "/authorizeApp": {
+      "post": {
+        "summary": "Authorize a App identity and return the current root epoch",
+        "operationId": "authorizeApp",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorization decision, including the epoch on rejection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationResult"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authorization backend unavailable; no legacy fallback."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -198,7 +260,9 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["ok"],
+            "enum": [
+              "ok"
+            ],
             "description": "System status"
           },
           "kmsContractAddr": {
@@ -244,11 +308,126 @@
         "properties": {
           "status": {
             "type": "string",
-            "enum": ["error"]
+            "enum": [
+              "error"
+            ]
           },
           "message": {
             "type": "string",
             "description": "Error message"
+          }
+        }
+      },
+      "AppInfo": {
+        "type": "object",
+        "required": [
+          "mrAggregated",
+          "osImageHash",
+          "appId",
+          "composeHash",
+          "instanceId",
+          "deviceId"
+        ],
+        "properties": {
+          "mrAggregated": {
+            "type": "string",
+            "description": "Aggregated MR measurement"
+          },
+          "osImageHash": {
+            "type": "string",
+            "description": "OS Image hash"
+          },
+          "appId": {
+            "type": "string",
+            "description": "Application ID"
+          },
+          "composeHash": {
+            "type": "string",
+            "description": "Compose hash"
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Instance ID"
+          },
+          "deviceId": {
+            "type": "string",
+            "description": "Device ID"
+          },
+          "tcbStatus": {
+            "type": "string",
+            "description": "TCB status (optional for compatibility)"
+          },
+          "advisoryIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Advisory IDs (optional for compatibility)"
+          },
+          "mrSystem": {
+            "type": "string",
+            "description": "MR System measurement (optional for compatibility)"
+          }
+        },
+        "description": "Verified attestation identity. The KMS app ID is the KMS contract address."
+      },
+      "AuthorizationResult": {
+        "type": "object",
+        "required": [
+          "isAllowed",
+          "rejectionReason",
+          "gatewayAppId",
+          "currentRootEpoch",
+          "currentRootEpochHash",
+          "currentAppEpoch"
+        ],
+        "properties": {
+          "isAllowed": {
+            "type": "boolean"
+          },
+          "rejectionReason": {
+            "type": "string",
+            "description": "Empty when allowed."
+          },
+          "gatewayAppId": {
+            "type": "string"
+          },
+          "currentRootEpoch": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currentRootEpochHash": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "Zero when no epoch is registered; authorization is denied."
+          },
+          "currentAppEpoch": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Current application epoch; zero until app rotation is supported."
+          }
+        }
+      },
+      "AuthorizationRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AppInfo"
+          }
+        ],
+        "type": "object",
+        "properties": {
+          "requestedRootEpoch": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295,
+            "description": "Omit to use the current epoch. An explicit zero selects epoch 0; future epochs are denied."
+          },
+          "requestedAppEpoch": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295,
+            "default": 0,
+            "description": "Application epoch, independent of KMS root epochs. Only zero is currently supported."
           }
         }
       }

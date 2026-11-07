@@ -33,7 +33,7 @@ interface IAppAuth is IERC165 {
      * @param tcbStatus Trusted Computing Base status
      * @param advisoryIds Array of security advisory identifiers
      */
-    struct AppBootInfo {
+    struct AppInfo {
         address appId;
         bytes32 composeHash;
         address instanceId;
@@ -52,5 +52,5 @@ interface IAppAuth is IERC165 {
      * @return isAllowed True if the app is authorized to boot, false otherwise
      * @return reason Human-readable reason for the decision (empty if allowed)
      */
-    function isAppAllowed(AppBootInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason);
+    function isAppAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason);
 }

@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
+use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::{
     attestation::{AppInfo, AttestationVerifier, VersionedAttestation},
-    cert::{generate_self_signed_ra_cert, CaCert, CertSigningRequestV2},
+    cert::{generate_self_signed_ra_cert, CaCert, CertPair, CertSigningRequestV2},
 };
 
 pub enum CertRequestClient {
@@ -47,6 +47,73 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
         bail!("invalid server cert usage: {usage}");
     }
     Ok(())
+}
+
+/// Fetch keys directly over the attested connection, without a metadata/CA preflight.
+/// A supplied CA always pins the connection, independently of the epoch selector.
+/// Callers retain the startup KMS CA for the CVM lifetime, including later key
+/// requests. Without a supplied CA, bind the response CA to this connection and
+/// establish its identity through the provider pin or launch-measurement policy.
+pub async fn request_app_keys(
+    url: String,
+    request: GetAppKeyRequest,
+    client_cert: CertPair,
+    attestation_verifier: Arc<AttestationVerifier>,
+    trusted_ca: Option<String>,
+) -> Result<AppKeyResponse> {
+    let server_cert = Arc::new(Mutex::new(None));
+    let captured = server_cert.clone();
+    let client = RaClientConfig::builder()
+        .remote_uri(url)
+        .tls_client_cert(client_cert.cert_pem)
+        .tls_client_key(client_cert.key_pem)
+        .tls_skip_ca_verification(trusted_ca.is_none())
+        .tls_built_in_root_certs(false)
+        .maybe_tls_ca_cert(trusted_ca.clone())
+        .attestation_verifier(attestation_verifier)
+        .cert_validator(Box::new(move |info| {
+            let info = info.context("missing KMS server certificate")?;
+            if info.attestation.is_none() {
+                bail!("KMS server certificate has no verified attestation");
+            }
+            let cert_der = info.cert_der.clone();
+            validate_kms_rpc_cert(Some(info))?;
+            *captured
+                .lock()
+                .map_err(|_| anyhow::anyhow!("KMS certificate lock poisoned"))? = Some(cert_der);
+            Ok(())
+        }))
+        .build()
+        .into_client()?;
+    let requested_root_epoch = request.root_epoch;
+    let response = KmsClient::new(client).get_app_key(request).await?;
+    if requested_root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
+        bail!("KMS returned a different root epoch than requested");
+    }
+    let cert = server_cert
+        .lock()
+        .map_err(|_| anyhow::anyhow!("KMS certificate lock poisoned"))?;
+    validate_kms_root(
+        cert.as_deref().context("missing KMS server certificate")?,
+        trusted_ca.as_deref().unwrap_or(&response.ca_cert),
+    )?;
+    Ok(response)
+}
+
+fn validate_kms_root(server_cert: &[u8], root_ca: &str) -> Result<()> {
+    let (_, pem) =
+        x509_parser::pem::parse_x509_pem(root_ca.as_bytes()).context("invalid KMS root CA")?;
+    let root = pem.parse_x509().context("invalid KMS root CA")?;
+    let (_, leaf) =
+        x509_parser::parse_x509_certificate(server_cert).context("invalid KMS RPC certificate")?;
+    if !root.is_ca() || !root.validity().is_valid() || !leaf.validity().is_valid() {
+        bail!("invalid or expired KMS certificate");
+    }
+    if leaf.issuer() != root.subject() {
+        bail!("KMS RPC certificate issuer does not match the root CA");
+    }
+    leaf.verify_signature(Some(root.public_key()))
+        .context("KMS root CA did not sign the attested RPC certificate")
 }
 
 fn kms_client(
@@ -372,6 +439,248 @@ mod tests {
             format!("{}\n{}\n{}", leaf.pem(), app_ca.pem_cert, root.pem_cert),
             key.serialize_pem(),
         )
+    }
+
+    #[rocket::post("/GetAppKey", data = "<_request>")]
+    fn direct_app_keys(
+        _request: String,
+        _cert: rocket::mtls::Certificate<'_>,
+        state: &rocket::State<(Arc<Mutex<String>>, std::sync::atomic::AtomicUsize)>,
+    ) -> rocket::response::content::RawJson<String> {
+        state.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        rocket::response::content::RawJson(state.0.lock().unwrap().clone())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn direct_key_fetch_verifies_the_response_connection_without_preflight() {
+        use ra_tls::attestation::{
+            AttestationVerifierConfig, DstackNitroQuote, QuoteContentType, RootCaPaths,
+        };
+        use rocket::tls::Resolver as _;
+        let dir = tempfile::tempdir().unwrap();
+        let attester = mock_attestation::nsm::NsmGenerator::new().unwrap();
+        let attestation_root = dir.path().join("attestation-root.pem");
+        std::fs::write(&attestation_root, attester.root_ca_pem()).unwrap();
+        let verifier = Arc::new(
+            AttestationVerifier::load(&AttestationVerifierConfig {
+                insecure_allow_external_trust_anchors: true,
+                root_ca: RootCaPaths {
+                    aws_nitro_enclave: Some(attestation_root),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let root = kms_root();
+        let rpc_key = p256_key();
+        let report_data = QuoteContentType::RaTlsCert.to_report_data(&rpc_key.public_key_der());
+        let pcrs = [0, 1, 2, 4]
+            .into_iter()
+            .map(|i| (i, vec![i as u8; 48]))
+            .collect();
+        let evidence = attester.attest_with_pcrs(&report_data, pcrs).unwrap();
+        let attestation = Attestation {
+            quote: AttestationQuote::DstackNitroEnclave(DstackNitroQuote {
+                nsm_quote: evidence,
+            }),
+            runtime_events: Vec::new(),
+            report_data,
+            config: String::new(),
+            report: (),
+        }
+        .into_versioned();
+        let rpc_cert = root
+            .sign(
+                CertRequest::builder()
+                    .subject("localhost")
+                    .alt_names(&["127.0.0.1".into()])
+                    .key(&rpc_key)
+                    .special_usage("kms:rpc")
+                    .usage_server_auth(true)
+                    .attestation(&attestation)
+                    .build(),
+            )
+            .unwrap();
+        let cert_path = dir.path().join("rpc.crt");
+        let key_path = dir.path().join("rpc.key");
+        std::fs::write(&cert_path, rpc_cert.pem()).unwrap();
+        std::fs::write(&key_path, rpc_key.serialize_pem()).unwrap();
+        let response = AppKeyResponse {
+            ca_cert: root.pem_cert.clone(),
+            root_epoch: 1,
+            ..Default::default()
+        };
+        let figment = rocket::Config::figment()
+            .merge(("port", 0))
+            .merge(("address", "127.0.0.1"))
+            .merge(("log_level", "off"))
+            .merge(("shutdown.ctrlc", false))
+            .merge(("tls.certs", cert_path))
+            .merge(("tls.key", key_path));
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        let response_body = Arc::new(Mutex::new(serde_json::to_string(&response).unwrap()));
+        let server = rocket::custom(figment)
+            .attach(ra_rpc::ratls_client_verifier::RaTlsClientAuth::fairing())
+            .manage((
+                response_body.clone(),
+                std::sync::atomic::AtomicUsize::new(0),
+            ))
+            .mount("/", rocket::routes![direct_app_keys])
+            .attach(rocket::fairing::AdHoc::on_liftoff("port", move |rocket| {
+                if let Some(tx) = tx.lock().unwrap().take() {
+                    let _ = tx.send(rocket.endpoints().find_map(|e| e.port()).unwrap());
+                }
+                Box::pin(async {})
+            }))
+            .ignite()
+            .await
+            .unwrap();
+        let shutdown = server.shutdown();
+        let task = tokio::spawn(server.launch());
+        let url = format!("https://127.0.0.1:{}", rx.await.unwrap());
+        let client_cert = || {
+            let key = p256_key();
+            let report_data = QuoteContentType::RaTlsCert.to_report_data(&key.public_key_der());
+            let pcrs = [0, 1, 2, 4]
+                .into_iter()
+                .map(|i| (i, vec![i as u8; 48]))
+                .collect();
+            let evidence = attester.attest_with_pcrs(&report_data, pcrs).unwrap();
+            let attestation = Attestation {
+                quote: AttestationQuote::DstackNitroEnclave(DstackNitroQuote {
+                    nsm_quote: evidence,
+                }),
+                runtime_events: Vec::new(),
+                report_data,
+                config: String::new(),
+                report: (),
+            }
+            .into_versioned();
+            let cert = CertRequest::builder()
+                .subject("guest")
+                .key(&key)
+                .attestation(&attestation)
+                .usage_client_auth(true)
+                .build()
+                .self_signed()
+                .unwrap();
+            CertPair {
+                cert_pem: cert.pem(),
+                key_pem: key.serialize_pem(),
+            }
+        };
+        let request = || GetAppKeyRequest {
+            api_version: 1,
+            vm_config: String::new(),
+            root_epoch: None,
+        };
+        let result = request_app_keys(
+            url.clone(),
+            request(),
+            client_cert(),
+            verifier.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.ca_cert, response.ca_cert);
+        assert_eq!(result.root_epoch, 1);
+
+        let other_ca = kms_root().pem_cert;
+        for requested_root_epoch in [None, Some(0), Some(1)] {
+            let request = || GetAppKeyRequest {
+                api_version: 1,
+                vm_config: String::new(),
+                root_epoch: requested_root_epoch,
+            };
+            let selected = AppKeyResponse {
+                root_epoch: requested_root_epoch.unwrap_or(1),
+                ..response.clone()
+            };
+            *response_body.lock().unwrap() = serde_json::to_string(&selected).unwrap();
+            // Omission and explicit epoch selectors have the same trust semantics.
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                None
+            )
+            .await
+            .is_ok());
+            // An unrelated pin must fail in TLS, before the RPC handler runs.
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                Some(other_ca.clone())
+            )
+            .await
+            .is_err());
+
+            let different_epoch_ca = AppKeyResponse {
+                ca_cert: other_ca.clone(),
+                ..selected
+            };
+            *response_body.lock().unwrap() = serde_json::to_string(&different_epoch_ca).unwrap();
+            // A key response cannot replace the startup CA pin, even for default requests.
+            let result = request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                Some(root.pem_cert.clone()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.ca_cert, other_ca);
+            // First-contact validation still requires the response CA to sign the RPC cert.
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                None
+            )
+            .await
+            .is_err());
+        }
+        *response_body.lock().unwrap() = serde_json::to_string(&response).unwrap();
+        let production = Arc::new(AttestationVerifier::new_prod(None).unwrap());
+        assert!(
+            request_app_keys(url, request(), client_cert(), production, None)
+                .await
+                .is_err()
+        );
+        shutdown.notify();
+        let server = task.await.unwrap().unwrap();
+        assert_eq!(
+            server
+                .state::<(Arc<Mutex<String>>, std::sync::atomic::AtomicUsize)>()
+                .unwrap()
+                .1
+                .load(std::sync::atomic::Ordering::SeqCst),
+            11
+        );
+    }
+
+    #[test]
+    fn the_returned_root_must_sign_the_actual_rpc_certificate() {
+        let root = kms_root();
+        let (leaf, _) = kms_rpc_cert(&root, "kms.example");
+        let (_, leaf) = x509_parser::pem::parse_x509_pem(leaf.as_bytes()).unwrap();
+        validate_kms_root(&leaf.contents, &root.pem_cert).unwrap();
+        let unrelated = kms_root();
+        assert!(validate_kms_root(&leaf.contents, &unrelated.pem_cert).is_err());
+        assert!(validate_kms_root(&leaf.contents, "not a certificate").is_err());
+        assert!(validate_kms_root(b"not a certificate", &root.pem_cert).is_err());
+
+        let (app_leaf, _) = app_cert(&root, &[0xa1; 20], "kms.example");
+        let (_, app_leaf) = x509_parser::pem::parse_x509_pem(app_leaf.as_bytes()).unwrap();
+        assert!(validate_kms_root(&app_leaf.contents, &root.pem_cert).is_err());
     }
 
     #[rocket::post("/GetMeta")]

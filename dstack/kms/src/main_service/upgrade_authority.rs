@@ -86,6 +86,91 @@ pub(crate) struct BootResponse {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthorizationResult {
+    pub is_allowed: bool,
+    pub rejection_reason: String,
+    pub gateway_app_id: String,
+    pub current_root_epoch: u32,
+    pub current_app_epoch: u32,
+    pub current_root_epoch_hash: String,
+}
+
+impl AuthorizationResult {
+    pub fn current_root(&self) -> Result<Option<CurrentRootEpoch>> {
+        let chain_hash: [u8; 32] =
+            hex::decode(self.current_root_epoch_hash.trim_start_matches("0x"))
+                .ok()
+                .and_then(|hash| hash.try_into().ok())
+                .context("invalid authorization root epoch chain hash")?;
+        if chain_hash == [0; 32] {
+            return Ok(None);
+        }
+        Ok(Some(CurrentRootEpoch {
+            epoch: self.current_root_epoch,
+            chain_hash,
+        }))
+    }
+}
+
+/// The root epoch fields: the KMS sends the epoch it serves in boot checks,
+/// and auth backends report the current one in info responses.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RootEpochFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch_hash: Option<String>,
+}
+
+impl From<CurrentRootEpoch> for RootEpochFields {
+    fn from(current: CurrentRootEpoch) -> Self {
+        Self {
+            root_epoch: Some(current.epoch),
+            root_epoch_hash: Some(format!("0x{}", hex::encode(current.chain_hash))),
+        }
+    }
+}
+
+impl RootEpochFields {
+    pub fn registry(&self) -> Result<RootEpochRegistry> {
+        match (self.root_epoch, &self.root_epoch_hash) {
+            (None, None) => Ok(RootEpochRegistry::Empty),
+            (Some(epoch), Some(hash)) => {
+                let chain_hash = hex::decode(hash.trim_start_matches("0x"))
+                    .ok()
+                    .and_then(|hash| hash.try_into().ok())
+                    .context("invalid root epoch chain hash")?;
+                Ok(RootEpochRegistry::Current(CurrentRootEpoch {
+                    epoch,
+                    chain_hash,
+                }))
+            }
+            _ => bail!("the auth API reports a root epoch without its chain hash"),
+        }
+    }
+}
+
+/// The root epoch governance made current, with the chain hash committing to
+/// the root public keys of epochs 0..=epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CurrentRootEpoch {
+    pub epoch: u32,
+    pub chain_hash: [u8; 32],
+}
+
+/// What governance says about root epochs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum RootEpochRegistry {
+    /// The dev backend: there is nothing to check against.
+    Unchecked,
+    /// No epoch is registered, or the backend predates root epochs.
+    Empty,
+    Current(CurrentRootEpoch),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthApiInfoResponse {
@@ -96,6 +181,8 @@ pub(crate) struct AuthApiInfoResponse {
     pub gateway_app_id: String,
     pub chain_id: u64,
     pub app_implementation: String,
+    #[serde(flatten)]
+    pub root_epoch: RootEpochFields,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +194,7 @@ pub(crate) struct GetInfoResponse {
     pub eth_rpc_url: Option<String>,
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
+    pub root_epochs: RootEpochRegistry,
 }
 
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -167,7 +255,80 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 }
 
 impl AuthApi {
-    pub async fn is_app_allowed(&self, boot_info: &BootInfo, is_kms: bool) -> Result<BootResponse> {
+    pub async fn check_kms_authorization(
+        &self,
+        app_info: &BootInfo,
+    ) -> Result<AuthorizationResult> {
+        self.check_authorization(app_info, "authorizeKms", None)
+            .await
+    }
+
+    pub async fn check_app_authorization(
+        &self,
+        app_info: &BootInfo,
+        requested_root_epoch: Option<u32>,
+    ) -> Result<AuthorizationResult> {
+        self.check_authorization(app_info, "authorizeApp", requested_root_epoch)
+            .await
+    }
+
+    async fn check_authorization(
+        &self,
+        app_info: &BootInfo,
+        method: &str,
+        requested_root_epoch: Option<u32>,
+    ) -> Result<AuthorizationResult> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AuthorizationRequest<'a> {
+            #[serde(flatten)]
+            app_info: &'a BootInfo,
+            requested_app_epoch: u32,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            requested_root_epoch: Option<u32>,
+        }
+        ensure_identity_widths(app_info)?;
+        match self {
+            AuthApi::Dev { dev } => Ok(AuthorizationResult {
+                is_allowed: true,
+                rejection_reason: String::new(),
+                gateway_app_id: dev.gateway_app_id.clone(),
+                current_root_epoch: 0,
+                current_app_epoch: 0,
+                current_root_epoch_hash: hex::encode([0; 32]),
+            }),
+            AuthApi::Webhook { webhook } => {
+                let url = url_join(&webhook.url, method);
+                http_post(
+                    &url,
+                    &AuthorizationRequest {
+                        app_info,
+                        requested_app_epoch: 0,
+                        requested_root_epoch,
+                    },
+                    webhook.timeout,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Legacy scoped checks remain available during bootstrap and onboarding,
+    /// before the first root epoch can be registered.
+    pub async fn is_app_allowed(
+        &self,
+        boot_info: &BootInfo,
+        is_kms: bool,
+        root_epoch: Option<CurrentRootEpoch>,
+    ) -> Result<BootResponse> {
+        #[derive(Serialize)]
+        struct BootAuthRequest<'a> {
+            #[serde(flatten)]
+            boot_info: &'a BootInfo,
+            #[serde(flatten)]
+            root_epoch: RootEpochFields,
+        }
+
         ensure_identity_widths(boot_info)?;
         match self {
             AuthApi::Dev { dev } => Ok(BootResponse {
@@ -182,7 +343,11 @@ impl AuthApi {
                     "bootAuth/app"
                 };
                 let url = url_join(&webhook.url, path);
-                http_post(&url, &boot_info, webhook.timeout).await
+                let request = BootAuthRequest {
+                    boot_info,
+                    root_epoch: root_epoch.map(Into::into).unwrap_or_default(),
+                };
+                http_post(&url, &request, webhook.timeout).await
             }
         }
     }
@@ -196,6 +361,7 @@ impl AuthApi {
                 gateway_app_id: Some(dev.gateway_app_id.clone()),
                 chain_id: None,
                 app_implementation: None,
+                root_epochs: RootEpochRegistry::Unchecked,
             }),
             AuthApi::Webhook { webhook } => {
                 let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
@@ -211,6 +377,7 @@ impl AuthApi {
                     chain_id: Some(info.chain_id),
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
+                    root_epochs: info.root_epoch.registry()?,
                 })
             }
         }
@@ -255,7 +422,7 @@ pub(crate) async fn ensure_self_kms_allowed(
         .context("failed to build local KMS boot info")?;
     let response = cfg
         .auth_api
-        .is_app_allowed(&boot_info, true)
+        .is_app_allowed(&boot_info, true, None)
         .await
         .context("failed to call KMS auth check")?;
     if !response.is_allowed {
@@ -264,10 +431,13 @@ pub(crate) async fn ensure_self_kms_allowed(
     Ok(())
 }
 
+/// `allow_legacy_cert` accepts a source whose certificate predates the unified
+/// attestation format, judging its image by mrAggregated alone.
 pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
     verifier: &AttestationVerifier,
+    allow_legacy_cert: bool,
 ) -> Result<()> {
     let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
@@ -277,6 +447,9 @@ pub(crate) async fn ensure_kms_allowed(
     // A source that presents a config but no os_image_hash is not legacy and gets no fallback.
     // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
     if boot_info.os_image_hash.is_empty() && attestation.config.is_empty() {
+        if !allow_legacy_cert {
+            bail!("the source KMS certificate does not carry its OS image hash");
+        }
         warn!("source KMS uses the legacy cert format, falling back to the local os_image_hash");
         let local_info = local_kms_boot_info(verifier)
             .await
@@ -285,7 +458,7 @@ pub(crate) async fn ensure_kms_allowed(
     }
     let response = cfg
         .auth_api
-        .is_app_allowed(&boot_info, true)
+        .is_app_allowed(&boot_info, true, None)
         .await
         .context("failed to call KMS auth check")?;
     if !response.is_allowed {
@@ -295,7 +468,7 @@ pub(crate) async fn ensure_kms_allowed(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::Webhook;
     use ra_tls::attestation::TeeVariant;
@@ -304,7 +477,7 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    fn boot_info(identity: u8) -> BootInfo {
+    pub(crate) fn boot_info(identity: u8) -> BootInfo {
         BootInfo {
             tee_variant: TeeVariant::DstackTdx,
             mr_aggregated: vec![identity; 32],
@@ -320,7 +493,7 @@ mod tests {
         }
     }
 
-    fn serve<S: Into<String>>(
+    pub(crate) fn serve<S: Into<String>>(
         responses: Vec<S>,
     ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
         let responses: Vec<String> = responses.into_iter().map(Into::into).collect();
@@ -364,9 +537,12 @@ mod tests {
                     .nth(1)
                     .unwrap()
                     .to_string();
-                let body =
-                    serde_json::from_slice(&request[header_end..header_end + content_length])
-                        .unwrap();
+                let body = &request[header_end..header_end + content_length];
+                let body = if body.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(body).unwrap()
+                };
                 requests.push((path, body));
                 write!(
                     stream,
@@ -381,7 +557,7 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
-    fn webhook(url: String) -> AuthApi {
+    pub(crate) fn webhook(url: String) -> AuthApi {
         AuthApi::Webhook {
             webhook: Webhook {
                 url,
@@ -436,7 +612,7 @@ mod tests {
         let mut aliasing_compose_hash = boot_info(1);
         aliasing_compose_hash.compose_hash.truncate(31);
         let err = auth
-            .is_app_allowed(&aliasing_compose_hash, false)
+            .is_app_allowed(&aliasing_compose_hash, false, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("compose_hash must be 32 bytes"));
@@ -444,7 +620,7 @@ mod tests {
         let mut aliasing_instance_id = boot_info(1);
         aliasing_instance_id.instance_id.truncate(19);
         let err = auth
-            .is_app_allowed(&aliasing_instance_id, false)
+            .is_app_allowed(&aliasing_instance_id, false, None)
             .await
             .unwrap_err();
         assert!(err
@@ -455,7 +631,7 @@ mod tests {
         let mut no_instance_id = boot_info(1);
         no_instance_id.instance_id.clear();
         assert!(
-            auth.is_app_allowed(&no_instance_id, false)
+            auth.is_app_allowed(&no_instance_id, false, None)
                 .await
                 .unwrap()
                 .is_allowed
@@ -472,8 +648,8 @@ mod tests {
         let auth = webhook(url);
         let info = boot_info(1);
 
-        let first = auth.is_app_allowed(&info, false).await.unwrap();
-        let repeated = auth.is_app_allowed(&info, false).await.unwrap();
+        let first = auth.is_app_allowed(&info, false, None).await.unwrap();
+        let repeated = auth.is_app_allowed(&info, false, None).await.unwrap();
         assert!(first.is_allowed);
         assert!(!repeated.is_allowed);
         assert_eq!(repeated.reason, "revoked");
@@ -495,8 +671,18 @@ mod tests {
         let app = boot_info(10);
         let kms = boot_info(20);
 
-        assert!(auth.is_app_allowed(&app, false).await.unwrap().is_allowed);
-        assert!(auth.is_app_allowed(&kms, true).await.unwrap().is_allowed);
+        assert!(
+            auth.is_app_allowed(&app, false, None)
+                .await
+                .unwrap()
+                .is_allowed
+        );
+        assert!(
+            auth.is_app_allowed(&kms, true, None)
+                .await
+                .unwrap()
+                .is_allowed
+        );
 
         let requests = server.join().unwrap();
         assert_eq!(requests[0].0, "/bootAuth/app");
@@ -510,6 +696,94 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn authorization_returns_the_epoch_with_each_decision() {
+        let response = |allowed: bool, epoch: u32| {
+            format!(
+                r#"{{"isAllowed":{allowed},"rejectionReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentAppEpoch":0,"currentRootEpochHash":"0x{}"}}"#,
+                "11".repeat(32)
+            )
+        };
+        let (url, server) = serve(vec![
+            response(true, 0),
+            response(false, 1),
+            response(true, 1),
+            response(true, 1),
+        ]);
+        let auth = webhook(url);
+        let info = boot_info(50);
+        let first = auth.check_app_authorization(&info, None).await.unwrap();
+        let second = auth.check_app_authorization(&info, None).await.unwrap();
+        assert!(first.is_allowed);
+        assert!(!second.is_allowed);
+        assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
+        assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
+        auth.check_app_authorization(&info, Some(0)).await.unwrap();
+        auth.check_kms_authorization(&info).await.unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[..3]
+            .iter()
+            .all(|(path, _)| path == "/authorizeApp"));
+        assert_eq!(requests[3].0, "/authorizeKms");
+        let mut expected = serde_json::to_value(info).unwrap();
+        expected["requestedAppEpoch"] = 0.into();
+        assert_eq!(requests[0].1, expected);
+        assert_eq!(requests[2].1["requestedAppEpoch"], 0);
+        assert!(requests[0].1.get("requestedRootEpoch").is_none());
+        assert_eq!(requests[2].1["requestedRootEpoch"], 0);
+    }
+
+    #[rocket::async_test]
+    async fn authorization_without_epoch_fields_is_not_accepted_as_legacy() {
+        let (url, server) = serve(vec![
+            r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
+        ]);
+        assert!(webhook(url)
+            .check_app_authorization(&boot_info(50), None)
+            .await
+            .is_err());
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[rocket::async_test]
+    async fn root_epochs_are_read_from_info_and_sent_in_boot_checks() {
+        let hash = "0x".to_string() + &"11".repeat(32);
+        let (url, server) = serve(vec![
+            format!(
+                r#"{{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
+                "appImplementation":"0x00","rootEpoch":3,"rootEpochHash":"{hash}"}}"#
+            ),
+            r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
+                "appImplementation":"0x00","rootEpoch":3}"#
+                .into(),
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":""}"#.into(),
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":""}"#.into(),
+        ]);
+        let auth = webhook(url);
+        let current = CurrentRootEpoch {
+            epoch: 3,
+            chain_hash: [0x11; 32],
+        };
+
+        assert_eq!(
+            auth.get_info().await.unwrap().root_epochs,
+            RootEpochRegistry::Current(current)
+        );
+        assert!(auth.get_info().await.is_err());
+        let info = boot_info(50);
+        auth.is_app_allowed(&info, false, Some(current))
+            .await
+            .unwrap();
+        auth.is_app_allowed(&info, true, None).await.unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests[2].1["rootEpoch"], 3);
+        assert_eq!(requests[2].1["rootEpochHash"], hash);
+        assert_eq!(requests[2].1["appId"], requests[3].1["appId"]);
+        assert!(requests[3].1.get("rootEpoch").is_none());
+    }
+
+    #[rocket::async_test]
     async fn malformed_backend_response_fails_closed_and_next_request_recovers() {
         let (url, server) = serve(vec![
             "not-json",
@@ -518,9 +792,9 @@ mod tests {
         let auth = webhook(url);
         let info = boot_info(30);
 
-        let error = auth.is_app_allowed(&info, false).await.unwrap_err();
+        let error = auth.is_app_allowed(&info, false, None).await.unwrap_err();
         assert!(error.to_string().contains("failed to decode response"));
-        let recovered = auth.is_app_allowed(&info, false).await.unwrap();
+        let recovered = auth.is_app_allowed(&info, false, None).await.unwrap();
         assert!(recovered.is_allowed);
         assert_eq!(recovered.reason, "recovered");
         assert_eq!(server.join().unwrap().len(), 2);
@@ -537,7 +811,7 @@ mod tests {
         let (url, server) = serve(vec![body]);
 
         let error = webhook(url)
-            .is_app_allowed(&boot_info(40), false)
+            .is_app_allowed(&boot_info(40), false, None)
             .await
             .unwrap_err();
 

@@ -18,6 +18,8 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use bon::Builder;
 
+mod tls;
+
 pub struct CertInfo {
     pub cert_der: Vec<u8>,
     pub attestation: Option<VerifiedAttestation>,
@@ -30,8 +32,10 @@ type CertValidator = Box<dyn Fn(Option<CertInfo>) -> Result<()> + Send + Sync + 
 #[derive(Builder)]
 pub struct RaClientConfig {
     remote_uri: String,
+    /// Skip CA-based certificate checks (trust chain, hostname, and validity).
+    /// TLS handshake signatures remain verified; attestation is checked separately.
     #[builder(default = false)]
-    tls_no_check: bool,
+    tls_skip_ca_verification: bool,
     #[builder(default = true)]
     verify_server_attestation: bool,
     #[builder(default = false)]
@@ -50,14 +54,19 @@ impl RaClientConfig {
     pub fn into_client(self) -> Result<RaClient> {
         let mut builder = Client::builder()
             .tls_sni(true)
-            .danger_accept_invalid_certs(self.tls_no_check)
             .danger_accept_invalid_hostnames(self.tls_no_check_hostname)
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(60));
         if self.cert_validator.is_some() {
             builder = builder.tls_info(true);
         }
-        if let (Some(cert_pem), Some(key_pem)) = (self.tls_client_cert, self.tls_client_key) {
+        if self.tls_skip_ca_verification {
+            builder = builder.use_preconfigured_tls(tls::config_without_ca_verification(
+                self.tls_client_cert.as_deref(),
+                self.tls_client_key.as_deref(),
+            )?);
+        } else if let (Some(cert_pem), Some(key_pem)) = (self.tls_client_cert, self.tls_client_key)
+        {
             let identity_pem = format!("{cert_pem}\n{key_pem}");
             let identity =
                 Identity::from_pem(identity_pem.as_bytes()).context("Failed to parse identity")?;
@@ -104,9 +113,9 @@ pub struct RaClient {
 }
 
 impl RaClient {
-    pub fn new(remote_uri: String, tls_no_check: bool) -> Result<Self> {
+    pub fn new(remote_uri: String, tls_skip_ca_verification: bool) -> Result<Self> {
         RaClientConfig::builder()
-            .tls_no_check(tls_no_check)
+            .tls_skip_ca_verification(tls_skip_ca_verification)
             .remote_uri(remote_uri)
             .build()
             .into_client()

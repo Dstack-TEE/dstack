@@ -4,7 +4,7 @@
 
 import fastify, { FastifyInstance } from 'fastify';
 import { EthereumBackend } from './ethereum';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, AuthorizationResult, AuthorizationRequest } from './types';
 import { ethers } from 'ethers';
 
 declare module 'fastify' {
@@ -25,8 +25,7 @@ export async function build(): Promise<FastifyInstance> {
     description,
   });
 
-  server.addSchema({
-    $id: 'bootInfo',
+  const appInfoSchema = {
     type: 'object',
     required: ['mrAggregated', 'osImageHash', 'appId', 'composeHash', 'instanceId', 'deviceId'],
     properties: {
@@ -39,9 +38,26 @@ export async function build(): Promise<FastifyInstance> {
       tcbStatus: { type: 'string', maxLength: 128, default: '' },
       advisoryIds: { type: 'array', maxItems: 128, items: { type: 'string', maxLength: 256 }, default: [] },
       mrSystem: { ...hex(32, 'System MR measurement'), default: '' },
+    }
+  };
+
+  server.addSchema({
+    ...appInfoSchema,
+    $id: 'bootInfo',
+    properties: {
+      ...appInfoSchema.properties,
       rootEpoch: { type: 'integer', minimum: 0 },
       rootEpochHash: hex(32, 'Chain hash of the root epochs up to rootEpoch'),
-    }
+    },
+  });
+  server.addSchema({
+    ...appInfoSchema,
+    $id: 'authorizationRequest',
+    properties: {
+      ...appInfoSchema.properties,
+      requestedAppEpoch: { type: 'integer', minimum: 0, maximum: 4294967295, default: 0 },
+      requestedRootEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
+    },
   });
 
   server.addSchema({
@@ -103,6 +119,28 @@ export async function build(): Promise<FastifyInstance> {
       return reply.code(500).send({ status: 'error', message: backendUnavailable });
     }
   });
+
+  for (const method of ['authorizeKms', 'authorizeApp'] as const) {
+    server.post<{ Body: AuthorizationRequest; Reply: AuthorizationResult }>(`/${method}`, {
+      schema: {
+        body: { $ref: 'authorizationRequest#' },
+        response: {
+          200: {
+            type: 'object',
+            required: ['isAllowed', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash', 'currentAppEpoch'],
+            properties: {
+              isAllowed: { type: 'boolean' },
+              rejectionReason: { type: 'string' },
+              gatewayAppId: { type: 'string' },
+              currentRootEpoch: { type: 'integer', minimum: 0 },
+              currentAppEpoch: { type: 'integer', minimum: 0 },
+              currentRootEpochHash: hex(32, 'Current root epoch chain hash'),
+            },
+          },
+        },
+      },
+    }, async (request) => server.ethereum.checkAuthorization(request.body, method));
+  }
 
   // Define routes
   server.post<{

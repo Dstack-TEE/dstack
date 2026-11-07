@@ -32,7 +32,7 @@ contract MockConfigurableApp {
         _ret = ret;
     }
 
-    function isAppAllowed(IAppAuth.AppBootInfo calldata) external view returns (bool, string memory) {
+    function isAppAllowed(IAppAuth.AppInfo calldata) external view returns (bool, string memory) {
         return (_ret, "");
     }
 }
@@ -41,7 +41,7 @@ contract MockConfigurableApp {
 ///      to verify that a malicious registered contract's revert
 ///      propagates out of `kms.isAppAllowed` rather than being swallowed.
 contract MockRevertingApp {
-    function isAppAllowed(IAppAuth.AppBootInfo calldata) external pure returns (bool, string memory) {
+    function isAppAllowed(IAppAuth.AppInfo calldata) external pure returns (bool, string memory) {
         revert("malicious app revert");
     }
 }
@@ -87,14 +87,14 @@ contract DstackKmsSymbolicTest is Test {
     // the (false, reason) return without delegating.
     // ---------------------------------------------------------------
 
-    function check_IsAppAllowed_RejectsUnregisteredApp(IAppAuth.AppBootInfo calldata bootInfo) external view {
+    function check_IsAppAllowed_RejectsUnregisteredApp(IAppAuth.AppInfo calldata bootInfo) external view {
         // No apps registered in setUp(), so any bootInfo.appId is rejected.
         (bool allowed, string memory reason) = kms.isAppAllowed(bootInfo);
         assert(!allowed);
         assert(keccak256(bytes(reason)) == keccak256(bytes("App not registered")));
     }
 
-    function check_IsAppAllowed_RejectsUnknownOsImage(address appId, IAppAuth.AppBootInfo calldata bootInfo) external {
+    function check_IsAppAllowed_RejectsUnknownOsImage(address appId, IAppAuth.AppInfo calldata bootInfo) external {
         vm.assume(appId != address(0));
 
         // Register the appId so the registration check passes.
@@ -128,7 +128,7 @@ contract DstackKmsSymbolicTest is Test {
         kms.addOsImageHash(osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(mock),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -158,7 +158,7 @@ contract DstackKmsSymbolicTest is Test {
         kms.addOsImageHash(osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(mock),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -192,7 +192,7 @@ contract DstackKmsSymbolicTest is Test {
         vm.prank(OWNER);
         kms.addOsImageHash(osImageHash);
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -222,7 +222,7 @@ contract DstackKmsSymbolicTest is Test {
         vm.stopPrank();
         // kmsAllowedDeviceIds is left empty.
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),

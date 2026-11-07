@@ -170,7 +170,7 @@ contract DstackAppTest is Test {
         app.addComposeHash(composeHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(app),
             composeHash: composeHash,
             instanceId: address(0),
@@ -212,7 +212,7 @@ contract DstackAppTest is Test {
         app.addComposeHash(allowedHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(app),
             composeHash: unallowedHash,
             instanceId: address(0),
@@ -270,7 +270,7 @@ contract DstackAppTest is Test {
         string[] memory advisoryIds = new string[](1);
         advisoryIds[0] = "INTEL-SA-00614";
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(app),
             composeHash: composeHash,
             instanceId: address(0),
@@ -318,7 +318,7 @@ contract DstackAppTest is Test {
         assertTrue(tcbApp.allowedDeviceIds(deviceId));
         assertTrue(tcbApp.allowedComposeHashes(composeHash));
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(tcbApp),
             composeHash: composeHash,
             instanceId: address(0),

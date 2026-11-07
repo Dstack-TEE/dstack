@@ -284,7 +284,7 @@ contract UpgradesWithPluginTest is Test {
         assertTrue(app.allowAnyDevice());
         assertTrue(app.allowedComposeHashes(composeHash));
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),
@@ -335,7 +335,7 @@ contract UpgradesWithPluginTest is Test {
         assertFalse(app.requireTcbUpToDate());
 
         // Outdated TCB still allowed when flag is off
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),
@@ -399,7 +399,7 @@ contract UpgradesWithPluginTest is Test {
         assertEq(app.owner(), owner);
 
         // Test the full flow still works
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),

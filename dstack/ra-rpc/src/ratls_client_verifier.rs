@@ -61,7 +61,7 @@ impl ClientCertVerifier for RaTlsClientVerifier {
 
     /// Anonymous connections stay allowed, matching the previous
     /// `[rpc.tls.mutual] mandatory = false`. Handlers that need an attested caller
-    /// enforce it themselves; the unauthenticated RPCs (`GetMeta`, `GetTempCaCert`)
+    /// enforce it themselves; the unauthenticated RPCs (such as `GetMeta`)
     /// are reachable without a certificate by design.
     fn client_auth_mandatory(&self) -> bool {
         false

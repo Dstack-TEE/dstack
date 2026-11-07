@@ -199,3 +199,17 @@ the test suite (`index.test.ts`) validates:
 - ✅ error handling behavior
 - ✅ hex encoding/decoding compatibility
 - ✅ optional field handling
+
+
+### Authorization endpoints
+
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, and `currentRootEpochHash`.
+The selected endpoint determines the policy; the backend checks that the verified
+`appId` matches that scope. `requestedAppEpoch` defaults to 0; nonzero values are currently
+rejected. The optional
+`requestedRootEpoch` selects historical keys; omission uses the returned current
+epoch, and an explicit `0` selects epoch 0. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for registration,
+bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
+remain available.

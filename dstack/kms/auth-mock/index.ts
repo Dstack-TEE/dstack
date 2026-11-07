@@ -29,6 +29,12 @@ const BootInfoSchema = z.object({
   rootEpochHash: z.string().optional()
 });
 
+const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
+  requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+});
+type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
+
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
@@ -104,6 +110,27 @@ class MockBackend {
     this.mockGatewayAppId = process.env.MOCK_GATEWAY_APP_ID || '0xmockgateway1234567890123456789012345678';
     this.mockChainId = parseInt(process.env.MOCK_CHAIN_ID || '1337');
     this.mockAppImplementation = process.env.MOCK_APP_IMPLEMENTATION || '0xmockapp9876543210987654321098765432109';
+  }
+
+  async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
+    const current = getRootEpoch();
+    const epoch = {
+      currentAppEpoch: 0,
+      currentRootEpoch: current.rootEpoch ?? 0,
+      currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
+    };
+    if (current.rootEpoch === undefined) {
+      return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > current.rootEpoch) {
+      return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    if (appInfo.requestedAppEpoch !== 0) {
+      return { isAllowed: false, rejectionReason: 'Requested app epoch must be zero', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    const result = this.evaluateBoot(appInfo, isKms);
+    return { isAllowed: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
+      gatewayAppId: this.mockGatewayAppId, ...epoch };
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
@@ -201,6 +228,16 @@ app.get('/', async (c) => {
     }, 500);
   }
 });
+
+for (const method of ['authorizeKms', 'authorizeApp'] as const) {
+  app.post(`/${method}`, zValidator('json', AuthorizationRequestSchema), async (c) => {
+    try {
+      return c.json(await mockBackend.checkAuthorization(c.req.valid('json'), method === 'authorizeKms'));
+    } catch {
+      return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
+    }
+  });
+}
 
 // app boot authentication
 app.post('/bootAuth/app',
