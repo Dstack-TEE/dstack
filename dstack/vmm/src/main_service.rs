@@ -937,6 +937,32 @@ impl RpcHandler {
         Ok(true)
     }
 
+    fn validate_env_image(
+        &self,
+        work_dir: &VmWorkDir,
+        image: &str,
+        encrypted_env: &[u8],
+        sealed_env: &[u8],
+    ) -> Result<()> {
+        if sealed_env.is_empty() {
+            if !encrypted_env.is_empty() {
+                return Ok(());
+            }
+            match fs::symlink_metadata(work_dir.sealed_env_path()) {
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(err) => return Err(err).context("failed to inspect sealed environment"),
+            }
+        }
+        let image_dir = self.app.config.image.image_dir(image)?;
+        let target =
+            Image::load(&image_dir).with_context(|| format!("failed to load image {image:?}"))?;
+        if !target.info.sealed_env {
+            bail!("image {image:?} does not support sealed_env; provide encrypted_env or choose a compatible image");
+        }
+        Ok(())
+    }
+
     /// Grows the data disk to `manifest.disk_size` if that exceeds `old_size`.
     async fn grow_disk_if_needed(
         vm_work_dir: &VmWorkDir,
@@ -994,6 +1020,12 @@ impl VmmRpc for RpcHandler {
         info!(vm_id = %id, "create_vm RPC called");
         let app_id = manifest.app_id.clone();
         let vm_work_dir = self.app.work_dir(&id)?;
+        self.validate_env_image(
+            &vm_work_dir,
+            &manifest.image,
+            &request.encrypted_env,
+            &request.sealed_env,
+        )?;
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to write manifest")?;
@@ -1103,6 +1135,12 @@ impl VmmRpc for RpcHandler {
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
         let old_disk_size = manifest.disk_size;
+        self.validate_env_image(
+            &vm_work_dir,
+            request.image.as_deref().unwrap_or(&manifest.image),
+            &request.encrypted_env,
+            &request.sealed_env,
+        )?;
         // Validate the whole request against an in-memory manifest before
         // touching the host, so a rejected update changes nothing.
         let new_id = if !request.compose_file.is_empty() {
@@ -1297,6 +1335,12 @@ impl VmmRpc for RpcHandler {
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
         let old_disk_size = manifest.disk_size;
+        self.validate_env_image(
+            &vm_work_dir,
+            request.image.as_deref().unwrap_or(&manifest.image),
+            &[],
+            &[],
+        )?;
         self.apply_resource_updates(
             &request.id,
             &mut manifest,
@@ -2882,6 +2926,172 @@ mod tests {
             held
         );
         assert!(port_map_from_proto(&[port(8080), port(8081)], &pm_cfg, &held).is_err());
+    }
+
+    fn env_image_handler(dir: &std::path::Path) -> RpcHandler {
+        let mut config: crate::config::Config =
+            Figment::from(crate::config::load_config_figment(None))
+                .extract()
+                .unwrap();
+        config.run_path = dir.join("vms");
+        config.image.path = dir.join("images");
+        for (name, capability) in [
+            ("legacy", None),
+            ("unsupported", Some(false)),
+            ("sealed", Some(true)),
+        ] {
+            let image_dir = config.image.path.join(name);
+            fs::create_dir_all(&image_dir).unwrap();
+            fs::write(image_dir.join("kernel"), b"test kernel").unwrap();
+            fs::write(image_dir.join("initrd"), b"test initrd").unwrap();
+            let mut metadata = serde_json::json!({"kernel": "kernel", "initrd": "initrd"});
+            if let Some(capability) = capability {
+                metadata["sealed_env"] = capability.into();
+            }
+            fs::write(
+                image_dir.join("metadata.json"),
+                serde_json::to_vec(&metadata).unwrap(),
+            )
+            .unwrap();
+        }
+        RpcHandler {
+            app: App::new(
+                config,
+                supervisor_client::SupervisorClient::new("http://127.0.0.1:0"),
+            ),
+        }
+    }
+
+    #[test]
+    fn env_image_validation_uses_the_effective_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = env_image_handler(tmp.path());
+        let work_dir = handler.app.work_dir("vm-test").unwrap();
+        for image in ["legacy", "unsupported", "sealed"] {
+            assert!(handler
+                .validate_env_image(&work_dir, image, b"", b"")
+                .is_ok());
+            assert!(handler
+                .validate_env_image(&work_dir, image, b"legacy", b"")
+                .is_ok());
+            assert_eq!(
+                handler
+                    .validate_env_image(&work_dir, image, b"", b"sealed")
+                    .is_ok(),
+                image == "sealed"
+            );
+        }
+        fs::create_dir_all(work_dir.shared_dir()).unwrap();
+        // Presence, including an empty file or dangling link, selects SealedEnv.
+        for dangling in [false, true] {
+            if dangling {
+                fs::remove_file(work_dir.sealed_env_path()).unwrap();
+                std::os::unix::fs::symlink("missing", work_dir.sealed_env_path()).unwrap();
+            } else {
+                fs::write(work_dir.sealed_env_path(), b"").unwrap();
+            }
+            for image in ["legacy", "unsupported", "sealed"] {
+                assert_eq!(
+                    handler
+                        .validate_env_image(&work_dir, image, b"", b"")
+                        .is_ok(),
+                    image == "sealed"
+                );
+                assert!(handler
+                    .validate_env_image(&work_dir, image, b"replacement", b"")
+                    .is_ok());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn incompatible_env_create_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = env_image_handler(tmp.path());
+        for image in ["legacy", "unsupported"] {
+            let err = RpcHandler {
+                app: handler.app.clone(),
+            }
+            .create_vm(VmConfiguration {
+                image: image.into(),
+                sealed_env: b"sealed".to_vec(),
+                ..test_vm_configuration()
+            })
+            .await
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("does not support sealed_env"),
+                "{err:#}"
+            );
+            assert!(!handler.app.config.run_path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn incompatible_env_update_and_resize_write_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = env_image_handler(tmp.path());
+        let mut manifest =
+            create_manifest_from_vm_config(test_vm_configuration(), &handler.app.config.cvm)
+                .unwrap();
+        let work_dir = handler.app.work_dir(&manifest.id).unwrap();
+        fs::create_dir_all(work_dir.shared_dir()).unwrap();
+        fs::write(work_dir.app_compose_path(), b"{}").unwrap();
+        fs::write(work_dir.sealed_env_path(), b"original sealed env").unwrap();
+        for (current, target, sealed) in [
+            ("legacy", None, b"new sealed".as_slice()),
+            ("sealed", Some("legacy"), b"".as_slice()),
+            ("sealed", Some("unsupported"), b"new sealed".as_slice()),
+        ] {
+            manifest.image = current.into();
+            work_dir.put_manifest(&manifest).unwrap();
+            let original = fs::read(work_dir.manifest_path()).unwrap();
+            let err = RpcHandler {
+                app: handler.app.clone(),
+            }
+            .update_vm(UpdateVmRequest {
+                id: manifest.id.clone(),
+                image: target.map(str::to_string),
+                sealed_env: sealed.to_vec(),
+                compose_file: r#"{"manifest_version":"2","name":"new","runner":"docker-compose"}"#
+                    .into(),
+                disk_size: Some(manifest.disk_size + 1),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("does not support sealed_env"),
+                "{err:#}"
+            );
+            assert_eq!(fs::read(work_dir.manifest_path()).unwrap(), original);
+            assert_eq!(fs::read(work_dir.app_compose_path()).unwrap(), b"{}");
+            assert_eq!(
+                fs::read(work_dir.sealed_env_path()).unwrap(),
+                b"original sealed env"
+            );
+            assert!(!work_dir.hda_path().exists());
+        }
+        manifest.image = "sealed".into();
+        work_dir.put_manifest(&manifest).unwrap();
+        let original = fs::read(work_dir.manifest_path()).unwrap();
+        let err = RpcHandler {
+            app: handler.app.clone(),
+        }
+        .resize_vm(ResizeVmRequest {
+            id: manifest.id.clone(),
+            image: Some("legacy".into()),
+            disk_size: Some(manifest.disk_size + 1),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("does not support sealed_env"),
+            "{err:#}"
+        );
+        assert_eq!(fs::read(work_dir.manifest_path()).unwrap(), original);
+        assert!(!work_dir.hda_path().exists());
     }
 
     #[tokio::test]
