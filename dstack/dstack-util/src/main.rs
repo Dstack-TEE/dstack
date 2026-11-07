@@ -639,9 +639,6 @@ fn cmd_attest_strip(args: AttestStripArgs) -> Result<()> {
 }
 
 async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
-    use dstack_kms_rpc::kms_client::KmsClient;
-    use ra_rpc::client::RaClientConfig;
-
     let kms_url = normalize_prpc_url(&args.kms_url);
 
     // Load root CA if provided for TLS pinning
@@ -653,58 +650,24 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         None
     };
 
-    // Step 1: Fetch the KMS root CA
-    eprintln!("Connecting to KMS: {kms_url}");
-    let tls_no_check = root_ca_pem.is_none();
-    if tls_no_check {
-        eprintln!("Warning: no --root-ca provided, TLS certificate verification is disabled for initial connection");
-    }
-    let root_ca = {
-        let client = RaClientConfig::builder()
-            .remote_uri(kms_url.clone())
-            .tls_no_check(tls_no_check)
-            .tls_built_in_root_certs(false)
-            .maybe_tls_ca_cert(root_ca_pem.clone())
-            .build()
-            .into_client()
-            .context("failed to create client")?;
-        KmsClient::new(client)
-            .get_meta()
-            .await
-            .context("failed to get KMS meta")?
-            .ca_cert
-    };
-
-    // Step 2: Generate a self-issued RA-TLS client certificate. The quote inside it
-    // is the identity the KMS authenticates, so no CA material is needed.
     let app_id = decode_app_id(args.app_id.as_deref())?;
     let cert_pair = generate_self_signed_ra_cert(app_id).context("Failed to generate RA cert")?;
-
-    // Step 3: Create authenticated client and request app keys
-    let ra_client = RaClientConfig::builder()
-        .tls_no_check(false)
-        .tls_built_in_root_certs(false)
-        .remote_uri(kms_url.clone())
-        .tls_client_cert(cert_pair.cert_pem)
-        .tls_client_key(cert_pair.key_pem)
-        .tls_ca_cert(root_ca.clone())
-        .build()
-        .into_client()
-        .context("Failed to create RA client")?;
-
-    let kms_client = KmsClient::new(ra_client);
-    let response = kms_client
-        .get_app_key(dstack_kms_rpc::GetAppKeyRequest {
+    let response = cert_client::request_app_keys(
+        kms_url.clone(),
+        dstack_kms_rpc::GetAppKeyRequest {
             api_version: 1,
-            vm_config: "".to_string(),
+            vm_config: String::new(),
             root_epoch: None,
-        })
-        .await
-        .context(
-            "failed to get app key (the KMS must be 0.6.0 or later to accept a self-issued RA-TLS client certificate)",
-        )?;
+        },
+        cert_pair,
+        std::sync::Arc::new(ra_tls::attestation::AttestationVerifier::new_prod(None)?),
+        root_ca_pem,
+    )
+    .await
+    .context("Failed to get app keys from the attested KMS")?;
+    let root_ca = response.ca_cert;
 
-    // Step 4: Build AppKeys structure
+    // Build AppKeys from the authenticated response.
     let (_, ca_pem) =
         x509_parser::pem::parse_x509_pem(root_ca.as_bytes()).context("Failed to parse CA cert")?;
     let x509 = ca_pem.parse_x509().context("Failed to parse CA cert")?;
@@ -723,7 +686,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
         },
     };
 
-    // Step 5: Output result
+    // Output result.
     let json = serde_json::to_string_pretty(&keys).context("Failed to serialize app keys")?;
     if let Some(output_path) = args.output {
         safe_write_with_mode(&output_path, &json, 0o600).context("Failed to write app keys")?;

@@ -303,7 +303,7 @@ sudo systemctl restart qgsd
 
 ### GetMeta Returns "Connection refused" on Port 9200
 
-**Symptom:** KMS responds to `GetTempCaCert` but GetMeta returns:
+**Symptom:** The KMS health endpoint responds but GetMeta returns:
 ```json
 {"error": "error sending request for url (http://127.0.0.1:9200/): ...Connection refused (os error 111)"}
 ```

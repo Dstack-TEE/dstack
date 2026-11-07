@@ -18,7 +18,7 @@ use dstack_kms_rpc::{
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{
-    client::{CertInfo, RaClient, RaClientConfig},
+    client::{CertInfo, RaClientConfig},
     CallContext, RpcCall,
 };
 use ra_tls::{
@@ -26,7 +26,7 @@ use ra_tls::{
         AttestationVerifier, GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation,
         VersionedAttestation,
     },
-    cert::{CaCert, CertRequest},
+    cert::CertRequest,
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::{safe_write, safe_write_with_mode};
@@ -548,9 +548,6 @@ mod tests {
 
     fn handover(epochs: u32) -> KmsKeyResponse {
         KmsKeyResponse {
-            temp_ca_key: KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
-                .unwrap()
-                .serialize_pem(),
             keys: (0..epochs)
                 .map(|_| KmsKeys {
                     ca_key: KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
@@ -609,6 +606,8 @@ mod tests {
             .await
             .unwrap();
         keys.store(&cfg).unwrap();
+        assert!(!cfg.cert_dir.join("tmp-ca.key").exists());
+        assert!(!cfg.cert_dir.join("tmp-ca.crt").exists());
 
         assert_eq!(crate::main_service::read_root_epoch(&cfg).unwrap(), 2);
         for (epoch, k256) in (0..).zip(&sent) {
@@ -830,8 +829,6 @@ struct Keys {
     epoch: u32,
     history: Vec<HistoricalRoot>,
     k256_key: SigningKey,
-    tmp_ca_key: KeyPair,
-    tmp_ca_cert: Certificate,
     ca_key: KeyPair,
     ca_cert: Certificate,
     rpc_key: KeyPair,
@@ -841,19 +838,10 @@ struct Keys {
 
 impl Keys {
     async fn generate(domain: &str, attest_rpc_cert: bool) -> Result<Self> {
-        let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
         let k256_key = SigningKey::random(&mut rand::rngs::OsRng);
-        Self::from_keys(
-            tmp_ca_key,
-            ca_key,
-            rpc_key,
-            k256_key,
-            domain,
-            attest_rpc_cert,
-        )
-        .await
+        Self::from_keys(ca_key, rpc_key, k256_key, domain, attest_rpc_cert).await
     }
 
     /// Attest the current root public keys. Epoch 0 keeps the original
@@ -870,21 +858,12 @@ impl Keys {
     }
 
     async fn from_keys(
-        tmp_ca_key: KeyPair,
         ca_key: KeyPair,
         rpc_key: KeyPair,
         k256_key: SigningKey,
         domain: &str,
         attest_rpc_cert: bool,
     ) -> Result<Self> {
-        let tmp_ca_cert = CertRequest::builder()
-            .org_name("Dstack")
-            .subject("Dstack Client Temp CA")
-            .ca_level(0)
-            .key(&tmp_ca_key)
-            .build()
-            .self_signed()?;
-
         let ca_cert = self_signed_root_ca(&ca_key)?;
         // The only place the KMS embeds its own attestation. Skipping it lets
         // the KMS run outside a TEE for development; it does not affect the
@@ -919,8 +898,6 @@ impl Keys {
             epoch: 0,
             history: Vec::new(),
             k256_key,
-            tmp_ca_key,
-            tmp_ca_cert,
             ca_key,
             ca_cert,
             rpc_key,
@@ -960,17 +937,7 @@ impl Keys {
                 .context("Missing source KMS attestation")
         };
 
-        // With a token, `other_kms_url` is the source's admin listener, which accepts
-        // a self-issued RA-TLS client certificate. Without one, the source predates
-        // 0.6.0: it serves `KMS.GetKmsKey` publicly and pins its temp CA.
-        let tmp_ca = if source_token.is_empty() {
-            let client = RaClient::new(other_kms_url.to_string(), true)?;
-            let tmp_ca = KmsClient::new(client).get_temp_ca_cert().await?;
-            Some((tmp_ca.temp_ca_cert, tmp_ca.temp_ca_key))
-        } else {
-            None
-        };
-        let (ra_cert, ra_key) = gen_ra_cert(tmp_ca).await?;
+        let (ra_cert, ra_key) = gen_ra_cert().await?;
         let client = RaClientConfig::builder()
             .tls_no_check(true)
             .tls_built_in_root_certs(false)
@@ -1056,17 +1023,7 @@ impl Keys {
             .collect::<Result<Vec<_>>>()?;
 
         let rpc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-        let tmp_ca_key =
-            KeyPair::from_pem(&keys_res.temp_ca_key).context("Failed to parse tmp CA key")?;
-        let keys = Self::from_keys(
-            tmp_ca_key,
-            ca_key,
-            rpc_key,
-            k256_key,
-            domain,
-            cfg.attest_rpc_cert,
-        )
-        .await?;
+        let keys = Self::from_keys(ca_key, rpc_key, k256_key, domain, cfg.attest_rpc_cert).await?;
         Ok(Self {
             epoch,
             history,
@@ -1093,7 +1050,6 @@ impl Keys {
     }
 
     fn store_keys(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write_with_mode(cfg.tmp_ca_key(), self.tmp_ca_key.serialize_pem(), 0o600)?;
         safe_write_with_mode(cfg.rpc_key(), self.rpc_key.serialize_pem(), 0o600)?;
         safe_write_with_mode(cfg.root_ca_key(), self.ca_key.serialize_pem(), 0o600)?;
         safe_write_with_mode(cfg.k256_key(), self.k256_key.to_bytes(), 0o600)?;
@@ -1101,7 +1057,6 @@ impl Keys {
     }
 
     fn store_certs(&self, cfg: &KmsConfig) -> Result<()> {
-        safe_write(cfg.tmp_ca_cert(), self.tmp_ca_cert.pem())?;
         safe_write(cfg.root_ca_cert(), self.ca_cert.pem())?;
         safe_write(cfg.rpc_cert(), self.rpc_cert.pem())?;
         Ok(())
@@ -1113,7 +1068,6 @@ impl Keys {
 pub(crate) async fn update_certs(cfg: &KmsConfig, epoch: u32, latest: u32) -> Result<()> {
     let roots = cfg.root_key_paths(epoch, latest);
     // Read existing keys
-    let tmp_ca_key = KeyPair::from_pem(&fs::read_to_string(cfg.tmp_ca_key())?)?;
     let ca_key = KeyPair::from_pem(&fs::read_to_string(&roots.ca_key)?)?;
     let rpc_key = KeyPair::from_pem(&fs::read_to_string(cfg.rpc_key())?)?;
 
@@ -1129,28 +1083,15 @@ pub(crate) async fn update_certs(cfg: &KmsConfig, epoch: u32, latest: u32) -> Re
     let domain = domain.trim();
 
     // Regenerate certificates using existing keys
-    let keys = Keys::from_keys(
-        tmp_ca_key,
-        ca_key,
-        rpc_key,
-        k256_key,
-        domain,
-        cfg.attest_rpc_cert,
-    )
-    .await
-    .context("Failed to regenerate certificates")?;
+    let keys = Keys::from_keys(ca_key, rpc_key, k256_key, domain, cfg.attest_rpc_cert)
+        .await
+        .context("Failed to regenerate certificates")?;
 
     renew_ca_cert_if_expiring(
         &roots.ca_cert,
         keys.ca_cert.pem(),
         "KMS root CA certificate",
     )?;
-    renew_ca_cert_if_expiring(
-        cfg.tmp_ca_cert(),
-        keys.tmp_ca_cert.pem(),
-        "temporary client CA certificate",
-    )?;
-
     // The RPC leaf depends on the refreshed domain and platform attestation, so
     // it is reissued on every startup.
     safe_write(cfg.rpc_cert(), keys.rpc_cert.pem())?;
@@ -1265,8 +1206,8 @@ fn keccak256(msg: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Mint an RA-TLS client certificate, signed by `ca` (cert and key PEM) or self-issued.
-async fn gen_ra_cert(ca: Option<(String, String)>) -> Result<(String, String)> {
+/// Mint a self-issued RA-TLS client certificate.
+async fn gen_ra_cert() -> Result<(String, String)> {
     use ra_tls::cert::CertRequest;
     use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 
@@ -1279,14 +1220,11 @@ async fn gen_ra_cert(ca: Option<(String, String)>) -> Result<(String, String)> {
     let attestation =
         VersionedAttestation::from_bytes(&response.attestation).context("Invalid attestation")?;
     let req = CertRequest::builder()
-        .subject("RA-TLS TEMP Cert")
+        .subject("RA-TLS Client Cert")
         .attestation(&attestation)
         .key(&key)
+        .usage_client_auth(true)
         .build();
-    let cert = match ca {
-        Some((cert_pem, key_pem)) => CaCert::new(cert_pem, key_pem)?.sign(req),
-        None => req.self_signed(),
-    }
-    .context("Failed to sign certificate")?;
+    let cert = req.self_signed().context("Failed to sign certificate")?;
     Ok((cert.pem(), key.serialize_pem()))
 }

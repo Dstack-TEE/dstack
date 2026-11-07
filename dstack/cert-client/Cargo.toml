@@ -20,10 +20,11 @@ tdx-attest.workspace = true
 dstack-guest-agent-rpc.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
 tokio.workspace = true
+x509-parser = { workspace = true, features = ["verify"] }
 
 [dev-dependencies]
+mock-attestation = { path = "../crates/mock-attestation" }
 hex.workspace = true
 rocket.workspace = true
 tempfile.workspace = true
-x509-parser.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync"] }

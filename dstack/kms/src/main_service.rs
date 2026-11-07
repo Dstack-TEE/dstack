@@ -13,9 +13,8 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
-    AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
-    GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SignCertRequest,
-    SignCertResponse,
+    AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse, KmsKeyResponse,
+    KmsKeys, PublicKeyResponse, SignCertRequest, SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
@@ -45,7 +44,7 @@ pub(crate) mod upgrade_authority;
 
 /// How long the auth API's info and this KMS's own authorization are reused.
 ///
-/// `GetMeta`, `GetAppEnvEncryptPubKey` and `GetTempCaCert` need no client certificate, and each
+/// `GetMeta` and `GetAppEnvEncryptPubKey` need no client certificate, and each
 /// would otherwise cost the auth API a round of chain RPC calls. Concurrent callers share one
 /// in-flight request. App authorization is never cached.
 const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -165,11 +164,8 @@ pub struct KmsStateInner {
     config: KmsConfig,
     keyring: Keyring,
     /// The CA of the running TLS listener, independent of key selection.
-    rpc_ca_cert: String,
     rpc_ca_pubkey: Vec<u8>,
     restart: tokio::sync::Notify,
-    temp_ca_cert: String,
-    temp_ca_key: String,
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: Cache<(), BootInfo>,
@@ -233,10 +229,6 @@ impl KmsState {
             .public_key()
             .raw
             .to_vec();
-        let temp_ca_key =
-            fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
-        let temp_ca_cert =
-            fs::read_to_string(config.tmp_ca_cert()).context("Faeild to read temp ca cert")?;
         let attestation_verifier = Arc::new(
             AttestationVerifier::load(&config.attestation)
                 .context("failed to load attestation verifier")?,
@@ -256,11 +248,8 @@ impl KmsState {
             inner: Arc::new(KmsStateInner {
                 config,
                 keyring,
-                rpc_ca_cert,
                 rpc_ca_pubkey,
                 restart: tokio::sync::Notify::new(),
-                temp_ca_cert,
-                temp_ca_key,
                 verifier,
                 attestation_verifier,
                 self_boot_info: Cache::builder()
@@ -436,7 +425,6 @@ impl RpcHandler {
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
         ensure_key_release_allowed(&info, (&self.state.config).into())?;
         Ok(KmsKeyResponse {
-            temp_ca_key: self.state.inner.temp_ca_key.clone(),
             keys: self
                 .state
                 .keyring
@@ -510,22 +498,12 @@ fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) ->
     }
 }
 
-fn ensure_self_key_release_allowed(
-    self_boot_info: Option<&BootInfo>,
-    policy: KeyReleasePolicy,
-) -> Result<()> {
-    if let Some(boot_info) = self_boot_info {
-        ensure_key_release_allowed(boot_info, policy)?;
-    }
-    Ok(())
-}
-
 impl RpcHandler {
-    async fn ensure_self_allowed(&self) -> Result<(Option<BootInfo>, u32)> {
+    async fn ensure_self_allowed(&self) -> Result<u32> {
         if !self.state.config.enforce_self_authorization {
             let epoch = self.state.current_epoch_from_info().await?;
             self.state.ensure_rpc_ca(epoch)?;
-            return Ok((None, epoch));
+            return Ok(epoch);
         }
         let boot_info = self
             .state
@@ -553,7 +531,7 @@ impl RpcHandler {
             .await
             .map_err(|err| anyhow!("{err:#}"))?;
         let epoch = self.state.authorized_epoch(&response, None)?;
-        Ok((Some(boot_info), epoch))
+        Ok(epoch)
     }
 
     fn ensure_attested(&self) -> Result<&VerifiedAttestation> {
@@ -677,7 +655,7 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_app_env_encrypt_pub_key(self, request: AppId) -> Result<PublicKeyResponse> {
-        let (_, epoch) = self
+        let epoch = self
             .ensure_self_allowed()
             .await
             .context("KMS self authorization failed")?;
@@ -755,24 +733,6 @@ impl KmsRpc for RpcHandler {
             bail!("public KMS key handover is disabled; use the admin listener");
         }
         self.handover_keys(request).await
-    }
-
-    /// Serve the temp CA certificate and key.
-    ///
-    /// Retained for older guest images and tokenless KMS onboarding. Current
-    /// guests use self-issued RA-TLS certificates and fetch the root CA via GetMeta.
-    /// The returned key authenticates nobody; client identity comes from attestation.
-    async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
-        let (self_boot_info, _) = self
-            .ensure_self_allowed()
-            .await
-            .context("KMS self authorization failed")?;
-        ensure_self_key_release_allowed(self_boot_info.as_ref(), (&self.state.config).into())?;
-        Ok(GetTempCaCertResponse {
-            temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
-            temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            ca_cert: self.state.rpc_ca_cert.clone(),
-        })
     }
 
     async fn sign_cert(self, request: SignCertRequest) -> Result<SignCertResponse> {
@@ -1410,16 +1370,6 @@ mod tests {
     }
 
     #[test]
-    fn snp_self_boot_info_uses_same_release_policy_for_temp_ca() {
-        let boot_info = snp_boot_info();
-
-        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default())
-            .expect_err("disabled SNP self boot info must not receive temp CA key material");
-        ensure_self_key_release_allowed(Some(&boot_info), SNP_ENABLED)
-            .expect("enabled clean SNP self boot info should pass the temp CA release gate");
-    }
-
-    #[test]
     fn nitro_enclave_key_release_requires_explicit_enablement() {
         let mut boot_info = snp_boot_info();
         boot_info.tee_variant = TeeVariant::DstackNitroEnclave;
@@ -1436,13 +1386,6 @@ mod tests {
         // explicitly enabled permits it
         ensure_key_release_allowed(&boot_info, NITRO_ENCLAVE_ENABLED)
             .expect("explicitly enabled nitro enclave key release should allow the boot info");
-
-        // the temp CA path uses the same gate
-        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default()).expect_err(
-            "disabled nitro enclave self boot info must not receive temp CA key material",
-        );
-        ensure_self_key_release_allowed(Some(&boot_info), NITRO_ENCLAVE_ENABLED)
-            .expect("enabled nitro enclave self boot info should pass the temp CA release gate");
     }
 
     #[test]
@@ -1518,19 +1461,8 @@ mod tests {
             .build()
             .self_signed()
             .unwrap();
-        let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let tmp_ca_cert = CertRequest::builder()
-            .org_name("Dstack")
-            .subject("Dstack Client Temp CA")
-            .ca_level(0)
-            .key(&tmp_ca_key)
-            .build()
-            .self_signed()
-            .unwrap();
         fs::write(cert_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
         fs::write(cert_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
-        fs::write(cert_dir.join("tmp-ca.key"), tmp_ca_key.serialize_pem()).unwrap();
-        fs::write(cert_dir.join("tmp-ca.crt"), tmp_ca_cert.pem()).unwrap();
         fs::write(
             cert_dir.join("root-k256.key"),
             SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
@@ -1585,8 +1517,12 @@ mod tests {
         });
         keyring.chain_hashes =
             root_chain_hashes(keyring.roots.iter().map(|root| (&root.ca.key, &root.k256)));
-        let state =
-            KmsState::new(initial.config.clone(), keyring, initial.rpc_ca_cert.clone()).unwrap();
+        let state = KmsState::new(
+            initial.config.clone(),
+            keyring,
+            initial.keyring.roots[0].ca.pem_cert.clone(),
+        )
+        .unwrap();
         let result = |epoch: u32| AuthorizationResult {
             is_allowed: true,
             rejection_reason: String::new(),
@@ -1607,7 +1543,7 @@ mod tests {
                 .await
                 .is_ok()
         );
-        assert_eq!(state.rpc_ca_cert, initial.rpc_ca_cert);
+        assert_eq!(state.rpc_ca_pubkey, initial.rpc_ca_pubkey);
 
         let mut rejected = result(1);
         rejected.is_allowed = false;

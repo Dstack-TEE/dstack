@@ -55,7 +55,7 @@ use crate::{
         deserialize_json_file, sha256, sha256_file, AppCompose, AppKeys, KeyProviderKind, SysConfig,
     },
 };
-use cert_client::{validate_kms_rpc_cert, CertRequestClient};
+use cert_client::{request_app_keys, CertRequestClient};
 use cmd_lib::run_fun as cmd;
 use dstack_api_auth::jwt;
 use dstack_gateway_rpc::{
@@ -2417,48 +2417,22 @@ impl<'a> Stage0<'a> {
 
     async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<(AppKeys, Vec<u8>)> {
         info!("Requesting app keys from KMS: {kms_url}");
-        // Learn the KMS root CA over an unauthenticated connection, as with
-        // `GetTempCaCert` before. Relying parties bind the KMS through the
-        // `key-provider` launch event; `verify_key_provider_id` also enforces it
-        // in-guest when the app pins `key_provider_id`.
-        let root_ca = {
-            info!("Getting KMS root CA");
-            let client = RaClient::new(kms_url.clone(), true)?;
-            let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(client);
-            kms_client
-                .get_meta()
-                .await
-                .context("failed to get KMS meta")?
-                .ca_cert
-        };
-        // Self-issued: the quote inside the certificate is the identity, so there is
-        // no CA to fetch and no shared private key to hold.
         let cert_pair =
             generate_self_signed_ra_cert(None).context("Failed to generate RA-TLS cert")?;
-        let attestation_verifier = attestation_verifier(&self.shared.sys_config)?;
-        let ra_client = RaClientConfig::builder()
-            .tls_no_check(false)
-            .tls_built_in_root_certs(false)
-            .remote_uri(kms_url.clone())
-            .tls_client_cert(cert_pair.cert_pem)
-            .tls_client_key(cert_pair.key_pem)
-            .tls_ca_cert(root_ca.clone())
-            .attestation_verifier(attestation_verifier)
-            .cert_validator(Box::new(validate_kms_rpc_cert))
-            .build()
-            .into_client()
-            .context("Failed to create client")?;
-        let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(ra_client);
-        let response = kms_client
-            .get_app_key(rpc::GetAppKeyRequest {
+        let response = request_app_keys(
+            kms_url.clone(),
+            rpc::GetAppKeyRequest {
                 api_version: 1,
                 vm_config: self.shared.sys_config.vm_config.clone(),
                 root_epoch: None,
-            })
-            .await
-            .context(
-                "failed to get app key (the KMS must be 0.6.0 or later to accept a self-issued RA-TLS client certificate)",
-            )?;
+            },
+            cert_pair,
+            attestation_verifier(&self.shared.sys_config)?,
+            None,
+        )
+        .await
+        .context("Failed to get app keys from the attested KMS")?;
+        let root_ca = response.ca_cert;
 
         let (_, ca_pem) = x509_parser::pem::parse_x509_pem(root_ca.as_bytes())
             .context("Failed to parse ca cert")?;

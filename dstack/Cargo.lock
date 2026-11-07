@@ -832,6 +832,7 @@ dependencies = [
  "dstack-types",
  "hex",
  "http-client",
+ "mock-attestation",
  "ra-rpc",
  "ra-tls",
  "rocket",
