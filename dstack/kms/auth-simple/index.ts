@@ -175,9 +175,6 @@ class ConfigBackend {
     if (appInfo.requestedAppEpoch !== 0) {
       return { isAllowed: false, rejectionReason: 'Requested app epoch must be zero', gatewayAppId: config.gatewayAppId, ...epoch };
     }
-    if (isKms !== (normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr))) {
-      return { isAllowed: false, rejectionReason: 'Authorization kind does not match app ID', gatewayAppId: config.gatewayAppId, ...epoch };
-    }
     const result = this.evaluateBoot(appInfo, isKms, config);
     return { isAllowed: result.isAllowed, rejectionReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
   }
@@ -362,10 +359,10 @@ app.get('/', async (c) => {
   }
 });
 
-for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+for (const method of ['authorizeKms', 'authorizeApp'] as const) {
   app.post(`/${method}`, zValidator('json', AuthorizationRequestSchema), async (c) => {
     try {
-      return c.json(await backend.checkAuthorization(c.req.valid('json'), method === 'checkKmsAuthorization'));
+      return c.json(await backend.checkAuthorization(c.req.valid('json'), method === 'authorizeKms'));
     } catch {
       console.error('authorization backend failed');
       return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);

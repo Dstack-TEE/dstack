@@ -124,7 +124,7 @@ Single-call (`test/DstackKms.symbolic.t.sol`):
 - [x] `check_RegisterApp_AnyCallerCanRegisterNonZeroAddress` + `_RejectsZeroAddress`
       — codifies the permissionless-by-design behavior; see "Findings"
 - [x] `check_IsAppAllowed_RejectsUnregisteredApp` / `_RejectsUnknownOsImage`
-      — fully symbolic `AppBootInfo`; the failing gate produces the
+      — fully symbolic `AppInfo`; the failing gate produces the
       right rejection reason without delegating
 - [x] `check_IsAppAllowed_DelegatesFaithfully` — when both KMS gates
       pass, the outer return equals the registered `IAppAuth`'s return.

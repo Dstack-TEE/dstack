@@ -124,7 +124,7 @@ contract CheckKmsAllowed is BaseQueryScript {
         require(address(kms) != address(0), "KMS_CONTRACT_ADDR not set");
 
         // Read boot info from environment
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: vm.envAddress("APP_ID"),
             composeHash: vm.envBytes32("COMPOSE_HASH"),
             instanceId: vm.envOr("INSTANCE_ID", address(0)),
@@ -150,7 +150,7 @@ contract CheckAppAllowed is BaseQueryScript {
         require(address(kms) != address(0), "KMS_CONTRACT_ADDR not set");
 
         // Read boot info from environment
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: vm.envAddress("APP_ID"),
             composeHash: vm.envBytes32("COMPOSE_HASH"),
             instanceId: vm.envOr("INSTANCE_ID", address(0)),
