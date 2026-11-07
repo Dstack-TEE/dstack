@@ -444,6 +444,7 @@ mod tests {
     #[rocket::post("/GetAppKey", data = "<_request>")]
     fn direct_app_keys(
         _request: String,
+        _cert: rocket::mtls::Certificate<'_>,
         state: &rocket::State<(Arc<Mutex<String>>, std::sync::atomic::AtomicUsize)>,
     ) -> rocket::response::content::RawJson<String> {
         state.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -455,6 +456,7 @@ mod tests {
         use ra_tls::attestation::{
             AttestationVerifierConfig, DstackNitroQuote, QuoteContentType, RootCaPaths,
         };
+        use rocket::tls::Resolver as _;
         let dir = tempfile::tempdir().unwrap();
         let attester = mock_attestation::nsm::NsmGenerator::new().unwrap();
         let attestation_root = dir.path().join("attestation-root.pem");
@@ -520,6 +522,7 @@ mod tests {
         let tx = Mutex::new(Some(tx));
         let response_body = Arc::new(Mutex::new(serde_json::to_string(&response).unwrap()));
         let server = rocket::custom(figment)
+            .attach(ra_rpc::ratls_client_verifier::RaTlsClientAuth::fairing())
             .manage((
                 response_body.clone(),
                 std::sync::atomic::AtomicUsize::new(0),
@@ -539,9 +542,26 @@ mod tests {
         let url = format!("https://127.0.0.1:{}", rx.await.unwrap());
         let client_cert = || {
             let key = p256_key();
+            let report_data = QuoteContentType::RaTlsCert.to_report_data(&key.public_key_der());
+            let pcrs = [0, 1, 2, 4]
+                .into_iter()
+                .map(|i| (i, vec![i as u8; 48]))
+                .collect();
+            let evidence = attester.attest_with_pcrs(&report_data, pcrs).unwrap();
+            let attestation = Attestation {
+                quote: AttestationQuote::DstackNitroEnclave(DstackNitroQuote {
+                    nsm_quote: evidence,
+                }),
+                runtime_events: Vec::new(),
+                report_data,
+                config: String::new(),
+                report: (),
+            }
+            .into_versioned();
             let cert = CertRequest::builder()
                 .subject("guest")
                 .key(&key)
+                .attestation(&attestation)
                 .usage_client_auth(true)
                 .build()
                 .self_signed()
