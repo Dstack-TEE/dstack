@@ -248,8 +248,8 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 
 Normal operations use two explicit authorization endpoints:
 
-- `POST /checkKmsAuthorization` for KMS self-authorization and root-key handover.
-- `POST /checkAppAuthorization` for application keys and certificates.
+- `POST /authorizeKms` for KMS self-authorization and root-key handover.
+- `POST /authorizeApp` for application keys and certificates.
 
 The Ethereum backends call the matching `DstackKms` method. Both accept
 `AuthorizationRequest` and return `AuthorizationResult`; no caller-kind flag is
