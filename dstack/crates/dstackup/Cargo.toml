@@ -16,6 +16,8 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 dstack-cli-core.workspace = true
+dstack-types.workspace = true
+dstack-volume.workspace = true
 hex = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 # reqwest (+ rustls/hyper) is already linked via dstack-cli-core's prpc client,
@@ -25,6 +27,5 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
-
-[dev-dependencies]
+tar.workspace = true
 tempfile.workspace = true
