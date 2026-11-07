@@ -33,8 +33,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     struct AuthorizationRequest {
         AppInfo appInfo;
-        uint256 appEpoch;
-        OptionalEpoch requestedEpoch;
+        // Reserved for application key rotation; only zero is currently supported.
+        uint256 requestedAppEpoch;
+        OptionalEpoch requestedRootEpoch;
     }
 
     struct AuthorizationResult {
@@ -434,12 +435,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         result.currentRootEpoch = _currentRootEpoch;
         result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
-        if (request.requestedEpoch.isSet && request.requestedEpoch.value > _currentRootEpoch) {
+        if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _currentRootEpoch) {
             result.rejectionReason = "Requested root epoch is not active";
             return result;
         }
-        if (request.appEpoch != 0) {
-            result.rejectionReason = "App epoch is not supported";
+        if (request.requestedAppEpoch != 0) {
+            result.rejectionReason = "Requested app epoch must be zero";
             return result;
         }
         AppInfo calldata appInfo = request.appInfo;

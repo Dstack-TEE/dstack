@@ -484,13 +484,13 @@ describe('auth-simple', () => {
       expect(await authorize()).toMatchObject({
         isAllowed: true, rejectionReason: '', currentRootEpoch: 1, currentRootEpochHash: h1,
       });
-      expect(await authorize({ requestedEpoch: 0 })).toMatchObject({ isAllowed: true, currentRootEpoch: 1 });
-      expect(await authorize({ requestedEpoch: 1 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedRootEpoch: 0 })).toMatchObject({ isAllowed: true, currentRootEpoch: 1 });
+      expect(await authorize({ requestedRootEpoch: 1 })).toMatchObject({ isAllowed: true });
       expect(await authorize({}, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
       expect(await authorize({ appId: kmsContractAddr })).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
-      expect(await authorize({ appEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'App epoch is not supported', currentRootEpoch: 1 });
-      expect(await authorize({ appEpoch: 0 })).toMatchObject({ isAllowed: true });
-      expect(await authorize({ requestedEpoch: 2 })).toMatchObject({
+      expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch must be zero', currentRootEpoch: 1 });
+      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedRootEpoch: 2 })).toMatchObject({
         isAllowed: false, rejectionReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,
       });
       expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' }, true)).toMatchObject({ isAllowed: true });

@@ -419,13 +419,13 @@
         ],
         "type": "object",
         "properties": {
-          "requestedEpoch": {
+          "requestedRootEpoch": {
             "type": "integer",
             "minimum": 0,
             "maximum": 4294967295,
             "description": "Omit to use the current epoch. An explicit zero selects epoch 0; future epochs are denied."
           },
-          "appEpoch": {
+          "requestedAppEpoch": {
             "type": "integer",
             "minimum": 0,
             "maximum": 4294967295,

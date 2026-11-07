@@ -85,9 +85,9 @@ pub async fn request_app_keys(
         }))
         .build()
         .into_client()?;
-    let requested_epoch = request.root_epoch;
+    let requested_root_epoch = request.root_epoch;
     let response = KmsClient::new(client).get_app_key(request).await?;
-    if requested_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
+    if requested_root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
         bail!("KMS returned a different root epoch than requested");
     }
     let cert = server_cert
@@ -569,14 +569,14 @@ mod tests {
         assert_eq!(result.root_epoch, 1);
 
         let other_ca = kms_root().pem_cert;
-        for requested_epoch in [None, Some(0), Some(1)] {
+        for requested_root_epoch in [None, Some(0), Some(1)] {
             let request = || GetAppKeyRequest {
                 api_version: 1,
                 vm_config: String::new(),
-                root_epoch: requested_epoch,
+                root_epoch: requested_root_epoch,
             };
             let selected = AppKeyResponse {
-                root_epoch: requested_epoch.unwrap_or(1),
+                root_epoch: requested_root_epoch.unwrap_or(1),
                 ..response.clone()
             };
             *response_body.lock().unwrap() = serde_json::to_string(&selected).unwrap();

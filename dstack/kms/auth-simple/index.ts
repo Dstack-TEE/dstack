@@ -28,8 +28,8 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
-  appEpoch: z.number().int().min(0).max(0xffffffff).default(0),
-  requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
+  requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
@@ -168,11 +168,11 @@ class ConfigBackend {
     if (current.rootEpoch === undefined) {
       return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
     }
-    if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
+    if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > current.rootEpoch) {
       return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
-    if (appInfo.appEpoch !== 0) {
-      return { isAllowed: false, rejectionReason: 'App epoch is not supported', gatewayAppId: config.gatewayAppId, ...epoch };
+    if (appInfo.requestedAppEpoch !== 0) {
+      return { isAllowed: false, rejectionReason: 'Requested app epoch must be zero', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     if (isKms !== (normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr))) {
       return { isAllowed: false, rejectionReason: 'Authorization kind does not match app ID', gatewayAppId: config.gatewayAppId, ...epoch };

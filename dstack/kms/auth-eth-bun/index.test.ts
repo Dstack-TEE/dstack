@@ -841,8 +841,8 @@ describe('POST /checkAppAuthorization', () => {
     mrAggregated: '0x' + '44'.repeat(32), mrSystem: '0x' + '55'.repeat(32),
     osImageHash: '0x' + '66'.repeat(32), tcbStatus: 'UpToDate', advisoryIds: [],
   };
-  const authorize = (requestedEpoch?: number) => appFetch(new Request('http://localhost/checkAppAuthorization', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, requestedEpoch }),
+  const authorize = (requestedRootEpoch?: number) => appFetch(new Request('http://localhost/checkAppAuthorization', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, requestedRootEpoch }),
   }));
 
   it('reads the complete result with one contract call at configured finality', async () => {
@@ -857,7 +857,7 @@ describe('POST /checkAppAuthorization', () => {
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       functionName: 'checkAppAuthorization', blockNumber: 98n,
-      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), appEpoch: 0n, requestedEpoch: { isSet: false, value: 0n } })],
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: 0n, requestedRootEpoch: { isSet: false, value: 0n } })],
     }));
   });
 
@@ -868,7 +868,7 @@ describe('POST /checkAppAuthorization', () => {
     });
     expect((await authorize(0)).status).toBe(200);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
-      args: [expect.objectContaining({ requestedEpoch: { isSet: true, value: 0n } })],
+      args: [expect.objectContaining({ requestedRootEpoch: { isSet: true, value: 0n } })],
     }));
   });
 

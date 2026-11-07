@@ -37,8 +37,8 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
-  appEpoch: z.number().int().min(0).max(0xffffffff).default(0),
-  requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
+  requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
@@ -94,8 +94,8 @@ const AUTHORIZATION_ABI = {
   stateMutability: 'view',
   inputs: [{ name: 'request', type: 'tuple', components: [
     { name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS },
-    { name: 'appEpoch', type: 'uint256' },
-    { name: 'requestedEpoch', type: 'tuple', components: [
+    { name: 'requestedAppEpoch', type: 'uint256' },
+    { name: 'requestedRootEpoch', type: 'tuple', components: [
       { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
     ] },
   ] }],
@@ -245,8 +245,8 @@ class EthereumBackend {
       functionName: method,
       args: [{
         appInfo: this.contractAppInfo(appInfo),
-        appEpoch: BigInt(appInfo.appEpoch),
-        requestedEpoch: { isSet: appInfo.requestedEpoch !== undefined, value: BigInt(appInfo.requestedEpoch ?? 0) },
+        requestedAppEpoch: BigInt(appInfo.requestedAppEpoch),
+        requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
       }],
       blockNumber,
     });
