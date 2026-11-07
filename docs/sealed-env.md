@@ -31,8 +31,9 @@ The guest still enforces the application's environment-name allowlist.
 ## Keys and signatures
 
 `GetSealedEnvPubKey` is available on KMS and proxied by VMM. Its request contains
-`app_id` (20 bytes), optional `root_epoch`, and optional `app_epoch`; omission selects the current
-active epoch, while future epochs are rejected. The response contains
+`app_id` (20 bytes) only and always selects the current active epochs. Historical
+private keys for decryption and migration are obtained through `GetAppKey`, not
+through either environment public-key endpoint. The response contains
 `public_key`, `root_epoch`, `app_epoch`, `timestamp`, and `signature`.
 
 For each app, the KMS derives the 32-byte receiver private key directly from

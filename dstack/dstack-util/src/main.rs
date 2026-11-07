@@ -793,9 +793,7 @@ async fn cmd_encrypt(args: EncryptArgs) -> Result<()> {
         .context("failed to create KMS client")?;
     let response = KmsClient::new(client)
         .get_app_env_encrypt_pub_key(dstack_kms_rpc::AppId {
-            app_epoch: None,
             app_id: app_id.to_vec(),
-            root_epoch: None,
         })
         .await
         .context("failed to get app environment encryption public key")?;
