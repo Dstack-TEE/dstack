@@ -359,12 +359,12 @@ pub fn create_manifest_from_vm_config(
         bail!("tee simulator credentials are not configured on this VMM");
     }
     let key_provider = key_provider_from_compose(&request.compose_file)?;
-    if key_provider == dstack_types::KeyProviderKind::Snp
+    if key_provider == dstack_types::KeyProviderKind::SevSnp
         && (cvm_config.resolved_platform() != crate::config::CvmPlatform::AmdSevSnp
             || simulated_tee.is_some()
             || request.no_tee)
     {
-        bail!("the SNP key provider requires a real AMD SEV-SNP platform");
+        bail!("the SEV-SNP key provider requires a real AMD SEV-SNP platform");
     }
     let swtpm = needs_swtpm(key_provider, simulated_tee);
     let disk_prealloc = disk_prealloc_from_vm_config(&request, cvm_config)?;
@@ -1832,7 +1832,7 @@ mod tests {
     #[test]
     fn snp_provider_requires_real_snp_hardware() {
         let mut request = test_vm_configuration();
-        request.compose_file = serde_json::json!({ "key_provider": "snp" }).to_string();
+        request.compose_file = serde_json::json!({ "key_provider": "sev-snp" }).to_string();
         let mut config = test_cvm_config();
         config.platform = Some(crate::config::CvmPlatform::Tdx);
         assert!(create_manifest_from_vm_config(request.clone(), &config)

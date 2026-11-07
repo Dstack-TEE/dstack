@@ -32,7 +32,7 @@ fn key_provider_kind_byte(key_provider: KeyProviderKind) -> u8 {
         KeyProviderKind::Local => 1,
         KeyProviderKind::Kms => 2,
         KeyProviderKind::Tpm => 3,
-        KeyProviderKind::Snp => 4,
+        KeyProviderKind::SevSnp => 4,
     }
 }
 
@@ -204,13 +204,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snp_provider_is_distinct_without_changing_legacy_codes() {
+    fn sev_snp_provider_is_distinct_without_changing_legacy_codes() {
         let providers = [
             KeyProviderKind::None,
             KeyProviderKind::Local,
             KeyProviderKind::Kms,
             KeyProviderKind::Tpm,
-            KeyProviderKind::Snp,
+            KeyProviderKind::SevSnp,
         ];
         for (code, provider) in providers.into_iter().enumerate() {
             assert_eq!(key_provider_kind_byte(provider), code as u8);
@@ -219,13 +219,19 @@ mod tests {
             vec![1; 20],
             vec![2; 32],
             None,
-            KeyProviderKind::Snp,
+            KeyProviderKind::SevSnp,
             vec![],
             vec![3; 20],
         );
         let mut other = snp.clone();
         other.key_provider = KeyProviderKind::None;
-        assert_eq!(snp.key_provider_name(), "snp");
+        assert_eq!(snp.key_provider_name(), "sev-snp");
+        let document = snp.to_canonical_json();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&document).unwrap()["key_provider"],
+            "sev-snp"
+        );
+        assert_eq!(MrConfigV3::from_document(&document).unwrap(), snp);
         assert_ne!(snp.to_snp_host_data(), other.to_snp_host_data());
     }
 

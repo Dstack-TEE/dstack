@@ -205,7 +205,7 @@ mod tests {
         let workdir = VmWorkDir::new(temp.path());
         fs::create_dir_all(workdir.shared_dir()).unwrap();
         let mut compose = app_compose(serde_json::json!("3"));
-        compose.key_provider = Some(KeyProviderKind::Snp);
+        compose.key_provider = Some(KeyProviderKind::SevSnp);
         fs::write(
             workdir.app_compose_path(),
             serde_json::to_vec(&compose).unwrap(),

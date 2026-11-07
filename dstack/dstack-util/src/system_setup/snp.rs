@@ -36,13 +36,13 @@ fn parameters_for_boot(
 impl Stage0<'_> {
     pub(super) async fn get_snp_seed(&self, app_info: &mut AppInfo) -> Result<Zeroizing<[u8; 32]>> {
         if detect_tee_variant()? != TeeVariant::DstackAmdSevSnp {
-            bail!("the SNP key provider requires an AMD SEV-SNP guest");
+            bail!("the SEV-SNP key provider requires an AMD SEV-SNP guest");
         }
         // HOST_DATA is host-supplied. The measured OS must validate its binding
         // to the actual app/config before deriving or using a sealing seed.
-        self.verify_app_config(app_info, KeyProviderKind::Snp, &[])?;
+        self.verify_app_config(app_info, KeyProviderKind::SevSnp, &[])?;
         if !parse_dstack_options(&self.shared)?.storage_encrypted {
-            bail!("the SNP key provider requires encrypted storage");
+            bail!("the SEV-SNP key provider requires encrypted storage");
         }
         let status = Command::new("cryptsetup")
             .arg("isLuks")

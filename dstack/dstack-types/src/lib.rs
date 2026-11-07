@@ -765,7 +765,8 @@ pub enum KeyProviderKind {
     Kms,
     Local,
     Tpm,
-    Snp,
+    #[serde(rename = "sev-snp")]
+    SevSnp,
 }
 
 /// Instance identity and public recovery metadata shared by the VMM and guest.
@@ -801,7 +802,7 @@ impl KeyProviderKind {
             Self::Local => "local-sgx",
             Self::Kms => "kms",
             Self::Tpm => "tpm",
-            Self::Snp => "snp",
+            Self::SevSnp => "sev-snp",
         }
     }
 
@@ -2484,7 +2485,7 @@ pub enum KeyProvider {
         #[serde(with = "hex_bytes")]
         pubkey: Vec<u8>,
     },
-    Snp {
+    SevSnp {
         key: String,
     },
     Kms {
@@ -2505,7 +2506,7 @@ impl KeyProvider {
             KeyProvider::None { .. } => KeyProviderKind::None,
             KeyProvider::Local { .. } => KeyProviderKind::Local,
             KeyProvider::Tpm { .. } => KeyProviderKind::Tpm,
-            KeyProvider::Snp { .. } => KeyProviderKind::Snp,
+            KeyProvider::SevSnp { .. } => KeyProviderKind::SevSnp,
             KeyProvider::Kms { .. } => KeyProviderKind::Kms,
         }
     }
@@ -2524,7 +2525,7 @@ impl KeyProvider {
             KeyProvider::None { .. } => &[],
             KeyProvider::Local { mr, .. } => mr,
             KeyProvider::Tpm { .. } => &[],
-            KeyProvider::Snp { .. } => &[],
+            KeyProvider::SevSnp { .. } => &[],
             KeyProvider::Kms { pubkey, .. } => pubkey,
         }
     }
@@ -2547,16 +2548,27 @@ mod key_provider_tests {
     use super::*;
 
     #[test]
-    fn snp_provider_has_no_instance_dependent_id() {
-        let provider: KeyProvider = serde_json::from_str(r#"{"Snp":{"key":"test-only"}}"#).unwrap();
-        assert_eq!(provider.kind(), KeyProviderKind::Snp);
+    fn sev_snp_provider_has_no_instance_dependent_id() {
+        let provider: KeyProvider =
+            serde_json::from_str(r#"{"SevSnp":{"key":"test-only"}}"#).unwrap();
+        assert_eq!(provider.kind(), KeyProviderKind::SevSnp);
         assert!(provider.id().is_empty());
-        assert_eq!(serde_json::to_string(&provider.kind()).unwrap(), r#""snp""#);
+        assert_eq!(
+            serde_json::to_string(&provider.kind()).unwrap(),
+            r#""sev-snp""#
+        );
+        assert_eq!(provider.kind().measurement_name(), "sev-snp");
+        for obsolete_name in ["snp", "sev_snp"] {
+            assert!(
+                serde_json::from_value::<KeyProviderKind>(serde_json::json!(obsolete_name))
+                    .is_err()
+            );
+        }
         let compose: AppCompose = serde_json::from_value(serde_json::json!({
-            "name": "snp-test", "runner": "docker-compose", "manifest_version": "3", "docker_compose_file": "", "key_provider": "snp"
+            "name": "snp-test", "runner": "docker-compose", "manifest_version": "3", "docker_compose_file": "", "key_provider": "sev-snp"
         }))
         .unwrap();
-        assert_eq!(compose.key_provider(), KeyProviderKind::Snp);
+        assert_eq!(compose.key_provider(), KeyProviderKind::SevSnp);
         assert!(!compose.kms_enabled());
     }
 

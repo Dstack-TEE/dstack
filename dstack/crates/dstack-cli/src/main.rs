@@ -20,7 +20,7 @@ use fs_err as fs;
 
 fn parse_key_provider(value: &str) -> std::result::Result<KeyProviderKind, String> {
     serde_json::from_value(serde_json::Value::String(value.to_string()))
-        .map_err(|_| "expected kms, local, snp, tpm, or none".to_string())
+        .map_err(|_| "expected kms, local, sev-snp, tpm, or none".to_string())
 }
 
 #[derive(Parser)]
@@ -121,7 +121,7 @@ enum Command {
         /// deploy in non-KMS mode (ephemeral keys; no KMS required).
         #[arg(long)]
         no_kms: bool,
-        /// key provider: kms (default), local (SGX), snp, tpm, or none.
+        /// key provider: kms (default), local (SGX), sev-snp, tpm, or none.
         #[arg(long, value_parser = parse_key_provider, conflicts_with = "no_kms")]
         key_provider: Option<KeyProviderKind>,
         /// register the app's compose hash in this auth-allowlist.json. Defaults
@@ -780,14 +780,19 @@ mod tests {
     }
 
     #[test]
-    fn snp_provider_is_explicit_and_conflicts_with_no_kms_alias() {
-        let cli =
-            Cli::try_parse_from(["dstack", "deploy", "compose.yaml", "--key-provider", "snp"])
-                .unwrap();
+    fn sev_snp_provider_is_explicit_and_conflicts_with_no_kms_alias() {
+        let cli = Cli::try_parse_from([
+            "dstack",
+            "deploy",
+            "compose.yaml",
+            "--key-provider",
+            "sev-snp",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Command::Deploy {
-                key_provider: Some(KeyProviderKind::Snp),
+                key_provider: Some(KeyProviderKind::SevSnp),
                 ..
             }
         ));
@@ -796,18 +801,20 @@ mod tests {
             "deploy",
             "compose.yaml",
             "--key-provider",
-            "snp",
+            "sev-snp",
             "--no-kms"
         ])
         .is_err());
-        assert!(Cli::try_parse_from([
-            "dstack",
-            "deploy",
-            "compose.yaml",
-            "--key-provider",
-            "unknown"
-        ])
-        .is_err());
+        for invalid in ["snp", "sev_snp", "unknown"] {
+            assert!(Cli::try_parse_from([
+                "dstack",
+                "deploy",
+                "compose.yaml",
+                "--key-provider",
+                invalid
+            ])
+            .is_err());
+        }
     }
 
     #[test]

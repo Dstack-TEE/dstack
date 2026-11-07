@@ -111,7 +111,7 @@ mod tests {
                 )
             };
             for provider in [
-                KeyProviderKind::Snp,
+                KeyProviderKind::SevSnp,
                 KeyProviderKind::Local,
                 KeyProviderKind::Tpm,
             ] {
