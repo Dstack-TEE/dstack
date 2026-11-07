@@ -8,10 +8,7 @@ use std::sync::Arc;
 
 use prpc::client::RequestClient;
 use ra_rpc::client::RaClientConfig;
-use ra_tls::{
-    cert::CertRequest,
-    rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256},
-};
+use ra_tls::test_pki::{TestCa, TestCert};
 use rustls::{
     pki_types::PrivatePkcs8KeyDer,
     server::{ClientHello, ResolvesServerCert},
@@ -40,32 +37,35 @@ async fn tls13_requires_the_server_certificate_key_even_without_ca_validation() 
 
 async fn check_key_possession(version: &'static rustls::SupportedProtocolVersion) {
     for correct_key in [true, false] {
-        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let cert = CertRequest::builder()
-            .subject("test server")
-            .key(&key)
-            .usage_server_auth(true)
-            .build()
-            .self_signed()
-            .unwrap();
+        let server_cert = TestCert::localhost().self_signed().unwrap();
         let signing_key = if correct_key {
-            key
+            server_cert.key_der()
         } else {
-            KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap()
+            TestCert::localhost().self_signed().unwrap().key_der()
         };
+        let ca = TestCa::new().unwrap();
+        let client_cert = TestCert::localhost().signed_by(&ca).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(ca.cert_key().cert.der().clone()).unwrap();
         let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+        let client_verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            Arc::new(roots),
+            provider.clone(),
+        )
+        .build()
+        .unwrap();
         let signing_key = provider
             .key_provider
-            .load_private_key(PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into())
+            .load_private_key(PrivatePkcs8KeyDer::from(signing_key).into())
             .unwrap();
         // A resolver permits deliberately pairing a stolen certificate with
         // another key, unlike with_single_cert which rejects it up front.
-        let pinned_cert = cert.der().to_vec();
-        let certified = CertifiedKey::new(vec![cert.der().clone()], signing_key);
+        let pinned_cert = server_cert.cert_der();
+        let certified = CertifiedKey::new(vec![server_cert.cert.der().clone()], signing_key);
         let config = rustls::ServerConfig::builder_with_provider(provider)
             .with_protocol_versions(&[version])
             .unwrap()
-            .with_no_client_auth()
+            .with_client_cert_verifier(client_verifier)
             .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified))));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -90,6 +90,8 @@ async fn check_key_possession(version: &'static rustls::SupportedProtocolVersion
         let client = RaClientConfig::builder()
             .remote_uri(format!("https://{address}"))
             .tls_no_check(true)
+            .tls_client_cert(client_cert.cert_pem())
+            .tls_client_key(client_cert.key_pem())
             .verify_server_attestation(false)
             .cert_validator(Box::new(move |info| {
                 let info = info.ok_or_else(|| anyhow::anyhow!("missing server certificate"))?;
