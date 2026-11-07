@@ -139,11 +139,10 @@ contract ActivateRootEpoch is BaseScript {
 contract SetRootEpochEvidenceUrl is BaseScript {
     function run() external {
         uint256 epoch = vm.envUint("ROOT_EPOCH");
-        bytes32 chainHash = vm.envBytes32("CHAIN_HASH");
         string memory evidenceUrl = vm.envString("EVIDENCE_URL");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.setRootEpochEvidenceUrl(epoch, chainHash, evidenceUrl);
+        kms.setRootEpochEvidenceUrl(epoch, evidenceUrl);
         vm.stopBroadcast();
 
         console.log("Updated the evidence URL of KMS root epoch", epoch);

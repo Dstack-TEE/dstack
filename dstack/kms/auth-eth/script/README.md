@@ -86,10 +86,8 @@ forge script script/Manage.s.sol:ActivateRootEpoch --broadcast --rpc-url $RPC_UR
 
 #### Update a Root Epoch's Evidence URL
 Points an epoch at a new copy of its attestation, e.g. when the old host goes away.
-`CHAIN_HASH` is the expected epoch chain hash (see `Query.s.sol`), so a stale
-update cannot overwrite the evidence URL of replacement keys at the same epoch.
 ```bash
-KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 CHAIN_HASH=0x... EVIDENCE_URL=ipfs://... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 EVIDENCE_URL=ipfs://... \
 forge script script/Manage.s.sol:SetRootEpochEvidenceUrl --broadcast --rpc-url $RPC_URL
 ```
 
