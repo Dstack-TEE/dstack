@@ -218,13 +218,14 @@ impl KmsImage {
 pub fn kms_app_compose(kms_toml: &str, image: &KmsImage, platform: Platform) -> String {
     let pull_policy = match image {
         KmsImage::Registry(_) => "",
-        KmsImage::Dev { .. } => "    pull_policy: never\n",
+        KmsImage::Dev { .. } => "    pull_policy: never",
     };
     let docker_compose = format!(
         r#"services:
   kms:
     image: {kms_image}
-{pull_policy}    volumes:
+{pull_policy}
+    volumes:
       - kms-volume:/kms
       - /var/run/dstack.sock:/var/run/dstack.sock
       - /dstack/kms-config/kms.toml:/kms/kms.toml:ro
