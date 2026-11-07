@@ -96,6 +96,7 @@ async fn sign_cert_request(
 
 mod config_id_verifier;
 mod luks;
+mod snp;
 
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
@@ -130,6 +131,8 @@ struct InstanceInfo {
     instance_id: Vec<u8>,
     #[serde(with = "hex_bytes", default)]
     app_id: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snp_sealing: Option<dstack_types::SnpSealingParameters>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -2571,12 +2574,22 @@ impl<'a> Stage0<'a> {
             .context("failed to generate TPM app keys")
     }
 
-    async fn request_app_keys(&self) -> Result<AppKeys> {
+    async fn request_app_keys(&self, app_info: &AppInfo) -> Result<AppKeys> {
         let key_provider = self.shared.app_compose.key_provider();
         validate_key_provider_inputs(key_provider, &self.shared.sys_config.kms_urls)?;
         match key_provider {
             KeyProviderKind::Kms => self.request_app_keys_from_kms().await,
             KeyProviderKind::Local => self.get_keys_from_local_key_provider().await,
+            KeyProviderKind::Snp => {
+                let parameters = app_info
+                    .instance_info
+                    .snp_sealing
+                    .context("missing SNP sealing parameters")?;
+                let seed = sev_snp_attest::sealing::derive_sealing_seed(parameters.tcb_version)
+                    .context("failed to derive SNP sealing seed")?;
+                gen_app_keys_from_seed(seed.as_ref(), KeyProviderKind::Snp, None)
+                    .context("failed to generate SNP app keys")
+            }
             KeyProviderKind::None => {
                 info!("No key provider is enabled, generating temporary app keys");
                 let seed: [u8; 32] = rand::thread_rng().gen();
@@ -3119,7 +3132,12 @@ impl<'a> Stage0<'a> {
         })
     }
 
-    fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
+    fn verify_app_config(
+        &self,
+        app_info: &AppInfo,
+        provider: KeyProviderKind,
+        provider_id: &[u8],
+    ) -> Result<()> {
         config_id_verifier::verify_mr_config_id(
             &app_info.compose_hash,
             &app_info.gpu_policy_hash,
@@ -3132,10 +3150,14 @@ impl<'a> Stage0<'a> {
                 .ok()
                 .context("Invalid app id")?,
             &app_info.instance_info.instance_id,
-            keys.key_provider.kind(),
-            keys.key_provider.id(),
+            provider,
+            provider_id,
         )?;
-        self.verify_key_provider_id(keys.key_provider.id())?;
+        self.verify_key_provider_id(provider_id)
+    }
+
+    fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
+        self.verify_app_config(app_info, keys.key_provider.kind(), keys.key_provider.id())?;
         // TPM uses an empty id: the instance app-root pubkey is not a stable
         // provider identity and must not enter the launch measurement chain.
         let kp_info = match &keys.key_provider {
@@ -3144,6 +3166,7 @@ impl<'a> Stage0<'a> {
                 KeyProviderInfo::new("local-sgx".into(), hex::encode(keys.key_provider.id()))
             }
             KeyProvider::Tpm { .. } => KeyProviderInfo::new("tpm".into(), "".into()),
+            KeyProvider::Snp { .. } => KeyProviderInfo::new("snp".into(), "".into()),
             KeyProvider::Kms { .. } => {
                 KeyProviderInfo::new("kms".into(), hex::encode(keys.key_provider.id()))
             }
@@ -3153,10 +3176,13 @@ impl<'a> Stage0<'a> {
     }
 
     async fn setup_fs(self) -> Result<Stage1<'a>> {
-        let app_info = self
+        let mut app_info = self
             .measure_app_info()
             .await
             .context("Failed to measure app info")?;
+        if self.shared.app_compose.key_provider() == KeyProviderKind::Snp {
+            self.prepare_snp_sealing(&mut app_info).await?;
+        }
         if self.shared.app_compose.key_provider().is_kms() {
             cmd_show_mrs()?;
         }
@@ -3164,7 +3190,7 @@ impl<'a> Stage0<'a> {
             .notify_q("boot.progress", "requesting app keys")
             .await;
         let app_keys = self
-            .request_app_keys()
+            .request_app_keys(&app_info)
             .await
             .context("Failed to request app keys")?;
         if app_keys.disk_crypt_key.is_empty() {

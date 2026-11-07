@@ -216,7 +216,8 @@ const CreateVmDialogComponent = {
               <select id="keyProviderSelect" v-model="form.key_provider">
                 <option value="none">None</option>
                 <option value="kms">KMS</option>
-                <option value="local">Local</option>
+                <option value="local">Local (SGX)</option>
+                <option value="snp">SEV-SNP hardware</option>
                 <option value="tpm">TPM</option>
               </select>
             </div>
