@@ -127,6 +127,15 @@ impl Vmm {
         }
     }
 
+    /// Fetch the complete configuration of an existing VM.
+    pub async fn info(&self, id: &str) -> Result<Option<dstack_vmm_rpc::VmInfo>> {
+        self.rpc
+            .get_info(Id { id: id.to_string() })
+            .await
+            .map(|response| response.info)
+            .map_err(|e| anyhow!("vmm GetInfo rpc failed: {e}"))
+    }
+
     /// fetch the last `lines` log lines for a VM (non-following).
     ///
     /// `/logs` is a plain-HTTP `GET` endpoint. It works over the local unix

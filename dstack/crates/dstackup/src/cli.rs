@@ -221,6 +221,14 @@ pub(crate) struct InstallOpts {
     #[arg(long, default_value = config::DEFAULT_KMS_IMAGE)]
     pub(crate) kms_image: String,
 
+    /// Package an existing local Docker image into a verity volume for KMS.
+    ///
+    /// Resolves the tag on every invocation. Unchanged image content produces the
+    /// same volume and can reuse the existing KMS. A changed image requires a
+    /// fresh --prefix and KMS CVM; use onboarding to retain existing KMS roots.
+    #[arg(long, value_name = "LOCAL_IMAGE", conflicts_with_all = ["kms_image", "no_kms"])]
+    pub(crate) dev_kms: Option<String>,
+
     /// host port for the KMS RPC (default: an auto-picked free port).
     #[arg(long)]
     pub(crate) kms_port: Option<u16>,
@@ -236,7 +244,27 @@ pub(crate) struct InstallOpts {
     #[arg(long)]
     pub(crate) allow_unpinned_image: bool,
 
-    /// render + write configs only; do not start any process.
+    /// prepare configs and local artifacts without starting services or CVMs.
     #[arg(long)]
     pub(crate) no_start: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_kms_selects_a_local_tag_and_rejects_conflicting_modes() {
+        let cli = Cli::try_parse_from(["dstackup", "install", "--dev-kms", "my-kms:test"]).unwrap();
+        let Command::Install(opts) = cli.command else {
+            panic!("expected install")
+        };
+        assert_eq!(opts.dev_kms.as_deref(), Some("my-kms:test"));
+        for extra in [&["--kms-image", "another-image"][..], &["--no-kms"][..]] {
+            let args = ["dstackup", "install", "--dev-kms", "my-kms:test"]
+                .into_iter()
+                .chain(extra.iter().copied());
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
 }
