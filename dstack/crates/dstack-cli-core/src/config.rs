@@ -197,7 +197,7 @@ pub const DEFAULT_KMS_IMAGE: &str = "dstacktee/dstack-kms:0.5.11@sha256:84b793fe
 /// build the KMS-in-CVM app-compose manifest. An init script writes the
 /// rendered `kms.toml` into the guest and the KMS container mounts it. On TDX
 /// the CVM uses the SGX local key provider; AMD SEV-SNP derives its sealing
-/// seed directly inside the guest. Both require a matching guest OS image.
+/// seed directly inside the guest. One unified OS image supports both providers.
 pub fn kms_app_compose(kms_toml: &str, kms_image: &str, platform: Platform) -> String {
     let docker_compose = format!(
         r#"services:
