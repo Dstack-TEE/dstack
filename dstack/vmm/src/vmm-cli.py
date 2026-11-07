@@ -848,6 +848,12 @@ class VmmCLI:
         rows = [[img["name"], img.get("version", "-")] for img in images]
         print(format_table(rows, headers))
 
+    def image_supports_sealed_env(self, image: Optional[str]) -> bool:
+        if not image:
+            return False
+        images = self.rpc_call("ListImages").get("images", [])
+        return any(item.get("name") == image and item.get("sealed_env") is True for item in images)
+
     def get_sealed_env_pub_key(
         self,
         app_id: str,
@@ -864,8 +870,20 @@ class VmmCLI:
             body={"app_id": app_id},
         )
         error = response.get("error") if isinstance(response, dict) else response
-        if status in (400, 404) and error == "Service not found: GetSealedEnvPubKey":
-            return None
+        if status in (400, 404):
+            missing = "Service not found: GetSealedEnvPubKey"
+            if error == missing:
+                return None
+            if isinstance(error, str):
+                for upstream in ("400 Bad Request", "404 Not Found"):
+                    prefix = f"Request failed with status={upstream}, error="
+                    if error.startswith(prefix):
+                        try:
+                            forwarded = json.loads(error[len(prefix):])
+                        except json.JSONDecodeError:
+                            break
+                        if isinstance(forwarded, dict) and forwarded.get("error") == missing:
+                            return None
         if status != 200:
             raise RuntimeError(f"GetSealedEnvPubKey failed with HTTP {status}")
         if not isinstance(response, dict):
@@ -874,11 +892,12 @@ class VmmCLI:
         return response
 
     def encrypt_env_payload(
-        self, envs: Dict[str, str], app_id: str, kms_url: Optional[str]
+        self, envs: Dict[str, str], app_id: str, kms_url: Optional[str],
+        supports_sealed_env: bool,
     ) -> Dict:
-        """Select the wire field by RPC support, never by environment file contents."""
+        """Select encryption using the target image capability and KMS RPC support."""
         envs_list = [{"key": k, "value": v} for k, v in envs.items()]
-        key = self.get_sealed_env_pub_key(app_id, kms_url)
+        key = self.get_sealed_env_pub_key(app_id, kms_url) if supports_sealed_env else None
         if key is not None:
             return {
                 "sealed_env": seal_env(envs_list, key["public_key"], key["root_epoch"], key.get("app_epoch", 0))
@@ -1149,7 +1168,7 @@ class VmmCLI:
             encrypt_url = args.kms_encrypt_url or (
                 args.kms_url[0] if args.kms_url else None
             )
-            params.update(self.encrypt_env_payload(envs, app_id, encrypt_url))
+            params.update(self.encrypt_env_payload(envs, app_id, encrypt_url, self.image_supports_sealed_env(args.image)))
         response = self.rpc_call("CreateVm", params)
         print(f"Created VM with ID: {response.get('id')}")
         return response.get("id")
@@ -1175,7 +1194,9 @@ class VmmCLI:
         compose_file = vm_configuration.get("compose_file")
 
         payload = {"id": vm_id}
-        payload.update(self.encrypt_env_payload(envs, app_id, kms_urls[0]))
+        payload.update(self.encrypt_env_payload(
+            envs, app_id, kms_urls[0], self.image_supports_sealed_env(vm_configuration.get("image"))
+        ))
 
         if compose_file:
             try:
@@ -1270,12 +1291,14 @@ class VmmCLI:
             resize_params["image"] = image
             updates.append(f"image: {image}")
 
-        if resize_params:
+        if resize_params and not env_file:
             resize_params["id"] = vm_id
             self.rpc_call("ResizeVm", resize_params)
 
         # handle upgrade operations (compose, env, user_config, ports, gpu)
         upgrade_params = {"id": vm_id}
+        if env_file:
+            upgrade_params.update(resize_params)
 
         # handle compose file updates (docker-compose, prelaunch script, swap)
         needs_compose_update = (
@@ -1337,7 +1360,10 @@ class VmmCLI:
                 vm_configuration = vm_info_response["info"].get("configuration") or {}
                 compose_file_content = vm_configuration.get("compose_file")
 
-                upgrade_params.update(self.encrypt_env_payload(envs, app_id, kms_urls[0]))
+                upgrade_params.update(self.encrypt_env_payload(
+                    envs, app_id, kms_urls[0],
+                    self.image_supports_sealed_env(image if image is not None else vm_configuration.get("image")),
+                ))
                 updates.append("environment variables")
 
                 # update allowed_envs in compose file if needed

@@ -3364,7 +3364,7 @@ impl Stage1<'_> {
         let ciphertext = &self.shared.encrypted_env;
         let current_key = env_crypt_key(&self.keys.env_crypt_key)?;
         let plaintext = match dh_decrypt(current_key, ciphertext) {
-            Ok(plaintext) => plaintext,
+            Ok(plaintext) => return Ok((plaintext, Vec::new())),
             Err(error) => {
                 let current = self.keys.root_epoch();
                 let mut recovered = None;
@@ -4897,7 +4897,7 @@ mod sealed_env_file_tests {
     }
 
     #[tokio::test]
-    async fn guest_prefers_sealed_and_converts_legacy() {
+    async fn guest_preserves_env_at_the_current_epoch() {
         let dir = tempfile::tempdir().unwrap();
         let args = SetupArgs {
             work_dir: dir.path().into(),
@@ -4916,9 +4916,12 @@ mod sealed_env_file_tests {
         let old = stage(&args, None, legacy.clone());
         let (opened, update) = old.decrypt_env().await.unwrap();
         assert_eq!(opened, plaintext);
-        assert!(!update.is_empty());
-        let migrated = stage(&args, Some(update), vec![]);
-        assert_eq!(migrated.decrypt_env().await.unwrap().0, plaintext);
+        assert!(update.is_empty());
+        let mut without_sealed_key = stage(&args, None, legacy.clone());
+        without_sealed_key.keys.sealed_env_key.clear();
+        let (opened, update) = without_sealed_key.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
 
         for invalid in [
             Vec::new(),
