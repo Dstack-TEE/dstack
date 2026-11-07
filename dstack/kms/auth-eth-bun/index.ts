@@ -94,7 +94,9 @@ const AUTHORIZATION_ABI = {
   stateMutability: 'view',
   inputs: [{ name: 'request', type: 'tuple', components: [
     { name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS },
-    { name: 'requestedAppEpoch', type: 'uint256' },
+    { name: 'requestedAppEpoch', type: 'tuple', components: [
+      { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
+    ] },
     { name: 'requestedRootEpoch', type: 'tuple', components: [
       { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
     ] },
@@ -108,6 +110,7 @@ const AUTHORIZATION_ABI = {
       { name: 'gatewayAppId', type: 'string' },
       { name: 'currentRootEpoch', type: 'uint256' },
       { name: 'currentRootEpochHash', type: 'bytes32' },
+      { name: 'currentAppEpoch', type: 'uint256' },
     ],
   }],
 } as const;
@@ -245,7 +248,7 @@ class EthereumBackend {
       functionName: method,
       args: [{
         appInfo: this.contractAppInfo(appInfo),
-        requestedAppEpoch: BigInt(appInfo.requestedAppEpoch),
+        requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: BigInt(appInfo.requestedAppEpoch ?? 0) },
         requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
       }],
       blockNumber,
@@ -254,7 +257,9 @@ class EthereumBackend {
     if (!Number.isSafeInteger(currentRootEpoch)) {
       throw new Error('current root epoch exceeds the supported range');
     }
-    return { ...result, currentRootEpoch };
+    const currentAppEpoch = Number(result.currentAppEpoch);
+    if (!Number.isSafeInteger(currentAppEpoch)) throw new Error('current app epoch exceeds the supported range');
+    return { ...result, currentRootEpoch, currentAppEpoch };
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {

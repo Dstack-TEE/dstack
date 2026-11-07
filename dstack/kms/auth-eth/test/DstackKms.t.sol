@@ -465,7 +465,7 @@ contract DstackKmsTest is Test {
         returns (DstackKms.AuthorizationResult memory)
     {
         DstackKms.AuthorizationRequest memory request =
-            DstackKms.AuthorizationRequest(info, 0, DstackKms.OptionalEpoch(false, 0));
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(false, 0));
         return isKms ? kms.checkKmsAuthorization(request) : kms.checkAppAuthorization(request);
     }
 
@@ -480,7 +480,7 @@ contract DstackKmsTest is Test {
         vm.stopPrank();
 
         DstackKms.AuthorizationRequest memory request =
-            DstackKms.AuthorizationRequest(info, 0, DstackKms.OptionalEpoch(true, 1));
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(true, 1));
         DstackKms.AuthorizationResult memory result = kms.checkKmsAuthorization(request);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested root epoch is not active");
@@ -537,7 +537,7 @@ contract DstackKmsTest is Test {
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Authorization kind does not match app ID");
         DstackKms.AuthorizationRequest memory appRequest =
-            DstackKms.AuthorizationRequest(info, 1, DstackKms.OptionalEpoch(false, 0));
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(true, 1), DstackKms.OptionalEpoch(false, 0));
         result = kms.checkAppAuthorization(appRequest);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested app epoch must be zero");

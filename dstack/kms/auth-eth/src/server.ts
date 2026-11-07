@@ -127,12 +127,13 @@ export async function build(): Promise<FastifyInstance> {
         response: {
           200: {
             type: 'object',
-            required: ['isAllowed', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash'],
+            required: ['isAllowed', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash', 'currentAppEpoch'],
             properties: {
               isAllowed: { type: 'boolean' },
               rejectionReason: { type: 'string' },
               gatewayAppId: { type: 'string' },
               currentRootEpoch: { type: 'integer', minimum: 0 },
+              currentAppEpoch: { type: 'integer', minimum: 0 },
               currentRootEpochHash: hex(32, 'Current root epoch chain hash'),
             },
           },
