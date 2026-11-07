@@ -16,7 +16,6 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use base64::Engine as _;
 use dstack_attest::{default_verifier, emit_runtime_event, set_runtime_event_version};
 use dstack_kms_rpc as rpc;
 use dstack_types::{
@@ -3330,13 +3329,10 @@ impl Stage1<'_> {
             if envelope.version != 1 {
                 bail!("unsupported sealed env version: {}", envelope.version);
             }
-            let enc = base64::engine::general_purpose::STANDARD.decode(envelope.enc)?;
-            if enc.len() != 32 {
+            if envelope.enc.len() != 32 {
                 bail!("sealed env encapsulated key must be 32 bytes");
             }
-            let ciphertext =
-                base64::engine::general_purpose::STANDARD.decode(envelope.ciphertext)?;
-            let payload = [enc, ciphertext].concat();
+            let payload = [envelope.enc, envelope.ciphertext].concat();
             let current = self.keys.root_epoch();
             if envelope.root_epoch > current {
                 bail!(
@@ -3532,12 +3528,14 @@ impl Stage1<'_> {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct SealedEnv {
     version: u32,
     root_epoch: u32,
-    enc: String,
-    ciphertext: String,
+    #[serde(with = "serde_human_bytes::base64")]
+    enc: Vec<u8>,
+    #[serde(with = "serde_human_bytes::base64")]
+    ciphertext: Vec<u8>,
 }
 
 fn sealed_env_info(epoch: &u32) -> Vec<u8> {
@@ -3550,12 +3548,12 @@ fn seal_env(secret: &[u8], epoch: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
     let payload =
         crate::crypto::sealed_env_encrypt(&public.to_bytes(), &sealed_env_info(&epoch), plaintext)?;
     let (enc, ciphertext) = payload.split_at(32);
-    Ok(serde_json::to_vec(&serde_json::json!({
-        "version": 1,
-        "root_epoch": epoch,
-        "enc": base64::engine::general_purpose::STANDARD.encode(enc),
-        "ciphertext": base64::engine::general_purpose::STANDARD.encode(ciphertext),
-    }))?)
+    Ok(serde_json::to_vec(&SealedEnv {
+        version: 1,
+        root_epoch: epoch,
+        enc: enc.to_vec(),
+        ciphertext: ciphertext.to_vec(),
+    })?)
 }
 
 fn env_crypt_key(key: &[u8]) -> Result<[u8; 32]> {
