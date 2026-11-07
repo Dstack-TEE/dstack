@@ -50,58 +50,55 @@ preflight does not replace firmware, kernel, QEMU, or OVMF validation.
 
 ## Install dstack on an SNP host
 
-Use a unified OS release that includes the `snp` key provider. The same image
-supports TDX and SEV-SNP; older releases lack this provider. Host tools and
-the KMS container must also recognize `snp`. Set `OS_IMAGE` to the unified
-image's name in the VMM image store and `KMS_IMAGE` to the KMS container
-image, then select the platform explicitly:
+Use a release containing the `snp` key provider in the guest OS and VMM. The
+KMS container and client attestation verifiers must recognize the new provider
+metadata. Set `VERSION` to the OS release version and `KMS_IMAGE` to the KMS
+container reference, then install:
 
 ```bash
+sudo dstackup image pull --version "$VERSION"
 sudo dstackup install --platform amd-sev-snp \
-  --image "$OS_IMAGE" --kms-image "$KMS_IMAGE"
+  --image "dstack-$VERSION" --kms-image "$KMS_IMAGE"
 sudo dstackup status
 ```
 
-The default `--platform auto` mode also selects SEV-SNP when the host CPU flags
-advertise `sev_snp`. Explicit selection is preferable while commissioning a
-host because it fails immediately when the required SNP device is absent.
+Confirm that installation reports `booted` for the KMS CVM. `dstackup` selects
+the `snp` provider for the KMS CVM on AMD hosts. The default
+`--platform auto` also detects SEV-SNP from the host CPU flags. Explicit
+selection checks for the required SNP device before installation. Review the
+[KMS key-release policy](#kms-key-release-policy) before serving applications.
 
-Unlike the TDX path, SEV-SNP does not use the local SGX key provider.
+## Run KMS with persistent local keys
 
-## Persistent local keys
+The `snp` provider lets a KMS CVM recover its encrypted disk and stored KMS
+roots after restart on the same AMD hardware. For a manually managed KMS CVM,
+set this field in its app-compose document:
 
-Select `key_provider: snp` in the KMS CVM's app-compose document, or deploy with
-`dstack deploy --key-provider snp`. The VMM UI calls this provider **SEV-SNP
-hardware**. `dstackup` selects it for an AMD KMS installation. Application CVMs
-continue using `key_provider: kms`.
+```json
+{"key_provider": "snp"}
+```
 
-Components that parse shared provider metadata, including the KMS and client
-attestation verifiers, must recognize the new `snp` enum value. Rebuild those
-components with the updated shared types; older strict verifiers reject it.
-The KMS RPC protocol and application configuration are unchanged.
+The deployment CLI also accepts `dstack deploy --key-provider snp`. Application
+CVMs continue using `key_provider: kms` and the existing KMS API.
 
-The provider requires a real SNP guest at VMPL0, debugging disabled, encrypted
-storage, and firmware supporting explicit VCEK selection through
-`SNP_GET_DERIVED_KEY`. It derives a seed using legacy VCEK (`KEY_SEL=1`), launch
-measurement, guest policy, and a pinned TCB. HOST_DATA and launch identity also
-bind the key. Derivation failures stop startup.
+The guest derives a seed through `SNP_GET_DERIVED_KEY` using legacy VCEK at
+VMPL0. The seed binds to launch measurement, guest policy, HOST_DATA, launch
+identity, and a pinned TCB. The guest requires debugging disabled and encrypted
+storage, and verifies the configuration binding before deriving the seed.
 
-Before initializing a new disk, the guest saves public versioned
-`snp_sealing` parameters in the existing `.instance_info` record through the
-host API. The TCB is stored as a decimal string to preserve all 64 bits. Later
-boots reuse it. Missing parameters for an existing LUKS disk, unknown parameter
-versions, or failure to save metadata stop startup before disk unlock.
+Before initializing a new disk, the guest persists public derivation parameters
+in `.instance_info` through the host API. Preserve this file, the encrypted
+disk, and the original launch configuration together. Missing parameters for
+an existing disk, unknown versions, or derivation/unlock failures stop startup.
 
-Preserve `.instance_info`, the original MrConfig document, launch identity,
-and launch inputs with the encrypted disk. Recovery requires the same hardware
-and bound configuration. OS or compose changes need a new sealing context;
-preserve KMS roots through the existing onboarding/replication flow. A firmware
-update must still support the saved derivation TCB and satisfy attestation
-policy. Hardware replacement requires KMS onboarding/replication too.
+Recovery requires the original hardware and bound launch inputs. For OS or
+compose changes, or hardware replacement, preserve KMS roots through the
+existing onboarding/replication flow. Firmware updates must support the stored
+derivation TCB and satisfy attestation policy.
 
-Keep the KMS CVM under the existing operator isolation and authorization
-policy. The hardware seed and KMS root keys stay inside that CVM; authorized
-applications retain access to their own application keys.
+The entire KMS CVM, including its OS, is trusted. Protect KMS root and sealing
+keys by keeping the KMS OS and workload under operator control. Application
+key release continues to follow the existing KMS authorization policy.
 
 ## Attestation and image identity
 
