@@ -3,15 +3,39 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, RootEpochInfo } from './types';
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
   "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
-  "function appImplementation() view returns (address)"
+  "function appImplementation() view returns (address)",
+  "function rootEpochCount() view returns (uint256)",
+  "function currentRootEpoch() view returns (uint256 epoch, bytes32 chainHash)"
 ];
+
+const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
+
+// Only a KMS serving the current root epoch, with the registered keys up to it,
+// may authorize. A KMS that predates root epochs reports none and holds only
+// epoch 0; KMS checks made while onboarding carry none and are not limited.
+export function rootEpochDenial(bootInfo: BootInfo, isKms: boolean, current: RootEpochInfo): string | undefined {
+  const currentEpoch = current.rootEpoch ?? 0;
+  if (bootInfo.rootEpoch === undefined) {
+    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+  }
+  if (current.rootEpoch === undefined) {
+    return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
+  }
+  if (bootInfo.rootEpoch !== currentEpoch) {
+    return `the KMS serves root epoch ${bootInfo.rootEpoch}, but ${currentEpoch} is current`;
+  }
+  if (normHash(bootInfo.rootEpochHash) !== normHash(current.rootEpochHash)) {
+    return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
+  }
+  return undefined;
+}
 
 export class EthereumBackend {
   private provider: ethers.JsonRpcProvider;
@@ -58,13 +82,25 @@ export class EthereumBackend {
     } else {
       response = await this.kmsContract.isAppAllowed(bootInfoStruct, { blockTag });
     }
-    const [isAllowed, reason] = response;
+    const [allowed, contractReason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
+    const epochDenial = allowed
+      ? rootEpochDenial(bootInfo, isKms, await this.getRootEpoch(blockTag))
+      : undefined;
     return {
-      isAllowed,
-      reason,
+      isAllowed: allowed && !epochDenial,
+      reason: epochDenial ?? contractReason,
       gatewayAppId,
     }
+  }
+
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
+  async getRootEpoch(blockTag?: number): Promise<RootEpochInfo> {
+    blockTag ??= await this.provider.getBlockNumber();
+    const count = await this.kmsContract.rootEpochCount({ blockTag });
+    if (count === 0n) return {};
+    const [epoch, chainHash] = await this.kmsContract.currentRootEpoch({ blockTag });
+    return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
   }
 
   async getGatewayAppId(): Promise<string> {

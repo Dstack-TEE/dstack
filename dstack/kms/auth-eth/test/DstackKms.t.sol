@@ -19,6 +19,12 @@ contract DstackKmsTest is Test {
     address public user;
 
     event KmsInfoSet(bytes k256Pubkey);
+    event RootEpochRegistered(
+        uint256 indexed epoch, bytes32 chainHash, bytes caPubkey, bytes k256Pubkey, string evidenceUrl
+    );
+    event RootEpochActivated(uint256 indexed epoch);
+    event RootEpochPopped(uint256 indexed epoch, bytes32 chainHash);
+    event RootEpochEvidenceUrlSet(uint256 indexed epoch, string evidenceUrl);
 
     event AppRegistered(address appId);
 
@@ -64,6 +70,253 @@ contract DstackKmsTest is Test {
         assertEq(storedCa, caPubkey);
         assertEq(storedQuote, quote);
         assertEq(storedEventlog, eventlog);
+    }
+
+    // Well-formed root public keys whose point bytes are all `fill`; shared with
+    // the off-chain implementations' tests.
+    function ca(uint8 fill) internal pure returns (bytes memory key) {
+        key = bytes.concat(hex"3059301306072a8648ce3d020106082a8648ce3d03010703420004", new bytes(64));
+        for (uint256 i = 27; i < 91; i++) {
+            key[i] = bytes1(fill);
+        }
+    }
+
+    function k256(uint8 fill) internal pure returns (bytes memory key) {
+        key = new bytes(33);
+        key[0] = 0x02;
+        for (uint256 i = 1; i < 33; i++) {
+            key[i] = bytes1(fill);
+        }
+    }
+
+    function chainHash(bytes32 previous, bytes memory caKey, bytes memory k256Key) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(previous, keccak256(caKey), keccak256(k256Key)));
+    }
+
+    function test_RegisterRootEpochAppendsAndChains() public {
+        assertEq(kms.rootEpochCount(), 0);
+        vm.expectRevert("No root epoch registered");
+        kms.currentRootEpoch();
+
+        bytes32 h0 = chainHash(bytes32(0), ca(0xa0), k256(0xb0));
+        bytes32 h1 = chainHash(h0, ca(0xa1), k256(0xb1));
+        // Shared with the off-chain implementations' tests.
+        assertEq(h0, 0x10ab6b6c8e7601901b0f1767985bf40d35bf3129e0866fe12dcc7c8f04a298f2);
+        assertEq(h1, 0x50152a82023f2219a31723b476c13bc5f608ab4147946dabdec15d4f3d648ed4);
+        vm.startPrank(owner);
+        vm.expectEmit(true, true, true, true);
+        emit RootEpochRegistered(0, h0, ca(0xa0), k256(0xb0), "ipfs://c0");
+        vm.expectEmit(true, true, true, true);
+        emit RootEpochActivated(0);
+        assertEq(kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0"), 0);
+        assertEq(kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1"), 1);
+        vm.stopPrank();
+
+        assertEq(kms.rootEpochCount(), 2);
+        (bytes memory caKey, bytes memory k256Key, string memory evidenceUrl, bytes32 h) = kms.rootEpoch(1);
+        assertEq(caKey, ca(0xa1));
+        assertEq(k256Key, k256(0xb1));
+        assertEq(evidenceUrl, "ipfs://c1");
+        assertEq(h, h1);
+        vm.expectRevert("Unknown root epoch");
+        kms.rootEpoch(2);
+
+        // Epoch 1 is registered but epoch 0 is still served.
+        (uint256 current, bytes32 currentHash) = kms.currentRootEpoch();
+        assertEq(current, 0);
+        assertEq(currentHash, h0);
+    }
+
+    function test_ActivateRootEpochMovesForwardOneAtATime() public {
+        bytes32 h0 = chainHash(bytes32(0), ca(0xa0), k256(0xb0));
+        bytes32 h1 = chainHash(h0, ca(0xa1), k256(0xb1));
+        bytes32 h2 = chainHash(h1, ca(0xa2), k256(0xb2));
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(1, h1);
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
+        kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2");
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(2, h2);
+        vm.expectEmit(true, true, true, true);
+        emit RootEpochActivated(1);
+        kms.activateRootEpoch(1, h1);
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(1, h1);
+        vm.expectRevert("Invalid root epoch activation");
+        kms.activateRootEpoch(0, h0);
+        vm.stopPrank();
+
+        (uint256 current,) = kms.currentRootEpoch();
+        assertEq(current, 1);
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.activateRootEpoch(2, h2);
+    }
+
+    function test_activate_root_epoch_rejects_replaced_pending_epoch() public {
+        bytes32 h0 = chainHash(bytes32(0), ca(0xa0), k256(0xb0));
+        bytes32 h1 = chainHash(h0, ca(0xa1), k256(0xb1));
+        bytes32 replacementHash = chainHash(h0, ca(0xa2), k256(0xb2));
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
+        kms.popRootEpoch(1, h1);
+        kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://replacement");
+
+        vm.expectRevert("root epoch chain hash mismatch");
+        kms.activateRootEpoch(1, h1);
+        (uint256 current, bytes32 currentHash) = kms.currentRootEpoch();
+        assertEq(current, 0);
+        assertEq(currentHash, h0);
+        (bytes memory k256Key, bytes memory caKey,,) = kms.kmsInfo();
+        assertEq(caKey, ca(0xa0));
+        assertEq(k256Key, k256(0xb0));
+
+        kms.activateRootEpoch(1, replacementHash);
+        (current, currentHash) = kms.currentRootEpoch();
+        assertEq(current, 1);
+        assertEq(currentHash, replacementHash);
+        (k256Key, caKey,,) = kms.kmsInfo();
+        assertEq(caKey, ca(0xa2));
+        assertEq(k256Key, k256(0xb2));
+        vm.stopPrank();
+    }
+
+    function test_RegisterRootEpochZeroMustMatchKmsInfo() public {
+        vm.startPrank(owner);
+        kms.setKmsInfo(DstackKms.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
+        vm.expectRevert("Epoch 0 keys differ from kmsInfo");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Epoch 0 keys differ from kmsInfo");
+        kms.registerRootEpoch(ca(0xa0), k256(0xb1), "ipfs://c0");
+        assertEq(kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0"), 0);
+        // Later epochs are new keys by definition.
+        assertEq(kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1"), 1);
+        vm.stopPrank();
+    }
+
+    function test_PopRootEpochDropsOnlyThePendingOne() public {
+        bytes32 h0 = chainHash(bytes32(0), ca(0xa0), k256(0xb0));
+        bytes32 h1 = chainHash(h0, ca(0xa1), k256(0xb1));
+        bytes32 h1b = chainHash(h0, ca(0xa2), k256(0xb2));
+        vm.startPrank(owner);
+        vm.expectRevert("Not the pending root epoch");
+        kms.popRootEpoch(0, h0);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Not the pending root epoch");
+        kms.popRootEpoch(0, h0);
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
+        vm.expectRevert("Not the pending root epoch");
+        kms.popRootEpoch(2, h1);
+        vm.expectRevert("Root epoch chain hash mismatch");
+        kms.popRootEpoch(1, h1b);
+
+        vm.expectEmit(true, true, true, true);
+        emit RootEpochPopped(1, h1);
+        kms.popRootEpoch(1, h1);
+        assertEq(kms.rootEpochCount(), 1);
+
+        // A new epoch 1 replaces the dropped one; a stale pop of the old one
+        // cannot drop it.
+        assertEq(kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2"), 1);
+        vm.expectRevert("Root epoch chain hash mismatch");
+        kms.popRootEpoch(1, h1);
+        kms.activateRootEpoch(1, h1b);
+        vm.expectRevert("Not the pending root epoch");
+        kms.popRootEpoch(1, h1b);
+        vm.stopPrank();
+
+        (uint256 epoch, bytes32 h) = kms.currentRootEpoch();
+        assertEq(epoch, 1);
+        assertEq(h, h1b);
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.popRootEpoch(1, h1b);
+    }
+
+    function test_SetRootEpochEvidenceUrl() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Unknown root epoch");
+        kms.setRootEpochEvidenceUrl(0, "ipfs://moved");
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Empty epoch evidence URL");
+        kms.setRootEpochEvidenceUrl(0, "");
+        vm.expectEmit(true, true, true, true);
+        emit RootEpochEvidenceUrlSet(0, "https://mirror/c0");
+        kms.setRootEpochEvidenceUrl(0, "https://mirror/c0");
+        vm.stopPrank();
+
+        (,, string memory evidenceUrl, bytes32 h) = kms.rootEpoch(0);
+        assertEq(evidenceUrl, "https://mirror/c0");
+        assertEq(h, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.setRootEpochEvidenceUrl(0, "ipfs://evil");
+    }
+
+    function test_KmsInfoFollowsTheCurrentRootEpoch() public {
+        vm.startPrank(owner);
+        kms.setKmsInfo(DstackKms.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        (bytes memory k256Key, bytes memory caKey, bytes memory quote, bytes memory eventlog) = kms.kmsInfo();
+        assertEq(caKey, ca(0xa0));
+        assertEq(k256Key, k256(0xb0));
+        assertEq(quote.length + eventlog.length, 0);
+
+        // A pending epoch is not the KMS identity yet.
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
+        (k256Key, caKey,,) = kms.kmsInfo();
+        assertEq(caKey, ca(0xa0));
+        (,,, bytes32 h1) = kms.rootEpoch(1);
+        kms.activateRootEpoch(1, h1);
+        (k256Key, caKey,,) = kms.kmsInfo();
+        assertEq(caKey, ca(0xa1));
+        assertEq(k256Key, k256(0xb1));
+
+        vm.expectRevert("kmsInfo follows the current root epoch");
+        kms.setKmsInfo(DstackKms.KmsInfo(k256(0xb0), ca(0xa0), "", ""));
+        vm.expectRevert("kmsInfo follows the current root epoch");
+        kms.setKmsQuote(hex"0d");
+        vm.expectRevert("kmsInfo follows the current root epoch");
+        kms.setKmsEventlog(hex"0e");
+        vm.stopPrank();
+    }
+
+    function test_RegisterRootEpochOnlyOwner() public {
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+    }
+
+    function test_RegisterRootEpochRejectsMalformedKeys() public {
+        bytes memory compressedCa = ca(0xa0);
+        compressedCa[26] = 0x02;
+        bytes memory otherCurve = ca(0xa0);
+        otherCurve[25] = 0x0a;
+        bytes memory uncompressedK256 = bytes.concat(hex"04", new bytes(64));
+        vm.startPrank(owner);
+        vm.expectRevert("Invalid epoch CA public key");
+        kms.registerRootEpoch("", k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Invalid epoch CA public key");
+        kms.registerRootEpoch(bytes.concat(ca(0xa0), hex"00"), k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Invalid epoch CA public key");
+        kms.registerRootEpoch(compressedCa, k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Invalid epoch CA public key");
+        kms.registerRootEpoch(otherCurve, k256(0xb0), "ipfs://c0");
+        vm.expectRevert("Invalid epoch k256 public key");
+        kms.registerRootEpoch(ca(0xa0), "", "ipfs://c0");
+        vm.expectRevert("Invalid epoch k256 public key");
+        kms.registerRootEpoch(ca(0xa0), uncompressedK256, "ipfs://c0");
+        vm.expectRevert("Invalid epoch k256 public key");
+        kms.registerRootEpoch(ca(0xa0), bytes.concat(hex"04", new bytes(32)), "ipfs://c0");
+        vm.expectRevert("Empty epoch evidence URL");
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "");
+        vm.stopPrank();
     }
 
     function test_SetKmsInfoOnlyOwner() public {

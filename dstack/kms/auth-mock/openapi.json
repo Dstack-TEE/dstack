@@ -151,6 +151,14 @@
           "mrSystem": {
             "type": "string",
             "description": "MR System measurement (optional for compatibility)"
+          },
+          "rootEpoch": {
+            "type": "integer",
+            "description": "KMS root epoch the asking KMS serves; must equal MOCK_ROOT_EPOCH"
+          },
+          "rootEpochHash": {
+            "type": "string",
+            "description": "Its chain hash; must equal MOCK_ROOT_EPOCH_HASH"
           }
         }
       },
@@ -221,6 +229,8 @@
             "description": "Mock app implementation address",
             "example": "0xmockapp9876543210987654321098765432109"
           },
+          "rootEpoch": { "type": "integer", "description": "MOCK_ROOT_EPOCH" },
+          "rootEpochHash": { "type": "string", "description": "MOCK_ROOT_EPOCH_HASH" },
           "note": {
             "type": "string",
             "description": "Note about mock backend behavior",

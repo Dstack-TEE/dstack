@@ -160,6 +160,34 @@ describe('Mock Backend Tests', () => {
     });
   });
 
+  describe('root epochs', () => {
+    it('allows only a KMS serving MOCK_ROOT_EPOCH', async () => {
+      const hash = '0x' + '11'.repeat(32);
+      process.env.MOCK_ROOT_EPOCH = '1';
+      process.env.MOCK_ROOT_EPOCH_HASH = hash;
+      const boot = async (path: string, fields: object) =>
+        (await appFetch(new Request(`http://localhost:3002/bootAuth/${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mrAggregated: '0x01', osImageHash: '0x02', appId: '0x03',
+            composeHash: '0x04', instanceId: '0x05', deviceId: '0x06', ...fields,
+          }),
+        }))).json();
+      try {
+        expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).isAllowed).toBe(true);
+        expect((await boot('app', { rootEpoch: 0, rootEpochHash: hash })).reason).toMatch(/1 is current/);
+        expect((await boot('app', {})).reason).toMatch(/reports none/);
+        expect((await boot('kms', {})).isAllowed).toBe(true);
+        const info = await appFetch(new Request('http://localhost:3002/'));
+        expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
+      } finally {
+        delete process.env.MOCK_ROOT_EPOCH;
+        delete process.env.MOCK_ROOT_EPOCH_HASH;
+      }
+    });
+  });
+
   describe('POST /bootAuth/kms', () => {
     const validBootInfo = {
       mrAggregated: '0x1234567890123456789012345678901234567890123456789012345678901234',

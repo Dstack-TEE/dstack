@@ -44,6 +44,31 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // DstackApp implementation contract address for factory deployment
     address public appImplementation;
 
+    // DER SubjectPublicKeyInfo prefix of a P-256 key with an uncompressed point;
+    // the 64 bytes of the point follow.
+    bytes27 private constant P256_SPKI_PREFIX = 0x3059301306072a8648ce3d020106082a8648ce3d03010703420004;
+
+    struct RootEpoch {
+        bytes caPubkey;
+        bytes k256Pubkey;
+        // Where to fetch the generating KMS's attestation. Its report data binds
+        // the epoch and both public keys, so the evidence proves itself: anyone
+        // can check the keys came from an approved KMS in a TEE.
+        string evidenceUrl;
+        // Commits to the public keys of this epoch and every earlier one:
+        // keccak256(previous chainHash || keccak256(caPubkey) ||
+        // keccak256(k256Pubkey)), with a zero previous hash for epoch 0.
+        bytes32 chainHash;
+    }
+
+    // Root keys of each KMS root epoch, indexed by epoch; epoch 0 is the
+    // original roots. Append-only: a registered epoch is never changed.
+    RootEpoch[] private _rootEpochs;
+
+    // The epoch KMS instances serve. Registering epoch 0 makes it current;
+    // later epochs take effect only when activated, one at a time.
+    uint256 private _currentRootEpoch;
+
     // Events
     // appId is unindexed for backward compatibility with deployed log indexers.
     // slither-disable-next-line unindexed-event-address
@@ -58,6 +83,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event GatewayAppIdSet(string gatewayAppId);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
+    event RootEpochRegistered(
+        uint256 indexed epoch, bytes32 chainHash, bytes caPubkey, bytes k256Pubkey, string evidenceUrl
+    );
+    event RootEpochActivated(uint256 indexed epoch);
+    event RootEpochPopped(uint256 indexed epoch, bytes32 chainHash);
+    event RootEpochEvidenceUrlSet(uint256 indexed epoch, string evidenceUrl);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
     /// @notice Additive audit event for reconstructing authorization policy.
     /// @dev `value` is the affected bytes32 value, address, or hash of dynamic public data.
@@ -108,20 +139,127 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         emit PolicyChanged(msg.sender, keccak256(bytes(policy)), value, enabled);
     }
 
-    // Function to set KMS information
+    // Function to set KMS information. Once root epochs are registered,
+    // kmsInfo follows the current one instead.
     function setKmsInfo(KmsInfo memory info) external onlyOwner {
+        require(_rootEpochs.length == 0, "kmsInfo follows the current root epoch");
         kmsInfo = info;
         emit KmsInfoSet(info.k256Pubkey);
         _emitPolicy("kms-info", keccak256(info.k256Pubkey), true);
     }
 
+    // Register the root public keys of the next KMS root epoch, with where to
+    // fetch the attestation proving where they were generated. It is not served until
+    // activated, except epoch 0, which is current from the start and must be
+    // the kmsInfo keys when those are set.
+    function registerRootEpoch(
+        // P-256 DER SubjectPublicKeyInfo, uncompressed (91 bytes)
+        bytes calldata caPubkey,
+        // secp256k1 SEC1 compressed (33 bytes)
+        bytes calldata k256Pubkey,
+        string calldata evidenceUrl
+    )
+        external
+        onlyOwner
+        returns (uint256 epoch)
+    {
+        require(caPubkey.length == 91 && bytes27(caPubkey[:27]) == P256_SPKI_PREFIX, "Invalid epoch CA public key");
+        require(
+            k256Pubkey.length == 33 && (k256Pubkey[0] == 0x02 || k256Pubkey[0] == 0x03), "Invalid epoch k256 public key"
+        );
+        require(bytes(evidenceUrl).length > 0, "Empty epoch evidence URL");
+        epoch = _rootEpochs.length;
+        if (epoch == 0 && kmsInfo.k256Pubkey.length > 0) {
+            require(
+                keccak256(caPubkey) == keccak256(kmsInfo.caPubkey)
+                    && keccak256(k256Pubkey) == keccak256(kmsInfo.k256Pubkey),
+                "Epoch 0 keys differ from kmsInfo"
+            );
+        }
+        bytes32 previous = epoch == 0 ? bytes32(0) : _rootEpochs[epoch - 1].chainHash;
+        bytes32 chainHash = keccak256(abi.encodePacked(previous, keccak256(caPubkey), keccak256(k256Pubkey)));
+        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, evidenceUrl, chainHash));
+        emit RootEpochRegistered(epoch, chainHash, caPubkey, k256Pubkey, evidenceUrl);
+        _emitPolicy("root-epoch", chainHash, true);
+        if (epoch == 0) {
+            _useRootEpoch(0);
+        }
+    }
+
+    // Make the next registered root epoch the one KMS instances serve. Bind
+    // activation to its chain hash in case a pending epoch has been replaced.
+    function activateRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
+        require(epoch == _currentRootEpoch + 1 && epoch < _rootEpochs.length, "Invalid root epoch activation");
+        require(_rootEpochs[epoch].chainHash == chainHash, "root epoch chain hash mismatch");
+        _currentRootEpoch = epoch;
+        _useRootEpoch(epoch);
+        _emitPolicy("root-epoch-activated", bytes32(epoch), true);
+    }
+
+    // Point kmsInfo at the keys of the now current epoch, for readers of the
+    // legacy KMS identity. Its quote and event log described the previous keys;
+    // the epoch's evidence is at its evidenceUrl.
+    function _useRootEpoch(uint256 epoch) private {
+        RootEpoch storage keys = _rootEpochs[epoch];
+        kmsInfo.caPubkey = keys.caPubkey;
+        kmsInfo.k256Pubkey = keys.k256Pubkey;
+        delete kmsInfo.quote;
+        delete kmsInfo.eventlog;
+        emit KmsInfoSet(keys.k256Pubkey);
+        emit RootEpochActivated(epoch);
+    }
+
+    // Point an epoch at a new copy of its evidence, for when the old location
+    // goes away. The evidence proves itself, so only its location changes.
+    function setRootEpochEvidenceUrl(uint256 epoch, string calldata evidenceUrl) external onlyOwner {
+        require(epoch < _rootEpochs.length, "Unknown root epoch");
+        require(bytes(evidenceUrl).length > 0, "Empty epoch evidence URL");
+        _rootEpochs[epoch].evidenceUrl = evidenceUrl;
+        emit RootEpochEvidenceUrlSet(epoch, evidenceUrl);
+    }
+
+    // Drop the last registered epoch while it is still pending, for when the
+    // nodes holding it are lost before enough others have onboarded it. The
+    // epoch is named by number and chain hash, so a stale call cannot drop a
+    // later registration of the same number.
+    function popRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
+        require(epoch + 1 == _rootEpochs.length && epoch > _currentRootEpoch, "Not the pending root epoch");
+        require(_rootEpochs[epoch].chainHash == chainHash, "Root epoch chain hash mismatch");
+        _rootEpochs.pop();
+        emit RootEpochPopped(epoch, chainHash);
+        _emitPolicy("root-epoch", chainHash, false);
+    }
+
+    function rootEpochCount() external view returns (uint256) {
+        return _rootEpochs.length;
+    }
+
+    // The root epoch KMS instances serve and its chain hash
+    function currentRootEpoch() external view returns (uint256 epoch, bytes32 chainHash) {
+        require(_rootEpochs.length > 0, "No root epoch registered");
+        epoch = _currentRootEpoch;
+        chainHash = _rootEpochs[epoch].chainHash;
+    }
+
+    function rootEpoch(uint256 epoch)
+        external
+        view
+        returns (bytes memory caPubkey, bytes memory k256Pubkey, string memory evidenceUrl, bytes32 chainHash)
+    {
+        require(epoch < _rootEpochs.length, "Unknown root epoch");
+        RootEpoch storage keys = _rootEpochs[epoch];
+        return (keys.caPubkey, keys.k256Pubkey, keys.evidenceUrl, keys.chainHash);
+    }
+
     // Function to set KMS quote
     function setKmsQuote(bytes memory quote) external onlyOwner {
+        require(_rootEpochs.length == 0, "kmsInfo follows the current root epoch");
         kmsInfo.quote = quote;
     }
 
     // Function to set KMS eventlog
     function setKmsEventlog(bytes memory eventlog) external onlyOwner {
+        require(_rootEpochs.length == 0, "kmsInfo follows the current root epoch");
         kmsInfo.eventlog = eventlog;
     }
 
@@ -306,7 +444,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[50] private __gap;
+    uint256[48] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

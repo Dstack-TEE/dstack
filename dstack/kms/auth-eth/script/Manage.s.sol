@@ -109,6 +109,59 @@ contract SetKmsInfo is BaseScript {
     }
 }
 
+contract RegisterRootEpoch is BaseScript {
+    function run() external {
+        bytes memory caPubkey = vm.envBytes("CA_PUBKEY");
+        bytes memory k256Pubkey = vm.envBytes("K256_PUBKEY");
+        string memory evidenceUrl = vm.envString("EVIDENCE_URL");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        uint256 epoch = kms.registerRootEpoch(caPubkey, k256Pubkey, evidenceUrl);
+        vm.stopBroadcast();
+
+        console.log("Registered KMS root epoch", epoch);
+    }
+}
+
+contract ActivateRootEpoch is BaseScript {
+    function run() external {
+        uint256 epoch = vm.envUint("ROOT_EPOCH");
+        bytes32 chainHash = vm.envBytes32("CHAIN_HASH");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.activateRootEpoch(epoch, chainHash);
+        vm.stopBroadcast();
+
+        console.log("Activated KMS root epoch", epoch);
+    }
+}
+
+contract SetRootEpochEvidenceUrl is BaseScript {
+    function run() external {
+        uint256 epoch = vm.envUint("ROOT_EPOCH");
+        string memory evidenceUrl = vm.envString("EVIDENCE_URL");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.setRootEpochEvidenceUrl(epoch, evidenceUrl);
+        vm.stopBroadcast();
+
+        console.log("Updated the evidence URL of KMS root epoch", epoch);
+    }
+}
+
+contract PopRootEpoch is BaseScript {
+    function run() external {
+        uint256 epoch = vm.envUint("ROOT_EPOCH");
+        bytes32 chainHash = vm.envBytes32("CHAIN_HASH");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.popRootEpoch(epoch, chainHash);
+        vm.stopBroadcast();
+
+        console.log("Popped pending KMS root epoch", epoch);
+    }
+}
+
 // App Management Scripts
 contract AddComposeHash is BaseScript {
     function run() external {

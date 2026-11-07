@@ -29,7 +29,11 @@ const BootInfoSchema = z.object({
   deviceId: boundedHex(32, 'device ID'),
   tcbStatus: z.string().max(128).optional().default(''),
   advisoryIds: z.array(z.string().max(256)).max(128).optional().default([]),
-  mrSystem: boundedHex(32, 'system MR measurement').optional().default('')
+  mrSystem: boundedHex(32, 'system MR measurement').optional().default(''),
+  // The root epoch the asking KMS serves and its chain hash; absent from a KMS
+  // that predates root epochs, and from KMS checks made while onboarding.
+  rootEpoch: z.number().int().min(0).optional(),
+  rootEpochHash: boundedHex(32, 'root epoch chain hash').optional()
 });
 
 const BootResponseSchema = z.object({
@@ -38,8 +42,34 @@ const BootResponseSchema = z.object({
   gatewayAppId: z.string()
 });
 
+// The current root epoch and its chain hash, which commits to the root public
+// keys of epochs 0..=rootEpoch; both absent when none is registered.
+type RootEpochInfo = { rootEpoch?: number; rootEpochHash?: Hex };
+
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
+
+const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
+
+// Only a KMS serving the current root epoch, with the registered keys up to it,
+// may authorize. A KMS that predates root epochs reports none and holds only
+// epoch 0; KMS checks made while onboarding carry none and are not limited.
+function rootEpochDenial(bootInfo: BootInfo, isKms: boolean, current: RootEpochInfo): string | undefined {
+  const currentEpoch = current.rootEpoch ?? 0;
+  if (bootInfo.rootEpoch === undefined) {
+    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+  }
+  if (current.rootEpoch === undefined) {
+    return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
+  }
+  if (bootInfo.rootEpoch !== currentEpoch) {
+    return `the KMS serves root epoch ${bootInfo.rootEpoch}, but ${currentEpoch} is current`;
+  }
+  if (normHash(bootInfo.rootEpochHash) !== normHash(current.rootEpochHash)) {
+    return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
+  }
+  return undefined;
+}
 
 // DstackKms contract ABI (minimal required functions)
 const DSTACK_KMS_ABI = [
@@ -108,6 +138,23 @@ const DSTACK_KMS_ABI = [
     stateMutability: 'view',
     inputs: [],
     outputs: [{ name: '', type: 'address' }]
+  },
+  {
+    name: 'rootEpochCount',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }]
+  },
+  {
+    name: 'currentRootEpoch',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [
+      { name: 'epoch', type: 'uint256' },
+      { name: 'chainHash', type: 'bytes32' }
+    ]
   }
 ] as const;
 
@@ -185,7 +232,7 @@ class EthereumBackend {
       });
     }
 
-    const [isAllowed, reason] = response;
+    const [allowed, contractReason] = response;
     const gatewayAppId = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
@@ -193,11 +240,33 @@ class EthereumBackend {
       blockNumber
     });
 
+    const epochDenial = allowed
+      ? rootEpochDenial(bootInfo, isKms, await this.getRootEpoch(blockNumber))
+      : undefined;
     return {
-      isAllowed,
-      reason,
+      isAllowed: allowed && !epochDenial,
+      reason: epochDenial ?? contractReason,
       gatewayAppId: gatewayAppId as string,
     };
+  }
+
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
+  async getRootEpoch(blockNumber?: bigint): Promise<RootEpochInfo> {
+    blockNumber ??= await this.finalizedBlockNumber();
+    const count = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'rootEpochCount',
+      blockNumber
+    });
+    if (count === 0n) return {};
+    const [epoch, chainHash] = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'currentRootEpoch',
+      blockNumber
+    });
+    return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
   }
 
   async getGatewayAppId(): Promise<string> {
@@ -278,6 +347,7 @@ app.get('/', async (c) => {
       ethereum.getGatewayAppId(),
       ethereum.getChainId(),
       ethereum.getAppImplementation(),
+      ethereum.getRootEpoch(),
     ]);
     console.log('batch', batch);
 
@@ -289,6 +359,7 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
+      ...batch[3],
     });
   } catch {
     console.error('authorization backend health check failed');

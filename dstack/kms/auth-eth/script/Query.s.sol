@@ -211,6 +211,22 @@ contract GetKmsSettings is BaseQueryScript {
         console.log("  Quote length:", quote.length);
         console.log("  Eventlog length:", eventlog.length);
 
+        uint256 epochCount = kms.rootEpochCount();
+        console.log("\nRegistered root epochs:", epochCount);
+        if (epochCount > 0) {
+            (uint256 current,) = kms.currentRootEpoch();
+            console.log("Current root epoch:", current);
+        }
+        for (uint256 epoch = 0; epoch < epochCount; epoch++) {
+            (bytes memory epochCa, bytes memory epochK256, string memory evidenceUrl, bytes32 chainHash) =
+                kms.rootEpoch(epoch);
+            console.log("  Epoch", epoch);
+            console.log("    CA Pubkey:", vm.toString(epochCa));
+            console.log("    K256 Pubkey:", vm.toString(epochK256));
+            console.log("    Evidence URL:", evidenceUrl);
+            console.log("    Chain hash:", vm.toString(chainHash));
+        }
+
         // Check implementation via storage
         bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
         address implementation = address(uint160(uint256(vm.load(address(kms), implSlot))));

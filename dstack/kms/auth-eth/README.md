@@ -13,6 +13,14 @@ This project contains upgradeable smart contracts for:
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) - For smart contract development and testing
 - Node.js - For the bootAuth server and TypeScript development
 
+## Upgrade order
+
+Upgrade the `DstackKms` contract before deploying the new auth backend or KMS.
+An empty root epoch registry is supported on the upgraded contract; there is no
+fallback for legacy contracts. Old KMS instances that omit the root epoch can
+receive app authorization only while no epoch is registered or epoch 0 is current,
+subject to the existing authorization policy.
+
 ## Setup
 
 1. Install dependencies:

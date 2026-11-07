@@ -6,6 +6,8 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { readFileSync, existsSync } from 'fs';
+import { keccak_256 } from '@noble/hashes/sha3.js';
+import { bytesToHex, concatBytes, hexToBytes } from '@noble/hashes/utils.js';
 
 // zod schemas for validation - compatible with auth-eth implementation
 const BootInfoSchema = z.object({
@@ -18,13 +20,22 @@ const BootInfoSchema = z.object({
   deviceId: z.string().describe('device ID'),
   tcbStatus: z.string().optional().default(''),
   advisoryIds: z.array(z.string()).optional().default([]),
-  mrSystem: z.string().optional().default('')
+  mrSystem: z.string().optional().default(''),
+  // The root epoch the asking KMS serves and its chain hash; absent from a KMS
+  // that predates root epochs, and from KMS checks made while onboarding.
+  rootEpoch: z.number().int().min(0).optional(),
+  rootEpochHash: z.string().optional()
 });
 
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
   reason: z.string(),
   gatewayAppId: z.string()
+});
+
+const RootEpochSchema = z.object({
+  caPubkey: z.string(),
+  k256Pubkey: z.string()
 });
 
 // config schema
@@ -52,12 +63,62 @@ const AuthConfigSchema = z.object({
   allowedTcbStatuses: z.array(z.string()).default(['UpToDate']),
   allowedAdvisoryIds: z.array(z.string()).default([]),
   kms: KmsConfigSchema.default({}),
-  apps: z.record(z.string(), AppConfigSchema).default({})
+  apps: z.record(z.string(), AppConfigSchema).default({}),
+  // Root public keys of each KMS root epoch, indexed by epoch; append only.
+  rootEpochs: z.array(RootEpochSchema).default([]),
+  // The root epoch KMS instances serve; raise it once every node holds it.
+  currentRootEpoch: z.number().int().min(0).default(0)
 });
 
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 type AuthConfig = z.infer<typeof AuthConfigSchema>;
+
+const bytesOf = (hex: string) => hexToBytes(hex.replace(/^0x/i, ''));
+
+// The current root epoch and its chain hash, as DstackKms computes it:
+// keccak256(previous || keccak256(caPubkey) || keccak256(k256Pubkey)),
+// with a zero previous hash for epoch 0. Empty when no epoch is configured.
+function currentRootEpoch(config: AuthConfig): { rootEpoch?: number; rootEpochHash?: string } {
+  const current = config.currentRootEpoch;
+  if (config.rootEpochs.length === 0 && current === 0) return {};
+  if (current >= config.rootEpochs.length) {
+    throw new Error('currentRootEpoch is not a configured root epoch');
+  }
+  let hash = new Uint8Array(32);
+  for (const keys of config.rootEpochs.slice(0, current + 1)) {
+    hash = keccak_256(concatBytes(
+      hash, keccak_256(bytesOf(keys.caPubkey)), keccak_256(bytesOf(keys.k256Pubkey))
+    ));
+  }
+  return { rootEpoch: current, rootEpochHash: '0x' + bytesToHex(hash) };
+}
+
+const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
+
+// Only a KMS serving the current root epoch, with the registered keys up to it,
+// may authorize. A KMS that predates root epochs reports none and holds only
+// epoch 0; KMS checks made while onboarding carry none and are not limited.
+function rootEpochDenial(
+  bootInfo: BootInfo,
+  isKms: boolean,
+  current: { rootEpoch?: number; rootEpochHash?: string }
+): string | undefined {
+  const currentEpoch = current.rootEpoch ?? 0;
+  if (bootInfo.rootEpoch === undefined) {
+    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+  }
+  if (current.rootEpoch === undefined) {
+    return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
+  }
+  if (bootInfo.rootEpoch !== currentEpoch) {
+    return `the KMS serves root epoch ${bootInfo.rootEpoch}, but ${currentEpoch} is current`;
+  }
+  if (normHash(bootInfo.rootEpochHash) !== normHash(current.rootEpochHash)) {
+    return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
+  }
+  return undefined;
+}
 
 // normalize hex string to lowercase with 0x prefix
 function normalizeHex(hex: string): string {
@@ -93,6 +154,14 @@ class ConfigBackend {
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
+    const response = this.evaluateBoot(bootInfo, isKms, config);
+    const epochDenial = response.isAllowed
+      ? rootEpochDenial(bootInfo, isKms, currentRootEpoch(config))
+      : undefined;
+    return epochDenial ? { ...response, isAllowed: false, reason: epochDenial } : response;
+  }
+
+  private evaluateBoot(bootInfo: BootInfo, isKms: boolean, config: AuthConfig): BootResponse {
     const osImageHash = normalizeHex(bootInfo.osImageHash);
     const deviceId = normalizeHex(bootInfo.deviceId);
 
@@ -220,6 +289,8 @@ class ConfigBackend {
     kmsContractAddr: string;
     chainId: number;
     appImplementation: string;
+    rootEpoch?: number;
+    rootEpochHash?: string;
   }> {
     const config = this.loadConfig();
     return {
@@ -227,6 +298,7 @@ class ConfigBackend {
       kmsContractAddr: config.kmsContractAddr,
       chainId: config.chainId,
       appImplementation: config.appImplementation,
+      ...currentRootEpoch(config),
     };
   }
 }
@@ -248,6 +320,8 @@ app.get('/', async (c) => {
       chainId: info.chainId,
       appAuthImplementation: info.appImplementation, // backward compat
       appImplementation: info.appImplementation,
+      rootEpoch: info.rootEpoch,
+      rootEpochHash: info.rootEpochHash,
     });
   } catch (error) {
     console.error('error in health check:', error);
