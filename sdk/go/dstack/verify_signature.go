@@ -135,14 +135,8 @@ func VerifyEnvEncryptPublicKeyWithTimestamp(
 		return nil, nil
 	}
 
-	maxAgeSeconds, futureSkewSeconds := normalizeVerifyOptions(opts)
-	now := uint64(time.Now().Unix())
-	if timestamp > now {
-		if timestamp-now > futureSkewSeconds {
-			return nil, fmt.Errorf("timestamp is too far in the future")
-		}
-	} else if now-timestamp > maxAgeSeconds {
-		return nil, fmt.Errorf("timestamp is too old: %ds > %ds", now-timestamp, maxAgeSeconds)
+	if err := verifyKeyTimestamp(timestamp, opts); err != nil {
+		return nil, err
 	}
 
 	baseMessage, err := buildVerifyMessage(publicKey, appID)
@@ -180,4 +174,71 @@ func VerifySignatureSimple(message []byte, signature []byte, expectedPubKey []by
 
 	sig := secp256k1ecdsa.NewSignature(r, s)
 	return sig.Verify(keccak256(message), pubKey)
+}
+
+func verifyKeyTimestamp(timestamp uint64, opts *VerifyEnvEncryptPublicKeyOptions) error {
+	maxAgeSeconds, futureSkewSeconds := normalizeVerifyOptions(opts)
+	now := uint64(time.Now().Unix())
+	if timestamp > now {
+		if timestamp-now > futureSkewSeconds {
+			return fmt.Errorf("timestamp is too far in the future")
+		}
+	} else if now-timestamp > maxAgeSeconds {
+		return fmt.Errorf("timestamp is too old: %ds > %ds", now-timestamp, maxAgeSeconds)
+	}
+
+	return nil
+}
+
+// VerifySealedEnvPublicKey recovers the compressed secp256k1 signer as 0x-prefixed
+// hex bytes, matching VerifyEnvEncryptPublicKey. A nil opts uses a maximum age of
+// 300 seconds and a future clock skew of 60 seconds. Epoch and timestamp widths
+// are enforced by their uint32 and uint64 types.
+//
+// Recovery alone does not establish trust. Before calling SealEnv, check that
+// rootEpoch is the expected epoch and compare the returned signer with its trusted
+// rootEpoch(epoch).k256Pubkey or an independently configured epoch pin.
+func VerifySealedEnvPublicKey(
+	publicKey []byte,
+	signature []byte,
+	appID string,
+	rootEpoch uint32,
+	timestamp uint64,
+	opts *VerifyEnvEncryptPublicKeyOptions,
+) ([]byte, error) {
+	if len(publicKey) != 32 {
+		return nil, fmt.Errorf("invalid public key length: expected 32 bytes, got %d", len(publicKey))
+	}
+	if len(signature) != 65 {
+		return nil, fmt.Errorf("invalid signature length: expected 65 bytes, got %d", len(signature))
+	}
+	cleanAppID := appID
+	if strings.HasPrefix(appID, "0x") || strings.HasPrefix(appID, "0X") {
+		cleanAppID = appID[2:]
+	}
+	app, err := hex.DecodeString(cleanAppID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid app ID: %w", err)
+	}
+	if len(app) != 20 {
+		return nil, fmt.Errorf("invalid app ID length: expected 20 bytes, got %d", len(app))
+	}
+	if err := verifyKeyTimestamp(timestamp, opts); err != nil {
+		return nil, err
+	}
+	var epochBytes [4]byte
+	var timestampBytes [8]byte
+	binary.BigEndian.PutUint32(epochBytes[:], rootEpoch)
+	binary.BigEndian.PutUint64(timestampBytes[:], timestamp)
+	message := bytes.Join([][]byte{
+		[]byte("dstack-sealed-env-pubkey-v1:"), app, epochBytes[:], publicKey, timestampBytes[:],
+	}, nil)
+	signer, err := recoverCompressedPublicKey(message, signature)
+	if err != nil {
+		return nil, err
+	}
+	if signer == nil {
+		return nil, fmt.Errorf("invalid sealed env public key signature")
+	}
+	return signer, nil
 }

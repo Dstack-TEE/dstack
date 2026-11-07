@@ -19,6 +19,7 @@ fs-err.workspace = true
 getrandom = { workspace = true, features = ["std"] }
 hex.workspace = true
 hex_fmt.workspace = true
+hpke.workspace = true
 regex.workspace = true
 scale = { workspace = true, features = ["derive"] }
 schnorrkel.workspace = true

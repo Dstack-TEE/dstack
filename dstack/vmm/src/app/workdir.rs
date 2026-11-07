@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use dstack_types::{
-    shared_filenames::{APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG},
+    shared_filenames::{
+        APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG, USER_CONFIG,
+    },
     AppCompose, SysConfig,
 };
 use fs_err as fs;
@@ -131,8 +133,37 @@ impl VmWorkDir {
         self.shared_dir().join(USER_CONFIG)
     }
 
+    pub(crate) fn validate_env_update(encrypted: &[u8], sealed: &[u8]) -> Result<()> {
+        if !encrypted.is_empty() && !sealed.is_empty() {
+            anyhow::bail!("encrypted_env and sealed_env are mutually exclusive");
+        }
+        Ok(())
+    }
+
+    /// Caller serializes updates to an existing VM with its launch lock.
+    pub(crate) fn write_env(&self, encrypted: &[u8], sealed: &[u8]) -> Result<()> {
+        Self::validate_env_update(encrypted, sealed)?;
+        let (path, other, data) = if !sealed.is_empty() {
+            (self.sealed_env_path(), self.encrypted_env_path(), sealed)
+        } else if !encrypted.is_empty() {
+            (self.encrypted_env_path(), self.sealed_env_path(), encrypted)
+        } else {
+            return Ok(());
+        };
+        safe_write::safe_write(path, data).context("failed to write env")?;
+        match fs::remove_file(other) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err).context("failed to remove superseded env"),
+        }
+    }
+
     pub fn encrypted_env_path(&self) -> PathBuf {
         self.shared_dir().join(ENCRYPTED_ENV)
+    }
+
+    pub fn sealed_env_path(&self) -> PathBuf {
+        self.shared_dir().join(SEALED_ENV)
     }
 
     pub fn instance_info_path(&self) -> PathBuf {
@@ -387,5 +418,41 @@ mod tests {
         workdir.remove_all().unwrap();
         assert!(!workdir.path().exists());
         workdir.remove_all().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    #[test]
+    fn env_updates_replace_the_other_format_and_reject_ambiguity() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(dir.path());
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        workdir.write_env(b"legacy", &[]).unwrap();
+        workdir.write_env(&[], b"sealed").unwrap();
+        assert!(!workdir.encrypted_env_path().exists());
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        assert!(workdir.write_env(b"ambiguous", b"ambiguous").is_err());
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        workdir.write_env(&[], &[]).unwrap();
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        workdir.write_env(b"owner", &[]).unwrap();
+        assert!(!workdir.sealed_env_path().exists());
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"owner");
+    }
+
+    #[test]
+    fn env_write_failure_preserves_original_and_cleanup_errors_propagate() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(dir.path());
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        workdir.write_env(b"original", &[]).unwrap();
+        fs::create_dir(workdir.sealed_env_path()).unwrap();
+        assert!(workdir.write_env(&[], b"replacement").is_err());
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"original");
+        assert!(workdir.write_env(b"updated", &[]).is_err());
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"updated");
     }
 }

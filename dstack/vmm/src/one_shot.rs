@@ -216,10 +216,7 @@ Compose file content (first 200 chars):
         .context("Failed to write app compose file")?;
 
     // Write other files if present
-    if !vm_config.encrypted_env.is_empty() {
-        fs_err::write(vm_work_dir.encrypted_env_path(), &vm_config.encrypted_env)
-            .context("Failed to write encrypted env")?;
-    }
+    vm_work_dir.write_env(&vm_config.encrypted_env, &vm_config.sealed_env)?;
 
     if !vm_config.user_config.is_empty() {
         fs_err::write(vm_work_dir.user_config_path(), &vm_config.user_config)

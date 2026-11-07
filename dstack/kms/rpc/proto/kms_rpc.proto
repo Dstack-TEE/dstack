@@ -18,6 +18,14 @@ message GetAppKeyRequest {
 
 message AppId {
   bytes app_id = 1;
+  optional uint32 root_epoch = 2;
+}
+
+message SealedEnvPubKeyResponse {
+  bytes public_key = 1;
+  uint32 root_epoch = 2;
+  uint64 timestamp = 3;
+  bytes signature = 4;
 }
 
 message PublicKeyResponse {
@@ -51,6 +59,8 @@ message AppKeyResponse {
   bytes os_image_hash = 8;
   // Root key epoch all epoch-dependent fields above were derived from.
   uint32 root_epoch = 9;
+  // X25519 private key for the SealedEnv HPKE receiver, derived for this epoch.
+  bytes sealed_env_key = 10;
 }
 
 message GetMetaResponse {
@@ -103,6 +113,7 @@ service KMS {
   rpc GetKmsKey(GetKmsKeyRequest) returns (KmsKeyResponse);
   // Request the app environment encryption public key given the app id
   rpc GetAppEnvEncryptPubKey(AppId) returns (PublicKeyResponse);
+  rpc GetSealedEnvPubKey(AppId) returns (SealedEnvPubKeyResponse);
   // Request the KMS instance metadata for use as a probe and health check.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
   // Sign a certificate

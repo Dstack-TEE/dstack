@@ -14,12 +14,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse, KmsKeyResponse,
-    KmsKeys, PublicKeyResponse, SignCertRequest, SignCertResponse,
+    KmsKeys, PublicKeyResponse, SealedEnvPubKeyResponse, SignCertRequest, SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use moka::future::Cache;
+use p256::pkcs8::DecodePrivateKey;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{resolve_vm_config, AttestationVerifier, TeeVariant, VerifiedAttestation},
@@ -359,6 +360,21 @@ struct AppKeys {
     env_crypt_key: Vec<u8>,
     k256_key: Vec<u8>,
     k256_signature: Vec<u8>,
+    sealed_env_key: Vec<u8>,
+}
+
+fn derive_sealed_env_key(root: &RootKeys, app_id: &[u8]) -> Result<[u8; 32]> {
+    ensure_app_id_len(app_id)?;
+    let ca_secret = p256::SecretKey::from_pkcs8_der(root.ca.key.serialized_der())?;
+    kdf::derive_key_with_salt(
+        b"dstack-sealed-env-v1",
+        &ca_secret.to_bytes(),
+        &[app_id],
+        32,
+    )
+    .map_err(|_| anyhow!("failed to derive sealed env key"))?
+    .try_into()
+    .map_err(|_| anyhow!("invalid sealed env key length"))
 }
 
 fn derive_app_keys(root: &RootKeys, app_id: &[u8], instance_id: &[u8]) -> Result<AppKeys> {
@@ -370,11 +386,13 @@ fn derive_app_keys(root: &RootKeys, app_id: &[u8], instance_id: &[u8]) -> Result
     let env_crypt_key = x25519_dalek::StaticSecret::from(env_crypt_key).to_bytes();
     let (k256_key, k256_signature) =
         derive_k256_key(&root.k256, app_id).context("Failed to derive app ecdsa key")?;
+    let sealed_env_key = derive_sealed_env_key(root, app_id)?.to_vec();
     Ok(AppKeys {
         disk_crypt_key: disk_crypt_key.to_vec(),
         env_crypt_key: env_crypt_key.to_vec(),
         k256_key: k256_key.to_bytes().to_vec(),
         k256_signature,
+        sealed_env_key,
     })
 }
 
@@ -631,6 +649,7 @@ impl KmsRpc for RpcHandler {
             gateway_app_id,
             os_image_hash: boot_info.os_image_hash,
             root_epoch,
+            sealed_env_key: keys.sealed_env_key,
         })
     }
 
@@ -679,6 +698,40 @@ impl KmsRpc for RpcHandler {
             signature,
             timestamp,
             signature_v1,
+        })
+    }
+
+    async fn get_sealed_env_pub_key(self, request: AppId) -> Result<SealedEnvPubKeyResponse> {
+        let requested = request.root_epoch;
+        let current = self.ensure_self_allowed().await?;
+        let epoch = requested.unwrap_or(current);
+        if epoch > current {
+            bail!("sealed env root epoch {epoch} is not active; current epoch is {current}");
+        }
+        let root = self.state.epoch_root(epoch)?;
+        ensure_app_id_len(&request.app_id)?;
+        let secret = derive_sealed_env_key(root, &request.app_id)?;
+        let public_key =
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("system time before UNIX epoch")?
+            .as_secs();
+        let mut message = Vec::with_capacity(4 + 32 + 8);
+        message.extend_from_slice(&epoch.to_be_bytes());
+        message.extend_from_slice(&public_key);
+        message.extend_from_slice(&timestamp.to_be_bytes());
+        let signature = sign_message(
+            &root.k256,
+            b"dstack-sealed-env-pubkey-v1",
+            &request.app_id,
+            &message,
+        )?;
+        Ok(SealedEnvPubKeyResponse {
+            public_key: public_key.to_vec(),
+            root_epoch: epoch,
+            timestamp,
+            signature,
         })
     }
 
@@ -1476,6 +1529,21 @@ mod tests {
             .unwrap();
         let keyring = Keyring::load(&config).unwrap();
         KmsState::new(config, keyring, ca_cert.pem()).unwrap()
+    }
+
+    #[test]
+    fn sealed_env_derivation_is_separate_and_shared_with_app_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = kms_state(dir.path(), "http://127.0.0.1:1");
+        let root = state.epoch_root(0).unwrap();
+        let app = [1; 20];
+        let sealed = derive_sealed_env_key(root, &app).unwrap();
+        let app_keys = derive_app_keys(root, &app, &[2; 20]).unwrap();
+        assert_eq!(sealed.as_slice(), app_keys.sealed_env_key);
+        assert_ne!(sealed.as_slice(), app_keys.env_crypt_key);
+        assert_ne!(sealed.as_slice(), app_keys.disk_crypt_key);
+        assert_ne!(sealed, derive_sealed_env_key(root, &[3; 20]).unwrap());
+        assert!(derive_sealed_env_key(root, &[1; 19]).is_err());
     }
 
     #[rocket::async_test]

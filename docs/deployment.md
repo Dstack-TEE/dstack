@@ -548,7 +548,10 @@ for the full procedure; the KMS steps are:
    `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
    that imported the dropped N must be onboarded again.
 6. Boot CVMs on an OS that supports root epochs. At boot they re-key their data
-   disk from the epoch recorded in its LUKS header to the current one.
+   disk from the epoch recorded in its LUKS header to the current one. If an
+   encrypted environment still uses an older epoch, the CVM re-encrypts it during
+   boot and the VMM replaces the ciphertext only if it was not changed concurrently.
+   See [SealedEnv](./sealed-env.md) for the new format, file precedence, and rollback requirements.
 
 Each `checkKmsAuthorization` or `checkAppAuthorization` result carries the current epoch and its chain hash,
 including when authorization is denied. KMS verifies these against its keyring;

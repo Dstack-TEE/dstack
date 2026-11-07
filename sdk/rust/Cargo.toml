@@ -10,6 +10,8 @@ members = [".", "types", "no_std_check"]
 resolver = "2"
 
 [workspace.dependencies]
+base64 = "0.22"
+hpke = { version = "0.15.1", default-features = false, features = ["alloc", "getrandom", "x25519", "aes"] }
 anyhow = { version = "1.0.97", default-features = false }
 bon = { version = "3.4.0", default-features = false }
 borsh = { version = "1.5.7", default-features = false, features = ["derive"] }
@@ -37,6 +39,8 @@ description = "This crate provides a rust client for communicating with dstack"
 authors = ["Encifher <encifher@rizelabs.io>"]
 
 [dependencies]
+base64.workspace = true
+hpke.workspace = true
 alloy = { workspace = true, features = ["signers", "signer-local"] }
 anyhow.workspace = true
 dstack-sdk-types = { workspace = true, default-features = true }

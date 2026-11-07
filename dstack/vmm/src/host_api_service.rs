@@ -46,6 +46,12 @@ impl HostApiRpc for HostApiHandler {
             .vm_event_report(self.endpoint.cid, &request.event, request.payload)
     }
 
+    async fn update_sealed_env(self, request: host_api::SealedEnv) -> Result<()> {
+        self.app
+            .update_sealed_env(self.endpoint.cid, request.sealed_env)
+            .await
+    }
+
     async fn get_sealing_key(self, request: GetSealingKeyRequest) -> Result<GetSealingKeyResponse> {
         let key_provider = &self.app.config.key_provider;
         if !key_provider.enabled {
