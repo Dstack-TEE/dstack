@@ -89,7 +89,7 @@ async fn check_key_possession(version: &'static rustls::SupportedProtocolVersion
         });
         let client = RaClientConfig::builder()
             .remote_uri(format!("https://{address}"))
-            .tls_no_check(true)
+            .tls_skip_ca_verification(true)
             .tls_client_cert(client_cert.cert_pem())
             .tls_client_key(client_cert.key_pem())
             .verify_server_attestation(false)
