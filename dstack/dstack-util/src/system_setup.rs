@@ -2353,6 +2353,47 @@ struct AppInfo {
     gpu_attestation_event: Option<Vec<u8>>,
 }
 
+impl HostShared {
+    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<(AppKeys, Vec<u8>)> {
+        info!("Requesting app keys from KMS: {kms_url}");
+        let cert_pair =
+            generate_self_signed_ra_cert(None).context("Failed to generate RA-TLS cert")?;
+        let response = request_app_keys(
+            kms_url.clone(),
+            rpc::GetAppKeyRequest {
+                api_version: 1,
+                vm_config: self.sys_config.vm_config.clone(),
+                root_epoch: None,
+            },
+            cert_pair,
+            attestation_verifier(&self.sys_config)?,
+            None,
+        )
+        .await
+        .context("Failed to get app keys from the attested KMS")?;
+        let root_ca = response.ca_cert;
+
+        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(root_ca.as_bytes())
+            .context("Failed to parse ca cert")?;
+        let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
+        let root_pubkey = x509.public_key().raw.to_vec();
+
+        let keys = AppKeys {
+            ca_cert: root_ca,
+            disk_crypt_key: response.disk_crypt_key,
+            env_crypt_key: response.env_crypt_key,
+            k256_key: response.k256_key,
+            k256_signature: response.k256_signature,
+            gateway_app_id: response.gateway_app_id,
+            key_provider: KeyProvider::Kms {
+                url: kms_url,
+                pubkey: root_pubkey,
+            },
+        };
+        Ok((keys, response.os_image_hash))
+    }
+}
+
 struct Stage0<'a> {
     args: &'a SetupArgs,
     shared: HostShared,
@@ -2415,45 +2456,6 @@ impl<'a> Stage0<'a> {
         self.shared.dir.join(APP_KEYS)
     }
 
-    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<(AppKeys, Vec<u8>)> {
-        info!("Requesting app keys from KMS: {kms_url}");
-        let cert_pair =
-            generate_self_signed_ra_cert(None).context("Failed to generate RA-TLS cert")?;
-        let response = request_app_keys(
-            kms_url.clone(),
-            rpc::GetAppKeyRequest {
-                api_version: 1,
-                vm_config: self.shared.sys_config.vm_config.clone(),
-                root_epoch: None,
-            },
-            cert_pair,
-            attestation_verifier(&self.shared.sys_config)?,
-            None,
-        )
-        .await
-        .context("Failed to get app keys from the attested KMS")?;
-        let root_ca = response.ca_cert;
-
-        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(root_ca.as_bytes())
-            .context("Failed to parse ca cert")?;
-        let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
-        let root_pubkey = x509.public_key().raw.to_vec();
-
-        let keys = AppKeys {
-            ca_cert: root_ca,
-            disk_crypt_key: response.disk_crypt_key,
-            env_crypt_key: response.env_crypt_key,
-            k256_key: response.k256_key,
-            k256_signature: response.k256_signature,
-            gateway_app_id: response.gateway_app_id,
-            key_provider: KeyProvider::Kms {
-                url: kms_url,
-                pubkey: root_pubkey,
-            },
-        };
-        Ok((keys, response.os_image_hash))
-    }
-
     async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
         if self.shared.sys_config.kms_urls.is_empty() {
             bail!("No KMS URLs are set");
@@ -2461,7 +2463,11 @@ impl<'a> Stage0<'a> {
         let mut errors = vec![];
         for kms_url in &self.shared.sys_config.kms_urls {
             let kms_url = kms_rpc_url(kms_url);
-            match self.request_app_keys_from_kms_url(kms_url.clone()).await {
+            match self
+                .shared
+                .request_app_keys_from_kms_url(kms_url.clone())
+                .await
+            {
                 Ok((keys, os_image_hash)) => {
                     // Measured here, outside the per-URL request, so that a
                     // failover can never extend os-image-hash twice.
