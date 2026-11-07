@@ -33,7 +33,11 @@ contract AddKmsAggregatedMr is BaseScript {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.addKmsAggregatedMr(mrAggregated);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.addKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
+        } else {
+            kms.addKmsAggregatedMr(mrAggregated);
+        }
         vm.stopBroadcast();
 
         console.log("Added KMS aggregated MR:", vm.toString(mrAggregated));
@@ -45,7 +49,11 @@ contract RemoveKmsAggregatedMr is BaseScript {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.removeKmsAggregatedMr(mrAggregated);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.removeKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
+        } else {
+            kms.removeKmsAggregatedMr(mrAggregated);
+        }
         vm.stopBroadcast();
 
         console.log("Removed KMS aggregated MR:", vm.toString(mrAggregated));
@@ -57,7 +65,11 @@ contract AddOsImage is BaseScript {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.addOsImageHash(imageHash);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.addOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
+        } else {
+            kms.addOsImageHash(imageHash);
+        }
         vm.stopBroadcast();
 
         console.log("Added OS image hash:", vm.toString(imageHash));
@@ -69,7 +81,11 @@ contract AddKmsDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.addKmsDevice(deviceId);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.addKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
+        } else {
+            kms.addKmsDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Added KMS device:", vm.toString(deviceId));
@@ -148,7 +164,11 @@ contract AddComposeHash is BaseScript {
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.addComposeHash(composeHash);
+        if (vm.envExists("APP_EPOCH")) {
+            app.addComposeHashAtEpoch(vm.envUint("APP_EPOCH"), composeHash);
+        } else {
+            app.addComposeHash(composeHash);
+        }
         vm.stopBroadcast();
 
         console.log("Added compose hash:", vm.toString(composeHash));
@@ -161,7 +181,11 @@ contract AddDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.addDevice(deviceId);
+        if (vm.envExists("APP_EPOCH")) {
+            app.addDeviceAtEpoch(vm.envUint("APP_EPOCH"), deviceId);
+        } else {
+            app.addDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Added device:", vm.toString(deviceId));
@@ -174,7 +198,11 @@ contract SetAllowAnyDevice is BaseScript {
         bool allow = vm.envBool("ALLOW_ANY_DEVICE");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.setAllowAnyDevice(allow);
+        if (vm.envExists("APP_EPOCH")) {
+            app.setAllowAnyDeviceAtEpoch(vm.envUint("APP_EPOCH"), allow);
+        } else {
+            app.setAllowAnyDevice(allow);
+        }
         vm.stopBroadcast();
 
         console.log("Set allowAnyDevice to:", allow);
@@ -273,7 +301,11 @@ contract RemoveOsImage is BaseScript {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.removeOsImageHash(imageHash);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.removeOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
+        } else {
+            kms.removeOsImageHash(imageHash);
+        }
         vm.stopBroadcast();
 
         console.log("Removed OS image hash:", vm.toString(imageHash));
@@ -285,7 +317,11 @@ contract RemoveKmsDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.removeKmsDevice(deviceId);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.removeKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
+        } else {
+            kms.removeKmsDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Removed KMS device:", vm.toString(deviceId));
@@ -299,7 +335,11 @@ contract RemoveComposeHash is BaseScript {
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.removeComposeHash(composeHash);
+        if (vm.envExists("APP_EPOCH")) {
+            app.removeComposeHashAtEpoch(vm.envUint("APP_EPOCH"), composeHash);
+        } else {
+            app.removeComposeHash(composeHash);
+        }
         vm.stopBroadcast();
 
         console.log("Removed compose hash:", vm.toString(composeHash));
@@ -312,7 +352,11 @@ contract RemoveDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.removeDevice(deviceId);
+        if (vm.envExists("APP_EPOCH")) {
+            app.removeDeviceAtEpoch(vm.envUint("APP_EPOCH"), deviceId);
+        } else {
+            app.removeDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Removed device:", vm.toString(deviceId));

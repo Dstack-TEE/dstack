@@ -569,11 +569,12 @@ impl RpcHandler {
     async fn ensure_kms_allowed(&self, vm_config: &str) -> Result<BootInfo> {
         let att = self.ensure_attested()?;
         let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
+        // Handover approval covers the highest exported epoch and all older roots.
         let response = self
             .state
             .config
             .auth_api
-            .authorize_kms(&boot_info, Operation::KmsImportKeys, None)
+            .authorize_kms(&boot_info, Operation::KmsImportKeys, Some(self.state.keyring.latest()))
             .await?;
         self.state.authorized_epoch(&response, None)?;
         self.ensure_attestation_policy(att, vm_config, &boot_info, &response)

@@ -6,11 +6,11 @@ keys or other apps. This extends SealedEnv (#1528); the PR dependency order is
 
 ## Authorization and rotation
 
-`checkAppAuthorization` returns `currentAppEpoch` together with the current root
+`authorizeApp` returns `currentAppEpoch` together with the current root
 epoch and its chain hash. `requestedRootEpoch` and `requestedAppEpoch` are
-independent `OptionalEpoch` values: omitted selects current, explicit zero selects
+independent `OptionalUint256` values: omitted selects current, explicit zero selects
 historical epoch zero. Future epochs are denied through `rejectionReason`.
-`checkKmsAuthorization` remains separate and uses app epoch zero.
+`authorizeKms` remains separate and uses app epoch zero.
 
 `DstackApp.currentAppEpoch` starts at zero. Its owner calls
 `advanceAppEpoch(expectedCurrentEpoch)` to increment it. The expected value
@@ -28,6 +28,70 @@ value. Legacy boot authorization and legacy environment public-key issuance are
 rejected once the app epoch is nonzero, preventing old clients from silently
 continuing with epoch-zero keys.
 
+## Epoch-scoped allowlists
+
+Material approvals are an exact `epoch × material` matrix, not a maximum epoch.
+Authorization checks only the selected row, with O(1) add, removal and lookup:
+
+- `DstackKms`: OS images, KMS aggregated measurements and KMS device IDs are
+  indexed by **root epoch**. OS image limits also apply to app key requests.
+- `DstackApp`: compose hashes, device IDs and `allowAnyDevice` are indexed by
+  **app epoch**. Each required material must be allowed in the selected row.
+
+There is no implicit access in either direction. Rotating keys starts an empty
+row; approving a new row neither copies old approvals nor grants historical keys.
+Root and app selectors remain independent. Omitted selectors select the current
+epochs. For an image handover, explicitly approve the new image in the old row so
+it can migrate old keys, approve it in the new row, and remove the old image from
+the old row after the handover. The old image never needs access to the new row.
+
+Existing add/remove methods operate on the highest epoch: the latest **registered**
+root epoch (including a pending epoch), or the current app epoch. Before any root
+epoch is registered, they operate on epoch zero. The `*AtEpoch(epoch, material)`
+methods select a particular registered root/current-or-historical app epoch;
+removal affects only that row. `setAllowAnyDeviceAtEpoch(epoch, allowed)` is also
+row-specific. Single-material add/remove scripts in `Manage.s.sol` accept optional
+`ROOT_EPOCH` or `APP_EPOCH` variables, respectively, as does `SetAllowAnyDevice`.
+
+The `*AtEpoch` getters read the selected row, including legacy epoch zero.
+`EpochPolicyChanged` events include the row and the resulting permission. Legacy
+bool getters and events describe **epoch zero only**; changing a nonzero row does
+not change its legacy bool or emit a misleading legacy material event.
+Pending root epoch numbers may be popped and reused; policy rows belong to epoch
+numbers, not key hashes. Review or clear a pending row before activating a
+replacement epoch with the same number.
+
+### KMS keyring handover
+
+Keyring handover is deliberately different from app key access: approval in the
+**highest exported root epoch** authorizes the entire keyring, including all older
+roots. The KMS passes that epoch explicitly to `authorizeKms`, so approval in the
+current row cannot accidentally authorize a newer pending keyring. A registered
+pending root may be authorized for KMS handover before activation; app key requests
+still cannot select it. KMS self-authorization without a selector continues to
+check the active root epoch. This permits staged key distribution without changing
+which epoch the KMS serves.
+
+### Upgrading existing proxies
+
+The original bool mappings and `allowAnyDevice` retain their storage locations and
+are used directly as row zero. New nested mappings consume three storage-gap slots
+in each contract; no entries are copied and no reinitializer is required. Existing
+owners, pending owners, policy flags, root registries and app epoch counters are
+preserved. Even if the pre-upgrade counter is nonzero, old global approvals grant
+only row zero after upgrading: explicitly populate the intended nonzero rows.
+
+Upgrade the KMS policy before app policies, then approve the intended rows before
+restarting guests or activating a new root. `DstackApp` advertises the optional
+ERC-165 `IAppEpochAuth` capability so the KMS can pass the selected app epoch to
+`isAppAllowedAtEpoch`. Policies without that capability can only authorize app
+epoch zero; failures of an advertised method propagate instead of falling back.
+Direct legacy app checks use the current app epoch; legacy KMS app authorization
+still rejects nonzero app epochs.
+
+These material matrices are implemented by the Solidity policies. Mock/simple auth
+backends retain their own policy model and may reject handover of pending epochs.
+
 ## Derivation and lifetime
 
 Every key is identified by `(root_epoch, app_epoch)`. App epoch zero keeps existing derived keys and app-key signatures. Nonzero app epochs append
@@ -42,8 +106,9 @@ returned root epoch. Epoch zero keeps the original `dstack-kms-issued` format.
 Restart CVMs after advancing the policy. A running CVM continues to use its boot
 key pair; omitted guest-agent GetKey selectors mean that CVM's boot epochs, not a
 fresh chain lookup. Explicit historical requests select each dimension
-independently and cache by the complete pair. Historical access still requires
-current app authorization. Supplied `trusted_ca` always pins the KMS connection,
+independently and cache by the complete pair. Historical requests must be approved
+in the selected root/app rows. Revoking one row does not revoke other rows or
+keys already delivered. Supplied `trusted_ca` always pins the KMS connection,
 regardless of epoch selection; historical responses cannot replace that pin.
 
 The guest migrates disk headers and environment ciphertext if either dimension

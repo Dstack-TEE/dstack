@@ -192,3 +192,16 @@ remain available.
 [KMS authorization protocol](../README.md#authorization-protocol) for the names
 and subject semantics. Bootstrap alone may authorize before root registration;
 unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.
+
+
+### Epoch-scoped material approvals
+
+Material approvals use exact root/app epoch rows; neither older nor newer rows
+are implicitly authorized. Existing add/remove methods default to the highest
+registered root epoch or current app epoch. The `*AtEpoch` methods and optional
+`ROOT_EPOCH` / `APP_EPOCH` variables on single-material management scripts select
+an explicit row. Original bool mappings and events remain epoch-zero views after
+upgrading; epoch-specific getters/events describe the new rows. KMS keyring
+handover separately checks its highest exported root epoch, which authorizes the
+whole keyring. See [epoch-scoped allowlists](../../../docs/app-key-epochs.md#epoch-scoped-allowlists)
+for migration, upgrade order and compatibility.

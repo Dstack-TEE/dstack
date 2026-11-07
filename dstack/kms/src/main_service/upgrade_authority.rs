@@ -801,6 +801,7 @@ pub(crate) mod tests {
             response(false, 1),
             response(true, 1),
             response(true, 1),
+            response(false, 1),
         ]);
         let auth = webhook(url);
         let info = boot_info(50);
@@ -822,12 +823,22 @@ pub(crate) mod tests {
         auth.authorize_kms(&info, Operation::KmsServe, None)
             .await
             .unwrap();
+        assert!(
+            !auth
+                .check_kms_authorization(&info, Operation::KmsImportKeys, Some(2))
+                .await
+                .unwrap()
+                .is_allowed
+        );
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 4);
+        assert_eq!(requests.len(), 5);
         assert!(requests[..3]
             .iter()
             .all(|(path, _)| path == "/authorizeApp"));
         assert_eq!(requests[3].0, "/authorizeKms");
+        assert_eq!(requests[4].0, "/authorizeKms");
+        assert_eq!(requests[4].1["requestedRootEpoch"], 2);
+        assert!(requests[4].1.get("requestedAppEpoch").is_none());
         let mut expected = serde_json::to_value(info).unwrap();
         expected["operation"] = "app_get_key".into();
         assert_eq!(requests[0].1, expected);
