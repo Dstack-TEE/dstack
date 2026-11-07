@@ -472,13 +472,13 @@ describe('auth-simple', () => {
     const info = async () =>
       (await app.fetch(new Request('http://localhost/', { method: 'GET' }))).json();
 
-    const authorize = async (fields: object = {}) =>
-      (await app.fetch(new Request('http://localhost/checkAuthorization', {
+    const authorize = async (fields: object = {}, isKms = false) =>
+      (await app.fetch(new Request(`http://localhost/${isKms ? 'checkKmsAuthorization' : 'checkAppAuthorization'}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...baseBootInfo, ...fields }),
       }))).json();
 
-    it('selects KMS policy by app ID and returns the epoch on rejection', async () => {
+    it('checks the requested policy and returns the epoch on rejection', async () => {
       const kmsContractAddr = '0x' + '11'.repeat(20);
       writeTestConfig({ ...config, kmsContractAddr, currentRootEpoch: 1 });
       expect(await authorize()).toMatchObject({
@@ -486,11 +486,15 @@ describe('auth-simple', () => {
       });
       expect(await authorize({ requestedEpoch: 0 })).toMatchObject({ isAllowed: true, currentRootEpoch: 1 });
       expect(await authorize({ requestedEpoch: 1 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({}, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
+      expect(await authorize({ appId: kmsContractAddr })).toMatchObject({ isAllowed: false, rejectionReason: 'Authorization kind does not match app ID' });
+      expect(await authorize({ appEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'App epoch is not supported', currentRootEpoch: 1 });
+      expect(await authorize({ appEpoch: 0 })).toMatchObject({ isAllowed: true });
       expect(await authorize({ requestedEpoch: 2 })).toMatchObject({
         isAllowed: false, rejectionReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,
       });
-      expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' })).toMatchObject({ isAllowed: true });
-      expect(await authorize({ appId: kmsContractAddr, mrAggregated: '0xbad' })).toMatchObject({
+      expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' }, true)).toMatchObject({ isAllowed: true });
+      expect(await authorize({ appId: kmsContractAddr, mrAggregated: '0xbad' }, true)).toMatchObject({
         isAllowed: false, currentRootEpoch: 1, currentRootEpochHash: h1,
       });
       expect(await authorize({ appId: '0x' + '22'.repeat(20) })).toMatchObject({ isAllowed: false });

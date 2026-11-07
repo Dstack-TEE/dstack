@@ -91,25 +91,28 @@ describe('Server', () => {
     });
   });
 
-  describe('POST /checkAuthorization', () => {
+  describe('POST /checkAppAuthorization', () => {
+    const appRequest = { ...mockBootInfo, appEpoch: 0 };
     it('preserves the complete decision, including the epoch on rejection', async () => {
       const decision = {
         isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
         currentRootEpoch: 1, currentRootEpochHash: '0x' + '11'.repeat(32),
       };
       app.ethereum.checkAuthorization = jest.fn().mockResolvedValue(decision);
-      const response = await app.inject({ method: 'POST', url: '/checkAuthorization', payload: mockBootInfo });
+      const response = await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: appRequest });
       expect(response.statusCode).toBe(200);
       expect(JSON.parse(response.payload)).toEqual(decision);
-      expect(app.ethereum.checkAuthorization).toHaveBeenCalledWith(mockBootInfo);
-      await app.inject({ method: 'POST', url: '/checkAuthorization', payload: { ...mockBootInfo, requestedEpoch: 0 } });
-      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...mockBootInfo, requestedEpoch: 0 });
+      expect(app.ethereum.checkAuthorization).toHaveBeenCalledWith(appRequest, 'checkAppAuthorization');
+      await app.inject({ method: 'POST', url: '/checkKmsAuthorization', payload: appRequest });
+      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith(appRequest, 'checkKmsAuthorization');
+      await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: { ...appRequest, requestedEpoch: 0 } });
+      expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...appRequest, requestedEpoch: 0 }, 'checkAppAuthorization');
     });
 
     it('fails closed when the new contract method is unavailable', async () => {
       jest.clearAllMocks();
       app.ethereum.checkAuthorization = jest.fn().mockRejectedValue(new Error('missing contract method'));
-      const response = await app.inject({ method: 'POST', url: '/checkAuthorization', payload: mockBootInfo });
+      const response = await app.inject({ method: 'POST', url: '/checkAppAuthorization', payload: appRequest });
       expect(response.statusCode).toBe(500);
       expect(app.ethereum.checkBoot).not.toHaveBeenCalled();
     });

@@ -37,6 +37,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  appEpoch: z.number().int().min(0).max(0xffffffff).default(0),
   requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
@@ -88,30 +89,33 @@ const APP_INFO_COMPONENTS = [
   { name: 'advisoryIds', type: 'string[]' }
 ] as const;
 
+const AUTHORIZATION_ABI = {
+  type: 'function',
+  stateMutability: 'view',
+  inputs: [{ name: 'request', type: 'tuple', components: [
+    { name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS },
+    { name: 'appEpoch', type: 'uint256' },
+    { name: 'requestedEpoch', type: 'tuple', components: [
+      { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
+    ] },
+  ] }],
+  outputs: [{
+    name: 'result',
+    type: 'tuple',
+    components: [
+      { name: 'isAllowed', type: 'bool' },
+      { name: 'rejectionReason', type: 'string' },
+      { name: 'gatewayAppId', type: 'string' },
+      { name: 'currentRootEpoch', type: 'uint256' },
+      { name: 'currentRootEpochHash', type: 'bytes32' },
+    ],
+  }],
+} as const;
+
 // DstackKms contract ABI (minimal required functions)
 const DSTACK_KMS_ABI = [
-  {
-    name: 'checkAuthorization',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'request', type: 'tuple', components: [
-      { name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS },
-      { name: 'requestedEpoch', type: 'tuple', components: [
-        { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
-      ] },
-    ] }],
-    outputs: [{
-      name: 'result',
-      type: 'tuple',
-      components: [
-        { name: 'isAllowed', type: 'bool' },
-        { name: 'rejectionReason', type: 'string' },
-        { name: 'gatewayAppId', type: 'string' },
-        { name: 'currentRootEpoch', type: 'uint256' },
-        { name: 'currentRootEpochHash', type: 'bytes32' },
-      ],
-    }],
-  },
+  { ...AUTHORIZATION_ABI, name: 'checkKmsAuthorization' },
+  { ...AUTHORIZATION_ABI, name: 'checkAppAuthorization' },
   {
     name: 'isKmsAllowed',
     type: 'function',
@@ -233,14 +237,15 @@ class EthereumBackend {
 
   }
 
-  async checkAuthorization(appInfo: AuthorizationRequest) {
+  async checkAuthorization(appInfo: AuthorizationRequest, method: 'checkKmsAuthorization' | 'checkAppAuthorization') {
     const blockNumber = await this.finalizedBlockNumber();
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
-      functionName: 'checkAuthorization',
+      functionName: method,
       args: [{
         appInfo: this.contractAppInfo(appInfo),
+        appEpoch: BigInt(appInfo.appEpoch),
         requestedEpoch: { isSet: appInfo.requestedEpoch !== undefined, value: BigInt(appInfo.requestedEpoch ?? 0) },
       }],
       blockNumber,
@@ -412,18 +417,20 @@ app.get('/', async (c) => {
   }
 });
 
-app.post('/checkAuthorization',
-  bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES }),
-  zValidator('json', AuthorizationRequestSchema),
-  async (c) => {
-    try {
-      return c.json(await ethereum.checkAuthorization(c.req.valid('json')));
-    } catch {
-      console.error('authorization backend failed');
-      return c.json({ status: 'error', message: backendUnavailable }, 503);
+for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+  app.post(`/${method}`,
+    bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES }),
+    zValidator('json', AuthorizationRequestSchema),
+    async (c) => {
+      try {
+        return c.json(await ethereum.checkAuthorization(c.req.valid('json'), method));
+      } catch {
+        console.error('authorization backend failed');
+        return c.json({ status: 'error', message: backendUnavailable }, 503);
+      }
     }
-  }
-);
+  );
+}
 
 // app boot authentication
 app.post('/bootAuth/app',

@@ -28,6 +28,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  appEpoch: z.number().int().min(0).max(0xffffffff).default(0),
   requestedEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
 type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
@@ -157,7 +158,7 @@ class ConfigBackend {
     }
   }
 
-  async checkAuthorization(appInfo: AuthorizationRequest) {
+  async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
     const config = this.loadConfig();
     const current = currentRootEpoch(config);
     const epoch = {
@@ -170,7 +171,12 @@ class ConfigBackend {
     if (appInfo.requestedEpoch !== undefined && appInfo.requestedEpoch > current.rootEpoch) {
       return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
-    const isKms = normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr);
+    if (appInfo.appEpoch !== 0) {
+      return { isAllowed: false, rejectionReason: 'App epoch is not supported', gatewayAppId: config.gatewayAppId, ...epoch };
+    }
+    if (isKms !== (normalizeHex(appInfo.appId) === normalizeHex(config.kmsContractAddr))) {
+      return { isAllowed: false, rejectionReason: 'Authorization kind does not match app ID', gatewayAppId: config.gatewayAppId, ...epoch };
+    }
     const result = this.evaluateBoot(appInfo, isKms, config);
     return { isAllowed: result.isAllowed, rejectionReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
   }
@@ -355,14 +361,16 @@ app.get('/', async (c) => {
   }
 });
 
-app.post('/checkAuthorization', zValidator('json', AuthorizationRequestSchema), async (c) => {
-  try {
-    return c.json(await backend.checkAuthorization(c.req.valid('json')));
-  } catch {
-    console.error('authorization backend failed');
-    return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
-  }
-});
+for (const method of ['checkKmsAuthorization', 'checkAppAuthorization'] as const) {
+  app.post(`/${method}`, zValidator('json', AuthorizationRequestSchema), async (c) => {
+    try {
+      return c.json(await backend.checkAuthorization(c.req.valid('json'), method === 'checkKmsAuthorization'));
+    } catch {
+      console.error('authorization backend failed');
+      return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
+    }
+  });
+}
 
 // app boot authentication
 app.post('/bootAuth/app',

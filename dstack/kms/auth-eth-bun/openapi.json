@@ -99,10 +99,41 @@
         }
       }
     },
-    "/checkAuthorization": {
+    "/checkKmsAuthorization": {
       "post": {
-        "summary": "Authorize an attested identity and return the current root epoch",
-        "operationId": "checkAuthorization",
+        "summary": "Authorize a Kms identity and return the current root epoch",
+        "operationId": "checkKmsAuthorization",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorization decision, including the epoch on rejection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationResult"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authorization backend unavailable; no legacy fallback."
+          }
+        }
+      }
+    },
+    "/checkAppAuthorization": {
+      "post": {
+        "summary": "Authorize a App identity and return the current root epoch",
+        "operationId": "checkAppAuthorization",
         "requestBody": {
           "required": true,
           "content": {
@@ -384,6 +415,13 @@
             "minimum": 0,
             "maximum": 4294967295,
             "description": "Omit to use the current epoch. An explicit zero selects epoch 0; future epochs are denied."
+          },
+          "appEpoch": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295,
+            "default": 0,
+            "description": "Application epoch, independent of KMS root epochs. Only zero is currently supported."
           }
         }
       }

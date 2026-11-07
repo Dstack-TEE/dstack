@@ -548,7 +548,7 @@ for the full procedure; the KMS steps are:
    `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
    that imported the dropped N must be onboarded again.
 
-Each `checkAuthorization` result carries the current epoch and its chain hash,
+Each `checkKmsAuthorization` or `checkAppAuthorization` result carries the current epoch and its chain hash,
 including when authorization is denied. KMS verifies these against its keyring;
 there is no cached serving epoch. An optional `requestedEpoch` selects historical
 keys, and omission selects the returned current epoch. Requests for future

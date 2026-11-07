@@ -246,12 +246,21 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 
 ## Authorization protocol
 
-Normal KMS operations use `POST /checkAuthorization`. The request carries the
-verified attestation identity (the same identity fields as the legacy
-`/bootAuth/*` requests). The Ethereum backends call
-`DstackKms.checkAuthorization(AuthorizationRequest)` once; the contract selects KMS policy when
-`appId == address(this)` (the proxy address), and app policy otherwise. KMS-only
-operations also check this identity before accepting the result.
+Normal operations use two explicit authorization endpoints:
+
+- `POST /checkKmsAuthorization` for KMS self-authorization and root-key handover.
+- `POST /checkAppAuthorization` for application keys and certificates.
+
+The Ethereum backends call the matching `DstackKms` method. Both accept
+`AuthorizationRequest` and return `AuthorizationResult`; no caller-kind flag is
+sent. The KMS method requires the attested `appId` to equal the proxy address,
+and the app method rejects that address and applies registered app policy.
+KMS callers do not fetch contract metadata to decide which policy to use.
+
+`appEpoch` reserves the application's own key epoch, independently of KMS root
+epochs. HTTP requests default it to 0; KMS currently sends 0. Nonzero values are
+rejected until app-epoch support is implemented, and rejection responses still
+carry the current root epoch and chain hash.
 
 `requestedEpoch` is optional in the JSON request. Omit it to use the epoch in
 this authorization result; an explicit `0` selects epoch 0. Solidity represents

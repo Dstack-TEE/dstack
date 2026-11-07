@@ -384,10 +384,10 @@ describe('Mock Behavior Verification', () => {
 });
 
 
-describe('POST /checkAuthorization', () => {
-  const authorize = (appId: string) => appFetch(new Request('http://localhost/checkAuthorization', {
+describe('authorization endpoints', () => {
+  const authorize = (appId: string, isKms = false, appEpoch = 0) => appFetch(new Request(`http://localhost/${isKms ? 'checkKmsAuthorization' : 'checkAppAuthorization'}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId, mrAggregated: '', osImageHash: '', composeHash: '', instanceId: '', deviceId: '' }),
+    body: JSON.stringify({ appId, appEpoch, mrAggregated: '', osImageHash: '', composeHash: '', instanceId: '', deviceId: '' }),
   }));
 
   it('requires registered roots and selects policy by app ID', async () => {
@@ -402,7 +402,7 @@ describe('POST /checkAuthorization', () => {
       vi.stubEnv('MOCK_ROOT_EPOCH', '1');
       vi.stubEnv('MOCK_ROOT_EPOCH_HASH', '0x' + '11'.repeat(32));
       expect(await (await authorize('app')).json()).toMatchObject({ isAllowed: true, rejectionReason: '', currentRootEpoch: 1 });
-      expect(await (await authorize(process.env.KMS_CONTRACT_ADDR!)).json()).toMatchObject({
+      expect(await (await authorize(process.env.KMS_CONTRACT_ADDR!, true)).json()).toMatchObject({
         isAllowed: false, rejectionReason: 'mock policy: deny-kms', currentRootEpoch: 1,
         currentRootEpochHash: '0x' + '11'.repeat(32),
       });

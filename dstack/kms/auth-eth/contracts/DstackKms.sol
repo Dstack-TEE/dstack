@@ -33,6 +33,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     struct AuthorizationRequest {
         AppInfo appInfo;
+        uint256 appEpoch;
         OptionalEpoch requestedEpoch;
     }
 
@@ -401,9 +402,28 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     /// Authorize an attested identity and return the root epoch from the same state.
-    /// The KMS app ID is this contract's proxy address; all other IDs use app policy.
-    function checkAuthorization(AuthorizationRequest calldata request)
+    /// The caller selects KMS or app policy; KMS authorization requires the proxy app ID.
+    function checkKmsAuthorization(AuthorizationRequest calldata request)
         external
+        view
+        returns (AuthorizationResult memory)
+    {
+        return _checkAuthorization(request, true);
+    }
+
+    function checkAppAuthorization(AuthorizationRequest calldata request)
+        external
+        view
+        returns (AuthorizationResult memory)
+    {
+        return _checkAuthorization(request, false);
+    }
+
+    function _checkAuthorization(
+        AuthorizationRequest calldata request,
+        bool isKms
+    )
+        private
         view
         returns (AuthorizationResult memory result)
     {
@@ -418,7 +438,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             result.rejectionReason = "Requested root epoch is not active";
             return result;
         }
+        if (request.appEpoch != 0) {
+            result.rejectionReason = "App epoch is not supported";
+            return result;
+        }
         AppInfo calldata appInfo = request.appInfo;
+        if (isKms != (appInfo.appId == address(this))) {
+            result.rejectionReason = "Authorization kind does not match app ID";
+            return result;
+        }
         AppBootInfo memory bootInfo = AppBootInfo({
             appId: appInfo.appId,
             composeHash: appInfo.composeHash,
@@ -430,7 +458,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             tcbStatus: appInfo.tcbStatus,
             advisoryIds: appInfo.advisoryIds
         });
-        if (appInfo.appId == address(this)) {
+        if (isKms) {
             (result.isAllowed, result.rejectionReason) = _isKmsAllowed(bootInfo);
         } else {
             (result.isAllowed, result.rejectionReason) = _isAppAllowed(bootInfo);

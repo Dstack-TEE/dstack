@@ -254,9 +254,27 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 }
 
 impl AuthApi {
-    pub async fn check_authorization(
+    pub async fn check_kms_authorization(
         &self,
         app_info: &BootInfo,
+    ) -> Result<AuthorizationResult> {
+        self.check_authorization(app_info, "checkKmsAuthorization", None)
+            .await
+    }
+
+    pub async fn check_app_authorization(
+        &self,
+        app_info: &BootInfo,
+        requested_epoch: Option<u32>,
+    ) -> Result<AuthorizationResult> {
+        self.check_authorization(app_info, "checkAppAuthorization", requested_epoch)
+            .await
+    }
+
+    async fn check_authorization(
+        &self,
+        app_info: &BootInfo,
+        method: &str,
         requested_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
         #[derive(Serialize)]
@@ -264,6 +282,7 @@ impl AuthApi {
         struct AuthorizationRequest<'a> {
             #[serde(flatten)]
             app_info: &'a BootInfo,
+            app_epoch: u32,
             #[serde(skip_serializing_if = "Option::is_none")]
             requested_epoch: Option<u32>,
         }
@@ -277,11 +296,12 @@ impl AuthApi {
                 current_root_epoch_hash: hex::encode([0; 32]),
             }),
             AuthApi::Webhook { webhook } => {
-                let url = url_join(&webhook.url, "checkAuthorization");
+                let url = url_join(&webhook.url, method);
                 http_post(
                     &url,
                     &AuthorizationRequest {
                         app_info,
+                        app_epoch: 0,
                         requested_epoch,
                     },
                     webhook.timeout,
@@ -685,22 +705,28 @@ pub(crate) mod tests {
             response(true, 0),
             response(false, 1),
             response(true, 1),
+            response(true, 1),
         ]);
         let auth = webhook(url);
         let info = boot_info(50);
-        let first = auth.check_authorization(&info, None).await.unwrap();
-        let second = auth.check_authorization(&info, None).await.unwrap();
+        let first = auth.check_app_authorization(&info, None).await.unwrap();
+        let second = auth.check_app_authorization(&info, None).await.unwrap();
         assert!(first.is_allowed);
         assert!(!second.is_allowed);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
-        auth.check_authorization(&info, Some(0)).await.unwrap();
+        auth.check_app_authorization(&info, Some(0)).await.unwrap();
+        auth.check_kms_authorization(&info).await.unwrap();
         let requests = server.join().unwrap();
-        assert_eq!(requests.len(), 3);
-        assert!(requests
+        assert_eq!(requests.len(), 4);
+        assert!(requests[..3]
             .iter()
-            .all(|(path, _)| path == "/checkAuthorization"));
-        assert_eq!(requests[0].1, serde_json::to_value(info).unwrap());
+            .all(|(path, _)| path == "/checkAppAuthorization"));
+        assert_eq!(requests[3].0, "/checkKmsAuthorization");
+        let mut expected = serde_json::to_value(info).unwrap();
+        expected["appEpoch"] = 0.into();
+        assert_eq!(requests[0].1, expected);
+        assert_eq!(requests[2].1["appEpoch"], 0);
         assert!(requests[0].1.get("requestedEpoch").is_none());
         assert_eq!(requests[2].1["requestedEpoch"], 0);
     }
@@ -711,7 +737,7 @@ pub(crate) mod tests {
             r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
         ]);
         assert!(webhook(url)
-            .check_authorization(&boot_info(50), None)
+            .check_app_authorization(&boot_info(50), None)
             .await
             .is_err());
         assert_eq!(server.join().unwrap().len(), 1);

@@ -42,5 +42,6 @@ export interface AuthorizationResult {
 }
 
 export interface AuthorizationRequest extends Omit<BootInfo, 'rootEpoch' | 'rootEpochHash'> {
+  appEpoch?: number;
   requestedEpoch?: number;
 }

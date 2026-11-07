@@ -834,14 +834,14 @@ describe('request hardening', () => {
 });
 
 
-describe('POST /checkAuthorization', () => {
+describe('POST /checkAppAuthorization', () => {
   const appInfo = {
     appId: '0x' + '11'.repeat(20), composeHash: '0x' + '22'.repeat(32),
     instanceId: '', deviceId: '0x' + '33'.repeat(32),
     mrAggregated: '0x' + '44'.repeat(32), mrSystem: '0x' + '55'.repeat(32),
     osImageHash: '0x' + '66'.repeat(32), tcbStatus: 'UpToDate', advisoryIds: [],
   };
-  const authorize = (requestedEpoch?: number) => appFetch(new Request('http://localhost/checkAuthorization', {
+  const authorize = (requestedEpoch?: number) => appFetch(new Request('http://localhost/checkAppAuthorization', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, requestedEpoch }),
   }));
 
@@ -856,8 +856,8 @@ describe('POST /checkAuthorization', () => {
     expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2 });
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
-      functionName: 'checkAuthorization', blockNumber: 98n,
-      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedEpoch: { isSet: false, value: 0n } })],
+      functionName: 'checkAppAuthorization', blockNumber: 98n,
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), appEpoch: 0n, requestedEpoch: { isSet: false, value: 0n } })],
     }));
   });
 
