@@ -36,6 +36,9 @@ pub struct ImageInfo {
     pub shared_ro: bool,
     #[serde(default)]
     pub version: String,
+    /// Whether this guest supports SealedEnv. Missing metadata means legacy only.
+    #[serde(default)]
+    pub sealed_env: bool,
     #[serde(default)]
     pub is_dev: bool,
     /// OVMF measurement layout declared by the image. Older metadata.json files

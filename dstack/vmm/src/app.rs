@@ -3555,6 +3555,7 @@ mod tests {
         let tdx_measurement = supports_lite.then(dummy_tdx_measurement_document);
         Image {
             info: ImageInfo {
+                sealed_env: false,
                 cmdline: None,
                 kernel: "kernel".to_string(),
                 initrd: "initrd".to_string(),

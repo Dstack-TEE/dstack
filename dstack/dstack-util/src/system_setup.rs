@@ -3326,7 +3326,7 @@ impl Stage1<'_> {
         if let Some(sealed_env) = &self.shared.sealed_env {
             let envelope: SealedEnv =
                 serde_json::from_slice(sealed_env).context("failed to parse sealed env")?;
-            if envelope.version != 1 {
+            if envelope.version != 1 || envelope.app_epoch != 0 {
                 bail!("unsupported sealed env version: {}", envelope.version);
             }
             if envelope.enc.len() != 32 {
@@ -3548,6 +3548,7 @@ const PAYLOAD_OFFSET: u64 = 16777216;
 #[derive(Serialize, Deserialize)]
 struct SealedEnv {
     version: u32,
+    app_epoch: u32,
     root_epoch: u32,
     #[serde(with = "serde_human_bytes::base64")]
     enc: Vec<u8>,
@@ -3556,7 +3557,7 @@ struct SealedEnv {
 }
 
 fn sealed_env_info(epoch: &u32) -> Vec<u8> {
-    format!("dstack-sealed-env-v1:{epoch}").into_bytes()
+    format!("dstack-sealed-env-v1:{epoch}:0").into_bytes()
 }
 
 fn seal_env(secret: &[u8], epoch: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
@@ -3567,6 +3568,7 @@ fn seal_env(secret: &[u8], epoch: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
     let (enc, ciphertext) = payload.split_at(32);
     Ok(serde_json::to_vec(&SealedEnv {
         version: 1,
+        app_epoch: 0,
         root_epoch: epoch,
         enc: enc.to_vec(),
         ciphertext: ciphertext.to_vec(),

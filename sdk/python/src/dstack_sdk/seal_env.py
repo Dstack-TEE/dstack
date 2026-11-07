@@ -13,22 +13,26 @@ from pyhpke import AEADId, CipherSuite, KDFId, KEMId
 from .encrypt_env_vars import EnvVar
 
 
-def seal_env(envs: List[EnvVar], public_key_hex: str, root_epoch: int) -> str:
+def seal_env(envs: List[EnvVar], public_key_hex: str, root_epoch: int, app_epoch: int = 0) -> str:
     """Seal envs to a trusted epoch public key and return the JSON envelope."""
     if isinstance(root_epoch, bool) or not isinstance(root_epoch, int) or not 0 <= root_epoch <= 0xFFFFFFFF:
         raise ValueError("root_epoch must be a uint32")
+    if isinstance(app_epoch, bool) or not isinstance(app_epoch, int) or not 0 <= app_epoch <= 0xFFFFFFFF:
+        raise ValueError("app_epoch must be a uint32")
+    info = f"dstack-sealed-env-v1:{root_epoch}:{app_epoch}"
     suite = CipherSuite.new(
         KEMId.DHKEM_X25519_HKDF_SHA256, KDFId.HKDF_SHA256, AEADId.AES256_GCM
     )
     public_key = suite.kem.deserialize_public_key(bytes.fromhex(public_key_hex.removeprefix("0x")))
     plaintext = json.dumps({"env": [{"key": env.key, "value": env.value} for env in envs]}).encode()
     enc, context = suite.create_sender_context(
-        public_key, info=f"dstack-sealed-env-v1:{root_epoch}".encode()
+        public_key, info=info.encode()
     )
     ciphertext = context.seal(plaintext)
     return json.dumps({
         "version": 1,
         "root_epoch": root_epoch,
+        "app_epoch": app_epoch,
         "enc": base64.b64encode(enc).decode("ascii"),
         "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
     })

@@ -120,6 +120,7 @@ def verify_sealed_env_public_key(
     timestamp: int,
     *,
     max_age_seconds: int = DEFAULT_MAX_AGE_SECONDS,
+    app_epoch: int = 0,
 ) -> Optional[str]:
     """Recover the signer; compare it with a trusted epoch root key or pin."""
     if len(public_key) != 32 or len(signature) != 65:
@@ -130,6 +131,8 @@ def verify_sealed_env_public_key(
         return None
     if type(max_age_seconds) is not int or max_age_seconds < 0:
         return None
+    if type(app_epoch) is not int or not 0 <= app_epoch <= 0xFFFFFFFF:
+        return None
     app = _normalize_app_id(app_id)
     if app is None or len(app) != 20:
         return None
@@ -137,7 +140,8 @@ def verify_sealed_env_public_key(
     if age < -_FUTURE_SKEW_TOLERANCE_SECONDS or age > max_age_seconds:
         return None
     message = (
-        b"dstack-sealed-env-pubkey-v1:" + app + root_epoch.to_bytes(4, "big")
+        b"dstack-sealed-env-pubkey-v1:"
+        + app + root_epoch.to_bytes(4, "big") + app_epoch.to_bytes(4, "big")
         + public_key + timestamp.to_bytes(8, "big")
     )
     return _recover_signer(keccak(message), signature)

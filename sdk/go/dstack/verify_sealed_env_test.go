@@ -36,6 +36,7 @@ func TestVerifySealedEnvPublicKey(t *testing.T) {
 		if err := binary.Write(&message, binary.BigEndian, epoch); err != nil {
 			t.Fatal(err)
 		}
+		message.Write(make([]byte, 4))
 		message.Write(pub)
 		if err := binary.Write(&message, binary.BigEndian, timestamp); err != nil {
 			t.Fatal(err)

@@ -86,6 +86,7 @@ class SealedEnvTests(unittest.TestCase):
             b"dstack-sealed-env-pubkey-v1:"
             + bytes.fromhex(self.app_id)
             + self.epoch.to_bytes(4, "big")
+            + (0).to_bytes(4, "big")
             + bytes.fromhex(self.response["public_key"])
             + self.timestamp.to_bytes(8, "big")
         )
@@ -103,7 +104,7 @@ class SealedEnvTests(unittest.TestCase):
     def decrypt(self, payload):
         self.assertNotIn("encrypted_env", payload)
         envelope = json.loads(bytes.fromhex(payload["sealed_env"]))
-        self.assertEqual(set(envelope), {"version", "root_epoch", "enc", "ciphertext"})
+        self.assertEqual(set(envelope), {"version", "root_epoch", "app_epoch", "enc", "ciphertext"})
         self.assertEqual(envelope["version"], 1)
         self.assertEqual(envelope["root_epoch"], self.epoch)
         enc = base64.b64decode(envelope["enc"], validate=True)
@@ -111,14 +112,14 @@ class SealedEnvTests(unittest.TestCase):
         receiver = self.suite.create_recipient_context(
             enc,
             self.recipient.private_key,
-            info=f"dstack-sealed-env-v1:{self.epoch}".encode(),
+            info=f"dstack-sealed-env-v1:{self.epoch}:0".encode(),
         )
         plaintext = json.loads(receiver.open(ciphertext, aad=b""))
         self.assertEqual(
             plaintext, {"env": [{"key": k, "value": v} for k, v in self.envs.items()]}
         )
         wrong_epoch = self.suite.create_recipient_context(
-            enc, self.recipient.private_key, info=b"dstack-sealed-env-v1:0"
+            enc, self.recipient.private_key, info=b"dstack-sealed-env-v1:0:0"
         )
         with self.assertRaises(Exception):
             wrong_epoch.open(ciphertext, aad=b"")
@@ -131,6 +132,29 @@ class SealedEnvTests(unittest.TestCase):
             ):
                 self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None))
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_app_epoch_is_signed_and_used_for_sealing(self):
+        self.response["app_epoch"] = 2
+        digest = keccak(
+            b"dstack-sealed-env-pubkey-v1:" + bytes.fromhex(self.app_id)
+            + self.epoch.to_bytes(4, "big") + (2).to_bytes(4, "big")
+            + bytes.fromhex(self.response["public_key"])
+            + self.timestamp.to_bytes(8, "big")
+        )
+        self.response["signature"] = self.signer.sign_msg_hash(digest).to_bytes().hex()
+        payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+        envelope = json.loads(bytes.fromhex(payload["sealed_env"]))
+        self.assertEqual(envelope["version"], 1)
+        self.assertEqual(envelope["app_epoch"], 2)
+        receiver = self.suite.create_recipient_context(
+            base64.b64decode(envelope["enc"]), self.recipient.private_key,
+            info=f"dstack-sealed-env-v1:{self.epoch}:2".encode(),
+        )
+        plaintext = json.loads(receiver.open(base64.b64decode(envelope["ciphertext"])))
+        self.assertEqual(plaintext, {"env": [{"key": k, "value": v} for k, v in self.envs.items()]})
+        self.response["app_epoch"] = 1
+        with self.assertRaises(ValueError):
+            self.cli.encrypt_env_payload(self.envs, self.app_id, None)
 
     def test_unpinned_signer_never_becomes_trusted(self):
         for pins in [

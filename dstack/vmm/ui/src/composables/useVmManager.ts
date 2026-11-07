@@ -380,7 +380,7 @@ fi
 
   const vmForm: Ref<VmFormState> = ref(createVmFormState(preLaunchScript));
 
-  const availableImages = ref([] as Array<{ name: string; version?: string }>);
+  const availableImages = ref([] as Array<{ name: string; version?: string; sealed_env?: boolean }>);
   const availableGpus = ref([] as Array<any>);
   const availableGpuProducts = ref([] as Array<any>);
   const allowAttachAllGpus = ref(false);
@@ -875,6 +875,9 @@ type CreateVmPayloadSource = {
     return image?.version;
   };
 
+  const supportsSealedEnv = (imageName: string) =>
+    availableImages.value.find((img) => img.name === imageName)?.sealed_env ?? false;
+
   // Mirror of dstack-types::version::Version::parse. The prerelease/build
   // suffix is stripped at the first '-' or '+', then major.minor[.patch] are
   // read as decimal integers with patch defaulting to 0. So 0.6.1, 0.6.1-rc1,
@@ -1233,7 +1236,7 @@ type CreateVmPayloadSource = {
       appIdToUse = await calcAppId(appCompose);
     }
     const keyBytes = hexToBytes(appIdToUse);
-    return encryptEnvPayload(vmmRpc, envs, keyBytes, encryptEnvWithKey);
+    return encryptEnvPayload(vmmRpc, envs, keyBytes, encryptEnvWithKey, supportsSealedEnv(vmForm.value.image));
   }
 
   async function encryptEnvWithKey(envs: EncryptedEnvEntry[], publicKeyBytes: Uint8Array) {
@@ -1368,6 +1371,7 @@ type CreateVmPayloadSource = {
       if (updateDialog.value.resetSecrets) {
         encryptedEnvPayload = await encryptEnvPayload(
           vmmRpc, updateDialog.value.encryptedEnvs, hexToBytes(vm.app_id || ''), encryptEnvWithKey,
+          supportsSealedEnv(updated.image),
         );
         composeNeedsUpdate = true;
       }

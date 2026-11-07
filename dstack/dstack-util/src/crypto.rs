@@ -464,7 +464,7 @@ mod sealed_env_tests {
             let payload = [decode("enc"), decode("ciphertext")].concat();
             let plaintext = sealed_env_decrypt(
                 &hex::decode(fixture["private_key"].as_str().unwrap()).unwrap(),
-                b"dstack-sealed-env-v1:3",
+                b"dstack-sealed-env-v1:3:0",
                 &payload,
             )
             .unwrap();
@@ -477,14 +477,14 @@ mod sealed_env_tests {
     fn sealed_env_round_trips_and_binds_info() {
         let secret = StaticSecret::random_from_rng(rand::thread_rng());
         let public = PublicKey::from(&secret).to_bytes();
-        let info = b"dstack-sealed-env-v1:3";
+        let info = b"dstack-sealed-env-v1:3:0";
         let payload = sealed_env_encrypt(&public, info, b"secret env").unwrap();
         assert_eq!(
             sealed_env_decrypt(&secret.to_bytes(), info, &payload).unwrap(),
             b"secret env"
         );
         assert!(
-            sealed_env_decrypt(&secret.to_bytes(), b"dstack-sealed-env-v1:4", &payload).is_err()
+            sealed_env_decrypt(&secret.to_bytes(), b"dstack-sealed-env-v1:4:0", &payload).is_err()
         );
         let mut tampered = payload;
         *tampered.last_mut().unwrap() ^= 1;

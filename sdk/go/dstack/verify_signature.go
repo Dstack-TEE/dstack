@@ -206,6 +206,11 @@ func VerifySealedEnvPublicKey(
 	timestamp uint64,
 	opts *VerifyEnvEncryptPublicKeyOptions,
 ) ([]byte, error) {
+	return VerifySealedEnvPublicKeyAtEpochs(publicKey, signature, appID, rootEpoch, 0, timestamp, opts)
+}
+
+// VerifySealedEnvPublicKeyAtEpochs recovers the signer with both epoch bindings.
+func VerifySealedEnvPublicKeyAtEpochs(publicKey, signature []byte, appID string, rootEpoch, appEpoch uint32, timestamp uint64, opts *VerifyEnvEncryptPublicKeyOptions) ([]byte, error) {
 	if len(publicKey) != 32 {
 		return nil, fmt.Errorf("invalid public key length: expected 32 bytes, got %d", len(publicKey))
 	}
@@ -230,9 +235,10 @@ func VerifySealedEnvPublicKey(
 	var timestampBytes [8]byte
 	binary.BigEndian.PutUint32(epochBytes[:], rootEpoch)
 	binary.BigEndian.PutUint64(timestampBytes[:], timestamp)
-	message := bytes.Join([][]byte{
-		[]byte("dstack-sealed-env-pubkey-v1:"), app, epochBytes[:], publicKey, timestampBytes[:],
-	}, nil)
+	prefix := "dstack-sealed-env-pubkey-v1:"
+	appBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(appBytes, appEpoch)
+	message := bytes.Join([][]byte{[]byte(prefix), app, epochBytes[:], appBytes, publicKey, timestampBytes[:]}, nil)
 	signer, err := recoverCompressedPublicKey(message, signature)
 	if err != nil {
 		return nil, err

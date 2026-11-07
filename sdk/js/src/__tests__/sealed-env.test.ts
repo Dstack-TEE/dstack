@@ -11,19 +11,19 @@ import { sealEnv } from '../seal-env'
 import { verifySealedEnvPublicKey } from '../verify-env-encrypt-public-key'
 
 describe('sealed env', () => {
-  it('encrypts an HPKE envelope bound to the epoch', async () => {
+  it.each([0, 2])('encrypts an HPKE envelope bound to both epochs (app %s)', async (appEpoch) => {
     const suite = new CipherSuite({ kem: new DhkemX25519HkdfSha256(), kdf: new HkdfSha256(), aead: new Aes256Gcm() })
     const keys = await suite.kem.generateKeyPair()
     const publicKey = Buffer.from(await suite.kem.serializePublicKey(keys.publicKey)).toString('hex')
     const env = [{ key: 'MESSAGE', value: 'hello 世界' }]
-    const sealed = JSON.parse(await sealEnv(env, publicKey, 3))
+    const sealed = JSON.parse(await sealEnv(env, publicKey, 3, appEpoch))
     expect(sealed.version).toBe(1)
     expect(sealed.root_epoch).toBe(3)
-    const params = { recipientKey: keys.privateKey, enc: Buffer.from(sealed.enc, 'base64'), info: new TextEncoder().encode('dstack-sealed-env-v1:3') }
+    const params = { recipientKey: keys.privateKey, enc: Buffer.from(sealed.enc, 'base64'), info: new TextEncoder().encode(`dstack-sealed-env-v1:3:${appEpoch}`) }
     const ct = Buffer.from(sealed.ciphertext, 'base64')
     const plaintext = await suite.open(params, ct)
     expect(JSON.parse(new TextDecoder().decode(plaintext))).toEqual({ env })
-    await expect(suite.open({ ...params, info: new TextEncoder().encode('dstack-sealed-env-v1:4') }, ct)).rejects.toThrow()
+    await expect(suite.open({ ...params, info: new TextEncoder().encode(`dstack-sealed-env-v1:4:${appEpoch}`) }, ct)).rejects.toThrow()
   })
 
   it('binds the public-key signature to app, epoch, key and timestamp', () => {
@@ -35,7 +35,7 @@ describe('sealed env', () => {
     const timestamp = BigInt(Math.floor(Date.now() / 1000))
     const ts = Buffer.alloc(8)
     ts.writeBigUInt64BE(timestamp)
-    const digest = keccak_256(Buffer.concat([Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epoch, publicKey, ts]))
+    const digest = keccak_256(Buffer.concat([Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epoch, Buffer.alloc(4), publicKey, ts]))
     const signed = secp256k1.sign(digest, signer)
     const signature = Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery])
     const trusted = '0x' + Buffer.from(secp256k1.getPublicKey(signer, true)).toString('hex')

@@ -35,16 +35,23 @@ export async function encryptEnvPayload(
   envs: EnvEntry[],
   appId: Uint8Array,
   encryptLegacy: (envs: EnvEntry[], key: Uint8Array) => Promise<Uint8Array>,
+  supportsSealedEnv: boolean,
 ): Promise<EnvPayload> {
+  const legacyPayload = async () => {
+    const legacy = await client.getAppEnvEncryptPubKey({ app_id: appId });
+    return { encrypted_env: await encryptLegacy(envs, legacy.public_key) };
+  };
+  if (!supportsSealedEnv) return legacyPayload();
   let response: VmmTypes.ISealedEnvPubKeyResponse;
   try {
     response = await client.getSealedEnvPubKey({ app_id: appId });
   } catch (error) {
     if (!isUnsupported(error)) throw error;
-    const legacy = await client.getAppEnvEncryptPubKey({ app_id: appId });
-    return { encrypted_env: await encryptLegacy(envs, legacy.public_key) };
+    return legacyPayload();
   }
   const epoch = response.root_epoch;
+  const appEpoch = response.app_epoch ?? 0;
+  if (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff) throw new Error('invalid app epoch');
   if (!Number.isInteger(epoch) || epoch < 0 || epoch > 0xffffffff || response.public_key?.length !== 32) {
     throw new Error('invalid sealed env public key response');
   }
@@ -56,12 +63,13 @@ export async function encryptEnvPayload(
   const recipientPublicKey = await suite.kem.deserializePublicKey(new Uint8Array(response.public_key));
   const { enc, ct } = await suite.seal({
     recipientPublicKey,
-    info: new TextEncoder().encode(`dstack-sealed-env-v1:${epoch}`),
+    info: new TextEncoder().encode(`dstack-sealed-env-v1:${epoch}:${appEpoch}`),
   }, new TextEncoder().encode(JSON.stringify({ env: envs })));
   const base64 = (bytes: ArrayBuffer) => btoa(Array.from(new Uint8Array(bytes), (byte) => String.fromCharCode(byte)).join(''));
   return { sealed_env: new TextEncoder().encode(JSON.stringify({
     version: 1,
     root_epoch: epoch,
+    app_epoch: appEpoch,
     enc: base64(enc),
     ciphertext: base64(ct),
   })) };

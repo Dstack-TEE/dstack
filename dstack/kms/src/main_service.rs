@@ -660,6 +660,9 @@ impl KmsRpc for RpcHandler {
             .context("KMS self authorization failed")?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
+        if request.app_epoch.is_some() || request.root_epoch.is_some() {
+            bail!("epoch-aware applications must use GetSealedEnvPubKey");
+        }
         let secret = kdf::derive_dh_secret(
             &root.ca.key,
             &[&request.app_id[..], "env-encrypt-key".as_bytes()],
@@ -710,6 +713,9 @@ impl KmsRpc for RpcHandler {
         }
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
+        if request.app_epoch.unwrap_or(0) != 0 {
+            bail!("requested app epoch is not active");
+        }
         let secret = derive_sealed_env_key(root, &request.app_id)?;
         let public_key =
             x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
@@ -717,8 +723,9 @@ impl KmsRpc for RpcHandler {
             .duration_since(std::time::UNIX_EPOCH)
             .context("system time before UNIX epoch")?
             .as_secs();
-        let mut message = Vec::with_capacity(4 + 32 + 8);
+        let mut message = Vec::with_capacity(8 + 32 + 8);
         message.extend_from_slice(&epoch.to_be_bytes());
+        message.extend_from_slice(&0u32.to_be_bytes());
         message.extend_from_slice(&public_key);
         message.extend_from_slice(&timestamp.to_be_bytes());
         let signature = sign_message(
@@ -728,6 +735,7 @@ impl KmsRpc for RpcHandler {
             &message,
         )?;
         Ok(SealedEnvPubKeyResponse {
+            app_epoch: 0,
             public_key: public_key.to_vec(),
             root_epoch: epoch,
             timestamp,
