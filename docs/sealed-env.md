@@ -62,7 +62,7 @@ maximum age 300 seconds, future clock tolerance 60 seconds).
 ## Image compatibility
 
 New image `metadata.json` files declare `"sealed_env": true`; `ListImages` exposes
-this flag. Missing metadata means legacy encryption only. The UI uses the target
+this flag. Missing metadata means legacy encryption only. The UI and CLI use the target
 image for both creation and environment updates, including image changes.
 Old or unknown images use legacy encryption even with a capable KMS. For capable
 images, legacy fallback is allowed only when the SealedEnv RPC is explicitly absent.
@@ -89,7 +89,10 @@ The copy limits are 384 KiB for sealed JSON and 256 KiB for legacy ciphertext.
 At boot, sealed ciphertext explicitly selects its historical root/app epoch pair. The
 guest obtains that epoch's app key over the already trusted KMS connection,
 decrypts, and seals to the current epoch. Legacy ciphertext uses the legacy
-key path at app epoch zero, trying earlier root epochs when necessary, and is converted to SealedEnv.
+key path at app epoch zero, trying earlier root epochs when necessary. It is
+converted to SealedEnv only when decrypted with a historical epoch. Ciphertext
+already decryptable with the current keys is left unchanged, even in the legacy
+format; an older KMS need not provide a SealedEnv key in that case.
 A future epoch or failed authentication stops environment provisioning.
 
 The guest sends `UpdateSealedEnv` through the host channel before application

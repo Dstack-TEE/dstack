@@ -130,7 +130,7 @@ class SealedEnvTests(unittest.TestCase):
                 self.subTest(pin=pin),
                 patch.object(VMM_CLI, "load_whitelist", return_value=[pin]),
             ):
-                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None))
+                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None, True))
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_app_epoch_is_signed_and_used_for_sealing(self):
@@ -142,7 +142,7 @@ class SealedEnvTests(unittest.TestCase):
             + self.timestamp.to_bytes(8, "big")
         )
         self.response["signature"] = self.signer.sign_msg_hash(digest).to_bytes().hex()
-        payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+        payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
         envelope = json.loads(bytes.fromhex(payload["sealed_env"]))
         self.assertEqual(envelope["version"], 1)
         self.assertEqual(envelope["app_epoch"], 2)
@@ -154,7 +154,7 @@ class SealedEnvTests(unittest.TestCase):
         self.assertEqual(plaintext, {"env": [{"key": k, "value": v} for k, v in self.envs.items()]})
         self.response["app_epoch"] = 1
         with self.assertRaises(ValueError):
-            self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+            self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
 
     def test_unpinned_signer_never_becomes_trusted(self):
         for pins in [
@@ -167,7 +167,7 @@ class SealedEnvTests(unittest.TestCase):
                 patch.object(self.cli, "confirm_untrusted_signer") as confirm,
             ):
                 with self.assertRaisesRegex(ValueError, "not pinned"):
-                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
                 confirm.assert_not_called()
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
@@ -193,11 +193,11 @@ class SealedEnvTests(unittest.TestCase):
                     {**self.response, field: value},
                 )
                 with self.assertRaises(Exception):
-                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
         self.cli.client.request.return_value = (200, self.response)
         for app_id in ["55" * 20, "11" * 19]:
             with self.assertRaises(ValueError):
-                self.cli.encrypt_env_payload(self.envs, app_id, None)
+                self.cli.encrypt_env_payload(self.envs, app_id, None, True)
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_pinned_signed_key_timestamp_window(self):
@@ -205,13 +205,13 @@ class SealedEnvTests(unittest.TestCase):
             with self.subTest(age=age), patch.object(
                 VMM_CLI.time, "time", return_value=self.timestamp + age
             ):
-                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None))
+                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None, True))
         for age, reason in [(-61, "future"), (301, "stale")]:
             with self.subTest(age=age), patch.object(
                 VMM_CLI.time, "time", return_value=self.timestamp + age
             ):
                 with self.assertRaisesRegex(ValueError, reason):
-                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_public_key_request_contains_only_app_id(self):
@@ -228,14 +228,21 @@ class SealedEnvTests(unittest.TestCase):
                 status,
                 {"error": "Service not found: GetSealedEnvPubKey"},
             )
-            payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+            payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
             self.assertEqual(set(payload), {"encrypted_env"})
             self.cli.get_app_env_encrypt_pub_key.assert_called_with(self.app_id, None)
+        for upstream in ["400 Bad Request", "404 Not Found"]:
+            self.cli.client.request.return_value = (400, {
+                "error": f"Request failed with status={upstream}, error="
+                + json.dumps({"error": "Service not found: GetSealedEnvPubKey"})
+            })
+            payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
+            self.assertEqual(set(payload), {"encrypted_env"})
         self.cli.get_app_env_encrypt_pub_key.side_effect = ValueError(
             "legacy trust rejected"
         )
         with self.assertRaisesRegex(ValueError, "legacy trust rejected"):
-            self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+            self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
 
     def test_errors_and_bad_responses_do_not_downgrade(self):
         for status, body in [
@@ -244,16 +251,19 @@ class SealedEnvTests(unittest.TestCase):
             (404, "Not Found"),
             (400, {"error": "invalid app"}),
             (500, {"error": "unavailable"}),
+            (400, {"error": 'Request failed with status=500 Internal Server Error, error={"error":"Service not found: GetSealedEnvPubKey"}'}),
+            (400, {"error": 'Request failed with status=404 Not Found, error={"error":"other service"}'}),
+            (400, {"error": 'Request failed with status=404 Not Found, error=invalid'}),
             (200, {}),
             (200, "invalid JSON"),
         ]:
             with self.subTest(status=status, body=body):
                 self.cli.client.request.return_value = (status, body)
                 with self.assertRaises(Exception):
-                    self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
         self.cli.client.request.side_effect = TimeoutError("test timeout")
         with self.assertRaises(TimeoutError):
-            self.cli.encrypt_env_payload(self.envs, self.app_id, None)
+            self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_direct_kms_verifies_pin_and_does_not_forward_vmm_credentials(self):
@@ -261,11 +271,32 @@ class SealedEnvTests(unittest.TestCase):
             client.return_value.request.return_value = (200, self.response)
             self.decrypt(
                 self.cli.encrypt_env_payload(
-                    self.envs, self.app_id, "https://kms.example"
+                    self.envs, self.app_id, "https://kms.example", True
                 )
             )
             client.assert_called_once_with("https://kms.example", verify_tls=False)
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
+
+    def test_image_downgrade_and_env_replacement_share_one_request(self):
+        def rpc(method, params=None):
+            if method == "GetInfo":
+                return {"found": True, "info": {"app_id": self.app_id, "configuration": {
+                    "image": "new", "compose_file": '{"kms_enabled":true}',
+                }}}
+            if method == "ListImages":
+                return {"images": [{"name": "new", "sealed_env": True}, {"name": "old"}]}
+            return {}
+        self.cli.rpc_call = Mock(side_effect=rpc)
+        with patch.object(VMM_CLI, "parse_env_file", return_value=self.envs), contextlib.redirect_stdout(io.StringIO()):
+            self.cli.update_vm("vm", image="old", env_file="env", kms_urls=["https://kms.example"])
+        calls = self.cli.rpc_call.call_args_list
+        self.assertNotIn("ResizeVm", [call.args[0] for call in calls])
+        method, payload = calls[-1].args
+        self.assertEqual(method, "UpgradeApp")
+        self.assertEqual(payload["image"], "old")
+        self.assertIn("encrypted_env", payload)
+        self.assertNotIn("sealed_env", payload)
+        self.cli.client.request.assert_not_called()
 
     def test_create_update_and_update_env_send_only_the_negotiated_field(self):
         compose = json.dumps({"kms_enabled": True})
@@ -299,12 +330,14 @@ class SealedEnvTests(unittest.TestCase):
         )
 
         def rpc(method, params=None):
+            if method == "ListImages":
+                return {"images": [{"name": "image", **capability}]}
             if method == "GetInfo":
                 return {
                     "found": True,
                     "info": {
                         "app_id": self.app_id,
-                        "configuration": {"compose_file": compose},
+                        "configuration": {"compose_file": compose, "image": "image"},
                     },
                 }
             return {"id": "vm"}
@@ -317,7 +350,7 @@ class SealedEnvTests(unittest.TestCase):
             patch.object(VMM_CLI, "VmmClient") as client,
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            for supported in [True, False]:
+            for capability, supported in [({"sealed_env": True}, True), ({"sealed_env": True}, False), ({"sealed_env": False}, True), ({}, True)]:
                 client.return_value.request.return_value = (
                     (200, self.response)
                     if supported
@@ -335,7 +368,7 @@ class SealedEnvTests(unittest.TestCase):
                         action()
                         method, payload = self.cli.rpc_call.call_args.args
                         self.assertIn(method, ["CreateVm", "UpgradeApp"])
-                        if supported:
+                        if supported and capability.get("sealed_env"):
                             self.decrypt(payload)
                         else:
                             self.assertIn("encrypted_env", payload)
