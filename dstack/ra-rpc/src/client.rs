@@ -14,6 +14,12 @@ use ra_tls::{
     traits::CertExt,
 };
 use reqwest::{tls::TlsInfo, Certificate, Client, Identity, Response};
+use rustls::{
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    crypto::WebPkiSupportedAlgorithms,
+    pki_types::{CertificateDer, ServerName, UnixTime},
+    DigitallySignedStruct, SignatureScheme,
+};
 use serde::{de::DeserializeOwned, Serialize};
 
 use bon::Builder;
@@ -102,62 +108,53 @@ impl RaClientConfig {
 /// Attestation is checked on the response, but TLS must still prove possession
 /// of the attested certificate key. Reqwest's no-verifier also skips that proof.
 #[derive(Debug)]
-struct AttestationServerVerifier(Arc<rustls::crypto::CryptoProvider>);
+struct AttestationServerVerifier(WebPkiSupportedAlgorithms);
 
-impl rustls::client::danger::ServerCertVerifier for AttestationServerVerifier {
+impl ServerCertVerifier for AttestationServerVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
         &self,
         message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        signature: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            signature,
-            &self.0.signature_verification_algorithms,
-        )
+        cert: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, signature, &self.0)
     }
 
     fn verify_tls13_signature(
         &self,
         message: &[u8],
-        cert: &rustls::pki_types::CertificateDer<'_>,
-        signature: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            signature,
-            &self.0.signature_verification_algorithms,
-        )
+        cert: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, signature, &self.0)
     }
 
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_schemes()
     }
 }
 
 fn attestation_tls_config(cert: Option<&str>, key: Option<&str>) -> Result<rustls::ClientConfig> {
-    use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+    use rustls::pki_types::{pem::PemObject, PrivateKeyDer};
     let provider = rustls::crypto::CryptoProvider::get_default()
         .cloned()
         .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
-    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let verifier = AttestationServerVerifier(provider.signature_verification_algorithms);
+    let builder = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AttestationServerVerifier(provider)));
+        .with_custom_certificate_verifier(Arc::new(verifier));
     match (cert, key) {
         (Some(cert), Some(key)) => builder
             .with_client_auth_cert(
