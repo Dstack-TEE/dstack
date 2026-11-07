@@ -457,11 +457,11 @@ contract DstackKmsTest is Test {
         returns (DstackKms.AuthorizationResult memory)
     {
         DstackKms.AuthorizationRequest memory request =
-            DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(false, 0));
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalU256(false, 0), DstackKms.OptionalU256(false, 0));
         return isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
     }
 
-    function test_CheckAuthorization_OptionalEpochDistinguishesZeroFromDefault() public {
+    function test_CheckAuthorization_OptionalU256DistinguishesZeroFromDefault() public {
         IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
@@ -472,7 +472,7 @@ contract DstackKmsTest is Test {
         vm.stopPrank();
 
         DstackKms.AuthorizationRequest memory request =
-            DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(true, 1));
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalU256(false, 0), DstackKms.OptionalU256(true, 1));
         DstackKms.AuthorizationResult memory result = kms.authorizeKms(request);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested root epoch is not active");
@@ -529,7 +529,7 @@ contract DstackKmsTest is Test {
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
         DstackKms.AuthorizationRequest memory appRequest =
-            DstackKms.AuthorizationRequest(info, DstackKms.OptionalEpoch(true, 1), DstackKms.OptionalEpoch(false, 0));
+            DstackKms.AuthorizationRequest(info, DstackKms.OptionalU256(true, 1), DstackKms.OptionalU256(false, 0));
         result = kms.authorizeApp(appRequest);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested app epoch must be zero");

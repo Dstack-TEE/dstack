@@ -14,7 +14,7 @@ import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeabl
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
-    struct OptionalEpoch {
+    struct OptionalU256 {
         bool isSet;
         uint256 value;
     }
@@ -22,8 +22,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     struct AuthorizationRequest {
         AppInfo appInfo;
         // Reserved for application key rotation; only zero is currently supported.
-        OptionalEpoch requestedAppEpoch;
-        OptionalEpoch requestedRootEpoch;
+        OptionalU256 requestedAppEpoch;
+        OptionalU256 requestedRootEpoch;
     }
 
     struct AuthorizationResult {
