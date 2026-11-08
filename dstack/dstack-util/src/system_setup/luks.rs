@@ -722,12 +722,7 @@ impl TestDisk {
     /// A disk formatted with `key` and recording `epochs`, or `None` without
     /// cryptsetup.
     fn new(key: &str, epochs: Option<(u32, u32)>) -> Option<Self> {
-        if Command::new("cryptsetup")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            eprintln!("cryptsetup is unavailable; skipping");
+        if !cryptsetup_available() {
             return None;
         }
         let dir = tempfile::tempdir().unwrap();
@@ -1012,4 +1007,13 @@ fn header_copies_that_disagree_on_the_epochs_are_rejected() {
             "{secondary}: {err:#}"
         );
     }
+}
+
+#[cfg(test)]
+pub(super) fn cryptsetup_available() -> bool {
+    let available = Command::new("cryptsetup").arg("--version").output().is_ok();
+    if !available {
+        eprintln!("cryptsetup is unavailable; skipping");
+    }
+    available
 }

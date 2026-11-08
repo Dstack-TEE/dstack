@@ -4725,12 +4725,11 @@ mod data_disk_epoch_tests {
     const OLD_DISK_KEY: [u8; 32] = [4; 32];
 
     fn disk_tools_available() -> bool {
-        let cryptsetup = Command::new("cryptsetup").arg("--version").output().is_ok();
         let root = fs::metadata("/proc/self").is_ok_and(|meta| meta.uid() == 0);
-        if !(cryptsetup && root) {
-            eprintln!("cryptsetup or root is unavailable; skipping");
+        if !root {
+            eprintln!("root is unavailable; skipping");
         }
-        cryptsetup && root
+        root && luks::cryptsetup_available()
     }
 
     fn keys_at(root_epoch: u32, app_epoch: u32) -> AppKeys {
