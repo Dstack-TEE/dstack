@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Runs the tests that reproduce open review findings. Each one asserts the
+# behavior a finding says should hold, so it fails until that finding is
+# fixed; the regular suites skip them (`#[ignore = "finding ..."]`, forge
+# `RUN_FINDINGS`). This job is informational and never blocks a merge: its
+# summary lists which findings still reproduce. A test that starts passing
+# means its finding is fixed and its skip marker should be removed.
+
+name: Review findings
+
+on:
+  pull_request:
+    paths:
+      - 'dstack/**'
+      - '.github/workflows/review-findings.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-findings:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: dstack
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+
+      - name: Run finding reproductions
+        run: |
+          set +e
+          # Every finding test is expected to fail, so keep going past the
+          # first failing crate to report all of them.
+          cargo test --no-fail-fast -p dstack-kms -p dstack-util -p dstack-guest-agent -p dstack-vmm -p dstack-auth \
+            -- --ignored finding_ 2>&1 | tee findings.log
+          {
+            echo '## Rust finding reproductions'
+            echo
+            echo 'A failing test means its finding still reproduces.'
+            echo
+            echo '```'
+            grep -E '^test .*finding_.* \.\.\. ' findings.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The data disk tests drive cryptsetup on file-backed LUKS images and need
+  # root; as an ordinary user they skip themselves, so `rust-checks` never
+  # exercises them. Run them here as root.
+  disk-tests-as-root:
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: dstack
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+
+      # 2.5 or newer: the token import uses `--token-replace`.
+      - name: Install cryptsetup
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq cryptsetup-bin
+
+      - name: Build dstack-util tests
+        run: |
+          bin=$(cargo test -p dstack-util --no-run --message-format=json \
+            | jq -r 'select(.executable != null and .target.name == "dstack-util") | .executable')
+          echo "DSTACK_UTIL_TESTS=$bin" >> "$GITHUB_ENV"
+
+      - name: Run data disk tests as root
+        run: sudo "$DSTACK_UTIL_TESTS" --test-threads=1 data_disk_epoch_tests luks
+
+  forge-findings:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: dstack/kms/auth-eth
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout contract dependencies
+        working-directory: .
+        run: |
+          git submodule update --init --recursive --depth 1 -- \
+            dstack/kms/auth-eth/lib/forge-std \
+            dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
+            dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Install OpenZeppelin upgrades validator
+        run: npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
+
+      - name: Run finding reproductions
+        env:
+          RUN_FINDINGS: 'true'
+        run: |
+          set +e
+          forge clean
+          forge test --ffi --match-test finding 2>&1 | tee findings.log
+          {
+            echo '## Contract finding reproductions'
+            echo
+            echo 'A failing test means its finding still reproduces.'
+            echo
+            echo '```'
+            grep -E '^\[(PASS|FAIL)' findings.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
