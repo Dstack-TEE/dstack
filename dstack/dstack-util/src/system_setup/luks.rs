@@ -986,3 +986,30 @@ fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
         "{error:#}"
     );
 }
+
+#[test]
+fn header_copies_that_disagree_on_the_epochs_are_rejected() {
+    let with_tokens = |primary: &str, secondary: &str| {
+        let mut header = include_bytes!("../../tests/fixtures/luks_header_good").to_vec();
+        let hdr_size = u64::from_be_bytes(header[8..16].try_into().unwrap()) as usize;
+        let (first, second) = header.split_at_mut(hdr_size);
+        for (copy, token) in [(first, primary), (second, secondary)] {
+            let replacement = format!(r#""tokens":{{"0":{token}}}"#);
+            let patched = patch_luks_json(copy, br#""tokens":{}"#, replacement.as_bytes());
+            assert_eq!(patched, 1, "expected to patch one header copy");
+        }
+        validate_luks2_headers(&mut &header[..])
+    };
+    let token = |root: u32, app: u32| {
+        format!(r#"{{"type":"dstack-kms","keyslots":["0"],"root_epoch":{root},"app_epoch":{app}}}"#)
+    };
+    let state = with_tokens(&token(2, 1), &token(2, 1)).unwrap();
+    assert_eq!((state.root_epoch, state.app_epoch), (Some(2), 1));
+    for secondary in [token(3, 1), token(2, 0)] {
+        let err = with_tokens(&token(2, 1), &secondary).unwrap_err();
+        assert!(
+            err.to_string().contains("LUKS header copies disagree"),
+            "{secondary}: {err:#}"
+        );
+    }
+}
