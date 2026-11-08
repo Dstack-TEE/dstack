@@ -4599,6 +4599,32 @@ mod sealed_env_file_tests {
     }
 
     #[test]
+    #[ignore = "finding CR3: expected to fail until CR3 is fixed"]
+    fn finding_cr3_guest_resolves_the_legacy_env_that_replaced_a_sealed_env() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(SYS_CONFIG), br#"{"vm_config":""}"#).unwrap();
+        fs::write(
+            dir.path().join(APP_COMPOSE),
+            br#"{"manifest_version":"2","name":"test","runner":"docker-compose"}"#,
+        )
+        .unwrap();
+        // The VMM published the owner's legacy env over an older sealed env
+        // and was interrupted before removing the sealed file it replaces.
+        let sealed_path = dir.path().join(SEALED_ENV);
+        fs::write(&sealed_path, b"replaced sealed env").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&sealed_path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+            .unwrap();
+        fs::write(dir.path().join(ENCRYPTED_ENV), b"owner legacy env").unwrap();
+        let shared = HostShared::load(dir.path()).unwrap();
+        assert_eq!(shared.sealed_env, None);
+        assert_eq!(shared.encrypted_env, b"owner legacy env");
+    }
+
+    #[test]
     fn missing_empty_and_unreadable_env_are_distinct() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(SEALED_ENV);
