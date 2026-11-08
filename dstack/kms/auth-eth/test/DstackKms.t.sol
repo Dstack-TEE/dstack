@@ -12,6 +12,7 @@ import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
 import "../contracts/IAppAuth.sol";
 import { DstackKms as DstackKmsV059 } from "../contracts/test-utils/reference/v0.5.9/DstackKmsV059.sol";
+import { DstackApp as DstackAppV059 } from "../contracts/test-utils/reference/v0.5.9/DstackAppV059.sol";
 
 contract DstackKmsTest is Test {
     DstackKms public kms;
@@ -1316,5 +1317,93 @@ contract DstackKmsTest is Test {
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
         vm.stopPrank();
         assertTrue(authorize(info, true).authorized, "released KMS policy is root epoch 0 policy");
+    }
+
+    function test_AppCannotRequestAPendingRootEpoch() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        registerNextRootEpoch();
+        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpoch(1, info.osImageHash);
+        vm.stopPrank();
+        assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).authorized);
+        AuthorizationResult memory result = kms.authorizeApp(epochRequest(info, 1, 0));
+        assertFalse(result.authorized, "apps cannot fetch keys of a pending root epoch");
+        assertEq(result.rejectionReason, "Requested root epoch is not active");
+    }
+
+    function test_PopRootEpochRejectsAnEpochBelowTheLatest() public {
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        (,,, bytes32 h1) = kms.rootEpoch(1);
+        vm.expectRevert("Not the pending root epoch");
+        kms.popRootEpoch(1, h1);
+        vm.stopPrank();
+        assertEq(kms.rootEpochCount(), 3);
+    }
+
+    function test_LegacyRemoveKmsDeviceKeepsEarlierRowsAfterActivation() public {
+        bytes32 deviceId = bytes32(uint256(123));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        activateNextRootEpoch();
+        kms.addKmsDeviceAtEpoch(0, deviceId);
+        kms.addKmsDeviceAtEpoch(1, deviceId);
+        kms.removeKmsDevice(deviceId);
+        vm.stopPrank();
+        assertFalse(kms.kmsAllowedDeviceIdsAtEpoch(1, deviceId));
+        assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(0, deviceId), "removing from the current row must keep older rows");
+    }
+
+    function test_ReleasedAppPolicyAuthorizesThroughTheLegacyInterface() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        info.appId = address(
+            new ERC1967Proxy(
+                address(new DstackAppV059()),
+                abi.encodeWithSignature(
+                    "initialize(address,bool,bool,bytes32,bytes32)", user, false, false, info.deviceId, info.composeHash
+                )
+            )
+        );
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        kms.addOsImageHash(info.osImageHash);
+        kms.registerApp(info.appId);
+        vm.stopPrank();
+        assertEq(kms.currentAppEpoch(info.appId), 0);
+        AuthorizationResult memory result = authorize(info, false);
+        assertTrue(result.authorized, result.rejectionReason);
+        result = kms.authorizeApp(epochRequest(info, 0, 0));
+        assertTrue(result.authorized, result.rejectionReason);
+        (bool allowed,) = kms.isAppAllowed(info);
+        assertTrue(allowed);
+        info.composeHash = bytes32(uint256(1));
+        result = authorize(info, false);
+        assertFalse(result.authorized);
+        assertEq(result.rejectionReason, "Compose hash not allowed");
+    }
+
+    function test_LegacyIsAppAllowedRejectsAppsPastEpochZero() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        kms.addOsImageHash(info.osImageHash);
+        info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        vm.stopPrank();
+        DstackApp policy = DstackApp(info.appId);
+        vm.startPrank(user);
+        policy.advanceAppEpoch(0);
+        policy.addComposeHash(info.composeHash);
+        policy.addDevice(info.deviceId);
+        vm.stopPrank();
+        assertTrue(authorize(info, false).authorized);
+        (bool allowed, string memory reason) = kms.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "App epoch requires epoch-aware authorization");
     }
 }
