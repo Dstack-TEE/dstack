@@ -45,6 +45,38 @@ describe('sealed env', () => {
     expect(verifySealedEnvPublicKey(publicKey, signature, '01', 3, timestamp)).toBeNull()
   })
 
+  const signSealedKey = (appEpoch: number, timestamp: bigint) => {
+    const signer = new Uint8Array(32).fill(7)
+    const app = Buffer.alloc(20, 1)
+    const publicKey = Buffer.alloc(32, 2)
+    const epochs = Buffer.alloc(8)
+    epochs.writeUInt32BE(3, 0)
+    epochs.writeUInt32BE(appEpoch, 4)
+    const ts = Buffer.alloc(8)
+    ts.writeBigUInt64BE(timestamp)
+    const digest = keccak_256(Buffer.concat([Buffer.from('dstack-sealed-env-pubkey-v1:'), app, epochs, publicKey, ts]))
+    const signed = secp256k1.sign(digest, signer)
+    return {
+      app: app.toString('hex'),
+      publicKey,
+      signature: Uint8Array.from([...signed.toCompactRawBytes(), signed.recovery]),
+      trusted: '0x' + Buffer.from(secp256k1.getPublicKey(signer, true)).toString('hex'),
+    }
+  }
+
+  it('recovers the trusted signer for a non-zero app epoch only under that epoch', () => {
+    const now = BigInt(Math.floor(Date.now() / 1000))
+    const { app, publicKey, signature, trusted } = signSealedKey(2, now)
+    expect(verifySealedEnvPublicKey(publicKey, signature, app, 3, now, { appEpoch: 2 })).toBe(trusted)
+    expect(verifySealedEnvPublicKey(publicKey, signature, app, 3, now)).not.toBe(trusted)
+  })
+
+  it.each([[60n, true], [61n, false]])('tolerates at most 60 seconds of future skew (%s)', (skew, accepted) => {
+    const timestamp = BigInt(Math.floor(Date.now() / 1000)) + skew
+    const { app, publicKey, signature, trusted } = signSealedKey(0, timestamp)
+    expect(verifySealedEnvPublicKey(publicKey, signature, app, 3, timestamp)).toBe(accepted ? trusted : null)
+  })
+
   it.each([-1, 2 ** 32, 0.5, NaN])('rejects invalid epoch %s', async (epoch) => {
     await expect(sealEnv([], '', epoch)).rejects.toThrow('uint32')
   })
