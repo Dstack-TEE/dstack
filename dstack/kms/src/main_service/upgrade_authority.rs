@@ -771,7 +771,22 @@ pub(crate) mod tests {
                     .unwrap();
             }
         }
-        for ((route, body), operation) in server.join().unwrap().into_iter().zip(operations) {
+        let wire_names = [
+            "kms_bootstrap",
+            "kms_serve",
+            "kms_export_keys",
+            "kms_import_keys",
+            "app_get_key",
+            "app_get_cert",
+        ];
+        for (((route, body), operation), name) in server
+            .join()
+            .unwrap()
+            .into_iter()
+            .zip(operations)
+            .zip(wire_names)
+        {
+            assert_eq!(body["operation"], name);
             assert_eq!(
                 route,
                 if operation.is_kms() {
@@ -825,7 +840,7 @@ pub(crate) mod tests {
             .unwrap();
         assert!(
             !auth
-                .check_kms_authorization(&info, Operation::KmsImportKeys, Some(2))
+                .authorize_kms(&info, Operation::KmsImportKeys, Some(2))
                 .await
                 .unwrap()
                 .is_allowed
