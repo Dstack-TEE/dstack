@@ -2415,10 +2415,10 @@ impl HostShared {
         let response = request_app_keys(
             kms_url.clone(),
             rpc::GetAppKeyRequest {
-                app_epoch,
                 api_version: 1,
                 vm_config: self.sys_config.vm_config.clone(),
                 root_epoch,
+                app_epoch,
             },
             cert_pair,
             attestation_verifier(&self.sys_config)?,
@@ -2443,10 +2443,10 @@ impl HostShared {
             k256_signature: response.k256_signature,
             gateway_app_id: response.gateway_app_id,
             key_provider: KeyProvider::Kms {
-                app_epoch: response.app_epoch,
                 url: kms_url,
                 pubkey: root_pubkey,
                 root_epoch: served,
+                app_epoch: response.app_epoch,
             },
         };
         Ok((keys, response.os_image_hash))

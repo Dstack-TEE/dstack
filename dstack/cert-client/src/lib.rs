@@ -183,10 +183,10 @@ impl CertRequestClient {
         };
         let response = client
             .get_app_key(GetAppKeyRequest {
-                app_epoch,
                 api_version: 1,
                 vm_config: vm_config.clone(),
                 root_epoch,
+                app_epoch,
             })
             .await?;
         if root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
@@ -641,10 +641,10 @@ mod tests {
             }
         };
         let request = || GetAppKeyRequest {
-            app_epoch: None,
             api_version: 1,
             vm_config: String::new(),
             root_epoch: None,
+            app_epoch: None,
         };
         let result = request_app_keys(
             url.clone(),
@@ -663,10 +663,10 @@ mod tests {
         let other_ca = kms_root().pem_cert;
         for requested_root_epoch in [None, Some(0), Some(1)] {
             let request = || GetAppKeyRequest {
-                app_epoch: None,
                 api_version: 1,
                 vm_config: String::new(),
                 root_epoch: requested_root_epoch,
+                app_epoch: None,
             };
             let selected = AppKeyResponse {
                 root_epoch: requested_root_epoch.unwrap_or(1),
