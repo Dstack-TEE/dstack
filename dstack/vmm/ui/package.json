@@ -13,5 +13,9 @@
     "protobufjs": "^7.5.8",
     "protobufjs-cli": "^1.3.3",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "@hpke/core": "1.10.0",
+    "@hpke/dhkem-x25519": "1.8.0"
   }
 }

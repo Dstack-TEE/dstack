@@ -21,6 +21,8 @@ const RPC_CERT: &str = "rpc.crt";
 const RPC_KEY: &str = "rpc.key";
 const RPC_DOMAIN: &str = "rpc-domain";
 const K256_KEY: &str = "root-k256.key";
+const ROOT_EPOCH: &str = "root-epoch";
+const EPOCHS_DIR: &str = "epochs";
 const BOOTSTRAP_INFO: &str = "bootstrap-info.json";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -130,9 +132,7 @@ impl KmsConfig {
     }
 
     pub fn keys_exists(&self) -> bool {
-        self.tmp_ca_cert().exists()
-            && self.tmp_ca_key().exists()
-            && self.root_ca_cert().exists()
+        self.root_ca_cert().exists()
             && self.root_ca_key().exists()
             && self.rpc_cert().exists()
             && self.rpc_key().exists()
@@ -171,6 +171,28 @@ impl KmsConfig {
         self.cert_dir.join(K256_KEY)
     }
 
+    /// Records the newest epoch this KMS holds, whose roots are the top-level
+    /// root files. Absent means 0.
+    pub fn root_epoch(&self) -> PathBuf {
+        self.cert_dir.join(ROOT_EPOCH)
+    }
+
+    /// Root key paths of `epoch` in a keyring whose newest epoch is `latest`:
+    /// the newest roots are the top-level root files, so paths that predate
+    /// epochs are unchanged. Older epochs live in `epochs/<n>/`.
+    pub fn root_key_paths(&self, epoch: u32, latest: u32) -> RootKeyPaths {
+        let dir = if epoch == latest {
+            self.cert_dir.clone()
+        } else {
+            self.cert_dir.join(EPOCHS_DIR).join(epoch.to_string())
+        };
+        RootKeyPaths {
+            ca_cert: dir.join(ROOT_CA_CERT),
+            ca_key: dir.join(ROOT_CA_KEY),
+            k256_key: dir.join(K256_KEY),
+        }
+    }
+
     pub fn bootstrap_info(&self) -> PathBuf {
         self.cert_dir.join(BOOTSTRAP_INFO)
     }
@@ -207,6 +229,12 @@ fn default_webhook_timeout() -> Duration {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Dev {
     pub gateway_app_id: String,
+}
+
+pub(crate) struct RootKeyPaths {
+    pub ca_cert: PathBuf,
+    pub ca_key: PathBuf,
+    pub k256_key: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize)]

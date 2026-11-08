@@ -189,6 +189,12 @@ message GetKeyRequest {
   // signing method: v0's `secp256k1_prehashed` was a mode wearing an
   // algorithm's name, and it does not appear here.
   string algorithm = 2;
+  // KMS root key epoch to derive from. Unset means the current epoch, which is
+  // what new keys should use; epoch 0 is the original root keys. Name an older
+  // epoch only to reach a key from before a KMS root key rotation, for example
+  // to migrate data or assets off it.
+  optional uint32 root_epoch = 3;
+  optional uint32 app_epoch = 4;
 }
 
 message GetKeyResponse {
@@ -209,6 +215,10 @@ message GetKeyResponse {
   // unversioned surface returns. Link [0] is not: its claim encoding is new,
   // and it is deliberately not one the v0 claim format can produce.
   repeated bytes signature_chain = 3;
+  // KMS root key epoch the key was derived from. Link [1] is signed by that
+  // epoch's KMS root key.
+  uint32 root_epoch = 4;
+  uint32 app_epoch = 5;
 }
 
 // ---------------------------------------------------------------------------

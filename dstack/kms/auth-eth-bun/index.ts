@@ -7,7 +7,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { createPublicClient, http, type Address, type Hex } from 'viem';
+import { createPublicClient, http, keccak256, toBytes, type Address, type Hex } from 'viem';
 
 // zod schemas for validation - compatible with original fastify implementation
 const boundedHex = (bytes: number, description: string) =>
@@ -29,8 +29,19 @@ const BootInfoSchema = z.object({
   deviceId: boundedHex(32, 'device ID'),
   tcbStatus: z.string().max(128).optional().default(''),
   advisoryIds: z.array(z.string().max(256)).max(128).optional().default([]),
-  mrSystem: boundedHex(32, 'system MR measurement').optional().default('')
+  mrSystem: boundedHex(32, 'system MR measurement').optional().default(''),
+  // The root epoch the asking KMS serves and its chain hash; absent from a KMS
+  // that predates root epochs, and from KMS checks made while onboarding.
+  rootEpoch: z.number().int().min(0).optional(),
+  rootEpochHash: boundedHex(32, 'root epoch chain hash').optional()
 });
+
+const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  operation: z.enum(['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys', 'app_get_key', 'app_get_cert']),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+  requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+});
+type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
@@ -38,11 +49,79 @@ const BootResponseSchema = z.object({
   gatewayAppId: z.string()
 });
 
+// The current root epoch and its chain hash, which commits to the root public
+// keys of epochs 0..=rootEpoch; both absent when none is registered.
+type RootEpochInfo = { rootEpoch?: number; rootEpochHash?: Hex };
+
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 
+const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
+
+// Only a KMS serving the current root epoch, with the registered keys up to it,
+// may authorize. A KMS that predates root epochs reports none and holds only
+// epoch 0; KMS checks made while onboarding carry none and are not limited.
+function rootEpochDenial(bootInfo: BootInfo, isKms: boolean, current: RootEpochInfo): string | undefined {
+  const currentEpoch = current.rootEpoch ?? 0;
+  if (bootInfo.rootEpoch === undefined) {
+    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+  }
+  if (current.rootEpoch === undefined) {
+    return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
+  }
+  if (bootInfo.rootEpoch !== currentEpoch) {
+    return `the KMS serves root epoch ${bootInfo.rootEpoch}, but ${currentEpoch} is current`;
+  }
+  if (normHash(bootInfo.rootEpochHash) !== normHash(current.rootEpochHash)) {
+    return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
+  }
+  return undefined;
+}
+
+const APP_INFO_COMPONENTS = [
+  { name: 'appId', type: 'address' },
+  { name: 'composeHash', type: 'bytes32' },
+  { name: 'instanceId', type: 'address' },
+  { name: 'deviceId', type: 'bytes32' },
+  { name: 'mrAggregated', type: 'bytes32' },
+  { name: 'mrSystem', type: 'bytes32' },
+  { name: 'osImageHash', type: 'bytes32' },
+  { name: 'tcbStatus', type: 'string' },
+  { name: 'advisoryIds', type: 'string[]' }
+] as const;
+
+const AUTHORIZATION_ABI = {
+  type: 'function',
+  stateMutability: 'view',
+  inputs: [{ name: 'request', type: 'tuple', components: [
+    { name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS },
+    { name: 'operation', type: 'bytes32' },
+    { name: 'requestedAppEpoch', type: 'tuple', components: [
+      { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
+    ] },
+    { name: 'requestedRootEpoch', type: 'tuple', components: [
+      { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
+    ] },
+  ] }],
+  outputs: [{
+    name: 'result',
+    type: 'tuple',
+    components: [
+      { name: 'isAllowed', type: 'bool' },
+      { name: 'rejectionReason', type: 'string' },
+      { name: 'gatewayAppId', type: 'string' },
+      { name: 'currentRootEpoch', type: 'uint256' },
+      { name: 'currentRootEpochHash', type: 'bytes32' },
+      { name: 'currentAppEpoch', type: 'uint256' },
+    ],
+  }],
+} as const;
+
 // DstackKms contract ABI (minimal required functions)
 const DSTACK_KMS_ABI = [
+  { name: 'currentAppEpoch', type: 'function', stateMutability: 'view', inputs: [{ name: 'appId', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
+  { ...AUTHORIZATION_ABI, name: 'authorizeKms' },
+  { ...AUTHORIZATION_ABI, name: 'authorizeApp' },
   {
     name: 'isKmsAllowed',
     type: 'function',
@@ -51,17 +130,7 @@ const DSTACK_KMS_ABI = [
       {
         name: 'bootInfo',
         type: 'tuple',
-        components: [
-          { name: 'appId', type: 'address' },
-          { name: 'composeHash', type: 'bytes32' },
-          { name: 'instanceId', type: 'address' },
-          { name: 'deviceId', type: 'bytes32' },
-          { name: 'mrAggregated', type: 'bytes32' },
-          { name: 'mrSystem', type: 'bytes32' },
-          { name: 'osImageHash', type: 'bytes32' },
-          { name: 'tcbStatus', type: 'string' },
-          { name: 'advisoryIds', type: 'string[]' }
-        ]
+        components: APP_INFO_COMPONENTS
       }
     ],
     outputs: [
@@ -77,17 +146,7 @@ const DSTACK_KMS_ABI = [
       {
         name: 'bootInfo',
         type: 'tuple',
-        components: [
-          { name: 'appId', type: 'address' },
-          { name: 'composeHash', type: 'bytes32' },
-          { name: 'instanceId', type: 'address' },
-          { name: 'deviceId', type: 'bytes32' },
-          { name: 'mrAggregated', type: 'bytes32' },
-          { name: 'mrSystem', type: 'bytes32' },
-          { name: 'osImageHash', type: 'bytes32' },
-          { name: 'tcbStatus', type: 'string' },
-          { name: 'advisoryIds', type: 'string[]' }
-        ]
+        components: APP_INFO_COMPONENTS
       }
     ],
     outputs: [
@@ -108,6 +167,23 @@ const DSTACK_KMS_ABI = [
     stateMutability: 'view',
     inputs: [],
     outputs: [{ name: '', type: 'address' }]
+  },
+  {
+    name: 'rootEpochCount',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }]
+  },
+  {
+    name: 'currentRootEpoch',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [
+      { name: 'epoch', type: 'uint256' },
+      { name: 'chainHash', type: 'bytes32' }
+    ]
   }
 ] as const;
 
@@ -151,9 +227,9 @@ class EthereumBackend {
     return `0x${hex}` as Hex;
   }
 
-  async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+  private contractAppInfo(bootInfo: BootInfo) {
     // create boot info struct for contract call
-    const bootInfoStruct = {
+    return {
       appId: this.decodeHex(bootInfo.appId, 20) as Address,
       composeHash: this.decodeHex(bootInfo.composeHash, 32),
       instanceId: this.decodeHex(bootInfo.instanceId, 20) as Address,
@@ -165,6 +241,33 @@ class EthereumBackend {
       advisoryIds: bootInfo.advisoryIds || []
     };
 
+  }
+
+  async checkAuthorization(appInfo: AuthorizationRequest, method: 'authorizeKms' | 'authorizeApp') {
+    const blockNumber = await this.finalizedBlockNumber();
+    const result = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: method,
+      args: [{
+        appInfo: this.contractAppInfo(appInfo),
+        operation: keccak256(toBytes(appInfo.operation)),
+        requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: BigInt(appInfo.requestedAppEpoch ?? 0) },
+        requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
+      }],
+      blockNumber,
+    });
+    const currentRootEpoch = Number(result.currentRootEpoch);
+    if (!Number.isSafeInteger(currentRootEpoch)) {
+      throw new Error('current root epoch exceeds the supported range');
+    }
+    const currentAppEpoch = Number(result.currentAppEpoch);
+    if (!Number.isSafeInteger(currentAppEpoch)) throw new Error('current app epoch exceeds the supported range');
+    return { ...result, currentRootEpoch, currentAppEpoch };
+  }
+
+  async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+    const bootInfoStruct = this.contractAppInfo(bootInfo);
     const blockNumber = await this.finalizedBlockNumber();
     let response;
     if (isKms) {
@@ -185,7 +288,7 @@ class EthereumBackend {
       });
     }
 
-    const [isAllowed, reason] = response;
+    const [allowed, contractReason] = response;
     const gatewayAppId = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
@@ -193,11 +296,42 @@ class EthereumBackend {
       blockNumber
     });
 
+    const epochDenial = allowed
+      ? rootEpochDenial(bootInfo, isKms, await this.getRootEpoch(blockNumber))
+      : undefined;
     return {
-      isAllowed,
-      reason,
+      isAllowed: allowed && !epochDenial,
+      reason: epochDenial ?? contractReason,
       gatewayAppId: gatewayAppId as string,
     };
+  }
+
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
+  async getRootEpoch(blockNumber?: bigint): Promise<RootEpochInfo> {
+    blockNumber ??= await this.finalizedBlockNumber();
+    const count = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'rootEpochCount',
+      blockNumber
+    });
+    if (count === 0n) return {};
+    const [epoch, chainHash] = await this.client.readContract({
+      address: this.kmsContractAddr,
+      abi: DSTACK_KMS_ABI,
+      functionName: 'currentRootEpoch',
+      blockNumber
+    });
+    return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
+  }
+
+  async getAppEpoch(appId: string): Promise<number> {
+    const epoch = Number(await this.client.readContract({
+      address: this.kmsContractAddr, abi: DSTACK_KMS_ABI, functionName: 'currentAppEpoch',
+      args: [this.decodeHex(appId, 20)], blockNumber: await this.finalizedBlockNumber(),
+    }));
+    if (!Number.isSafeInteger(epoch)) throw new Error('app epoch exceeds the supported range');
+    return epoch;
   }
 
   async getGatewayAppId(): Promise<string> {
@@ -278,6 +412,7 @@ app.get('/', async (c) => {
       ethereum.getGatewayAppId(),
       ethereum.getChainId(),
       ethereum.getAppImplementation(),
+      ethereum.getRootEpoch(),
     ]);
     console.log('batch', batch);
 
@@ -289,6 +424,7 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
+      ...batch[3],
     });
   } catch {
     console.error('authorization backend health check failed');
@@ -298,6 +434,31 @@ app.get('/', async (c) => {
     }, 500);
   }
 });
+
+app.get('/app/:appId', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  try {
+    return c.json({ currentAppEpoch: await ethereum.getAppEpoch(appId) });
+  } catch {
+    return c.json({ error: 'authorization backend unavailable' }, 503);
+  }
+});
+
+for (const method of ['authorizeKms', 'authorizeApp'] as const) {
+  app.post(`/${method}`,
+    bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES }),
+    zValidator('json', AuthorizationRequestSchema),
+    async (c) => {
+      try {
+        return c.json(await ethereum.checkAuthorization(c.req.valid('json'), method));
+      } catch {
+        console.error('authorization backend failed');
+        return c.json({ status: 'error', message: backendUnavailable }, 503);
+      }
+    }
+  );
+}
 
 // app boot authentication
 app.post('/bootAuth/app',

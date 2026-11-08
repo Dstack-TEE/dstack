@@ -16,6 +16,7 @@ import socket
 import ssl
 import sys
 import tempfile
+import time
 import urllib.parse
 from typing import Any, BinaryIO, Dict, List, Optional, Tuple, Union
 
@@ -308,6 +309,76 @@ def cmd_switch_vmm(args):
     save_active_vmm(selected["id"])
     url = vmm_address_to_url(selected)
     print(f"Switched to VMM {selected['id'][:8]} ({url})")
+
+
+def seal_env(envs, hex_public_key: str, root_epoch: int, app_epoch: int = 0) -> str:
+    """Return hex-encoded SealedEnv JSON using RFC 9180 base mode."""
+    from pyhpke import AEADId, CipherSuite, KDFId, KEMId
+
+    validate_uint(root_epoch, 32, "root_epoch")
+    validate_uint(app_epoch, 32, "app_epoch")
+    info = f"dstack-sealed-env-v1:{root_epoch}:{app_epoch}"
+    suite = CipherSuite.new(
+        KEMId.DHKEM_X25519_HKDF_SHA256, KDFId.HKDF_SHA256, AEADId.AES256_GCM
+    )
+    public_key = suite.kem.deserialize_public_key(
+        bytes.fromhex(hex_public_key.removeprefix("0x"))
+    )
+    enc, context = suite.create_sender_context(public_key, info=info.encode("utf-8"))
+    plaintext = json.dumps({"env": envs}).encode("utf-8")
+    envelope = {
+        "version": 1,
+        "root_epoch": root_epoch,
+        "app_epoch": app_epoch,
+        "enc": base64.b64encode(enc).decode("ascii"),
+        "ciphertext": base64.b64encode(context.seal(plaintext, aad=b"")).decode(
+            "ascii"
+        ),
+    }
+    return json.dumps(envelope, separators=(",", ":")).encode("utf-8").hex()
+
+
+def validate_uint(value: int, bits: int, name: str) -> None:
+    """Require an integer in the specified unsigned range."""
+    if type(value) is not int or not 0 <= value < 1 << bits:
+        raise ValueError(f"{name} must be a uint{bits}")
+
+
+def verify_sealed_env_pubkey(response: Dict, app_id: str) -> None:
+    """Authenticate a SealedEnv key against the locally pinned epoch signers."""
+    if not CRYPTO_AVAILABLE:
+        raise ImportError("Install the VMM CLI requirements to verify SealedEnv keys")
+    app_id_bytes = bytes.fromhex(app_id.removeprefix("0x"))
+    public_key = bytes.fromhex(response["public_key"].removeprefix("0x"))
+    signature = bytes.fromhex(response["signature"].removeprefix("0x"))
+    epoch, timestamp = response["root_epoch"], response["timestamp"]
+    response_app_epoch = response.get("app_epoch", 0)
+    validate_uint(response_app_epoch, 32, "app_epoch")
+    validate_uint(epoch, 32, "root_epoch")
+    validate_uint(timestamp, 64, "timestamp")
+    now = int(time.time())
+    if now - timestamp > 300:
+        raise ValueError("SealedEnv public key timestamp is stale")
+    if timestamp - now > 60:
+        raise ValueError("SealedEnv public key timestamp is in the future")
+    if len(app_id_bytes) != 20 or len(public_key) != 32 or len(signature) != 65:
+        raise ValueError("Invalid SealedEnv app ID, public key or signature length")
+    digest = keccak(
+        b"dstack-sealed-env-pubkey-v1:"
+        + app_id_bytes
+        + epoch.to_bytes(4, "big")
+        + response_app_epoch.to_bytes(4, "big")
+        + public_key
+        + timestamp.to_bytes(8, "big")
+    )
+    signer = keys.Signature(signature_bytes=signature).recover_public_key_from_msg_hash(
+        digest
+    )
+    pins = {bytes.fromhex(pin.removeprefix("0x")) for pin in load_whitelist()}
+    if signer.to_compressed_bytes() not in pins:
+        raise ValueError(
+            "SealedEnv signer is not pinned; configure a trusted epoch signer with kms add"
+        )
 
 
 def encrypt_env(envs, hex_public_key: str) -> str:
@@ -776,6 +847,60 @@ class VmmCLI:
         rows = [[img["name"], img.get("version", "-")] for img in images]
         print(format_table(rows, headers))
 
+    def image_supports_sealed_env(self, image: Optional[str]) -> bool:
+        """Read the selected image capability, treating missing metadata as legacy."""
+        if not image:
+            return False
+        images = self.rpc_call("ListImages").get("images", [])
+        return any(
+            item.get("name") == image and item.get("sealed_env") is True
+            for item in images
+        )
+
+    def get_sealed_env_pub_key(
+        self,
+        app_id: str,
+        kms_url: Optional[str] = None,
+    ) -> Dict:
+        """Return the authenticated current key; never downgrade on an unsigned error."""
+        # KMS RA-TLS is authenticated by the pinned signer below. The VMM
+        # path retains its configured TLS verification and authentication.
+        client = VmmClient(kms_url, verify_tls=False) if kms_url else self.client
+        status, response = client.request(
+            "POST",
+            "/prpc/GetSealedEnvPubKey?json",
+            headers={"Content-Type": "application/json"},
+            body={"app_id": app_id},
+        )
+        if status != 200:
+            raise RuntimeError(f"GetSealedEnvPubKey failed with HTTP {status}")
+        if not isinstance(response, dict):
+            raise ValueError("Invalid GetSealedEnvPubKey response")
+        verify_sealed_env_pubkey(response, app_id)
+        return response
+
+    def encrypt_env_payload(
+        self,
+        envs: Dict[str, str],
+        app_id: str,
+        kms_url: Optional[str],
+        supports_sealed_env: bool,
+    ) -> Dict:
+        """Select encryption using the target image capability and KMS RPC support."""
+        envs_list = [{"key": k, "value": v} for k, v in envs.items()]
+        if supports_sealed_env:
+            key = self.get_sealed_env_pub_key(app_id, kms_url)
+            return {
+                "sealed_env": seal_env(
+                    envs_list,
+                    key["public_key"],
+                    key["root_epoch"],
+                    key.get("app_epoch", 0),
+                )
+            }
+        public_key = self.get_app_env_encrypt_pub_key(app_id, kms_url)
+        return {"encrypted_env": encrypt_env(envs_list, public_key)}
+
     def get_app_env_encrypt_pub_key(
         self, app_id: str, kms_url: Optional[str] = None
     ) -> Dict:
@@ -1039,10 +1164,14 @@ class VmmCLI:
             encrypt_url = args.kms_encrypt_url or (
                 args.kms_url[0] if args.kms_url else None
             )
-            encrypt_pubkey = self.get_app_env_encrypt_pub_key(app_id, encrypt_url)
-            print(f"Encrypting environment variables with key: {encrypt_pubkey}")
-            envs_list = [{"key": k, "value": v} for k, v in envs.items()]
-            params["encrypted_env"] = encrypt_env(envs_list, encrypt_pubkey)
+            params.update(
+                self.encrypt_env_payload(
+                    envs,
+                    app_id,
+                    encrypt_url,
+                    self.image_supports_sealed_env(args.image),
+                )
+            )
         response = self.rpc_call("CreateVm", params)
         print(f"Created VM with ID: {response.get('id')}")
         return response.get("id")
@@ -1067,16 +1196,15 @@ class VmmCLI:
         vm_configuration = vm_info_response["info"].get("configuration") or {}
         compose_file = vm_configuration.get("compose_file")
 
-        # Now get the encryption key for the app
-        encrypt_pubkey = self.get_app_env_encrypt_pub_key(
-            app_id, kms_urls[0] if kms_urls else None
+        payload = {"id": vm_id}
+        payload.update(
+            self.encrypt_env_payload(
+                envs,
+                app_id,
+                kms_urls[0],
+                self.image_supports_sealed_env(vm_configuration.get("image")),
+            )
         )
-        print(f"Encrypting environment variables with key: {encrypt_pubkey}")
-        envs_list = [{"key": k, "value": v} for k, v in envs.items()]
-        encrypted_env = encrypt_env(envs_list, encrypt_pubkey)
-
-        # Use UpdateApp with the VM ID
-        payload = {"id": vm_id, "encrypted_env": encrypted_env}
 
         if compose_file:
             try:
@@ -1171,12 +1299,14 @@ class VmmCLI:
             resize_params["image"] = image
             updates.append(f"image: {image}")
 
-        if resize_params:
+        if resize_params and not env_file:
             resize_params["id"] = vm_id
             self.rpc_call("ResizeVm", resize_params)
 
         # handle upgrade operations (compose, env, user_config, ports, gpu)
         upgrade_params = {"id": vm_id}
+        if env_file:
+            upgrade_params.update(resize_params)
 
         # handle compose file updates (docker-compose, prelaunch script, swap)
         needs_compose_update = (
@@ -1238,11 +1368,18 @@ class VmmCLI:
                 vm_configuration = vm_info_response["info"].get("configuration") or {}
                 compose_file_content = vm_configuration.get("compose_file")
 
-                encrypt_pubkey = self.get_app_env_encrypt_pub_key(
-                    app_id, kms_urls[0] if kms_urls else None
+                upgrade_params.update(
+                    self.encrypt_env_payload(
+                        envs,
+                        app_id,
+                        kms_urls[0],
+                        self.image_supports_sealed_env(
+                            image
+                            if image is not None
+                            else vm_configuration.get("image")
+                        ),
+                    )
                 )
-                envs_list = [{"key": k, "value": v} for k, v in envs.items()]
-                upgrade_params["encrypted_env"] = encrypt_env(envs_list, encrypt_pubkey)
                 updates.append("environment variables")
 
                 # update allowed_envs in compose file if needed

@@ -80,6 +80,24 @@ impl HostApi {
         Ok(())
     }
 
+    /// Hand the host the env re-encrypted to the current root epoch, or an
+    /// empty one when nothing changed.
+    pub async fn update_sealed_env(&self, sealed_env: Vec<u8>) -> Result<()> {
+        if !matches!(Platform::detect_or_dstack(), Platform::Dstack) {
+            return Ok(());
+        }
+        let Some(client) = &self.client else {
+            return Ok(());
+        };
+        tokio::time::timeout(
+            HOST_API_TIMEOUT,
+            client.update_sealed_env(host_api::SealedEnv { sealed_env }),
+        )
+        .await
+        .context("Timed out updating the sealed env on the host")??;
+        Ok(())
+    }
+
     pub async fn notify_q(&self, event: &str, payload: &str) {
         if let Err(err) = self.notify(event, payload).await {
             warn!("Failed to notify event {event} to host: {:?}", err);

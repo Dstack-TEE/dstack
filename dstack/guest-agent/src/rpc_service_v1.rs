@@ -159,16 +159,20 @@ impl V1RpcHandler {
         Self { state }
     }
 
-    /// Derive the key named by `(domain, algorithm)` together with its
-    /// signature chain.
-    fn derive(&self, domain: &str, algorithm: &str) -> Result<(AppKey, Vec<Vec<u8>>)> {
+    /// Derive the key named by `(domain, algorithm)` under the app root of
+    /// `root_epoch`, together with its signature chain and that epoch.
+    async fn derive(
+        &self,
+        domain: &str,
+        algorithm: &str,
+        root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
+    ) -> Result<(AppKey, Vec<Vec<u8>>, u32, u32)> {
         let algorithm = Algorithm::parse(algorithm)?;
-        let key = AppKey::derive(self.state.app_root_k256_key(), domain, algorithm)?;
-        let chain = vec![
-            key.claim_signature(self.state.app_root_signing_key()?)?,
-            self.state.kms_k256_signature().to_vec(),
-        ];
-        Ok((key, chain))
+        let root = self.state.app_root(root_epoch, app_epoch).await?;
+        let key = AppKey::derive(&root.k256_key, domain, algorithm)?;
+        let chain = vec![key.claim_signature(&root.signing_key)?, root.kms_signature];
+        Ok((key, chain, root.epoch, root.app_epoch))
     }
 }
 
@@ -196,11 +200,20 @@ impl DstackGuestRpc for V1RpcHandler {
     }
 
     async fn get_key(self, request: GetKeyRequest) -> Result<GetKeyResponse> {
-        let (key, signature_chain) = self.derive(&request.domain, &request.algorithm)?;
+        let (key, signature_chain, root_epoch, app_epoch) = self
+            .derive(
+                &request.domain,
+                &request.algorithm,
+                request.root_epoch,
+                request.app_epoch,
+            )
+            .await?;
         Ok(GetKeyResponse {
             key: key.secret(),
             public_key: key.public_key(),
             signature_chain,
+            root_epoch,
+            app_epoch,
         })
     }
 

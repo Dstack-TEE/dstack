@@ -22,8 +22,19 @@ const BootInfoSchema = z.object({
   // optional fields (for full compatibility with BootInfo interface)
   tcbStatus: z.string().optional().default(''),
   advisoryIds: z.array(z.string()).optional().default([]),
-  mrSystem: z.string().optional().default('')
+  mrSystem: z.string().optional().default(''),
+  // The root epoch the asking KMS serves and its chain hash; absent from a KMS
+  // that predates root epochs, and from KMS checks made while onboarding.
+  rootEpoch: z.number().int().min(0).optional(),
+  rootEpochHash: z.string().optional()
 });
+
+const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  operation: z.enum(['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys', 'app_get_key', 'app_get_cert']),
+  requestedAppEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+  requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
+});
+type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
 const BootResponseSchema = z.object({
   isAllowed: z.boolean(),
@@ -31,8 +42,41 @@ const BootResponseSchema = z.object({
   gatewayAppId: z.string()
 });
 
+// MOCK_ROOT_EPOCH and MOCK_ROOT_EPOCH_HASH: the current KMS root epoch and its
+// chain hash; both unset means none is registered
+function getRootEpoch(): { rootEpoch?: number; rootEpochHash?: string } {
+  const epoch = process.env.MOCK_ROOT_EPOCH;
+  const hash = process.env.MOCK_ROOT_EPOCH_HASH;
+  if (!epoch && !hash) return {};
+  if (!epoch || !hash) throw new Error('set both MOCK_ROOT_EPOCH and MOCK_ROOT_EPOCH_HASH');
+  return { rootEpoch: z.coerce.number().int().min(0).parse(epoch), rootEpochHash: hash };
+}
+
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
+
+const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
+
+// Only a KMS serving the current root epoch, with the registered keys up to it,
+// may authorize. A KMS that predates root epochs reports none and holds only
+// epoch 0; KMS checks made while onboarding carry none and are not limited.
+function rootEpochDenial(bootInfo: BootInfo, isKms: boolean): string | undefined {
+  const current = getRootEpoch();
+  const currentEpoch = current.rootEpoch ?? 0;
+  if (bootInfo.rootEpoch === undefined) {
+    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+  }
+  if (current.rootEpoch === undefined) {
+    return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
+  }
+  if (bootInfo.rootEpoch !== currentEpoch) {
+    return `the KMS serves root epoch ${bootInfo.rootEpoch}, but ${currentEpoch} is current`;
+  }
+  if (normHash(bootInfo.rootEpochHash) !== normHash(current.rootEpochHash)) {
+    return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
+  }
+  return undefined;
+}
 
 // authorization policy - configurable via environment variables
 // MOCK_POLICY: "allow-all" (default), "deny-kms", "deny-app", "deny-all",
@@ -69,7 +113,45 @@ class MockBackend {
     this.mockAppImplementation = process.env.MOCK_APP_IMPLEMENTATION || '0xmockapp9876543210987654321098765432109';
   }
 
+  async getAppEpoch(_appId: string): Promise<number> {
+    return z.coerce.number().int().min(0).max(0xffffffff).parse(process.env.MOCK_APP_EPOCH ?? 0);
+  }
+
+  async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
+    const current = getRootEpoch();
+    const epoch = {
+      currentAppEpoch: isKms ? 0 : await this.getAppEpoch(appInfo.appId),
+      currentRootEpoch: current.rootEpoch ?? 0,
+      currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
+    };
+    const kmsOperation = ['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys'].includes(appInfo.operation);
+    if (kmsOperation !== isKms) {
+      return { isAllowed: false, rejectionReason: 'Invalid authorization operation', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    if (current.rootEpoch === undefined && appInfo.operation !== 'kms_bootstrap') {
+      return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > (current.rootEpoch ?? 0)) {
+      return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    if (appInfo.requestedAppEpoch !== undefined && appInfo.requestedAppEpoch > epoch.currentAppEpoch) {
+      return { isAllowed: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
+    }
+    const result = this.evaluateBoot(appInfo, isKms);
+    return { isAllowed: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
+      gatewayAppId: this.mockGatewayAppId, ...epoch };
+  }
+
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+    if (!isKms && await this.getAppEpoch(bootInfo.appId) !== 0) {
+      return { isAllowed: false, reason: "App epoch requires epoch-aware authorization", gatewayAppId: "" };
+    }
+    const response = this.evaluateBoot(bootInfo, isKms);
+    const epochDenial = response.isAllowed ? rootEpochDenial(bootInfo, isKms) : undefined;
+    return epochDenial ? { isAllowed: false, reason: epochDenial, gatewayAppId: '' } : response;
+  }
+
+  private evaluateBoot(bootInfo: BootInfo, isKms: boolean): BootResponse {
     const policy = getPolicy();
     const deny = (reason: string): BootResponse => ({
       isAllowed: false,
@@ -147,6 +229,7 @@ app.get('/', async (c) => {
       chainId: batch[1],
       appAuthImplementation: batch[2], // NOTE: for backward compatibility
       appImplementation: batch[2],
+      ...getRootEpoch(),
       note: 'this is a mock backend - all authentications will succeed'
     });
   } catch (error) {
@@ -157,6 +240,26 @@ app.get('/', async (c) => {
     }, 500);
   }
 });
+
+app.get('/app/:appId', async (c) => {
+  const appId = c.req.param('appId');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  try {
+    return c.json({ currentAppEpoch: await mockBackend.getAppEpoch(appId) });
+  } catch {
+    return c.json({ error: 'authorization backend unavailable' }, 503);
+  }
+});
+
+for (const method of ['authorizeKms', 'authorizeApp'] as const) {
+  app.post(`/${method}`, zValidator('json', AuthorizationRequestSchema), async (c) => {
+    try {
+      return c.json(await mockBackend.checkAuthorization(c.req.valid('json'), method === 'authorizeKms'));
+    } catch {
+      return c.json({ status: 'error', message: 'authorization backend unavailable' }, 503);
+    }
+  });
+}
 
 // app boot authentication
 app.post('/bootAuth/app',

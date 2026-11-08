@@ -68,6 +68,7 @@ pub fn dh_decrypt(secret: [u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("Decryption failed: {}", e))
 }
 
+
 fn stream_nonce(prefix: &[u8; 8], index: u32) -> [u8; 12] {
     let mut nonce = [0u8; 12];
     nonce[..8].copy_from_slice(prefix);
@@ -360,4 +361,47 @@ mod tests {
         )
         .is_err());
     }
+}
+
+/// Encrypt a sealed environment with HPKE DHKEM(X25519, HKDF-SHA256) and AES-256-GCM.
+pub fn sealed_env_encrypt(public_key: &[u8], info: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
+    use hpke::{
+        aead::AesGcm256, kdf::HkdfSha256, kem::X25519HkdfSha256, Deserializable, OpModeS,
+        Serializable,
+    };
+    let public_key = <X25519HkdfSha256 as hpke::Kem>::PublicKey::from_bytes(public_key)
+        .map_err(|_| anyhow!("invalid sealed env public key"))?;
+    let (enc, ciphertext) = hpke::single_shot_seal::<AesGcm256, HkdfSha256, X25519HkdfSha256>(
+        &OpModeS::Base,
+        &public_key,
+        info,
+        plaintext,
+        &[],
+    )
+    .map_err(|e| anyhow!("sealed env encryption failed: {e}"))?;
+    Ok([enc.to_bytes().as_ref(), ciphertext.as_slice()].concat())
+}
+
+/// Decrypt a sealed environment HPKE payload.
+pub fn sealed_env_decrypt(secret: &[u8], info: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
+    use hpke::{aead::AesGcm256, kdf::HkdfSha256, kem::X25519HkdfSha256, Deserializable, OpModeR};
+    let enc = payload
+        .get(..32)
+        .ok_or_else(|| anyhow!("sealed env payload is missing encapsulated key"))?;
+    let ciphertext = payload
+        .get(32..)
+        .ok_or_else(|| anyhow!("sealed env payload is missing ciphertext"))?;
+    let secret = <X25519HkdfSha256 as hpke::Kem>::PrivateKey::from_bytes(secret)
+        .map_err(|_| anyhow!("invalid sealed env private key"))?;
+    let enc = <X25519HkdfSha256 as hpke::Kem>::EncappedKey::from_bytes(enc)
+        .map_err(|_| anyhow!("invalid sealed env encapsulated key"))?;
+    hpke::single_shot_open::<AesGcm256, HkdfSha256, X25519HkdfSha256>(
+        &OpModeR::Base,
+        &secret,
+        &enc,
+        info,
+        ciphertext,
+        &[],
+    )
+    .map_err(|e| anyhow!("sealed env decryption failed: {e}"))
 }

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, bail, Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use config::KmsConfig;
 use main_service::{KmsState, RpcHandler};
 use ra_rpc::ratls_client_verifier::RaTlsClientAuth;
@@ -35,6 +35,32 @@ struct Args {
     /// Path to the configuration file
     #[arg(short, long)]
     config: Option<String>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Print, as hex, the attestation `registerRootEpoch` takes for epoch 0,
+    /// converted from the legacy `kmsInfo` quote and event log
+    LegacyAttestation {
+        /// TDX quote, hex
+        #[arg(long)]
+        quote: String,
+        /// Event log JSON, hex-encoded as `kmsInfo()` returns it
+        #[arg(long)]
+        eventlog: String,
+    },
+}
+
+fn legacy_attestation(quote: &str, eventlog: &str) -> Result<String> {
+    let decode = |hex_str: &str| hex::decode(hex_str.trim().trim_start_matches("0x"));
+    let quote = decode(quote).context("invalid quote hex")?;
+    let eventlog = decode(eventlog).context("invalid event log hex")?;
+    let attestation = dstack_attest::attestation::Attestation::from_tdx_quote(quote, &eventlog)?
+        .into_versioned()
+        .to_bytes()?;
+    Ok(format!("0x{}", hex::encode(attestation)))
 }
 
 async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<()> {
@@ -123,6 +149,10 @@ async fn main() -> Result<()> {
         fmt().with_env_filter(filter).with_ansi(false).init();
     }
     let args = Args::parse();
+    if let Some(Command::LegacyAttestation { quote, eventlog }) = args.command {
+        println!("{}", legacy_attestation(&quote, &eventlog)?);
+        return Ok(());
+    }
 
     let figment = config::load_config_figment(args.config.as_deref());
     let config: KmsConfig = figment.focus("core").extract()?;
@@ -143,8 +173,12 @@ async fn main() -> Result<()> {
         }
     }
 
+    let keyring = main_service::Keyring::load(&config).context("Failed to load the root keys")?;
+    let rpc_epoch = main_service::wait_for_servable_epoch(&config, &keyring).await;
+    info!("Issuing RPC certificate under root epoch {rpc_epoch}");
+
     info!("Updating certs");
-    if let Err(err) = onboard_service::update_certs(&config).await {
+    if let Err(err) = onboard_service::update_certs(&config, rpc_epoch, keyring.latest()).await {
         if config.attest_rpc_cert {
             return Err(err).context(
                 "Failed to reissue the attested KMS RPC certificate; refusing to start with a \
@@ -176,7 +210,12 @@ async fn main() -> Result<()> {
     } else {
         None
     };
-    let state = main_service::KmsState::new(config).context("Failed to initialize KMS state")?;
+    // Reload certificates after renewal before exposing them through RPCs.
+    let rpc_ca_cert =
+        fs_err::read_to_string(config.root_key_paths(rpc_epoch, keyring.latest()).ca_cert)?;
+    let keyring = main_service::Keyring::load(&config).context("Failed to reload the root keys")?;
+    let state = main_service::KmsState::new(config, keyring, rpc_ca_cert)
+        .context("Failed to initialize KMS state")?;
     let quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let admin_quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let figment = figment
@@ -213,6 +252,11 @@ async fn main() -> Result<()> {
     rocket = rocket.manage(quote_verifier);
 
     let main_srv = rocket.launch();
+    // Refresh the TLS listener when the authorized root CA changes.
+    let restart = {
+        let state = state.clone();
+        async move { state.restart_requested().await }
+    };
     match admin_setup {
         Some((admin_figment, admin_fairing)) => {
             if admin_config.insecure_no_auth {
@@ -233,14 +277,22 @@ async fn main() -> Result<()> {
                 .manage(state)
                 .manage(admin_quote_verifier)
                 .launch();
-            tokio::try_join!(
-                async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
-                async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
-            )?;
+            let servers = async {
+                tokio::try_join!(
+                    async { main_srv.await.map_err(|err| anyhow!(err.to_string())) },
+                    async { admin_srv.await.map_err(|err| anyhow!(err.to_string())) },
+                )
+                .map(drop)
+            };
+            tokio::select! {
+                result = servers => result?,
+                () = restart => bail!("the RPC root CA changed; restarting to refresh the TLS certificate"),
+            }
         }
-        None => {
-            main_srv.await.map_err(|err| anyhow!(err.to_string()))?;
-        }
+        None => tokio::select! {
+            result = main_srv => result.map(drop).map_err(|err| anyhow!(err.to_string()))?,
+            () = restart => bail!("the RPC root CA changed; restarting to refresh the TLS certificate"),
+        },
     }
     Ok(())
 }

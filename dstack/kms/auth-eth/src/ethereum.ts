@@ -3,15 +3,42 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ethers } from 'ethers';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, RootEpochInfo, AuthorizationResult, AuthorizationRequest } from './types';
 
 // Minimal ABI for DstackKms contract
 const DSTACK_KMS_ABI = [
+  "function currentAppEpoch(address appId) view returns (uint256)",
+  "function authorizeKms(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,bytes32 operation,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",
+  "function authorizeApp(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,bytes32 operation,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",
   "function isAppAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function isKmsAllowed((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) bootInfo) view returns (bool, string)",
   "function gatewayAppId() view returns (string)",
-  "function appImplementation() view returns (address)"
+  "function appImplementation() view returns (address)",
+  "function rootEpochCount() view returns (uint256)",
+  "function currentRootEpoch() view returns (uint256 epoch, bytes32 chainHash)"
 ];
+
+const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
+
+// Only a KMS serving the current root epoch, with the registered keys up to it,
+// may authorize. A KMS that predates root epochs reports none and holds only
+// epoch 0; KMS checks made while onboarding carry none and are not limited.
+export function rootEpochDenial(bootInfo: BootInfo, isKms: boolean, current: RootEpochInfo): string | undefined {
+  const currentEpoch = current.rootEpoch ?? 0;
+  if (bootInfo.rootEpoch === undefined) {
+    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+  }
+  if (current.rootEpoch === undefined) {
+    return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
+  }
+  if (bootInfo.rootEpoch !== currentEpoch) {
+    return `the KMS serves root epoch ${bootInfo.rootEpoch}, but ${currentEpoch} is current`;
+  }
+  if (normHash(bootInfo.rootEpochHash) !== normHash(current.rootEpochHash)) {
+    return `the KMS root keys up to epoch ${currentEpoch} are not the registered ones`;
+  }
+  return undefined;
+}
 
 export class EthereumBackend {
   private provider: ethers.JsonRpcProvider;
@@ -37,9 +64,9 @@ export class EthereumBackend {
     return '0x' + hex;
   }
 
-  async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+  private contractAppInfo(bootInfo: BootInfo) {
     // Create boot info struct for contract call
-    const bootInfoStruct = {
+    return {
       appId: this.decodeHex(bootInfo.appId, 20),
       instanceId: this.decodeHex(bootInfo.instanceId, 20),
       composeHash: this.decodeHex(bootInfo.composeHash, 32),
@@ -50,6 +77,27 @@ export class EthereumBackend {
       tcbStatus: bootInfo.tcbStatus,
       advisoryIds: bootInfo.advisoryIds
     };
+  }
+
+  async checkAuthorization(appInfo: AuthorizationRequest, method: 'authorizeKms' | 'authorizeApp'): Promise<AuthorizationResult> {
+    const result = await this.kmsContract[method]({
+      appInfo: this.contractAppInfo(appInfo),
+      operation: ethers.id(appInfo.operation),
+      requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: appInfo.requestedAppEpoch ?? 0 },
+      requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: appInfo.requestedRootEpoch ?? 0 },
+    });
+    return {
+      isAllowed: result.isAllowed,
+      rejectionReason: result.rejectionReason,
+      gatewayAppId: result.gatewayAppId,
+      currentRootEpoch: ethers.toNumber(result.currentRootEpoch),
+      currentRootEpochHash: result.currentRootEpochHash,
+      currentAppEpoch: ethers.toNumber(result.currentAppEpoch),
+    };
+  }
+
+  async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
+    const bootInfoStruct = this.contractAppInfo(bootInfo);
     // Read the whole decision from one block.
     const blockTag = await this.provider.getBlockNumber();
     let response;
@@ -58,13 +106,29 @@ export class EthereumBackend {
     } else {
       response = await this.kmsContract.isAppAllowed(bootInfoStruct, { blockTag });
     }
-    const [isAllowed, reason] = response;
+    const [allowed, contractReason] = response;
     const gatewayAppId = await this.kmsContract.gatewayAppId({ blockTag });
+    const epochDenial = allowed
+      ? rootEpochDenial(bootInfo, isKms, await this.getRootEpoch(blockTag))
+      : undefined;
     return {
-      isAllowed,
-      reason,
+      isAllowed: allowed && !epochDenial,
+      reason: epochDenial ?? contractReason,
       gatewayAppId,
     }
+  }
+
+  // The current root epoch and its chain hash; empty only when no epoch is registered.
+  async getRootEpoch(blockTag?: number): Promise<RootEpochInfo> {
+    blockTag ??= await this.provider.getBlockNumber();
+    const count = await this.kmsContract.rootEpochCount({ blockTag });
+    if (count === 0n) return {};
+    const [epoch, chainHash] = await this.kmsContract.currentRootEpoch({ blockTag });
+    return { rootEpoch: Number(epoch), rootEpochHash: chainHash };
+  }
+
+  async getAppEpoch(appId: string): Promise<number> {
+    return ethers.toNumber(await this.kmsContract.currentAppEpoch(this.decodeHex(appId, 20)));
   }
 
   async getGatewayAppId(): Promise<string> {

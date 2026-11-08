@@ -14,28 +14,31 @@ use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
     AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
-    GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SignCertRequest,
-    SignCertResponse,
+    GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SealedEnvPubKeyResponse,
+    SignCertRequest, SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use moka::future::Cache;
+use p256::pkcs8::DecodePrivateKey;
 use ra_rpc::{CallContext, RpcCall};
 use ra_tls::{
     attestation::{resolve_vm_config, AttestationVerifier, TeeVariant, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
     kdf,
+    rcgen::KeyPair,
 };
 use scale::Decode;
 use tracing::warn;
 use upgrade_authority::{
-    build_boot_info, ensure_app_id_len, local_kms_boot_info, BootInfo, GetInfoResponse,
+    build_boot_info, ensure_app_id_len, local_kms_boot_info, AuthorizationResult, BootInfo,
+    GetInfoResponse, Operation, RootEpochRegistry,
 };
 
 use crate::{
-    config::KmsConfig,
-    crypto::{derive_k256_key, sign_message, sign_message_with_timestamp},
+    config::{KmsConfig, RootKeyPaths},
+    crypto::{app_epoch_context, derive_k256_key, sign_message, sign_message_with_timestamp},
 };
 
 pub(crate) mod amd_attest;
@@ -43,7 +46,7 @@ pub(crate) mod upgrade_authority;
 
 /// How long the auth API's info and this KMS's own authorization are reused.
 ///
-/// `GetMeta`, `GetAppEnvEncryptPubKey` and `GetTempCaCert` need no client certificate, and each
+/// `GetMeta` and `GetAppEnvEncryptPubKey` need no client certificate, and each
 /// would otherwise cost the auth API a round of chain RPC calls. Concurrent callers share one
 /// in-flight request. App authorization is never cached.
 const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
@@ -67,16 +70,109 @@ impl std::ops::Deref for KmsState {
     }
 }
 
+/// The root key pair of one epoch.
+struct RootKeys {
+    ca: CaCert,
+    k256: SigningKey,
+}
+
+impl RootKeys {
+    fn load(paths: &RootKeyPaths) -> Result<Self> {
+        let ca = CaCert::load(&paths.ca_cert, &paths.ca_key)
+            .context("failed to load root CA certificate")?;
+        let key_bytes = fs::read(&paths.k256_key).context("failed to read ECDSA root key")?;
+        let k256 = SigningKey::from_slice(&key_bytes).context("failed to load ECDSA root key")?;
+        Ok(Self { ca, k256 })
+    }
+}
+
+/// The root keys of epochs 0..=latest this KMS holds, and their chain hashes.
+pub(crate) struct Keyring {
+    roots: Vec<RootKeys>,
+    chain_hashes: Vec<[u8; 32]>,
+}
+
+impl Keyring {
+    pub(crate) fn load(config: &KmsConfig) -> Result<Self> {
+        let latest = read_root_epoch(config)?;
+        let roots = (0..=latest)
+            .map(|epoch| {
+                RootKeys::load(&config.root_key_paths(epoch, latest))
+                    .with_context(|| format!("failed to load root keys of epoch {epoch}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let chain_hashes = root_chain_hashes(roots.iter().map(|root| (&root.ca.key, &root.k256)));
+        Ok(Self {
+            roots,
+            chain_hashes,
+        })
+    }
+
+    pub(crate) fn latest(&self) -> u32 {
+        self.roots.len() as u32 - 1
+    }
+
+    pub(crate) fn servable_epoch(&self, registry: RootEpochRegistry) -> Result<u32> {
+        servable_epoch(&self.chain_hashes, registry)
+    }
+}
+
+/// Chain hashes of the root keys of epochs 0, 1, ...
+pub(crate) fn root_chain_hashes<'a>(
+    roots: impl Iterator<Item = (&'a KeyPair, &'a SigningKey)>,
+) -> Vec<[u8; 32]> {
+    let pubkeys: Vec<_> = roots
+        .map(|(ca, k256)| {
+            (
+                ca.public_key_der(),
+                k256.verifying_key().to_sec1_bytes().to_vec(),
+            )
+        })
+        .collect();
+    dstack_types::root_epoch::chain_hashes(pubkeys.iter().map(|(ca, k256)| (&ca[..], &k256[..])))
+}
+
+/// The epoch a keyring with `chain_hashes` serves under `registry`: the
+/// current epoch, which the keyring must hold with a matching chain hash. A
+/// keyring nobody registered is servable only at epoch 0, as before root
+/// epochs existed.
+pub(crate) fn servable_epoch(
+    chain_hashes: &[[u8; 32]],
+    registry: RootEpochRegistry,
+) -> Result<u32> {
+    let latest = chain_hashes.len() as u32 - 1;
+    let current = match registry {
+        RootEpochRegistry::Unchecked => return Ok(latest),
+        RootEpochRegistry::Empty if latest == 0 => return Ok(0),
+        RootEpochRegistry::Empty => {
+            bail!("the keyring holds root epoch {latest}, but no root epoch is registered")
+        }
+        RootEpochRegistry::Current(current) => current,
+    };
+    match chain_hashes.get(current.epoch as usize) {
+        Some(hash) if *hash == current.chain_hash => Ok(current.epoch),
+        Some(_) => bail!(
+            "the root keys up to epoch {} are not the registered ones",
+            current.epoch
+        ),
+        None => bail!(
+            "root epoch {} is current, but the keyring holds only up to {latest}",
+            current.epoch
+        ),
+    }
+}
+
 pub struct KmsStateInner {
     config: KmsConfig,
-    root_ca: CaCert,
-    k256_key: SigningKey,
-    temp_ca_cert: String,
-    temp_ca_key: String,
+    keyring: Keyring,
+    temp_ca: CaCert,
+    /// The CA of the running TLS listener, independent of key selection.
+    rpc_ca_pubkey: Vec<u8>,
+    restart: tokio::sync::Notify,
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: Cache<(), BootInfo>,
-    self_allowed: Cache<(), ()>,
+    self_allowed: Cache<Operation, AuthorizationResult>,
     auth_api_info: Cache<(), GetInfoResponse>,
     metrics: KmsMetrics,
 }
@@ -112,9 +208,13 @@ impl KmsMetrics {
     }
 }
 
-fn short_lived_cache<V: Clone + Send + Sync + 'static>() -> Cache<(), V> {
+fn short_lived_cache<K, V>(capacity: u64) -> Cache<K, V>
+where
+    K: Eq + std::hash::Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
     Cache::builder()
-        .max_capacity(1)
+        .max_capacity(capacity)
         .time_to_live(AUTH_API_CACHE_TTL)
         .build()
 }
@@ -127,16 +227,15 @@ impl KmsState {
         self.verifier.clear_cache(image_hash, config_hash)
     }
 
-    pub fn new(config: KmsConfig) -> Result<Self> {
-        let root_ca = CaCert::load(config.root_ca_cert(), config.root_ca_key())
-            .context("Failed to load root CA certificate")?;
-        let key_bytes = fs::read(config.k256_key()).context("Failed to read ECDSA root key")?;
-        let k256_key =
-            SigningKey::from_slice(&key_bytes).context("Failed to load ECDSA root key")?;
-        let temp_ca_key =
-            fs::read_to_string(config.tmp_ca_key()).context("Faeild to read temp ca key")?;
-        let temp_ca_cert =
-            fs::read_to_string(config.tmp_ca_cert()).context("Faeild to read temp ca cert")?;
+    pub fn new(config: KmsConfig, keyring: Keyring, rpc_ca_cert: String) -> Result<Self> {
+        let (_, pem) = x509_parser::pem::parse_x509_pem(rpc_ca_cert.as_bytes())
+            .context("invalid RPC CA certificate")?;
+        let rpc_ca_pubkey = pem
+            .parse_x509()
+            .context("invalid RPC CA certificate")?
+            .public_key()
+            .raw
+            .to_vec();
         let attestation_verifier = Arc::new(
             AttestationVerifier::load(&config.attestation)
                 .context("failed to load attestation verifier")?,
@@ -154,19 +253,19 @@ impl KmsState {
         }
         Ok(Self {
             inner: Arc::new(KmsStateInner {
+                temp_ca: crate::onboard_service::ensure_temp_ca(&config)?,
                 config,
-                root_ca,
-                k256_key,
-                temp_ca_cert,
-                temp_ca_key,
+                keyring,
+                rpc_ca_pubkey,
+                restart: tokio::sync::Notify::new(),
                 verifier,
                 attestation_verifier,
                 self_boot_info: Cache::builder()
                     .max_capacity(1)
                     .time_to_live(SELF_BOOT_INFO_TTL)
                     .build(),
-                self_allowed: short_lived_cache(),
-                auth_api_info: short_lived_cache(),
+                self_allowed: short_lived_cache(4),
+                auth_api_info: short_lived_cache(1),
                 metrics: KmsMetrics::default(),
             }),
         })
@@ -178,6 +277,149 @@ impl KmsState {
 
     pub(crate) fn attestation_verifier(&self) -> Arc<AttestationVerifier> {
         self.inner.attestation_verifier.clone()
+    }
+
+    fn epoch_root(&self, epoch: u32) -> Result<&RootKeys> {
+        self.keyring
+            .roots
+            .get(epoch as usize)
+            .with_context(|| format!("root epoch {epoch} is not held by this KMS"))
+    }
+
+    pub async fn restart_requested(&self) {
+        self.restart.notified().await
+    }
+
+    async fn current_epoch_from_info(&self) -> Result<u32> {
+        let info = self
+            .auth_api_info
+            .try_get_with((), self.config.auth_api.get_info())
+            .await
+            .map_err(|err| anyhow!("{err:#}"))?;
+        self.keyring.servable_epoch(info.root_epochs)
+    }
+
+    /// Resolve this request from its authorization result; no serving epoch is cached.
+    fn authorized_epoch(
+        &self,
+        result: &AuthorizationResult,
+        requested: Option<u32>,
+    ) -> Result<u32> {
+        let current = if self.config.auth_api.is_dev() {
+            self.keyring.latest()
+        } else {
+            let current = result
+                .current_root()?
+                .context("Root epoch not registered")?;
+            self.keyring
+                .servable_epoch(RootEpochRegistry::Current(current))?
+        };
+        if !result.is_allowed {
+            bail!("Authorization denied: {}", result.rejection_reason);
+        }
+        let epoch = requested.unwrap_or(current);
+        if epoch > current {
+            bail!("root epoch {epoch} is not active; the current one is {current}");
+        }
+        self.epoch_root(epoch)?;
+        Ok(epoch)
+    }
+
+    /// Keep the running TLS issuer consistent with default key responses until reload.
+    fn ensure_rpc_ca(&self, current_epoch: u32) -> Result<()> {
+        if self.epoch_root(current_epoch)?.ca.key.public_key_der() != self.rpc_ca_pubkey {
+            self.restart.notify_one();
+            bail!("the RPC root CA changed; retry after the TLS certificate is refreshed");
+        }
+        Ok(())
+    }
+}
+
+/// Wait for the registered current roots to issue the RPC certificate at startup.
+/// An epoch-0 keyring may start while the info endpoint is unreachable, but
+/// key release still requires an authorization result with registered roots.
+pub(crate) async fn wait_for_servable_epoch(config: &KmsConfig, keyring: &Keyring) -> u32 {
+    const RETRY: Duration = Duration::from_secs(10);
+    loop {
+        let result = match config.auth_api.get_info().await {
+            Ok(info) => keyring.servable_epoch(info.root_epochs),
+            Err(err) if keyring.latest() == 0 => {
+                warn!("skipping the root epoch check: {err:#}");
+                return 0;
+            }
+            Err(err) => Err(err.context("failed to read the current root epoch")),
+        };
+        match result {
+            Ok(epoch) => return epoch,
+            Err(err) => {
+                warn!("not serving yet: {err:#}; retrying in {}s", RETRY.as_secs());
+                tokio::time::sleep(RETRY).await;
+            }
+        }
+    }
+}
+
+struct AppKeys {
+    disk_crypt_key: Vec<u8>,
+    env_crypt_key: Vec<u8>,
+    k256_key: Vec<u8>,
+    k256_signature: Vec<u8>,
+    sealed_env_key: Vec<u8>,
+}
+
+fn derive_sealed_env_key(root: &RootKeys, app_id: &[u8], app_epoch: u32) -> Result<[u8; 32]> {
+    ensure_app_id_len(app_id)?;
+    let ca_secret = p256::SecretKey::from_pkcs8_der(root.ca.key.serialized_der())?;
+    kdf::derive_key_with_salt(
+        b"dstack-sealed-env-v1",
+        &ca_secret.to_bytes(),
+        &[app_id, &app_epoch_context(app_epoch)],
+        32,
+    )
+    .map_err(|_| anyhow!("failed to derive sealed env key"))?
+    .try_into()
+    .map_err(|_| anyhow!("invalid sealed env key length"))
+}
+
+fn derive_app_keys(
+    root: &RootKeys,
+    app_id: &[u8],
+    instance_id: &[u8],
+    app_epoch: u32,
+) -> Result<AppKeys> {
+    let disk_crypt_key = kdf::derive_dh_secret(
+        &root.ca.key,
+        &[
+            app_id,
+            instance_id,
+            b"app-disk-crypt-key",
+            &app_epoch_context(app_epoch),
+        ],
+    )
+    .context("Failed to derive app disk key")?;
+    let env_crypt_key = kdf::derive_dh_secret(
+        &root.ca.key,
+        &[app_id, b"env-encrypt-key", &app_epoch_context(app_epoch)],
+    )
+    .context("Failed to derive env encrypt key")?;
+    let env_crypt_key = x25519_dalek::StaticSecret::from(env_crypt_key).to_bytes();
+    let (k256_key, k256_signature) =
+        derive_k256_key(&root.k256, app_id, app_epoch).context("Failed to derive app ecdsa key")?;
+    let sealed_env_key = derive_sealed_env_key(root, app_id, app_epoch)?.to_vec();
+    Ok(AppKeys {
+        disk_crypt_key: disk_crypt_key.to_vec(),
+        env_crypt_key: env_crypt_key.to_vec(),
+        k256_key: k256_key.to_bytes().to_vec(),
+        k256_signature,
+        sealed_env_key,
+    })
+}
+
+pub(crate) fn read_root_epoch(config: &KmsConfig) -> Result<u32> {
+    match fs::read_to_string(config.root_epoch()) {
+        Ok(epoch) => epoch.trim().parse().context("invalid root epoch file"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(err) => Err(err).context("failed to read root epoch file"),
     }
 }
 
@@ -195,24 +437,38 @@ impl RpcHandler {
     }
 
     pub(crate) async fn handover_keys(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
-        self.ensure_self_allowed()
+        self.ensure_self_allowed(Operation::KmsExportKeys)
             .await
             .context("KMS self authorization failed")?;
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
         ensure_key_release_allowed(&info, (&self.state.config).into())?;
         Ok(KmsKeyResponse {
-            temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            keys: vec![KmsKeys {
-                ca_key: self.state.inner.root_ca.key.serialize_pem(),
-                k256_key: self.state.inner.k256_key.to_bytes().to_vec(),
-            }],
+            temp_ca_key: self.state.temp_ca.key.serialize_pem(),
+            keys: self
+                .state
+                .keyring
+                .roots
+                .iter()
+                .map(|root| KmsKeys {
+                    ca_key: root.ca.key.serialize_pem(),
+                    k256_key: root.k256.to_bytes().to_vec(),
+                })
+                .collect(),
         })
     }
+}
+
+#[derive(Default)]
+struct RequestedAppEpochs {
+    root: Option<u32>,
+    app: Option<u32>,
 }
 
 struct BootConfig {
     boot_info: BootInfo,
     gateway_app_id: String,
+    root_epoch: u32,
+    app_epoch: u32,
 }
 
 pub(crate) fn build_boot_info_for_attestation(
@@ -268,20 +524,12 @@ fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) ->
     }
 }
 
-fn ensure_self_key_release_allowed(
-    self_boot_info: Option<&BootInfo>,
-    policy: KeyReleasePolicy,
-) -> Result<()> {
-    if let Some(boot_info) = self_boot_info {
-        ensure_key_release_allowed(boot_info, policy)?;
-    }
-    Ok(())
-}
-
 impl RpcHandler {
-    async fn ensure_self_allowed(&self) -> Result<Option<BootInfo>> {
+    async fn ensure_self_allowed(&self, operation: Operation) -> Result<u32> {
         if !self.state.config.enforce_self_authorization {
-            return Ok(None);
+            let epoch = self.state.current_epoch_from_info().await?;
+            self.state.ensure_rpc_ca(epoch)?;
+            return Ok(epoch);
         }
         let boot_info = self
             .state
@@ -290,24 +538,25 @@ impl RpcHandler {
             .await
             .map_err(|err| anyhow!("{err:#}"))
             .context("Failed to load cached self boot info")?;
-        self.state
+        let response = self
+            .state
             .self_allowed
-            .try_get_with((), async {
+            .try_get_with(operation, async {
                 let response = self
                     .state
                     .config
                     .auth_api
-                    .is_app_allowed(&boot_info, true)
+                    .authorize_kms(&boot_info, operation, None)
                     .await
                     .context("Failed to call self KMS auth check")?;
-                if !response.is_allowed {
-                    bail!("KMS is not allowed: {}", response.reason);
-                }
-                Ok(())
+                let epoch = self.state.authorized_epoch(&response, None)?;
+                self.state.ensure_rpc_ca(epoch)?;
+                Ok::<_, anyhow::Error>(response)
             })
             .await
             .map_err(|err| anyhow!("{err:#}"))?;
-        Ok(Some(boot_info))
+        let epoch = self.state.authorized_epoch(&response, None)?;
+        Ok(epoch)
     }
 
     fn ensure_attested(&self) -> Result<&VerifiedAttestation> {
@@ -319,57 +568,94 @@ impl RpcHandler {
 
     async fn ensure_kms_allowed(&self, vm_config: &str) -> Result<BootInfo> {
         let att = self.ensure_attested()?;
-        self.ensure_app_attestation_allowed(att, true, false, vm_config)
-            .await
-            .map(|c| c.boot_info)
+        let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
+        // Handover approval covers the highest exported epoch and all older roots.
+        let response = self
+            .state
+            .config
+            .auth_api
+            .authorize_kms(
+                &boot_info,
+                Operation::KmsImportKeys,
+                Some(self.state.keyring.latest()),
+            )
+            .await?;
+        self.state.authorized_epoch(&response, None)?;
+        self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
+            .await?;
+        Ok(boot_info)
     }
 
-    async fn ensure_app_boot_allowed(&self, vm_config: &str) -> Result<BootConfig> {
+    async fn ensure_app_boot_allowed(
+        &self,
+        vm_config: &str,
+        epochs: RequestedAppEpochs,
+    ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
-        self.ensure_app_attestation_allowed(att, false, false, vm_config)
+        let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
+        self.ensure_app_attestation_allowed(att, boot_info, vm_config, Operation::AppGetKey, epochs)
             .await
     }
 
     async fn ensure_app_attestation_allowed(
         &self,
         att: &VerifiedAttestation,
-        is_kms: bool,
-        use_boottime_mr: bool,
-        vm_config_str: &str,
+        boot_info: BootInfo,
+        vm_config: &str,
+        operation: Operation,
+        epochs: RequestedAppEpochs,
     ) -> Result<BootConfig> {
-        let boot_info = build_boot_info_for_attestation(att, use_boottime_mr, vm_config_str)?;
         let response = self
             .state
             .config
             .auth_api
-            .is_app_allowed(&boot_info, is_kms)
+            .authorize_app(&boot_info, operation, epochs.root, epochs.app)
             .await?;
-        if !response.is_allowed {
-            bail!("Boot denied: {}", response.reason);
+        let root_epoch = self.state.authorized_epoch(&response, epochs.root)?;
+        let app_epoch = epochs.app.unwrap_or(response.current_app_epoch);
+        if app_epoch > response.current_app_epoch {
+            bail!("requested app epoch is not active");
         }
+        self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
+            .await?;
+        Ok(BootConfig {
+            boot_info,
+            gateway_app_id: response.gateway_app_id,
+            root_epoch,
+            app_epoch,
+        })
+    }
+
+    async fn ensure_attestation_policy(
+        &self,
+        att: &VerifiedAttestation,
+        vm_config: &str,
+        boot_info: &BootInfo,
+        response: &AuthorizationResult,
+    ) -> Result<()> {
+        let current_epoch = if self.state.config.auth_api.is_dev() {
+            self.state.keyring.latest()
+        } else {
+            response.current_root_epoch
+        };
+        self.state.ensure_rpc_ca(current_epoch)?;
         // SNP rootfs/app/config binding is handled by the SNP launch-measurement
         // helper above. The legacy OS-image verifier is TDX-oriented and still
         // rejects SNP quotes; keep SNP on the explicit fail-closed helper path.
         if boot_info.tee_variant != TeeVariant::DstackAmdSevSnp {
             self.state
                 .verifier
-                .verify_os_image_hash(
-                    vm_config_str.into(),
-                    att,
-                    &mut VerificationDetails::default(),
-                )
+                .verify_os_image_hash(vm_config.into(), att, &mut VerificationDetails::default())
                 .await
                 .context("Failed to verify os image hash")?;
         }
-        Ok(BootConfig {
-            boot_info,
-            gateway_app_id: response.gateway_app_id,
-        })
+        Ok(())
     }
 
-    fn derive_app_ca(&self, app_id: &[u8]) -> Result<CaCert> {
-        let context_data = vec![app_id, b"app-ca"];
-        let app_key = kdf::derive_p256_key_pair(&self.state.root_ca.key, &context_data)
+    fn derive_app_ca(&self, app_id: &[u8], root: &RootKeys, app_epoch: u32) -> Result<CaCert> {
+        let epoch_context = app_epoch_context(app_epoch);
+        let context_data = vec![app_id, b"app-ca", epoch_context.as_slice()];
+        let app_key = kdf::derive_p256_key_pair(&root.ca.key, &context_data)
             .context("Failed to derive app disk key")?;
         let req = CertRequest::builder()
             .key(&app_key)
@@ -379,11 +665,7 @@ impl RpcHandler {
             .app_id(app_id)
             .special_usage("app:ca")
             .build();
-        let app_ca = self
-            .state
-            .root_ca
-            .sign(req)
-            .context("Failed to sign App CA")?;
+        let app_ca = root.ca.sign(req).context("Failed to sign App CA")?;
         Ok(CaCert::from_parts(app_key, app_ca))
     }
 }
@@ -393,60 +675,62 @@ impl KmsRpc for RpcHandler {
         if request.api_version > 1 {
             bail!("Unsupported API version: {}", request.api_version);
         }
-        self.ensure_self_allowed()
+        self.ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
         let BootConfig {
             boot_info,
             gateway_app_id,
+            root_epoch,
+            app_epoch,
         } = self
-            .ensure_app_boot_allowed(&request.vm_config)
+            .ensure_app_boot_allowed(
+                &request.vm_config,
+                RequestedAppEpochs {
+                    root: request.root_epoch,
+                    app: request.app_epoch,
+                },
+            )
             .await
             .context("App not allowed")?;
         ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
-        let app_id = boot_info.app_id;
-        let instance_id = boot_info.instance_id;
-        let os_image_hash = boot_info.os_image_hash;
-
-        let context_data = vec![&app_id[..], &instance_id[..], b"app-disk-crypt-key"];
-        let app_disk_key = kdf::derive_dh_secret(&self.state.root_ca.key, &context_data)
-            .context("Failed to derive app disk key")?;
-        let env_crypt_key = {
-            let secret =
-                kdf::derive_dh_secret(&self.state.root_ca.key, &[&app_id[..], b"env-encrypt-key"])
-                    .context("Failed to derive env encrypt key")?;
-            let secret = x25519_dalek::StaticSecret::from(secret);
-            secret.to_bytes()
-        };
-
-        let (k256_key, k256_signature) = {
-            let (k256_app_key, signature) = derive_k256_key(&self.state.k256_key, &app_id)
-                .context("Failed to derive app ecdsa key")?;
-            (k256_app_key.to_bytes().to_vec(), signature)
-        };
+        let root = self.state.epoch_root(root_epoch)?;
+        let keys = derive_app_keys(root, &boot_info.app_id, &boot_info.instance_id, app_epoch)?;
 
         Ok(AppKeyResponse {
-            ca_cert: self.state.root_ca.pem_cert.clone(),
-            disk_crypt_key: app_disk_key.to_vec(),
-            env_crypt_key: env_crypt_key.to_vec(),
-            k256_key,
-            k256_signature,
+            ca_cert: root.ca.pem_cert.clone(),
+            disk_crypt_key: keys.disk_crypt_key,
+            env_crypt_key: keys.env_crypt_key,
+            k256_key: keys.k256_key,
+            k256_signature: keys.k256_signature,
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
-            os_image_hash,
+            os_image_hash: boot_info.os_image_hash,
+            root_epoch,
+            sealed_env_key: keys.sealed_env_key,
+            app_epoch,
         })
     }
 
     async fn get_app_env_encrypt_pub_key(self, request: AppId) -> Result<PublicKeyResponse> {
-        self.ensure_self_allowed()
+        let epoch = self
+            .ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
+        let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let secret = kdf::derive_dh_secret(
-            &self.state.root_ca.key,
-            &[&request.app_id[..], "env-encrypt-key".as_bytes()],
-        )
-        .context("Failed to derive env encrypt key")?;
+        let app_epoch = self
+            .state
+            .config
+            .auth_api
+            .app_epoch(&request.app_id)
+            .await?;
+        if app_epoch != 0 {
+            bail!("epoch-aware applications must use GetSealedEnvPubKey");
+        }
+        let secret =
+            kdf::derive_dh_secret(&root.ca.key, &[&request.app_id[..], b"env-encrypt-key"])
+                .context("Failed to derive env encrypt key")?;
         let secret = x25519_dalek::StaticSecret::from(secret);
         let pubkey = x25519_dalek::PublicKey::from(&secret);
 
@@ -458,7 +742,7 @@ impl KmsRpc for RpcHandler {
 
         // Legacy signature (without timestamp) for backward compatibility
         let signature = sign_message(
-            &self.state.k256_key,
+            &root.k256,
             b"dstack-env-encrypt-pubkey",
             &request.app_id,
             &public_key,
@@ -467,7 +751,7 @@ impl KmsRpc for RpcHandler {
 
         // New signature with timestamp to prevent replay attacks
         let signature_v1 = sign_message_with_timestamp(
-            &self.state.k256_key,
+            &root.k256,
             b"dstack-env-encrypt-pubkey",
             &request.app_id,
             timestamp,
@@ -483,6 +767,43 @@ impl KmsRpc for RpcHandler {
         })
     }
 
+    async fn get_sealed_env_pub_key(self, request: AppId) -> Result<SealedEnvPubKeyResponse> {
+        let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
+        let root = self.state.epoch_root(epoch)?;
+        ensure_app_id_len(&request.app_id)?;
+        let app_epoch = self
+            .state
+            .config
+            .auth_api
+            .app_epoch(&request.app_id)
+            .await?;
+        let secret = derive_sealed_env_key(root, &request.app_id, app_epoch)?;
+        let public_key =
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("system time before UNIX epoch")?
+            .as_secs();
+        let mut message = Vec::with_capacity(8 + 32 + 8);
+        message.extend_from_slice(&epoch.to_be_bytes());
+        message.extend_from_slice(&app_epoch.to_be_bytes());
+        message.extend_from_slice(&public_key);
+        message.extend_from_slice(&timestamp.to_be_bytes());
+        let signature = sign_message(
+            &root.k256,
+            b"dstack-sealed-env-pubkey-v1",
+            &request.app_id,
+            &message,
+        )?;
+        Ok(SealedEnvPubKeyResponse {
+            public_key: public_key.to_vec(),
+            root_epoch: epoch,
+            app_epoch,
+            timestamp,
+            signature,
+        })
+    }
+
     async fn get_meta(self) -> Result<GetMetaResponse> {
         let bootstrap_info = fs::read_to_string(self.state.config.bootstrap_info())
             .ok()
@@ -493,16 +814,12 @@ impl KmsRpc for RpcHandler {
             .try_get_with((), self.state.config.auth_api.get_info())
             .await
             .map_err(|err| anyhow!("{err:#}"))?;
+        let epoch = self.state.keyring.servable_epoch(info.root_epochs)?;
+        let root = self.state.epoch_root(epoch)?;
         Ok(GetMetaResponse {
-            ca_cert: self.state.inner.root_ca.pem_cert.clone(),
+            ca_cert: root.ca.pem_cert.clone(),
             allow_any_upgrade: self.state.inner.config.auth_api.is_dev(),
-            k256_pubkey: self
-                .state
-                .inner
-                .k256_key
-                .verifying_key()
-                .to_sec1_bytes()
-                .to_vec(),
+            k256_pubkey: root.k256.verifying_key().to_sec1_bytes().to_vec(),
             bootstrap_info,
             is_dev: self.state.config.auth_api.is_dev(),
             kms_contract_address: info.kms_contract_address,
@@ -520,26 +837,26 @@ impl KmsRpc for RpcHandler {
         self.handover_keys(request).await
     }
 
-    /// Serve the temp CA certificate and key.
-    ///
-    /// Retained for older guest images and tokenless KMS onboarding. Current
-    /// guests use self-issued RA-TLS certificates and fetch the root CA via GetMeta.
-    /// The returned key authenticates nobody; client identity comes from attestation.
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
-        let self_boot_info = self
-            .ensure_self_allowed()
-            .await
-            .context("KMS self authorization failed")?;
-        ensure_self_key_release_allowed(self_boot_info.as_ref(), (&self.state.config).into())?;
+        let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
+        if self.state.config.enforce_self_authorization {
+            let boot_info = self
+                .state
+                .self_boot_info
+                .get(&())
+                .await
+                .context("missing authorized KMS boot info")?;
+            ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
+        }
         Ok(GetTempCaCertResponse {
-            temp_ca_cert: self.state.inner.temp_ca_cert.clone(),
-            temp_ca_key: self.state.inner.temp_ca_key.clone(),
-            ca_cert: self.state.inner.root_ca.pem_cert.clone(),
+            temp_ca_cert: self.state.temp_ca.pem_cert.clone(),
+            temp_ca_key: self.state.temp_ca.key.serialize_pem(),
+            ca_cert: self.state.epoch_root(epoch)?.ca.pem_cert.clone(),
         })
     }
 
     async fn sign_cert(self, request: SignCertRequest) -> Result<SignCertResponse> {
-        self.ensure_self_allowed()
+        self.ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
         let csr = match request.api_version {
@@ -566,11 +883,19 @@ impl KmsRpc for RpcHandler {
             .verify_with_ra_pubkey(&csr.pubkey, &self.state.attestation_verifier)
             .await
             .context("Quote verification failed")?;
+        let boot_info = build_boot_info_for_attestation(&attestation, true, &request.vm_config)?;
         let app_info = self
-            .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config)
+            .ensure_app_attestation_allowed(
+                &attestation,
+                boot_info,
+                &request.vm_config,
+                Operation::AppGetCert,
+                RequestedAppEpochs::default(),
+            )
             .await?;
         ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
-        let app_ca = self.derive_app_ca(&app_info.boot_info.app_id)?;
+        let root = self.state.epoch_root(app_info.root_epoch)?;
+        let app_ca = self.derive_app_ca(&app_info.boot_info.app_id, root, app_info.app_epoch)?;
         // Stamp the identity verified above, not the requester's own claims.
         // Runtime measurements (`false`) are what certificates have always carried.
         let cert_app_info = attestation
@@ -583,7 +908,7 @@ impl KmsRpc for RpcHandler {
             certificate_chain: vec![
                 cert.pem(),
                 app_ca.pem_cert.clone(),
-                self.state.root_ca.pem_cert.clone(),
+                root.ca.pem_cert.clone(),
             ],
         })
     }

@@ -35,6 +35,7 @@ mod one_shot;
 mod openapi;
 mod vm_launcher;
 
+
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REV: &str = dstack_build_info::git_revision!();
 

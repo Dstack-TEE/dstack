@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::v0::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
+pub(crate) use dstack_types::authorization::AuthorizationOperation as Operation;
 use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
@@ -78,12 +79,90 @@ pub(crate) async fn local_kms_boot_info(verifier: &AttestationVerifier) -> Resul
     build_boot_info_for_attestation(&verified, false, "")
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct BootResponse {
+pub(crate) struct AuthorizationResult {
     pub is_allowed: bool,
+    pub rejection_reason: String,
     pub gateway_app_id: String,
-    pub reason: String,
+    pub current_root_epoch: u32,
+    pub current_app_epoch: u32,
+    pub current_root_epoch_hash: String,
+}
+
+impl AuthorizationResult {
+    pub fn current_root(&self) -> Result<Option<CurrentRootEpoch>> {
+        let chain_hash: [u8; 32] =
+            hex::decode(self.current_root_epoch_hash.trim_start_matches("0x"))
+                .ok()
+                .and_then(|hash| hash.try_into().ok())
+                .context("invalid authorization root epoch chain hash")?;
+        if chain_hash == [0; 32] {
+            return Ok(None);
+        }
+        Ok(Some(CurrentRootEpoch {
+            epoch: self.current_root_epoch,
+            chain_hash,
+        }))
+    }
+}
+
+/// The root epoch fields: the KMS sends the epoch it serves in boot checks,
+/// and auth backends report the current one in info responses.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RootEpochFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_epoch_hash: Option<String>,
+}
+
+impl From<CurrentRootEpoch> for RootEpochFields {
+    fn from(current: CurrentRootEpoch) -> Self {
+        Self {
+            root_epoch: Some(current.epoch),
+            root_epoch_hash: Some(format!("0x{}", hex::encode(current.chain_hash))),
+        }
+    }
+}
+
+impl RootEpochFields {
+    pub fn registry(&self) -> Result<RootEpochRegistry> {
+        match (self.root_epoch, &self.root_epoch_hash) {
+            (None, None) => Ok(RootEpochRegistry::Empty),
+            (Some(epoch), Some(hash)) => {
+                let chain_hash = hex::decode(hash.trim_start_matches("0x"))
+                    .ok()
+                    .and_then(|hash| hash.try_into().ok())
+                    .context("invalid root epoch chain hash")?;
+                Ok(RootEpochRegistry::Current(CurrentRootEpoch {
+                    epoch,
+                    chain_hash,
+                }))
+            }
+            _ => bail!("the auth API reports a root epoch without its chain hash"),
+        }
+    }
+}
+
+/// The root epoch governance made current, with the chain hash committing to
+/// the root public keys of epochs 0..=epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CurrentRootEpoch {
+    pub epoch: u32,
+    pub chain_hash: [u8; 32],
+}
+
+/// What governance says about root epochs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum RootEpochRegistry {
+    /// The dev backend: there is nothing to check against.
+    Unchecked,
+    /// No epoch is registered, or the backend predates root epochs.
+    Empty,
+    Current(CurrentRootEpoch),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -96,6 +175,8 @@ pub(crate) struct AuthApiInfoResponse {
     pub gateway_app_id: String,
     pub chain_id: u64,
     pub app_implementation: String,
+    #[serde(flatten)]
+    pub root_epoch: RootEpochFields,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +188,7 @@ pub(crate) struct GetInfoResponse {
     pub eth_rpc_url: Option<String>,
     pub chain_id: Option<u64>,
     pub app_implementation: Option<String>,
+    pub root_epochs: RootEpochRegistry,
 }
 
 const AUTH_API_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -167,25 +249,108 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 }
 
 impl AuthApi {
-    pub async fn is_app_allowed(&self, boot_info: &BootInfo, is_kms: bool) -> Result<BootResponse> {
-        ensure_identity_widths(boot_info)?;
+    pub async fn authorize_kms(
+        &self,
+        app_info: &BootInfo,
+        operation: Operation,
+        requested_root_epoch: Option<u32>,
+    ) -> Result<AuthorizationResult> {
+        if !operation.is_kms() {
+            bail!("invalid KMS authorization operation");
+        }
+        self.check_authorization(
+            app_info,
+            "authorizeKms",
+            operation,
+            requested_root_epoch,
+            None,
+        )
+        .await
+    }
+
+    pub async fn authorize_app(
+        &self,
+        app_info: &BootInfo,
+        operation: Operation,
+        requested_root_epoch: Option<u32>,
+        requested_app_epoch: Option<u32>,
+    ) -> Result<AuthorizationResult> {
+        if operation.is_kms() {
+            bail!("invalid app authorization operation");
+        }
+        self.check_authorization(
+            app_info,
+            "authorizeApp",
+            operation,
+            requested_root_epoch,
+            requested_app_epoch,
+        )
+        .await
+    }
+
+    async fn check_authorization(
+        &self,
+        app_info: &BootInfo,
+        method: &str,
+        operation: Operation,
+        requested_root_epoch: Option<u32>,
+        requested_app_epoch: Option<u32>,
+    ) -> Result<AuthorizationResult> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AuthorizationRequest<'a> {
+            #[serde(flatten)]
+            app_info: &'a BootInfo,
+            operation: Operation,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            requested_app_epoch: Option<u32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            requested_root_epoch: Option<u32>,
+        }
+        ensure_identity_widths(app_info)?;
         match self {
-            AuthApi::Dev { dev } => Ok(BootResponse {
+            AuthApi::Dev { dev } => Ok(AuthorizationResult {
                 is_allowed: true,
-                reason: "".to_string(),
+                rejection_reason: String::new(),
                 gateway_app_id: dev.gateway_app_id.clone(),
+                current_root_epoch: 0,
+                current_app_epoch: 0,
+                current_root_epoch_hash: hex::encode([0; 32]),
             }),
             AuthApi::Webhook { webhook } => {
-                let path = if is_kms {
-                    "bootAuth/kms"
-                } else {
-                    "bootAuth/app"
-                };
-                let url = url_join(&webhook.url, path);
-                http_post(&url, &boot_info, webhook.timeout).await
+                let url = url_join(&webhook.url, method);
+                http_post(
+                    &url,
+                    &AuthorizationRequest {
+                        app_info,
+                        operation,
+                        requested_app_epoch,
+                        requested_root_epoch,
+                    },
+                    webhook.timeout,
+                )
+                .await
             }
         }
     }
+
+    pub async fn app_epoch(&self, app_id: &[u8]) -> Result<u32> {
+        ensure_app_id_len(app_id)?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct AppEpoch {
+            current_app_epoch: u32,
+        }
+        match self {
+            AuthApi::Dev { .. } => Ok(0),
+            AuthApi::Webhook { webhook } => {
+                let url = url_join(&webhook.url, &format!("app/0x{}", hex::encode(app_id)));
+                let response: AppEpoch = http_get(&url, webhook.timeout).await?;
+                Ok(response.current_app_epoch)
+            }
+        }
+    }
+
 
     pub async fn get_info(&self) -> Result<GetInfoResponse> {
         match self {
@@ -196,6 +361,7 @@ impl AuthApi {
                 gateway_app_id: Some(dev.gateway_app_id.clone()),
                 chain_id: None,
                 app_implementation: None,
+                root_epochs: RootEpochRegistry::Unchecked,
             }),
             AuthApi::Webhook { webhook } => {
                 let info: AuthApiInfoResponse = http_get(&webhook.url, webhook.timeout).await?;
@@ -211,6 +377,7 @@ impl AuthApi {
                     chain_id: Some(info.chain_id),
                     gateway_app_id: Some(info.gateway_app_id.clone()),
                     app_implementation: Some(info.app_implementation.clone()),
+                    root_epochs: info.root_epoch.registry()?,
                 })
             }
         }
@@ -255,20 +422,24 @@ pub(crate) async fn ensure_self_kms_allowed(
         .context("failed to build local KMS boot info")?;
     let response = cfg
         .auth_api
-        .is_app_allowed(&boot_info, true)
+        .authorize_kms(&boot_info, Operation::KmsBootstrap, None)
         .await
-        .context("failed to call KMS auth check")?;
+        .context("failed to call KMS bootstrap authorization")?;
     if !response.is_allowed {
-        bail!("boot denied: {}", response.reason);
+        bail!("boot denied: {}", response.rejection_reason);
     }
     Ok(())
 }
 
+/// `allow_legacy_cert` accepts a source whose certificate predates the unified
+/// attestation format, judging its image by mrAggregated alone.
 pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
     verifier: &AttestationVerifier,
-) -> Result<()> {
+    allow_legacy_cert: bool,
+    root_epoch: u32,
+) -> Result<RootEpochRegistry> {
     let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
     // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
@@ -277,6 +448,9 @@ pub(crate) async fn ensure_kms_allowed(
     // A source that presents a config but no os_image_hash is not legacy and gets no fallback.
     // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
     if boot_info.os_image_hash.is_empty() && attestation.config.is_empty() {
+        if !allow_legacy_cert {
+            bail!("the source KMS certificate does not carry its OS image hash");
+        }
         warn!("source KMS uses the legacy cert format, falling back to the local os_image_hash");
         let local_info = local_kms_boot_info(verifier)
             .await
@@ -285,13 +459,19 @@ pub(crate) async fn ensure_kms_allowed(
     }
     let response = cfg
         .auth_api
-        .is_app_allowed(&boot_info, true)
+        .authorize_kms(&boot_info, Operation::KmsExportKeys, Some(root_epoch))
         .await
-        .context("failed to call KMS auth check")?;
+        .context("failed to authorize source KMS key export")?;
     if !response.is_allowed {
-        bail!("boot denied: {}", response.reason);
+        bail!("boot denied: {}", response.rejection_reason);
     }
-    Ok(())
+    if cfg.auth_api.is_dev() {
+        return Ok(RootEpochRegistry::Unchecked);
+    }
+    let current = response
+        .current_root()?
+        .context("root epoch not registered")?;
+    Ok(RootEpochRegistry::Current(current))
 }
 
 #[cfg(test)]

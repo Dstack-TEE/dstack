@@ -33,7 +33,11 @@ contract AddKmsAggregatedMr is BaseScript {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.addKmsAggregatedMr(mrAggregated);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.addKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
+        } else {
+            kms.addKmsAggregatedMr(mrAggregated);
+        }
         vm.stopBroadcast();
 
         console.log("Added KMS aggregated MR:", vm.toString(mrAggregated));
@@ -45,7 +49,11 @@ contract RemoveKmsAggregatedMr is BaseScript {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.removeKmsAggregatedMr(mrAggregated);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.removeKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
+        } else {
+            kms.removeKmsAggregatedMr(mrAggregated);
+        }
         vm.stopBroadcast();
 
         console.log("Removed KMS aggregated MR:", vm.toString(mrAggregated));
@@ -57,7 +65,11 @@ contract AddOsImage is BaseScript {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.addOsImageHash(imageHash);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.addOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
+        } else {
+            kms.addOsImageHash(imageHash);
+        }
         vm.stopBroadcast();
 
         console.log("Added OS image hash:", vm.toString(imageHash));
@@ -69,7 +81,11 @@ contract AddKmsDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.addKmsDevice(deviceId);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.addKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
+        } else {
+            kms.addKmsDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Added KMS device:", vm.toString(deviceId));
@@ -88,24 +104,56 @@ contract SetGatewayAppId is BaseScript {
     }
 }
 
-contract SetKmsInfo is BaseScript {
+contract RegisterRootEpoch is BaseScript {
     function run() external {
-        bytes memory k256Pubkey = vm.envBytes("K256_PUBKEY");
         bytes memory caPubkey = vm.envBytes("CA_PUBKEY");
-        bytes memory quote = vm.envBytes("QUOTE");
-        bytes memory eventlog = vm.envBytes("EVENTLOG");
+        bytes memory k256Pubkey = vm.envBytes("K256_PUBKEY");
+        string memory evidenceUrl = vm.envString("EVIDENCE_URL");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.setKmsInfo(
-            DstackKms.KmsInfo({ k256Pubkey: k256Pubkey, caPubkey: caPubkey, quote: quote, eventlog: eventlog })
-        );
+        uint256 epoch = kms.registerRootEpoch(caPubkey, k256Pubkey, evidenceUrl);
         vm.stopBroadcast();
 
-        console.log("KMS info set successfully");
-        console.log("  K256 Pubkey length:", k256Pubkey.length);
-        console.log("  CA Pubkey length:", caPubkey.length);
-        console.log("  Quote length:", quote.length);
-        console.log("  Eventlog length:", eventlog.length);
+        console.log("Registered KMS root epoch", epoch);
+    }
+}
+
+contract ActivateRootEpoch is BaseScript {
+    function run() external {
+        uint256 epoch = vm.envUint("ROOT_EPOCH");
+        bytes32 chainHash = vm.envBytes32("CHAIN_HASH");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.activateRootEpoch(epoch, chainHash);
+        vm.stopBroadcast();
+
+        console.log("Activated KMS root epoch", epoch);
+    }
+}
+
+contract SetRootEpochEvidenceUrl is BaseScript {
+    function run() external {
+        uint256 epoch = vm.envUint("ROOT_EPOCH");
+        string memory evidenceUrl = vm.envString("EVIDENCE_URL");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.setRootEpochEvidenceUrl(epoch, evidenceUrl);
+        vm.stopBroadcast();
+
+        console.log("Updated the evidence URL of KMS root epoch", epoch);
+    }
+}
+
+contract PopRootEpoch is BaseScript {
+    function run() external {
+        uint256 epoch = vm.envUint("ROOT_EPOCH");
+        bytes32 chainHash = vm.envBytes32("CHAIN_HASH");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        kms.popRootEpoch(epoch, chainHash);
+        vm.stopBroadcast();
+
+        console.log("Popped pending KMS root epoch", epoch);
     }
 }
 
@@ -116,7 +164,11 @@ contract AddComposeHash is BaseScript {
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.addComposeHash(composeHash);
+        if (vm.envExists("APP_EPOCH")) {
+            app.addComposeHashAtEpoch(vm.envUint("APP_EPOCH"), composeHash);
+        } else {
+            app.addComposeHash(composeHash);
+        }
         vm.stopBroadcast();
 
         console.log("Added compose hash:", vm.toString(composeHash));
@@ -129,7 +181,11 @@ contract AddDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.addDevice(deviceId);
+        if (vm.envExists("APP_EPOCH")) {
+            app.addDeviceAtEpoch(vm.envUint("APP_EPOCH"), deviceId);
+        } else {
+            app.addDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Added device:", vm.toString(deviceId));
@@ -142,7 +198,11 @@ contract SetAllowAnyDevice is BaseScript {
         bool allow = vm.envBool("ALLOW_ANY_DEVICE");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.setAllowAnyDevice(allow);
+        if (vm.envExists("APP_EPOCH")) {
+            app.setAllowAnyDeviceAtEpoch(vm.envUint("APP_EPOCH"), allow);
+        } else {
+            app.setAllowAnyDevice(allow);
+        }
         vm.stopBroadcast();
 
         console.log("Set allowAnyDevice to:", allow);
@@ -241,7 +301,11 @@ contract RemoveOsImage is BaseScript {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.removeOsImageHash(imageHash);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.removeOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
+        } else {
+            kms.removeOsImageHash(imageHash);
+        }
         vm.stopBroadcast();
 
         console.log("Removed OS image hash:", vm.toString(imageHash));
@@ -253,7 +317,11 @@ contract RemoveKmsDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.removeKmsDevice(deviceId);
+        if (vm.envExists("ROOT_EPOCH")) {
+            kms.removeKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
+        } else {
+            kms.removeKmsDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Removed KMS device:", vm.toString(deviceId));
@@ -267,7 +335,11 @@ contract RemoveComposeHash is BaseScript {
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.removeComposeHash(composeHash);
+        if (vm.envExists("APP_EPOCH")) {
+            app.removeComposeHashAtEpoch(vm.envUint("APP_EPOCH"), composeHash);
+        } else {
+            app.removeComposeHash(composeHash);
+        }
         vm.stopBroadcast();
 
         console.log("Removed compose hash:", vm.toString(composeHash));
@@ -280,7 +352,11 @@ contract RemoveDevice is BaseScript {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        app.removeDevice(deviceId);
+        if (vm.envExists("APP_EPOCH")) {
+            app.removeDeviceAtEpoch(vm.envUint("APP_EPOCH"), deviceId);
+        } else {
+            app.removeDevice(deviceId);
+        }
         vm.stopBroadcast();
 
         console.log("Removed device:", vm.toString(deviceId));
@@ -331,3 +407,14 @@ contract DisableAppUpgrades is BaseScript {
 // a live proxy to the current `contracts/DstackKms.sol` / `contracts/DstackApp.sol`
 // source. The `UpgradeKmsToV2` / `UpgradeAppToV2` variants target the V2 test
 // mocks under `contracts/test-utils/` and are for upgrade-flow tests only.
+
+contract AdvanceAppEpoch is BaseScript {
+    function run() external {
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        uint256 expected = vm.envUint("EXPECTED_APP_EPOCH");
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        app.advanceAppEpoch(expected);
+        vm.stopBroadcast();
+        console.log("Current app epoch:", app.currentAppEpoch());
+    }
+}

@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
-use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
+use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
 use dstack_types::{AppKeys, KeyProvider};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::{
     attestation::{AppInfo, AttestationVerifier, VersionedAttestation},
-    cert::{generate_self_signed_ra_cert, CaCert, CertSigningRequestV2},
+    cert::{generate_self_signed_ra_cert, CaCert, CertPair, CertSigningRequestV2},
 };
 
 pub enum CertRequestClient {
@@ -47,6 +47,77 @@ pub fn validate_kms_rpc_cert(cert: Option<CertInfo>) -> Result<()> {
         bail!("invalid server cert usage: {usage}");
     }
     Ok(())
+}
+
+/// Fetch keys directly over the attested connection, without a metadata/CA preflight.
+/// A supplied CA always pins the connection, independently of the epoch selector.
+/// Callers retain the startup KMS CA for the CVM lifetime, including later key
+/// requests. Without a supplied CA, bind the response CA to this connection and
+/// establish its identity through the provider pin or launch-measurement policy.
+pub async fn request_app_keys(
+    url: String,
+    request: GetAppKeyRequest,
+    client_cert: CertPair,
+    attestation_verifier: Arc<AttestationVerifier>,
+    trusted_ca: Option<String>,
+) -> Result<AppKeyResponse> {
+    let server_cert = Arc::new(Mutex::new(None));
+    let captured = server_cert.clone();
+    let client = RaClientConfig::builder()
+        .remote_uri(url)
+        .tls_client_cert(client_cert.cert_pem)
+        .tls_client_key(client_cert.key_pem)
+        .tls_skip_ca_verification(trusted_ca.is_none())
+        .tls_built_in_root_certs(false)
+        .maybe_tls_ca_cert(trusted_ca.clone())
+        .attestation_verifier(attestation_verifier)
+        .cert_validator(Box::new(move |info| {
+            let info = info.context("missing KMS server certificate")?;
+            if info.attestation.is_none() {
+                bail!("KMS server certificate has no verified attestation");
+            }
+            let cert_der = info.cert_der.clone();
+            validate_kms_rpc_cert(Some(info))?;
+            *captured
+                .lock()
+                .map_err(|_| anyhow::anyhow!("KMS certificate lock poisoned"))? = Some(cert_der);
+            Ok(())
+        }))
+        .build()
+        .into_client()?;
+    let requested_root_epoch = request.root_epoch;
+    let requested_app_epoch = request.app_epoch;
+    let response = KmsClient::new(client).get_app_key(request).await?;
+    if requested_root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
+        bail!("KMS returned a different root epoch than requested");
+    }
+    if requested_app_epoch.is_some_and(|epoch| epoch != response.app_epoch) {
+        bail!("KMS returned a different app epoch than requested");
+    }
+    let cert = server_cert
+        .lock()
+        .map_err(|_| anyhow::anyhow!("KMS certificate lock poisoned"))?;
+    validate_kms_root(
+        cert.as_deref().context("missing KMS server certificate")?,
+        trusted_ca.as_deref().unwrap_or(&response.ca_cert),
+    )?;
+    Ok(response)
+}
+
+fn validate_kms_root(server_cert: &[u8], root_ca: &str) -> Result<()> {
+    let (_, pem) =
+        x509_parser::pem::parse_x509_pem(root_ca.as_bytes()).context("invalid KMS root CA")?;
+    let root = pem.parse_x509().context("invalid KMS root CA")?;
+    let (_, leaf) =
+        x509_parser::parse_x509_certificate(server_cert).context("invalid KMS RPC certificate")?;
+    if !root.is_ca() || !root.validity().is_valid() || !leaf.validity().is_valid() {
+        bail!("invalid or expired KMS certificate");
+    }
+    if leaf.issuer() != root.subject() {
+        bail!("KMS RPC certificate issuer does not match the root CA");
+    }
+    leaf.verify_signature(Some(root.public_key()))
+        .context("KMS root CA did not sign the attested RPC certificate")
 }
 
 fn kms_client(
@@ -99,6 +170,32 @@ impl CertRequestClient {
                 Ok(response.certificate_chain)
             }
         }
+    }
+
+    /// Fetch app keys from the startup KMS, using its current epochs for omitted selectors.
+    pub async fn get_app_key(
+        &self,
+        root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
+    ) -> Result<AppKeyResponse> {
+        let CertRequestClient::Kms { client, vm_config } = self else {
+            bail!("only KMS-provided keys have older root epochs");
+        };
+        let response = client
+            .get_app_key(GetAppKeyRequest {
+                api_version: 1,
+                vm_config: vm_config.clone(),
+                root_epoch,
+                app_epoch,
+            })
+            .await?;
+        if root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
+            bail!("KMS returned a different root epoch than requested");
+        }
+        if app_epoch.is_some_and(|epoch| epoch != response.app_epoch) {
+            bail!("KMS returned a different app epoch than requested");
+        }
+        Ok(response)
     }
 
     pub async fn get_root_ca(&self) -> Result<String> {

@@ -68,6 +68,9 @@ export interface GetKeyResponseV1 {
   public_key: Uint8Array
   /** Two links: the app root key over the v1 key claim, then the KMS root key. */
   signature_chain: Uint8Array[]
+  /** KMS root key epoch the key was derived from. */
+  root_epoch: number
+  app_epoch: number
 }
 
 export interface AttestResponseV1 {
@@ -333,21 +336,32 @@ export class DstackClientV1 {
    * @param domain Caller-chosen domain-separation string. May be empty.
    * @param algorithm Exactly `secp256k1` or `ed25519`. No default, no `k256` alias.
    */
-  async getKey(domain: string, algorithm: string): Promise<GetKeyResponseV1> {
+  async getKey(domain: string, algorithm: string, rootEpoch?: number, appEpoch?: number): Promise<GetKeyResponseV1> {
     // v0 defaulted an empty algorithm to secp256k1, which let a typo hand back a
     // key of the wrong type under a name the caller thought meant something else.
     if (!algorithm) {
       throw new Error('algorithm is required, use "secp256k1" or "ed25519"')
     }
-    const payload = JSON.stringify({ domain, algorithm })
-    const result = await send_rpc_request<{ key: string, public_key: string, signature_chain: string[] }>(
+    // Unset is the current KMS root key epoch; name an older one only to migrate off it.
+    if (rootEpoch !== undefined && (!Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff)) {
+      throw new Error('rootEpoch must be a uint32')
+    }
+    if (appEpoch !== undefined && (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff)) throw new Error('appEpoch must be a uint32')
+    const payload = JSON.stringify({ domain, algorithm, root_epoch: rootEpoch, app_epoch: appEpoch })
+    const result = await send_rpc_request<{ key: string, public_key: string, signature_chain: string[], root_epoch?: number, app_epoch?: number }>(
       this.endpoint, '/v1/GetKey', payload)
     throwOnRpcError(result)
+    if ((rootEpoch !== undefined && (result.root_epoch ?? 0) !== rootEpoch) ||
+        (appEpoch !== undefined && (result.app_epoch ?? 0) !== appEpoch)) {
+      throw new Error('GetKey returned different epochs than requested')
+    }
     return Object.freeze({
       key: from_hex(result.key, 'key'),
       public_key: from_hex(result.public_key, 'public_key'),
       signature_chain: to_list(result.signature_chain, 'signature_chain', 'error')
         .map((link, i) => from_hex(link, `signature_chain[${i}]`)),
+      root_epoch: result.root_epoch ?? 0,
+      app_epoch: result.app_epoch ?? 0,
       __name__: 'GetKeyResponseV1' as const,
     })
   }

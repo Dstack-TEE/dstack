@@ -100,12 +100,7 @@ pub async fn run_one_shot(
 
     // Create or use specified workdir and setup files
     let workdir_path = match workdir_option {
-        Some(workdir_str) => {
-            let workdir_path = std::path::PathBuf::from(workdir_str);
-            fs_err::create_dir_all(&workdir_path)
-                .with_context(|| format!("Failed to create workdir: {}", workdir_path.display()))?;
-            workdir_path
-        }
+        Some(workdir_str) => std::path::PathBuf::from(workdir_str),
         None => {
             // Create a persistent directory in current working directory
             let vm_name = &manifest.name;
@@ -114,14 +109,18 @@ pub async fn run_one_shot(
                 .unwrap_or_default()
                 .as_secs();
             let workdir_name = format!("dstack-oneshot-{}-{}", vm_name, timestamp);
-            let workdir_path = std::env::current_dir()?.join(workdir_name);
-            fs_err::create_dir_all(&workdir_path)
-                .with_context(|| format!("Failed to create workdir: {}", workdir_path.display()))?;
-            workdir_path
+            std::env::current_dir()?.join(workdir_name)
         }
     };
 
     let vm_work_dir = VmWorkDir::new(&workdir_path);
+    if vm_work_dir.uses_sealed_env(&vm_config.encrypted_env, &vm_config.sealed_env)?
+        && !image.info.sealed_env
+    {
+        anyhow::bail!("image {:?} does not support sealed_env; provide encrypted_env or choose a compatible image", manifest.image);
+    }
+    fs::create_dir_all(&workdir_path)
+        .with_context(|| format!("failed to create workdir: {}", workdir_path.display()))?;
 
     vm_work_dir
         .put_manifest(&manifest)
@@ -216,10 +215,7 @@ Compose file content (first 200 chars):
         .context("Failed to write app compose file")?;
 
     // Write other files if present
-    if !vm_config.encrypted_env.is_empty() {
-        fs_err::write(vm_work_dir.encrypted_env_path(), &vm_config.encrypted_env)
-            .context("Failed to write encrypted env")?;
-    }
+    vm_work_dir.write_env(&vm_config.encrypted_env, &vm_config.sealed_env)?;
 
     if !vm_config.user_config.is_empty() {
         fs_err::write(vm_work_dir.user_config_path(), &vm_config.user_config)

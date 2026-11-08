@@ -124,7 +124,7 @@ contract CheckKmsAllowed is BaseQueryScript {
         require(address(kms) != address(0), "KMS_CONTRACT_ADDR not set");
 
         // Read boot info from environment
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: vm.envAddress("APP_ID"),
             composeHash: vm.envBytes32("COMPOSE_HASH"),
             instanceId: vm.envOr("INSTANCE_ID", address(0)),
@@ -150,7 +150,7 @@ contract CheckAppAllowed is BaseQueryScript {
         require(address(kms) != address(0), "KMS_CONTRACT_ADDR not set");
 
         // Read boot info from environment
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: vm.envAddress("APP_ID"),
             composeHash: vm.envBytes32("COMPOSE_HASH"),
             instanceId: vm.envOr("INSTANCE_ID", address(0)),
@@ -211,6 +211,22 @@ contract GetKmsSettings is BaseQueryScript {
         console.log("  Quote length:", quote.length);
         console.log("  Eventlog length:", eventlog.length);
 
+        uint256 epochCount = kms.rootEpochCount();
+        console.log("\nRegistered root epochs:", epochCount);
+        if (epochCount > 0) {
+            (uint256 current,) = kms.currentRootEpoch();
+            console.log("Current root epoch:", current);
+        }
+        for (uint256 epoch = 0; epoch < epochCount; epoch++) {
+            (bytes memory epochCa, bytes memory epochK256, string memory evidenceUrl, bytes32 chainHash) =
+                kms.rootEpoch(epoch);
+            console.log("  Epoch", epoch);
+            console.log("    CA Pubkey:", vm.toString(epochCa));
+            console.log("    K256 Pubkey:", vm.toString(epochK256));
+            console.log("    Evidence URL:", evidenceUrl);
+            console.log("    Chain hash:", vm.toString(chainHash));
+        }
+
         // Check implementation via storage
         bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
         address implementation = address(uint160(uint256(vm.load(address(kms), implSlot))));
@@ -232,5 +248,13 @@ contract GetAppSettings is BaseQueryScript {
         bytes32 implSlot = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
         address implementation = address(uint160(uint256(vm.load(address(app), implSlot))));
         console.log("\nProxy Implementation:", implementation);
+    }
+}
+
+contract GetAppEpoch is BaseQueryScript {
+    function run() external view {
+        require(address(kms) != address(0), "KMS_CONTRACT_ADDR not set");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        console.log("Current app epoch:", kms.currentAppEpoch(address(app)));
     }
 }

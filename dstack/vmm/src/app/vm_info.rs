@@ -203,6 +203,7 @@ impl VmInfo {
                     compose_file: fs::read_to_string(workdir.app_compose_path())
                         .unwrap_or_default(),
                     encrypted_env: fs::read(workdir.encrypted_env_path()).unwrap_or_default(),
+                    sealed_env: fs::read(workdir.sealed_env_path()).unwrap_or_default(),
                     user_config: fs::read_to_string(workdir.user_config_path()).unwrap_or_default(),
                     vcpu: self.manifest.vcpu,
                     memory: self.manifest.memory,

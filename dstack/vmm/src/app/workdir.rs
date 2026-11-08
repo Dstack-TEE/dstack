@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use dstack_types::{
-    shared_filenames::{APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG},
+    shared_filenames::{
+        APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG, USER_CONFIG,
+    },
     AppCompose, SysConfig,
 };
 use fs_err as fs;
@@ -131,8 +133,53 @@ impl VmWorkDir {
         self.shared_dir().join(USER_CONFIG)
     }
 
+    pub(crate) fn validate_env_update(encrypted: &[u8], sealed: &[u8]) -> Result<()> {
+        if !encrypted.is_empty() && !sealed.is_empty() {
+            anyhow::bail!("encrypted_env and sealed_env are mutually exclusive");
+        }
+        Ok(())
+    }
+
+    /// Empty inputs preserve existing environment files, including invalid sealed files.
+    pub(crate) fn uses_sealed_env(&self, encrypted: &[u8], sealed: &[u8]) -> Result<bool> {
+        Self::validate_env_update(encrypted, sealed)?;
+        if !sealed.is_empty() {
+            return Ok(true);
+        }
+        if !encrypted.is_empty() {
+            return Ok(false);
+        }
+        match fs::symlink_metadata(self.sealed_env_path()) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err).context("failed to inspect sealed environment"),
+        }
+    }
+
+    /// Caller serializes updates to an existing VM with its launch lock.
+    pub(crate) fn write_env(&self, encrypted: &[u8], sealed: &[u8]) -> Result<()> {
+        Self::validate_env_update(encrypted, sealed)?;
+        let (path, other, data) = if !sealed.is_empty() {
+            (self.sealed_env_path(), self.encrypted_env_path(), sealed)
+        } else if !encrypted.is_empty() {
+            (self.encrypted_env_path(), self.sealed_env_path(), encrypted)
+        } else {
+            return Ok(());
+        };
+        safe_write::safe_write(path, data).context("failed to write env")?;
+        match fs::remove_file(other) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err).context("failed to remove superseded env"),
+        }
+    }
+
     pub fn encrypted_env_path(&self) -> PathBuf {
         self.shared_dir().join(ENCRYPTED_ENV)
+    }
+
+    pub fn sealed_env_path(&self) -> PathBuf {
+        self.shared_dir().join(SEALED_ENV)
     }
 
     pub fn instance_info_path(&self) -> PathBuf {

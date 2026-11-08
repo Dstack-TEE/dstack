@@ -8,11 +8,21 @@ use k256::ecdsa::SigningKey;
 use ra_tls::api_v1::sign_recoverable_keccak256;
 use ra_tls::kdf;
 
+pub(crate) fn app_epoch_context(epoch: u32) -> Vec<u8> {
+    if epoch == 0 {
+        Vec::new()
+    } else {
+        [b"app-epoch-v1:".as_slice(), &epoch.to_be_bytes()].concat()
+    }
+}
+
 pub(crate) fn derive_k256_key(
     parent_key: &SigningKey,
     app_id: &[u8],
+    app_epoch: u32,
 ) -> Result<(SigningKey, Vec<u8>)> {
-    let context_data = [app_id, b"app-key"];
+    let epoch_context = app_epoch_context(app_epoch);
+    let context_data = [app_id, b"app-key", epoch_context.as_slice()];
     let derived_key_bytes: [u8; 32] = kdf::derive_key(&parent_key.to_bytes(), &context_data, 32)?
         .try_into()
         .ok()
@@ -20,12 +30,21 @@ pub(crate) fn derive_k256_key(
     let derived_signing_key = SigningKey::from_bytes(&derived_key_bytes.into())?;
     let pubkey = derived_signing_key.verifying_key();
 
-    let signature = sign_message(
-        parent_key,
-        b"dstack-kms-issued",
-        app_id,
-        &pubkey.to_sec1_bytes(),
-    )?;
+    let signature = if app_epoch == 0 {
+        sign_message(
+            parent_key,
+            b"dstack-kms-issued",
+            app_id,
+            &pubkey.to_sec1_bytes(),
+        )?
+    } else {
+        sign_message(
+            parent_key,
+            b"dstack-kms-issued-v2",
+            app_id,
+            &[app_epoch.to_be_bytes().as_slice(), &pubkey.to_sec1_bytes()].concat(),
+        )?
+    };
     Ok((derived_signing_key, signature))
 }
 

@@ -14,8 +14,9 @@ use dstack_vmm_rpc::vmm_server::{VmmRpc, VmmServer};
 use dstack_vmm_rpc::{
     AppId, ComposeHash as RpcComposeHash, GatewaySettings, GetInfoResponse, GetMetaResponse, Id,
     ImageInfo as RpcImageInfo, ImageListResponse, KmsSettings, ListGpusResponse, PublicKeyResponse,
-    ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, StatusRequest, StatusResponse,
-    SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse, VmConfiguration,
+    ReloadVmsResponse, ResizeVmRequest, ResourcesSettings, SealedEnvPubKeyResponse, StatusRequest,
+    StatusResponse, SvListResponse, SvProcessInfo, UpdateVmRequest, VersionResponse,
+    VmConfiguration,
 };
 use fs_err as fs;
 use path_absolutize::Absolutize;
@@ -311,6 +312,7 @@ pub fn create_manifest_from_vm_config(
     request: VmConfiguration,
     cvm_config: &crate::config::CvmConfig,
 ) -> Result<Manifest> {
+    VmWorkDir::validate_env_update(&request.encrypted_env, &request.sealed_env)?;
     validate_label(&request.name)?;
     // Same checks as `validate_resize_request`.
     if request.vcpu == 0 {
@@ -935,6 +937,25 @@ impl RpcHandler {
         Ok(true)
     }
 
+    fn validate_env_image(
+        &self,
+        work_dir: &VmWorkDir,
+        image: &str,
+        encrypted_env: &[u8],
+        sealed_env: &[u8],
+    ) -> Result<()> {
+        if !work_dir.uses_sealed_env(encrypted_env, sealed_env)? {
+            return Ok(());
+        }
+        let image_dir = self.app.config.image.image_dir(image)?;
+        let target =
+            Image::load(&image_dir).with_context(|| format!("failed to load image {image:?}"))?;
+        if !target.info.sealed_env {
+            bail!("image {image:?} does not support sealed_env; provide encrypted_env or choose a compatible image");
+        }
+        Ok(())
+    }
+
     /// Grows the data disk to `manifest.disk_size` if that exceeds `old_size`.
     async fn grow_disk_if_needed(
         vm_work_dir: &VmWorkDir,
@@ -992,6 +1013,12 @@ impl VmmRpc for RpcHandler {
         info!(vm_id = %id, "create_vm RPC called");
         let app_id = manifest.app_id.clone();
         let vm_work_dir = self.app.work_dir(&id)?;
+        self.validate_env_image(
+            &vm_work_dir,
+            &manifest.image,
+            &request.encrypted_env,
+            &request.sealed_env,
+        )?;
         vm_work_dir
             .put_manifest(&manifest)
             .context("Failed to write manifest")?;
@@ -1068,6 +1095,7 @@ impl VmmRpc for RpcHandler {
                     name,
                     description: serde_json::to_string(&info).unwrap_or_default(),
                     version: info.version,
+                    sealed_env: info.sealed_env,
                     is_dev: info.is_dev,
                 })
                 .collect(),
@@ -1092,6 +1120,7 @@ impl VmmRpc for RpcHandler {
         // deleted that directory would recreate it holding nothing but a
         // manifest: invisible to `list_vms`, unloadable at every start, and
         // claiming the VM's netd interfaces against collection forever.
+        VmWorkDir::validate_env_update(&request.encrypted_env, &request.sealed_env)?;
         let _launch = self.app.launch_lock(&request.id).await;
         // Again under the lock: removal can have claimed the VM while this
         // waited for it.
@@ -1099,6 +1128,12 @@ impl VmmRpc for RpcHandler {
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("Failed to read manifest")?;
         let old_disk_size = manifest.disk_size;
+        self.validate_env_image(
+            &vm_work_dir,
+            request.image.as_deref().unwrap_or(&manifest.image),
+            &request.encrypted_env,
+            &request.sealed_env,
+        )?;
         // Validate the whole request against an in-memory manifest before
         // touching the host, so a rejected update changes nothing.
         let new_id = if !request.compose_file.is_empty() {
@@ -1207,11 +1242,7 @@ impl VmmRpc for RpcHandler {
             fs::write(self.compose_file_path(&request.id)?, &request.compose_file)
                 .context("Failed to write compose file")?;
         }
-        if !request.encrypted_env.is_empty() {
-            let encrypted_env_path = self.encrypted_env_path(&request.id)?;
-            fs::write(encrypted_env_path, &request.encrypted_env)
-                .context("Failed to write encrypted env")?;
-        }
+        vm_work_dir.write_env(&request.encrypted_env, &request.sealed_env)?;
         if !request.user_config.is_empty() {
             let user_config_path = self.user_config_path(&request.id)?;
             fs::write(user_config_path, &request.user_config)
@@ -1240,6 +1271,22 @@ impl VmmRpc for RpcHandler {
             signature: response.signature,
             timestamp: response.timestamp,
             signature_v1: response.signature_v1,
+        })
+    }
+
+    async fn get_sealed_env_pub_key(self, request: AppId) -> Result<SealedEnvPubKeyResponse> {
+        let kms = self.kms_client()?;
+        let response = kms
+            .get_sealed_env_pub_key(dstack_kms_rpc::AppId {
+                app_id: request.app_id,
+            })
+            .await?;
+        Ok(SealedEnvPubKeyResponse {
+            app_epoch: response.app_epoch,
+            public_key: response.public_key,
+            root_epoch: response.root_epoch,
+            timestamp: response.timestamp,
+            signature: response.signature,
         })
     }
 
@@ -1277,6 +1324,12 @@ impl VmmRpc for RpcHandler {
         let vm_work_dir = self.app.work_dir(&request.id)?;
         let mut manifest = vm_work_dir.manifest().context("failed to read manifest")?;
         let old_disk_size = manifest.disk_size;
+        self.validate_env_image(
+            &vm_work_dir,
+            request.image.as_deref().unwrap_or(&manifest.image),
+            &[],
+            &[],
+        )?;
         self.apply_resource_updates(
             &request.id,
             &mut manifest,

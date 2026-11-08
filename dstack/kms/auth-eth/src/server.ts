@@ -4,7 +4,7 @@
 
 import fastify, { FastifyInstance } from 'fastify';
 import { EthereumBackend } from './ethereum';
-import { BootInfo, BootResponse } from './types';
+import { BootInfo, BootResponse, AuthorizationResult, AuthorizationRequest } from './types';
 import { ethers } from 'ethers';
 
 declare module 'fastify' {
@@ -25,8 +25,7 @@ export async function build(): Promise<FastifyInstance> {
     description,
   });
 
-  server.addSchema({
-    $id: 'bootInfo',
+  const appInfoSchema = {
     type: 'object',
     required: ['mrAggregated', 'osImageHash', 'appId', 'composeHash', 'instanceId', 'deviceId'],
     properties: {
@@ -40,6 +39,27 @@ export async function build(): Promise<FastifyInstance> {
       advisoryIds: { type: 'array', maxItems: 128, items: { type: 'string', maxLength: 256 }, default: [] },
       mrSystem: { ...hex(32, 'System MR measurement'), default: '' },
     }
+  };
+
+  server.addSchema({
+    ...appInfoSchema,
+    $id: 'bootInfo',
+    properties: {
+      ...appInfoSchema.properties,
+      rootEpoch: { type: 'integer', minimum: 0 },
+      rootEpochHash: hex(32, 'Chain hash of the root epochs up to rootEpoch'),
+    },
+  });
+  server.addSchema({
+    ...appInfoSchema,
+    $id: 'authorizationRequest',
+    required: [...appInfoSchema.required, 'operation'],
+    properties: {
+      ...appInfoSchema.properties,
+      operation: { type: 'string', enum: ['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys', 'app_get_key', 'app_get_cert'] },
+      requestedAppEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
+      requestedRootEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
+    },
   });
 
   server.addSchema({
@@ -84,6 +104,7 @@ export async function build(): Promise<FastifyInstance> {
         server.ethereum.getGatewayAppId(),
         server.ethereum.getChainId(),
         server.ethereum.getAppImplementation(),
+        server.ethereum.getRootEpoch(),
       ]);
       return {
         status: 'ok',
@@ -93,12 +114,39 @@ export async function build(): Promise<FastifyInstance> {
         chainId: batch[1],
         appAuthImplementation: batch[2], // NOTE: for backward compatibility
         appImplementation: batch[2],
+        ...batch[3],
       };
     } catch {
       _request.log.error('authorization backend health check failed');
       return reply.code(500).send({ status: 'error', message: backendUnavailable });
     }
   });
+
+  server.get<{ Params: { appId: string } }>('/app/:appId', {
+    schema: { params: { type: 'object', required: ['appId'], properties: { appId: { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$' } } } },
+  }, async (request) => ({ currentAppEpoch: await server.ethereum.getAppEpoch(request.params.appId) }));
+
+  for (const method of ['authorizeKms', 'authorizeApp'] as const) {
+    server.post<{ Body: AuthorizationRequest; Reply: AuthorizationResult }>(`/${method}`, {
+      schema: {
+        body: { $ref: 'authorizationRequest#' },
+        response: {
+          200: {
+            type: 'object',
+            required: ['isAllowed', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash', 'currentAppEpoch'],
+            properties: {
+              isAllowed: { type: 'boolean' },
+              rejectionReason: { type: 'string' },
+              gatewayAppId: { type: 'string' },
+              currentRootEpoch: { type: 'integer', minimum: 0 },
+              currentAppEpoch: { type: 'integer', minimum: 0 },
+              currentRootEpochHash: hex(32, 'Current root epoch chain hash'),
+            },
+          },
+        },
+      },
+    }, async (request) => server.ethereum.checkAuthorization(request.body, method));
+  }
 
   // Define routes
   server.post<{

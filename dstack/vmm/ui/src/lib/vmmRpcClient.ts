@@ -8,6 +8,13 @@ const textDecoder = new TextDecoder();
 const EMPTY_BODY = new Uint8Array();
 let cachedClient: any;
 
+export class RpcError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'RpcError';
+  }
+}
+
 function decodePrpcError(buffer: Uint8Array) {
   try {
     if (buffer && buffer.length > 0) {
@@ -76,7 +83,7 @@ export function getVmmRpcClient(basePath = '/prpc') {
       .then(async (response) => {
         const buffer = new Uint8Array(await response.arrayBuffer());
         if (!response.ok) {
-          callback(new Error(decodePrpcError(buffer)));
+          callback(new RpcError(decodePrpcError(buffer), response.status));
           return;
         }
         callback(null, buffer);

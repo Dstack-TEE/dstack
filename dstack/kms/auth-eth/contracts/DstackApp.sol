@@ -7,6 +7,8 @@
 pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
+import "./AuthorizationOperation.sol";
+import "./IAppEpochAuth.sol";
 import "./IAppAuthBasicManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
@@ -19,7 +21,8 @@ contract DstackApp is
     UUPSUpgradeable,
     ERC165Upgradeable,
     IAppAuth,
-    IAppAuthBasicManagement
+    IAppAuthBasicManagement,
+    IAppEpochAuth
 {
     // Mapping of allowed compose hashes for this app
     mapping(bytes32 => bool) public allowedComposeHashes;
@@ -35,6 +38,16 @@ contract DstackApp is
 
     // Whether to require TCB status to be UpToDate
     bool public requireTcbUpToDate;
+
+    uint256 public override currentAppEpoch;
+    event AppEpochAdvanced(uint256 indexed epoch);
+
+    // Epoch zero continues to use the original fields above after an upgrade.
+    mapping(uint256 => mapping(bytes32 => bool)) private _composeHashesByEpoch;
+    mapping(uint256 => mapping(bytes32 => bool)) private _deviceIdsByEpoch;
+    mapping(uint256 => bool) private _allowAnyDeviceByEpoch;
+
+    event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     // Additional events specific to DstackApp
     event UpgradesDisabled();
@@ -128,7 +141,7 @@ contract DstackApp is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return interfaceId == 0x1e079198 // IAppAuth
+        return interfaceId == type(IAppEpochAuth).interfaceId || interfaceId == 0x1e079198 // IAppAuth
             || interfaceId == 0x8fd37527 // IAppAuthBasicManagement
             || super.supportsInterface(interfaceId);
     }
@@ -143,26 +156,62 @@ contract DstackApp is
         emit PolicyChanged(msg.sender, keccak256(bytes(policy)), value, enabled);
     }
 
-    // Add a compose hash to allowed list
-    function addComposeHash(bytes32 composeHash) external onlyOwner {
+    function allowedComposeHashesAtEpoch(uint256 epoch, bytes32 composeHash) public view returns (bool) {
+        return epoch == 0 ? allowedComposeHashes[composeHash] : _composeHashesByEpoch[epoch][composeHash];
+    }
+
+    function allowedDeviceIdsAtEpoch(uint256 epoch, bytes32 deviceId) public view returns (bool) {
+        return epoch == 0 ? allowedDeviceIds[deviceId] : _deviceIdsByEpoch[epoch][deviceId];
+    }
+
+    function allowAnyDeviceAtEpoch(uint256 epoch) public view returns (bool) {
+        return epoch == 0 ? allowAnyDevice : _allowAnyDeviceByEpoch[epoch];
+    }
+
+    function addComposeHash(bytes32 composeHash) external {
+        addComposeHashAtEpoch(currentAppEpoch, composeHash);
+    }
+
+    function addComposeHashAtEpoch(uint256 epoch, bytes32 composeHash) public onlyOwner {
         require(composeHash != bytes32(0), "invalid compose hash");
-        allowedComposeHashes[composeHash] = true;
-        emit ComposeHashAdded(composeHash);
-        _emitPolicy("compose-hash", composeHash, true);
+        _setComposeHash(epoch, composeHash, true);
     }
 
-    // Remove a compose hash from allowed list
-    function removeComposeHash(bytes32 composeHash) external onlyOwner {
-        allowedComposeHashes[composeHash] = false;
-        emit ComposeHashRemoved(composeHash);
-        _emitPolicy("compose-hash", composeHash, false);
+    function removeComposeHash(bytes32 composeHash) external {
+        removeComposeHashAtEpoch(currentAppEpoch, composeHash);
     }
 
-    // Set whether any device is allowed to boot this app
-    function setAllowAnyDevice(bool _allowAnyDevice) external onlyOwner {
-        allowAnyDevice = _allowAnyDevice;
-        emit AllowAnyDeviceSet(_allowAnyDevice);
-        _emitPolicy("allow-any-device", bytes32(0), _allowAnyDevice);
+    function removeComposeHashAtEpoch(uint256 epoch, bytes32 composeHash) public onlyOwner {
+        _setComposeHash(epoch, composeHash, false);
+    }
+
+    function _setComposeHash(uint256 epoch, bytes32 composeHash, bool allowed) private {
+        require(epoch <= currentAppEpoch, "Unknown app epoch");
+        if (epoch == 0) {
+            allowedComposeHashes[composeHash] = allowed;
+            if (allowed) emit ComposeHashAdded(composeHash);
+            else emit ComposeHashRemoved(composeHash);
+            _emitPolicy("compose-hash", composeHash, allowed);
+        } else {
+            _composeHashesByEpoch[epoch][composeHash] = allowed;
+        }
+        emit EpochPolicyChanged(keccak256("compose-hash"), composeHash, epoch, allowed);
+    }
+
+    function setAllowAnyDevice(bool allowed) external {
+        setAllowAnyDeviceAtEpoch(currentAppEpoch, allowed);
+    }
+
+    function setAllowAnyDeviceAtEpoch(uint256 epoch, bool allowed) public onlyOwner {
+        require(epoch <= currentAppEpoch, "Unknown app epoch");
+        if (epoch == 0) {
+            allowAnyDevice = allowed;
+            emit AllowAnyDeviceSet(allowed);
+            _emitPolicy("allow-any-device", bytes32(0), allowed);
+        } else {
+            _allowAnyDeviceByEpoch[epoch] = allowed;
+        }
+        emit EpochPolicyChanged(keccak256("allow-any-device"), bytes32(0), epoch, allowed);
     }
 
     // Set whether TCB status must be UpToDate to boot this app
@@ -172,28 +221,69 @@ contract DstackApp is
         _emitPolicy("require-tcb-up-to-date", bytes32(0), _requireUpToDate);
     }
 
-    // Add a device ID to allowed list
-    function addDevice(bytes32 deviceId) external onlyOwner {
+    function addDevice(bytes32 deviceId) external {
+        addDeviceAtEpoch(currentAppEpoch, deviceId);
+    }
+
+    function addDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         require(deviceId != bytes32(0), "invalid device ID");
-        allowedDeviceIds[deviceId] = true;
-        emit DeviceAdded(deviceId);
-        _emitPolicy("device", deviceId, true);
+        _setDevice(epoch, deviceId, true);
     }
 
-    // Remove a device ID from allowed list
-    function removeDevice(bytes32 deviceId) external onlyOwner {
-        allowedDeviceIds[deviceId] = false;
-        emit DeviceRemoved(deviceId);
-        _emitPolicy("device", deviceId, false);
+    function removeDevice(bytes32 deviceId) external {
+        removeDeviceAtEpoch(currentAppEpoch, deviceId);
     }
 
-    // Check if an app is allowed to boot
-    function isAppAllowed(IAppAuth.AppBootInfo calldata bootInfo)
+    function removeDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
+        _setDevice(epoch, deviceId, false);
+    }
+
+    function _setDevice(uint256 epoch, bytes32 deviceId, bool allowed) private {
+        require(epoch <= currentAppEpoch, "Unknown app epoch");
+        if (epoch == 0) {
+            allowedDeviceIds[deviceId] = allowed;
+            if (allowed) emit DeviceAdded(deviceId);
+            else emit DeviceRemoved(deviceId);
+            _emitPolicy("device", deviceId, allowed);
+        } else {
+            _deviceIdsByEpoch[epoch][deviceId] = allowed;
+        }
+        emit EpochPolicyChanged(keccak256("device"), deviceId, epoch, allowed);
+    }
+
+    // Legacy callers authorize the current epoch, never an older policy implicitly.
+    function isAppAllowed(IAppAuth.AppInfo calldata bootInfo)
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
+        return _authorizeApp(bootInfo, currentAppEpoch);
+    }
+
+    function authorizeApp(
+        IAppAuth.AppInfo calldata bootInfo,
+        uint256 appEpoch,
+        bytes32 operation
+    )
+        external
+        view
+        override
+        returns (bool isAllowed, string memory reason)
+    {
+        if (!AuthorizationOperation.isApp(operation)) return (false, "Invalid authorization operation");
+        return _authorizeApp(bootInfo, appEpoch);
+    }
+
+    function _authorizeApp(
+        IAppAuth.AppInfo calldata bootInfo,
+        uint256 appEpoch
+    )
+        private
+        view
+        returns (bool, string memory)
+    {
+        if (appEpoch > currentAppEpoch) return (false, "Requested app epoch is not active");
         // Optionally require TCB status to be up to date
         if (
             requireTcbUpToDate
@@ -203,16 +293,25 @@ contract DstackApp is
         }
 
         // Check if compose hash is allowed
-        if (!allowedComposeHashes[bootInfo.composeHash]) {
+        if (!allowedComposeHashesAtEpoch(appEpoch, bootInfo.composeHash)) {
             return (false, "Compose hash not allowed");
         }
 
         // Check if device is allowed (when device restriction is enabled)
-        if (!allowAnyDevice && !allowedDeviceIds[bootInfo.deviceId]) {
+        if (!allowAnyDeviceAtEpoch(appEpoch) && !allowedDeviceIdsAtEpoch(appEpoch, bootInfo.deviceId)) {
             return (false, "Device not allowed");
         }
 
         return (true, "");
+    }
+
+    /// Advance only from the epoch the owner intended, rejecting stale transactions.
+    function advanceAppEpoch(uint256 expectedCurrentEpoch) external onlyOwner {
+        require(currentAppEpoch == expectedCurrentEpoch, "App epoch changed");
+        require(currentAppEpoch < type(uint32).max, "App epoch exhausted");
+        currentAppEpoch++;
+        emit AppEpochAdvanced(currentAppEpoch);
+        _emitPolicy("app-epoch", bytes32(currentAppEpoch), true);
     }
 
     // Function to permanently disable upgrades
@@ -223,5 +322,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[49] private __gap;
+    uint256[45] private __gap;
 }
