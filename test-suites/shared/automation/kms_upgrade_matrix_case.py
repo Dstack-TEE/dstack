@@ -51,6 +51,7 @@ RELEASES = {
     "0.5.7": ("bridge", "dstack-0.5.8", "legacy"),
     "0.5.8": ("dstacktee/dstack-kms:0.5.8", "dstack-0.5.8", "legacy"),
     "0.5.11": ("dstacktee/dstack-kms:0.5.11", "dstack-0.5.11", "modern"),
+    "0.6.0": ("cr.kvin.wang/dstack/dstack-kms:0.6.0-rc0", "dstack-0.6.0", "modern"),
     "candidate": ("candidate", "candidate", "candidate"),
 }
 
@@ -3642,13 +3643,13 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         }
     if case_id == "tc-int-compatibil-008":
         old = matrix.deploy(
-            "0.5.11", initialized=True, domain_override="10-0-2-2.sslip.io"
+            "0.6.0", initialized=True, domain_override="10-0-2-2.sslip.io"
         )
         app = matrix.deploy_client(
             [old],
             identity="rotation-migration",
             kms_encrypt_row=old,
-            guest_image=matrix.values["version_matrix"]["guest_images"]["0.5.11"],
+            guest_image=matrix.values["version_matrix"]["guest_images"]["0.6.0"],
             encrypted_environment={"DSTACK_TEST_MIGRATION_SENTINEL": "old-epoch"},
         )
         candidate = matrix.deploy("candidate", initialized=False, legacy=True)
@@ -3688,7 +3689,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             raise RuntimeError("migration observer exposed private material")
         return {
             "path": [
-                "old-kms-0.5.11-old-os-app",
+                "old-kms-0.6.0-old-os-app",
                 "rotation-onboarding",
                 "same-vm-stop",
                 "candidate-os-in-place-update",
