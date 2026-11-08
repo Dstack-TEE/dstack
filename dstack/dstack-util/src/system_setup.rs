@@ -96,6 +96,9 @@ async fn sign_cert_request(
 
 mod config_id_verifier;
 mod luks;
+mod sealed_env;
+
+use sealed_env::{env_crypt_key, seal_env, sealed_env_info, SealedEnv};
 
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
@@ -3525,36 +3528,6 @@ impl Stage1<'_> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct SealedEnv {
-    version: u32,
-    app_epoch: u32,
-    root_epoch: u32,
-    #[serde(with = "serde_human_bytes::base64")]
-    enc: Vec<u8>,
-    #[serde(with = "serde_human_bytes::base64")]
-    ciphertext: Vec<u8>,
-}
-
-fn sealed_env_info(epoch: &u32) -> Vec<u8> {
-    format!("dstack-sealed-env-v1:{epoch}:0").into_bytes()
-}
-
-fn seal_env(secret: &[u8], epoch: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
-    let secret: [u8; 32] = secret.try_into().context("invalid sealed env key")?;
-    let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret));
-    let payload =
-        crate::crypto::sealed_env_encrypt(&public.to_bytes(), &sealed_env_info(&epoch), plaintext)?;
-    let (enc, ciphertext) = payload.split_at(32);
-    Ok(serde_json::to_vec(&SealedEnv {
-        version: 1,
-        app_epoch: 0,
-        root_epoch: epoch,
-        enc: enc.to_vec(),
-        ciphertext: ciphertext.to_vec(),
-    })?)
-}
-
 async fn decrypt_historical_env<I, F, Fut>(
     ciphertext: &[u8],
     epochs: I,
@@ -3577,11 +3550,6 @@ where
     bail!("failed to decrypt legacy env with accessible historical keys")
 }
 
-fn env_crypt_key(key: &[u8]) -> Result<[u8; 32]> {
-    key.try_into()
-        .ok()
-        .context("encrypted env is present but the key provider gave no valid env crypt key")
-}
 fn kms_root_epoch(keys: &AppKeys) -> Option<u32> {
     match keys.key_provider {
         KeyProvider::Kms { root_epoch, .. } => Some(root_epoch),
