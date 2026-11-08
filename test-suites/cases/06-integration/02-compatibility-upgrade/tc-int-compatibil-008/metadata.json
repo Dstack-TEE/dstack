@@ -30,7 +30,9 @@
     "simulation_allowed": false
   },
   "actions_under_test": [
-    "KMS root rotation followed by in-place app OS upgrade and disk-key migration"
+    "KMS root rotation followed by in-place app OS upgrade and disk-key migration",
+    "KMS contract upgrade with unchanged App contract",
+    "KMS and App contract upgrades together"
   ],
   "execution": {
     "entrypoint": "shared/automation/kms_upgrade_matrix_case.py",

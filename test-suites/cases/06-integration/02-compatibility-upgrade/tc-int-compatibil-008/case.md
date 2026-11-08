@@ -18,6 +18,15 @@ The test must use a real TDX guest and a lease-owned KMS/VMM/Gateway topology. U
 
 ## Required scenarios
 
+### KMS contract upgrade with an old App implementation
+
+Upgrade the deployed KMS contract while keeping the already deployed App proxy and implementation unchanged. Rotate the KMS root, onboard the replacement KMS, migrate the app disk, and verify existing app authorization, keys, certificates, and data remain usable through the old App contract.
+
+### KMS and App contract upgrade together
+
+Repeat the same flow after upgrading both KMS and App contracts. Verify the App implementation upgrade does not inherit or cross epoch rows, old app policy rows remain isolated, and the migrated app keeps its identity and data while new authorization uses the active contract interfaces.
+
+
 ### Successful migration
 
 The old OS boots and writes a sentinel to the encrypted data disk. After KMS onboarding and root rotation, the new OS starts from the same VM/workdir and disk. It must migrate the disk key atomically, rewrite the epoch metadata, unlock the disk, and expose the sentinel.
