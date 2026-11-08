@@ -23,6 +23,8 @@ TESTS = {
         "crypto::sealed_env_tests::sealed_env_round_trips_and_binds_info",
         "system_setup::sealed_env_file_tests::sealed_env_binds_both_epochs_and_rejects_mislabeled_versions",
         "system_setup::sealed_env_file_tests::legacy_env_migration_skips_denied_intermediate_epochs",
+        "system_setup::sealed_env_file_tests::sealed_env_binds_both_epochs_and_rejects_mislabeled_versions",
+        "system_setup::sealed_env_file_tests::legacy_env_migration_skips_denied_intermediate_epochs",
     ],
 }
 
@@ -39,7 +41,7 @@ def main() -> int:
             started = time.monotonic()
             command = ["cargo", "test", "-p", package, test_filter, "--", "--nocapture"]
             result = subprocess.run(command, cwd=repo / "dstack", env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
-            rows.append({"package": package, "filter": test_filter, "returncode": result.returncode, "duration_seconds": round(time.monotonic() - started, 3), "output_sha256": hashlib.sha256(result.stdout.encode()).hexdigest(), "passed": int(next((line.split()[2] for line in result.stdout.splitlines() if line.startswith("test result: ok.") and " passed;" in line), "0"))})
+            rows.append({"package": package, "filter": test_filter, "returncode": result.returncode, "duration_seconds": round(time.monotonic() - started, 3), "output_sha256": hashlib.sha256(result.stdout.encode()).hexdigest(), "passed": int(next((line.split()[2] for line in result.stdout.splitlines() if line.startswith("test result: ok.") and " passed;" in line), "0")), "passed": int(next((line.split()[2] for line in result.stdout.splitlines() if line.startswith("test result: ok.") and " passed;" in line), "0"))})
             if result.returncode or rows[-1]["passed"] != 1:
                 break
         if rows[-1]["returncode"]:
