@@ -57,7 +57,11 @@ def main():
             timeout=300,
         )
         passed = int(
-            r.returncode == 0 and "... ok" in r.stdout and "running 1 test" in r.stdout
+            r.returncode == 0
+            and any(
+                filt.split("::")[-1] in line and line.strip().endswith("... ok")
+                for line in r.stdout.splitlines()
+            )
         )
         rows.append(
             {
