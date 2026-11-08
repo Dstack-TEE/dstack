@@ -423,7 +423,7 @@ contract DstackAppTest is Test {
         app.addComposeHash(info.composeHash);
         app.addDevice(info.deviceId);
         vm.stopPrank();
-        (bool allowed,) = app.authorizeApp(info, 0, keccak256("get_app_cert"));
+        (bool allowed,) = app.authorizeApp(info, 0, keccak256("app_get_cert"));
         assertTrue(allowed);
         (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);

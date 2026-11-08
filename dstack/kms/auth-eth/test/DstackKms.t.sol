@@ -1016,12 +1016,12 @@ contract DstackKmsTest is Test {
         );
         vm.mockCall(
             info.appId,
-            abi.encodeCall(IAppEpochAuth.authorizeApp, (info, 0, keccak256("get_app_cert"))),
+            abi.encodeCall(IAppEpochAuth.authorizeApp, (info, 0, keccak256("app_get_cert"))),
             abi.encode(true, "")
         );
         DstackKms.AuthorizationRequest memory request = epochRequest(info, 0, 0);
         assertEq(kms.authorizeApp(request).rejectionReason, "key retrieval denied");
-        request.operation = keccak256("get_app_cert");
+        request.operation = keccak256("app_get_cert");
         assertTrue(kms.authorizeApp(request).isAllowed);
         (bool allowed,) = kms.isAppAllowed(info);
         assertTrue(allowed);
