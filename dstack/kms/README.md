@@ -242,3 +242,134 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 - Verify the CSR signature
 - Query the smart contract to check if the app is authorized
 - If authorized, sign the CSR with the CA root key and return the certificate chain to the app
+
+
+## Authorization protocol
+
+Authorization uses two explicit endpoints:
+
+- `POST /authorizeKms` for KMS self-authorization and root-key handover.
+- `POST /authorizeApp` for application keys and certificates.
+
+The Ethereum backends call the matching `DstackKms` method. Both accept
+`AuthorizationRequest` and return `AuthorizationResult`; no caller-kind flag is
+sent. The KMS method checks the KMS policy; the app method applies registered app
+policy.
+KMS callers do not fetch contract metadata to decide which policy to use.
+
+`requestedAppEpoch` selects the application's own key epoch, independently of KMS
+root epochs. Omission uses `currentAppEpoch`; explicit zero selects app epoch zero.
+Solidity uses `OptionalUint256 { isSet, value }` for both selectors. Future epochs
+are denied; historical epochs remain subject to current authorization policy.
+Rejection responses still carry the current epochs and root chain hash. See
+[application key epochs](../../docs/app-key-epochs.md) for rotation and migration.
+
+`requestedRootEpoch` is optional in the JSON request. Omit it to use the epoch in
+this authorization result; an explicit `0` selects epoch 0. Solidity represents
+it as `OptionalUint256 { isSet, value }` alongside `AppInfo` in the request. The
+contract rejects future root epochs for application requests; historical epochs
+remain available subject to the selected policy row. No serving epoch or serving
+hash is sent. KMS-to-KMS handover explicitly selects the highest exported root
+epoch, including a registered pending epoch. Approval in that row authorizes the
+complete keyring, including older roots. KMS self-authorization omits the selector
+and checks the current root epoch. The recipient separately authorizes the
+source to `kms_export_keys` at the highest received epoch before importing it.
+
+Every request includes a required `operation` describing what the attested
+subject is authorized to do. JSON uses `snake_case`; the contract receives
+`keccak256(bytes(operation))` as `bytes32`. Rust uses the shared serde-derived
+`AuthorizationOperation` enum. Unknown operations and operations on the wrong
+endpoint are rejected. The supported operations currently share the existing
+material policy, leaving room for independent policies later:
+
+| Endpoint | Operation | Subject |
+| --- | --- | --- |
+| `authorizeKms` | `kms_bootstrap` | KMS generating its first roots |
+| `authorizeKms` | `kms_serve` | KMS serving app keys, public keys or certificates |
+| `authorizeKms` | `kms_export_keys` | Source KMS handing over its keyring |
+| `authorizeKms` | `kms_import_keys` | Recipient KMS receiving a keyring |
+| `authorizeApp` | `app_get_key` | App receiving derived keys |
+| `authorizeApp` | `app_get_cert` | App requesting a certificate |
+
+The KMS chooses the operation from its code path, not an untrusted RPC field.
+Self-authorization caches are keyed by operation. Legacy authorization endpoints
+retain their existing semantics for old KMS binaries; fine-grained operation
+policies cannot protect calls still served by those old binaries.
+
+The response is an `AuthorizationResult`:
+
+```json
+{
+  "isAllowed": true,
+  "rejectionReason": "",
+  "gatewayAppId": "0x...",
+  "currentRootEpoch": 0,
+  "currentAppEpoch": 0,
+  "currentRootEpochHash": "0x..."
+}
+```
+
+Both successful and rejected decisions include the current epoch and chain hash
+from the same contract call or auth-simple configuration snapshot. Except for `kms_bootstrap`, with no
+registered epoch the result is `isAllowed: false`,
+`rejectionReason: "Root epoch not registered"`, epoch 0 and a zero hash. A zero hash
+never authorizes key release or requests an epoch switch.
+
+The KMS holds no serving-epoch snapshot. It verifies the returned current epoch
+and chain hash against its keyring, then derives keys from `requestedRootEpoch` when
+specified or the returned current epoch otherwise. Missing or mismatched roots
+fail closed. Self-authorization retains its one-second cache of complete results.
+
+The TLS listener has a separate lifetime: when an authorized current CA differs
+from the running RPC certificate's issuer, the KMS requests a restart to refresh
+that certificate and the caller must retry. The RPC CA does not select key
+epochs. Application key responses and signed certificate chains report the
+selected epoch's CA. CA certificates
+are reloaded after renewal at startup.
+
+Upgrade the contract and auth backend and register epoch 0 before using this
+protocol for key release. Runtime authorization never falls back to the legacy
+API if the new endpoint or contract method is unavailable. The old contract
+methods and `/bootAuth/app` and `/bootAuth/kms` endpoints remain available for
+older clients. Bootstrap uses the `kms_bootstrap` operation, which checks KMS policy at epoch zero
+even before roots are registered. Other operations require registered roots.
+Onboarding checks its source through `authorizeKms`, without a legacy fallback. For
+`auth-simple`, set `kmsContractAddr` to the attested KMS app ID and configure
+`rootEpochs`; for `auth-mock`, set `KMS_CONTRACT_ADDR`, `MOCK_ROOT_EPOCH`, and
+`MOCK_ROOT_EPOCH_HASH`.
+
+
+## Direct attested key retrieval
+
+`GetTempCaCert`, its original response fields, and the `temp_ca_key` handover
+field remain available for existing OS images and legacy KMS onboarding. The
+compatibility CA is stored in `tmp-ca.key`/`tmp-ca.crt`, independent of all root
+epochs; existing files are reused and missing files are recreated. Its public
+private key authenticates nobody. Client identity still requires attestation.
+The returned `ca_cert` is the currently served root CA.
+
+Upgrade contracts and auth backends, register the original roots as epoch 0,
+then upgrade KMS nodes before guests. Keep root and app epochs at zero during
+the mixed-version phase; rotate only after guests support key migration.
+
+Guests and `dstack-util get-keys` generate their self-issued RA-TLS certificate
+locally, then call `GetAppKey` directly. They verify the response connection's
+attestation and `kms:rpc` usage, and verify that the returned root CA signed that
+connection's certificate. Skipping CA-chain validation during this first request
+still verifies the TLS handshake signature, so replaying an attested certificate
+without its private key cannot impersonate the server. There is no `GetMeta` preflight or first unauthenticated
+connection. The optional provider pin and the key-provider launch measurement
+still bind the root identity; a valid quote alone is not a KMS policy decision.
+`--root-ca` additionally pins the CLI connection before sending the request.
+
+Onboarding with an admin token uses a self-issued client certificate. Tokenless
+onboarding obtains the source temp CA first so pre-0.6 sources remain usable.
+Both paths check the source attestation captured from the key-carrying connection
+against local KMS policy before importing anything. Retries and reconnects repeat
+verification on the response connection; no assumption relies on one TCP session
+lasting forever. All subsequent key requests pin the KMS CA established at startup, regardless
+of whether the epoch selector is omitted or explicit. A supplied `trusted_ca`
+always wins over the response CA. The selected epoch's CA never replaces this
+lifetime pin; a TLS CA change requires a fresh boot/trust establishment rather
+than silently trusting another KMS. Without a supplied pin, the response CA
+must sign the actual RPC certificate, even when an epoch is explicitly selected.

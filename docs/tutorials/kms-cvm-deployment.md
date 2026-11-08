@@ -73,8 +73,6 @@ Inside the CVM at `/etc/kms/certs/`:
 | `root-ca.key` | Root CA signing key (P256 ECDSA) |
 | `rpc.crt` | TLS certificate for RPC server |
 | `rpc.key` | RPC server private key |
-| `tmp-ca.crt` | Temp CA, served by the legacy `GetTempCaCert` bootstrap RPC |
-| `tmp-ca.key` | Temp CA private key, served alongside it |
 | `root-k256.key` | Ethereum signing key (secp256k1) |
 | `bootstrap-info.json` | Public keys and TDX attestation quote |
 

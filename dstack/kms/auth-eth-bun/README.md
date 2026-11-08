@@ -17,6 +17,14 @@ a single-file implementation of the dstack KMS ethereum backend using bun + hono
 bun install
 ```
 
+## Upgrade order
+
+Upgrade the `DstackKms` contract before deploying the new auth backend or KMS.
+An empty root epoch registry is supported on the upgraded contract; there is no
+fallback for legacy contracts. Old KMS instances that omit the root epoch can
+receive app authorization only while no epoch is registered or epoch 0 is current,
+subject to the existing authorization policy.
+
 ## usage
 
 ### development
@@ -191,3 +199,25 @@ the test suite (`index.test.ts`) validates:
 - ✅ error handling behavior
 - ✅ hex encoding/decoding compatibility
 - ✅ optional field handling
+
+
+### Authorization endpoints
+
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
+The selected endpoint determines the policy; the backend checks that the verified
+`appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
+omission uses the current app epoch, explicit zero selects epoch zero, and future
+values are denied. The optional
+`requestedRootEpoch` selects historical keys; omission uses the returned current
+epoch, and an explicit `0` selects epoch 0. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for registration,
+bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
+remain available.
+
+### Authorization operations
+
+`/authorizeKms` and `/authorizeApp` require an `operation` string. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for the names
+and subject semantics. Bootstrap alone may authorize before root registration;
+unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.

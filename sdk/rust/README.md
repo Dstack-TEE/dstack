@@ -382,3 +382,26 @@ println!("Ethereum address: {}", signer.address());
 ## License
 
 Apache License 2.0
+
+## Sealed environment variables
+
+`seal_env` encrypts environment key/value pairs into a version-1 `.sealed-env`
+JSON string using HPKE (X25519/HKDF-SHA256/AES-256-GCM). Supply an authenticated
+32-byte public key and its root epoch; this function does not fetch or verify
+keys. The epoch is bound into the HPKE info string.
+
+```rust
+use dstack_sdk::seal_env;
+
+fn sealed_config(trusted_public_key: &[u8; 32], root_epoch: u32) -> anyhow::Result<String> {
+    seal_env(&[("API_TOKEN", "example-value")], trusted_public_key, root_epoch)
+}
+```
+
+For a KMS-signed response, construct `SealedEnvPublicKey` from its decoded fields
+and call `verify_sealed_env_public_key` before sealing. Pass the expected app ID,
+root epoch, that epoch's independently trusted secp256k1 `VerifyingKey`, and
+trusted current Unix time in seconds. Verification rejects a different signer,
+epoch, app binding, signatures older than 300 seconds, or timestamps more than
+60 seconds in the future. `recover_sealed_env_public_key` only recovers the
+signer; it does not establish trust or freshness.

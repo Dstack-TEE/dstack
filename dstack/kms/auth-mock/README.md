@@ -72,6 +72,7 @@ bun run check
 - `MOCK_GATEWAY_APP_ID` - mock gateway app ID (default: 0xmockgateway1234567890123456789012345678)
 - `MOCK_CHAIN_ID` - mock blockchain chain ID (default: 1337)
 - `MOCK_APP_IMPLEMENTATION` - mock app implementation address (default: 0xmockapp9876543210987654321098765432109)
+- `MOCK_ROOT_EPOCH`, `MOCK_ROOT_EPOCH_HASH` - current KMS root epoch and its chain hash, reported by the info endpoint as `rootEpoch`/`rootEpochHash`; boot checks from a KMS serving another epoch are denied (default: none registered, only epoch 0 serves)
 
 ## API endpoints
 
@@ -166,3 +167,25 @@ to switch from mock to real backend:
 4. update environment variables
 
 the API remains identical, so no client code changes are needed.
+
+
+### Authorization endpoints
+
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
+The selected endpoint determines the policy; the backend checks that the verified
+`appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
+omission uses the current app epoch, explicit zero selects epoch zero, and future
+values are denied. The optional
+`requestedRootEpoch` selects historical keys; omission uses the returned current
+epoch, and an explicit `0` selects epoch 0. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for registration,
+bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
+remain available.
+
+### Authorization operations
+
+`/authorizeKms` and `/authorizeApp` require an `operation` string. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for the names
+and subject semantics. Bootstrap alone may authorize before root registration;
+unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.

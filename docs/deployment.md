@@ -131,9 +131,13 @@ Production KMS requires:
 | Custom | Your own authorization logic | Implement webhook interface |
 
 All auth servers implement the same webhook interface:
-- `GET /` - Health check
-- `POST /bootAuth/app` - App boot authorization
-- `POST /bootAuth/kms` - KMS boot authorization
+
+- `GET /` - Health check and current root epoch
+- `POST /authorizeApp` - Application key and certificate authorization
+- `POST /authorizeKms` - KMS self-authorization and key handover
+
+The legacy `/bootAuth/app` and `/bootAuth/kms` routes remain available for older
+clients and KMS bootstrap/onboarding checks.
 
 #### Using auth-simple (Config-Based)
 
@@ -470,9 +474,9 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 **How it works:**
 
 1. New KMS starts in onboard mode (empty `auto_bootstrap_domain`)
-2. New KMS generates an RA-TLS client certificate with its TDX quote: self-issued when given a `source_token`, or minted from the temp CA fetched with `GetTempCaCert` for a source older than 0.6.0
-3. New KMS calls `GetKmsKey` over mTLS: `Admin.GetKmsKey` with the token, or the legacy public `KMS.GetKmsKey` without one
-4. Source KMS verifies attestation via `bootAuth/kms` webhook
+2. New KMS generates an RA-TLS client certificate with its attestation: self-issued with an admin token, or signed by the source temporary CA for tokenless legacy onboarding
+3. New KMS calls `GetKmsKey` over mTLS: `Admin.GetKmsKey` with the token, or the explicitly enabled public `KMS.GetKmsKey` without one
+4. Source KMS verifies the attestation and authorizes handover via `/authorizeKms`
 5. If approved, source KMS returns root keys
 6. New KMS verifies the source's attestation on that same connection and checks it against its own policy before using the keys
 7. Both KMS instances now derive identical keys
@@ -512,6 +516,59 @@ curl http://<new-kms>:9203/finish
 > **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 >
 > **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`.
+
+#### Rotating KMS Root Keys
+
+KMS root keys are versioned by epoch; epoch 0 is the original roots. Every KMS
+keeps all epochs so CVMs can migrate from any of them, and serves the epoch
+governance made current. See the [rotation design](./kms-emergency-key-rotation-protocol.md)
+for the full procedure; the KMS steps are:
+
+1. If epochs were never registered, publish the attestation the KMS produced at
+   bootstrap (kept in `bootstrap-info.json` on the bootstrapped node) and
+   register the current root public keys as epoch 0:
+   `DstackKms.registerRootEpoch(caPubkey, k256Pubkey, evidenceUrl)`, via
+   `script/Manage.s.sol:RegisterRootEpoch`, or a `rootEpochs` entry in the
+   auth-simple config. Epoch 0 is current once registered, and must be the
+   `kmsInfo` keys when those are set. A deployment whose `kmsInfo` holds a
+   legacy `quote` and `eventlog` instead of an attestation converts them with
+   `dstack-kms legacy-attestation --quote <hex> --eventlog <hex>` and publishes
+   the result first: from then on `kmsInfo` follows the current epoch's keys and
+   its quote and event log are cleared.
+2. Onboard a fresh KMS with `"rotate": true` (the **Rotate** checkbox in the
+   onboard UI) from a KMS at the current epoch N-1. It imports epochs 0..N-1,
+   generates epoch N, and returns the new public keys with an attestation whose
+   report data is
+   `keccak256("dstack-kms-generated-keys-v2:{N};{ca_pubkey_hex};{k256_pubkey_hex};")`.
+3. Verify the attestation, publish it, and register epoch N with its URL. The
+   cluster keeps serving N-1.
+4. Onboard the other KMS nodes from the rotated one; they import 0..N and keep
+   serving N-1.
+5. Activate epoch N (`ActivateRootEpoch`, or `currentRootEpoch` for
+   auth-simple). Each KMS restarts onto N on its next uncached authorization
+   check; a KMS that does not hold N waits
+   until it is onboarded again.
+   If the nodes holding N are lost before N is activated, drop it with
+   `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
+   that imported the dropped N must be onboarded again.
+6. Boot CVMs on an OS that supports root epochs. At boot they re-key their data
+   disk from the epoch recorded in its LUKS header to the current one. If an
+   encrypted environment still uses an older epoch, the CVM re-encrypts it during
+   boot and the VMM replaces the ciphertext only if it was not changed concurrently.
+   See [SealedEnv](./sealed-env.md) for the new format, file precedence, and rollback requirements.
+
+Each `authorizeKms` or `authorizeApp` result carries the current epoch and its chain hash,
+including when authorization is denied. KMS verifies these against its keyring;
+there is no cached serving epoch. An optional `requestedRootEpoch` selects historical
+keys, and omission selects the returned current epoch. Requests for future
+epochs are denied. No registered epoch returns a rejection with
+`rejectionReason: "Root epoch not registered"` and a zero hash.
+
+RPC certificates still require a listener restart when their root CA changes;
+callers retry after the certificate is refreshed. Register epoch 0 before normal
+key release. Bootstrap keeps using scoped KMS authorization so it can generate
+the first roots before registration. See the
+[authorization protocol](../dstack/kms/README.md#authorization-protocol).
 
 ---
 

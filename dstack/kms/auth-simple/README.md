@@ -107,6 +107,8 @@ raw NitroTPM evidence by itself.
 | `apps.<appId>.composeHashes` | No | Allowed compose hashes for this app |
 | `apps.<appId>.devices` | No | Allowed device IDs for this app. Empty denies all unless `allowAnyDevice` is true. |
 | `apps.<appId>.allowAnyDevice` | No | If true, skip device ID check for this app |
+| `rootEpochs` | No | KMS root public keys of each root epoch, indexed by epoch, `[{"caPubkey": "0x...", "k256Pubkey": "0x..."}]`. Epoch 0 is the original roots. Append only. The info endpoint reports the current epoch as `rootEpoch` with its chain hash as `rootEpochHash`; boot checks from a KMS serving another epoch are denied. |
+| `currentRootEpoch` | No | Root epoch KMS instances serve (default 0). Raise it only once every KMS node holds that epoch. |
 
 For experimental AMD SEV-SNP dry-run authorization, keep the default fail-closed TCB policy unless you intentionally want the auth webhook to accept non-up-to-date verifier-derived SNP `BootInfo`. To exercise the dry-run path without enabling key release, allowlist the recomputed SNP `mrAggregated`, `osImageHash`, app/compose identity, device/chip identity, and any non-default `allowedTcbStatuses`/`allowedAdvisoryIds` values explicitly. KMS still rejects SNP before returning app keys, KMS keys, or app certificates.
 
@@ -250,3 +252,25 @@ bun run test:run
 - [auth-eth](../auth-eth/) - On-chain governance auth server
 - [auth-mock](../auth-mock/) - Development/testing auth server (always allows)
 - [Deployment Guide](../../../docs/deployment.md) - Full deployment instructions
+
+
+### Authorization endpoints
+
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
+The selected endpoint determines the policy; the backend checks that the verified
+`appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
+omission uses the current app epoch, explicit zero selects epoch zero, and future
+values are denied. The optional
+`requestedRootEpoch` selects historical keys; omission uses the returned current
+epoch, and an explicit `0` selects epoch 0. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for registration,
+bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
+remain available.
+
+### Authorization operations
+
+`/authorizeKms` and `/authorizeApp` require an `operation` string. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for the names
+and subject semantics. Bootstrap alone may authorize before root registration;
+unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.

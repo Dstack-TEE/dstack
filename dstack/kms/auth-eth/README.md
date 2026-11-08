@@ -13,6 +13,14 @@ This project contains upgradeable smart contracts for:
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) - For smart contract development and testing
 - Node.js - For the bootAuth server and TypeScript development
 
+## Upgrade order
+
+Upgrade the `DstackKms` contract before deploying the new auth backend or KMS.
+An empty root epoch registry is supported on the upgraded contract; there is no
+fallback for legacy contracts. Old KMS instances that omit the root epoch can
+receive app authorization only while no epoch is registered or epoch 0 is current,
+subject to the existing authorization policy.
+
 ## Setup
 
 1. Install dependencies:
@@ -162,3 +170,38 @@ anvil
 ```
 
 Documentation: https://book.getfoundry.sh/
+
+
+### Authorization endpoints
+
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
+The selected endpoint determines the policy; the backend checks that the verified
+`appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
+omission uses the current app epoch, explicit zero selects epoch zero, and future
+values are denied. The optional
+`requestedRootEpoch` selects historical keys; omission uses the returned current
+epoch, and an explicit `0` selects epoch 0. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for registration,
+bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
+remain available.
+
+### Authorization operations
+
+`/authorizeKms` and `/authorizeApp` require an `operation` string. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for the names
+and subject semantics. Bootstrap alone may authorize before root registration;
+unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.
+
+
+### Epoch-scoped material approvals
+
+Material approvals use exact root/app epoch rows; neither older nor newer rows
+are implicitly authorized. Existing add/remove methods default to the highest
+registered root epoch or current app epoch. The `*AtEpoch` methods and optional
+`ROOT_EPOCH` / `APP_EPOCH` variables on single-material management scripts select
+an explicit row. Original bool mappings and events remain epoch-zero views after
+upgrading; epoch-specific getters/events describe the new rows. KMS keyring
+handover separately checks its highest exported root epoch, which authorizes the
+whole keyring. See [epoch-scoped allowlists](../../../docs/app-key-epochs.md#epoch-scoped-allowlists)
+for migration, upgrade order and compatibility.

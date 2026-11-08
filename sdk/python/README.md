@@ -634,6 +634,17 @@ before switching anything that holds state.
 | `emit_event()` | — | RTMR3 is system-owned as of 0.6.0 |
 | `gpu_info()` | `attest()` with `include_boottime_gpu_evidence=True` | Same bytes, now on the attestation call, in `attest_gpu()`'s bundle shape |
 
+### Sealed environment variables
+
+`seal_env(envs, public_key_hex, root_epoch)` returns HPKE JSON for `.sealed-env`.
+First obtain `GetSealedEnvPubKey`, use `verify_sealed_env_public_key` to recover
+its timestamp-checked signer, and compare that signer with an independently
+trusted root key for the response epoch. Send the JSON's UTF-8 bytes in VMM's
+`sealed_env` field (hex for JSON RPC). The legacy encryption API is unchanged.
+
+See [the SealedEnv protocol](../../docs/sealed-env.md) for file precedence,
+automatic migration, and the old-OS rollback requirement.
+
 ## License
 
 Apache License 2.0
