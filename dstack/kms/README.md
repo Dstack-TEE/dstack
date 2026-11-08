@@ -259,14 +259,14 @@ KMS callers do not fetch contract metadata to decide which policy to use.
 
 `requestedAppEpoch` selects the application's own key epoch, independently of KMS
 root epochs. Omission uses `currentAppEpoch`; explicit zero selects app epoch zero.
-Solidity uses `OptionalEpoch { isSet, value }` for both selectors. Future epochs
+Solidity uses `OptionalUint256 { isSet, value }` for both selectors. Future epochs
 are denied; historical epochs remain subject to current authorization policy.
 Rejection responses still carry the current epochs and root chain hash. See
 [application key epochs](../../docs/app-key-epochs.md) for rotation and migration.
 
 `requestedRootEpoch` is optional in the JSON request. Omit it to use the epoch in
 this authorization result; an explicit `0` selects epoch 0. Solidity represents
-it as `OptionalEpoch { isSet, value }` alongside `AppInfo` in the request. The
+it as `OptionalUint256 { isSet, value }` alongside `AppInfo` in the request. The
 contract rejects a requested epoch newer than the current one; historical
 epochs remain available for migration. No serving epoch or serving hash is sent.
 KMS-to-KMS handover transfers the complete keyring. The receiver explicitly
@@ -301,6 +301,7 @@ The response is an `AuthorizationResult`:
   "rejectionReason": "",
   "gatewayAppId": "0x...",
   "currentRootEpoch": 0,
+  "currentAppEpoch": 0,
   "currentRootEpochHash": "0x..."
 }
 ```
