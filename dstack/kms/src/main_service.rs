@@ -588,14 +588,8 @@ impl RpcHandler {
     ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
         let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
-        self.ensure_app_attestation_allowed(
-            att,
-            boot_info,
-            vm_config,
-            Operation::AppGetKey,
-            epochs,
-        )
-        .await
+        self.ensure_app_attestation_allowed(att, boot_info, vm_config, Operation::AppGetKey, epochs)
+            .await
     }
 
     async fn ensure_app_attestation_allowed(

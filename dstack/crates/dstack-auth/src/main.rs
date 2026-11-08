@@ -638,6 +638,7 @@ mod tests {
                 let allowed =
                     selectors["requestedAppEpoch"] != 3 && selectors["requestedRootEpoch"] != 2;
                 let mut request = selectors;
+                request["operation"] = "app_get_key".into();
                 request["appId"] = id.clone().into();
                 request["composeHash"] = "ee".into();
                 let response: serde_json::Value = client

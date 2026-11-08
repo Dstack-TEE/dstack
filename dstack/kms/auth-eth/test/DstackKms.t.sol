@@ -618,21 +618,21 @@ contract DstackKmsTest is Test {
         (uint256 rootEpoch,) = kms.currentRootEpoch();
         assertEq(rootEpoch, 0);
         DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
-            info, DstackKms.OptionalEpoch(false, 0), DstackKms.OptionalEpoch(false, 0)
+            info, keccak256("app_get_key"), DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0)
         );
-        DstackKms.AuthorizationResult memory result = kms.checkAppAuthorization(request);
+        DstackKms.AuthorizationResult memory result = kms.authorizeApp(request);
         assertTrue(result.isAllowed);
         assertEq(result.currentAppEpoch, 1);
-        request.requestedAppEpoch = DstackKms.OptionalEpoch(true, 0);
-        assertTrue(kms.checkAppAuthorization(request).isAllowed);
+        request.requestedAppEpoch = DstackKms.OptionalUint256(true, 0);
+        assertTrue(kms.authorizeApp(request).isAllowed);
         request.requestedAppEpoch.value = 2;
-        result = kms.checkAppAuthorization(request);
+        result = kms.authorizeApp(request);
         assertFalse(result.isAllowed);
         assertEq(result.currentAppEpoch, 1);
         assertEq(result.rejectionReason, "Requested app epoch is not active");
-        request.requestedAppEpoch = DstackKms.OptionalEpoch(false, 0);
+        request.requestedAppEpoch = DstackKms.OptionalUint256(false, 0);
         request.appInfo.composeHash = bytes32(0);
-        result = kms.checkAppAuthorization(request);
+        result = kms.authorizeApp(request);
         assertFalse(result.isAllowed);
         assertEq(result.currentAppEpoch, 1);
         vm.prank(user);

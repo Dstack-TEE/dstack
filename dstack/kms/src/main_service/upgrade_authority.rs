@@ -266,8 +266,14 @@ impl AuthApi {
         if !operation.is_kms() {
             bail!("invalid KMS authorization operation");
         }
-        self.check_authorization(app_info, "authorizeKms", operation, requested_root_epoch, None)
-            .await
+        self.check_authorization(
+            app_info,
+            "authorizeKms",
+            operation,
+            requested_root_epoch,
+            None,
+        )
+        .await
     }
 
     pub async fn authorize_app(
@@ -280,8 +286,14 @@ impl AuthApi {
         if operation.is_kms() {
             bail!("invalid app authorization operation");
         }
-        self.check_authorization(app_info, "authorizeApp", operation, requested_root_epoch, requested_app_epoch)
-            .await
+        self.check_authorization(
+            app_info,
+            "authorizeApp",
+            operation,
+            requested_root_epoch,
+            requested_app_epoch,
+        )
+        .await
     }
 
     async fn check_authorization(
