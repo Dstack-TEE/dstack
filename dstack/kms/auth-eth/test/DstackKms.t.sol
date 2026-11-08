@@ -585,10 +585,23 @@ contract DstackKmsTest is Test {
     function test_AppEpochCapabilityIsOptionalButGetterFailuresPropagate() public {
         address policy = address(new DstackApp());
         kms.registerApp(policy);
-        vm.mockCall(policy, abi.encodeCall(IERC165.supportsInterface, (type(IAppEpoch).interfaceId)), abi.encode(false));
+        vm.mockCall(policy, abi.encodeCall(IAppEpochAuth.currentAppEpoch, ()), abi.encode(uint256(7)));
+        assertEq(kms.currentAppEpoch(policy), 7);
+        vm.mockCall(
+            policy, abi.encodeCall(IERC165.supportsInterface, (type(IAppEpochAuth).interfaceId)), abi.encode(false)
+        );
+        // Advertising either old single-method interface does not opt into the combined capability.
+        vm.mockCall(
+            policy,
+            abi.encodeCall(IERC165.supportsInterface, (IAppEpochAuth.currentAppEpoch.selector)),
+            abi.encode(true)
+        );
+        vm.mockCall(
+            policy, abi.encodeCall(IERC165.supportsInterface, (IAppEpochAuth.authorizeApp.selector)), abi.encode(true)
+        );
         assertEq(kms.currentAppEpoch(policy), 0);
         vm.clearMockedCalls();
-        vm.mockCallRevert(policy, abi.encodeCall(IAppEpoch.currentAppEpoch, ()), "epoch unavailable");
+        vm.mockCallRevert(policy, abi.encodeCall(IAppEpochAuth.currentAppEpoch, ()), "epoch unavailable");
         vm.expectRevert("epoch unavailable");
         kms.currentAppEpoch(policy);
     }
@@ -1042,8 +1055,11 @@ contract DstackKmsTest is Test {
         vm.mockCall(info.appId, abi.encodeCall(IAppAuth.isAppAllowed, (info)), abi.encode(true, ""));
         assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).isAllowed);
         DstackKms.AuthorizationResult memory result = authorize(info, false);
+        assertTrue(result.isAllowed);
+        assertEq(result.currentAppEpoch, 0);
+        result = kms.authorizeApp(epochRequest(info, 0, 1));
         assertFalse(result.isAllowed);
-        assertEq(result.rejectionReason, "App policy does not support epoch authorization");
+        assertEq(result.rejectionReason, "Requested app epoch is not active");
         vm.clearMockedCalls();
         vm.mockCallRevert(
             info.appId,

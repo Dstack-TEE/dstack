@@ -544,7 +544,14 @@ contract DstackAppTest is Test {
         vm.expectRevert(unauthorized);
         app.setAllowAnyDeviceAtEpoch(0, true);
         vm.stopPrank();
-        assertTrue(app.supportsInterface(type(IAppEpochAuth).interfaceId));
+    }
+
+    function test_epoch_auth_interface_combines_discovery_and_authorization() public view {
+        bytes4 combined = IAppEpochAuth.currentAppEpoch.selector ^ IAppEpochAuth.authorizeApp.selector;
+        assertEq(bytes32(type(IAppEpochAuth).interfaceId), bytes32(combined));
+        assertTrue(app.supportsInterface(combined));
+        assertFalse(app.supportsInterface(IAppEpochAuth.currentAppEpoch.selector));
+        assertFalse(app.supportsInterface(IAppEpochAuth.authorizeApp.selector));
     }
 
     function testFuzz_AppAuthorizationMatchesOnlyTheSelectedRow(uint8 approved, uint8 requested) public {

@@ -18,8 +18,9 @@ prevents a stale or retried transaction from advancing twice. Epochs cannot be
 rolled back and are limited to uint32. `AdvanceAppEpoch` in `Manage.s.sol` exposes
 this operation; `GetAppEpoch` in `Query.s.sol` reads it. Upgrade the app policy
 implementation before advancing, and upgrade the KMS/auth backend and guests
-before using nonzero epochs. Legacy policies without the ERC-165 `IAppEpoch`
-capability remain at zero; failures of an advertised getter propagate.
+before using nonzero epochs. The ERC-165 `IAppEpochAuth` capability combines
+`currentAppEpoch()` and `authorizeApp(...)` in one interface. Legacy policies
+without this capability remain at zero; failures of an advertised getter propagate.
 
 The Ethereum auth backends query the policy through the KMS contract. The simple
 backend reads `apps[appId].currentAppEpoch` (default zero); operators must preserve
@@ -84,9 +85,12 @@ only row zero after upgrading: explicitly populate the intended nonzero rows.
 
 Upgrade the KMS policy before app policies, then approve the intended rows before
 restarting guests or activating a new root. `DstackApp` advertises the optional
-ERC-165 `IAppEpochAuth` capability so the KMS can pass the selected app epoch and operation to
-`authorizeApp`. Policies without that capability can only authorize app
-epoch zero; failures of an advertised method propagate instead of falling back.
+ERC-165 `IAppEpochAuth` capability so the KMS can discover the current epoch and
+pass the selected app epoch and operation to `authorizeApp`. Its interface ID is
+the XOR of both method selectors; policies advertising only either former
+single-method interface must upgrade to the combined interface. Policies without
+that capability can only authorize app epoch zero; failures of an advertised
+method propagate instead of falling back.
 Direct legacy app checks use the current app epoch; legacy KMS app authorization
 still rejects nonzero app epochs.
 

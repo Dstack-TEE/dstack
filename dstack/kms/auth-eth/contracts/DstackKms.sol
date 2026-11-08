@@ -8,7 +8,6 @@ pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
-import "./IAppEpoch.sol";
 import "./IAppEpochAuth.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -466,8 +465,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     /// Legacy policies have epoch zero; an advertised epoch getter must succeed.
     function currentAppEpoch(address appId) public view returns (uint256) {
         if (!registeredApps[appId] || appId.code.length == 0) return 0;
-        if (!ERC165Checker.supportsInterface(appId, type(IAppEpoch).interfaceId)) return 0;
-        return IAppEpoch(appId).currentAppEpoch();
+        if (!ERC165Checker.supportsInterface(appId, type(IAppEpochAuth).interfaceId)) return 0;
+        return IAppEpochAuth(appId).currentAppEpoch();
     }
 
     /// Authorize an attested identity and return the root epoch from the same state.

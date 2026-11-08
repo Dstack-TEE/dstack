@@ -8,7 +8,6 @@ pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
-import "./IAppEpoch.sol";
 import "./IAppEpochAuth.sol";
 import "./IAppAuthBasicManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
@@ -23,7 +22,6 @@ contract DstackApp is
     ERC165Upgradeable,
     IAppAuth,
     IAppAuthBasicManagement,
-    IAppEpoch,
     IAppEpochAuth
 {
     // Mapping of allowed compose hashes for this app
@@ -143,8 +141,7 @@ contract DstackApp is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return interfaceId == type(IAppEpochAuth).interfaceId || interfaceId == type(IAppEpoch).interfaceId
-            || interfaceId == 0x1e079198 // IAppAuth
+        return interfaceId == type(IAppEpochAuth).interfaceId || interfaceId == 0x1e079198 // IAppAuth
             || interfaceId == 0x8fd37527 // IAppAuthBasicManagement
             || super.supportsInterface(interfaceId);
     }
