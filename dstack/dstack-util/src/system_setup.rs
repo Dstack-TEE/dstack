@@ -3365,22 +3365,19 @@ impl Stage1<'_> {
         let current_key = env_crypt_key(&self.keys.env_crypt_key)?;
         let plaintext = match dh_decrypt(current_key, ciphertext) {
             Ok(plaintext) => return Ok((plaintext, Vec::new())),
-            Err(error) => {
-                let current = self.keys.root_epoch();
-                let mut recovered = None;
-                for epoch in (0..current).rev() {
-                    let old = self
-                        .shared
-                        .request_historical_keys(&self.keys, epoch)
-                        .await?;
-                    if let Ok(plaintext) =
-                        dh_decrypt(env_crypt_key(&old.env_crypt_key)?, ciphertext)
-                    {
-                        recovered = Some(plaintext);
-                        break;
-                    }
-                }
-                recovered.ok_or(error)?
+            Err(_) => {
+                decrypt_historical_env(
+                    ciphertext,
+                    (0..self.keys.root_epoch()).rev(),
+                    async |epoch| {
+                        Ok(self
+                            .shared
+                            .request_historical_keys(&self.keys, epoch)
+                            .await?
+                            .env_crypt_key)
+                    },
+                )
+                .await?
             }
         };
         let sealed = seal_env(current_secret, self.keys.root_epoch(), &plaintext)?;
@@ -3556,6 +3553,28 @@ fn seal_env(secret: &[u8], epoch: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
         enc: enc.to_vec(),
         ciphertext: ciphertext.to_vec(),
     })?)
+}
+
+async fn decrypt_historical_env<I, F, Fut>(
+    ciphertext: &[u8],
+    epochs: I,
+    mut key_at: F,
+) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = u32>,
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>>>,
+{
+    for epoch in epochs {
+        let decrypted = key_at(epoch)
+            .await
+            .and_then(|key| dh_decrypt(env_crypt_key(&key)?, ciphertext));
+        match decrypted {
+            Ok(plaintext) => return Ok(plaintext),
+            Err(err) => warn!("failed to open legacy env at root epoch {epoch}: {err:#}"),
+        }
+    }
+    bail!("failed to decrypt legacy env with accessible historical keys")
 }
 
 fn env_crypt_key(key: &[u8]) -> Result<[u8; 32]> {
@@ -4443,6 +4462,37 @@ mod sealed_env_file_tests {
             .unwrap_err()
             .to_string()
             .contains("exceeds current"));
+    }
+
+    #[tokio::test]
+    async fn legacy_env_migration_skips_denied_intermediate_epochs() {
+        let secret = x25519_dalek::StaticSecret::from([8; 32]);
+        let public = x25519_dalek::PublicKey::from(&secret);
+        let plaintext = br#"{"env":[{"key":"SECRET","value":"synthetic"}]}"#;
+        let encrypted = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let mut requested = Vec::new();
+        let decrypted = decrypt_historical_env(&encrypted, (0..2).rev(), |epoch| {
+            requested.push(epoch);
+            std::future::ready(if epoch == 0 {
+                Ok(secret.to_bytes().to_vec())
+            } else {
+                Err(anyhow::anyhow!("authorization denied"))
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(requested, [1, 0]);
+        assert_eq!(decrypted, plaintext);
+        assert!(
+            decrypt_historical_env(&encrypted, (0..2).rev(), |_| async { bail!("denied") })
+                .await
+                .is_err()
+        );
+        assert!(
+            decrypt_historical_env(&encrypted, (0..2).rev(), |_| async { Ok(vec![3; 32]) })
+                .await
+                .is_err()
+        );
     }
 
     #[test]
