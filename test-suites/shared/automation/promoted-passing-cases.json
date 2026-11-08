@@ -3010,6 +3010,33 @@
       "promoted_at": "2026-11-08T00:00:00Z",
       "notes": "14 focused root/app epoch, keyring, onboarding, authorization, disk migration and SealedEnv rows passed on the tdxlab host using Rust 1.92.0 and local Cargo targets; no TDX VM lifecycle was exercised in this first rotation round",
       "environment": "TDXLAB-HOST"
+    },
+    {
+      "case_id": "tc-kms-rotation-014",
+      "source_run": "kms-rotation-tdxlab-2026-11-08",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-rotation-014/run.py",
+      "promoted_at": "2026-11-08T12:00:00Z",
+      "notes": "82 on-chain and upgrade contract tests passed on tdxlab after forge clean between suites",
+      "environment": "TDXLAB-HOST"
+    },
+    {
+      "case_id": "tc-kms-rotation-015",
+      "source_run": "kms-backend-rotation-tdxlab-2026-11-08",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/07-authorization-implementations/tc-kms-rotation-015/run.py",
+      "promoted_at": "2026-11-08T12:00:00Z",
+      "notes": "auth-simple, auth-mock, auth-eth-bun, and auth-eth suites passed under Node 22.23.4",
+      "environment": "TDXLAB-HOST"
+    },
+    {
+      "case_id": "tc-int-forward-016",
+      "source_run": "forward-matrix-tdxlab-2026-11-08",
+      "source_status": "PASS",
+      "entrypoint": "cases/06-integration/01-end-to-end/tc-int-forward-016/run.py",
+      "promoted_at": "2026-11-08T12:00:00Z",
+      "notes": "11 focused NUMA, root-device, annotation, passt/QMP, guest, RA-TLS, TPM, and serialization rows passed on tdxlab",
+      "environment": "TDXLAB-HOST"
     }
   ]
 }
