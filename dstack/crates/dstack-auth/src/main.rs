@@ -1248,4 +1248,40 @@ mod tests {
         .unwrap();
         assert!(check_app(&info2, &al).is_allowed);
     }
+
+    fn scoped_policy() -> serde_json::Value {
+        json!({
+            "kmsContractAddr": "0x1111111111111111111111111111111111111111",
+            "rootEpochs": [{"caPubkey": "aa", "k256Pubkey": "bb"}],
+            "osImages": ["aa"],
+            "kms": {"mrAggregated": ["bb"], "allowAnyDevice": true},
+            "apps": {"0x2222222222222222222222222222222222222222": {"composeHashes": ["cc"], "allowAnyDevice": true}}
+        })
+    }
+
+    async fn client_with(
+        policy: &serde_json::Value,
+    ) -> (tempfile::TempDir, rocket::local::asynchronous::Client) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist.json");
+        std::fs::write(&path, policy.to_string()).unwrap();
+        let client = client_for(&path).await;
+        (dir, client)
+    }
+
+    fn kms_request(operation: &str) -> serde_json::Value {
+        json!({"operation": operation, "appId": "11".repeat(20), "mrAggregated": "bb", "deviceId": "dd"})
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding B3-a: expected to fail until B3-a is fixed"]
+    async fn finding_b3a_kms_allowed_to_serve_is_denied_key_handover_by_default() {
+        let (_dir, client) = client_with(&scoped_policy()).await;
+        let serve = post_json(&client, "/authorizeKms", &kms_request("kms_serve")).await;
+        assert_eq!(serve["authorized"], true, "{serve}");
+        for operation in ["kms_export_keys", "kms_import_keys"] {
+            let response = post_json(&client, "/authorizeKms", &kms_request(operation)).await;
+            assert_eq!(response["authorized"], false, "{operation}: {response}");
+        }
+    }
 }
