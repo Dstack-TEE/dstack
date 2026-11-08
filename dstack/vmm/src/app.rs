@@ -2603,6 +2603,165 @@ mod tests {
         assert!(!app.work_dir("vm-2").unwrap().path().exists());
     }
 
+    // Only the socket boundary is substituted: the guest wrapper, generated RPC
+    // decoder, host handler and filesystem/CAS implementation are production code.
+    #[rocket::post("/UpdateSealedEnv", data = "<body>")]
+    async fn sealed_env_rpc(
+        body: Vec<u8>,
+        state: &rocket::State<(App, u32)>,
+    ) -> (rocket::http::Status, Vec<u8>) {
+        use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
+        let handler = crate::host_api_service::HostApiHandler::construct(
+            CallContext::builder()
+                .state(&state.0)
+                .remote_endpoint(RemoteEndpoint::Vsock {
+                    cid: state.1,
+                    port: 1234,
+                })
+                .build(),
+        )
+        .unwrap();
+        let (status, body) = handler
+            .call("UpdateSealedEnv".into(), body, true, false)
+            .await;
+        (rocket::http::Status::new(status), body)
+    }
+
+    #[tokio::test]
+    async fn sealed_env_rpc_keeps_injection_payloads_bound_to_the_transport_vm() {
+        use crate::guest_host_api::HostApi;
+        use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
+
+        // HostApi intentionally skips unsupported platforms; do not let that turn
+        // this regression into a passing no-op.
+        assert!(matches!(
+            dstack_types::Platform::detect_or_dstack(),
+            dstack_types::Platform::Dstack
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        for (id, cid) in [("sender", 3), ("victim", 4)] {
+            let (mut vm, _) = bridge_vm(&app, id);
+            vm.cid = cid;
+            vm.image.info.sealed_env = true;
+            app.lock().vms.insert(id.into(), VmState::new(vm));
+            let workdir = app.work_dir(id).unwrap();
+            fs::create_dir_all(workdir.shared_dir()).unwrap();
+            workdir.write_env(&[], id.as_bytes()).unwrap();
+            let hash = app.sha256_of_env(id).unwrap();
+            app.lock().vms.get_mut(id).unwrap().state.env_update = Some(hash);
+        }
+        let sender = app.work_dir("sender").unwrap();
+        let victim = app.work_dir("victim").unwrap();
+        let marker = dir.path().join("injected");
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"untouched").unwrap();
+        let mut payload = format!(
+            "\"}},\"cid\":4,\"id\":\"victim\",\"path\":\"{}\",\"sealed_env\":\"overwritten\"}}\n../../../outside\n{}\n$(touch {}) ; touch {} #\n`touch {}`\n\\u0022\\n\\x00\r\n",
+            victim.sealed_env_path().display(), outside.display(),
+            marker.display(), marker.display(), marker.display(),
+        ).into_bytes();
+        payload.extend(0u8..=255);
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        let server = rocket::custom(
+            rocket::Config::figment()
+                .merge(("address", "127.0.0.1"))
+                .merge(("port", 0))
+                .merge(("log_level", "off"))
+                .merge(("shutdown.ctrlc", false)),
+        )
+        .manage((app.clone(), 3u32))
+        .mount("/", rocket::routes![sealed_env_rpc])
+        .attach(rocket::fairing::AdHoc::on_liftoff("port", move |rocket| {
+            tx.lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(
+                    rocket
+                        .endpoints()
+                        .find_map(|endpoint| endpoint.port())
+                        .unwrap(),
+                )
+                .unwrap();
+            Box::pin(async {})
+        }))
+        .ignite()
+        .await
+        .unwrap();
+        let shutdown = server.shutdown();
+        let server = tokio::spawn(server.launch());
+        let host = HostApi::new(
+            Some(format!("http://127.0.0.1:{}", rx.await.unwrap())),
+            None,
+        );
+        host.update_sealed_env(payload.clone()).await.unwrap();
+        assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), payload);
+        assert!(!sender.encrypted_env_path().exists());
+        assert_eq!(fs::read(victim.sealed_env_path()).unwrap(), b"victim");
+        assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+        assert!(!marker.exists());
+        assert!(app
+            .lock()
+            .vms
+            .get("victim")
+            .unwrap()
+            .state
+            .env_update
+            .is_some());
+        let err = host.update_sealed_env(payload.clone()).await.unwrap_err();
+        assert!(format!("{err:#}").contains("once per boot"));
+        assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), payload);
+
+        // Even top-level forged JSON fields cannot select a VM or revive the CAS.
+        let forged = serde_json::to_vec(&serde_json::json!({
+            "sealed_env": hex::encode(&payload), "cid": 4, "id": "victim",
+            "path": victim.sealed_env_path(), "env_update": true,
+        }))
+        .unwrap();
+        for cid in [3, 999] {
+            let handler = crate::host_api_service::HostApiHandler::construct(
+                CallContext::builder()
+                    .state(&app)
+                    .remote_endpoint(RemoteEndpoint::Vsock { cid, port: 1234 })
+                    .build(),
+            )
+            .unwrap();
+            let (status, body) = handler
+                .call("UpdateSealedEnv".into(), forged.clone(), true, false)
+                .await;
+            assert_eq!(status, 400);
+            let expected = if cid == 3 {
+                "once per boot"
+            } else {
+                "VM not found"
+            };
+            assert!(String::from_utf8(body).unwrap().contains(expected));
+        }
+        assert!(crate::host_api_service::HostApiHandler::construct(
+            CallContext::builder().state(&app).build()
+        )
+        .is_err());
+
+        // An owner change after the boot snapshot wins over the guest payload.
+        let hash = app.sha256_of_env("sender").unwrap();
+        app.lock().vms.get_mut("sender").unwrap().state.env_update = Some(hash);
+        sender.write_env(&[], b"owner update").unwrap();
+        let err = host.update_sealed_env(payload).await.unwrap_err();
+        assert!(format!("{err:#}").contains("changed since the VM booted"));
+        assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), b"owner update");
+        assert_eq!(fs::read(victim.sealed_env_path()).unwrap(), b"victim");
+        assert_eq!(fs::read(outside).unwrap(), b"untouched");
+        assert!(!marker.exists());
+        shutdown.notify();
+        server.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn sealed_env_cas_binds_both_files_and_serializes_owner_updates() {
         let dir = tempfile::tempdir().unwrap();

@@ -70,6 +70,11 @@ vfio-ioctls.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+host-api = { workspace = true, features = ["client"] }
+dcap-qvl.workspace = true
+ra-tls.workspace = true
+sodiumbox.workspace = true
+tdx-attest.workspace = true
 
 [build-dependencies]
 or-panic.workspace = true
