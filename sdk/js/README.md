@@ -422,10 +422,6 @@ Migrate a surface at a time: both clients can talk to the same agent at once, so
 | `client.tdxQuote(data)` | `client.attest(bytes)` — **bytes only**, where v0 UTF-8 encoded a string |
 | `/var/run/tappd.sock` | `/var/run/dstack.sock` |
 
-## License
-
-Apache-2.0
-
 ### Sealed environment variables
 
 `sealEnv` produces the version-1 HPKE JSON for `.sealed-env`. Fetch
@@ -447,3 +443,7 @@ const sealed = await sealEnv(envs, response.public_key, response.root_epoch)
 
 Legacy `encryptEnvVars` remains available for old guest images. See
 [the SealedEnv protocol](../../docs/sealed-env.md) for migration and rollback.
+
+## License
+
+Apache-2.0
