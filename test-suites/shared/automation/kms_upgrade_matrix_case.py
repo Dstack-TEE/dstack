@@ -1025,8 +1025,6 @@ class MatrixRun:
                     f"https://127.0.0.1:{self.encryption_row(kms_rows, version)['service_port']}",
                 ]
             )
-            signer_row = kms_encrypt_row or self.encryption_row(kms_rows, "candidate")
-            self.pin_kms_signer(signer_row)
             for row in kms_rows:
                 command.extend(
                     ["--kms-url", f"https://{row['domain']}:{row['service_port']}"]
@@ -1471,6 +1469,8 @@ configs:
                         ["--gateway-url", row.get("client_guest_url", row["guest_url"])]
                     )
             policy_before = len(self.policy_observations()) if not expect_boot else 0
+            signer_row = kms_encrypt_row or self.encryption_row(kms_rows, "candidate")
+            self.pin_kms_signer(signer_row)
             output = run(command, timeout=300)
         signature_v1_verified = "Verified signature_v1 (with timestamp)" in output
         if encrypted_environment and not signature_v1_verified:
