@@ -3672,7 +3672,11 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             timeout=180,
         )
         run([*matrix.cli, "start", app["vm_id"]], timeout=180)
-        wait_http(f"http://127.0.0.1:{app['service_port']}/observation", timeout=240)
+        wait_http(
+            f"http://127.0.0.1:{app['service_port']}/observation",
+            tls=False,
+            timeout=240,
+        )
         after = json.loads(run([*matrix.cli, "info", "--json", app["vm_id"]]))
         if before.get("id") != after.get("id"):
             raise RuntimeError("in-place rotation migration changed the VM identity")
