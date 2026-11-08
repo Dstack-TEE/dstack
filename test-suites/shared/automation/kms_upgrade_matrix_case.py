@@ -3644,7 +3644,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             [old_primary, old_secondary],
             gateway_rows=[old_gateway],
             kms_encrypt_row=old_primary,
-            guest_image=self.values["version_matrix"]["guest_images"]["0.5.8"],
+            guest_image=matrix.values["version_matrix"]["guest_images"]["0.5.8"],
         )
 
         candidate_primary = matrix.deploy("candidate", initialized=False, legacy=True)
@@ -3686,7 +3686,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             [candidate_primary, candidate_secondary],
             gateway_rows=[new_gateway, old_gateway],
             kms_encrypt_row=candidate_primary,
-            guest_image=self.values["version_matrix"]["guest_images"][
+            guest_image=matrix.values["version_matrix"]["guest_images"][
                 "0.6.0-candidate"
             ],
         )
@@ -3694,7 +3694,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             [old_primary, old_secondary],
             gateway_rows=[old_gateway, new_gateway],
             kms_encrypt_row=old_primary,
-            guest_image=self.values["version_matrix"]["guest_images"]["0.5.8"],
+            guest_image=matrix.values["version_matrix"]["guest_images"]["0.5.8"],
         )
         stable_fields = (
             "app_id",
@@ -3714,7 +3714,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             identity="new",
             gateway_rows=[new_gateway, old_gateway],
             kms_encrypt_row=candidate_primary,
-            guest_image=self.values["version_matrix"]["guest_images"][
+            guest_image=matrix.values["version_matrix"]["guest_images"][
                 "0.6.0-candidate"
             ],
         )
