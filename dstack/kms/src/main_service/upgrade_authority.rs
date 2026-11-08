@@ -257,7 +257,7 @@ async fn send_request<R: DeserializeOwned>(req: reqwest::RequestBuilder, url: &s
 }
 
 impl AuthApi {
-    pub async fn check_kms_authorization(
+    pub async fn authorize_kms(
         &self,
         app_info: &BootInfo,
         operation: Operation,
@@ -270,7 +270,7 @@ impl AuthApi {
             .await
     }
 
-    pub async fn check_app_authorization(
+    pub async fn authorize_app(
         &self,
         app_info: &BootInfo,
         operation: Operation,
@@ -435,7 +435,7 @@ pub(crate) async fn ensure_self_kms_allowed(
         .context("failed to build local KMS boot info")?;
     let response = cfg
         .auth_api
-        .check_kms_authorization(&boot_info, Operation::KmsBootstrap, None)
+        .authorize_kms(&boot_info, Operation::KmsBootstrap, None)
         .await
         .context("failed to call KMS bootstrap authorization")?;
     if !response.is_allowed {
@@ -472,7 +472,7 @@ pub(crate) async fn ensure_kms_allowed(
     }
     let response = cfg
         .auth_api
-        .check_kms_authorization(&boot_info, Operation::KmsExportKeys, Some(root_epoch))
+        .authorize_kms(&boot_info, Operation::KmsExportKeys, Some(root_epoch))
         .await
         .context("failed to authorize source KMS key export")?;
     if !response.is_allowed {
@@ -730,11 +730,11 @@ pub(crate) mod tests {
         let auth = webhook(url);
         for operation in operations {
             if operation.is_kms() {
-                auth.check_kms_authorization(&boot_info(1), operation, Some(0))
+                auth.authorize_kms(&boot_info(1), operation, Some(0))
                     .await
                     .unwrap();
             } else {
-                auth.check_app_authorization(&boot_info(1), operation, None)
+                auth.authorize_app(&boot_info(1), operation, None)
                     .await
                     .unwrap();
             }
@@ -773,21 +773,21 @@ pub(crate) mod tests {
         let auth = webhook(url);
         let info = boot_info(50);
         let first = auth
-            .check_app_authorization(&info, Operation::AppGetKey, None)
+            .authorize_app(&info, Operation::AppGetKey, None)
             .await
             .unwrap();
         let second = auth
-            .check_app_authorization(&info, Operation::AppGetKey, None)
+            .authorize_app(&info, Operation::AppGetKey, None)
             .await
             .unwrap();
         assert!(first.is_allowed);
         assert!(!second.is_allowed);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
-        auth.check_app_authorization(&info, Operation::AppGetKey, Some(0))
+        auth.authorize_app(&info, Operation::AppGetKey, Some(0))
             .await
             .unwrap();
-        auth.check_kms_authorization(&info, Operation::KmsServe, None)
+        auth.authorize_kms(&info, Operation::KmsServe, None)
             .await
             .unwrap();
         let requests = server.join().unwrap();
@@ -811,7 +811,7 @@ pub(crate) mod tests {
             r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
         ]);
         assert!(webhook(url)
-            .check_app_authorization(&boot_info(50), Operation::AppGetKey, None)
+            .authorize_app(&boot_info(50), Operation::AppGetKey, None)
             .await
             .is_err());
         assert_eq!(server.join().unwrap().len(), 1);

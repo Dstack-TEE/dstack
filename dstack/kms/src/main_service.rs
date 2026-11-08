@@ -509,7 +509,7 @@ impl RpcHandler {
                     .state
                     .config
                     .auth_api
-                    .check_kms_authorization(&boot_info, operation, None)
+                    .authorize_kms(&boot_info, operation, None)
                     .await
                     .context("Failed to call self KMS auth check")?;
                 let epoch = self.state.authorized_epoch(&response, None)?;
@@ -536,7 +536,7 @@ impl RpcHandler {
             .state
             .config
             .auth_api
-            .check_kms_authorization(&boot_info, Operation::KmsImportKeys, None)
+            .authorize_kms(&boot_info, Operation::KmsImportKeys, None)
             .await?;
         self.state.authorized_epoch(&response, None)?;
         self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
@@ -573,7 +573,7 @@ impl RpcHandler {
             .state
             .config
             .auth_api
-            .check_app_authorization(&boot_info, operation, requested_root_epoch)
+            .authorize_app(&boot_info, operation, requested_root_epoch)
             .await?;
         let root_epoch = self
             .state
