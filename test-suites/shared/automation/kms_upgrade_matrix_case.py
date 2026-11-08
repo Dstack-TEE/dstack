@@ -3648,7 +3648,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             [old],
             identity="rotation-migration",
             kms_encrypt_row=old,
-            guest_image=matrix.values["version_matrix"]["guest_images"]["0.5.8"],
+            guest_image=matrix.values["version_matrix"]["guest_images"]["0.5.11"],
             encrypted_environment={"DSTACK_TEST_MIGRATION_SENTINEL": "old-epoch"},
         )
         candidate = matrix.deploy("candidate", initialized=False, legacy=True)
@@ -3684,7 +3684,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             raise RuntimeError("migration observer exposed private material")
         return {
             "path": [
-                "old-kms-old-os-app",
+                "old-kms-0.5.11-old-os-app",
                 "rotation-onboarding",
                 "same-vm-stop",
                 "candidate-os-in-place-update",
