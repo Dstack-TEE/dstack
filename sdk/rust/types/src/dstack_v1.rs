@@ -352,7 +352,6 @@ mod tests {
             key: vec![0x01; 32],
             public_key: vec![0x02; 33],
             signature_chain: vec![vec![0xaa, 0xbb], vec![0xcc]],
-            root_epoch: 0,
         };
         let json = serde_json::to_string(&response).expect("serializes");
         assert!(json.contains(r#""signature_chain":["aabb","cc"]"#));
