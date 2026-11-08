@@ -711,17 +711,15 @@ mod tests {
             .unwrap();
             assert_eq!(result.ca_cert, other_ca);
             // First-contact validation still requires the response CA to sign the RPC cert.
-            assert!(
-                request_app_keys(
-                    url.clone(),
-                    request(),
-                    client_cert(),
-                    verifier.clone(),
-                    None
-                )
-                .await
-                .is_err()
-            );
+            assert!(request_app_keys(
+                url.clone(),
+                request(),
+                client_cert(),
+                verifier.clone(),
+                None
+            )
+            .await
+            .is_err());
         }
         assert_eq!(requests.lock().unwrap().len(), 10);
 
