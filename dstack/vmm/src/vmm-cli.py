@@ -34,7 +34,10 @@ except ImportError:
 
 # Default config file locations
 DEFAULT_CONFIG_PATH = os.path.expanduser("~/.dstack-vmm/config.json")
-DEFAULT_KMS_WHITELIST_PATH = os.path.expanduser("~/.dstack-vmm/kms-whitelist.json")
+DEFAULT_KMS_WHITELIST_PATH = os.environ.get(
+    "DSTACK_VMM_KMS_WHITELIST_PATH",
+    os.path.expanduser("~/.dstack-vmm/kms-whitelist.json"),
+)
 
 
 # VMM discovery directories
