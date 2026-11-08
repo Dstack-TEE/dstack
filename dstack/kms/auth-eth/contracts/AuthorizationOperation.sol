@@ -14,8 +14,8 @@ library AuthorizationOperation {
     bytes32 internal constant APP_GET_CERT = keccak256("app_get_cert");
 
     function isKms(bytes32 operation) internal pure returns (bool) {
-        return
-            operation == KMS_BOOTSTRAP || operation == KMS_SERVE || operation == KMS_EXPORT_KEYS || operation == KMS_IMPORT_KEYS;
+        return operation == KMS_BOOTSTRAP || operation == KMS_SERVE || operation == KMS_EXPORT_KEYS
+            || operation == KMS_IMPORT_KEYS;
     }
 
     function isApp(bytes32 operation) internal pure returns (bool) {
