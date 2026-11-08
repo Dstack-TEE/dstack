@@ -342,8 +342,8 @@ export class DstackClientV1 {
       throw new Error('algorithm is required, use "secp256k1" or "ed25519"')
     }
     // Unset is the current KMS root key epoch; name an older one only to migrate off it.
-    if (rootEpoch !== undefined && (!Number.isInteger(rootEpoch) || rootEpoch < 0)) {
-      throw new Error('rootEpoch must be a non-negative epoch number')
+    if (rootEpoch !== undefined && (!Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff)) {
+      throw new Error('rootEpoch must be a uint32')
     }
     const payload = JSON.stringify(
       rootEpoch === undefined ? { domain, algorithm } : { domain, algorithm, root_epoch: rootEpoch })

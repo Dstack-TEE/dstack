@@ -259,8 +259,8 @@ class AsyncDstackClientV1(AsyncBaseClient):
             raise ValueError("algorithm is required, use `secp256k1` or `ed25519`")
         data: Dict[str, Any] = {"domain": domain, "algorithm": algorithm}
         if root_epoch is not None:
-            if root_epoch < 0:
-                raise ValueError("root_epoch must be a non-negative epoch number")
+            if type(root_epoch) is not int or not 0 <= root_epoch <= 0xFFFFFFFF:
+                raise ValueError("root_epoch must be a uint32")
             data["root_epoch"] = root_epoch
         result = await self._send_rpc_request("GetKey", data)
         return GetKeyResponseV1(**result)
