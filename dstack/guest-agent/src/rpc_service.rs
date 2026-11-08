@@ -429,9 +429,15 @@ impl AppState {
     }
 
     pub(crate) async fn historical_root(&self, epoch: u32) -> Result<AppRoot> {
-        let mut roots = self.inner.historical_roots.lock().await;
-        if let Some(root) = roots.get(&epoch) {
-            return Ok(root.clone());
+        if let Some(root) = self
+            .inner
+            .historical_roots
+            .lock()
+            .await
+            .get(&epoch)
+            .cloned()
+        {
+            return Ok(root);
         }
         let keys = self
             .inner
@@ -440,8 +446,8 @@ impl AppState {
             .await
             .with_context(|| format!("failed to fetch the app keys of root epoch {epoch}"))?;
         let root = AppRoot::new(epoch, keys.k256_key, keys.k256_signature)?;
-        roots.insert(epoch, root.clone());
-        Ok(root)
+        let mut roots = self.inner.historical_roots.lock().await;
+        Ok(roots.entry(epoch).or_insert_with(|| root.clone()).clone())
     }
 
     #[cfg(test)]
