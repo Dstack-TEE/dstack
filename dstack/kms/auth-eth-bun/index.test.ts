@@ -10,7 +10,8 @@ const mockReadContract = vi.fn();
 const mockGetChainId = vi.fn();
 const mockGetBlockNumber = vi.fn();
 
-vi.mock('viem', () => ({
+vi.mock('viem', async (importOriginal) => ({
+  ...await importOriginal<typeof import('viem')>(),
   createPublicClient: vi.fn(() => ({
     readContract: mockReadContract,
     getChainId: mockGetChainId,
@@ -58,6 +59,7 @@ describe('API Compatibility Tests', () => {
     it('should return system info matching OpenAPI spec', async () => {
       // Mock contract calls
       mockReadContract.mockImplementation((params) => {
+        if (params.functionName === 'rootEpochCount') return 0n;
         if (params.functionName === 'gatewayAppId') {
           return '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd';
         }
@@ -119,6 +121,7 @@ describe('API Compatibility Tests', () => {
     it('should validate app boot with required fields only', async () => {
       // Mock successful contract response
       mockReadContract.mockImplementation((params) => {
+        if (params.functionName === 'rootEpochCount') return 0n;
         if (params.functionName === 'isAppAllowed') {
           return [true, 'success'];
         }
@@ -160,6 +163,7 @@ describe('API Compatibility Tests', () => {
       };
 
       mockReadContract.mockImplementation((params) => {
+        if (params.functionName === 'rootEpochCount') return 0n;
         if (params.functionName === 'isAppAllowed') {
           return [true, 'success with full info'];
         }
@@ -230,6 +234,125 @@ describe('API Compatibility Tests', () => {
     });
 });
 
+  describe('root epochs', () => {
+    const validBootInfo = {
+      mrAggregated: '0x' + '12'.repeat(32),
+      osImageHash: '0x' + 'ab'.repeat(32),
+      appId: '0x' + '11'.repeat(20),
+      composeHash: '0x' + '22'.repeat(32),
+      instanceId: '0x' + '33'.repeat(20),
+      deviceId: '0x' + '44'.repeat(32),
+    };
+
+    const hash = '0x' + '11'.repeat(32);
+    const mockChain = (currentRootEpoch: () => unknown, rootEpochCount = () => 2n) =>
+      mockReadContract.mockImplementation((params) => {
+        switch (params.functionName) {
+          case 'isAppAllowed': return [true, ''];
+          case 'isKmsAllowed': return [true, ''];
+          case 'gatewayAppId': return '0xgateway';
+          case 'appImplementation': return '0x9876543210987654321098765432109876543210';
+          case 'rootEpochCount': return rootEpochCount();
+          case 'currentRootEpoch': return currentRootEpoch();
+        }
+      });
+    const boot = async (path: string, fields: object) => {
+      const response = await appFetch(new Request(`http://localhost:3001/bootAuth/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...validBootInfo, ...fields }),
+      }));
+      return response.json();
+    };
+
+    it('allows only a KMS serving the current root epoch', async () => {
+      mockChain(() => [1n, hash]);
+
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).isAllowed).toBe(true);
+      const stale = await boot('app', { rootEpoch: 0, rootEpochHash: hash });
+      expect(stale.isAllowed).toBe(false);
+      expect(stale.reason).toMatch(/1 is current/);
+      const forked = await boot('app', { rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) });
+      expect(forked.reason).toMatch(/not the registered/);
+      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      expect((await boot('app', {})).reason).toMatch(/reports none/);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
+
+      const info = await appFetch(new Request('http://localhost:3001/'));
+      expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
+    });
+
+    it('supports an upgraded empty registry without querying the current epoch', async () => {
+      const current = vi.fn(() => { throw new Error('no root epoch registered'); });
+      mockChain(current, () => 0n);
+
+      expect((await boot('app', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: hash })).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).reason).toMatch(/not registered/);
+      const info = await appFetch(new Request('http://localhost:3001/'));
+      expect(info.status).toBe(200);
+      expect(await info.json()).not.toHaveProperty('rootEpoch');
+      expect(current).not.toHaveBeenCalled();
+    });
+
+    it('allows old KMS app requests while epoch 0 is current', async () => {
+      mockChain(() => [0n, hash], () => 1n);
+      expect((await boot('app', {})).isAllowed).toBe(true);
+    });
+
+    it.each(['app', 'info'])('reads the registry at the same finalized block for %s', async (endpoint) => {
+      mockChain(() => [1n, hash]);
+      if (endpoint === 'app') {
+        expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).isAllowed).toBe(true);
+      } else {
+        const response = await appFetch(new Request('http://localhost:3001/'));
+        expect(response.status).toBe(200);
+      }
+      const calls = mockReadContract.mock.calls.map(([params]) => params)
+        .filter(({ functionName }) => ['rootEpochCount', 'currentRootEpoch'].includes(functionName));
+      expect(calls.map(({ functionName }) => functionName)).toEqual(['rootEpochCount', 'currentRootEpoch']);
+      expect(calls.every(({ blockNumber }) => blockNumber === 98n)).toBe(true);
+      expect(mockGetBlockNumber).toHaveBeenCalledTimes(1);
+    });
+
+    describe.each(['rootEpochCount', 'currentRootEpoch'])('%s failures', (getter) => {
+      it.each([
+        ['missing getter', { name: 'ContractFunctionZeroDataError' }],
+        ['revert', { name: 'ContractFunctionRevertedError' }],
+        ['RPC failure', new Error('RPC unavailable')],
+      ])('fails closed on %s', async (_name, cause) => {
+        const failure = () => { throw Object.assign(new Error('query failed'), { cause }); };
+        mockChain(getter === 'currentRootEpoch' ? failure : () => [1n, hash],
+          getter === 'rootEpochCount' ? failure : () => 2n);
+
+        for (const path of ['app', 'kms']) {
+          expect(await boot(path, {})).toEqual({
+            isAllowed: false, reason: 'authorization backend unavailable', gatewayAppId: '',
+          });
+          expect((await boot(path, { rootEpoch: 0, rootEpochHash: hash })).isAllowed).toBe(false);
+        }
+        const info = await appFetch(new Request('http://localhost:3001/'));
+        expect(info.status).toBe(500);
+      });
+
+      it.each(['0x', '0x1234'] as const)('fails closed on malformed ABI data %s', async (data) => {
+        const { decodeFunctionResult } = await vi.importActual<typeof import('viem')>('viem');
+        mockReadContract.mockImplementation((params) => {
+          if (params.functionName === getter) return decodeFunctionResult({ ...params, data });
+          if (params.functionName === 'rootEpochCount') return 2n;
+          if (params.functionName === 'isAppAllowed') return [true, ''];
+          if (params.functionName === 'gatewayAppId') return 'gateway-app';
+          if (params.functionName === 'appImplementation') return '0x' + '11'.repeat(20);
+          throw new Error(`unexpected function ${params.functionName}`);
+        });
+        expect((await boot('app', {})).isAllowed).toBe(false);
+        const info = await appFetch(new Request('http://localhost:3001/'));
+        expect(info.status).toBe(500);
+      });
+    });
+  });
+
   describe('POST /bootAuth/kms', () => {
     const validBootInfo = {
       mrAggregated: '0x1234567890123456789012345678901234567890123456789012345678901234',
@@ -243,6 +366,7 @@ describe('API Compatibility Tests', () => {
     it('should validate KMS boot successfully', async () => {
       // Mock successful contract response
       mockReadContract.mockImplementation((params) => {
+        if (params.functionName === 'rootEpochCount') return 0n;
         if (params.functionName === 'isKmsAllowed') {
           return [true, 'KMS allowed'];
         }
@@ -269,6 +393,7 @@ describe('API Compatibility Tests', () => {
 
     it('should handle KMS rejection', async () => {
       mockReadContract.mockImplementation((params) => {
+        if (params.functionName === 'rootEpochCount') return 0n;
         if (params.functionName === 'isKmsAllowed') {
           return [false, 'KMS not authorized'];
         }
@@ -399,6 +524,7 @@ describe('Hex Decoding Compatibility', () => {
     };
 
     mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') {
         // Verify that hex values are properly formatted
         const [bootInfoStruct] = params.args;
@@ -444,6 +570,7 @@ describe('Authorization freshness and domain binding', () => {
     let decisions = 0;
     mockReadContract.mockImplementation((params) => {
       expect(params.address).toBe('0x1234567890123456789012345678901234567890');
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') {
         decisions += 1;
         return decisions === 1 ? [true, 'initial allow'] : [false, 'policy changed'];
@@ -463,6 +590,7 @@ describe('Authorization freshness and domain binding', () => {
   it('binds changed measurements and identities into distinct contract arguments', async () => {
     const calls: unknown[] = [];
     mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') {
         calls.push(params.args[0]);
         return [true, 'allowed'];
@@ -490,6 +618,7 @@ describe('Authorization freshness and domain binding', () => {
     });
 
     mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
       throw new Error(`unexpected function ${params.functionName}`);
@@ -520,6 +649,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     mockGetBlockNumber.mockResolvedValue(100n);
     mockReadContract.mockImplementation((params) => {
       expect(params.blockNumber).toBe(98n);
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') return [true, 'finalized allow'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
       throw new Error(`unexpected function ${params.functionName}`);
@@ -535,6 +665,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     let decisions = 0;
     const observedBlocks: bigint[] = [];
     mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') {
         observedBlocks.push(params.blockNumber);
         decisions += 1;
@@ -567,6 +698,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     mockGetChainId.mockResolvedValue(1337);
     mockGetBlockNumber.mockResolvedValue(102n);
     mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];
       if (params.functionName === 'gatewayAppId') return 'gateway-app';
       throw new Error(`unexpected function ${params.functionName}`);
@@ -607,6 +739,7 @@ describe('dstack-kms 0.6 bootAuth payload', () => {
 
   beforeEach(() => {
     mockReadContract.mockImplementation((params) => {
+      if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isKmsAllowed' || params.functionName === 'isAppAllowed') {
         return [true, ''];
       }
@@ -698,5 +831,51 @@ describe('request hardening', () => {
 
     expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(response.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+  });
+});
+
+
+describe('POST /authorizeApp', () => {
+  const appInfo = {
+    appId: '0x' + '11'.repeat(20), composeHash: '0x' + '22'.repeat(32),
+    instanceId: '', deviceId: '0x' + '33'.repeat(32),
+    mrAggregated: '0x' + '44'.repeat(32), mrSystem: '0x' + '55'.repeat(32),
+    osImageHash: '0x' + '66'.repeat(32), tcbStatus: 'UpToDate', advisoryIds: [],
+  };
+  const authorize = (requestedRootEpoch?: number) => appFetch(new Request('http://localhost/authorizeApp', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', requestedRootEpoch }),
+  }));
+
+  it('reads the complete result with one contract call at configured finality', async () => {
+    const result = {
+      isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
+      currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+    };
+    mockReadContract.mockResolvedValueOnce(result);
+    const response = await authorize();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0 });
+    expect(mockReadContract).toHaveBeenCalledTimes(1);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      functionName: 'authorizeApp', blockNumber: 98n,
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: false, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n } })],
+    }));
+  });
+
+  it('encodes an explicit epoch zero as present', async () => {
+    mockReadContract.mockResolvedValueOnce({
+      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      currentAppEpoch: 0n, currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
+    });
+    expect((await authorize(0)).status).toBe(200);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      args: [expect.objectContaining({ requestedRootEpoch: { isSet: true, value: 0n } })],
+    }));
+  });
+
+  it('does not fall back to legacy authorization on a failed contract call', async () => {
+    mockReadContract.mockRejectedValueOnce(new Error('contract unavailable'));
+    expect((await authorize()).status).toBe(503);
+    expect(mockReadContract).toHaveBeenCalledTimes(1);
   });
 });

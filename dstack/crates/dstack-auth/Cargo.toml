@@ -20,3 +20,6 @@ clap.workspace = true
 rocket = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

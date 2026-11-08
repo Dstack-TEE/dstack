@@ -68,6 +68,34 @@ pub fn dh_decrypt(secret: [u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("Decryption failed: {}", e))
 }
 
+/// Encrypt to `remote_public_key` in the format [`dh_decrypt`] reads:
+/// ephemeral public key, IV, then the AES-GCM ciphertext.
+#[cfg(test)]
+pub fn dh_encrypt(remote_public_key: [u8; 32], plaintext: &[u8]) -> Result<Vec<u8>> {
+    let mut ephemeral_secret = [0u8; 32];
+    getrandom::fill(&mut ephemeral_secret).context("failed to generate ephemeral secret")?;
+    let ephemeral_secret = StaticSecret::from(ephemeral_secret);
+    let shared_secret = ephemeral_secret
+        .diffie_hellman(&PublicKey::from(remote_public_key))
+        .to_bytes();
+    ensure!(
+        !shared_secret.iter().all(|byte| *byte == 0),
+        "invalid X25519 shared secret"
+    );
+    let cipher = Aes256Gcm::new_from_slice(&shared_secret)
+        .map_err(|e| anyhow!("failed to create cipher: {e}"))?;
+    let mut iv = [0u8; 12];
+    getrandom::fill(&mut iv).context("failed to generate IV")?;
+    let ciphertext = cipher
+        .encrypt(Nonce::<Aes256Gcm>::from_slice(&iv), plaintext)
+        .map_err(|e| anyhow!("encryption failed: {e}"))?;
+    Ok([
+        PublicKey::from(&ephemeral_secret).as_bytes(),
+        &iv[..],
+        &ciphertext,
+    ]
+    .concat())
+}
 
 fn stream_nonce(prefix: &[u8; 8], index: u32) -> [u8; 12] {
     let mut nonce = [0u8; 12];
@@ -268,6 +296,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dh_encrypt_round_trips_through_dh_decrypt() {
+        let secret = [7u8; 32];
+        let public = PublicKey::from(&StaticSecret::from(secret)).to_bytes();
+        let ciphertext = dh_encrypt(public, b"env").unwrap();
+        assert_eq!(dh_decrypt(secret, &ciphertext).unwrap(), b"env");
+        assert!(dh_decrypt([8u8; 32], &ciphertext).is_err());
+    }
+
+    #[test]
     fn test_dh_agree() {
         use rand::Rng;
         let secret = rand::thread_rng().gen::<[u8; 32]>();
@@ -404,4 +441,53 @@ pub fn sealed_env_decrypt(secret: &[u8], info: &[u8], payload: &[u8]) -> Result<
         &[],
     )
     .map_err(|e| anyhow!("sealed env decryption failed: {e}"))
+}
+
+#[cfg(test)]
+mod sealed_env_tests {
+    use super::*;
+
+    #[test]
+    fn opens_sdk_envelopes() {
+        use base64::Engine as _;
+        for source in [
+            include_str!("../../../sdk/fixtures/sealed-env/python.json"),
+            include_str!("../../../sdk/fixtures/sealed-env/javascript.json"),
+        ] {
+            let fixture: serde_json::Value = serde_json::from_str(source).unwrap();
+            let envelope = &fixture["sealed_env"];
+            let decode = |name: &str| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(envelope[name].as_str().unwrap())
+                    .unwrap()
+            };
+            let payload = [decode("enc"), decode("ciphertext")].concat();
+            let plaintext = sealed_env_decrypt(
+                &hex::decode(fixture["private_key"].as_str().unwrap()).unwrap(),
+                b"dstack-sealed-env-v1:3:0",
+                &payload,
+            )
+            .unwrap();
+            let decoded: serde_json::Value = serde_json::from_slice(&plaintext).unwrap();
+            assert_eq!(decoded["env"], fixture["env"]);
+        }
+    }
+
+    #[test]
+    fn sealed_env_round_trips_and_binds_info() {
+        let secret = StaticSecret::random_from_rng(rand::thread_rng());
+        let public = PublicKey::from(&secret).to_bytes();
+        let info = b"dstack-sealed-env-v1:3:0";
+        let payload = sealed_env_encrypt(&public, info, b"secret env").unwrap();
+        assert_eq!(
+            sealed_env_decrypt(&secret.to_bytes(), info, &payload).unwrap(),
+            b"secret env"
+        );
+        assert!(
+            sealed_env_decrypt(&secret.to_bytes(), b"dstack-sealed-env-v1:4:0", &payload).is_err()
+        );
+        let mut tampered = payload;
+        *tampered.last_mut().unwrap() ^= 1;
+        assert!(sealed_env_decrypt(&secret.to_bytes(), info, &tampered).is_err());
+    }
 }

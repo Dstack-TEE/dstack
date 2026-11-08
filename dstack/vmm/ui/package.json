@@ -6,7 +6,8 @@
   "scripts": {
     "generate:proto": "bash scripts/build_proto.sh",
     "build": "node build.mjs",
-    "watch": "node build.mjs --watch"
+    "watch": "node build.mjs --watch",
+    "test": "DSTACK_UI_OUT=dist/index.html npm run build && node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",

@@ -79,6 +79,14 @@ pub(crate) async fn local_kms_boot_info(verifier: &AttestationVerifier) -> Resul
     build_boot_info_for_attestation(&verified, false, "")
 }
 
+#[cfg(test)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BootResponse {
+    pub is_allowed: bool,
+    pub gateway_app_id: String,
+    pub reason: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -351,6 +359,43 @@ impl AuthApi {
         }
     }
 
+    #[cfg(test)]
+    pub async fn is_app_allowed(
+        &self,
+        boot_info: &BootInfo,
+        is_kms: bool,
+        root_epoch: Option<CurrentRootEpoch>,
+    ) -> Result<BootResponse> {
+        #[derive(Serialize)]
+        struct BootAuthRequest<'a> {
+            #[serde(flatten)]
+            boot_info: &'a BootInfo,
+            #[serde(flatten)]
+            root_epoch: RootEpochFields,
+        }
+
+        ensure_identity_widths(boot_info)?;
+        match self {
+            AuthApi::Dev { dev } => Ok(BootResponse {
+                is_allowed: true,
+                reason: "".to_string(),
+                gateway_app_id: dev.gateway_app_id.clone(),
+            }),
+            AuthApi::Webhook { webhook } => {
+                let path = if is_kms {
+                    "bootAuth/kms"
+                } else {
+                    "bootAuth/app"
+                };
+                let url = url_join(&webhook.url, path);
+                let request = BootAuthRequest {
+                    boot_info,
+                    root_epoch: root_epoch.map(Into::into).unwrap_or_default(),
+                };
+                http_post(&url, &request, webhook.timeout).await
+            }
+        }
+    }
 
     pub async fn get_info(&self) -> Result<GetInfoResponse> {
         match self {
@@ -475,7 +520,7 @@ pub(crate) async fn ensure_kms_allowed(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::config::Webhook;
     use ra_tls::attestation::TeeVariant;
@@ -484,7 +529,7 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    fn boot_info(identity: u8) -> BootInfo {
+    pub(crate) fn boot_info(identity: u8) -> BootInfo {
         BootInfo {
             tee_variant: TeeVariant::DstackTdx,
             mr_aggregated: vec![identity; 32],
@@ -500,7 +545,7 @@ mod tests {
         }
     }
 
-    fn serve<S: Into<String>>(
+    pub(crate) fn serve<S: Into<String>>(
         responses: Vec<S>,
     ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
         let responses: Vec<String> = responses.into_iter().map(Into::into).collect();
@@ -544,9 +589,12 @@ mod tests {
                     .nth(1)
                     .unwrap()
                     .to_string();
-                let body =
-                    serde_json::from_slice(&request[header_end..header_end + content_length])
-                        .unwrap();
+                let body = &request[header_end..header_end + content_length];
+                let body = if body.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_slice(body).unwrap()
+                };
                 requests.push((path, body));
                 write!(
                     stream,
@@ -561,7 +609,7 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
-    fn webhook(url: String) -> AuthApi {
+    pub(crate) fn webhook(url: String) -> AuthApi {
         AuthApi::Webhook {
             webhook: Webhook {
                 url,
@@ -616,7 +664,7 @@ mod tests {
         let mut aliasing_compose_hash = boot_info(1);
         aliasing_compose_hash.compose_hash.truncate(31);
         let err = auth
-            .is_app_allowed(&aliasing_compose_hash, false)
+            .is_app_allowed(&aliasing_compose_hash, false, None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("compose_hash must be 32 bytes"));
@@ -624,7 +672,7 @@ mod tests {
         let mut aliasing_instance_id = boot_info(1);
         aliasing_instance_id.instance_id.truncate(19);
         let err = auth
-            .is_app_allowed(&aliasing_instance_id, false)
+            .is_app_allowed(&aliasing_instance_id, false, None)
             .await
             .unwrap_err();
         assert!(err
@@ -635,7 +683,7 @@ mod tests {
         let mut no_instance_id = boot_info(1);
         no_instance_id.instance_id.clear();
         assert!(
-            auth.is_app_allowed(&no_instance_id, false)
+            auth.is_app_allowed(&no_instance_id, false, None)
                 .await
                 .unwrap()
                 .is_allowed
@@ -652,8 +700,8 @@ mod tests {
         let auth = webhook(url);
         let info = boot_info(1);
 
-        let first = auth.is_app_allowed(&info, false).await.unwrap();
-        let repeated = auth.is_app_allowed(&info, false).await.unwrap();
+        let first = auth.is_app_allowed(&info, false, None).await.unwrap();
+        let repeated = auth.is_app_allowed(&info, false, None).await.unwrap();
         assert!(first.is_allowed);
         assert!(!repeated.is_allowed);
         assert_eq!(repeated.reason, "revoked");
@@ -675,8 +723,18 @@ mod tests {
         let app = boot_info(10);
         let kms = boot_info(20);
 
-        assert!(auth.is_app_allowed(&app, false).await.unwrap().is_allowed);
-        assert!(auth.is_app_allowed(&kms, true).await.unwrap().is_allowed);
+        assert!(
+            auth.is_app_allowed(&app, false, None)
+                .await
+                .unwrap()
+                .is_allowed
+        );
+        assert!(
+            auth.is_app_allowed(&kms, true, None)
+                .await
+                .unwrap()
+                .is_allowed
+        );
 
         let requests = server.join().unwrap();
         assert_eq!(requests[0].0, "/bootAuth/app");
@@ -690,6 +748,171 @@ mod tests {
     }
 
     #[rocket::async_test]
+    async fn authorization_operations_are_typed_and_sent_without_legacy_fallback() {
+        let operations = [
+            Operation::KmsBootstrap,
+            Operation::KmsServe,
+            Operation::KmsExportKeys,
+            Operation::KmsImportKeys,
+            Operation::AppGetKey,
+            Operation::AppGetCert,
+        ];
+        let response = r#"{"isAllowed":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
+        let (url, server) = serve(vec![response; operations.len()]);
+        let auth = webhook(url);
+        for operation in operations {
+            if operation.is_kms() {
+                auth.authorize_kms(&boot_info(1), operation, Some(0))
+                    .await
+                    .unwrap();
+            } else {
+                auth.authorize_app(&boot_info(1), operation, None, None)
+                    .await
+                    .unwrap();
+            }
+        }
+        let wire_names = [
+            "kms_bootstrap",
+            "kms_serve",
+            "kms_export_keys",
+            "kms_import_keys",
+            "app_get_key",
+            "app_get_cert",
+        ];
+        for (((route, body), operation), name) in server
+            .join()
+            .unwrap()
+            .into_iter()
+            .zip(operations)
+            .zip(wire_names)
+        {
+            assert_eq!(body["operation"], name);
+            assert_eq!(
+                route,
+                if operation.is_kms() {
+                    "/authorizeKms"
+                } else {
+                    "/authorizeApp"
+                }
+            );
+            assert_eq!(
+                serde_json::from_value::<Operation>(body["operation"].clone()).unwrap(),
+                operation
+            );
+        }
+        assert!(serde_json::from_str::<Operation>(r#""unknown""#).is_err());
+    }
+
+    #[rocket::async_test]
+    async fn authorization_returns_the_epoch_with_each_decision() {
+        let response = |allowed: bool, epoch: u32| {
+            format!(
+                r#"{{"isAllowed":{allowed},"rejectionReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentAppEpoch":0,"currentRootEpochHash":"0x{}"}}"#,
+                "11".repeat(32)
+            )
+        };
+        let (url, server) = serve(vec![
+            response(true, 0),
+            response(false, 1),
+            response(true, 1),
+            response(true, 1),
+            response(false, 1),
+        ]);
+        let auth = webhook(url);
+        let info = boot_info(50);
+        let first = auth
+            .authorize_app(&info, Operation::AppGetKey, None, None)
+            .await
+            .unwrap();
+        let second = auth
+            .authorize_app(&info, Operation::AppGetKey, None, None)
+            .await
+            .unwrap();
+        assert!(first.is_allowed);
+        assert!(!second.is_allowed);
+        assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
+        assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
+        auth.authorize_app(&info, Operation::AppGetKey, Some(0), Some(0))
+            .await
+            .unwrap();
+        auth.authorize_kms(&info, Operation::KmsServe, None)
+            .await
+            .unwrap();
+        assert!(
+            !auth
+                .authorize_kms(&info, Operation::KmsImportKeys, Some(2))
+                .await
+                .unwrap()
+                .is_allowed
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 5);
+        assert!(requests[..3]
+            .iter()
+            .all(|(path, _)| path == "/authorizeApp"));
+        assert_eq!(requests[3].0, "/authorizeKms");
+        assert_eq!(requests[4].0, "/authorizeKms");
+        assert_eq!(requests[4].1["requestedRootEpoch"], 2);
+        assert!(requests[4].1.get("requestedAppEpoch").is_none());
+        let mut expected = serde_json::to_value(info).unwrap();
+        expected["operation"] = "app_get_key".into();
+        assert_eq!(requests[0].1, expected);
+        assert_eq!(requests[2].1["requestedAppEpoch"], 0);
+        assert!(requests[0].1.get("requestedRootEpoch").is_none());
+        assert_eq!(requests[2].1["requestedRootEpoch"], 0);
+    }
+
+    #[rocket::async_test]
+    async fn authorization_without_epoch_fields_is_not_accepted_as_legacy() {
+        let (url, server) = serve(vec![
+            r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
+        ]);
+        assert!(webhook(url)
+            .authorize_app(&boot_info(50), Operation::AppGetKey, None, None)
+            .await
+            .is_err());
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[rocket::async_test]
+    async fn root_epochs_are_read_from_info_and_sent_in_boot_checks() {
+        let hash = "0x".to_string() + &"11".repeat(32);
+        let (url, server) = serve(vec![
+            format!(
+                r#"{{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
+                "appImplementation":"0x00","rootEpoch":3,"rootEpochHash":"{hash}"}}"#
+            ),
+            r#"{"status":"ok","kmsContractAddr":"0x00","gatewayAppId":"gw","chainId":1,
+                "appImplementation":"0x00","rootEpoch":3}"#
+                .into(),
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":""}"#.into(),
+            r#"{"isAllowed":true,"gatewayAppId":"gw","reason":""}"#.into(),
+        ]);
+        let auth = webhook(url);
+        let current = CurrentRootEpoch {
+            epoch: 3,
+            chain_hash: [0x11; 32],
+        };
+
+        assert_eq!(
+            auth.get_info().await.unwrap().root_epochs,
+            RootEpochRegistry::Current(current)
+        );
+        assert!(auth.get_info().await.is_err());
+        let info = boot_info(50);
+        auth.is_app_allowed(&info, false, Some(current))
+            .await
+            .unwrap();
+        auth.is_app_allowed(&info, true, None).await.unwrap();
+
+        let requests = server.join().unwrap();
+        assert_eq!(requests[2].1["rootEpoch"], 3);
+        assert_eq!(requests[2].1["rootEpochHash"], hash);
+        assert_eq!(requests[2].1["appId"], requests[3].1["appId"]);
+        assert!(requests[3].1.get("rootEpoch").is_none());
+    }
+
+    #[rocket::async_test]
     async fn malformed_backend_response_fails_closed_and_next_request_recovers() {
         let (url, server) = serve(vec![
             "not-json",
@@ -698,9 +921,9 @@ mod tests {
         let auth = webhook(url);
         let info = boot_info(30);
 
-        let error = auth.is_app_allowed(&info, false).await.unwrap_err();
+        let error = auth.is_app_allowed(&info, false, None).await.unwrap_err();
         assert!(error.to_string().contains("failed to decode response"));
-        let recovered = auth.is_app_allowed(&info, false).await.unwrap();
+        let recovered = auth.is_app_allowed(&info, false, None).await.unwrap();
         assert!(recovered.is_allowed);
         assert_eq!(recovered.reason, "recovered");
         assert_eq!(server.join().unwrap().len(), 2);
@@ -717,7 +940,7 @@ mod tests {
         let (url, server) = serve(vec![body]);
 
         let error = webhook(url)
-            .is_app_allowed(&boot_info(40), false)
+            .is_app_allowed(&boot_info(40), false, None)
             .await
             .unwrap_err();
 

@@ -465,6 +465,20 @@ impl AppState {
             .clone())
     }
 
+    #[cfg(test)]
+    pub(crate) async fn insert_historical_root(
+        &self,
+        epoch: u32,
+        k256_key: Vec<u8>,
+        kms_signature: Vec<u8>,
+    ) {
+        let root = AppRoot::new(epoch, 0, k256_key, kms_signature).unwrap();
+        self.inner
+            .historical_roots
+            .lock()
+            .await
+            .insert((epoch, 0), root);
+    }
 
     /// The KMS root key's signature over the app root public key: the second
     /// link of every signature chain, produced outside this agent and passed
@@ -1241,8 +1255,43 @@ pub(crate) mod tests {
             .expect("certificate carries an attestation")
     }
 
+    pub(crate) const HISTORICAL_K256_KEY: [u8; 32] = [0x11; 32];
+
     pub(crate) async fn setup_test_state() -> (AppState, tempfile::NamedTempFile) {
         setup_test_state_with_platform(None).await
+    }
+
+    #[tokio::test]
+    async fn app_root_selectors_and_cache_keep_epochs_independent() {
+        let (mut state, _guard) = setup_test_state().await;
+        Arc::get_mut(&mut state.inner).unwrap().keys.key_provider = KeyProvider::Kms {
+            url: "https://unused.invalid".into(),
+            pubkey: vec![],
+            root_epoch: 2,
+            app_epoch: 2,
+        };
+        for (root, app, byte) in [(2, 0, 0x11), (0, 2, 0x22), (0, 0, 0x33)] {
+            state.inner.historical_roots.lock().await.insert(
+                (root, app),
+                AppRoot::new(root, app, vec![byte; 32], vec![]).unwrap(),
+            );
+        }
+        let current = state.app_root(None, None).await.unwrap();
+        assert_eq!((current.epoch, current.app_epoch), (2, 2));
+        for (root, app, byte) in [
+            (None, Some(0), 0x11),
+            (Some(0), None, 0x22),
+            (Some(0), Some(0), 0x33),
+        ] {
+            let key = state.app_root(root, app).await.unwrap();
+            assert_eq!(
+                (key.epoch, key.app_epoch),
+                (root.unwrap_or(2), app.unwrap_or(2))
+            );
+            assert_eq!(key.k256_key, vec![byte; 32]);
+        }
+        assert!(state.app_root(Some(3), None).await.is_err());
+        assert!(state.app_root(None, Some(3)).await.is_err());
     }
 
     /// How many times the fixture platform was asked to attest for `Info`, and
@@ -1440,6 +1489,7 @@ pNs85uhOZE8z2jr8Pg==
         let dummy_keys = AppKeys {
             disk_crypt_key: Vec::new(),
             env_crypt_key: Vec::new(),
+            sealed_env_key: Vec::new(),
             k256_key: DUMMY_K256_KEY.to_vec(),
             k256_signature: Vec::new(),
             gateway_app_id: String::new(),
@@ -1531,6 +1581,7 @@ pNs85uhOZE8z2jr8Pg==
             keys: dummy_keys,
             vm_config: String::new(),
             cert_client: dummy_cert_client,
+            historical_roots: Default::default(),
             demo_cert: Default::default(),
             demo_cert_last_failure: Default::default(),
             platform: Arc::new(TestSimulatorPlatform {

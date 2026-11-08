@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn issued_app_key_signatures_match_their_golden_vectors() {
         let root = SigningKey::from_slice(&[7_u8; 32]).unwrap();
-        let (derived, signature) = derive_k256_key(&root, b"app-a").unwrap();
+        let (derived, signature) = derive_k256_key(&root, b"app-a", 0).unwrap();
 
         assert_eq!(
             hex::encode(derived.to_bytes()),

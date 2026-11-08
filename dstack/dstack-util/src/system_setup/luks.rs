@@ -259,7 +259,15 @@ pub(super) fn rekey_luks_header_at_epochs(
     write_luks_epochs(header, epoch, app_epoch)
 }
 
+#[cfg(test)]
+fn write_luks_root_epoch(device: &Path, epoch: u32) -> Result<()> {
+    write_luks_epochs(device, epoch, 0)
+}
 
+#[cfg(test)]
+fn rekey_luks_header(header: &Path, old_key: &str, new_key: &str, epoch: u32) -> Result<()> {
+    rekey_luks_header_at_epochs(header, old_key, new_key, epoch, 0)
+}
 
 /// Set by luksFormat and cleared once the filesystem exists, so a disk still
 /// carrying it was interrupted mid-initialization and holds no data.
@@ -488,4 +496,202 @@ fn validate_single_luks2_header(
         root_epoch,
         app_epoch: tokens.get(&0).map(|token| token.app_epoch).unwrap_or(0),
     })
+}
+
+#[test]
+fn test_validate_luks2_header() {
+    let mut header_data = include_bytes!("../../tests/fixtures/luks_header_good").to_vec();
+    let state =
+        validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header");
+    assert_eq!(
+        state,
+        LuksHeaderState {
+            initializing: false,
+            root_epoch: None,
+            app_epoch: 0
+        }
+    );
+    header_data[24..24 + LUKS_INITIALIZING_LABEL.len()]
+        .copy_from_slice(LUKS_INITIALIZING_LABEL.as_bytes());
+    assert!(
+        validate_luks2_headers(&mut &header_data[..])
+            .expect("Failed to validate LUKS2 header")
+            .initializing
+    );
+    let header_data = include_bytes!("../../tests/fixtures/luks_header_cipher_null").to_vec();
+    let error = validate_luks2_headers(&mut &header_data[..]).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("Invalid LUKS keyslot encryption"));
+}
+
+#[test]
+fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
+    // Redirect the keyslot binary area below the header region. Same length
+    // so the surrounding header stays intact; "00768" parses to 768, which is
+    // inside the header copies (< 2 * hdr_size) rather than the metadata gap.
+    let mut header = include_bytes!("../../tests/fixtures/luks_header_good").to_vec();
+    let patched = patch_luks_json(&mut header, br#""offset":"32768""#, br#""offset":"00768""#);
+    assert_eq!(patched, 2, "expected to patch both header copies");
+    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
+    assert!(error.to_string().contains("Invalid LUKS keyslot area"));
+}
+
+/// Replace `needle` with `replacement` inside every LUKS JSON region, keeping
+/// each region the same length by giving back trailing NUL padding.
+#[cfg(test)]
+fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usize {
+    assert!(replacement.len() >= needle.len());
+    let grow = replacement.len() - needle.len();
+    let mut patched = 0;
+    let mut i = 0;
+    while i + needle.len() <= header.len() {
+        if &header[i..i + needle.len()] != needle {
+            i += 1;
+            continue;
+        }
+        let tail = &mut header[i..];
+        let end = tail.iter().position(|b| *b == 0).expect("NUL padding");
+        assert!(end + grow < tail.len(), "not enough NUL padding");
+        tail.copy_within(needle.len()..end, replacement.len());
+        tail[..replacement.len()].copy_from_slice(replacement);
+        patched += 1;
+        i += replacement.len();
+    }
+    patched
+}
+
+#[test]
+fn test_disk_key_migration_with_cryptsetup() {
+    if Command::new("cryptsetup")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("cryptsetup is unavailable; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("disk.img");
+    fs::File::create(&image)
+        .unwrap()
+        .set_len(2 * PAYLOAD_OFFSET)
+        .unwrap();
+    let offset = (PAYLOAD_OFFSET / 512).to_string();
+    let format = cryptsetup(
+        &[
+            "luksFormat",
+            "--batch-mode",
+            "--type",
+            "luks2",
+            "--offset",
+            &offset,
+            "--cipher",
+            "aes-xts-plain64",
+            "--pbkdf",
+            "pbkdf2",
+            "--sector-size",
+            "512",
+            "-d-",
+        ],
+        &image,
+    );
+    assert_eq!(run_with_input(format, b"old").unwrap(), Some(0));
+    let unlocks = |key: &str| {
+        let test = cryptsetup(
+            &["open", "--test-passphrase", "--key-slot", "0", "-d-"],
+            &image,
+        );
+        run_with_input(test, key.as_bytes()).unwrap() == Some(0)
+    };
+
+    // Re-key a detached copy of the header, as the boot does, and restore it.
+    let header = dir.path().join("header");
+    let backup = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
+        .arg(&image)
+        .status()
+        .unwrap();
+    assert!(backup.success());
+    rekey_luks_header(&header, "old", "new", 2).unwrap();
+    assert!(!dir.path().join("old-key").exists());
+    assert!(
+        unlocks("old"),
+        "the disk is unchanged until the header is restored"
+    );
+    let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
+    assert_eq!(state.root_epoch, Some(2));
+
+    let restore = cryptsetup(
+        &["luksHeaderRestore", "--batch-mode", "--header-backup-file"],
+        &header,
+    )
+    .arg(&image)
+    .status()
+    .unwrap();
+    assert!(restore.success());
+    assert!(unlocks("new"));
+    assert!(!unlocks("old"));
+
+    // A later rotation replaces the recorded epoch.
+    write_luks_root_epoch(&image, 3).unwrap();
+    fs::remove_file(&header).unwrap();
+    let backup = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
+        .arg(&image)
+        .status()
+        .unwrap();
+    assert!(backup.success());
+    let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
+    assert_eq!(state.root_epoch, Some(3));
+    rekey_luks_header_at_epochs(&header, "new", "app-epoch-one", 3, 1).unwrap();
+    let rotated = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
+    assert_eq!(rotated.root_epoch, Some(3));
+    assert_eq!(rotated.app_epoch, 1);
+    assert!(cryptsetup(
+        &["luksHeaderRestore", "--batch-mode", "--header-backup-file"],
+        &header
+    )
+    .arg(&image)
+    .status()
+    .unwrap()
+    .success());
+    assert!(!unlocks("new"));
+    assert!(unlocks("app-epoch-one"));
+}
+
+#[test]
+fn test_validate_luks2_header_root_epoch_token() {
+    let with_token = |token: &str| {
+        let mut header = include_bytes!("../../tests/fixtures/luks_header_good").to_vec();
+        let replacement = format!(r#""tokens":{{"0":{token}}}"#);
+        let patched = patch_luks_json(&mut header, br#""tokens":{}"#, replacement.as_bytes());
+        assert_eq!(patched, 2, "expected to patch both header copies");
+        validate_luks2_headers(&mut &header[..])
+    };
+    let state = with_token(r#"{"type":"dstack-kms","keyslots":["0"],"root_epoch":2}"#).unwrap();
+    assert_eq!(state.root_epoch, Some(2));
+    for token in [
+        r#"{"type":"luks2-keyring","keyslots":["0"],"root_epoch":2}"#,
+        r#"{"type":"dstack-kms","keyslots":["1"],"root_epoch":2}"#,
+        r#"{"type":"dstack-kms","keyslots":["0"]}"#,
+    ] {
+        assert!(with_token(token).is_err(), "{token}");
+    }
+}
+
+#[test]
+fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
+    let mut header = include_bytes!("../../tests/fixtures/luks_header_good").to_vec();
+    // 2**64 - 32768 + 1000: added to the accepted offset 32768 it wraps to
+    // 1000, which is below PAYLOAD_OFFSET.
+    let patched = patch_luks_json(
+        &mut header,
+        br#""size":"258048""#,
+        br#""size":"18446744073709519848""#,
+    );
+    assert_eq!(patched, 2, "expected to patch both header copies");
+    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
+    assert!(
+        error.to_string().contains("Invalid LUKS keyslot area"),
+        "{error:#}"
+    );
 }

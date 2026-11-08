@@ -2518,7 +2518,7 @@ mod key_provider_tests {
         assert_eq!(
             serde_json::to_value(provider).unwrap(),
             serde_json::json!({
-                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd" }
+                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd", "root_epoch": 0, "app_epoch": 0 }
             })
         );
     }
@@ -2535,8 +2535,10 @@ mod key_provider_tests {
         assert_eq!(tpm.kind(), KeyProviderKind::Tpm);
 
         let kms = KeyProvider::Kms {
+            app_epoch: 0,
             url: "https://kms.example".into(),
             pubkey: vec![0xab; 32],
+            root_epoch: 0,
         };
         assert_eq!(kms.id(), &[0xab; 32]);
     }

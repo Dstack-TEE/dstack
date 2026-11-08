@@ -35,6 +35,15 @@ mod one_shot;
 mod openapi;
 mod vm_launcher;
 
+// Exercise the guest's actual HostApi wrapper against VMM storage in tests.
+#[cfg(test)]
+#[allow(dead_code, unused_imports)]
+#[path = "../../dstack-util/src/host_api.rs"]
+mod guest_host_api;
+#[cfg(test)]
+#[allow(dead_code, unused_imports)]
+#[path = "../../dstack-util/src/utils.rs"]
+mod utils;
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const GIT_REV: &str = dstack_build_info::git_revision!();

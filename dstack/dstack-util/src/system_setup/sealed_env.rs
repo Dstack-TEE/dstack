@@ -50,3 +50,8 @@ pub(super) fn env_crypt_key(key: &[u8]) -> Result<[u8; 32]> {
         .ok()
         .context("encrypted env is present but the key provider gave no valid env crypt key")
 }
+
+#[cfg(test)]
+pub(super) fn seal_env(secret: &[u8], epoch: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
+    seal_env_at_epochs(secret, epoch, 0, plaintext)
+}

@@ -98,6 +98,8 @@ mod config_id_verifier;
 mod luks;
 mod sealed_env;
 
+#[cfg(test)]
+use sealed_env::seal_env;
 use sealed_env::{env_crypt_key, seal_env_at_epochs, sealed_env_info_at_epochs, SealedEnv};
 
 #[derive(clap::Parser)]
@@ -4392,73 +4394,197 @@ Endpoint = [2001:db8::1]:51822
     }
 }
 
-
-/// Replace `needle` with `replacement` inside every LUKS JSON region, keeping
-/// each region the same length by giving back trailing NUL padding.
 #[cfg(test)]
-fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usize {
-    assert!(replacement.len() >= needle.len());
-    let grow = replacement.len() - needle.len();
-    let mut patched = 0;
-    let mut i = 0;
-    while i + needle.len() <= header.len() {
-        if &header[i..i + needle.len()] != needle {
-            i += 1;
-            continue;
+mod sealed_env_file_tests {
+    use super::*;
+
+    fn stage(args: &SetupArgs, sealed_env: Option<Vec<u8>>, encrypted_env: Vec<u8>) -> Stage1<'_> {
+        Stage1 {
+            args,
+            vmm: HostApi::default(),
+            shared: HostShared {
+                dir: HostShareDir::new(&args.work_dir),
+                sys_config: serde_json::from_value(serde_json::json!({"vm_config": ""})).unwrap(),
+                app_compose: serde_json::from_value(serde_json::json!({
+                    "manifest_version": "2", "name": "sealed-test", "runner": "docker-compose"
+                }))
+                .unwrap(),
+                instance_info: InstanceInfo::default(),
+                sealed_env,
+                encrypted_env,
+            },
+            keys: AppKeys {
+                disk_crypt_key: vec![],
+                env_crypt_key: vec![9; 32],
+                sealed_env_key: vec![7; 32],
+                k256_key: vec![],
+                k256_signature: vec![],
+                gateway_app_id: String::new(),
+                ca_cert: String::new(),
+                key_provider: KeyProvider::Kms {
+                    app_epoch: 0,
+                    url: "http://127.0.0.1:1".into(),
+                    pubkey: vec![],
+                    root_epoch: 3,
+                },
+            },
         }
-        let tail = &mut header[i..];
-        let end = tail.iter().position(|b| *b == 0).expect("NUL padding");
-        assert!(end + grow < tail.len(), "not enough NUL padding");
-        tail.copy_within(needle.len()..end, replacement.len());
-        tail[..replacement.len()].copy_from_slice(replacement);
-        patched += 1;
-        i += replacement.len();
     }
-    patched
-}
 
-#[test]
-fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
-    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    // 2**64 - 32768 + 1000: added to the accepted offset 32768 it wraps to
-    // 1000, which is below PAYLOAD_OFFSET.
-    let patched = patch_luks_json(
-        &mut header,
-        br#""size":"258048""#,
-        br#""size":"18446744073709519848""#,
-    );
-    assert_eq!(patched, 2, "expected to patch both header copies");
-    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
-    assert!(
-        error.to_string().contains("Invalid LUKS keyslot area"),
-        "{error:#}"
-    );
-}
+    #[tokio::test]
+    async fn guest_preserves_env_at_the_current_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        };
+        let plaintext = br#"{"env":[{"key":"MESSAGE","value":"test"}]}"#;
+        let sealed = seal_env(&[7; 32], 3, plaintext).unwrap();
+        let current = stage(&args, Some(sealed), b"invalid legacy".to_vec());
+        let (opened, update) = current.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
 
-#[test]
-fn test_validate_luks2_header() {
-    let mut header_data = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    assert!(
-        !validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header")
-    );
-    header_data[24..24 + LUKS_INITIALIZING_LABEL.len()]
-        .copy_from_slice(LUKS_INITIALIZING_LABEL.as_bytes());
-    assert!(validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header"));
-    let header_data = include_bytes!("../tests/fixtures/luks_header_cipher_null").to_vec();
-    let error = validate_luks2_headers(&mut &header_data[..]).unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("Invalid LUKS keyslot encryption"));
-}
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([9; 32]));
+        let legacy = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let old = stage(&args, None, legacy.clone());
+        let (opened, update) = old.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+        let mut without_sealed_key = stage(&args, None, legacy.clone());
+        without_sealed_key.keys.sealed_env_key.clear();
+        let (opened, update) = without_sealed_key.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
 
-#[test]
-fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
-    // Redirect the keyslot binary area below the header region. Same length
-    // so the surrounding header stays intact; "00768" parses to 768, which is
-    // inside the header copies (< 2 * hdr_size) rather than the metadata gap.
-    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    let patched = patch_luks_json(&mut header, br#""offset":"32768""#, br#""offset":"00768""#);
-    assert_eq!(patched, 2, "expected to patch both header copies");
-    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
-    assert!(error.to_string().contains("Invalid LUKS keyslot area"));
+        for invalid in [
+            Vec::new(),
+            b"invalid JSON".to_vec(),
+            br#"{"version":2,"root_epoch":3,"enc":"","ciphertext":""}"#.to_vec(),
+        ] {
+            assert!(stage(&args, Some(invalid), legacy.clone())
+                .decrypt_env()
+                .await
+                .is_err());
+        }
+        let future = seal_env(&[7; 32], 4, plaintext).unwrap();
+        assert!(stage(&args, Some(future), legacy)
+            .decrypt_env()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds current"));
+    }
+
+    #[tokio::test]
+    async fn legacy_env_migration_skips_denied_intermediate_epochs() {
+        let secret = x25519_dalek::StaticSecret::from([8; 32]);
+        let public = x25519_dalek::PublicKey::from(&secret);
+        let plaintext = br#"{"env":[{"key":"SECRET","value":"synthetic"}]}"#;
+        let encrypted = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let mut requested = Vec::new();
+        let decrypted = decrypt_historical_env(&encrypted, (0..2).rev(), |epoch| {
+            requested.push(epoch);
+            std::future::ready(if epoch == 0 {
+                Ok(secret.to_bytes().to_vec())
+            } else {
+                Err(anyhow::anyhow!("authorization denied"))
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(requested, [1, 0]);
+        assert_eq!(decrypted, plaintext);
+        assert!(
+            decrypt_historical_env(&encrypted, (0..2).rev(), |_| async { bail!("denied") })
+                .await
+                .is_err()
+        );
+        assert!(
+            decrypt_historical_env(&encrypted, (0..2).rev(), |_| async { Ok(vec![3; 32]) })
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn sealed_env_binds_both_epochs_and_rejects_mislabeled_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        };
+        let plaintext = br#"{"env":[{"key":"VALUE","value":"epoch-test"}]}"#;
+        let sealed = seal_env_at_epochs(&[7; 32], 3, 2, plaintext).unwrap();
+        let mut current = stage(&args, Some(sealed.clone()), vec![]);
+        if let KeyProvider::Kms { app_epoch, .. } = &mut current.keys.key_provider {
+            *app_epoch = 2;
+        }
+        let (opened, update) = current.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+        for (field, value) in [
+            ("version", 2),
+            ("root_epoch", 2),
+            ("app_epoch", 1),
+            ("app_epoch", 3),
+        ] {
+            let mut tampered: Value = serde_json::from_slice(&sealed).unwrap();
+            tampered[field] = value.into();
+            current.shared.sealed_env = Some(serde_json::to_vec(&tampered).unwrap());
+            assert!(current.decrypt_env().await.is_err());
+        }
+        let envelope: SealedEnv = serde_json::from_slice(&sealed).unwrap();
+        assert_eq!(envelope.version, 1);
+        let payload = [envelope.enc.clone(), envelope.ciphertext.clone()].concat();
+        assert!(crate::crypto::sealed_env_decrypt(
+            &[7; 32],
+            &sealed_env_info_at_epochs(3, 1),
+            &payload
+        )
+        .is_err());
+        assert!(crate::crypto::sealed_env_decrypt(
+            &[7; 32],
+            &sealed_env_info_at_epochs(2, 2),
+            &payload
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn sealed_file_selection_ignores_legacy_but_rejects_links() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(SYS_CONFIG), br#"{"vm_config":""}"#).unwrap();
+        fs::write(
+            dir.path().join(APP_COMPOSE),
+            br#"{"manifest_version":"2","name":"test","runner":"docker-compose"}"#,
+        )
+        .unwrap();
+        let sealed_path = dir.path().join(SEALED_ENV);
+        fs::write(&sealed_path, b"sealed bytes").unwrap();
+        fs::create_dir(dir.path().join(ENCRYPTED_ENV)).unwrap();
+        let shared = HostShared::load(dir.path()).unwrap();
+        assert_eq!(shared.sealed_env.unwrap(), b"sealed bytes");
+        assert!(shared.encrypted_env.is_empty());
+        fs::remove_file(&sealed_path).unwrap();
+        std::os::unix::fs::symlink("missing-target", &sealed_path).unwrap();
+        assert!(env_file_exists(&sealed_path).is_err());
+        assert!(HostShared::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn missing_empty_and_unreadable_env_are_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SEALED_ENV);
+        assert_eq!(read_optional_env(&path).unwrap(), None);
+        fs::write(&path, []).unwrap();
+        assert_eq!(read_optional_env(&path).unwrap(), Some(Vec::new()));
+        assert!(
+            serde_json::from_slice::<SealedEnv>(&read_optional_env(&path).unwrap().unwrap())
+                .is_err()
+        );
+        assert!(read_optional_env(dir.path()).is_err());
+    }
 }

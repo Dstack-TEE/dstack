@@ -295,6 +295,8 @@ mod tests {
     use crate::main_service::amd_attest::{
         compute_expected_measurement, MeasurementInput, OvmfSectionParam,
     };
+    use crate::main_service::upgrade_authority::CurrentRootEpoch;
+    use dstack_kms_rpc::KmsKeys;
     use sha2::Digest;
 
     fn hex_of(byte: u8, len: usize) -> String {
@@ -542,6 +544,210 @@ mod tests {
         assert!(status.k256_pubkey.is_empty());
         assert!(status.ca_pubkey.is_empty());
         assert!(status.attestation.is_empty());
+    }
+
+    fn handover(epochs: u32) -> KmsKeyResponse {
+        KmsKeyResponse {
+            temp_ca_key: String::new(),
+            keys: (0..epochs)
+                .map(|_| KmsKeys {
+                    ca_key: KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
+                        .unwrap()
+                        .serialize_pem(),
+                    k256_key: SigningKey::random(&mut rand::rngs::OsRng)
+                        .to_bytes()
+                        .to_vec(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The registry a correct handover of `res` would be checked against.
+    fn current_of(res: &KmsKeyResponse, epoch: u32) -> RootEpochRegistry {
+        let roots: Vec<_> = res
+            .keys
+            .iter()
+            .map(|k| {
+                (
+                    KeyPair::from_pem(&k.ca_key).unwrap().public_key_der(),
+                    SigningKey::from_slice(&k.k256_key)
+                        .unwrap()
+                        .verifying_key()
+                        .to_sec1_bytes()
+                        .to_vec(),
+                )
+            })
+            .collect();
+        let hashes = dstack_types::root_epoch::chain_hashes(
+            roots.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
+        );
+        RootEpochRegistry::Current(CurrentRootEpoch {
+            epoch,
+            chain_hash: hashes[epoch as usize],
+        })
+    }
+
+    async fn onboard(
+        cfg: &KmsConfig,
+        res: KmsKeyResponse,
+        rotate: bool,
+        registry: RootEpochRegistry,
+    ) -> Result<Keys> {
+        Keys::from_key_response(cfg, res, "kms.example.com", rotate, registry).await
+    }
+
+    #[test]
+    fn compatibility_ca_survives_restart_and_recovers_a_missing_certificate() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(dir.path());
+        let first = ensure_temp_ca(&cfg).unwrap();
+        let second = ensure_temp_ca(&cfg).unwrap();
+        assert_eq!(first.key.public_key_der(), second.key.public_key_der());
+        assert_eq!(first.pem_cert, second.pem_cert);
+        fs::remove_file(cfg.tmp_ca_cert()).unwrap();
+        let recovered = ensure_temp_ca(&cfg).unwrap();
+        assert_eq!(first.key.public_key_der(), recovered.key.public_key_der());
+        assert!(!cfg.root_keys_exist());
+    }
+
+    #[rocket::async_test]
+    async fn join_imports_and_stores_every_epoch() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let res = handover(3);
+        let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
+
+        let keys = onboard(&cfg, res, false, RootEpochRegistry::Unchecked)
+            .await
+            .unwrap();
+        keys.store(&cfg).unwrap();
+        assert!(cfg.tmp_ca_key().exists());
+        assert!(cfg.tmp_ca_cert().exists());
+
+        assert_eq!(crate::main_service::read_root_epoch(&cfg).unwrap(), 2);
+        for (epoch, k256) in (0..).zip(&sent) {
+            assert_eq!(
+                &fs::read(cfg.root_key_paths(epoch, 2).k256_key).unwrap(),
+                k256
+            );
+        }
+        assert_eq!(&fs::read(cfg.k256_key()).unwrap(), &sent[2]);
+    }
+
+    #[rocket::async_test]
+    async fn rotation_imports_the_keyring_and_generates_the_next_epoch() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let res = handover(2);
+        let registry = current_of(&res, 1);
+        let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
+
+        let keys = onboard(&cfg, res, true, registry).await.unwrap();
+        assert_eq!(keys.epoch, 2);
+        keys.store(&cfg).unwrap();
+
+        assert_eq!(
+            fs::read(cfg.root_key_paths(1, 2).k256_key).unwrap(),
+            sent[1]
+        );
+        let current = fs::read(cfg.k256_key()).unwrap();
+        assert!(!sent.contains(&current));
+    }
+
+    #[rocket::async_test]
+    async fn onboarding_checks_the_handover_against_the_current_epoch() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let res = handover(2);
+        let other = handover(2);
+
+        // A join may hold an epoch pending activation beyond the current one.
+        assert!(onboard(&cfg, res.clone(), false, current_of(&res, 1))
+            .await
+            .is_ok());
+        assert!(onboard(&cfg, res.clone(), false, current_of(&res, 0))
+            .await
+            .is_ok());
+        // A rotation must start at the current epoch.
+        assert!(onboard(&cfg, res.clone(), true, current_of(&res, 0))
+            .await
+            .is_err());
+        // A keyring other than the registered one.
+        assert!(onboard(&cfg, res.clone(), false, current_of(&other, 1))
+            .await
+            .is_err());
+        assert!(onboard(&cfg, res.clone(), true, current_of(&other, 1))
+            .await
+            .is_err());
+        // A source behind the current epoch.
+        assert!(onboard(&cfg, handover(1), false, current_of(&res, 1))
+            .await
+            .is_err());
+        // A missing epoch shifts the rest, so the chain hash no longer matches.
+        let mut gap = res.clone();
+        gap.keys.remove(0);
+        assert!(onboard(&cfg, gap, false, current_of(&res, 0))
+            .await
+            .is_err());
+        assert!(
+            onboard(&cfg, handover(0), false, RootEpochRegistry::Unchecked)
+                .await
+                .is_err()
+        );
+    }
+
+    #[rocket::async_test]
+    async fn an_unregistered_deployment_can_only_join_at_epoch_0() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        assert!(onboard(&cfg, handover(1), false, RootEpochRegistry::Empty)
+            .await
+            .is_ok());
+        assert!(onboard(&cfg, handover(2), false, RootEpochRegistry::Empty)
+            .await
+            .is_err());
+        assert!(onboard(&cfg, handover(1), true, RootEpochRegistry::Empty)
+            .await
+            .is_err());
+    }
+
+    /// A stored keyring at `latest`, loaded back.
+    async fn stored_keyring(epochs: u32) -> (tempfile::TempDir, KmsConfig, KmsKeyResponse) {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let res = handover(epochs);
+        onboard(&cfg, res.clone(), false, RootEpochRegistry::Unchecked)
+            .await
+            .unwrap()
+            .store(&cfg)
+            .unwrap();
+        (cert_dir, cfg, res)
+    }
+
+    #[rocket::async_test]
+    async fn a_keyring_serves_the_current_epoch_it_holds() {
+        use crate::main_service::Keyring;
+
+        let (_dir, cfg, res) = stored_keyring(3).await;
+        let keyring = Keyring::load(&cfg).unwrap();
+        assert_eq!(keyring.latest(), 2);
+        assert_eq!(keyring.servable_epoch(current_of(&res, 1)).unwrap(), 1);
+        assert_eq!(keyring.servable_epoch(current_of(&res, 2)).unwrap(), 2);
+        assert_eq!(
+            keyring
+                .servable_epoch(RootEpochRegistry::Unchecked)
+                .unwrap(),
+            2
+        );
+        assert!(keyring.servable_epoch(RootEpochRegistry::Empty).is_err());
+        assert!(keyring.servable_epoch(current_of(&handover(3), 1)).is_err());
+        let mut ahead = handover(4);
+        ahead.keys[..3].clone_from_slice(&res.keys);
+        assert!(keyring.servable_epoch(current_of(&ahead, 3)).is_err());
+
+        let (_dir, cfg, _) = stored_keyring(1).await;
+        let keyring = Keyring::load(&cfg).unwrap();
+        assert_eq!(keyring.servable_epoch(RootEpochRegistry::Empty).unwrap(), 0);
     }
 
     #[rocket::async_test]

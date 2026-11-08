@@ -24,6 +24,8 @@ x509-parser = { workspace = true, features = ["verify"] }
 
 [dev-dependencies]
 prpc.workspace = true
+ra-rpc = { workspace = true, features = ["rocket", "client"] }
+mock-attestation = { path = "../crates/mock-attestation" }
 hex.workspace = true
 rocket.workspace = true
 tempfile.workspace = true

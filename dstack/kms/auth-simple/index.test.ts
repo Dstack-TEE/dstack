@@ -446,6 +446,145 @@ describe('auth-simple', () => {
     });
   });
 
+  describe('root epochs', () => {
+    const rootEpochs = [
+      // Well-formed keys whose point bytes repeat one value.
+      { caPubkey: '0x3059301306072a8648ce3d020106082a8648ce3d03010703420004' + 'a0'.repeat(64), k256Pubkey: '0x02' + 'b0'.repeat(32) },
+      { caPubkey: '0x3059301306072a8648ce3d020106082a8648ce3d03010703420004' + 'a1'.repeat(64), k256Pubkey: '0x02' + 'b1'.repeat(32) }
+    ];
+    // Shared with the DstackKms contract tests.
+    const h0 = '0x10ab6b6c8e7601901b0f1767985bf40d35bf3129e0866fe12dcc7c8f04a298f2';
+    const h1 = '0x50152a82023f2219a31723b476c13bc5f608ab4147946dabdec15d4f3d648ed4';
+
+    const config = {
+      gatewayAppId: '0xgateway',
+      osImages: [baseBootInfo.osImageHash],
+      kms: { mrAggregated: [baseBootInfo.mrAggregated], allowAnyDevice: true },
+      apps: { '0xapp123': { composeHashes: ['0xcompose456'], allowAnyDevice: true } },
+      rootEpochs
+    };
+    const boot = async (path: string, fields: object) =>
+      (await app.fetch(new Request(`http://localhost/bootAuth/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...baseBootInfo, ...fields })
+      }))).json();
+    const info = async () =>
+      (await app.fetch(new Request('http://localhost/', { method: 'GET' }))).json();
+
+    const authorize = async (fields: object = {}, isKms = false) =>
+      (await app.fetch(new Request(`http://localhost/${isKms ? 'authorizeKms' : 'authorizeApp'}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...baseBootInfo, operation: isKms ? 'kms_serve' : 'app_get_key', ...fields }),
+      }))).json();
+
+    it('checks the requested policy and returns the epoch on rejection', async () => {
+      const kmsContractAddr = '0x' + '11'.repeat(20);
+      writeTestConfig({ ...config, kmsContractAddr, currentRootEpoch: 1 });
+      expect(await authorize()).toMatchObject({
+        isAllowed: true, rejectionReason: '', currentRootEpoch: 1, currentRootEpochHash: h1,
+      });
+      expect(await authorize({ requestedRootEpoch: 0 })).toMatchObject({ isAllowed: true, currentRootEpoch: 1 });
+      expect(await authorize({ requestedRootEpoch: 1 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active', currentRootEpoch: 1 });
+      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedRootEpoch: 2 })).toMatchObject({
+        isAllowed: false, rejectionReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,
+      });
+      expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' }, true)).toMatchObject({ isAllowed: true });
+      expect(await authorize({ appId: kmsContractAddr, mrAggregated: '0xbad' }, true)).toMatchObject({
+        isAllowed: false, currentRootEpoch: 1, currentRootEpochHash: h1,
+      });
+      expect(await authorize({ appId: '0x' + '22'.repeat(20) })).toMatchObject({ isAllowed: false });
+    });
+
+    it('rotates only the selected app and allows historical app epochs', async () => {
+      writeTestConfig({ ...config, apps: {
+        ...config.apps,
+        '0xapp123': { ...config.apps['0xapp123'], currentAppEpoch: 2 },
+      } });
+      expect(await authorize()).toMatchObject({ isAllowed: true, currentAppEpoch: 2, currentRootEpoch: 0 });
+      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true, currentAppEpoch: 2 });
+      expect(await authorize({ requestedAppEpoch: 2 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedAppEpoch: 3 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active', currentAppEpoch: 2 });
+      expect(await boot('app', {})).toMatchObject({ isAllowed: false, reason: 'App epoch requires epoch-aware authorization' });
+    });
+
+    it('denies authorization without registered roots, while bootstrap remains available', async () => {
+      writeTestConfig({ ...config, rootEpochs: [] });
+      expect(await authorize()).toMatchObject({
+        isAllowed: false, rejectionReason: 'Root epoch not registered',
+        currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32),
+      });
+      expect((await boot('kms', {})).isAllowed).toBe(true);
+      expect(await authorize({ operation: 'kms_bootstrap' }, true)).toMatchObject({ isAllowed: true });
+      expect(await authorize({ operation: 'kms_export_keys' }, true)).toMatchObject({ isAllowed: false });
+    });
+
+    it('rejects operations belonging to the other authorization scope', async () => {
+      writeTestConfig(config);
+      expect(await authorize({ operation: 'kms_serve' })).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
+      expect(await authorize({ operation: 'app_get_cert' }, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
+      expect(await authorize({ operation: 'app_get_cert' })).toMatchObject({ isAllowed: true });
+    });
+
+    it('allows only a KMS serving the current root epoch', async () => {
+      writeTestConfig(config);
+      expect(await info()).toMatchObject({ rootEpoch: 0, rootEpochHash: h0 });
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).isAllowed).toBe(true);
+      expect((await boot('app', {})).isAllowed).toBe(true);
+
+      writeTestConfig({ ...config, currentRootEpoch: 1 });
+      expect(await info()).toMatchObject({ rootEpoch: 1, rootEpochHash: h1 });
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: h1 })).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).reason).toMatch(/1 is current/);
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: h0 })).reason).toMatch(/not the registered/);
+      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      expect((await boot('app', {})).reason).toMatch(/reports none/);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
+    });
+
+    it.each([
+      { currentRootEpoch: 1, rootEpochs: [] },
+      { currentRootEpoch: 1, rootEpochs: undefined },
+      { currentRootEpoch: 2, rootEpochs },
+      { rootEpochs: [{ ...rootEpochs[0], caPubkey: '0xINVALID' }] },
+      { rootEpochs: [{ ...rootEpochs[0], k256Pubkey: '0xINVALID' }] }
+    ])('fails closed for invalid root epoch config %j', async (epochs) => {
+      writeTestConfig({ ...config, ...epochs });
+      const health = await app.fetch(new Request('http://localhost/'));
+      expect(health.status).toBe(500);
+      for (const path of ['app', 'kms']) {
+        for (const fields of [{}, { rootEpoch: 0 }, { rootEpoch: 1 }]) {
+          expect((await boot(path, fields)).isAllowed).toBe(false);
+        }
+      }
+    });
+
+    it.each(['0x' + 'ab'.repeat(20), '0X' + 'AB'.repeat(20), 'Ab'.repeat(20)])(
+      'uses the same normalized app policy for epoch lookup and authorization: %s', async (id) => {
+        const appId = '0x' + 'ab'.repeat(20);
+        writeTestConfig({ ...config, apps: { [id]: {
+          composeHashes: [baseBootInfo.composeHash], allowAnyDevice: true, currentAppEpoch: 1,
+        } } });
+        const lookup = await app.fetch(new Request(`http://localhost/app/${appId}`));
+        expect((await lookup.json()).currentAppEpoch).toBe(1);
+        expect(await authorize({ appId })).toMatchObject({ isAllowed: true, currentAppEpoch: 1 });
+        expect((await authorize({ appId, requestedAppEpoch: 1 })).isAllowed).toBe(true);
+        expect((await authorize({ appId, requestedAppEpoch: 0 })).isAllowed).toBe(true);
+        expect((await authorize({ appId, requestedAppEpoch: 2 })).isAllowed).toBe(false);
+        expect((await boot('app', { appId })).isAllowed).toBe(false);
+      }
+    );
+
+    it('serves only epoch 0 when none is configured', async () => {
+      writeTestConfig({ ...config, rootEpochs: [] });
+      expect((await info()).rootEpoch).toBeUndefined();
+      expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).isAllowed).toBe(true);
+      expect((await boot('app', { rootEpoch: 1, rootEpochHash: h1 })).reason).toMatch(/not registered/);
+    });
+  });
+
   describe('hex normalization', () => {
     it('handles uppercase hex', async () => {
       writeTestConfig({

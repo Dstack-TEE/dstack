@@ -389,6 +389,72 @@ Compose file content (first 200 chars):
 mod tests {
     use super::*;
 
+    #[rocket::async_test]
+    async fn sealed_env_requires_a_capable_image_before_writing_one_shot_state() {
+        use rocket::figment::{
+            providers::{Format, Toml},
+            Figment,
+        };
+        for capability in [None, Some(false)] {
+            for existing in [false, true] {
+                let dir = tempfile::tempdir().unwrap();
+                let mut config: Config = Figment::from(Toml::string(crate::config::DEFAULT_CONFIG))
+                    .extract()
+                    .unwrap();
+                config.image.path = dir.path().join("images");
+                let image_dir = config.image.path.join("legacy");
+                fs::create_dir_all(&image_dir).unwrap();
+                fs::write(image_dir.join("kernel"), b"kernel").unwrap();
+                fs::write(image_dir.join("initrd"), b"initrd").unwrap();
+                let mut metadata = serde_json::json!({"kernel": "kernel", "initrd": "initrd"});
+                if let Some(capability) = capability {
+                    metadata["sealed_env"] = capability.into();
+                }
+                fs::write(image_dir.join("metadata.json"), metadata.to_string()).unwrap();
+                let workdir = dir.path().join("vm");
+                let state = VmWorkDir::new(&workdir);
+                if existing {
+                    fs::create_dir_all(state.shared_dir()).unwrap();
+                    // Presence alone selects the sealed format, even for an empty file.
+                    fs::write(state.sealed_env_path(), b"").unwrap();
+                    fs::write(state.manifest_path(), b"original manifest").unwrap();
+                }
+                let request = dstack_vmm_rpc::VmConfiguration {
+                    name: "test".into(),
+                    image: "legacy".into(),
+                    vcpu: 1,
+                    memory: 1024,
+                    disk_size: 1,
+                    compose_file: r#"{"manifest_version":2,"name":"test","runner":"none"}"#.into(),
+                    sealed_env: if existing { vec![] } else { b"sealed".to_vec() },
+                    ..Default::default()
+                };
+                let path = dir.path().join("vm.json");
+                fs::write(&path, serde_json::to_vec(&request).unwrap()).unwrap();
+                let error = run_one_shot(
+                    path.to_str().unwrap(),
+                    config,
+                    Some(workdir.to_str().unwrap().into()),
+                    true,
+                )
+                .await
+                .unwrap_err();
+                assert!(
+                    format!("{error:#}").contains("does not support sealed_env"),
+                    "{error:#}"
+                );
+                if existing {
+                    assert_eq!(
+                        fs::read(state.manifest_path()).unwrap(),
+                        b"original manifest"
+                    );
+                } else {
+                    assert!(!workdir.exists());
+                }
+            }
+        }
+    }
+
     #[test]
     fn compose_preview_truncates_by_character() {
         let preview = compose_preview(&"\u{4e2d}".repeat(250));

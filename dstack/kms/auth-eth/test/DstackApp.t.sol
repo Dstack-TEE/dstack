@@ -170,7 +170,7 @@ contract DstackAppTest is Test {
         app.addComposeHash(composeHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(app),
             composeHash: composeHash,
             instanceId: address(0),
@@ -212,7 +212,7 @@ contract DstackAppTest is Test {
         app.addComposeHash(allowedHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(app),
             composeHash: unallowedHash,
             instanceId: address(0),
@@ -270,7 +270,7 @@ contract DstackAppTest is Test {
         string[] memory advisoryIds = new string[](1);
         advisoryIds[0] = "INTEL-SA-00614";
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(app),
             composeHash: composeHash,
             instanceId: address(0),
@@ -318,7 +318,7 @@ contract DstackAppTest is Test {
         assertTrue(tcbApp.allowedDeviceIds(deviceId));
         assertTrue(tcbApp.allowedComposeHashes(composeHash));
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: address(tcbApp),
             composeHash: composeHash,
             instanceId: address(0),
@@ -408,5 +408,164 @@ contract DstackAppTest is Test {
         vm.expectRevert("invalid device ID");
         app.addDevice(bytes32(0));
         vm.stopPrank();
+    }
+
+    function epochInfo() internal view returns (IAppAuth.AppInfo memory info) {
+        info.appId = address(app);
+        info.composeHash = bytes32(uint256(1));
+        info.deviceId = bytes32(uint256(2));
+        info.tcbStatus = "UpToDate";
+    }
+
+    function test_AppOperationsSharePolicyButRejectUnknownOrKmsOperations() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHash(info.composeHash);
+        app.addDevice(info.deviceId);
+        vm.stopPrank();
+        (bool allowed,) = app.authorizeApp(info, 0, keccak256("app_get_cert"));
+        assertTrue(allowed);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("kms_import_keys"));
+        assertFalse(allowed);
+        (allowed,) = app.authorizeApp(info, 0, bytes32(0));
+        assertFalse(allowed);
+    }
+
+    function test_AppEpochRowsAreIndependentAndDefaultsUseCurrentEpoch() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHash(info.composeHash);
+        app.addDevice(info.deviceId);
+        app.advanceAppEpoch(0);
+        (bool allowed,) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+        app.addComposeHash(info.composeHash);
+        (allowed,) = app.isAppAllowed(info);
+        assertFalse(allowed, "each material must be approved in the selected row");
+        app.addDevice(info.deviceId);
+        (allowed,) = app.isAppAllowed(info);
+        assertTrue(allowed);
+        app.removeComposeHash(info.composeHash);
+        assertFalse(app.allowedComposeHashesAtEpoch(1, info.composeHash));
+        assertTrue(app.allowedComposeHashes(info.composeHash));
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+        app.addComposeHash(info.composeHash);
+        app.removeDeviceAtEpoch(0, info.deviceId);
+        assertFalse(app.allowedDeviceIds(info.deviceId));
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        assertFalse(allowed);
+        (allowed,) = app.isAppAllowed(info);
+        assertTrue(allowed, "revoking epoch zero must not revoke epoch one");
+        (allowed,) = app.authorizeApp(info, 2, keccak256("app_get_key"));
+        assertFalse(allowed);
+        vm.stopPrank();
+    }
+
+    function test_NewImageCanBeExplicitlyAddedToOldRowForHandover() public {
+        IAppAuth.AppInfo memory oldInfo = epochInfo();
+        IAppAuth.AppInfo memory newInfo = epochInfo();
+        newInfo.composeHash = bytes32(uint256(3));
+        vm.startPrank(owner);
+        app.addComposeHash(oldInfo.composeHash);
+        app.addDevice(oldInfo.deviceId);
+        app.advanceAppEpoch(0);
+        app.addComposeHash(newInfo.composeHash);
+        app.addDevice(newInfo.deviceId);
+        (bool allowed,) = app.authorizeApp(newInfo, 0, keccak256("app_get_key"));
+        assertFalse(allowed, "new epoch approval must not imply historical access");
+        app.addComposeHashAtEpoch(0, newInfo.composeHash);
+        (allowed,) = app.authorizeApp(newInfo, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+        (allowed,) = app.isAppAllowed(oldInfo);
+        assertFalse(allowed, "old image cannot read new keys");
+        app.removeComposeHashAtEpoch(0, oldInfo.composeHash);
+        (allowed,) = app.authorizeApp(oldInfo, 0, keccak256("app_get_key"));
+        assertFalse(allowed);
+        (allowed,) = app.isAppAllowed(newInfo);
+        assertTrue(allowed);
+        vm.stopPrank();
+    }
+
+    function test_AllowAnyDeviceIsScopedToExactlyOneEpoch() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHash(info.composeHash);
+        app.setAllowAnyDevice(true);
+        app.advanceAppEpoch(0);
+        app.addComposeHash(info.composeHash);
+        (bool allowed,) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        app.addDevice(info.deviceId);
+        (allowed,) = app.isAppAllowed(info);
+        assertTrue(allowed, "explicit device can replace wildcard in a newer row");
+        app.removeDevice(info.deviceId);
+        app.setAllowAnyDevice(true);
+        app.setAllowAnyDeviceAtEpoch(0, false);
+        assertFalse(app.allowAnyDevice());
+        assertTrue(app.allowAnyDeviceAtEpoch(1));
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        assertFalse(allowed);
+        (allowed,) = app.isAppAllowed(info);
+        assertTrue(allowed);
+        app.setAllowAnyDevice(false);
+        (allowed,) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        vm.stopPrank();
+    }
+
+    function test_ExplicitAppEpochSettersRequireOwnerAndKnownEpoch() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Unknown app epoch");
+        app.addComposeHashAtEpoch(1, bytes32(uint256(1)));
+        vm.expectRevert("Unknown app epoch");
+        app.removeComposeHashAtEpoch(1, bytes32(uint256(1)));
+        vm.expectRevert("Unknown app epoch");
+        app.addDeviceAtEpoch(1, bytes32(uint256(1)));
+        vm.expectRevert("Unknown app epoch");
+        app.removeDeviceAtEpoch(1, bytes32(uint256(1)));
+        vm.expectRevert("Unknown app epoch");
+        app.setAllowAnyDeviceAtEpoch(1, true);
+        vm.stopPrank();
+        bytes memory unauthorized = abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user);
+        vm.startPrank(user);
+        vm.expectRevert(unauthorized);
+        app.addComposeHashAtEpoch(0, bytes32(uint256(1)));
+        vm.expectRevert(unauthorized);
+        app.removeComposeHashAtEpoch(0, bytes32(uint256(1)));
+        vm.expectRevert(unauthorized);
+        app.addDeviceAtEpoch(0, bytes32(uint256(1)));
+        vm.expectRevert(unauthorized);
+        app.removeDeviceAtEpoch(0, bytes32(uint256(1)));
+        vm.expectRevert(unauthorized);
+        app.setAllowAnyDeviceAtEpoch(0, true);
+        vm.stopPrank();
+    }
+
+    function test_epoch_auth_interface_combines_discovery_and_authorization() public view {
+        bytes4 combined = IAppEpochAuth.currentAppEpoch.selector ^ IAppEpochAuth.authorizeApp.selector;
+        assertEq(bytes32(type(IAppEpochAuth).interfaceId), bytes32(combined));
+        assertTrue(app.supportsInterface(combined));
+        assertFalse(app.supportsInterface(IAppEpochAuth.currentAppEpoch.selector));
+        assertFalse(app.supportsInterface(IAppEpochAuth.authorizeApp.selector));
+    }
+
+    function testFuzz_AppAuthorizationMatchesOnlyTheSelectedRow(uint8 approved, uint8 requested) public {
+        uint256 row = bound(approved, 0, 4);
+        uint256 selected = bound(requested, 0, 6);
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        for (uint256 i; i < 5; i++) {
+            app.advanceAppEpoch(i);
+        }
+        app.addComposeHashAtEpoch(row, info.composeHash);
+        app.addDeviceAtEpoch(row, info.deviceId);
+        vm.stopPrank();
+        (bool allowed,) = app.authorizeApp(info, selected, keccak256("app_get_key"));
+        assertEq(allowed, selected == row);
     }
 }

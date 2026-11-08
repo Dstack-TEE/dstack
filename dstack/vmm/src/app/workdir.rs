@@ -436,3 +436,39 @@ mod tests {
         workdir.remove_all().unwrap();
     }
 }
+
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    #[test]
+    fn env_updates_replace_the_other_format_and_reject_ambiguity() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(dir.path());
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        workdir.write_env(b"legacy", &[]).unwrap();
+        workdir.write_env(&[], b"sealed").unwrap();
+        assert!(!workdir.encrypted_env_path().exists());
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        assert!(workdir.write_env(b"ambiguous", b"ambiguous").is_err());
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        workdir.write_env(&[], &[]).unwrap();
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        workdir.write_env(b"owner", &[]).unwrap();
+        assert!(!workdir.sealed_env_path().exists());
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"owner");
+    }
+
+    #[test]
+    fn env_write_failure_preserves_original_and_cleanup_errors_propagate() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(dir.path());
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        workdir.write_env(b"original", &[]).unwrap();
+        fs::create_dir(workdir.sealed_env_path()).unwrap();
+        assert!(workdir.write_env(&[], b"replacement").is_err());
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"original");
+        assert!(workdir.write_env(b"updated", &[]).is_err());
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"updated");
+    }
+}

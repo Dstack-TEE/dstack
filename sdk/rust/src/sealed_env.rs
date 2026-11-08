@@ -140,3 +140,171 @@ pub fn seal_env_at_epochs<K: AsRef<str>, V: AsRef<str>>(
     });
     Ok(serde_json::to_string(&envelope)?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hpke::OpModeR;
+
+    #[test]
+    fn hpke_roundtrip_binds_epoch() {
+        let (secret, public) = X25519HkdfSha256::derive_keypair(&[42; 32]);
+        let envs = [
+            ("TOKEN", "test-value"),
+            ("UNICODE", "你好\n\""),
+            ("EMPTY", ""),
+        ];
+        for epoch in [0, 42, u32::MAX] {
+            let sealed = seal_env(&envs, &public.to_bytes(), epoch).unwrap();
+            let envelope: serde_json::Value = serde_json::from_str(&sealed).unwrap();
+            assert_eq!(envelope.as_object().unwrap().len(), 5);
+            assert_eq!(envelope["version"], 1);
+            assert_eq!(envelope["root_epoch"], epoch);
+            let enc = STANDARD.decode(envelope["enc"].as_str().unwrap()).unwrap();
+            assert_eq!(enc.len(), 32);
+            let enc = <X25519HkdfSha256 as Kem>::EncappedKey::from_bytes(&enc).unwrap();
+            let ciphertext = STANDARD
+                .decode(envelope["ciphertext"].as_str().unwrap())
+                .unwrap();
+            let open = |info: &str| {
+                hpke::single_shot_open::<AesGcm256, HkdfSha256, X25519HkdfSha256>(
+                    &OpModeR::Base,
+                    &secret,
+                    &enc,
+                    info.as_bytes(),
+                    &ciphertext,
+                    &[],
+                )
+            };
+            let plaintext = open(&format!("dstack-sealed-env-v1:{epoch}:0")).unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&plaintext).unwrap(),
+                json!({ "env": [
+                    { "key": "TOKEN", "value": "test-value" },
+                    { "key": "UNICODE", "value": "你好\n\"" },
+                    { "key": "EMPTY", "value": "" },
+                ] })
+            );
+            assert!(open(&format!("dstack-sealed-env-v1:{}:0", epoch.wrapping_add(1))).is_err());
+        }
+    }
+
+    #[test]
+    fn verifies_public_key_binding_signer_and_freshness() {
+        use k256::ecdsa::SigningKey;
+        let signer = SigningKey::from_slice(&[7; 32]).unwrap();
+        let other_signer = SigningKey::from_slice(&[8; 32]).unwrap();
+        let app_id = [9; 20];
+        let mut key = SealedEnvPublicKey {
+            app_epoch: 0,
+            public_key: [10; 32],
+            root_epoch: 42,
+            timestamp: 1_000,
+            signature: [0; 65],
+        };
+        // Construct the wire claim independently of the production digest helper.
+        let mut claim = b"dstack-sealed-env-pubkey-v1:".to_vec();
+        claim.extend_from_slice(&app_id);
+        claim.extend_from_slice(&42u32.to_be_bytes());
+        claim.extend_from_slice(&0u32.to_be_bytes());
+        claim.extend_from_slice(&[10; 32]);
+        claim.extend_from_slice(&1_000u64.to_be_bytes());
+        let digest = Keccak256::digest(claim);
+        let (signature, recovery_id) = signer.sign_prehash_recoverable(&digest).unwrap();
+        key.signature[..64].copy_from_slice(&signature.to_bytes());
+        key.signature[64] = recovery_id.to_byte();
+        assert_eq!(
+            recover_sealed_env_public_key(&app_id, &key).unwrap(),
+            *signer.verifying_key()
+        );
+        for now in [940, 1_000, 1_300] {
+            verify_sealed_env_public_key(&app_id, &key, 42, signer.verifying_key(), now).unwrap();
+        }
+        for now in [939, 1_301, u64::MAX] {
+            assert!(
+                verify_sealed_env_public_key(&app_id, &key, 42, signer.verifying_key(), now)
+                    .is_err()
+            );
+        }
+        assert!(
+            verify_sealed_env_public_key(&app_id, &key, 41, signer.verifying_key(), 1_000).is_err()
+        );
+        assert!(verify_sealed_env_public_key(
+            &app_id,
+            &key,
+            42,
+            other_signer.verifying_key(),
+            1_000
+        )
+        .is_err());
+        assert!(
+            verify_sealed_env_public_key(&[8; 20], &key, 42, signer.verifying_key(), 1_000)
+                .is_err()
+        );
+        for field in 0..4 {
+            let mut modified = key.clone();
+            match field {
+                0 => modified.public_key[0] ^= 1,
+                1 => modified.timestamp += 1,
+                2 => modified.signature[0] ^= 1,
+                _ => modified.root_epoch += 1,
+            }
+            assert!(verify_sealed_env_public_key(
+                &app_id,
+                &modified,
+                modified.root_epoch,
+                signer.verifying_key(),
+                1_000
+            )
+            .is_err());
+        }
+        key.signature[64] = 255;
+        assert!(recover_sealed_env_public_key(&app_id, &key).is_err());
+    }
+
+    #[test]
+    fn app_epoch_signature_cannot_be_relabelled() {
+        use k256::ecdsa::SigningKey;
+        let signer = SigningKey::from_slice(&[7; 32]).unwrap();
+        let app_id = [9; 20];
+        let mut key = SealedEnvPublicKey {
+            app_epoch: 2,
+            public_key: [10; 32],
+            root_epoch: 42,
+            timestamp: 1_000,
+            signature: [0; 65],
+        };
+        let mut claim = b"dstack-sealed-env-pubkey-v1:".to_vec();
+        claim.extend_from_slice(&app_id);
+        claim.extend_from_slice(&42u32.to_be_bytes());
+        claim.extend_from_slice(&2u32.to_be_bytes());
+        claim.extend_from_slice(&key.public_key);
+        claim.extend_from_slice(&key.timestamp.to_be_bytes());
+        let (signature, recovery_id) = signer
+            .sign_prehash_recoverable(&Keccak256::digest(claim))
+            .unwrap();
+        key.signature[..64].copy_from_slice(&signature.to_bytes());
+        key.signature[64] = recovery_id.to_byte();
+        verify_sealed_env_public_key_at_epochs(&app_id, &key, 42, 2, signer.verifying_key(), 1_000)
+            .unwrap();
+        for app_epoch in [0, 1, 3] {
+            key.app_epoch = app_epoch;
+            assert!(verify_sealed_env_public_key_at_epochs(
+                &app_id,
+                &key,
+                42,
+                app_epoch,
+                signer.verifying_key(),
+                1_000
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_public_keys() {
+        for key in [vec![], vec![0; 31], vec![0; 32], vec![0; 33]] {
+            assert!(seal_env(&[("KEY", "value")], &key, 0).is_err());
+        }
+    }
+}

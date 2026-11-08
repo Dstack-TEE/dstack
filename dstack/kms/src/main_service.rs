@@ -1497,16 +1497,6 @@ mod tests {
     }
 
     #[test]
-    fn snp_self_boot_info_uses_same_release_policy_for_temp_ca() {
-        let boot_info = snp_boot_info();
-
-        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default())
-            .expect_err("disabled SNP self boot info must not receive temp CA key material");
-        ensure_self_key_release_allowed(Some(&boot_info), SNP_ENABLED)
-            .expect("enabled clean SNP self boot info should pass the temp CA release gate");
-    }
-
-    #[test]
     fn nitro_enclave_key_release_requires_explicit_enablement() {
         let mut boot_info = snp_boot_info();
         boot_info.tee_variant = TeeVariant::DstackNitroEnclave;
@@ -1523,13 +1513,6 @@ mod tests {
         // explicitly enabled permits it
         ensure_key_release_allowed(&boot_info, NITRO_ENCLAVE_ENABLED)
             .expect("explicitly enabled nitro enclave key release should allow the boot info");
-
-        // the temp CA path uses the same gate
-        ensure_self_key_release_allowed(Some(&boot_info), KeyReleasePolicy::default()).expect_err(
-            "disabled nitro enclave self boot info must not receive temp CA key material",
-        );
-        ensure_self_key_release_allowed(Some(&boot_info), NITRO_ENCLAVE_ENABLED)
-            .expect("enabled nitro enclave self boot info should pass the temp CA release gate");
     }
 
     #[test]
@@ -1605,19 +1588,8 @@ mod tests {
             .build()
             .self_signed()
             .unwrap();
-        let tmp_ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let tmp_ca_cert = CertRequest::builder()
-            .org_name("Dstack")
-            .subject("Dstack Client Temp CA")
-            .ca_level(0)
-            .key(&tmp_ca_key)
-            .build()
-            .self_signed()
-            .unwrap();
         fs::write(cert_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
         fs::write(cert_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
-        fs::write(cert_dir.join("tmp-ca.key"), tmp_ca_key.serialize_pem()).unwrap();
-        fs::write(cert_dir.join("tmp-ca.crt"), tmp_ca_cert.pem()).unwrap();
         fs::write(
             cert_dir.join("root-k256.key"),
             SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
@@ -1649,10 +1621,197 @@ mod tests {
             .focus("core")
             .extract()
             .unwrap();
-        KmsState::new(config).unwrap()
+        let keyring = Keyring::load(&config).unwrap();
+        KmsState::new(config, keyring, ca_cert.pem()).unwrap()
+    }
+
+    #[test]
+    fn sealed_env_derivation_is_separate_and_shared_with_app_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = kms_state(dir.path(), "http://127.0.0.1:1");
+        let root = state.epoch_root(0).unwrap();
+        let app = [1; 20];
+        let sealed = derive_sealed_env_key(root, &app, 0).unwrap();
+        let app_keys = derive_app_keys(root, &app, &[2; 20], 0).unwrap();
+        assert_eq!(sealed.as_slice(), app_keys.sealed_env_key);
+        assert_ne!(sealed.as_slice(), app_keys.env_crypt_key);
+        assert_ne!(sealed.as_slice(), app_keys.disk_crypt_key);
+        assert_ne!(sealed, derive_sealed_env_key(root, &[3; 20], 0).unwrap());
+        assert!(derive_sealed_env_key(root, &[1; 19], 0).is_err());
+    }
+
+    #[test]
+    fn app_epoch_derivation_is_separate_and_epoch_zero_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = kms_state(dir.path(), "http://127.0.0.1:1");
+        let root = state.epoch_root(0).unwrap();
+        let app = [1; 20];
+        let instance = [2; 20];
+        let zero = derive_app_keys(root, &app, &instance, 0).unwrap();
+        assert_eq!(
+            zero.disk_crypt_key,
+            kdf::derive_dh_secret(&root.ca.key, &[&app, &instance, b"app-disk-crypt-key"]).unwrap()
+        );
+        assert_eq!(
+            zero.env_crypt_key,
+            x25519_dalek::StaticSecret::from(
+                kdf::derive_dh_secret(&root.ca.key, &[&app, b"env-encrypt-key"]).unwrap()
+            )
+            .to_bytes()
+        );
+        for epoch in [1, 2, u32::MAX] {
+            let rotated = derive_app_keys(root, &app, &instance, epoch).unwrap();
+            let again = derive_app_keys(root, &app, &instance, epoch).unwrap();
+            assert_eq!(rotated.disk_crypt_key, again.disk_crypt_key);
+            assert_ne!(zero.disk_crypt_key, rotated.disk_crypt_key);
+            assert_ne!(zero.env_crypt_key, rotated.env_crypt_key);
+            assert_ne!(zero.sealed_env_key, rotated.sealed_env_key);
+            assert_ne!(zero.k256_key, rotated.k256_key);
+        }
+        assert_ne!(
+            derive_app_keys(root, &app, &instance, 1).unwrap().k256_key,
+            derive_app_keys(root, &app, &instance, 2).unwrap().k256_key
+        );
+    }
+
+    #[rocket::async_test]
+    async fn authorization_selects_epochs_without_a_serving_epoch_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let initial = kms_state(dir.path(), "http://127.0.0.1:1");
+        let mut keyring = Keyring::load(&initial.config).unwrap();
+        let key = KeyPair::generate_for(&ra_tls::rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = CertRequest::builder()
+            .key(&key)
+            .subject("Root epoch 1")
+            .ca_level(1)
+            .build()
+            .self_signed()
+            .unwrap();
+        keyring.roots.push(RootKeys {
+            ca: CaCert::from_parts(key, cert),
+            k256: SigningKey::random(&mut rand::rngs::OsRng),
+        });
+        keyring.chain_hashes =
+            root_chain_hashes(keyring.roots.iter().map(|root| (&root.ca.key, &root.k256)));
+        let state = KmsState::new(
+            initial.config.clone(),
+            keyring,
+            initial.keyring.roots[0].ca.pem_cert.clone(),
+        )
+        .unwrap();
+        let result = |epoch: u32| AuthorizationResult {
+            is_allowed: true,
+            rejection_reason: String::new(),
+            gateway_app_id: String::new(),
+            current_root_epoch: epoch,
+            current_app_epoch: 0,
+            current_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
+        };
+        assert_eq!(state.authorized_epoch(&result(0), None).unwrap(), 0);
+        assert!(state.authorized_epoch(&result(0), Some(1)).is_err());
+        assert_eq!(state.authorized_epoch(&result(1), None).unwrap(), 1);
+        assert_eq!(state.authorized_epoch(&result(1), Some(0)).unwrap(), 0);
+        assert_eq!(state.authorized_epoch(&result(1), Some(1)).unwrap(), 1);
+        assert!(state.authorized_epoch(&result(1), Some(u32::MAX)).is_err());
+        // Key selection already follows epoch 1; only the TLS listener needs refreshing.
+        assert!(state.ensure_rpc_ca(1).is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), state.restart_requested())
+                .await
+                .is_ok()
+        );
+        assert_eq!(state.rpc_ca_pubkey, initial.rpc_ca_pubkey);
+
+        let mut rejected = result(1);
+        rejected.is_allowed = false;
+        rejected.rejection_reason = "Policy denied".into();
+        assert!(state.authorized_epoch(&rejected, Some(0)).is_err());
+        rejected.is_allowed = true;
+        for hash in [
+            "invalid".into(),
+            hex::encode([0; 32]),
+            hex::encode([0x55; 32]),
+        ] {
+            rejected.current_root_epoch_hash = hash;
+            assert!(state.authorized_epoch(&rejected, None).is_err());
+        }
+        let mut missing = result(1);
+        missing.current_root_epoch = u32::MAX;
+        assert!(state.authorized_epoch(&missing, Some(0)).is_err());
+        assert!(state.epoch_root(u32::MAX).is_err());
     }
 
     const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    #[rocket::async_test]
+    async fn self_authorization_cache_cannot_authorize_a_different_operation() {
+        use upgrade_authority::tests::{boot_info, serve};
+        let dir = tempfile::tempdir().unwrap();
+        let initial = kms_state(dir.path(), "http://127.0.0.1:1");
+        let response = |allowed| {
+            serde_json::json!({
+                "isAllowed": allowed, "rejectionReason": "export denied", "gatewayAppId": "",
+                "currentRootEpoch": 0, "currentAppEpoch": 0,
+                "currentRootEpochHash": hex::encode(initial.keyring.chain_hashes[0]),
+            })
+            .to_string()
+        };
+        let (url, server) = serve(vec![response(true), response(false)]);
+        let mut config = initial.config.clone();
+        config.enforce_self_authorization = true;
+        config.auth_api = upgrade_authority::tests::webhook(url);
+        let keyring = Keyring::load(&config).unwrap();
+        let state = KmsState::new(
+            config,
+            keyring,
+            initial.epoch_root(0).unwrap().ca.pem_cert.clone(),
+        )
+        .unwrap();
+        state.self_boot_info.insert((), boot_info(1)).await;
+        let handler = RpcHandler {
+            state,
+            attestation: None,
+        };
+        assert_eq!(
+            handler
+                .ensure_self_allowed(Operation::KmsServe)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(handler
+            .ensure_self_allowed(Operation::KmsExportKeys)
+            .await
+            .is_err());
+        assert_eq!(
+            handler
+                .ensure_self_allowed(Operation::KmsServe)
+                .await
+                .unwrap(),
+            0
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0].1["operation"], "kms_serve");
+        assert_eq!(requests[1].1["operation"], "kms_export_keys");
+    }
+
+    #[rocket::async_test]
+    async fn legacy_temp_ca_rpc_returns_a_separate_ca_and_the_served_root() {
+        assert!(dstack_kms_rpc::kms_server::KMSMethod::from_str("GetTempCaCert").is_some());
+        let dir = tempfile::tempdir().unwrap();
+        let (url, _) = serve_concurrent_auth_api(AUTH_API_INFO);
+        let state = kms_state(dir.path(), &url);
+        let response = RpcHandler {
+            state: state.clone(),
+            attestation: None,
+        }
+        .get_temp_ca_cert()
+        .await
+        .unwrap();
+        let temp_ca = CaCert::new(response.temp_ca_cert, response.temp_ca_key).unwrap();
+        assert_ne!(temp_ca.key.public_key_der(), state.rpc_ca_pubkey);
+        assert_eq!(response.ca_cert, state.epoch_root(0).unwrap().ca.pem_cert);
+    }
 
     #[rocket::async_test]
     async fn concurrent_get_meta_calls_share_one_auth_api_request() {

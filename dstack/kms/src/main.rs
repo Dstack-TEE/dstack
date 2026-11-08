@@ -296,3 +296,27 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use dstack_attest::attestation::VersionedAttestation;
+
+    #[test]
+    fn legacy_attestation_converts_a_get_quote_response() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../verifier/fixtures/tdx-lite-getquote.json"
+        ))
+        .unwrap();
+        let quote = fixture["quote"].as_str().unwrap();
+        let eventlog = hex::encode(fixture["event_log"].as_str().unwrap());
+
+        let attestation = super::legacy_attestation(quote, &format!("0x{eventlog}")).unwrap();
+        let attestation =
+            VersionedAttestation::from_bytes(&hex::decode(&attestation[2..]).unwrap()).unwrap();
+        let attestation = attestation.into_v1();
+        assert_eq!(
+            hex::encode(attestation.report_data().unwrap()),
+            fixture["report_data"].as_str().unwrap()
+        );
+    }
+}

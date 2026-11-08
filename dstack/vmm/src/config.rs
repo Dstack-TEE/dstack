@@ -1433,6 +1433,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn host_api_limits_sealed_env_updates() {
+        use rocket::data::ToByteUnit;
+        use rocket::figment::providers::Serialized;
+        // Built the way `run_host_api` builds the host API server's config.
+        let figment = load_config_figment(None);
+        let figment = figment.clone().merge(Serialized::defaults(
+            figment.find_value("host_api").unwrap(),
+        ));
+        let config: rocket::Config = figment.extract().unwrap();
+        assert_eq!(config.limits.get("UpdateSealedEnv"), Some(1.mebibytes()));
+    }
+
+    #[test]
     fn image_dir_stays_a_direct_child_of_the_image_root() {
         let cfg = ImageConfig {
             path: PathBuf::from("/images"),
