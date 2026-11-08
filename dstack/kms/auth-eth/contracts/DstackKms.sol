@@ -22,7 +22,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         bytes eventlog;
     }
 
-    // KMS information
+    // Retained for proxy storage compatibility and legacy readers. Only root
+    // epoch registration and activation may update this identity.
     KmsInfo public kmsInfo;
 
     // The dstack-gateway App ID
@@ -139,15 +140,6 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         emit PolicyChanged(msg.sender, keccak256(bytes(policy)), value, enabled);
     }
 
-    // Function to set KMS information. Once root epochs are registered,
-    // kmsInfo follows the current one instead.
-    function setKmsInfo(KmsInfo memory info) external onlyOwner {
-        require(_rootEpochs.length == 0, "kmsInfo follows the current root epoch");
-        kmsInfo = info;
-        emit KmsInfoSet(info.k256Pubkey);
-        _emitPolicy("kms-info", keccak256(info.k256Pubkey), true);
-    }
-
     // Register the root public keys of the next KMS root epoch, with where to
     // fetch the attestation proving where they were generated. It is not served until
     // activated, except epoch 0, which is current from the start and must be
@@ -249,18 +241,6 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         require(epoch < _rootEpochs.length, "Unknown root epoch");
         RootEpoch storage keys = _rootEpochs[epoch];
         return (keys.caPubkey, keys.k256Pubkey, keys.evidenceUrl, keys.chainHash);
-    }
-
-    // Function to set KMS quote
-    function setKmsQuote(bytes memory quote) external onlyOwner {
-        require(_rootEpochs.length == 0, "kmsInfo follows the current root epoch");
-        kmsInfo.quote = quote;
-    }
-
-    // Function to set KMS eventlog
-    function setKmsEventlog(bytes memory eventlog) external onlyOwner {
-        require(_rootEpochs.length == 0, "kmsInfo follows the current root epoch");
-        kmsInfo.eventlog = eventlog;
     }
 
     // Function to set trusted Gateway App ID

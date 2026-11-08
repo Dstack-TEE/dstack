@@ -52,15 +52,12 @@ KMS_CONTRACT_ADDR=0x... GATEWAY_APP_ID="my-gateway" \
 forge script script/Manage.s.sol:SetGatewayAppId --broadcast --rpc-url $RPC_URL
 ```
 
-#### Set KMS Info
-Only before root epochs are registered; afterwards `kmsInfo` holds the current
-epoch's keys, with no quote or event log.
-```bash
-KMS_CONTRACT_ADDR=0x... K256_PUBKEY=0x... CA_PUBKEY=0x... QUOTE=0x... EVENTLOG=0x... \
-forge script script/Manage.s.sol:SetKmsInfo --broadcast --rpc-url $RPC_URL
-```
-
 #### Register a KMS Root Epoch
+Use this for initial setup as well as subsequent root rotations. The legacy
+`setKmsInfo`, `setKmsQuote`, and `setKmsEventlog` entry points have been removed;
+calls to them revert even before epoch 0 is registered. For an upgraded proxy
+with legacy roots in `kmsInfo`, epoch 0 must register those same public keys.
+
 Appends the next root epoch (the original roots are epoch 0). Epoch 0 takes
 effect when registered; later epochs take effect when activated, and each takes
 over `kmsInfo` then, clearing its quote and event log. `EVIDENCE_URL`

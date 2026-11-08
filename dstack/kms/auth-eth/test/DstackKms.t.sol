@@ -11,6 +11,7 @@ import "openzeppelin-foundry-upgrades/Upgrades.sol";
 import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
 import "../contracts/IAppAuth.sol";
+import "../contracts/test-utils/LegacyDstackKms.sol";
 
 contract DstackKmsTest is Test {
     DstackKms public kms;
@@ -50,26 +51,64 @@ contract DstackKmsTest is Test {
         assertEq(kms.appImplementation(), address(appImpl));
     }
 
-    function test_SetKmsInfo() public {
-        bytes memory k256Pubkey = hex"123456";
-        bytes memory caPubkey = hex"789abc";
-        bytes memory quote = hex"defdef";
-        bytes memory eventlog = hex"abcabc";
-
-        vm.prank(owner);
-        vm.expectEmit(true, true, true, true);
-        emit KmsInfoSet(k256Pubkey);
-
-        kms.setKmsInfo(
-            DstackKms.KmsInfo({ k256Pubkey: k256Pubkey, caPubkey: caPubkey, quote: quote, eventlog: eventlog })
+    function upgradeLegacyKms() internal {
+        vm.startPrank(owner);
+        address proxy = Upgrades.deployUUPSProxy(
+            "LegacyDstackKms.sol", abi.encodeCall(LegacyDstackKms.initialize, (owner, address(appImpl)))
         );
+        LegacyDstackKms(proxy).setKmsInfo(LegacyDstackKms.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
+        Options memory opts;
+        opts.referenceContract = "LegacyDstackKms.sol";
+        Upgrades.upgradeProxy(proxy, "DstackKms.sol", "", opts);
+        vm.stopPrank();
+        kms = DstackKms(proxy);
 
-        (bytes memory storedK256, bytes memory storedCa, bytes memory storedQuote, bytes memory storedEventlog) =
+        assertEq(kms.owner(), owner);
+        assertEq(kms.appImplementation(), address(appImpl));
+        assertEq(kms.rootEpochCount(), 0);
+        (bytes memory storedK256, bytes memory storedCa, bytes memory quote, bytes memory eventlog) = kms.kmsInfo();
+        assertEq(storedK256, k256(0xb0));
+        assertEq(storedCa, ca(0xa0));
+        assertEq(quote, hex"0d");
+        assertEq(eventlog, hex"0e");
+    }
+
+    function assertLegacySettersDisabled(address caller) internal {
+        (bytes memory key, bytes memory caKey, bytes memory quote, bytes memory eventlog) = kms.kmsInfo();
+        vm.startPrank(caller);
+        (bool ok,) = address(kms)
+            .call(
+                abi.encodeWithSignature(
+                    "setKmsInfo((bytes,bytes,bytes,bytes))", DstackKms.KmsInfo(k256(0xb1), ca(0xa1), hex"ff", hex"ff")
+                )
+            );
+        assertFalse(ok);
+        (ok,) = address(kms).call(abi.encodeWithSignature("setKmsQuote(bytes)", hex"ff"));
+        assertFalse(ok);
+        (ok,) = address(kms).call(abi.encodeWithSignature("setKmsEventlog(bytes)", hex"ff"));
+        assertFalse(ok);
+        vm.stopPrank();
+        (bytes memory storedKey, bytes memory storedCa, bytes memory storedQuote, bytes memory storedEventlog) =
             kms.kmsInfo();
-        assertEq(storedK256, k256Pubkey);
-        assertEq(storedCa, caPubkey);
+        assertEq(storedKey, key);
+        assertEq(storedCa, caKey);
         assertEq(storedQuote, quote);
         assertEq(storedEventlog, eventlog);
+    }
+
+    function test_legacy_setters_disabled_before_and_after_epoch_registration() public {
+        assertLegacySettersDisabled(owner);
+        assertLegacySettersDisabled(user);
+        vm.prank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        assertLegacySettersDisabled(owner);
+        assertLegacySettersDisabled(user);
+    }
+
+    function test_legacy_setters_disabled_after_upgrade() public {
+        upgradeLegacyKms();
+        assertLegacySettersDisabled(owner);
+        assertLegacySettersDisabled(user);
     }
 
     // Well-formed root public keys whose point bytes are all `fill`; shared with
@@ -186,8 +225,8 @@ contract DstackKmsTest is Test {
     }
 
     function test_RegisterRootEpochZeroMustMatchKmsInfo() public {
+        upgradeLegacyKms();
         vm.startPrank(owner);
-        kms.setKmsInfo(DstackKms.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
         vm.expectRevert("Epoch 0 keys differ from kmsInfo");
         kms.registerRootEpoch(ca(0xa1), k256(0xb0), "ipfs://c0");
         vm.expectRevert("Epoch 0 keys differ from kmsInfo");
@@ -260,8 +299,8 @@ contract DstackKmsTest is Test {
     }
 
     function test_KmsInfoFollowsTheCurrentRootEpoch() public {
+        upgradeLegacyKms();
         vm.startPrank(owner);
-        kms.setKmsInfo(DstackKms.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
         (bytes memory k256Key, bytes memory caKey, bytes memory quote, bytes memory eventlog) = kms.kmsInfo();
         assertEq(caKey, ca(0xa0));
@@ -278,13 +317,9 @@ contract DstackKmsTest is Test {
         assertEq(caKey, ca(0xa1));
         assertEq(k256Key, k256(0xb1));
 
-        vm.expectRevert("kmsInfo follows the current root epoch");
-        kms.setKmsInfo(DstackKms.KmsInfo(k256(0xb0), ca(0xa0), "", ""));
-        vm.expectRevert("kmsInfo follows the current root epoch");
-        kms.setKmsQuote(hex"0d");
-        vm.expectRevert("kmsInfo follows the current root epoch");
-        kms.setKmsEventlog(hex"0e");
         vm.stopPrank();
+        assertLegacySettersDisabled(owner);
+        assertLegacySettersDisabled(user);
     }
 
     function test_RegisterRootEpochOnlyOwner() public {
@@ -317,19 +352,6 @@ contract DstackKmsTest is Test {
         vm.expectRevert("Empty epoch evidence URL");
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "");
         vm.stopPrank();
-    }
-
-    function test_SetKmsInfoOnlyOwner() public {
-        bytes memory k256Pubkey = hex"123456";
-        bytes memory caPubkey = hex"789abc";
-        bytes memory quote = hex"defdef";
-        bytes memory eventlog = hex"abcabc";
-
-        vm.prank(user);
-        vm.expectRevert();
-        kms.setKmsInfo(
-            DstackKms.KmsInfo({ k256Pubkey: k256Pubkey, caPubkey: caPubkey, quote: quote, eventlog: eventlog })
-        );
     }
 
     function test_AddKmsAggregatedMr() public {
@@ -418,20 +440,6 @@ contract DstackKmsTest is Test {
         kms.removeOsImageHash(imageHash);
         assertFalse(kms.allowedOsImages(imageHash));
         vm.stopPrank();
-    }
-
-    function test_SetKmsQuoteAndEventlog() public {
-        bytes memory newQuote = hex"deadbeef";
-        bytes memory newEventlog = hex"cafebabe";
-
-        vm.startPrank(owner);
-        kms.setKmsQuote(newQuote);
-        kms.setKmsEventlog(newEventlog);
-        vm.stopPrank();
-
-        (,, bytes memory storedQuote, bytes memory storedEventlog) = kms.kmsInfo();
-        assertEq(storedQuote, newQuote);
-        assertEq(storedEventlog, newEventlog);
     }
 
     function test_IsKmsAllowed() public {

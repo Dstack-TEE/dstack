@@ -88,27 +88,6 @@ contract SetGatewayAppId is BaseScript {
     }
 }
 
-contract SetKmsInfo is BaseScript {
-    function run() external {
-        bytes memory k256Pubkey = vm.envBytes("K256_PUBKEY");
-        bytes memory caPubkey = vm.envBytes("CA_PUBKEY");
-        bytes memory quote = vm.envBytes("QUOTE");
-        bytes memory eventlog = vm.envBytes("EVENTLOG");
-
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        kms.setKmsInfo(
-            DstackKms.KmsInfo({ k256Pubkey: k256Pubkey, caPubkey: caPubkey, quote: quote, eventlog: eventlog })
-        );
-        vm.stopBroadcast();
-
-        console.log("KMS info set successfully");
-        console.log("  K256 Pubkey length:", k256Pubkey.length);
-        console.log("  CA Pubkey length:", caPubkey.length);
-        console.log("  Quote length:", quote.length);
-        console.log("  Eventlog length:", eventlog.length);
-    }
-}
-
 contract RegisterRootEpoch is BaseScript {
     function run() external {
         bytes memory caPubkey = vm.envBytes("CA_PUBKEY");

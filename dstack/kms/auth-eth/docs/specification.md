@@ -52,7 +52,7 @@ return-value spoofing are still possible — see §6.
 
 | Slot | Name | Type | Writable by | Notes |
 |---|---|---|---|---|
-| 0–3 | `kmsInfo` | `KmsInfo` (struct, 4 fields) | `setKmsInfo`, `setKmsQuote`, `setKmsEventlog` (owner) | |
+| 0–3 | `kmsInfo` | `KmsInfo` (struct, 4 fields) | `registerRootEpoch` (epoch 0), `activateRootEpoch` (owner) | Preserved for proxy upgrades and legacy readers; quote and event log are cleared on activation |
 | 4 | `gatewayAppId` | `string` | `setGatewayAppId` (owner) | Renamed from `tproxyAppId`; carries `@custom:oz-renamed-from` |
 | 5 | `registeredApps` | `mapping(address => bool)` | `registerApp` (anyone), `deployAndRegisterApp` (anyone) | Permissionless — see §6.1 |
 | 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMr`, `removeKmsAggregatedMr` (owner) | |
@@ -167,7 +167,12 @@ Decision (in order):
 
 ### 3.7 Owner-only KMS mutations (uniform pattern)
 
-For each of `setKmsInfo`, `setKmsQuote`, `setKmsEventlog`, `setGatewayAppId`,
+The legacy `setKmsInfo`, `setKmsQuote`, and `setKmsEventlog` entry points are
+removed: calls always revert, including before root epoch registration. Initial
+setup uses `registerRootEpoch`. On an upgraded proxy with existing legacy roots,
+epoch 0 must match the stored `kmsInfo` keys; the upgrade preserves that storage.
+
+For each of `setGatewayAppId`,
 `setAppImplementation`, `addKmsAggregatedMr`, `removeKmsAggregatedMr`,
 `addKmsDevice`, `removeKmsDevice`, `addOsImageHash`, `removeOsImageHash`:
 
