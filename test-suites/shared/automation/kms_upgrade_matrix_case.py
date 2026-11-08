@@ -733,6 +733,23 @@ class MatrixRun:
             time.sleep(0.2)
         raise RuntimeError(f"disabled endpoint proxy remained usable: {observations}")
 
+    @staticmethod
+    def encryption_row(kms_rows: list[dict[str, Any]], version: str) -> dict[str, Any]:
+        """Choose a KMS endpoint that supports the selected guest's env format."""
+        if version == "candidate":
+            return next(
+                (
+                    row
+                    for row in kms_rows
+                    if row.get("version") in {"candidate", "0.6.0-candidate"}
+                ),
+                kms_rows[0],
+            )
+        return next(
+            (row for row in kms_rows if row.get("version") == version),
+            kms_rows[0],
+        )
+
     def deploy_gateway(
         self,
         version: str,
@@ -1005,7 +1022,7 @@ class MatrixRun:
             command.extend(
                 [
                     "--kms-encrypt-url",
-                    f"https://127.0.0.1:{kms_rows[0]['service_port']}",
+                    f"https://127.0.0.1:{self.encryption_row(kms_rows, version)['service_port']}",
                 ]
             )
             for row in kms_rows:
@@ -1413,7 +1430,19 @@ configs:
                 "--env-file",
                 str(env_file),
                 "--kms-encrypt-url",
-                f"https://127.0.0.1:{(kms_encrypt_row or kms_rows[0])['service_port']}",
+                f"https://127.0.0.1:{
+                    (
+                        kms_encrypt_row
+                        or (
+                            self.encryption_row(kms_rows, 'candidate')
+                            if guest_image
+                            == self.values['version_matrix']['guest_images'][
+                                '0.6.0-candidate'
+                            ]
+                            else kms_rows[0]
+                        )
+                    )['service_port']
+                }",
                 *(["--app-id", source_app_id] if source_app_id else []),
                 "--vcpu",
                 "2",
