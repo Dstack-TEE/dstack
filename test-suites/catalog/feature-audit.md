@@ -406,6 +406,8 @@ This audit is derived from the repository source inventory and is the traceabili
 <a id="req-kms-upgrade-011"></a><a id="risk-kms-upgrade-011"></a>| `req-kms-upgrade-011` | `risk-kms-upgrade-011` | [tc-kms-upgrade-011](../cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-011/case.md#tc-kms-upgrade-011) — Measurement cache across KMS upgrade boundaries | P0 |
 <a id="req-kms-upgrade-012"></a><a id="risk-kms-upgrade-012"></a>| `req-kms-upgrade-012` | `risk-kms-upgrade-012` | [tc-kms-upgrade-012](../cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-upgrade-012/case.md#tc-kms-upgrade-012) — Post-KMS gateway 0.6.0 upgrade order | P0 |
 <a id="req-kms-rotation-013"></a><a id="risk-kms-rotation-013"></a>| `req-kms-rotation-013` | `risk-kms-rotation-013` | [tc-kms-rotation-013](../cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-rotation-013/case.md#tc-kms-rotation-013) — Root and app key rotation lifecycle matrix | P0 |
+<a id="req-kms-rotation-014"></a><a id="risk-kms-rotation-014"></a>| `req-kms-rotation-014` | `risk-kms-rotation-014` | [tc-kms-rotation-014](../cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-rotation-014/case.md#tc-kms-rotation-014) — On-chain root and app epoch rotation matrix | P0 |
+<a id="req-kms-rotation-015"></a><a id="risk-kms-rotation-015"></a>| `req-kms-rotation-015` | `risk-kms-rotation-015` | [tc-kms-rotation-015](../cases/03-kms/07-authorization-implementations/tc-kms-rotation-015/case.md#tc-kms-rotation-015) — Epoch-scoped authorization across auth backends | P0 |
 
 <a id="audit-section-kms-certificate-transparency-log"></a>
 ### Removed Certificate-Log Surface
