@@ -82,6 +82,13 @@ This PR accepts app epoch zero only; the field is reserved for application key
 rotation without changing this format. Signature and HPKE contexts always include
 both epochs, including zero. Changing either epoch invalidates authentication.
 
+The browser UI receives the key through the same-origin VMM API and does not
+independently verify the response signer or freshness. Its trust boundary includes
+the VMM and the configured KMS connection; it does not provide the independently
+pinned signer verification described above. Use the CLI with a trusted signer
+allowlist, or an SDK verification helper with an independently trusted signer,
+when that verification is required.
+
 ## File precedence and migration
 
 A new guest chooses `.sealed-env` whenever that file exists. An empty, invalid,
