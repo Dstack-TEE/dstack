@@ -241,7 +241,11 @@ class AsyncDstackClientV1(AsyncBaseClient):
         return IssueCertResponseV1(**result)
 
     async def get_key(
-        self, domain: str, algorithm: str, root_epoch: Optional[int] = None, app_epoch: Optional[int] = None
+        self,
+        domain: str,
+        algorithm: str,
+        root_epoch: Optional[int] = None,
+        app_epoch: Optional[int] = None,
     ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``.
 
@@ -374,7 +378,11 @@ class DstackClientV1(BaseClient):
 
     @call_async
     def get_key(
-        self, domain: str, algorithm: str, root_epoch: Optional[int] = None, app_epoch: Optional[int] = None
+        self,
+        domain: str,
+        algorithm: str,
+        root_epoch: Optional[int] = None,
+        app_epoch: Optional[int] = None,
     ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``."""
         raise NotImplementedError
