@@ -82,31 +82,10 @@ test('uses and authenticates the app epoch returned by the KMS', async () => {
   await assert.rejects(open(pair, new TextEncoder().encode(JSON.stringify(envelope))));
 });
 
-test('falls back only on explicit missing RPC, including a forwarded KMS error', async () => {
+test('network, HTTP, authentication and unrelated service errors never downgrade', async () => {
   for (const error of [
     new RpcError(missing, 404), new RpcError(missing, 400),
     new RpcError(`Request failed with status=404 Not Found, error=${JSON.stringify({ error: missing })}`, 400),
-  ]) {
-    let legacyCalls = 0;
-    const payload = await encryptEnvPayload({
-      getSealedEnvPubKey: async () => { throw error; },
-      getAppEnvEncryptPubKey: async (request) => {
-        legacyCalls++;
-        assert.deepEqual(request, { app_id: appId });
-        return { public_key: new Uint8Array(32) };
-      },
-    }, envs, appId, async (entries, key) => {
-      assert.deepEqual(entries, envs);
-      assert.equal(key.length, 32);
-      return new Uint8Array([1, 2, 3]);
-    }, true);
-    assert.equal(legacyCalls, 1);
-    assert.deepEqual(Object.keys(payload), ['encrypted_env']);
-  }
-});
-
-test('network, HTTP, authentication and unrelated service errors never downgrade', async () => {
-  for (const error of [
     new Error('network failed'), new Error(missing), new RpcError('Not Found', 404),
     new RpcError(missing, 401), new RpcError(missing, 403), new RpcError(missing, 500),
     new RpcError('Service not found: DifferentMethod', 404),
@@ -181,7 +160,7 @@ function consoleApp(response, unsupported = false) {
 }
 
 for (const [unsupported, capability] of [[false, true], [true, true], [false, false]]) {
-  const legacy = unsupported || !capability;
+  const legacy = !capability;
   test(`browser bundle create and edit: capability=${capability}, missing RPC=${unsupported}`, async () => {
     const { pair, response } = await recipient();
     const { manager, calls, alerts } = consoleApp(response, unsupported);
@@ -191,6 +170,11 @@ for (const [unsupported, capability] of [[false, true], [true, true], [false, fa
       app_id: '',
     });
     await manager.createVm();
+    if (unsupported && capability) {
+      assert.equal(alerts.length, 1);
+      assert.deepEqual(calls.map(call => call.method), ['GetSealedEnvPubKey']);
+      return;
+    }
     assert.deepEqual(alerts, []);
     const created = calls.find((call) => call.method === 'CreateVm').request;
     const expectedAppId = new Uint8Array(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(created.compose_file))).slice(0, 20);

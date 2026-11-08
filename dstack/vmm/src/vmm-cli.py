@@ -858,8 +858,8 @@ class VmmCLI:
         self,
         app_id: str,
         kms_url: Optional[str] = None,
-    ) -> Optional[Dict]:
-        """Return the authenticated current key, or None only for an unsupported RPC."""
+    ) -> Dict:
+        """Return the authenticated current key; never downgrade on an unsigned error."""
         # KMS RA-TLS is authenticated by the pinned signer below. The VMM
         # path retains its configured TLS verification and authentication.
         client = VmmClient(kms_url, verify_tls=False) if kms_url else self.client
@@ -869,21 +869,6 @@ class VmmCLI:
             headers={"Content-Type": "application/json"},
             body={"app_id": app_id},
         )
-        error = response.get("error") if isinstance(response, dict) else response
-        if status in (400, 404):
-            missing = "Service not found: GetSealedEnvPubKey"
-            if error == missing:
-                return None
-            if isinstance(error, str):
-                for upstream in ("400 Bad Request", "404 Not Found"):
-                    prefix = f"Request failed with status={upstream}, error="
-                    if error.startswith(prefix):
-                        try:
-                            forwarded = json.loads(error[len(prefix):])
-                        except json.JSONDecodeError:
-                            break
-                        if isinstance(forwarded, dict) and forwarded.get("error") == missing:
-                            return None
         if status != 200:
             raise RuntimeError(f"GetSealedEnvPubKey failed with HTTP {status}")
         if not isinstance(response, dict):
@@ -897,8 +882,8 @@ class VmmCLI:
     ) -> Dict:
         """Select encryption using the target image capability and KMS RPC support."""
         envs_list = [{"key": k, "value": v} for k, v in envs.items()]
-        key = self.get_sealed_env_pub_key(app_id, kms_url) if supports_sealed_env else None
-        if key is not None:
+        if supports_sealed_env:
+            key = self.get_sealed_env_pub_key(app_id, kms_url)
             return {
                 "sealed_env": seal_env(envs_list, key["public_key"], key["root_epoch"], key.get("app_epoch", 0))
             }

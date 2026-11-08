@@ -5,7 +5,6 @@
 import { Aes256Gcm, CipherSuite, HkdfSha256 } from '@hpke/core';
 import { DhkemX25519HkdfSha256 } from '@hpke/dhkem-x25519';
 import type { vmm as VmmTypes } from '../proto/vmm_rpc';
-import { RpcError } from './vmmRpcClient';
 
 export type EnvEntry = { key: string; value: string };
 type EnvPayload = { sealed_env?: Uint8Array; encrypted_env?: Uint8Array };
@@ -13,21 +12,6 @@ type KeyClient = {
   getSealedEnvPubKey(request: VmmTypes.IAppId): Promise<VmmTypes.ISealedEnvPubKeyResponse>;
   getAppEnvEncryptPubKey(request: VmmTypes.IAppId): Promise<VmmTypes.IPublicKeyResponse>;
 };
-
-const missingService = 'Service not found: GetSealedEnvPubKey';
-
-function isUnsupported(error: unknown): boolean {
-  if (!(error instanceof RpcError) || ![400, 404].includes(error.status)) return false;
-  if (error.message === missingService) return true;
-  // The VMM forwards an older KMS's JSON RPC error through its binary RPC.
-  const forwarded = /^Request failed with status=(?:400 Bad Request|404 Not Found), error=(.+)$/s.exec(error.message);
-  if (!forwarded) return false;
-  try {
-    return JSON.parse(forwarded[1]).error === missingService;
-  } catch {
-    return false;
-  }
-}
 
 /** Keep key retrieval on the authenticated, same-origin VMM transport. */
 export async function encryptEnvPayload(
@@ -42,13 +26,7 @@ export async function encryptEnvPayload(
     return { encrypted_env: await encryptLegacy(envs, legacy.public_key) };
   };
   if (!supportsSealedEnv) return legacyPayload();
-  let response: VmmTypes.ISealedEnvPubKeyResponse;
-  try {
-    response = await client.getSealedEnvPubKey({ app_id: appId });
-  } catch (error) {
-    if (!isUnsupported(error)) throw error;
-    return legacyPayload();
-  }
+  const response = await client.getSealedEnvPubKey({ app_id: appId });
   const epoch = response.root_epoch;
   const appEpoch = response.app_epoch ?? 0;
   if (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff) throw new Error('invalid app epoch');

@@ -222,27 +222,28 @@ class SealedEnvTests(unittest.TestCase):
         )
         self.assertEqual(response["root_epoch"], self.epoch)
 
-    def test_only_explicit_unsupported_method_falls_back(self):
-        for status in [400, 404]:
-            self.cli.client.request.return_value = (
-                status,
-                {"error": "Service not found: GetSealedEnvPubKey"},
-            )
-            payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
-            self.assertEqual(set(payload), {"encrypted_env"})
-            self.cli.get_app_env_encrypt_pub_key.assert_called_with(self.app_id, None)
-        for upstream in ["400 Bad Request", "404 Not Found"]:
-            self.cli.client.request.return_value = (400, {
-                "error": f"Request failed with status={upstream}, error="
-                + json.dumps({"error": "Service not found: GetSealedEnvPubKey"})
-            })
-            payload = self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
-            self.assertEqual(set(payload), {"encrypted_env"})
-        self.cli.get_app_env_encrypt_pub_key.side_effect = ValueError(
-            "legacy trust rejected"
+    def test_missing_rpc_cannot_replay_a_legacy_recipient(self):
+        legacy_digest = keccak(
+            b"dstack-env-encrypt-pubkey:" + bytes.fromhex(self.app_id)
+            + bytes.fromhex(self.response["public_key"])
         )
-        with self.assertRaisesRegex(ValueError, "legacy trust rejected"):
-            self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
+        legacy = {
+            "public_key": self.response["public_key"],
+            "signature": self.signer.sign_msg_hash(legacy_digest).to_bytes().hex(),
+        }
+        missing = {"error": "Service not found: GetSealedEnvPubKey"}
+        errors = [(status, missing) for status in [400, 404]]
+        errors += [
+            (400, {"error": f"Request failed with status={status}, error={json.dumps(missing)}"})
+            for status in ["400 Bad Request", "404 Not Found"]
+        ]
+        for error in errors:
+            with self.subTest(error=error), patch.object(VMM_CLI, "VmmClient") as client:
+                client.return_value.request.side_effect = [error, (200, legacy)]
+                with self.assertRaises(RuntimeError):
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, "https://kms.example", True)
+                client.return_value.request.assert_called_once()
+        self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_errors_and_bad_responses_do_not_downgrade(self):
         for status, body in [
@@ -350,12 +351,8 @@ class SealedEnvTests(unittest.TestCase):
             patch.object(VMM_CLI, "VmmClient") as client,
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            for capability, supported in [({"sealed_env": True}, True), ({"sealed_env": True}, False), ({"sealed_env": False}, True), ({}, True)]:
-                client.return_value.request.return_value = (
-                    (200, self.response)
-                    if supported
-                    else (404, {"error": "Service not found: GetSealedEnvPubKey"})
-                )
+            for capability in [{"sealed_env": True}, {"sealed_env": False}, {}]:
+                client.return_value.request.return_value = (200, self.response)
                 for action in [
                     lambda: self.cli.create_vm(args),
                     lambda: self.cli.update_vm(
@@ -363,12 +360,12 @@ class SealedEnvTests(unittest.TestCase):
                     ),
                     lambda: self.cli.update_vm_env("vm", self.envs, args.kms_url),
                 ]:
-                    with self.subTest(supported=supported, action=action):
+                    with self.subTest(capability=capability, action=action):
                         self.cli.rpc_call.reset_mock()
                         action()
                         method, payload = self.cli.rpc_call.call_args.args
                         self.assertIn(method, ["CreateVm", "UpgradeApp"])
-                        if supported and capability.get("sealed_env"):
+                        if capability.get("sealed_env"):
                             self.decrypt(payload)
                         else:
                             self.assertIn("encrypted_env", payload)

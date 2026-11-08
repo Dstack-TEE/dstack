@@ -64,8 +64,10 @@ maximum age 300 seconds, future clock tolerance 60 seconds).
 New image `metadata.json` files declare `"sealed_env": true`; `ListImages` exposes
 this flag. Missing metadata means legacy encryption only. The UI and CLI use the target
 image for both creation and environment updates, including image changes.
-Old or unknown images use legacy encryption even with a capable KMS. For capable
-images, legacy fallback is allowed only when the SealedEnv RPC is explicitly absent.
+Old or unknown images use legacy encryption even with a capable KMS. Capable images require the SealedEnv RPC: CLI and UI fail on any lookup error,
+including "service not found". Such errors are not signed and must not select a
+weaker encryption protocol. Upgrade the KMS before submitting secrets for a
+SealedEnv-capable image.
 
 The VMM also enforces the flag for API callers. Creation, updates and image changes
 through resize reject an effective SealedEnv file when the target image lacks the
