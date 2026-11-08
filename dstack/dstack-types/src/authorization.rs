@@ -9,19 +9,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthorizationOperation {
-    Bootstrap,
-    Serve,
-    ExportKmsKeys,
-    ImportKmsKeys,
-    GetAppKey,
-    GetAppCert,
+    KmsBootstrap,
+    KmsServe,
+    KmsExportKeys,
+    KmsImportKeys,
+    AppGetKey,
+    AppGetCert,
 }
 
 impl AuthorizationOperation {
     pub fn is_kms(self) -> bool {
         matches!(
             self,
-            Self::Bootstrap | Self::Serve | Self::ExportKmsKeys | Self::ImportKmsKeys
+            Self::KmsBootstrap | Self::KmsServe | Self::KmsExportKeys | Self::KmsImportKeys
         )
     }
 }

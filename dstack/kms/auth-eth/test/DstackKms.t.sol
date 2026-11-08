@@ -466,7 +466,7 @@ contract DstackKmsTest is Test {
     {
         DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
             info,
-            isKms ? keccak256("serve") : keccak256("get_app_key"),
+            isKms ? keccak256("kms_serve") : keccak256("app_get_key"),
             DstackKms.OptionalUint256(false, 0),
             DstackKms.OptionalUint256(false, 0)
         );
@@ -481,19 +481,19 @@ contract DstackKmsTest is Test {
         kms.addKmsAggregatedMr(info.mrAggregated);
         vm.stopPrank();
         DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
-            info, keccak256("bootstrap"), DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0)
+            info, keccak256("kms_bootstrap"), DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0)
         );
         assertTrue(kms.authorizeKms(request).isAllowed);
         assertEq(kms.authorizeKms(request).currentRootEpochHash, bytes32(0));
-        request.operation = keccak256("export_kms_keys");
+        request.operation = keccak256("kms_export_keys");
         assertEq(kms.authorizeKms(request).rejectionReason, "Root epoch not registered");
         vm.prank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
         assertTrue(kms.authorizeKms(request).isAllowed);
-        request.operation = keccak256("import_kms_keys");
+        request.operation = keccak256("kms_import_keys");
         assertTrue(kms.authorizeKms(request).isAllowed);
         assertEq(kms.authorizeApp(request).rejectionReason, "Invalid authorization operation");
-        request.operation = keccak256("get_app_cert");
+        request.operation = keccak256("app_get_cert");
         assertEq(kms.authorizeKms(request).rejectionReason, "Invalid authorization operation");
         request.operation = bytes32(0);
         assertEq(kms.authorizeKms(request).rejectionReason, "Invalid authorization operation");
@@ -511,7 +511,7 @@ contract DstackKmsTest is Test {
         vm.stopPrank();
 
         DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
-            info, keccak256("serve"), DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(true, 1)
+            info, keccak256("kms_serve"), DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(true, 1)
         );
         DstackKms.AuthorizationResult memory result = kms.authorizeKms(request);
         assertFalse(result.isAllowed);
@@ -569,7 +569,7 @@ contract DstackKmsTest is Test {
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
         DstackKms.AuthorizationRequest memory appRequest = DstackKms.AuthorizationRequest(
-            info, keccak256("get_app_key"), DstackKms.OptionalUint256(true, 1), DstackKms.OptionalUint256(false, 0)
+            info, keccak256("app_get_key"), DstackKms.OptionalUint256(true, 1), DstackKms.OptionalUint256(false, 0)
         );
         result = kms.authorizeApp(appRequest);
         assertFalse(result.isAllowed);

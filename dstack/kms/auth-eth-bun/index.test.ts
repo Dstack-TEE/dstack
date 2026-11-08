@@ -843,7 +843,7 @@ describe('POST /authorizeApp', () => {
     osImageHash: '0x' + '66'.repeat(32), tcbStatus: 'UpToDate', advisoryIds: [],
   };
   const authorize = (requestedRootEpoch?: number) => appFetch(new Request('http://localhost/authorizeApp', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, operation: 'get_app_key', requestedRootEpoch }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', requestedRootEpoch }),
   }));
 
   it('reads the complete result with one contract call at configured finality', async () => {

@@ -281,12 +281,12 @@ material policy, leaving room for independent policies later:
 
 | Endpoint | Operation | Subject |
 | --- | --- | --- |
-| `authorizeKms` | `bootstrap` | KMS generating its first roots |
-| `authorizeKms` | `serve` | KMS serving app keys, public keys or certificates |
-| `authorizeKms` | `export_kms_keys` | Source KMS handing over its keyring |
-| `authorizeKms` | `import_kms_keys` | Recipient KMS receiving a keyring |
-| `authorizeApp` | `get_app_key` | App receiving derived keys |
-| `authorizeApp` | `get_app_cert` | App requesting a certificate |
+| `authorizeKms` | `kms_bootstrap` | KMS generating its first roots |
+| `authorizeKms` | `kms_serve` | KMS serving app keys, public keys or certificates |
+| `authorizeKms` | `kms_export_keys` | Source KMS handing over its keyring |
+| `authorizeKms` | `kms_import_keys` | Recipient KMS receiving a keyring |
+| `authorizeApp` | `app_get_key` | App receiving derived keys |
+| `authorizeApp` | `app_get_cert` | App requesting a certificate |
 
 The KMS chooses the operation from its code path, not an untrusted RPC field.
 Self-authorization caches are keyed by operation. Legacy authorization endpoints
@@ -327,7 +327,7 @@ Upgrade the contract and auth backend and register epoch 0 before using this
 protocol for key release. Runtime authorization never falls back to the legacy
 API if the new endpoint or contract method is unavailable. The old contract
 methods and `/bootAuth/app` and `/bootAuth/kms` endpoints remain available for
-older clients. Bootstrap uses the `bootstrap` operation, which checks KMS policy at epoch zero
+older clients. Bootstrap uses the `kms_bootstrap` operation, which checks KMS policy at epoch zero
 even before roots are registered. Other operations require registered roots.
 Onboarding checks its source through `authorizeKms`, without a legacy fallback. For
 `auth-simple`, set `kmsContractAddr` to the attested KMS app ID and configure

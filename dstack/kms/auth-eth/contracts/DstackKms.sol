@@ -419,7 +419,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             return result;
         }
         if (_rootEpochs.length == 0) {
-            if (request.operation != AuthorizationOperation.BOOTSTRAP) {
+            if (request.operation != AuthorizationOperation.KMS_BOOTSTRAP) {
                 result.rejectionReason = "Root epoch not registered";
                 return result;
             }

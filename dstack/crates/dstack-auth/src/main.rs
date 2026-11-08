@@ -318,7 +318,7 @@ fn authorize(
     let info = &request.boot_info;
     result.rejection_reason = if request.operation.is_kms() != is_kms {
         "invalid authorization operation".into()
-    } else if current.is_none() && request.operation != Operation::Bootstrap {
+    } else if current.is_none() && request.operation != Operation::KmsBootstrap {
         "root epoch not registered".into()
     } else if request
         .requested_root_epoch
@@ -327,9 +327,9 @@ fn authorize(
         "requested root epoch is not active".into()
     } else if request.requested_app_epoch.unwrap_or(0) != 0 {
         "requested app epoch must be zero".into()
-    } else if request.operation != Operation::Bootstrap && norm(&al.kms_contract_addr).is_empty() {
+    } else if request.operation != Operation::KmsBootstrap && norm(&al.kms_contract_addr).is_empty() {
         "kmsContractAddr is not configured".into()
-    } else if request.operation != Operation::Bootstrap
+    } else if request.operation != Operation::KmsBootstrap
         && (norm(&info.app_id) == norm(&al.kms_contract_addr)) != is_kms
     {
         "caller does not match authorization scope".into()
@@ -478,8 +478,8 @@ mod tests {
         }))
         .await
         .unwrap();
-        let kms = json!({"operation": "serve", "appId": "11".repeat(20), "mrAggregated": "bb"});
-        let app = json!({"operation": "get_app_key", "appId": "22".repeat(20), "composeHash": "cc", "osImageHash": "aa"});
+        let kms = json!({"operation": "kms_serve", "appId": "11".repeat(20), "mrAggregated": "bb"});
+        let app = json!({"operation": "app_get_key", "appId": "22".repeat(20), "composeHash": "cc", "osImageHash": "aa"});
         for (route, body, allowed) in [
             ("/authorizeKms", kms.clone(), true),
             ("/authorizeApp", app.clone(), true),
