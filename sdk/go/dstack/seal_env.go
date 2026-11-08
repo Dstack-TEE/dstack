@@ -22,7 +22,8 @@ func SealEnv(envs []EnvVar, publicKeyHex string, rootEpoch uint32) (string, erro
 }
 
 func SealEnvAtEpochs(envs []EnvVar, publicKeyHex string, rootEpoch, appEpoch uint32) (string, error) {
-	key, err := hex.DecodeString(strings.TrimPrefix(publicKeyHex, "0x"))
+	publicKeyHex = strings.TrimPrefix(strings.TrimPrefix(publicKeyHex, "0x"), "0X")
+	key, err := hex.DecodeString(publicKeyHex)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode public key: %w", err)
 	}
