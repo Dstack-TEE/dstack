@@ -329,3 +329,9 @@ registered-root requirement as the other backends. Missing registration denies k
 release, and invalid epoch configuration returns HTTP 503. Legacy `/bootAuth/*`
 routes remain available for bootstrap. Local compose/device allowlists apply to
 all permitted historical roots; they are not the on-chain per-epoch matrices.
+
+Application entries also accept `currentAppEpoch` (default zero). Keep this value
+monotonic, restart the application after advancing it, and retain permissions for
+historical keys needed during migration. `/app/:appId` exposes the current app
+epoch; legacy app boot authorization is denied once it is nonzero. The Rust
+backend uses the same normalized app ID lookup for policy and epoch selection.

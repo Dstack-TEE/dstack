@@ -173,6 +173,7 @@ struct KmsRules {
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 struct AppRules {
+    current_app_epoch: u32,
     compose_hashes: Vec<String>,
     devices: Vec<String>,
     allow_any_device: bool,
@@ -281,6 +282,12 @@ fn kms_policy(info: &BootInfo, al: &Allowlist) -> BootResponse {
 }
 
 fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
+    if al
+        .app(&info.app_id)
+        .is_some_and(|app| app.current_app_epoch != 0)
+    {
+        return deny(al, "app epoch requires epoch-aware authorization");
+    }
     let result = app_policy(info, al);
     if result.is_allowed {
         allow(info, false, al)
@@ -313,7 +320,12 @@ fn authorize(
             || format!("0x{}", "00".repeat(32)),
             |epoch| epoch.hash.clone(),
         ),
-        current_app_epoch: 0,
+        current_app_epoch: if is_kms {
+            0
+        } else {
+            al.app(&request.boot_info.app_id)
+                .map_or(0, |app| app.current_app_epoch)
+        },
     };
     let info = &request.boot_info;
     result.rejection_reason = if request.operation.is_kms() != is_kms {
@@ -325,8 +337,11 @@ fn authorize(
         .is_some_and(|epoch| epoch as usize > result.current_root_epoch)
     {
         "requested root epoch is not active".into()
-    } else if request.requested_app_epoch.unwrap_or(0) != 0 {
-        "requested app epoch must be zero".into()
+    } else if request
+        .requested_app_epoch
+        .is_some_and(|epoch| epoch > result.current_app_epoch)
+    {
+        "requested app epoch is not active".into()
     } else if request.operation != Operation::KmsBootstrap && norm(&al.kms_contract_addr).is_empty()
     {
         "kmsContractAddr is not configured".into()
@@ -369,6 +384,18 @@ fn authorize_kms(
     authorize(&request, true, &load(&cli.config))
         .map(Json)
         .map_err(unavailable)
+}
+
+#[get("/app/<app_id>")]
+fn app_epoch(app_id: &str, cli: &State<Cli>) -> Result<Json<serde_json::Value>, Status> {
+    let id = norm(app_id);
+    if hex::decode(&id).map_or(true, |bytes| bytes.len() != 20) {
+        return Err(Status::BadRequest);
+    }
+    let al = load(&cli.config);
+    Ok(Json(
+        json!({ "currentAppEpoch": al.app(&id).map_or(0, |app| app.current_app_epoch) }),
+    ))
 }
 
 /// load the allowlist, failing closed (deny-all) if it's missing or invalid.
@@ -441,7 +468,14 @@ fn server(cli: Cli) -> rocket::Rocket<rocket::Build> {
         .merge(("port", cli.port));
     rocket::custom(figment).manage(cli).mount(
         "/",
-        routes![info, boot_app, boot_kms, authorize_app, authorize_kms],
+        routes![
+            info,
+            boot_app,
+            boot_kms,
+            authorize_app,
+            authorize_kms,
+            app_epoch
+        ],
     )
 }
 
@@ -558,6 +592,82 @@ mod tests {
                 .await
                 .status(),
             Status::ServiceUnavailable
+        );
+    }
+
+    #[rocket::async_test]
+    async fn app_epochs_share_normalized_policy_and_reject_legacy_boot() {
+        use rocket::{http::ContentType, local::asynchronous::Client};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist.json");
+        let client = Client::tracked(server(Cli {
+            config: path.clone(),
+            address: "127.0.0.1".into(),
+            port: 0,
+        }))
+        .await
+        .unwrap();
+        let id = "ab".repeat(20);
+        for configured_id in [
+            id.clone(),
+            format!("0X{}", id.to_uppercase()),
+            format!("0x{id}"),
+        ] {
+            let policy = json!({
+                "kmsContractAddr": "11".repeat(20),
+                "rootEpochs": [{"caPubkey": "aa", "k256Pubkey": "bb"}, {"caPubkey": "cc", "k256Pubkey": "dd"}],
+                "currentRootEpoch": 1,
+                "apps": {configured_id: {"currentAppEpoch": 2, "composeHashes": ["ee"]}}
+            });
+            std::fs::write(&path, policy.to_string()).unwrap();
+            let response: serde_json::Value = client
+                .get(format!("/app/0x{id}"))
+                .dispatch()
+                .await
+                .into_json()
+                .await
+                .unwrap();
+            assert_eq!(response["currentAppEpoch"], 2);
+            for selectors in [
+                json!({}),
+                json!({"requestedRootEpoch": 0, "requestedAppEpoch": 0}),
+                json!({"requestedRootEpoch": 1, "requestedAppEpoch": 2}),
+                json!({"requestedAppEpoch": 3}),
+                json!({"requestedRootEpoch": 2}),
+            ] {
+                let allowed =
+                    selectors["requestedAppEpoch"] != 3 && selectors["requestedRootEpoch"] != 2;
+                let mut request = selectors;
+                request["appId"] = id.clone().into();
+                request["composeHash"] = "ee".into();
+                let response: serde_json::Value = client
+                    .post("/authorizeApp")
+                    .header(ContentType::JSON)
+                    .body(request.to_string())
+                    .dispatch()
+                    .await
+                    .into_json()
+                    .await
+                    .unwrap();
+                assert_eq!(response["isAllowed"], allowed);
+                assert_eq!(response["currentAppEpoch"], 2);
+                assert_eq!(response["currentRootEpoch"], 1);
+            }
+            let body = json!({"appId": id, "composeHash": "ee"});
+            let response: serde_json::Value = client
+                .post("/bootAuth/app")
+                .header(ContentType::JSON)
+                .body(body.to_string())
+                .dispatch()
+                .await
+                .into_json()
+                .await
+                .unwrap();
+            assert_eq!(response["isAllowed"], false);
+        }
+        assert_eq!(
+            client.get("/app/not-hex").dispatch().await.status(),
+            Status::BadRequest
         );
     }
 
