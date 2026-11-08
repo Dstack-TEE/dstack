@@ -286,7 +286,7 @@ material policy, leaving room for independent policies later:
 | `authorizeKms` | `export_kms_keys` | Source KMS handing over its keyring |
 | `authorizeKms` | `import_kms_keys` | Recipient KMS receiving a keyring |
 | `authorizeApp` | `get_app_key` | App receiving derived keys |
-| `authorizeApp` | `sign_cert` | App requesting a certificate |
+| `authorizeApp` | `get_app_cert` | App requesting a certificate |
 
 The KMS chooses the operation from its code path, not an untrusted RPC field.
 Self-authorization caches are keyed by operation. Legacy authorization endpoints

@@ -56,7 +56,7 @@ export async function build(): Promise<FastifyInstance> {
     required: [...appInfoSchema.required, 'operation'],
     properties: {
       ...appInfoSchema.properties,
-      operation: { type: 'string', enum: ['bootstrap', 'serve', 'export_kms_keys', 'import_kms_keys', 'get_app_key', 'sign_cert'] },
+      operation: { type: 'string', enum: ['bootstrap', 'serve', 'export_kms_keys', 'import_kms_keys', 'get_app_key', 'get_app_cert'] },
       requestedAppEpoch: { type: 'integer', minimum: 0, maximum: 4294967295, default: 0 },
       requestedRootEpoch: { type: 'integer', minimum: 0, maximum: 4294967295 },
     },

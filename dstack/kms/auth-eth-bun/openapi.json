@@ -437,7 +437,7 @@
               "export_kms_keys",
               "import_kms_keys",
               "get_app_key",
-              "sign_cert"
+              "get_app_cert"
             ]
           }
         },

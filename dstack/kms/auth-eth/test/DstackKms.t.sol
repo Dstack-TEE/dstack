@@ -493,7 +493,7 @@ contract DstackKmsTest is Test {
         request.operation = keccak256("import_kms_keys");
         assertTrue(kms.authorizeKms(request).isAllowed);
         assertEq(kms.authorizeApp(request).rejectionReason, "Invalid authorization operation");
-        request.operation = keccak256("sign_cert");
+        request.operation = keccak256("get_app_cert");
         assertEq(kms.authorizeKms(request).rejectionReason, "Invalid authorization operation");
         request.operation = bytes32(0);
         assertEq(kms.authorizeKms(request).rejectionReason, "Invalid authorization operation");

@@ -14,7 +14,7 @@ pub enum AuthorizationOperation {
     ExportKmsKeys,
     ImportKmsKeys,
     GetAppKey,
-    SignCert,
+    GetAppCert,
 }
 
 impl AuthorizationOperation {

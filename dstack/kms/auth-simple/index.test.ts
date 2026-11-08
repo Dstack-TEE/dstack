@@ -512,8 +512,8 @@ describe('auth-simple', () => {
     it('rejects operations belonging to the other authorization scope', async () => {
       writeTestConfig(config);
       expect(await authorize({ operation: 'serve' })).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
-      expect(await authorize({ operation: 'sign_cert' }, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
-      expect(await authorize({ operation: 'sign_cert' })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ operation: 'get_app_cert' }, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
+      expect(await authorize({ operation: 'get_app_cert' })).toMatchObject({ isAllowed: true });
     });
 
     it('allows only a KMS serving the current root epoch', async () => {

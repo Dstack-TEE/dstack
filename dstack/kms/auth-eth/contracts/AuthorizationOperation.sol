@@ -11,7 +11,7 @@ library AuthorizationOperation {
     bytes32 internal constant EXPORT_KMS_KEYS = keccak256("export_kms_keys");
     bytes32 internal constant IMPORT_KMS_KEYS = keccak256("import_kms_keys");
     bytes32 internal constant GET_APP_KEY = keccak256("get_app_key");
-    bytes32 internal constant SIGN_CERT = keccak256("sign_cert");
+    bytes32 internal constant GET_APP_CERT = keccak256("get_app_cert");
 
     function isKms(bytes32 operation) internal pure returns (bool) {
         return
@@ -19,6 +19,6 @@ library AuthorizationOperation {
     }
 
     function isApp(bytes32 operation) internal pure returns (bool) {
-        return operation == GET_APP_KEY || operation == SIGN_CERT;
+        return operation == GET_APP_KEY || operation == GET_APP_CERT;
     }
 }

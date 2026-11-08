@@ -30,7 +30,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
-  operation: z.enum(['bootstrap', 'serve', 'export_kms_keys', 'import_kms_keys', 'get_app_key', 'sign_cert']),
+  operation: z.enum(['bootstrap', 'serve', 'export_kms_keys', 'import_kms_keys', 'get_app_key', 'get_app_cert']),
   requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });

@@ -723,7 +723,7 @@ pub(crate) mod tests {
             Operation::ExportKmsKeys,
             Operation::ImportKmsKeys,
             Operation::GetAppKey,
-            Operation::SignCert,
+            Operation::GetAppCert,
         ];
         let response = r#"{"isAllowed":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
         let (url, server) = serve(vec![response; operations.len()]);

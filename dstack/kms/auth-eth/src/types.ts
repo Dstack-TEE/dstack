@@ -43,7 +43,7 @@ export interface AuthorizationResult {
 }
 
 export interface AuthorizationRequest extends Omit<BootInfo, 'rootEpoch' | 'rootEpochHash'> {
-  operation: 'bootstrap' | 'serve' | 'export_kms_keys' | 'import_kms_keys' | 'get_app_key' | 'sign_cert';
+  operation: 'bootstrap' | 'serve' | 'export_kms_keys' | 'import_kms_keys' | 'get_app_key' | 'get_app_cert';
   requestedAppEpoch?: number;
   requestedRootEpoch?: number;
 }

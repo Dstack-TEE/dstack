@@ -796,7 +796,7 @@ impl KmsRpc for RpcHandler {
                 &attestation,
                 boot_info,
                 &request.vm_config,
-                Operation::SignCert,
+                Operation::GetAppCert,
                 None,
             )
             .await?;
