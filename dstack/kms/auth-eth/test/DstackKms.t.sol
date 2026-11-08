@@ -464,8 +464,9 @@ contract DstackKmsTest is Test {
         view
         returns (DstackKms.AuthorizationResult memory)
     {
-        DstackKms.AuthorizationRequest memory request =
-            DstackKms.AuthorizationRequest(info, DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0));
+        DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
+            info, DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0)
+        );
         return isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
     }
 
@@ -479,8 +480,9 @@ contract DstackKmsTest is Test {
         kms.addKmsAggregatedMr(info.mrAggregated);
         vm.stopPrank();
 
-        DstackKms.AuthorizationRequest memory request =
-            DstackKms.AuthorizationRequest(info, DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(true, 1));
+        DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
+            info, DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(true, 1)
+        );
         DstackKms.AuthorizationResult memory result = kms.authorizeKms(request);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested root epoch is not active");
@@ -536,8 +538,9 @@ contract DstackKmsTest is Test {
         result = authorize(info, true);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
-        DstackKms.AuthorizationRequest memory appRequest =
-            DstackKms.AuthorizationRequest(info, DstackKms.OptionalUint256(true, 1), DstackKms.OptionalUint256(false, 0));
+        DstackKms.AuthorizationRequest memory appRequest = DstackKms.AuthorizationRequest(
+            info, DstackKms.OptionalUint256(true, 1), DstackKms.OptionalUint256(false, 0)
+        );
         result = kms.authorizeApp(appRequest);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "Requested app epoch must be zero");

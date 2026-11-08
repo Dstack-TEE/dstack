@@ -393,19 +393,11 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     /// Authorize an attested identity and return the root epoch from the same state.
     /// The caller selects KMS or app policy; KMS authorization requires the proxy app ID.
-    function authorizeKms(AuthorizationRequest calldata request)
-        external
-        view
-        returns (AuthorizationResult memory)
-    {
+    function authorizeKms(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory) {
         return _checkAuthorization(request, true);
     }
 
-    function authorizeApp(AuthorizationRequest calldata request)
-        external
-        view
-        returns (AuthorizationResult memory)
-    {
+    function authorizeApp(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory) {
         return _checkAuthorization(request, false);
     }
 
