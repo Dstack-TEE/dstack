@@ -3642,7 +3642,7 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
         }
     if case_id == "tc-int-compatibil-008":
         old = matrix.deploy(
-            "0.5.8", initialized=True, domain_override="10-0-2-2.sslip.io"
+            "0.5.11", initialized=True, domain_override="10-0-2-2.sslip.io"
         )
         app = matrix.deploy_client(
             [old],
