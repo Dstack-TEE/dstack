@@ -968,7 +968,10 @@ class MatrixRun:
                 "--name",
                 name,
                 "--image",
-                self.values["version_matrix"]["guest_images"]["0.6.0-candidate"],
+                self.values["version_matrix"]["guest_images"].get(
+                    version,
+                    self.values["version_matrix"]["guest_images"]["0.6.0-candidate"],
+                ),
                 "--compose",
                 str(app),
                 "--env-file",
