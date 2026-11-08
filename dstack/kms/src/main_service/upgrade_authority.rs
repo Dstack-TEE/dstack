@@ -544,10 +544,12 @@ pub(crate) async fn ensure_kms_allowed(
 pub(crate) mod tests {
     use super::*;
     use crate::config::Webhook;
+    use crate::main_service::tests::{kms_config, snp_source_kms};
     use ra_tls::attestation::TeeVariant;
     use serde_json::Value;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     pub(crate) fn boot_info(identity: u8) -> BootInfo {
@@ -564,6 +566,60 @@ pub(crate) mod tests {
             tcb_status: "UpToDate".into(),
             advisory_ids: vec![],
         }
+    }
+
+    /// Read one HTTP request: its path and JSON body (`Null` when empty).
+    pub(crate) fn read_request(stream: &mut impl Read) -> (String, Value) {
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut chunk).unwrap();
+            assert_ne!(read, 0, "request ended before headers");
+            request.extend_from_slice(&chunk[..read]);
+            if let Some(position) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                break position + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&request[..header_end]).into_owned();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+            })
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            let read = stream.read(&mut chunk).unwrap();
+            assert_ne!(read, 0, "request ended before body");
+            request.extend_from_slice(&chunk[..read]);
+        }
+        let path = headers
+            .lines()
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .to_string();
+        let body = &request[header_end..header_end + content_length];
+        let body = if body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(body).unwrap()
+        };
+        (path, body)
+    }
+
+    pub(crate) fn write_json(stream: &mut impl Write, status: u16, body: &str) {
+        write!(
+            stream,
+            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
     }
 
     pub(crate) fn serve<S: Into<String>>(
@@ -586,54 +642,8 @@ pub(crate) mod tests {
             let mut requests = Vec::new();
             for (status, response) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
-                let mut request = Vec::new();
-                let mut chunk = [0u8; 4096];
-                let header_end = loop {
-                    let read = stream.read(&mut chunk).unwrap();
-                    assert_ne!(read, 0, "request ended before headers");
-                    request.extend_from_slice(&chunk[..read]);
-                    if let Some(position) = request.windows(4).position(|part| part == b"\r\n\r\n")
-                    {
-                        break position + 4;
-                    }
-                };
-                let headers = String::from_utf8_lossy(&request[..header_end]).into_owned();
-                let content_length = headers
-                    .lines()
-                    .find_map(|line| {
-                        line.split_once(':').and_then(|(name, value)| {
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().unwrap())
-                        })
-                    })
-                    .unwrap_or(0);
-                while request.len() < header_end + content_length {
-                    let read = stream.read(&mut chunk).unwrap();
-                    assert_ne!(read, 0, "request ended before body");
-                    request.extend_from_slice(&chunk[..read]);
-                }
-                let path = headers
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap()
-                    .to_string();
-                let body = &request[header_end..header_end + content_length];
-                let body = if body.is_empty() {
-                    Value::Null
-                } else {
-                    serde_json::from_slice(body).unwrap()
-                };
-                requests.push((path, body));
-                write!(
-                    stream,
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    response.len(),
-                    response
-                )
-                .unwrap();
+                requests.push(read_request(&mut stream));
+                write_json(&mut stream, status, &response);
             }
             requests
         });
@@ -653,6 +663,45 @@ pub(crate) mod tests {
             "{err:#}"
         );
         ensure_source_os_image(&boot_info(1)).unwrap();
+    }
+
+    /// Every request an auth backend from [`serve_with`] has received, in order.
+    pub(crate) type Requests = Arc<Mutex<Vec<(String, Value)>>>;
+
+    /// An auth backend answering each request with `respond(path, body)` for as
+    /// long as the test runs, recording every request before it answers.
+    pub(crate) fn serve_with(
+        respond: impl Fn(&str, &Value) -> String + Send + 'static,
+    ) -> (String, Requests) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Requests::default();
+        let recorded = requests.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let (path, body) = read_request(&mut stream);
+                let response = respond(&path, &body);
+                recorded.lock().unwrap().push((path, body));
+                write_json(&mut stream, 200, &response);
+            }
+        });
+        (format!("http://{address}"), requests)
+    }
+
+    /// An authorization decision as the auth backend sends it.
+    pub(crate) fn decision(allowed: bool, root_epoch: u32, chain_hash: [u8; 32]) -> String {
+        serde_json::json!({
+            "authorized": allowed,
+            "rejectionReason": "denied by the test policy",
+            "gatewayAppId": "0xgateway",
+            "currentRootEpoch": root_epoch,
+            "currentAppEpoch": 0,
+            "currentRootEpochHash": hex::encode(chain_hash),
+            "latestRootEpoch": root_epoch,
+            "latestRootEpochHash": hex::encode(chain_hash),
+        })
+        .to_string()
     }
 
     pub(crate) fn webhook(url: String) -> AuthApi {
@@ -1016,6 +1065,61 @@ pub(crate) mod tests {
 
         assert!(format!("{error:#}").contains("failed to decode response"));
         server.join().unwrap();
+    }
+
+    /// A receiver's config, with its auth API pointed at `url`.
+    fn receiver(url: &str) -> (tempfile::TempDir, KmsConfig) {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = kms_config(dir.path(), url);
+        (dir, cfg)
+    }
+
+    #[rocket::async_test]
+    async fn receiver_refuses_a_source_the_backend_denies() {
+        let (url, requests) = serve_with(|_, _| decision(false, 0, [0x11; 32]));
+        let (_dir, cfg) = receiver(&url);
+        let err = ensure_kms_allowed(&cfg, &snp_source_kms(), 0)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("boot denied"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    #[rocket::async_test]
+    async fn receiver_asks_to_approve_the_source_exporting_every_handed_over_epoch() {
+        let (url, requests) = serve_with(|_, _| decision(true, 2, [0x11; 32]));
+        let (_dir, cfg) = receiver(&url);
+        let registration = ensure_kms_allowed(&cfg, &snp_source_kms(), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            registration.registry,
+            RootEpochRegistry::Current(CurrentRootEpoch {
+                epoch: 2,
+                chain_hash: [0x11; 32],
+            })
+        );
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, "/authorizeKms");
+        assert_eq!(requests[0].1["operation"], "kms_export_keys");
+        assert_eq!(requests[0].1["requestedRootEpoch"], 2);
+    }
+
+    #[rocket::async_test]
+    async fn receiver_treats_a_zero_chain_hash_as_unregistered() {
+        let (url, _) = serve_with(|_, _| decision(true, 0, [0; 32]));
+        let (_dir, cfg) = receiver(&url);
+        let err = ensure_kms_allowed(&cfg, &snp_source_kms(), 0)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("root epoch not registered"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]
