@@ -64,7 +64,10 @@ class UpdateVmTests(unittest.TestCase):
 
 
 class SealedEnvTests(unittest.TestCase):
+    """Exercise signed recipient selection and SealedEnv compatibility."""
+
     def setUp(self):
+        """Create synthetic keys, a signed response and an isolated client."""
         self.app_id = "11" * 20
         self.epoch = 3
         self.timestamp = 1700000000
@@ -102,9 +105,12 @@ class SealedEnvTests(unittest.TestCase):
         self.envs = {"SECRET": "synthetic test value", "UNICODE": "测试"}
 
     def decrypt(self, payload):
+        """Check plaintext recovery and rejection under a different epoch context."""
         self.assertNotIn("encrypted_env", payload)
         envelope = json.loads(bytes.fromhex(payload["sealed_env"]))
-        self.assertEqual(set(envelope), {"version", "root_epoch", "app_epoch", "enc", "ciphertext"})
+        self.assertEqual(
+            set(envelope), {"version", "root_epoch", "app_epoch", "enc", "ciphertext"}
+        )
         self.assertEqual(envelope["version"], 1)
         self.assertEqual(envelope["root_epoch"], self.epoch)
         enc = base64.b64decode(envelope["enc"], validate=True)
@@ -125,19 +131,25 @@ class SealedEnvTests(unittest.TestCase):
             wrong_epoch.open(ciphertext, aad=b"")
 
     def test_sealed_payload_round_trip_and_normalized_pins(self):
+        """Accept equivalent pin encodings without using legacy encryption."""
         for pin in [self.pin, "0x" + self.pin.upper()]:
             with (
                 self.subTest(pin=pin),
                 patch.object(VMM_CLI, "load_whitelist", return_value=[pin]),
             ):
-                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None, True))
+                self.decrypt(
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
+                )
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_app_epoch_is_signed_and_used_for_sealing(self):
+        """Bind the app epoch in both the signature and HPKE context."""
         self.response["app_epoch"] = 2
         digest = keccak(
-            b"dstack-sealed-env-pubkey-v1:" + bytes.fromhex(self.app_id)
-            + self.epoch.to_bytes(4, "big") + (2).to_bytes(4, "big")
+            b"dstack-sealed-env-pubkey-v1:"
+            + bytes.fromhex(self.app_id)
+            + self.epoch.to_bytes(4, "big")
+            + (2).to_bytes(4, "big")
             + bytes.fromhex(self.response["public_key"])
             + self.timestamp.to_bytes(8, "big")
         )
@@ -147,16 +159,20 @@ class SealedEnvTests(unittest.TestCase):
         self.assertEqual(envelope["version"], 1)
         self.assertEqual(envelope["app_epoch"], 2)
         receiver = self.suite.create_recipient_context(
-            base64.b64decode(envelope["enc"]), self.recipient.private_key,
+            base64.b64decode(envelope["enc"]),
+            self.recipient.private_key,
             info=f"dstack-sealed-env-v1:{self.epoch}:2".encode(),
         )
         plaintext = json.loads(receiver.open(base64.b64decode(envelope["ciphertext"])))
-        self.assertEqual(plaintext, {"env": [{"key": k, "value": v} for k, v in self.envs.items()]})
+        self.assertEqual(
+            plaintext, {"env": [{"key": k, "value": v} for k, v in self.envs.items()]}
+        )
         self.response["app_epoch"] = 1
         with self.assertRaises(ValueError):
             self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
 
     def test_unpinned_signer_never_becomes_trusted(self):
+        """Reject recipients without an independently trusted signer."""
         for pins in [
             [],
             [keys.PrivateKey(b"\x33" * 32).public_key.to_compressed_bytes().hex()],
@@ -172,6 +188,7 @@ class SealedEnvTests(unittest.TestCase):
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_signature_binds_every_field_and_app(self):
+        """Reject mutations of the signed claim or application identity."""
         cases = [
             ("public_key", "44" * 32),
             ("root_epoch", 4),
@@ -201,20 +218,26 @@ class SealedEnvTests(unittest.TestCase):
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_pinned_signed_key_timestamp_window(self):
+        """Enforce the freshness window for a trusted signer."""
         for age in [-60, 0, 300]:
-            with self.subTest(age=age), patch.object(
-                VMM_CLI.time, "time", return_value=self.timestamp + age
+            with (
+                self.subTest(age=age),
+                patch.object(VMM_CLI.time, "time", return_value=self.timestamp + age),
             ):
-                self.decrypt(self.cli.encrypt_env_payload(self.envs, self.app_id, None, True))
+                self.decrypt(
+                    self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
+                )
         for age, reason in [(-61, "future"), (301, "stale")]:
-            with self.subTest(age=age), patch.object(
-                VMM_CLI.time, "time", return_value=self.timestamp + age
+            with (
+                self.subTest(age=age),
+                patch.object(VMM_CLI.time, "time", return_value=self.timestamp + age),
             ):
                 with self.assertRaisesRegex(ValueError, reason):
                     self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_public_key_request_contains_only_app_id(self):
+        """Keep epoch selection on the KMS rather than in the lookup request."""
         response = self.cli.get_sealed_env_pub_key(self.app_id)
         self.assertEqual(
             self.cli.client.request.call_args.kwargs["body"],
@@ -223,8 +246,10 @@ class SealedEnvTests(unittest.TestCase):
         self.assertEqual(response["root_epoch"], self.epoch)
 
     def test_missing_rpc_cannot_replay_a_legacy_recipient(self):
+        """Reject capability downgrade attempts using a captured legacy key."""
         legacy_digest = keccak(
-            b"dstack-env-encrypt-pubkey:" + bytes.fromhex(self.app_id)
+            b"dstack-env-encrypt-pubkey:"
+            + bytes.fromhex(self.app_id)
             + bytes.fromhex(self.response["public_key"])
         )
         legacy = {
@@ -234,27 +259,48 @@ class SealedEnvTests(unittest.TestCase):
         missing = {"error": "Service not found: GetSealedEnvPubKey"}
         errors = [(status, missing) for status in [400, 404]]
         errors += [
-            (400, {"error": f"Request failed with status={status}, error={json.dumps(missing)}"})
+            (
+                400,
+                {
+                    "error": f"Request failed with status={status}, error={json.dumps(missing)}"
+                },
+            )
             for status in ["400 Bad Request", "404 Not Found"]
         ]
         for error in errors:
-            with self.subTest(error=error), patch.object(VMM_CLI, "VmmClient") as client:
+            with (
+                self.subTest(error=error),
+                patch.object(VMM_CLI, "VmmClient") as client,
+            ):
                 client.return_value.request.side_effect = [error, (200, legacy)]
                 with self.assertRaises(RuntimeError):
-                    self.cli.encrypt_env_payload(self.envs, self.app_id, "https://kms.example", True)
+                    self.cli.encrypt_env_payload(
+                        self.envs, self.app_id, "https://kms.example", True
+                    )
                 client.return_value.request.assert_called_once()
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_errors_and_bad_responses_do_not_downgrade(self):
+        """Fail closed on lookup errors and malformed key responses."""
         for status, body in [
             (401, {"error": "Service not found: GetSealedEnvPubKey"}),
             (403, {"error": "forbidden"}),
             (404, "Not Found"),
             (400, {"error": "invalid app"}),
             (500, {"error": "unavailable"}),
-            (400, {"error": 'Request failed with status=500 Internal Server Error, error={"error":"Service not found: GetSealedEnvPubKey"}'}),
-            (400, {"error": 'Request failed with status=404 Not Found, error={"error":"other service"}'}),
-            (400, {"error": 'Request failed with status=404 Not Found, error=invalid'}),
+            (
+                400,
+                {
+                    "error": 'Request failed with status=500 Internal Server Error, error={"error":"Service not found: GetSealedEnvPubKey"}'
+                },
+            ),
+            (
+                400,
+                {
+                    "error": 'Request failed with status=404 Not Found, error={"error":"other service"}'
+                },
+            ),
+            (400, {"error": "Request failed with status=404 Not Found, error=invalid"}),
             (200, {}),
             (200, "invalid JSON"),
         ]:
@@ -268,6 +314,7 @@ class SealedEnvTests(unittest.TestCase):
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_direct_kms_verifies_pin_and_does_not_forward_vmm_credentials(self):
+        """Authenticate direct KMS keys without forwarding VMM credentials."""
         with patch.object(VMM_CLI, "VmmClient") as client:
             client.return_value.request.return_value = (200, self.response)
             self.decrypt(
@@ -279,17 +326,34 @@ class SealedEnvTests(unittest.TestCase):
         self.cli.get_app_env_encrypt_pub_key.assert_not_called()
 
     def test_image_downgrade_and_env_replacement_share_one_request(self):
+        """Replace the image and environment format in the same update."""
+
         def rpc(method, params=None):
             if method == "GetInfo":
-                return {"found": True, "info": {"app_id": self.app_id, "configuration": {
-                    "image": "new", "compose_file": '{"kms_enabled":true}',
-                }}}
+                return {
+                    "found": True,
+                    "info": {
+                        "app_id": self.app_id,
+                        "configuration": {
+                            "image": "new",
+                            "compose_file": '{"kms_enabled":true}',
+                        },
+                    },
+                }
             if method == "ListImages":
-                return {"images": [{"name": "new", "sealed_env": True}, {"name": "old"}]}
+                return {
+                    "images": [{"name": "new", "sealed_env": True}, {"name": "old"}]
+                }
             return {}
+
         self.cli.rpc_call = Mock(side_effect=rpc)
-        with patch.object(VMM_CLI, "parse_env_file", return_value=self.envs), contextlib.redirect_stdout(io.StringIO()):
-            self.cli.update_vm("vm", image="old", env_file="env", kms_urls=["https://kms.example"])
+        with (
+            patch.object(VMM_CLI, "parse_env_file", return_value=self.envs),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.cli.update_vm(
+                "vm", image="old", env_file="env", kms_urls=["https://kms.example"]
+            )
         calls = self.cli.rpc_call.call_args_list
         self.assertNotIn("ResizeVm", [call.args[0] for call in calls])
         method, payload = calls[-1].args
@@ -300,6 +364,7 @@ class SealedEnvTests(unittest.TestCase):
         self.cli.client.request.assert_not_called()
 
     def test_create_update_and_update_env_send_only_the_negotiated_field(self):
+        """Use the selected ciphertext field consistently across CLI commands."""
         compose = json.dumps({"kms_enabled": True})
         args = argparse.Namespace(
             compose="compose.json",

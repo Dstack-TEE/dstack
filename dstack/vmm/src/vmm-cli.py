@@ -324,9 +324,7 @@ def seal_env(envs, hex_public_key: str, root_epoch: int, app_epoch: int = 0) -> 
     public_key = suite.kem.deserialize_public_key(
         bytes.fromhex(hex_public_key.removeprefix("0x"))
     )
-    enc, context = suite.create_sender_context(
-        public_key, info=info.encode("utf-8")
-    )
+    enc, context = suite.create_sender_context(public_key, info=info.encode("utf-8"))
     plaintext = json.dumps({"env": envs}).encode("utf-8")
     envelope = {
         "version": 1,
@@ -341,6 +339,7 @@ def seal_env(envs, hex_public_key: str, root_epoch: int, app_epoch: int = 0) -> 
 
 
 def validate_uint(value: int, bits: int, name: str) -> None:
+    """Require an integer in the specified unsigned range."""
     if type(value) is not int or not 0 <= value < 1 << bits:
         raise ValueError(f"{name} must be a uint{bits}")
 
@@ -849,10 +848,14 @@ class VmmCLI:
         print(format_table(rows, headers))
 
     def image_supports_sealed_env(self, image: Optional[str]) -> bool:
+        """Read the selected image capability, treating missing metadata as legacy."""
         if not image:
             return False
         images = self.rpc_call("ListImages").get("images", [])
-        return any(item.get("name") == image and item.get("sealed_env") is True for item in images)
+        return any(
+            item.get("name") == image and item.get("sealed_env") is True
+            for item in images
+        )
 
     def get_sealed_env_pub_key(
         self,
@@ -877,7 +880,10 @@ class VmmCLI:
         return response
 
     def encrypt_env_payload(
-        self, envs: Dict[str, str], app_id: str, kms_url: Optional[str],
+        self,
+        envs: Dict[str, str],
+        app_id: str,
+        kms_url: Optional[str],
         supports_sealed_env: bool,
     ) -> Dict:
         """Select encryption using the target image capability and KMS RPC support."""
@@ -885,7 +891,12 @@ class VmmCLI:
         if supports_sealed_env:
             key = self.get_sealed_env_pub_key(app_id, kms_url)
             return {
-                "sealed_env": seal_env(envs_list, key["public_key"], key["root_epoch"], key.get("app_epoch", 0))
+                "sealed_env": seal_env(
+                    envs_list,
+                    key["public_key"],
+                    key["root_epoch"],
+                    key.get("app_epoch", 0),
+                )
             }
         public_key = self.get_app_env_encrypt_pub_key(app_id, kms_url)
         return {"encrypted_env": encrypt_env(envs_list, public_key)}
@@ -1153,7 +1164,14 @@ class VmmCLI:
             encrypt_url = args.kms_encrypt_url or (
                 args.kms_url[0] if args.kms_url else None
             )
-            params.update(self.encrypt_env_payload(envs, app_id, encrypt_url, self.image_supports_sealed_env(args.image)))
+            params.update(
+                self.encrypt_env_payload(
+                    envs,
+                    app_id,
+                    encrypt_url,
+                    self.image_supports_sealed_env(args.image),
+                )
+            )
         response = self.rpc_call("CreateVm", params)
         print(f"Created VM with ID: {response.get('id')}")
         return response.get("id")
@@ -1179,9 +1197,14 @@ class VmmCLI:
         compose_file = vm_configuration.get("compose_file")
 
         payload = {"id": vm_id}
-        payload.update(self.encrypt_env_payload(
-            envs, app_id, kms_urls[0], self.image_supports_sealed_env(vm_configuration.get("image"))
-        ))
+        payload.update(
+            self.encrypt_env_payload(
+                envs,
+                app_id,
+                kms_urls[0],
+                self.image_supports_sealed_env(vm_configuration.get("image")),
+            )
+        )
 
         if compose_file:
             try:
@@ -1345,10 +1368,18 @@ class VmmCLI:
                 vm_configuration = vm_info_response["info"].get("configuration") or {}
                 compose_file_content = vm_configuration.get("compose_file")
 
-                upgrade_params.update(self.encrypt_env_payload(
-                    envs, app_id, kms_urls[0],
-                    self.image_supports_sealed_env(image if image is not None else vm_configuration.get("image")),
-                ))
+                upgrade_params.update(
+                    self.encrypt_env_payload(
+                        envs,
+                        app_id,
+                        kms_urls[0],
+                        self.image_supports_sealed_env(
+                            image
+                            if image is not None
+                            else vm_configuration.get("image")
+                        ),
+                    )
+                )
                 updates.append("environment variables")
 
                 # update allowed_envs in compose file if needed

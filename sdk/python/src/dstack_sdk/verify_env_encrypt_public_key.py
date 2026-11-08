@@ -141,7 +141,10 @@ def verify_sealed_env_public_key(
         return None
     message = (
         b"dstack-sealed-env-pubkey-v1:"
-        + app + root_epoch.to_bytes(4, "big") + app_epoch.to_bytes(4, "big")
-        + public_key + timestamp.to_bytes(8, "big")
+        + app
+        + root_epoch.to_bytes(4, "big")
+        + app_epoch.to_bytes(4, "big")
+        + public_key
+        + timestamp.to_bytes(8, "big")
     )
     return _recover_signer(keccak(message), signature)
