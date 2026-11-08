@@ -2393,4 +2393,76 @@ pNs85uhOZE8z2jr8Pg==
             .verifying_key();
         assert_eq!(signer, older_root, "claim not signed by the epoch-1 root");
     }
+
+    /// A stand-in KMS that counts connections and refuses each request after
+    /// a delay, so concurrent requests are all in flight at once.
+    async fn refusing_kms() -> (String, Arc<AtomicUsize>) {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/prpc", listener.local_addr().unwrap());
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counter = connections.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    let response = "HTTP/1.1 503 Service Unavailable\r\n\
+                                    content-length: 0\r\nconnection: close\r\n\r\n";
+                    stream.write_all(response.as_bytes()).await.ok();
+                });
+            }
+        });
+        (url, connections)
+    }
+
+    #[tokio::test]
+    #[ignore = "finding CR6: expected to fail until CR6 is fixed"]
+    async fn finding_cr6_concurrent_get_key_for_one_older_epoch_fetches_it_once() {
+        use crate::rpc_service_v1::V1RpcHandler;
+        use dstack_guest_agent_rpc::v1::{dstack_guest_server::DstackGuestRpc as _, GetKeyRequest};
+        use dstack_kms_rpc::kms_client::KmsClient;
+        use ra_rpc::client::RaClientConfig;
+
+        let (url, connections) = refusing_kms().await;
+        let (mut state, _guard) = setup_test_state().await;
+        let inner = Arc::get_mut(&mut state.inner).unwrap();
+        inner.keys.key_provider = KeyProvider::Kms {
+            url: url.clone(),
+            pubkey: vec![],
+            root_epoch: 2,
+            app_epoch: 0,
+        };
+        let client = RaClientConfig::builder()
+            .remote_uri(url)
+            .verify_server_attestation(false)
+            .build()
+            .into_client()
+            .unwrap();
+        inner.cert_client = CertRequestClient::Kms {
+            client: KmsClient::new(client),
+            vm_config: String::new(),
+        };
+        let get_key = || {
+            V1RpcHandler::new(state.clone()).get_key(GetKeyRequest {
+                domain: "storage-encryption".into(),
+                algorithm: "secp256k1".into(),
+                root_epoch: Some(1),
+                app_epoch: Some(0),
+            })
+        };
+
+        let results = futures::future::join_all((0..8).map(|_| get_key())).await;
+        assert!(results.iter().all(Result::is_err));
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            1,
+            "KMS fetches for 8 concurrent requests of one epoch"
+        );
+        // A failure is not cached: the next request asks the KMS again.
+        assert!(get_key().await.is_err());
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
+    }
 }

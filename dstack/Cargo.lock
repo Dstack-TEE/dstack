@@ -2117,6 +2117,7 @@ dependencies = [
  "dstack-attest",
  "dstack-build-info",
  "dstack-guest-agent-rpc",
+ "dstack-kms-rpc",
  "dstack-types",
  "ed25519-dalek",
  "figment",
