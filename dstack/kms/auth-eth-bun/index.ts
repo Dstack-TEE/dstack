@@ -7,7 +7,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { createPublicClient, http, type Address, type Hex } from 'viem';
+import { createPublicClient, http, keccak256, toBytes, type Address, type Hex } from 'viem';
 
 // zod schemas for validation - compatible with original fastify implementation
 const boundedHex = (bytes: number, description: string) =>
@@ -37,6 +37,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  operation: z.enum(['bootstrap', 'serve', 'export_kms_keys', 'import_kms_keys', 'get_app_key', 'sign_cert']),
   requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
@@ -94,6 +95,7 @@ const AUTHORIZATION_ABI = {
   stateMutability: 'view',
   inputs: [{ name: 'request', type: 'tuple', components: [
     { name: 'appInfo', type: 'tuple', components: APP_INFO_COMPONENTS },
+    { name: 'operation', type: 'bytes32' },
     { name: 'requestedAppEpoch', type: 'tuple', components: [
       { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
     ] },
@@ -248,6 +250,7 @@ class EthereumBackend {
       functionName: method,
       args: [{
         appInfo: this.contractAppInfo(appInfo),
+        operation: keccak256(toBytes(appInfo.operation)),
         requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: BigInt(appInfo.requestedAppEpoch ?? 0) },
         requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
       }],

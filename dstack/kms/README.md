@@ -246,15 +246,15 @@ The `SignCert` RPC is used by the dstack app to sign a TLS certificate. In this 
 
 ## Authorization protocol
 
-Normal operations use two explicit authorization endpoints:
+Authorization uses two explicit endpoints:
 
 - `POST /authorizeKms` for KMS self-authorization and root-key handover.
 - `POST /authorizeApp` for application keys and certificates.
 
 The Ethereum backends call the matching `DstackKms` method. Both accept
 `AuthorizationRequest` and return `AuthorizationResult`; no caller-kind flag is
-sent. The KMS method requires the attested `appId` to equal the proxy address,
-and the app method rejects that address and applies registered app policy.
+sent. The KMS method checks the KMS policy; the app method applies registered app
+policy.
 KMS callers do not fetch contract metadata to decide which policy to use.
 
 `requestedAppEpoch` reserves the application's own key epoch, independently of KMS root
@@ -269,8 +269,29 @@ this authorization result; an explicit `0` selects epoch 0. Solidity represents
 it as `OptionalEpoch { isSet, value }` alongside `AppInfo` in the request. The
 contract rejects a requested epoch newer than the current one; historical
 epochs remain available for migration. No serving epoch or serving hash is sent.
-KMS-to-KMS handover omits this selector and still transfers the complete keyring,
-including pending epochs.
+KMS-to-KMS handover transfers the complete keyring. The receiver explicitly
+authorizes the source to export the highest received epoch before importing it.
+
+Every request includes a required `operation` describing what the attested
+subject is authorized to do. JSON uses `snake_case`; the contract receives
+`keccak256(bytes(operation))` as `bytes32`. Rust uses the shared serde-derived
+`AuthorizationOperation` enum. Unknown operations and operations on the wrong
+endpoint are rejected. The supported operations currently share the existing
+material policy, leaving room for independent policies later:
+
+| Endpoint | Operation | Subject |
+| --- | --- | --- |
+| `authorizeKms` | `bootstrap` | KMS generating its first roots |
+| `authorizeKms` | `serve` | KMS serving app keys, public keys or certificates |
+| `authorizeKms` | `export_kms_keys` | Source KMS handing over its keyring |
+| `authorizeKms` | `import_kms_keys` | Recipient KMS receiving a keyring |
+| `authorizeApp` | `get_app_key` | App receiving derived keys |
+| `authorizeApp` | `sign_cert` | App requesting a certificate |
+
+The KMS chooses the operation from its code path, not an untrusted RPC field.
+Self-authorization caches are keyed by operation. Legacy authorization endpoints
+retain their existing semantics for old KMS binaries; fine-grained operation
+policies cannot protect calls still served by those old binaries.
 
 The response is an `AuthorizationResult`:
 
@@ -306,8 +327,9 @@ Upgrade the contract and auth backend and register epoch 0 before using this
 protocol for key release. Runtime authorization never falls back to the legacy
 API if the new endpoint or contract method is unavailable. The old contract
 methods and `/bootAuth/app` and `/bootAuth/kms` endpoints remain available for
-older clients. Bootstrap and onboarding retain scoped KMS checks so the first
-root keys can be generated and attested before registering epoch 0. For
+older clients. Bootstrap uses the `bootstrap` operation, which checks KMS policy at epoch zero
+even before roots are registered. Other operations require registered roots.
+Onboarding checks its source through `authorizeKms`, without a legacy fallback. For
 `auth-simple`, set `kmsContractAddr` to the attested KMS app ID and configure
 `rootEpochs`; for `auth-mock`, set `KMS_CONTRACT_ADDR`, `MOCK_ROOT_EPOCH`, and
 `MOCK_ROOT_EPOCH_HASH`.

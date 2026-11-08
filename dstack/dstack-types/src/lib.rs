@@ -14,6 +14,8 @@ use size_parser::human_size;
 /// infrastructure-provider initialization stages.
 pub const MAX_INIT_SCRIPTS: usize = 5;
 
+pub mod authorization;
+
 pub mod init_script_hashes {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_human_bytes::ByteBuf;

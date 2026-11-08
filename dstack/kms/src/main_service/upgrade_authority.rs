@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::v0::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
+pub(crate) use dstack_types::authorization::AuthorizationOperation as Operation;
 use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
 use serde::de::DeserializeOwned;
@@ -78,6 +79,7 @@ pub(crate) async fn local_kms_boot_info(verifier: &AttestationVerifier) -> Resul
     build_boot_info_for_attestation(&verified, false, "")
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BootResponse {
@@ -258,17 +260,26 @@ impl AuthApi {
     pub async fn check_kms_authorization(
         &self,
         app_info: &BootInfo,
+        operation: Operation,
+        requested_root_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
-        self.check_authorization(app_info, "authorizeKms", None)
+        if !operation.is_kms() {
+            bail!("invalid KMS authorization operation");
+        }
+        self.check_authorization(app_info, "authorizeKms", operation, requested_root_epoch)
             .await
     }
 
     pub async fn check_app_authorization(
         &self,
         app_info: &BootInfo,
+        operation: Operation,
         requested_root_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
-        self.check_authorization(app_info, "authorizeApp", requested_root_epoch)
+        if operation.is_kms() {
+            bail!("invalid app authorization operation");
+        }
+        self.check_authorization(app_info, "authorizeApp", operation, requested_root_epoch)
             .await
     }
 
@@ -276,6 +287,7 @@ impl AuthApi {
         &self,
         app_info: &BootInfo,
         method: &str,
+        operation: Operation,
         requested_root_epoch: Option<u32>,
     ) -> Result<AuthorizationResult> {
         #[derive(Serialize)]
@@ -283,6 +295,7 @@ impl AuthApi {
         struct AuthorizationRequest<'a> {
             #[serde(flatten)]
             app_info: &'a BootInfo,
+            operation: Operation,
             requested_app_epoch: u32,
             #[serde(skip_serializing_if = "Option::is_none")]
             requested_root_epoch: Option<u32>,
@@ -303,6 +316,7 @@ impl AuthApi {
                     &url,
                     &AuthorizationRequest {
                         app_info,
+                        operation,
                         requested_app_epoch: 0,
                         requested_root_epoch,
                     },
@@ -313,8 +327,7 @@ impl AuthApi {
         }
     }
 
-    /// Legacy scoped checks remain available during bootstrap and onboarding,
-    /// before the first root epoch can be registered.
+    #[cfg(test)]
     pub async fn is_app_allowed(
         &self,
         boot_info: &BootInfo,
@@ -422,11 +435,11 @@ pub(crate) async fn ensure_self_kms_allowed(
         .context("failed to build local KMS boot info")?;
     let response = cfg
         .auth_api
-        .is_app_allowed(&boot_info, true, None)
+        .check_kms_authorization(&boot_info, Operation::Bootstrap, None)
         .await
-        .context("failed to call KMS auth check")?;
+        .context("failed to call KMS bootstrap authorization")?;
     if !response.is_allowed {
-        bail!("boot denied: {}", response.reason);
+        bail!("boot denied: {}", response.rejection_reason);
     }
     Ok(())
 }
@@ -438,7 +451,8 @@ pub(crate) async fn ensure_kms_allowed(
     attestation: &VerifiedAttestation,
     verifier: &AttestationVerifier,
     allow_legacy_cert: bool,
-) -> Result<()> {
+    root_epoch: u32,
+) -> Result<RootEpochRegistry> {
     let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
     // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
@@ -458,13 +472,19 @@ pub(crate) async fn ensure_kms_allowed(
     }
     let response = cfg
         .auth_api
-        .is_app_allowed(&boot_info, true, None)
+        .check_kms_authorization(&boot_info, Operation::ExportKmsKeys, Some(root_epoch))
         .await
-        .context("failed to call KMS auth check")?;
+        .context("failed to authorize source KMS key export")?;
     if !response.is_allowed {
-        bail!("boot denied: {}", response.reason);
+        bail!("boot denied: {}", response.rejection_reason);
     }
-    Ok(())
+    if cfg.auth_api.is_dev() {
+        return Ok(RootEpochRegistry::Unchecked);
+    }
+    let current = response
+        .current_root()?
+        .context("root epoch not registered")?;
+    Ok(RootEpochRegistry::Current(current))
 }
 
 #[cfg(test)]
@@ -696,6 +716,47 @@ pub(crate) mod tests {
     }
 
     #[rocket::async_test]
+    async fn authorization_operations_are_typed_and_sent_without_legacy_fallback() {
+        let operations = [
+            Operation::Bootstrap,
+            Operation::Serve,
+            Operation::ExportKmsKeys,
+            Operation::ImportKmsKeys,
+            Operation::GetAppKey,
+            Operation::SignCert,
+        ];
+        let response = r#"{"isAllowed":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
+        let (url, server) = serve(vec![response; operations.len()]);
+        let auth = webhook(url);
+        for operation in operations {
+            if operation.is_kms() {
+                auth.check_kms_authorization(&boot_info(1), operation, Some(0))
+                    .await
+                    .unwrap();
+            } else {
+                auth.check_app_authorization(&boot_info(1), operation, None)
+                    .await
+                    .unwrap();
+            }
+        }
+        for ((route, body), operation) in server.join().unwrap().into_iter().zip(operations) {
+            assert_eq!(
+                route,
+                if operation.is_kms() {
+                    "/authorizeKms"
+                } else {
+                    "/authorizeApp"
+                }
+            );
+            assert_eq!(
+                serde_json::from_value::<Operation>(body["operation"].clone()).unwrap(),
+                operation
+            );
+        }
+        assert!(serde_json::from_str::<Operation>(r#""unknown""#).is_err());
+    }
+
+    #[rocket::async_test]
     async fn authorization_returns_the_epoch_with_each_decision() {
         let response = |allowed: bool, epoch: u32| {
             format!(
@@ -711,14 +772,24 @@ pub(crate) mod tests {
         ]);
         let auth = webhook(url);
         let info = boot_info(50);
-        let first = auth.check_app_authorization(&info, None).await.unwrap();
-        let second = auth.check_app_authorization(&info, None).await.unwrap();
+        let first = auth
+            .check_app_authorization(&info, Operation::GetAppKey, None)
+            .await
+            .unwrap();
+        let second = auth
+            .check_app_authorization(&info, Operation::GetAppKey, None)
+            .await
+            .unwrap();
         assert!(first.is_allowed);
         assert!(!second.is_allowed);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
-        auth.check_app_authorization(&info, Some(0)).await.unwrap();
-        auth.check_kms_authorization(&info).await.unwrap();
+        auth.check_app_authorization(&info, Operation::GetAppKey, Some(0))
+            .await
+            .unwrap();
+        auth.check_kms_authorization(&info, Operation::Serve, None)
+            .await
+            .unwrap();
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 4);
         assert!(requests[..3]
@@ -727,6 +798,7 @@ pub(crate) mod tests {
         assert_eq!(requests[3].0, "/authorizeKms");
         let mut expected = serde_json::to_value(info).unwrap();
         expected["requestedAppEpoch"] = 0.into();
+        expected["operation"] = "get_app_key".into();
         assert_eq!(requests[0].1, expected);
         assert_eq!(requests[2].1["requestedAppEpoch"], 0);
         assert!(requests[0].1.get("requestedRootEpoch").is_none());
@@ -739,7 +811,7 @@ pub(crate) mod tests {
             r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
         ]);
         assert!(webhook(url)
-            .check_app_authorization(&boot_info(50), None)
+            .check_app_authorization(&boot_info(50), Operation::GetAppKey, None)
             .await
             .is_err());
         assert_eq!(server.join().unwrap().len(), 1);

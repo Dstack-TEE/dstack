@@ -982,26 +982,21 @@ impl Keys {
         };
         // The attestation is captured only on the connection that returned the keys;
         // nothing received is used before the source passes this check.
-        ensure_kms_allowed(cfg, &source_attestation()?, &attestation_verifier, !rotate)
-            .await
-            .context("Source KMS is not allowed for onboarding")?;
-        Self::from_registered_key_response(cfg, keys_res, domain, rotate).await
-    }
-
-    /// [`Self::from_key_response`] after reading the registered epochs, so a
-    /// source holding any keyring other than the registered one is refused.
-    async fn from_registered_key_response(
-        cfg: &KmsConfig,
-        keys_res: KmsKeyResponse,
-        domain: &str,
-        rotate: bool,
-    ) -> Result<Self> {
-        let registry = cfg
-            .auth_api
-            .get_info()
-            .await
-            .context("failed to read the current root epoch")?
-            .root_epochs;
+        let highest = keys_res
+            .keys
+            .len()
+            .checked_sub(1)
+            .context("source KMS handed over no keys")?;
+        let highest = u32::try_from(highest).context("too many root epochs")?;
+        let registry = ensure_kms_allowed(
+            cfg,
+            &source_attestation()?,
+            &attestation_verifier,
+            !rotate,
+            highest,
+        )
+        .await
+        .context("source KMS is not allowed for onboarding")?;
         Self::from_key_response(cfg, keys_res, domain, rotate, registry).await
     }
 

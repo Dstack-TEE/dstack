@@ -92,7 +92,7 @@ describe('Server', () => {
   });
 
   describe('POST /authorizeApp', () => {
-    const appRequest = { ...mockBootInfo, requestedAppEpoch: 0 };
+    const appRequest = { ...mockBootInfo, operation: 'get_app_key', requestedAppEpoch: 0 };
     it('preserves the complete decision, including the epoch on rejection', async () => {
       const decision = {
         isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',

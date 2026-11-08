@@ -266,3 +266,10 @@ epoch, and an explicit `0` selects epoch 0. See the
 [KMS authorization protocol](../README.md#authorization-protocol) for registration,
 bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
 remain available.
+
+### Authorization operations
+
+`/authorizeKms` and `/authorizeApp` require an `operation` string. See the
+[KMS authorization protocol](../README.md#authorization-protocol) for the names
+and subject semantics. Bootstrap alone may authorize before root registration;
+unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.

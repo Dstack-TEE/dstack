@@ -7,6 +7,7 @@
 pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
+import "./AuthorizationOperation.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -21,6 +22,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     struct AuthorizationRequest {
         AppInfo appInfo;
+        bytes32 operation;
         // Reserved for application key rotation; only zero is currently supported.
         OptionalUint256 requestedAppEpoch;
         OptionalUint256 requestedRootEpoch;
@@ -410,12 +412,21 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         returns (AuthorizationResult memory result)
     {
         result.gatewayAppId = gatewayAppId;
-        if (_rootEpochs.length == 0) {
-            result.rejectionReason = "Root epoch not registered";
+        if (!(isKms
+                    ? AuthorizationOperation.isKms(request.operation)
+                    : AuthorizationOperation.isApp(request.operation))) {
+            result.rejectionReason = "Invalid authorization operation";
             return result;
         }
-        result.currentRootEpoch = _currentRootEpoch;
-        result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        if (_rootEpochs.length == 0) {
+            if (request.operation != AuthorizationOperation.BOOTSTRAP) {
+                result.rejectionReason = "Root epoch not registered";
+                return result;
+            }
+        } else {
+            result.currentRootEpoch = _currentRootEpoch;
+            result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        }
         if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _currentRootEpoch) {
             result.rejectionReason = "Requested root epoch is not active";
             return result;

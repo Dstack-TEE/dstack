@@ -32,7 +32,7 @@ use scale::Decode;
 use tracing::warn;
 use upgrade_authority::{
     build_boot_info, ensure_app_id_len, local_kms_boot_info, AuthorizationResult, BootInfo,
-    GetInfoResponse, RootEpochRegistry,
+    GetInfoResponse, Operation, RootEpochRegistry,
 };
 
 use crate::{
@@ -171,7 +171,7 @@ pub struct KmsStateInner {
     verifier: CvmVerifier,
     attestation_verifier: Arc<AttestationVerifier>,
     self_boot_info: Cache<(), BootInfo>,
-    self_allowed: Cache<(), AuthorizationResult>,
+    self_allowed: Cache<Operation, AuthorizationResult>,
     auth_api_info: Cache<(), GetInfoResponse>,
     metrics: KmsMetrics,
 }
@@ -207,9 +207,13 @@ impl KmsMetrics {
     }
 }
 
-fn short_lived_cache<V: Clone + Send + Sync + 'static>() -> Cache<(), V> {
+fn short_lived_cache<K, V>(capacity: u64) -> Cache<K, V>
+where
+    K: Eq + std::hash::Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
     Cache::builder()
-        .max_capacity(1)
+        .max_capacity(capacity)
         .time_to_live(AUTH_API_CACHE_TTL)
         .build()
 }
@@ -259,8 +263,8 @@ impl KmsState {
                     .max_capacity(1)
                     .time_to_live(SELF_BOOT_INFO_TTL)
                     .build(),
-                self_allowed: short_lived_cache(),
-                auth_api_info: short_lived_cache(),
+                self_allowed: short_lived_cache(4),
+                auth_api_info: short_lived_cache(1),
                 metrics: KmsMetrics::default(),
             }),
         })
@@ -403,7 +407,7 @@ impl RpcHandler {
     }
 
     pub(crate) async fn handover_keys(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
-        self.ensure_self_allowed()
+        self.ensure_self_allowed(Operation::ExportKmsKeys)
             .await
             .context("KMS self authorization failed")?;
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
@@ -484,7 +488,7 @@ fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) ->
 }
 
 impl RpcHandler {
-    async fn ensure_self_allowed(&self) -> Result<u32> {
+    async fn ensure_self_allowed(&self, operation: Operation) -> Result<u32> {
         if !self.state.config.enforce_self_authorization {
             let epoch = self.state.current_epoch_from_info().await?;
             self.state.ensure_rpc_ca(epoch)?;
@@ -500,12 +504,12 @@ impl RpcHandler {
         let response = self
             .state
             .self_allowed
-            .try_get_with((), async {
+            .try_get_with(operation, async {
                 let response = self
                     .state
                     .config
                     .auth_api
-                    .check_kms_authorization(&boot_info)
+                    .check_kms_authorization(&boot_info, operation, None)
                     .await
                     .context("Failed to call self KMS auth check")?;
                 let epoch = self.state.authorized_epoch(&response, None)?;
@@ -532,7 +536,7 @@ impl RpcHandler {
             .state
             .config
             .auth_api
-            .check_kms_authorization(&boot_info)
+            .check_kms_authorization(&boot_info, Operation::ImportKmsKeys, None)
             .await?;
         self.state.authorized_epoch(&response, None)?;
         self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
@@ -547,8 +551,14 @@ impl RpcHandler {
     ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
         let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
-        self.ensure_app_attestation_allowed(att, boot_info, vm_config, requested_root_epoch)
-            .await
+        self.ensure_app_attestation_allowed(
+            att,
+            boot_info,
+            vm_config,
+            Operation::GetAppKey,
+            requested_root_epoch,
+        )
+        .await
     }
 
     async fn ensure_app_attestation_allowed(
@@ -556,13 +566,14 @@ impl RpcHandler {
         att: &VerifiedAttestation,
         boot_info: BootInfo,
         vm_config: &str,
+        operation: Operation,
         requested_root_epoch: Option<u32>,
     ) -> Result<BootConfig> {
         let response = self
             .state
             .config
             .auth_api
-            .check_app_authorization(&boot_info, requested_root_epoch)
+            .check_app_authorization(&boot_info, operation, requested_root_epoch)
             .await?;
         let root_epoch = self
             .state
@@ -624,7 +635,7 @@ impl KmsRpc for RpcHandler {
         if request.api_version > 1 {
             bail!("Unsupported API version: {}", request.api_version);
         }
-        self.ensure_self_allowed()
+        self.ensure_self_allowed(Operation::Serve)
             .await
             .context("KMS self authorization failed")?;
         let BootConfig {
@@ -654,7 +665,7 @@ impl KmsRpc for RpcHandler {
 
     async fn get_app_env_encrypt_pub_key(self, request: AppId) -> Result<PublicKeyResponse> {
         let epoch = self
-            .ensure_self_allowed()
+            .ensure_self_allowed(Operation::Serve)
             .await
             .context("KMS self authorization failed")?;
         let root = self.state.epoch_root(epoch)?;
@@ -734,7 +745,7 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
-        let epoch = self.ensure_self_allowed().await?;
+        let epoch = self.ensure_self_allowed(Operation::Serve).await?;
         if self.state.config.enforce_self_authorization {
             let boot_info = self
                 .state
@@ -752,7 +763,7 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn sign_cert(self, request: SignCertRequest) -> Result<SignCertResponse> {
-        self.ensure_self_allowed()
+        self.ensure_self_allowed(Operation::Serve)
             .await
             .context("KMS self authorization failed")?;
         let csr = match request.api_version {
@@ -781,7 +792,13 @@ impl KmsRpc for RpcHandler {
             .context("Quote verification failed")?;
         let boot_info = build_boot_info_for_attestation(&attestation, true, &request.vm_config)?;
         let app_info = self
-            .ensure_app_attestation_allowed(&attestation, boot_info, &request.vm_config, None)
+            .ensure_app_attestation_allowed(
+                &attestation,
+                boot_info,
+                &request.vm_config,
+                Operation::SignCert,
+                None,
+            )
             .await?;
         ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
         let root = self.state.epoch_root(app_info.root_epoch)?;
@@ -1583,6 +1600,52 @@ mod tests {
     }
 
     const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    #[rocket::async_test]
+    async fn self_authorization_cache_cannot_authorize_a_different_operation() {
+        use upgrade_authority::tests::{boot_info, serve};
+        let dir = tempfile::tempdir().unwrap();
+        let initial = kms_state(dir.path(), "http://127.0.0.1:1");
+        let response = |allowed| {
+            serde_json::json!({
+                "isAllowed": allowed, "rejectionReason": "export denied", "gatewayAppId": "",
+                "currentRootEpoch": 0, "currentAppEpoch": 0,
+                "currentRootEpochHash": hex::encode(initial.keyring.chain_hashes[0]),
+            })
+            .to_string()
+        };
+        let (url, server) = serve(vec![response(true), response(false)]);
+        let mut config = initial.config.clone();
+        config.enforce_self_authorization = true;
+        config.auth_api = upgrade_authority::tests::webhook(url);
+        let keyring = Keyring::load(&config).unwrap();
+        let state = KmsState::new(
+            config,
+            keyring,
+            initial.epoch_root(0).unwrap().ca.pem_cert.clone(),
+        )
+        .unwrap();
+        state.self_boot_info.insert((), boot_info(1)).await;
+        let handler = RpcHandler {
+            state,
+            attestation: None,
+        };
+        assert_eq!(
+            handler.ensure_self_allowed(Operation::Serve).await.unwrap(),
+            0
+        );
+        assert!(handler
+            .ensure_self_allowed(Operation::ExportKmsKeys)
+            .await
+            .is_err());
+        assert_eq!(
+            handler.ensure_self_allowed(Operation::Serve).await.unwrap(),
+            0
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0].1["operation"], "serve");
+        assert_eq!(requests[1].1["operation"], "export_kms_keys");
+    }
 
     #[rocket::async_test]
     async fn legacy_temp_ca_rpc_returns_a_separate_ca_and_the_served_root() {

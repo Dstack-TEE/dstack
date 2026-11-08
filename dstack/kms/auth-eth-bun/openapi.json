@@ -428,8 +428,22 @@
             "maximum": 4294967295,
             "default": 0,
             "description": "Application epoch, independent of KMS root epochs. Only zero is currently supported."
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "bootstrap",
+              "serve",
+              "export_kms_keys",
+              "import_kms_keys",
+              "get_app_key",
+              "sign_cert"
+            ]
           }
-        }
+        },
+        "required": [
+          "operation"
+        ]
       }
     }
   }

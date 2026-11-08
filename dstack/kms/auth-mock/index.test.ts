@@ -387,7 +387,7 @@ describe('Mock Behavior Verification', () => {
 describe('authorization endpoints', () => {
   const authorize = (appId: string, isKms = false, requestedAppEpoch = 0) => appFetch(new Request(`http://localhost/${isKms ? 'authorizeKms' : 'authorizeApp'}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId, requestedAppEpoch, mrAggregated: '', osImageHash: '', composeHash: '', instanceId: '', deviceId: '' }),
+    body: JSON.stringify({ appId, operation: isKms ? 'serve' : 'get_app_key', requestedAppEpoch, mrAggregated: '', osImageHash: '', composeHash: '', instanceId: '', deviceId: '' }),
   }));
 
   it('requires registered roots and selects policy by app ID', async () => {

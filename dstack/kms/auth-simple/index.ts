@@ -28,6 +28,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  operation: z.enum(['bootstrap', 'serve', 'export_kms_keys', 'import_kms_keys', 'get_app_key', 'sign_cert']),
   requestedAppEpoch: z.number().int().min(0).max(0xffffffff).default(0),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
 });
@@ -166,10 +167,14 @@ class ConfigBackend {
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
-    if (current.rootEpoch === undefined) {
+    const kmsOperation = ['bootstrap', 'serve', 'export_kms_keys', 'import_kms_keys'].includes(appInfo.operation);
+    if (kmsOperation !== isKms) {
+      return { isAllowed: false, rejectionReason: 'Invalid authorization operation', gatewayAppId: config.gatewayAppId, ...epoch };
+    }
+    if (current.rootEpoch === undefined && appInfo.operation !== 'bootstrap') {
       return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
     }
-    if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > current.rootEpoch) {
+    if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > (current.rootEpoch ?? 0)) {
       return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     if (appInfo.requestedAppEpoch !== 0) {

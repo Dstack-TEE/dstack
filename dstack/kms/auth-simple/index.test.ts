@@ -475,7 +475,7 @@ describe('auth-simple', () => {
     const authorize = async (fields: object = {}, isKms = false) =>
       (await app.fetch(new Request(`http://localhost/${isKms ? 'authorizeKms' : 'authorizeApp'}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...baseBootInfo, ...fields }),
+        body: JSON.stringify({ ...baseBootInfo, operation: isKms ? 'serve' : 'get_app_key', ...fields }),
       }))).json();
 
     it('checks the requested policy and returns the epoch on rejection', async () => {
@@ -505,6 +505,15 @@ describe('auth-simple', () => {
         currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32),
       });
       expect((await boot('kms', {})).isAllowed).toBe(true);
+      expect(await authorize({ operation: 'bootstrap' }, true)).toMatchObject({ isAllowed: true });
+      expect(await authorize({ operation: 'export_kms_keys' }, true)).toMatchObject({ isAllowed: false });
+    });
+
+    it('rejects operations belonging to the other authorization scope', async () => {
+      writeTestConfig(config);
+      expect(await authorize({ operation: 'serve' })).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
+      expect(await authorize({ operation: 'sign_cert' }, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
+      expect(await authorize({ operation: 'sign_cert' })).toMatchObject({ isAllowed: true });
     });
 
     it('allows only a KMS serving the current root epoch', async () => {
