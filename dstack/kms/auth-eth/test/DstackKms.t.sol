@@ -1277,4 +1277,44 @@ contract DstackKmsTest is Test {
         assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
         vm.stopPrank();
     }
+
+    // A KMS proxy running the v0.5.9 implementation deployed on Base and
+    // Ethereum, with an identity and policy set through its own setters.
+    function deployReleasedKms(IAppAuth.AppInfo memory info) internal returns (address proxy) {
+        vm.startPrank(owner);
+        proxy = Upgrades.deployUUPSProxy(
+            "DstackKmsV059.sol:DstackKms", abi.encodeCall(DstackKmsV059.initialize, (owner, address(appImpl)))
+        );
+        DstackKmsV059 released = DstackKmsV059(proxy);
+        released.setKmsInfo(DstackKmsV059.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
+        released.setGatewayAppId("released-gateway");
+        released.addOsImageHash(info.osImageHash);
+        released.addKmsAggregatedMr(info.mrAggregated);
+        released.addKmsDevice(info.deviceId);
+        vm.stopPrank();
+    }
+
+    function test_ReleasedKmsProxyKeepsItsPolicyAcrossTheEpochUpgrade() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        address proxy = deployReleasedKms(info);
+        Options memory opts;
+        opts.referenceContract = "DstackKmsV059.sol:DstackKms";
+        vm.startPrank(owner);
+        Upgrades.upgradeProxy(proxy, "DstackKms.sol", "", opts);
+        vm.stopPrank();
+        kms = DstackKms(proxy);
+        info.appId = proxy;
+
+        assertEq(kms.gatewayAppId(), "released-gateway");
+        assertTrue(kms.allowedOsImages(info.osImageHash));
+        assertTrue(kms.kmsAllowedAggregatedMrs(info.mrAggregated));
+        assertTrue(kms.kmsAllowedDeviceIds(info.deviceId));
+        (bool allowed,) = kms.isKmsAllowed(info);
+        assertTrue(allowed);
+
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        vm.stopPrank();
+        assertTrue(authorize(info, true).authorized, "released KMS policy is root epoch 0 policy");
+    }
 }
