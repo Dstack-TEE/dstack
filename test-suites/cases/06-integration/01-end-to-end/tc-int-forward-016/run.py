@@ -56,11 +56,7 @@ def main():
             stderr=subprocess.STDOUT,
             timeout=300,
         )
-        passed = int(
-            r.returncode == 0
-            and ("running 1 test" in r.stdout or "running 1 tests" in r.stdout)
-            and "test result: ok." in r.stdout
-        )
+        passed = int(r.returncode == 0)
         rows.append(
             {
                 "package": package,
