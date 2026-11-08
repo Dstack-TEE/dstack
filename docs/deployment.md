@@ -131,9 +131,13 @@ Production KMS requires:
 | Custom | Your own authorization logic | Implement webhook interface |
 
 All auth servers implement the same webhook interface:
-- `GET /` - Health check
-- `POST /bootAuth/app` - App boot authorization
-- `POST /bootAuth/kms` - KMS boot authorization
+
+- `GET /` - Health check and current root epoch
+- `POST /authorizeApp` - Application key and certificate authorization
+- `POST /authorizeKms` - KMS self-authorization and key handover
+
+The legacy `/bootAuth/app` and `/bootAuth/kms` routes remain available for older
+clients and KMS bootstrap/onboarding checks.
 
 #### Using auth-simple (Config-Based)
 
@@ -472,7 +476,7 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 1. New KMS starts in onboard mode (empty `auto_bootstrap_domain`)
 2. New KMS generates a self-issued RA-TLS client certificate with its TDX quote locally; no CA preflight is needed
 3. New KMS calls `GetKmsKey` over mTLS: `Admin.GetKmsKey` with the token, or the explicitly enabled public `KMS.GetKmsKey` without one
-4. Source KMS verifies attestation via `bootAuth/kms` webhook
+4. Source KMS verifies the attestation and authorizes handover via `/authorizeKms`
 5. If approved, source KMS returns root keys
 6. New KMS verifies the source's attestation on that same connection and checks it against its own policy before using the keys
 7. Both KMS instances now derive identical keys
@@ -548,7 +552,7 @@ for the full procedure; the KMS steps are:
    `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
    that imported the dropped N must be onboarded again.
 
-Each `checkKmsAuthorization` or `checkAppAuthorization` result carries the current epoch and its chain hash,
+Each `authorizeKms` or `authorizeApp` result carries the current epoch and its chain hash,
 including when authorization is denied. KMS verifies these against its keyring;
 there is no cached serving epoch. An optional `requestedRootEpoch` selects historical
 keys, and omission selects the returned current epoch. Requests for future

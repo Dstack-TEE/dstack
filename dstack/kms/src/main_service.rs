@@ -523,9 +523,17 @@ impl RpcHandler {
 
     async fn ensure_kms_allowed(&self, vm_config: &str) -> Result<BootInfo> {
         let att = self.ensure_attested()?;
-        self.ensure_app_attestation_allowed(att, true, false, vm_config, None)
-            .await
-            .map(|c| c.boot_info)
+        let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
+        let response = self
+            .state
+            .config
+            .auth_api
+            .check_kms_authorization(&boot_info)
+            .await?;
+        self.state.authorized_epoch(&response, None)?;
+        self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
+            .await?;
+        Ok(boot_info)
     }
 
     async fn ensure_app_boot_allowed(
@@ -534,29 +542,43 @@ impl RpcHandler {
         requested_root_epoch: Option<u32>,
     ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
-        self.ensure_app_attestation_allowed(att, false, false, vm_config, requested_root_epoch)
+        let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
+        self.ensure_app_attestation_allowed(att, boot_info, vm_config, requested_root_epoch)
             .await
     }
 
     async fn ensure_app_attestation_allowed(
         &self,
         att: &VerifiedAttestation,
-        is_kms: bool,
-        use_boottime_mr: bool,
-        vm_config_str: &str,
+        boot_info: BootInfo,
+        vm_config: &str,
         requested_root_epoch: Option<u32>,
     ) -> Result<BootConfig> {
-        let boot_info = build_boot_info_for_attestation(att, use_boottime_mr, vm_config_str)?;
-        let auth = &self.state.config.auth_api;
-        let response = if is_kms {
-            auth.check_kms_authorization(&boot_info).await?
-        } else {
-            auth.check_app_authorization(&boot_info, requested_root_epoch)
-                .await?
-        };
+        let response = self
+            .state
+            .config
+            .auth_api
+            .check_app_authorization(&boot_info, requested_root_epoch)
+            .await?;
         let root_epoch = self
             .state
             .authorized_epoch(&response, requested_root_epoch)?;
+        self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
+            .await?;
+        Ok(BootConfig {
+            boot_info,
+            gateway_app_id: response.gateway_app_id,
+            root_epoch,
+        })
+    }
+
+    async fn ensure_attestation_policy(
+        &self,
+        att: &VerifiedAttestation,
+        vm_config: &str,
+        boot_info: &BootInfo,
+        response: &AuthorizationResult,
+    ) -> Result<()> {
         let current_epoch = if self.state.config.auth_api.is_dev() {
             self.state.keyring.latest()
         } else {
@@ -569,19 +591,11 @@ impl RpcHandler {
         if boot_info.tee_variant != TeeVariant::DstackAmdSevSnp {
             self.state
                 .verifier
-                .verify_os_image_hash(
-                    vm_config_str.into(),
-                    att,
-                    &mut VerificationDetails::default(),
-                )
+                .verify_os_image_hash(vm_config.into(), att, &mut VerificationDetails::default())
                 .await
                 .context("Failed to verify os image hash")?;
         }
-        Ok(BootConfig {
-            boot_info,
-            gateway_app_id: response.gateway_app_id,
-            root_epoch,
-        })
+        Ok(())
     }
 
     fn derive_app_ca(&self, app_id: &[u8], root: &RootKeys) -> Result<CaCert> {
@@ -743,8 +757,9 @@ impl KmsRpc for RpcHandler {
             .verify_with_ra_pubkey(&csr.pubkey, &self.state.attestation_verifier)
             .await
             .context("Quote verification failed")?;
+        let boot_info = build_boot_info_for_attestation(&attestation, true, &request.vm_config)?;
         let app_info = self
-            .ensure_app_attestation_allowed(&attestation, false, true, &request.vm_config, None)
+            .ensure_app_attestation_allowed(&attestation, boot_info, &request.vm_config, None)
             .await?;
         ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
         let root = self.state.epoch_root(app_info.root_epoch)?;
