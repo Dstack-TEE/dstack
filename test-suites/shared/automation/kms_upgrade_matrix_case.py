@@ -1336,6 +1336,7 @@ configs:
       GATEWAY_PORTS: ${{GATEWAY_PORTS}}
       DSTACK_TEST_SECRET_PRIMARY: ${{DSTACK_TEST_SECRET_PRIMARY:-}}
       DSTACK_TEST_SECRET_PEER: ${{DSTACK_TEST_SECRET_PEER:-}}
+      DSTACK_TEST_MIGRATION_SENTINEL: ${{DSTACK_TEST_MIGRATION_SENTINEL:-}}
       TRUST_CHAIN_OBSERVATION: ${{TRUST_CHAIN_OBSERVATION:-0}}
       CONTINUITY_OBSERVATION: ${{CONTINUITY_OBSERVATION:-0}}
       ROUTE_INSTANCE: ${{ROUTE_INSTANCE:-}}
@@ -3673,18 +3674,31 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             timeout=180,
         )
         run([*matrix.cli, "start", app["vm_id"]], timeout=180)
-        wait_http(
-            f"http://127.0.0.1:{app['service_port']}/observation",
-            tls=False,
-            timeout=240,
-        )
-        after = json.loads(run([*matrix.cli, "info", "--json", app["vm_id"]]))
+        deadline = time.monotonic() + 240
+        after = {}
+        while time.monotonic() < deadline:
+            after = json.loads(run([*matrix.cli, "info", "--json", app["vm_id"]]))
+            if (
+                after.get("status") == "running"
+                and after.get("boot_progress") == "done"
+            ):
+                break
+            time.sleep(2)
+        else:
+            raise RuntimeError(f"migrated VM did not finish boot: {after}")
         if before.get("id") != after.get("id"):
             raise RuntimeError("in-place rotation migration changed the VM identity")
-        code, raw = http(f"http://127.0.0.1:{app['service_port']}/observation")
-        if code != 200:
-            raise RuntimeError(f"migrated app observer HTTP {code}: {raw[:300]!r}")
-        observation = json.loads(raw)
+        observation = None
+        while time.monotonic() < deadline:
+            code, raw = http(
+                f"http://127.0.0.1:{app['service_port']}/observation", timeout=10
+            )
+            if code == 200:
+                observation = json.loads(raw)
+                break
+            time.sleep(2)
+        if observation is None:
+            raise RuntimeError("migrated app observer did not become ready")
         if observation.get("private_material_exported") is not False:
             raise RuntimeError("migration observer exposed private material")
         return {
