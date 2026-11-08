@@ -81,6 +81,7 @@ const AuthConfigSchema = z.object({
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 type AuthConfig = z.infer<typeof AuthConfigSchema>;
+type AppConfig = z.infer<typeof AppConfigSchema>;
 
 const bytesOf = (hex: string) => hexToBytes(hex.replace(/^0x/i, ''));
 
@@ -172,8 +173,9 @@ class ConfigBackend {
   async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
     const config = this.loadConfig();
     const current = currentRootEpoch(config);
+    const appConfig = isKms ? undefined : findApp(config, appInfo.appId);
     const epoch = {
-      currentAppEpoch: isKms ? 0 : (findApp(config, appInfo.appId)?.currentAppEpoch ?? 0),
+      currentAppEpoch: appConfig?.currentAppEpoch ?? 0,
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
@@ -190,23 +192,26 @@ class ConfigBackend {
     if (appInfo.requestedAppEpoch !== undefined && appInfo.requestedAppEpoch > epoch.currentAppEpoch) {
       return { isAllowed: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
-    const result = this.evaluateBoot(appInfo, isKms, config);
+    const result = this.evaluateBoot(appInfo, isKms, config, appConfig);
     return { isAllowed: result.isAllowed, rejectionReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
-    if (!isKms && (findApp(config, bootInfo.appId)?.currentAppEpoch ?? 0) !== 0) {
+    const appConfig = isKms ? undefined : findApp(config, bootInfo.appId);
+    if ((appConfig?.currentAppEpoch ?? 0) !== 0) {
       return { isAllowed: false, reason: 'App epoch requires epoch-aware authorization', gatewayAppId: config.gatewayAppId };
     }
-    const response = this.evaluateBoot(bootInfo, isKms, config);
+    const response = this.evaluateBoot(bootInfo, isKms, config, appConfig);
     const epochDenial = response.isAllowed
       ? rootEpochDenial(bootInfo, isKms, currentRootEpoch(config))
       : undefined;
     return epochDenial ? { ...response, isAllowed: false, reason: epochDenial } : response;
   }
 
-  private evaluateBoot(bootInfo: BootInfo, isKms: boolean, config: AuthConfig): BootResponse {
+  private evaluateBoot(
+    bootInfo: BootInfo, isKms: boolean, config: AuthConfig, appConfig: AppConfig | undefined
+  ): BootResponse {
     const osImageHash = normalizeHex(bootInfo.osImageHash);
     const deviceId = normalizeHex(bootInfo.deviceId);
 
@@ -243,7 +248,7 @@ class ConfigBackend {
     if (isKms) {
       return this.checkKmsBoot(bootInfo, config, deviceId);
     } else {
-      return this.checkAppBoot(bootInfo, config, deviceId);
+      return this.checkAppBoot(bootInfo, config, deviceId, appConfig);
     }
   }
 
@@ -279,12 +284,12 @@ class ConfigBackend {
     };
   }
 
-  private checkAppBoot(bootInfo: BootInfo, config: AuthConfig, deviceId: string): BootResponse {
+  private checkAppBoot(
+    bootInfo: BootInfo, config: AuthConfig, deviceId: string, appConfig: AppConfig | undefined
+  ): BootResponse {
     const composeHash = normalizeHex(bootInfo.composeHash);
 
     // check app exists
-    const appConfig = findApp(config, bootInfo.appId);
-
     if (!appConfig) {
       return {
         isAllowed: false,
