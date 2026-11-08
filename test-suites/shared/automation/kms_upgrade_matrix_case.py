@@ -1025,6 +1025,8 @@ class MatrixRun:
                     f"https://127.0.0.1:{self.encryption_row(kms_rows, version)['service_port']}",
                 ]
             )
+            signer_row = kms_encrypt_row or self.encryption_row(kms_rows, "candidate")
+            self.pin_kms_signer(signer_row)
             for row in kms_rows:
                 command.extend(
                     ["--kms-url", f"https://{row['domain']}:{row['service_port']}"]
@@ -1807,6 +1809,19 @@ configs:
             if completed.returncode or not passed:
                 raise RuntimeError(f"measurement cache test failed: {observation}")
         return observations
+
+    def pin_kms_signer(self, row: dict[str, Any]) -> None:
+        """Pin the selected KMS root signer before VMM verifies sealed env keys."""
+        code, raw = http(
+            f"https://127.0.0.1:{row['service_port']}/prpc/KMS.GetMeta?json"
+        )
+        if code != 200:
+            raise RuntimeError(f"GetMeta HTTP {code} while pinning KMS signer")
+        value = json.loads(raw)
+        pubkey = value.get("k256_pubkey")
+        if not isinstance(pubkey, str):
+            raise RuntimeError("KMS metadata omitted k256_pubkey")
+        run([*self.cli, "kms", "add", pubkey])
 
     def metadata(self, row: dict[str, Any]) -> dict[str, str]:
         """Return safe public identity hashes for one initialized KMS."""
