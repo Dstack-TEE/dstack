@@ -327,7 +327,8 @@ fn authorize(
         "requested root epoch is not active".into()
     } else if request.requested_app_epoch.unwrap_or(0) != 0 {
         "requested app epoch must be zero".into()
-    } else if request.operation != Operation::KmsBootstrap && norm(&al.kms_contract_addr).is_empty() {
+    } else if request.operation != Operation::KmsBootstrap && norm(&al.kms_contract_addr).is_empty()
+    {
         "kmsContractAddr is not configured".into()
     } else if request.operation != Operation::KmsBootstrap
         && (norm(&info.app_id) == norm(&al.kms_contract_addr)) != is_kms

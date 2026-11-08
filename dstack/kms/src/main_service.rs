@@ -1631,7 +1631,10 @@ mod tests {
             attestation: None,
         };
         assert_eq!(
-            handler.ensure_self_allowed(Operation::KmsServe).await.unwrap(),
+            handler
+                .ensure_self_allowed(Operation::KmsServe)
+                .await
+                .unwrap(),
             0
         );
         assert!(handler
@@ -1639,7 +1642,10 @@ mod tests {
             .await
             .is_err());
         assert_eq!(
-            handler.ensure_self_allowed(Operation::KmsServe).await.unwrap(),
+            handler
+                .ensure_self_allowed(Operation::KmsServe)
+                .await
+                .unwrap(),
             0
         );
         let requests = server.join().unwrap();
