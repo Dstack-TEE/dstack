@@ -315,11 +315,16 @@ root keys can be generated and attested before registering epoch 0. For
 
 ## Direct attested key retrieval
 
-`GetTempCaCert` and temporary CA generation, persistence, renewal, and handover
-are removed. Its former handover field number and name are reserved in protobuf.
-Existing temporary CA files are ignored; they are not needed to start the KMS.
-Clients that require the removed RPC, and onboarding sources that require
-CA-issued client certificates, are no longer supported.
+`GetTempCaCert`, its original response fields, and the `temp_ca_key` handover
+field remain available for existing OS images and legacy KMS onboarding. The
+compatibility CA is stored in `tmp-ca.key`/`tmp-ca.crt`, independent of all root
+epochs; existing files are reused and missing files are recreated. Its public
+private key authenticates nobody. Client identity still requires attestation.
+The returned `ca_cert` is the currently served root CA.
+
+Upgrade contracts and auth backends, register the original roots as epoch 0,
+then upgrade KMS nodes before guests. Keep root and app epochs at zero during
+the mixed-version phase; rotate only after guests support key migration.
 
 Guests and `dstack-util get-keys` generate their self-issued RA-TLS certificate
 locally, then call `GetAppKey` directly. They verify the response connection's
@@ -331,8 +336,9 @@ connection. The optional provider pin and the key-provider launch measurement
 still bind the root identity; a valid quote alone is not a KMS policy decision.
 `--root-ca` additionally pins the CLI connection before sending the request.
 
-Onboarding uses the same self-issued client flow with or without an admin token,
-and checks the source attestation captured from the key-carrying connection
+Onboarding with an admin token uses a self-issued client certificate. Tokenless
+onboarding obtains the source temp CA first so pre-0.6 sources remain usable.
+Both paths check the source attestation captured from the key-carrying connection
 against local KMS policy before importing anything. Retries and reconnects repeat
 verification on the response connection; no assumption relies on one TCP session
 lasting forever. All subsequent key requests pin the KMS CA established at startup, regardless

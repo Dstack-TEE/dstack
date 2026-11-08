@@ -13,6 +13,8 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config("kms", DEFAULT_CONFIG, config_file, false)
 }
 
+const TEMP_CA_CERT: &str = "tmp-ca.crt";
+const TEMP_CA_KEY: &str = "tmp-ca.key";
 const ROOT_CA_CERT: &str = "root-ca.crt";
 const ROOT_CA_KEY: &str = "root-ca.key";
 const RPC_CERT: &str = "rpc.crt";
@@ -135,6 +137,14 @@ impl KmsConfig {
             && self.rpc_cert().exists()
             && self.rpc_key().exists()
             && self.k256_key().exists()
+    }
+
+    pub fn tmp_ca_cert(&self) -> PathBuf {
+        self.cert_dir.join(TEMP_CA_CERT)
+    }
+
+    pub fn tmp_ca_key(&self) -> PathBuf {
+        self.cert_dir.join(TEMP_CA_KEY)
     }
 
     pub fn root_ca_cert(&self) -> PathBuf {

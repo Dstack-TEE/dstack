@@ -111,7 +111,7 @@ Development settings are intentionally easy to audit, but they are not productio
 - The KMS contract pins a concrete gateway app id. Do not use `gateway_app_id = "any"` for production traffic.
 - TEE quotes are evaluated by deployment policy, including TCB status and expected OS/application measurements.
 
-The KMS TLS listener verifies client certificates by the attestation they carry rather than by an issuer CA, so it needs no `rpc.tls.mutual` section. It still accepts connections without a client certificate, because bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. Guests and onboarding clients use self-issued certificates. The temporary-CA RPC and key material have been removed; older clients that require them must be upgraded.
+The KMS TLS listener verifies client certificates by the attestation they carry rather than by an issuer CA, so it needs no `rpc.tls.mutual` section. It still accepts connections without a client certificate, because bootstrap and public metadata endpoints must be reachable before a client has an RA-TLS certificate. Guests and onboarding clients use self-issued certificates. The temporary-CA RPC remains available for old OS images and tokenless legacy onboarding; its public key material authenticates no caller.
 
 App key release and KMS key handover still require verified caller attestation from the RA-TLS client certificate. Certificate signing verifies the CSR signature and embedded attestation before signing.
 

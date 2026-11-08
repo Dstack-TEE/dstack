@@ -18,7 +18,7 @@ use dstack_kms_rpc::{
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{
-    client::{CertInfo, RaClientConfig},
+    client::{CertInfo, RaClient, RaClientConfig},
     CallContext, RpcCall,
 };
 use ra_tls::{
@@ -26,7 +26,7 @@ use ra_tls::{
         AttestationVerifier, GetDeviceId, PlatformEvidence, QuoteContentType, VerifiedAttestation,
         VersionedAttestation,
     },
-    cert::CertRequest,
+    cert::{CaCert, CertRequest},
     rcgen::{Certificate, KeyPair, PKCS_ECDSA_P256_SHA256},
 };
 use safe_write::{safe_write, safe_write_with_mode};
@@ -548,6 +548,7 @@ mod tests {
 
     fn handover(epochs: u32) -> KmsKeyResponse {
         KmsKeyResponse {
+            temp_ca_key: String::new(),
             keys: (0..epochs)
                 .map(|_| KmsKeys {
                     ca_key: KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)
@@ -595,6 +596,20 @@ mod tests {
         Keys::from_key_response(cfg, res, "kms.example.com", rotate, registry).await
     }
 
+    #[test]
+    fn compatibility_ca_survives_restart_and_recovers_a_missing_certificate() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(dir.path());
+        let first = ensure_temp_ca(&cfg).unwrap();
+        let second = ensure_temp_ca(&cfg).unwrap();
+        assert_eq!(first.key.public_key_der(), second.key.public_key_der());
+        assert_eq!(first.pem_cert, second.pem_cert);
+        fs::remove_file(cfg.tmp_ca_cert()).unwrap();
+        let recovered = ensure_temp_ca(&cfg).unwrap();
+        assert_eq!(first.key.public_key_der(), recovered.key.public_key_der());
+        assert!(!cfg.root_keys_exist());
+    }
+
     #[rocket::async_test]
     async fn join_imports_and_stores_every_epoch() {
         let cert_dir = tempfile::tempdir().unwrap();
@@ -606,8 +621,8 @@ mod tests {
             .await
             .unwrap();
         keys.store(&cfg).unwrap();
-        assert!(!cfg.cert_dir.join("tmp-ca.key").exists());
-        assert!(!cfg.cert_dir.join("tmp-ca.crt").exists());
+        assert!(cfg.tmp_ca_key().exists());
+        assert!(cfg.tmp_ca_cert().exists());
 
         assert_eq!(crate::main_service::read_root_epoch(&cfg).unwrap(), 2);
         for (epoch, k256) in (0..).zip(&sent) {
@@ -937,7 +952,14 @@ impl Keys {
                 .context("Missing source KMS attestation")
         };
 
-        let (ra_cert, ra_key) = gen_ra_cert().await?;
+        let temp_ca = if source_token.is_empty() {
+            let client = RaClient::new(other_kms_url.to_string(), true)?;
+            let ca = KmsClient::new(client).get_temp_ca_cert().await?;
+            Some((ca.temp_ca_cert, ca.temp_ca_key))
+        } else {
+            None
+        };
+        let (ra_cert, ra_key) = gen_ra_cert(temp_ca).await?;
         let client = RaClientConfig::builder()
             .tls_skip_ca_verification(true)
             .tls_built_in_root_certs(false)
@@ -1033,6 +1055,7 @@ impl Keys {
 
     /// The root keys go last: see [`KmsConfig::root_keys_exist`].
     fn store(&self, cfg: &KmsConfig) -> Result<()> {
+        ensure_temp_ca(cfg)?;
         for (epoch, root) in (0..).zip(&self.history) {
             let paths = cfg.root_key_paths(epoch, self.epoch);
             if let Some(dir) = paths.ca_key.parent() {
@@ -1063,9 +1086,39 @@ impl Keys {
     }
 }
 
+/// Keep the public compatibility CA independent of all epoch root keys.
+pub(crate) fn ensure_temp_ca(cfg: &KmsConfig) -> Result<CaCert> {
+    let had_key = cfg.tmp_ca_key().exists();
+    let key = if had_key {
+        KeyPair::from_pem(&fs::read_to_string(cfg.tmp_ca_key())?)?
+    } else {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        safe_write_with_mode(cfg.tmp_ca_key(), key.serialize_pem(), 0o600)?;
+        key
+    };
+    let cert = CertRequest::builder()
+        .org_name("Dstack")
+        .subject("Dstack Client Temp CA")
+        .ca_level(0)
+        .key(&key)
+        .build()
+        .self_signed()?;
+    if had_key && cfg.tmp_ca_cert().exists() {
+        renew_ca_cert_if_expiring(
+            cfg.tmp_ca_cert(),
+            cert.pem(),
+            "temporary client CA certificate",
+        )?;
+    } else {
+        safe_write(cfg.tmp_ca_cert(), cert.pem())?;
+    }
+    CaCert::load(cfg.tmp_ca_cert(), cfg.tmp_ca_key())
+}
+
 /// Reissue the RPC certificate under the root CA of the served `epoch`, so
 /// guests reach this KMS through the CA of the keys it serves.
 pub(crate) async fn update_certs(cfg: &KmsConfig, epoch: u32, latest: u32) -> Result<()> {
+    ensure_temp_ca(cfg)?;
     let roots = cfg.root_key_paths(epoch, latest);
     // Read existing keys
     let ca_key = KeyPair::from_pem(&fs::read_to_string(&roots.ca_key)?)?;
@@ -1206,8 +1259,8 @@ fn keccak256(msg: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Mint a self-issued RA-TLS client certificate.
-async fn gen_ra_cert() -> Result<(String, String)> {
+/// Legacy sources require a temp-CA-issued client certificate.
+async fn gen_ra_cert(ca: Option<(String, String)>) -> Result<(String, String)> {
     use ra_tls::cert::CertRequest;
     use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
 
@@ -1225,6 +1278,10 @@ async fn gen_ra_cert() -> Result<(String, String)> {
         .key(&key)
         .usage_client_auth(true)
         .build();
-    let cert = req.self_signed().context("Failed to sign certificate")?;
+    let cert = match ca {
+        Some((cert, key)) => CaCert::new(cert, key)?.sign(req),
+        None => req.self_signed(),
+    }
+    .context("failed to sign client certificate")?;
     Ok((cert.pem(), key.serialize_pem()))
 }

@@ -13,8 +13,9 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use dstack_kms_rpc::{
     kms_server::{KmsRpc, KmsServer},
-    AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse, KmsKeyResponse,
-    KmsKeys, PublicKeyResponse, SignCertRequest, SignCertResponse,
+    AppId, AppKeyResponse, GetAppKeyRequest, GetKmsKeyRequest, GetMetaResponse,
+    GetTempCaCertResponse, KmsKeyResponse, KmsKeys, PublicKeyResponse, SignCertRequest,
+    SignCertResponse,
 };
 use dstack_verifier::{CvmVerifier, VerificationDetails};
 use fs_err as fs;
@@ -163,6 +164,7 @@ pub(crate) fn servable_epoch(
 pub struct KmsStateInner {
     config: KmsConfig,
     keyring: Keyring,
+    temp_ca: CaCert,
     /// The CA of the running TLS listener, independent of key selection.
     rpc_ca_pubkey: Vec<u8>,
     restart: tokio::sync::Notify,
@@ -246,6 +248,7 @@ impl KmsState {
         }
         Ok(Self {
             inner: Arc::new(KmsStateInner {
+                temp_ca: crate::onboard_service::ensure_temp_ca(&config)?,
                 config,
                 keyring,
                 rpc_ca_pubkey,
@@ -406,6 +409,7 @@ impl RpcHandler {
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
         ensure_key_release_allowed(&info, (&self.state.config).into())?;
         Ok(KmsKeyResponse {
+            temp_ca_key: self.state.temp_ca.key.serialize_pem(),
             keys: self
                 .state
                 .keyring
@@ -727,6 +731,24 @@ impl KmsRpc for RpcHandler {
             bail!("public KMS key handover is disabled; use the admin listener");
         }
         self.handover_keys(request).await
+    }
+
+    async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
+        let epoch = self.ensure_self_allowed().await?;
+        if self.state.config.enforce_self_authorization {
+            let boot_info = self
+                .state
+                .self_boot_info
+                .get(&())
+                .await
+                .context("missing authorized KMS boot info")?;
+            ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
+        }
+        Ok(GetTempCaCertResponse {
+            temp_ca_cert: self.state.temp_ca.pem_cert.clone(),
+            temp_ca_key: self.state.temp_ca.key.serialize_pem(),
+            ca_cert: self.state.epoch_root(epoch)?.ca.pem_cert.clone(),
+        })
     }
 
     async fn sign_cert(self, request: SignCertRequest) -> Result<SignCertResponse> {
@@ -1561,6 +1583,24 @@ mod tests {
     }
 
     const AUTH_API_INFO: &str = r#"{"status":"ok","kmsContractAddr":"0xkms","ethRpcUrl":"https://rpc.example","gatewayAppId":"0xgateway","chainId":1,"appImplementation":"0ximpl"}"#;
+
+    #[rocket::async_test]
+    async fn legacy_temp_ca_rpc_returns_a_separate_ca_and_the_served_root() {
+        assert!(dstack_kms_rpc::kms_server::KMSMethod::from_str("GetTempCaCert").is_some());
+        let dir = tempfile::tempdir().unwrap();
+        let (url, _) = serve_concurrent_auth_api(AUTH_API_INFO);
+        let state = kms_state(dir.path(), &url);
+        let response = RpcHandler {
+            state: state.clone(),
+            attestation: None,
+        }
+        .get_temp_ca_cert()
+        .await
+        .unwrap();
+        let temp_ca = CaCert::new(response.temp_ca_cert, response.temp_ca_key).unwrap();
+        assert_ne!(temp_ca.key.public_key_der(), state.rpc_ca_pubkey);
+        assert_eq!(response.ca_cert, state.epoch_root(0).unwrap().ca.pem_cert);
+    }
 
     #[rocket::async_test]
     async fn concurrent_get_meta_calls_share_one_auth_api_request() {

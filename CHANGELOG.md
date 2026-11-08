@@ -7,14 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Removed
-
-- KMS: remove `GetTempCaCert` and temporary CA files and handover material.
-  Guests fetch keys directly with self-issued RA-TLS certificates and validate
-  the response connection's attestation and root CA. Older clients and sources
-  that require the temporary CA protocol must be upgraded.
-
 ### Changed
+
+- KMS: retain `GetTempCaCert`, temporary CA files and legacy handover fields so
+  KMS nodes can be upgraded before existing OS images.
 
 - dstack-util, cert-client: guests mint self-issued RA-TLS client
   certificates for KMS calls instead of fetching the temp CA and minting from

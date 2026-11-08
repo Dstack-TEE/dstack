@@ -78,10 +78,16 @@ message KmsKeys {
 }
 
 message KmsKeyResponse {
-  reserved 1;
-  reserved "temp_ca_key";
+  // Retained for legacy KMS onboarding. This public CA authenticates no caller.
+  string temp_ca_key = 1;
   // Root keys of every epoch the KMS holds; the index is the epoch.
   repeated KmsKeys keys = 2;
+}
+
+message GetTempCaCertResponse {
+  string temp_ca_cert = 1;
+  string temp_ca_key = 2;
+  string ca_cert = 3;
 }
 
 message SignCertRequest {
@@ -105,6 +111,8 @@ service KMS {
   rpc GetAppEnvEncryptPubKey(AppId) returns (PublicKeyResponse);
   // Request the KMS instance metadata for use as a probe and health check.
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
+  // Compatibility for existing OS images and tokenless legacy onboarding.
+  rpc GetTempCaCert(google.protobuf.Empty) returns (GetTempCaCertResponse);
   // Sign a certificate
   rpc SignCert(SignCertRequest) returns (SignCertResponse);
 }
