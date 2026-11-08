@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- KMS root and application key epochs, epoch-scoped authorization, SealedEnv
+  HPKE encryption, automatic environment migration, and epoch-aware SDK key
+  selection.
+
 ### Changed
 
 - KMS: retain `GetTempCaCert`, temporary CA files and legacy handover fields so
