@@ -267,10 +267,12 @@ Rejection responses still carry the current epochs and root chain hash. See
 `requestedRootEpoch` is optional in the JSON request. Omit it to use the epoch in
 this authorization result; an explicit `0` selects epoch 0. Solidity represents
 it as `OptionalUint256 { isSet, value }` alongside `AppInfo` in the request. The
-contract rejects a requested epoch newer than the current one; historical
-epochs remain available for migration. No serving epoch or serving hash is sent.
-KMS-to-KMS handover transfers the complete keyring. The receiver explicitly
-authorizes the source to export the highest received epoch before importing it.
+contract rejects future root epochs for application requests; historical epochs
+remain available subject to the selected policy row. No serving epoch or serving
+hash is sent. KMS-to-KMS handover explicitly selects the highest exported root
+epoch, including a registered pending epoch. Approval in that row authorizes the
+complete keyring, including older roots. KMS self-authorization omits the selector
+and checks the current root epoch.
 
 Every request includes a required `operation` describing what the attested
 subject is authorized to do. JSON uses `snake_case`; the contract receives
