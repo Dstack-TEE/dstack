@@ -417,6 +417,22 @@ contract DstackAppTest is Test {
         info.tcbStatus = "UpToDate";
     }
 
+    function test_AppOperationsSharePolicyButRejectUnknownOrKmsOperations() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHash(info.composeHash);
+        app.addDevice(info.deviceId);
+        vm.stopPrank();
+        (bool allowed,) = app.authorizeApp(info, 0, keccak256("sign_cert"));
+        assertTrue(allowed);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("kms_import_keys"));
+        assertFalse(allowed);
+        (allowed,) = app.authorizeApp(info, 0, bytes32(0));
+        assertFalse(allowed);
+    }
+
     function test_AppEpochRowsAreIndependentAndDefaultsUseCurrentEpoch() public {
         IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
@@ -425,7 +441,7 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         (bool allowed,) = app.isAppAllowed(info);
         assertFalse(allowed);
-        (allowed,) = app.authorizeApp(info, 0);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         app.addComposeHash(info.composeHash);
         (allowed,) = app.isAppAllowed(info);
@@ -436,16 +452,16 @@ contract DstackAppTest is Test {
         app.removeComposeHash(info.composeHash);
         assertFalse(app.allowedComposeHashesAtEpoch(1, info.composeHash));
         assertTrue(app.allowedComposeHashes(info.composeHash));
-        (allowed,) = app.authorizeApp(info, 0);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         app.addComposeHash(info.composeHash);
         app.removeDeviceAtEpoch(0, info.deviceId);
         assertFalse(app.allowedDeviceIds(info.deviceId));
-        (allowed,) = app.authorizeApp(info, 0);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
         (allowed,) = app.isAppAllowed(info);
         assertTrue(allowed, "revoking epoch zero must not revoke epoch one");
-        (allowed,) = app.authorizeApp(info, 2);
+        (allowed,) = app.authorizeApp(info, 2, keccak256("app_get_key"));
         assertFalse(allowed);
         vm.stopPrank();
     }
@@ -460,15 +476,15 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         app.addComposeHash(newInfo.composeHash);
         app.addDevice(newInfo.deviceId);
-        (bool allowed,) = app.authorizeApp(newInfo, 0);
+        (bool allowed,) = app.authorizeApp(newInfo, 0, keccak256("app_get_key"));
         assertFalse(allowed, "new epoch approval must not imply historical access");
         app.addComposeHashAtEpoch(0, newInfo.composeHash);
-        (allowed,) = app.authorizeApp(newInfo, 0);
+        (allowed,) = app.authorizeApp(newInfo, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         (allowed,) = app.isAppAllowed(oldInfo);
         assertFalse(allowed, "old image cannot read new keys");
         app.removeComposeHashAtEpoch(0, oldInfo.composeHash);
-        (allowed,) = app.authorizeApp(oldInfo, 0);
+        (allowed,) = app.authorizeApp(oldInfo, 0, keccak256("app_get_key"));
         assertFalse(allowed);
         (allowed,) = app.isAppAllowed(newInfo);
         assertTrue(allowed);
@@ -492,7 +508,7 @@ contract DstackAppTest is Test {
         app.setAllowAnyDeviceAtEpoch(0, false);
         assertFalse(app.allowAnyDevice());
         assertTrue(app.allowAnyDeviceAtEpoch(1));
-        (allowed,) = app.authorizeApp(info, 0);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
         (allowed,) = app.isAppAllowed(info);
         assertTrue(allowed);
@@ -542,7 +558,7 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(row, info.composeHash);
         app.addDeviceAtEpoch(row, info.deviceId);
         vm.stopPrank();
-        (bool allowed,) = app.authorizeApp(info, selected);
+        (bool allowed,) = app.authorizeApp(info, selected, keccak256("app_get_key"));
         assertEq(allowed, selected == row);
     }
 }

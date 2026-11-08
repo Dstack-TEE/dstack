@@ -7,6 +7,7 @@
 pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
+import "./AuthorizationOperation.sol";
 import "./IAppEpoch.sol";
 import "./IAppEpochAuth.sol";
 import "./IAppAuthBasicManagement.sol";
@@ -265,13 +266,15 @@ contract DstackApp is
 
     function authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
-        uint256 appEpoch
+        uint256 appEpoch,
+        bytes32 operation
     )
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
+        if (!AuthorizationOperation.isApp(operation)) return (false, "Invalid authorization operation");
         return _authorizeApp(bootInfo, appEpoch);
     }
 

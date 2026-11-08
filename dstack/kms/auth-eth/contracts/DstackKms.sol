@@ -533,7 +533,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (isKms) {
             (result.isAllowed, result.rejectionReason) = _isKmsAllowed(bootInfo, selectedRootEpoch);
         } else {
-            (result.isAllowed, result.rejectionReason) = _isAppAllowed(bootInfo, selectedRootEpoch, appEpoch);
+            (result.isAllowed, result.rejectionReason) =
+                _isAppAllowed(bootInfo, selectedRootEpoch, appEpoch, request.operation);
         }
     }
 
@@ -583,13 +584,14 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (currentAppEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }
-        return _isAppAllowed(bootInfo, _currentRootEpoch, 0);
+        return _isAppAllowed(bootInfo, _currentRootEpoch, 0, bytes32(0));
     }
 
     function _isAppAllowed(
         AppInfo memory bootInfo,
         uint256 selectedRootEpoch,
-        uint256 appEpoch
+        uint256 appEpoch,
+        bytes32 operation
     )
         private
         view
@@ -609,8 +611,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             return (false, "App not deployed or invalid address");
         }
 
-        if (ERC165Checker.supportsInterface(bootInfo.appId, type(IAppEpochAuth).interfaceId)) {
-            return IAppEpochAuth(bootInfo.appId).authorizeApp(bootInfo, appEpoch);
+        if (operation != bytes32(0) && ERC165Checker.supportsInterface(bootInfo.appId, type(IAppEpochAuth).interfaceId))
+        {
+            return IAppEpochAuth(bootInfo.appId).authorizeApp(bootInfo, appEpoch, operation);
         }
         if (appEpoch != 0) return (false, "App policy does not support epoch authorization");
 

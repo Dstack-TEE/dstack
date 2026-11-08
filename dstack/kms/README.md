@@ -272,7 +272,8 @@ remain available subject to the selected policy row. No serving epoch or serving
 hash is sent. KMS-to-KMS handover explicitly selects the highest exported root
 epoch, including a registered pending epoch. Approval in that row authorizes the
 complete keyring, including older roots. KMS self-authorization omits the selector
-and checks the current root epoch.
+and checks the current root epoch. The recipient separately authorizes the
+source to `kms_export_keys` at the highest received epoch before importing it.
 
 Every request includes a required `operation` describing what the attested
 subject is authorized to do. JSON uses `snake_case`; the contract receives
@@ -309,8 +310,8 @@ The response is an `AuthorizationResult`:
 ```
 
 Both successful and rejected decisions include the current epoch and chain hash
-from the same contract call or auth-simple configuration snapshot. With no
-registered epoch, the result is `isAllowed: false`,
+from the same contract call or auth-simple configuration snapshot. Except for `kms_bootstrap`, with no
+registered epoch the result is `isAllowed: false`,
 `rejectionReason: "Root epoch not registered"`, epoch 0 and a zero hash. A zero hash
 never authorizes key release or requests an epoch switch.
 

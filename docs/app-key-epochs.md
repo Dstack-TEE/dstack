@@ -69,8 +69,9 @@ roots. The KMS passes that epoch explicitly to `authorizeKms`, so approval in th
 current row cannot accidentally authorize a newer pending keyring. A registered
 pending root may be authorized for KMS handover before activation; app key requests
 still cannot select it. KMS self-authorization without a selector continues to
-check the active root epoch. This permits staged key distribution without changing
-which epoch the KMS serves.
+check the active root epoch. The source checks `kms_import_keys` for the recipient, and the recipient
+checks `kms_export_keys` for the source, both at the highest transferred epoch.
+This permits staged key distribution without changing which epoch the KMS serves.
 
 ### Upgrading existing proxies
 
@@ -83,7 +84,7 @@ only row zero after upgrading: explicitly populate the intended nonzero rows.
 
 Upgrade the KMS policy before app policies, then approve the intended rows before
 restarting guests or activating a new root. `DstackApp` advertises the optional
-ERC-165 `IAppEpochAuth` capability so the KMS can pass the selected app epoch to
+ERC-165 `IAppEpochAuth` capability so the KMS can pass the selected app epoch and operation to
 `authorizeApp`. Policies without that capability can only authorize app
 epoch zero; failures of an advertised method propagate instead of falling back.
 Direct legacy app checks use the current app epoch; legacy KMS app authorization

@@ -574,7 +574,11 @@ impl RpcHandler {
             .state
             .config
             .auth_api
-            .authorize_kms(&boot_info, Operation::KmsImportKeys, Some(self.state.keyring.latest()))
+            .authorize_kms(
+                &boot_info,
+                Operation::KmsImportKeys,
+                Some(self.state.keyring.latest()),
+            )
             .await?;
         self.state.authorized_epoch(&response, None)?;
         self.ensure_attestation_policy(att, vm_config, &boot_info, &response)

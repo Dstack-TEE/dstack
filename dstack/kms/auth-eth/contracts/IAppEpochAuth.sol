@@ -8,11 +8,12 @@ pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 
-/// Optional epoch-aware policy capability. Legacy policies only authorize app epoch zero.
+/// Optional epoch- and operation-aware policy capability. Legacy policies only authorize app epoch zero.
 interface IAppEpochAuth {
     function authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
-        uint256 appEpoch
+        uint256 appEpoch,
+        bytes32 operation
     )
         external
         view
