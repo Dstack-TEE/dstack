@@ -868,6 +868,7 @@ dependencies = [
  "hex",
  "http-client",
  "mock-attestation",
+ "prpc",
  "ra-rpc",
  "ra-tls",
  "rocket",

@@ -454,7 +454,7 @@ impl AppState {
         let keys = self
             .inner
             .cert_client
-            .get_app_key(epoch, app_epoch)
+            .get_app_key(Some(epoch), Some(app_epoch))
             .await
             .with_context(|| format!("failed to fetch the app keys of root epoch {epoch}"))?;
         let root = AppRoot::new(epoch, app_epoch, keys.k256_key, keys.k256_signature)?;

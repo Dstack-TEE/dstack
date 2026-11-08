@@ -172,26 +172,28 @@ impl CertRequestClient {
         }
     }
 
-    /// The app keys of an older KMS root epoch, from the KMS that served the
-    /// current ones.
-    pub async fn get_app_key(&self, root_epoch: u32, app_epoch: u32) -> Result<AppKeyResponse> {
+    /// Fetch app keys from the startup KMS, using its current epochs for omitted selectors.
+    pub async fn get_app_key(
+        &self,
+        root_epoch: Option<u32>,
+        app_epoch: Option<u32>,
+    ) -> Result<AppKeyResponse> {
         let CertRequestClient::Kms { client, vm_config } = self else {
             bail!("only KMS-provided keys have older root epochs");
         };
         let response = client
             .get_app_key(GetAppKeyRequest {
-                app_epoch: Some(app_epoch),
+                app_epoch,
                 api_version: 1,
                 vm_config: vm_config.clone(),
-                root_epoch: Some(root_epoch),
+                root_epoch,
             })
             .await?;
-        if response.root_epoch != root_epoch || response.app_epoch != app_epoch {
-            bail!(
-                "KMS returned key epochs ({}, {}) instead of ({root_epoch}, {app_epoch})",
-                response.root_epoch,
-                response.app_epoch
-            );
+        if root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
+            bail!("KMS returned a different root epoch than requested");
+        }
+        if app_epoch.is_some_and(|epoch| epoch != response.app_epoch) {
+            bail!("KMS returned a different app epoch than requested");
         }
         Ok(response)
     }
@@ -469,13 +471,54 @@ mod tests {
         )
     }
 
-    #[rocket::post("/GetAppKey", data = "<_request>")]
+    #[test]
+    fn generated_epoch_selectors_preserve_omission_and_explicit_zero() {
+        use prpc::Message;
+
+        let default = GetAppKeyRequest::default();
+        assert_eq!((default.root_epoch, default.app_epoch), (None, None));
+        for json in ["{}", r#"{"api_version":1,"vm_config":""}"#] {
+            let request: GetAppKeyRequest = serde_json::from_str(json).unwrap();
+            assert_eq!((request.root_epoch, request.app_epoch), (None, None));
+        }
+        for root_epoch in [None, Some(0), Some(7)] {
+            for app_epoch in [None, Some(0), Some(9)] {
+                let request = GetAppKeyRequest {
+                    root_epoch,
+                    app_epoch,
+                    ..Default::default()
+                };
+                let json = serde_json::to_vec(&request).unwrap();
+                let from_json: GetAppKeyRequest = serde_json::from_slice(&json).unwrap();
+                let from_proto =
+                    GetAppKeyRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+                for decoded in [from_json, from_proto] {
+                    assert_eq!(
+                        (decoded.root_epoch, decoded.app_epoch),
+                        (root_epoch, app_epoch)
+                    );
+                }
+            }
+        }
+        let explicit: GetAppKeyRequest =
+            serde_json::from_str(r#"{"root_epoch":0,"app_epoch":0}"#).unwrap();
+        assert_eq!(
+            (explicit.root_epoch, explicit.app_epoch),
+            (Some(0), Some(0))
+        );
+    }
+
+    #[rocket::post("/GetAppKey", data = "<request>")]
     fn direct_app_keys(
-        _request: String,
+        request: String,
         _cert: rocket::mtls::Certificate<'_>,
-        state: &rocket::State<(Arc<Mutex<String>>, std::sync::atomic::AtomicUsize)>,
+        state: &rocket::State<(Arc<Mutex<String>>, Arc<Mutex<Vec<GetAppKeyRequest>>>)>,
     ) -> rocket::response::content::RawJson<String> {
-        state.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        state
+            .1
+            .lock()
+            .unwrap()
+            .push(serde_json::from_str(&request).unwrap());
         rocket::response::content::RawJson(state.0.lock().unwrap().clone())
     }
 
@@ -549,12 +592,10 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let tx = Mutex::new(Some(tx));
         let response_body = Arc::new(Mutex::new(serde_json::to_string(&response).unwrap()));
+        let requests = Arc::new(Mutex::new(Vec::<GetAppKeyRequest>::new()));
         let server = rocket::custom(figment)
             .attach(ra_rpc::ratls_client_verifier::RaTlsClientAuth::fairing())
-            .manage((
-                response_body.clone(),
-                std::sync::atomic::AtomicUsize::new(0),
-            ))
+            .manage((response_body.clone(), requests.clone()))
             .mount("/", rocket::routes![direct_app_keys])
             .attach(rocket::fairing::AdHoc::on_liftoff("port", move |rocket| {
                 if let Some(tx) = tx.lock().unwrap().take() {
@@ -616,6 +657,8 @@ mod tests {
         .unwrap();
         assert_eq!(result.ca_cert, response.ca_cert);
         assert_eq!(result.root_epoch, 1);
+        let received = requests.lock().unwrap().last().unwrap().clone();
+        assert_eq!((received.root_epoch, received.app_epoch), (None, None));
 
         let other_ca = kms_root().pem_cert;
         for requested_root_epoch in [None, Some(0), Some(1)] {
@@ -668,15 +711,73 @@ mod tests {
             .unwrap();
             assert_eq!(result.ca_cert, other_ca);
             // First-contact validation still requires the response CA to sign the RPC cert.
-            assert!(request_app_keys(
+            assert!(
+                request_app_keys(
+                    url.clone(),
+                    request(),
+                    client_cert(),
+                    verifier.clone(),
+                    None
+                )
+                .await
+                .is_err()
+            );
+        }
+        assert_eq!(requests.lock().unwrap().len(), 10);
+
+        let cert = client_cert();
+        let client = CertRequestClient::Kms {
+            client: kms_client(
                 url.clone(),
-                request(),
-                client_cert(),
+                root.pem_cert.clone(),
+                cert.cert_pem,
+                cert.key_pem,
                 verifier.clone(),
-                None
             )
-            .await
-            .is_err());
+            .unwrap(),
+            vm_config: "selector-test".into(),
+        };
+        for root_epoch in [None, Some(0), Some(1)] {
+            for app_epoch in [None, Some(0), Some(2)] {
+                let selected = AppKeyResponse {
+                    root_epoch: root_epoch.unwrap_or(3),
+                    app_epoch: app_epoch.unwrap_or(4),
+                    ..response.clone()
+                };
+                *response_body.lock().unwrap() = serde_json::to_string(&selected).unwrap();
+                let result = client.get_app_key(root_epoch, app_epoch).await.unwrap();
+                assert_eq!(
+                    (result.root_epoch, result.app_epoch),
+                    (selected.root_epoch, selected.app_epoch)
+                );
+                let received = requests.lock().unwrap().last().unwrap().clone();
+                assert_eq!(
+                    (received.root_epoch, received.app_epoch),
+                    (root_epoch, app_epoch)
+                );
+                assert_eq!(received.api_version, 1);
+                assert_eq!(received.vm_config, "selector-test");
+
+                for (wrong_root, wrong_app, message) in [
+                    (selected.root_epoch + 1, selected.app_epoch, "root epoch"),
+                    (selected.root_epoch, selected.app_epoch + 1, "app epoch"),
+                ] {
+                    let mismatched = AppKeyResponse {
+                        root_epoch: wrong_root,
+                        app_epoch: wrong_app,
+                        ..selected.clone()
+                    };
+                    *response_body.lock().unwrap() = serde_json::to_string(&mismatched).unwrap();
+                    let result = client.get_app_key(root_epoch, app_epoch).await;
+                    if (message == "root epoch" && root_epoch.is_some())
+                        || (message == "app epoch" && app_epoch.is_some())
+                    {
+                        assert!(result.unwrap_err().to_string().contains(message));
+                    } else {
+                        assert!(result.is_ok());
+                    }
+                }
+            }
         }
         *response_body.lock().unwrap() = serde_json::to_string(&response).unwrap();
         let production = Arc::new(AttestationVerifier::new_prod(None).unwrap());
@@ -686,15 +787,8 @@ mod tests {
                 .is_err()
         );
         shutdown.notify();
-        let server = task.await.unwrap().unwrap();
-        assert_eq!(
-            server
-                .state::<(Arc<Mutex<String>>, std::sync::atomic::AtomicUsize)>()
-                .unwrap()
-                .1
-                .load(std::sync::atomic::Ordering::SeqCst),
-            11
-        );
+        task.await.unwrap().unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 38);
     }
 
     #[test]
