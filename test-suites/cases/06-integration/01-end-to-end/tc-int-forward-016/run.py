@@ -58,10 +58,8 @@ def main():
         )
         passed = int(
             r.returncode == 0
-            and any(
-                filt.split("::")[-1] in line and line.strip().endswith("... ok")
-                for line in r.stdout.splitlines()
-            )
+            and ("running 1 test" in r.stdout or "running 1 tests" in r.stdout)
+            and "test result: ok." in r.stdout
         )
         rows.append(
             {
