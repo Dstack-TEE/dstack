@@ -944,15 +944,8 @@ impl RpcHandler {
         encrypted_env: &[u8],
         sealed_env: &[u8],
     ) -> Result<()> {
-        if sealed_env.is_empty() {
-            if !encrypted_env.is_empty() {
-                return Ok(());
-            }
-            match fs::symlink_metadata(work_dir.sealed_env_path()) {
-                Ok(_) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                Err(err) => return Err(err).context("failed to inspect sealed environment"),
-            }
+        if !work_dir.uses_sealed_env(encrypted_env, sealed_env)? {
+            return Ok(());
         }
         let image_dir = self.app.config.image.image_dir(image)?;
         let target =

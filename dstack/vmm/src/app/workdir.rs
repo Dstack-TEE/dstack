@@ -140,6 +140,22 @@ impl VmWorkDir {
         Ok(())
     }
 
+    /// Empty inputs preserve existing environment files, including invalid sealed files.
+    pub(crate) fn uses_sealed_env(&self, encrypted: &[u8], sealed: &[u8]) -> Result<bool> {
+        Self::validate_env_update(encrypted, sealed)?;
+        if !sealed.is_empty() {
+            return Ok(true);
+        }
+        if !encrypted.is_empty() {
+            return Ok(false);
+        }
+        match fs::symlink_metadata(self.sealed_env_path()) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(err) => Err(err).context("failed to inspect sealed environment"),
+        }
+    }
+
     /// Caller serializes updates to an existing VM with its launch lock.
     pub(crate) fn write_env(&self, encrypted: &[u8], sealed: &[u8]) -> Result<()> {
         Self::validate_env_update(encrypted, sealed)?;

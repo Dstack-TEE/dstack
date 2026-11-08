@@ -69,7 +69,8 @@ including "service not found". Such errors are not signed and must not select a
 weaker encryption protocol. Upgrade the KMS before submitting secrets for a
 SealedEnv-capable image.
 
-The VMM also enforces the flag for API callers. Creation, updates and image changes
+The VMM also enforces the flag for API callers and `dstack-vmm run`, including
+existing SealedEnv files in a reused one-shot workdir. Creation, updates and image changes
 through resize reject an effective SealedEnv file when the target image lacks the
 capability, before writing files or changing resources. An update may replace it
 with nonempty legacy `encrypted_env` while switching to an older image. Empty env
