@@ -69,9 +69,9 @@ def main() -> int:
                     "passed": int(
                         next(
                             (
-                                line.split()[2]
+                                line.split()[3]
                                 for line in result.stdout.splitlines()
-                                if line.startswith("test result: ok.")
+                                if line.strip().startswith("test result: ok.")
                                 and " passed;" in line
                             ),
                             "0",
