@@ -2340,4 +2340,57 @@ pNs85uhOZE8z2jr8Pg==
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(probe.cert_calls.load(Ordering::Relaxed), 1);
     }
+
+    /// A key requested at an older epoch pair comes entirely from that pair's
+    /// app root: derived under it, its claim signed by it, chained to the KMS
+    /// signature of that root, and labelled with the epochs actually served.
+    #[tokio::test]
+    async fn get_key_at_an_older_epoch_is_derived_signed_and_labelled_under_that_root() {
+        use crate::rpc_service_v1::{keys::Algorithm, V1RpcHandler};
+        use dstack_guest_agent_rpc::v1::{dstack_guest_server::DstackGuestRpc as _, GetKeyRequest};
+        use k256::ecdsa::RecoveryId;
+        use sha3::{Digest as _, Keccak256};
+
+        let (mut state, _guard) = setup_test_state().await;
+        Arc::get_mut(&mut state.inner).unwrap().keys.key_provider = KeyProvider::Kms {
+            url: "https://unused.invalid".into(),
+            pubkey: vec![],
+            root_epoch: 2,
+            app_epoch: 2,
+        };
+        let kms_signature = vec![0xab; 65];
+        state.inner.historical_roots.lock().await.insert(
+            (1, 0),
+            AppRoot::new(1, 0, HISTORICAL_K256_KEY.to_vec(), kms_signature.clone()).unwrap(),
+        );
+        let domain = "storage-encryption";
+        let get_key = |root_epoch, app_epoch| {
+            V1RpcHandler::new(state.clone()).get_key(GetKeyRequest {
+                domain: domain.into(),
+                algorithm: "secp256k1".into(),
+                root_epoch,
+                app_epoch,
+            })
+        };
+
+        let current = get_key(None, None).await.unwrap();
+        let older = get_key(Some(1), Some(0)).await.unwrap();
+        assert_eq!((older.root_epoch, older.app_epoch), (1, 0));
+        assert_ne!(older.key, current.key, "derived under the current root");
+        assert_eq!(older.signature_chain[1], kms_signature);
+
+        let claim =
+            ra_tls::api_v1::key_claim(Algorithm::Secp256k1, domain, &older.public_key).unwrap();
+        let link = &older.signature_chain[0];
+        let signer = VerifyingKey::recover_from_digest(
+            Keccak256::new_with_prefix(&claim),
+            &K256Signature::from_slice(&link[..64]).unwrap(),
+            RecoveryId::from_byte(link[64]).unwrap(),
+        )
+        .unwrap();
+        let older_root = *SigningKey::from_slice(&HISTORICAL_K256_KEY)
+            .unwrap()
+            .verifying_key();
+        assert_eq!(signer, older_root, "claim not signed by the epoch-1 root");
+    }
 }
