@@ -561,6 +561,22 @@ describe('auth-simple', () => {
       }
     });
 
+    it.each(['0x' + 'ab'.repeat(20), '0X' + 'AB'.repeat(20), 'Ab'.repeat(20)])(
+      'uses the same normalized app policy for epoch lookup and authorization: %s', async (id) => {
+        const appId = '0x' + 'ab'.repeat(20);
+        writeTestConfig({ ...config, apps: { [id]: {
+          composeHashes: [baseBootInfo.composeHash], allowAnyDevice: true, currentAppEpoch: 1,
+        } } });
+        const lookup = await app.fetch(new Request(`http://localhost/app/${appId}`));
+        expect((await lookup.json()).currentAppEpoch).toBe(1);
+        expect(await authorize({ appId })).toMatchObject({ isAllowed: true, currentAppEpoch: 1 });
+        expect((await authorize({ appId, requestedAppEpoch: 1 })).isAllowed).toBe(true);
+        expect((await authorize({ appId, requestedAppEpoch: 0 })).isAllowed).toBe(true);
+        expect((await authorize({ appId, requestedAppEpoch: 2 })).isAllowed).toBe(false);
+        expect((await boot('app', { appId })).isAllowed).toBe(false);
+      }
+    );
+
     it('serves only epoch 0 when none is configured', async () => {
       writeTestConfig({ ...config, rootEpochs: [] });
       expect((await info()).rootEpoch).toBeUndefined();

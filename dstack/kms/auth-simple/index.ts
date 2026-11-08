@@ -137,6 +137,11 @@ function normalizeHex(hex: string): string {
   return hex;
 }
 
+function findApp(config: AuthConfig, appId: string) {
+  const normalized = normalizeHex(appId);
+  return Object.entries(config.apps).find(([id]) => normalizeHex(id) === normalized)?.[1];
+}
+
 // config-based backend
 class ConfigBackend {
   private getConfigPath(): string {
@@ -161,14 +166,14 @@ class ConfigBackend {
   }
 
   async getAppEpoch(appId: string): Promise<number> {
-    return this.loadConfig().apps[normalizeHex(appId)]?.currentAppEpoch ?? 0;
+    return findApp(this.loadConfig(), appId)?.currentAppEpoch ?? 0;
   }
 
   async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
     const config = this.loadConfig();
     const current = currentRootEpoch(config);
     const epoch = {
-      currentAppEpoch: isKms ? 0 : (config.apps[normalizeHex(appInfo.appId)]?.currentAppEpoch ?? 0),
+      currentAppEpoch: isKms ? 0 : (findApp(config, appInfo.appId)?.currentAppEpoch ?? 0),
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
     };
@@ -191,7 +196,7 @@ class ConfigBackend {
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const config = this.loadConfig();
-    if (!isKms && (config.apps[normalizeHex(bootInfo.appId)]?.currentAppEpoch ?? 0) !== 0) {
+    if (!isKms && (findApp(config, bootInfo.appId)?.currentAppEpoch ?? 0) !== 0) {
       return { isAllowed: false, reason: 'App epoch requires epoch-aware authorization', gatewayAppId: config.gatewayAppId };
     }
     const response = this.evaluateBoot(bootInfo, isKms, config);
@@ -275,13 +280,10 @@ class ConfigBackend {
   }
 
   private checkAppBoot(bootInfo: BootInfo, config: AuthConfig, deviceId: string): BootResponse {
-    const appId = normalizeHex(bootInfo.appId);
     const composeHash = normalizeHex(bootInfo.composeHash);
 
     // check app exists
-    const appConfig = Object.entries(config.apps).find(
-      ([id]) => normalizeHex(id) === appId
-    )?.[1];
+    const appConfig = findApp(config, bootInfo.appId);
 
     if (!appConfig) {
       return {
