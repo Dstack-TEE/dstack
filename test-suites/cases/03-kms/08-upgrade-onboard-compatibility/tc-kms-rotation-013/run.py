@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """Run the focused root/app key rotation and migration test matrix."""
+
 from __future__ import annotations
-import hashlib, json, os, pathlib, subprocess, time
+
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import time
 
 CASE = "tc-kms-rotation-013"
 TESTS = {
@@ -28,10 +35,13 @@ TESTS = {
     ],
 }
 
+
 def main() -> int:
     if os.environ.get("DSTACK_TEST_CASE_ID") != CASE:
         raise SystemExit("unsupported case")
-    runtime = json.loads(pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
+    runtime = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
+    )
     repo = pathlib.Path(runtime["repository"])
     env = os.environ.copy()
     env["CARGO_TARGET_DIR"] = runtime["cargo_target_dir"]
@@ -40,20 +50,77 @@ def main() -> int:
         for test_filter in filters:
             started = time.monotonic()
             command = ["cargo", "test", "-p", package, test_filter, "--", "--nocapture"]
-            result = subprocess.run(command, cwd=repo / "dstack", env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
-            rows.append({"package": package, "filter": test_filter, "returncode": result.returncode, "duration_seconds": round(time.monotonic() - started, 3), "output_sha256": hashlib.sha256(result.stdout.encode()).hexdigest(), "passed": int(next((line.split()[2] for line in result.stdout.splitlines() if line.startswith("test result: ok.") and " passed;" in line), "0")), "passed": int(next((line.split()[2] for line in result.stdout.splitlines() if line.startswith("test result: ok.") and " passed;" in line), "0"))})
+            result = subprocess.run(
+                command,
+                cwd=repo / "dstack",
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=300,
+            )
+            rows.append(
+                {
+                    "package": package,
+                    "filter": test_filter,
+                    "returncode": result.returncode,
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                    "output_sha256": hashlib.sha256(result.stdout.encode()).hexdigest(),
+                    "passed": int(
+                        next(
+                            (
+                                line.split()[2]
+                                for line in result.stdout.splitlines()
+                                if line.startswith("test result: ok.")
+                                and " passed;" in line
+                            ),
+                            "0",
+                        )
+                    ),
+                }
+            )
             if result.returncode or rows[-1]["passed"] != 1:
                 break
         if rows[-1]["returncode"]:
             break
     passed = sum(row["returncode"] == 0 for row in rows)
-    status = "PASS" if len(rows) == sum(map(len, TESTS.values())) and passed == len(rows) else "FAIL"
+    status = (
+        "PASS"
+        if len(rows) == sum(map(len, TESTS.values())) and passed == len(rows)
+        else "FAIL"
+    )
     result_dir = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     artifact = result_dir / "artifacts/key-rotation-matrix.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_text(json.dumps({"candidate_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(), "status": status, "rows": rows}, indent=2) + "\n")
-    (result_dir / "result.json").write_text(json.dumps({"schema_version": "1.0", "case_id": CASE, "provisional": False, "status": status, "summary": f"{passed}/{len(rows)} focused rotation rows passed", "artifacts": [{"path": "artifacts/key-rotation-matrix.json"}]}, indent=2) + "\n")
+    artifact.write_text(
+        json.dumps(
+            {
+                "candidate_commit": subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+                ).strip(),
+                "status": status,
+                "rows": rows,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    (result_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "case_id": CASE,
+                "provisional": False,
+                "status": status,
+                "summary": f"{passed}/{len(rows)} focused rotation rows passed",
+                "artifacts": [{"path": "artifacts/key-rotation-matrix.json"}],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     return 0 if status == "PASS" else 1
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
