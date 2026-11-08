@@ -460,6 +460,21 @@ mod env_tests {
     }
 
     #[test]
+    #[ignore = "finding CR3: expected to fail until CR3 is fixed"]
+    fn finding_cr3_interrupted_legacy_replacement_keeps_the_owner_env_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = VmWorkDir::new(dir.path());
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        workdir.write_env(&[], b"replaced sealed env").unwrap();
+        // `write_env(b"owner legacy env", &[])` interrupted after publishing
+        // the new file and before removing the one it supersedes.
+        safe_write::safe_write(workdir.encrypted_env_path(), b"owner legacy env").unwrap();
+        // With no new upload, the env the VM boots with is the stored one,
+        // selected the way the guest selects it.
+        assert!(!workdir.uses_sealed_env(&[], &[]).unwrap());
+    }
+
+    #[test]
     fn env_write_failure_preserves_original_and_cleanup_errors_propagate() {
         let dir = tempfile::tempdir().unwrap();
         let workdir = VmWorkDir::new(dir.path());

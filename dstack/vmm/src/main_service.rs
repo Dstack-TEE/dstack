@@ -2951,6 +2951,155 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn list_images_reports_each_image_sealed_env_capability() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = env_image_handler(tmp.path());
+        let images: BTreeMap<_, _> = handler
+            .list_images()
+            .await
+            .unwrap()
+            .images
+            .into_iter()
+            .map(|image| (image.name, image.sealed_env))
+            .collect();
+        assert_eq!(
+            images,
+            BTreeMap::from([
+                ("legacy".to_string(), false),
+                ("sealed".to_string(), true),
+                ("unsupported".to_string(), false),
+            ])
+        );
+    }
+
+    /// The guest copies at most this much `.sealed-env` out of the host share
+    /// (dstack-util `HostShared::copy`).
+    const GUEST_SEALED_ENV_LIMIT: usize = 384 * 1024;
+    const COMPOSE: &str = r#"{"manifest_version":2,"name":"test","runner":"none"}"#;
+
+    fn create_sealed_vm(
+        handler: &RpcHandler,
+        sealed_env: &[u8],
+    ) -> impl std::future::Future<Output = Result<Id>> {
+        RpcHandler {
+            app: handler.app.clone(),
+        }
+        .create_vm(VmConfiguration {
+            image: "sealed".into(),
+            sealed_env: sealed_env.to_vec(),
+            stopped: true,
+            compose_file: COMPOSE.into(),
+            ..test_vm_configuration()
+        })
+    }
+
+    #[tokio::test]
+    #[ignore = "finding CR4: expected to fail until CR4 is fixed"]
+    async fn finding_cr4_owner_create_rejects_sealed_env_above_the_guest_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = env_image_handler(tmp.path());
+        let at_limit = vec![b'a'; GUEST_SEALED_ENV_LIMIT];
+        let id = create_sealed_vm(&handler, &at_limit).await.unwrap().id;
+        let work_dir = handler.app.work_dir(&id).unwrap();
+        assert_eq!(fs::read(work_dir.sealed_env_path()).unwrap(), at_limit);
+        let oversized = vec![b'o'; GUEST_SEALED_ENV_LIMIT + 1];
+        assert!(
+            create_sealed_vm(&handler, &oversized).await.is_err(),
+            "create_vm accepted a sealed_env the guest will refuse"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "finding CR4: expected to fail until CR4 is fixed"]
+    async fn finding_cr4_owner_update_rejects_sealed_env_above_the_guest_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = env_image_handler(tmp.path());
+        let at_limit = vec![b'a'; GUEST_SEALED_ENV_LIMIT];
+        let id = create_sealed_vm(&handler, b"initial").await.unwrap().id;
+        let work_dir = handler.app.work_dir(&id).unwrap();
+        for (sealed_env, accepted) in [
+            (at_limit.clone(), true),
+            (vec![b'o'; GUEST_SEALED_ENV_LIMIT + 1], false),
+        ] {
+            let result = RpcHandler {
+                app: handler.app.clone(),
+            }
+            .update_vm(UpdateVmRequest {
+                id: id.clone(),
+                sealed_env,
+                ..Default::default()
+            })
+            .await;
+            if accepted {
+                result.unwrap();
+            } else {
+                assert!(
+                    result.is_err(),
+                    "update_vm accepted a sealed_env the guest will refuse"
+                );
+            }
+            assert_eq!(fs::read(work_dir.sealed_env_path()).unwrap(), at_limit);
+        }
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding CR4: expected to fail until CR4 is fixed"]
+    async fn finding_cr4_one_shot_rejects_sealed_env_above_the_guest_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let handler = env_image_handler(tmp.path());
+        // The test images cannot build a QEMU command, so even the dry run
+        // fails after the env is written; what is stored is the observable.
+        for (name, len) in [
+            ("at-limit", GUEST_SEALED_ENV_LIMIT),
+            ("oversized", GUEST_SEALED_ENV_LIMIT + 1),
+        ] {
+            let vm_config = tmp.path().join(format!("{name}.json"));
+            let request = VmConfiguration {
+                image: "sealed".into(),
+                sealed_env: vec![b's'; len],
+                compose_file: COMPOSE.into(),
+                ..test_vm_configuration()
+            };
+            fs::write(&vm_config, serde_json::to_vec(&request).unwrap()).unwrap();
+            let workdir = tmp.path().join(name);
+            let result = crate::one_shot::run_one_shot(
+                vm_config.to_str().unwrap(),
+                handler.app.config.as_ref().clone(),
+                Some(workdir.to_str().unwrap().into()),
+                true,
+            )
+            .await;
+            let stored = VmWorkDir::new(workdir).sealed_env_path().exists();
+            if len <= GUEST_SEALED_ENV_LIMIT {
+                assert!(stored);
+            } else {
+                assert!(result.is_err());
+                assert!(
+                    !stored,
+                    "one-shot stored a sealed_env the guest will refuse"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "finding CR4: expected to fail until CR4 is fixed"]
+    fn finding_cr4_guest_update_limit_equals_the_guest_sealed_env_limit() {
+        use rocket::data::ToByteUnit;
+        use rocket::figment::providers::Serialized;
+        // Built the way `run_host_api` builds the host API server's config.
+        let figment = crate::config::load_config_figment(None);
+        let figment = figment.clone().merge(Serialized::defaults(
+            figment.find_value("host_api").unwrap(),
+        ));
+        let config: rocket::Config = figment.extract().unwrap();
+        assert_eq!(
+            config.limits.get("UpdateSealedEnv"),
+            Some(GUEST_SEALED_ENV_LIMIT.bytes())
+        );
+    }
+
     #[test]
     fn env_image_validation_uses_the_effective_environment() {
         let tmp = tempfile::tempdir().unwrap();
