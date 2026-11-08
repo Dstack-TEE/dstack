@@ -33,6 +33,7 @@ SUPPORTED = {f"tc-kms-upgrade-{index:03d}" for index in range(1, 13)} | {
     "tc-int-mixed-003",
     "tc-int-mixed-004",
     "tc-int-mixed-006",
+    "tc-int-compatibil-008",
     "tc-int-end-to-end-001",
     "tc-int-end-to-end-002",
     "tc-int-end-to-end-003",
@@ -246,6 +247,7 @@ class MatrixRun:
                         "tc-int-mixed-003",
                         "tc-int-mixed-004",
                         "tc-int-mixed-006",
+                        "tc-int-compatibil-008",
                         "tc-int-end-to-end-001",
                         "tc-int-end-to-end-002",
                         "tc-int-end-to-end-003",
@@ -586,6 +588,7 @@ class MatrixRun:
         *,
         expect_success: bool,
         target_domain: str = "",
+        rotate: bool = False,
     ) -> tuple[int, str]:
         """Attempt one key-transfer hop and optionally transition the target to main mode."""
         source_url = f"https://10.0.2.2:{source['service_port']}"
@@ -597,6 +600,7 @@ class MatrixRun:
             {
                 "source_url": source_url,
                 "domain": target_domain or f"{self.case_id}.target.test",
+                "rotate": rotate,
             },
             separators=(",", ":"),
         ).encode()
@@ -3634,6 +3638,61 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
                 "passed": True,
                 "output_sha256": hashlib.sha256(completed.stdout).hexdigest(),
             },
+            "private_material_exported": False,
+        }
+    if case_id == "tc-int-compatibil-008":
+        old = matrix.deploy(
+            "0.5.8", initialized=True, domain_override="10-0-2-2.sslip.io"
+        )
+        app = matrix.deploy_client(
+            [old],
+            identity="rotation-migration",
+            kms_encrypt_row=old,
+            guest_image=matrix.values["version_matrix"]["guest_images"]["0.5.8"],
+            encrypted_environment={"DSTACK_TEST_MIGRATION_SENTINEL": "old-epoch"},
+        )
+        candidate = matrix.deploy("candidate", initialized=False, legacy=True)
+        matrix.onboard(
+            candidate,
+            old,
+            expect_success=True,
+            target_domain="10-0-2-2.sslip.io",
+            rotate=True,
+        )
+        before = json.loads(run([*matrix.cli, "info", "--json", app["vm_id"]]))
+        run([*matrix.cli, "stop", app["vm_id"], "--force"], timeout=120)
+        run(
+            [
+                *matrix.cli,
+                "update",
+                app["vm_id"],
+                "--image",
+                matrix.values["version_matrix"]["guest_images"]["0.6.0-candidate"],
+            ],
+            timeout=180,
+        )
+        run([*matrix.cli, "start", app["vm_id"]], timeout=180)
+        wait_http(f"http://127.0.0.1:{app['service_port']}/observation", timeout=240)
+        after = json.loads(run([*matrix.cli, "info", "--json", app["vm_id"]]))
+        if before.get("id") != after.get("id"):
+            raise RuntimeError("in-place rotation migration changed the VM identity")
+        code, raw = http(f"http://127.0.0.1:{app['service_port']}/observation")
+        if code != 200:
+            raise RuntimeError(f"migrated app observer HTTP {code}: {raw[:300]!r}")
+        observation = json.loads(raw)
+        if observation.get("private_material_exported") is not False:
+            raise RuntimeError("migration observer exposed private material")
+        return {
+            "path": [
+                "old-kms-old-os-app",
+                "rotation-onboarding",
+                "same-vm-stop",
+                "candidate-os-in-place-update",
+                "disk-key-migration-and-reboot",
+            ],
+            "expected": "the same app VM preserves its identity and encrypted data after root rotation and candidate OS migration",
+            "vm_identity_preserved": True,
+            "observer": observation,
             "private_material_exported": False,
         }
     if case_id in {
