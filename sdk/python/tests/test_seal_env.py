@@ -107,3 +107,68 @@ def test_sealed_key_signature_context(app_epoch):
         )
         != trusted
     )
+
+
+@pytest.mark.parametrize("skew, accepted", [(60, True), (61, False)])
+def test_sealed_key_future_timestamp_tolerance(skew, accepted):
+    import time
+
+    from eth_keys import keys
+    from eth_utils import keccak
+
+    from dstack_sdk import verify_sealed_env_public_key
+
+    signer = keys.PrivateKey(bytes([7]) * 32)
+    app = bytes([1]) * 20
+    public_key = bytes([2]) * 32
+    timestamp = int(time.time()) + skew
+    message = (
+        b"dstack-sealed-env-pubkey-v1:"
+        + app
+        + (3).to_bytes(4, "big")
+        + (0).to_bytes(4, "big")
+        + public_key
+        + timestamp.to_bytes(8, "big")
+    )
+    signature = signer.sign_msg_hash(keccak(message)).to_bytes()
+    trusted = "0x" + signer.public_key.to_compressed_bytes().hex()
+    signer_or_none = verify_sealed_env_public_key(
+        public_key, signature, app.hex(), 3, timestamp
+    )
+    assert signer_or_none == (trusted if accepted else None)
+
+
+@pytest.mark.parametrize("producer", ["python", "javascript"])
+def test_sdk_fixture_opens_with_its_envelope_epochs(producer):
+    """The guest derives the HPKE info from the envelope's own epoch fields."""
+    from pathlib import Path
+
+    fixture = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "fixtures"
+            / "sealed-env"
+            / f"{producer}.json"
+        ).read_text()
+    )
+    envelope = fixture["sealed_env"]
+    assert (envelope["version"], envelope["root_epoch"], envelope["app_epoch"]) == (
+        1,
+        3,
+        0,
+    )
+    suite = CipherSuite.new(
+        KEMId.DHKEM_X25519_HKDF_SHA256, KDFId.HKDF_SHA256, AEADId.AES256_GCM
+    )
+    private_key = suite.kem.deserialize_private_key(
+        bytes.fromhex(fixture["private_key"])
+    )
+    context = suite.create_recipient_context(
+        base64.b64decode(envelope["enc"]),
+        private_key,
+        info=(
+            f"dstack-sealed-env-v1:{envelope['root_epoch']}:{envelope['app_epoch']}"
+        ).encode(),
+    )
+    plaintext = context.open(base64.b64decode(envelope["ciphertext"]))
+    assert json.loads(plaintext) == {"env": fixture["env"]}
