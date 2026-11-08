@@ -13,6 +13,7 @@ import "../contracts/DstackApp.sol";
 import "../contracts/IAppAuth.sol";
 import "../contracts/test-utils/DstackKmsV2.sol";
 import "../contracts/test-utils/DstackAppV2.sol";
+import { DstackApp as DstackAppV059 } from "../contracts/test-utils/reference/v0.5.9/DstackAppV059.sol";
 
 contract UpgradesWithPluginTest is Test {
     address public owner;
@@ -455,5 +456,55 @@ contract UpgradesWithPluginTest is Test {
         assertEq(reason, "");
 
         vm.stopPrank();
+    }
+
+    function test_ReleasedAppProxyKeepsItsPolicyAcrossTheEpochUpgrade() public {
+        bytes32 deviceId = bytes32(uint256(0xd1));
+        bytes32 composeHash = bytes32(uint256(0xc1));
+        bytes32 laterComposeHash = bytes32(uint256(0xc2));
+        for (uint256 i = 0; i < appReleases.length; i++) {
+            vm.startPrank(owner);
+            address proxy = Upgrades.deployUUPSProxy(
+                appReleases[i],
+                abi.encodeWithSignature(
+                    "initialize(address,bool,bool,bool,bytes32,bytes32)",
+                    owner,
+                    false,
+                    true,
+                    false,
+                    deviceId,
+                    composeHash
+                )
+            );
+            DstackAppV059(proxy).addComposeHash(laterComposeHash);
+            Options memory opts;
+            opts.referenceContract = appReleases[i];
+            Upgrades.upgradeProxy(proxy, "DstackApp.sol", "", opts);
+            vm.stopPrank();
+
+            DstackApp app = DstackApp(proxy);
+            assertEq(app.owner(), owner);
+            assertTrue(app.requireTcbUpToDate());
+            assertFalse(app.allowAnyDevice());
+            assertTrue(app.allowedDeviceIds(deviceId));
+            assertTrue(app.allowedComposeHashes(composeHash));
+            assertTrue(app.allowedComposeHashes(laterComposeHash));
+            assertEq(app.currentAppEpoch(), 0);
+
+            IAppAuth.AppInfo memory info;
+            info.appId = proxy;
+            info.composeHash = laterComposeHash;
+            info.deviceId = deviceId;
+            info.tcbStatus = "UpToDate";
+            (bool allowed,) = app.isAppAllowed(info);
+            assertTrue(allowed, "released policy must keep authorizing after the upgrade");
+            AuthorizationRequest memory request = AuthorizationRequest(
+                info, keccak256("app_get_key"), OptionalUint256(true, 0), OptionalUint256(false, 0)
+            );
+            assertTrue(app.authorizeApp(request).authorized);
+            info.tcbStatus = "OutOfDate";
+            (allowed,) = app.isAppAllowed(info);
+            assertFalse(allowed);
+        }
     }
 }
