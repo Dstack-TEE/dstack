@@ -3001,6 +3001,15 @@
       "promoted_at": "2026-07-28T04:57:08Z",
       "notes": "the complete current five-test source matrix covers verity volume parsing, path confinement, duplicate-root resolution, and measurement binding",
       "environment": "UNIT"
+    },
+    {
+      "case_id": "tc-kms-rotation-013",
+      "source_run": "kms-rotation-local-2026-11-08",
+      "source_status": "PASS",
+      "entrypoint": "cases/03-kms/08-upgrade-onboard-compatibility/tc-kms-rotation-013/run.py",
+      "promoted_at": "2026-11-08T00:00:00Z",
+      "notes": "focused root/app epoch, keyring, onboarding, authorization, disk migration and SealedEnv matrix passed in isolated local Cargo tests; physical tdxlab execution pending",
+      "environment": "UNIT"
     }
   ]
 }
