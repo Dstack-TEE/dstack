@@ -84,6 +84,12 @@ jobs:
           # the entries that are actually shared.
           save-if: ${{ github.event_name == 'push' }}
 
+      - name: Set up Python
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: SDK tests
         if: steps.changes.outputs.relevant == 'true'
         run: cd sdk && ./run-tests.sh
