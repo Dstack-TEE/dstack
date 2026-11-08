@@ -731,7 +731,7 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_sealed_env_pub_key(self, request: AppId) -> Result<SealedEnvPubKeyResponse> {
-        let epoch = self.ensure_self_allowed(Operation::Serve).await?;
+        let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
         let secret = derive_sealed_env_key(root, &request.app_id)?;
