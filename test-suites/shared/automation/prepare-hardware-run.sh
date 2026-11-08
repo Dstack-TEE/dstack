@@ -37,6 +37,13 @@ for command in cargo curl dstack-acpi-tables git jq mkosi npm python3 tar unshar
   require_command "$command"
 done
 
+python3 - <<'PYTHON'
+import importlib.util
+missing = [name for name in ("cryptography", "eth_keys", "eth_utils", "pyhpke") if importlib.util.find_spec(name) is None]
+if missing:
+    raise SystemExit("missing VMM CLI Python dependencies: " + ", ".join(missing) + "; install dstack/vmm/requirements.txt before preparing a hardware run")
+PYTHON
+
 user_namespace_ready() {
   unshare --user --map-root-user true >/dev/null 2>&1
 }
