@@ -133,6 +133,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "0.5.4": os.environ.get("DSTACK_TEST_IMAGE_0_5_4", "dstack-dev-0.5.4"),
             "0.5.8": os.environ.get("DSTACK_TEST_IMAGE_0_5_8", "dstack-0.5.8"),
             "0.5.11": os.environ.get("DSTACK_TEST_IMAGE_0_5_11", "dstack-0.5.11"),
+            "0.6.0": os.environ.get("DSTACK_TEST_IMAGE_0_6_0", "dstack-0.6.0"),
             "0.6.0-candidate": os.environ.get(
                 "DSTACK_TEST_GUEST_IMAGE", "dstack-0.6.0"
             ),
