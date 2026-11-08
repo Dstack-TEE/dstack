@@ -4637,4 +4637,74 @@ mod sealed_env_file_tests {
         );
         assert!(read_optional_env(dir.path()).is_err());
     }
+
+    fn work_dir_args(dir: &tempfile::TempDir) -> SetupArgs {
+        SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        }
+    }
+
+    fn with_app_epoch(mut stage: Stage1<'_>, epoch: u32) -> Stage1<'_> {
+        if let KeyProvider::Kms { app_epoch, .. } = &mut stage.keys.key_provider {
+            *app_epoch = epoch;
+        }
+        stage
+    }
+
+    #[tokio::test]
+    async fn an_envelope_from_a_future_app_epoch_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = work_dir_args(&dir);
+        let plaintext = br#"{"env":[{"key":"VALUE","value":"future"}]}"#;
+        let sealed = seal_env_at_epochs(&[7; 32], 3, 3, plaintext).unwrap();
+        let current = with_app_epoch(stage(&args, Some(sealed), vec![]), 2);
+        let err = current.decrypt_env().await.unwrap_err();
+        assert!(format!("{err:#}").contains("exceeds current"), "{err:#}");
+    }
+
+    /// The current key opens only an envelope labelled with both current
+    /// epochs. One from any other epoch pair needs that pair's key, even when
+    /// its ciphertext happens to open under the current one.
+    #[tokio::test]
+    async fn an_envelope_from_another_epoch_is_never_opened_with_the_current_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = work_dir_args(&dir);
+        let plaintext = br#"{"env":[{"key":"VALUE","value":"other-epoch"}]}"#;
+        for (root, app) in [(3, 1), (2, 2)] {
+            let sealed = seal_env_at_epochs(&[7; 32], root, app, plaintext).unwrap();
+            let current = with_app_epoch(stage(&args, Some(sealed), vec![]), 2);
+            let opened = current.decrypt_env().await;
+            assert!(
+                opened.is_err(),
+                "envelope at ({root}, {app}) opened with the key of (3, 2)"
+            );
+        }
+    }
+
+    /// How the KMS words a refusal (`get_app_key` in the KMS main service).
+    /// That the guest tells a denial apart by it is the test's assumption.
+    const KMS_DENIAL: &str = "Authorization denied: app epoch is retired";
+
+    #[tokio::test]
+    #[ignore = "finding SF3: expected to fail until SF3 is fixed (denial text is the test's assumption)"]
+    async fn finding_sf3_historical_env_search_stops_at_the_first_denial() {
+        let secret = x25519_dalek::StaticSecret::from([8; 32]);
+        let public = x25519_dalek::PublicKey::from(&secret);
+        let plaintext = br#"{"env":[{"key":"SECRET","value":"synthetic"}]}"#;
+        let encrypted = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let mut requested = Vec::new();
+        let decrypted = decrypt_historical_env(&encrypted, (0..=2).rev(), |epoch| {
+            requested.push(epoch);
+            std::future::ready(match epoch {
+                2 => Err(anyhow!(KMS_DENIAL)),
+                0 => Ok(secret.to_bytes().to_vec()),
+                _ => Ok(vec![3; 32]),
+            })
+        })
+        .await;
+        assert_eq!(requested, [2], "epochs requested after a KMS denial");
+        assert!(decrypted.is_err());
+    }
 }
