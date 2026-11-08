@@ -122,3 +122,40 @@ func TestVerifySealedEnvPublicKeyInvalidInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifySealedEnvPublicKeyAtEpochsBindsAppEpoch(t *testing.T) {
+	privateKey, err := secp256k1.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := []byte("0x" + hex.EncodeToString(privateKey.PubKey().SerializeCompressed()))
+	pub := bytes.Repeat([]byte{0x22}, 32)
+	app := bytes.Repeat([]byte{0x11}, 20)
+	rootEpoch, appEpoch := uint32(3), uint32(2)
+	now := uint64(time.Now().Unix())
+	var message bytes.Buffer
+	message.WriteString("dstack-sealed-env-pubkey-v1:")
+	message.Write(app)
+	for _, field := range []any{rootEpoch, appEpoch} {
+		if err := binary.Write(&message, binary.BigEndian, field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	message.Write(pub)
+	if err := binary.Write(&message, binary.BigEndian, now); err != nil {
+		t.Fatal(err)
+	}
+	hash := sha3.NewLegacyKeccak256()
+	hash.Write(message.Bytes())
+	compact := ecdsa.SignCompact(privateKey, hash.Sum(nil), true)
+	sig := append(append([]byte(nil), compact[1:]...), compact[0]-31)
+
+	key, err := dstack.VerifySealedEnvPublicKeyAtEpochs(pub, sig, hex.EncodeToString(app), rootEpoch, appEpoch, now, nil)
+	if err != nil || !bytes.Equal(key, pin) {
+		t.Fatalf("expected trusted signer for app epoch %d, got %q, %v", appEpoch, key, err)
+	}
+	key, err = dstack.VerifySealedEnvPublicKey(pub, sig, hex.EncodeToString(app), rootEpoch, now, nil)
+	if err == nil && bytes.Equal(key, pin) {
+		t.Fatal("app epoch 2 signature recovered trusted signer at app epoch 0")
+	}
+}
