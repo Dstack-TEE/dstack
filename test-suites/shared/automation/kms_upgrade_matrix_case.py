@@ -265,6 +265,10 @@ class MatrixRun:
             f'''#!/bin/sh\nset -eu\nmkdir -p /etc/docker\ncat > /etc/docker/daemon.json <<JSON\n{{"insecure-registries":["{self.registry["registry_guest"]}"]}}\nJSON\nsystemctl restart docker\n'''
         )
         self.prelaunch.chmod(0o755)
+        # Keep VMM signer pins isolated from other retained physical fixtures.
+        self.vmm_home = self.workspace / "vmm-home"
+        self.vmm_home.mkdir(parents=True, exist_ok=True)
+        os.environ["HOME"] = str(self.vmm_home)
 
     def image(self, version: str) -> tuple[str, str, str]:
         """Resolve the immutable container/guest/config family for a matrix version."""
