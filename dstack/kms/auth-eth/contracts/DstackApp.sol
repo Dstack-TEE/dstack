@@ -24,16 +24,19 @@ contract DstackApp is
     IAppAuthBasicManagement,
     IAppEpochAuth
 {
-    // Mapping of allowed compose hashes for this app
+    /// @notice Allowed compose hashes for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedComposeHashes;
 
     // State variable to track if upgrades are disabled
     bool private _upgradesDisabled;
 
-    // Whether allow any device to boot this app or only allow devices
+    /// @notice Whether any device may boot this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     bool public allowAnyDevice;
 
-    // Mapping of allowed device IDs for this app
+    /// @notice Allowed device IDs for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedDeviceIds;
 
     // Whether to require TCB status to be UpToDate
@@ -51,6 +54,7 @@ contract DstackApp is
 
     // Additional events specific to DstackApp
     event UpgradesDisabled();
+    /// @notice Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     event AllowAnyDeviceSet(bool allowAny);
     event RequireTcbUpToDateSet(bool requireUpToDate);
     /// @notice Additive audit event for reconstructing authorization policy.

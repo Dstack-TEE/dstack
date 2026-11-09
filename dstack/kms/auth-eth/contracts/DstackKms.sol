@@ -57,13 +57,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Mapping of registered apps
     mapping(address => bool) public registeredApps;
 
-    // Mapping of allowed aggregated MR measurements for running KMS
+    /// @notice Allowed aggregated MR measurements for running KMS. Epoch 0 only; for other epochs use the *AtEpoch
+    /// getters and EpochPolicyChanged.
     mapping(bytes32 => bool) public kmsAllowedAggregatedMrs;
 
-    // Mapping of allowed KMS device IDs
+    /// @notice Allowed KMS device IDs. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     mapping(bytes32 => bool) public kmsAllowedDeviceIds;
 
-    // Mapping of allowed image measurements
+    /// @notice Allowed OS image measurements. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedOsImages;
 
     // DstackApp implementation contract address for factory deployment
@@ -108,6 +110,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // slither-disable-next-line unindexed-event-address
     event AppRegistered(address appId);
     event KmsInfoSet(bytes k256Pubkey);
+    /// @notice Legacy material events. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     event KmsAggregatedMrAdded(bytes32 mrAggregated);
     event KmsAggregatedMrRemoved(bytes32 mrAggregated);
     event KmsDeviceAdded(bytes32 deviceId);
