@@ -38,7 +38,6 @@ path = [
     "dstack/kms/auth-eth/slither.config.json",
     "**/package-lock.json",
     "dstack/kms/auth-eth/.openzeppelin/unknown-2035.json",
-    "dstack/kms/auth-mock/.oxlintrc.json",
     "dstack/kms/auth-simple/.oxlintrc.json",
     "dstack/kms/auth-simple/auth-config.example.json",
     "tools/sca/examples/heartbeat/config.json",
