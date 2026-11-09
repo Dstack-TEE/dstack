@@ -549,7 +549,9 @@ for the full procedure; the KMS steps are:
    equals the value recomputed from the returned public keys. Then publish it
    and register epoch N with its URL. The cluster keeps serving N-1.
 4. Onboard the other KMS nodes from the rotated one; they import 0..N and keep
-   serving N-1.
+   serving N-1. A join checks the source's keyring against the latest registered
+   epoch as well as the current one, so a source holding an unregistered or
+   different epoch N is refused.
 5. Activate epoch N (`ActivateRootEpoch`, or `currentRootEpoch` for
    auth-simple). Each KMS restarts onto N on its next uncached authorization
    check; a KMS that does not hold N waits
@@ -566,7 +568,8 @@ for the full procedure; the KMS steps are:
    See [SealedEnv](./sealed-env.md) for the new format, file precedence, and rollback requirements.
 
 Each `authorizeKms` or `authorizeApp` result carries the current epoch and its chain hash,
-including when authorization is denied. KMS verifies these against its keyring;
+and the latest registered epoch (`latestRootEpoch`, `latestRootEpochHash`), which may be
+pending activation, including when authorization is denied. KMS verifies these against its keyring;
 there is no cached serving epoch. An optional `requestedRootEpoch` selects historical
 keys, and omission selects the returned current epoch. Requests for future
 epochs are denied. No registered epoch returns a rejection with

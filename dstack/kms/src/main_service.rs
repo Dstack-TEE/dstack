@@ -1808,6 +1808,8 @@ mod tests {
             current_root_epoch: epoch,
             current_app_epoch: 0,
             current_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
+            latest_root_epoch: epoch,
+            latest_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
         };
         assert_eq!(state.authorized_epoch(&result(0), None).unwrap(), 0);
         assert!(state.authorized_epoch(&result(0), Some(1)).is_err());
@@ -1855,6 +1857,8 @@ mod tests {
                 "authorized": allowed, "rejectionReason": "export denied", "gatewayAppId": "",
                 "currentRootEpoch": 0, "currentAppEpoch": 0,
                 "currentRootEpochHash": hex::encode(initial.keyring.chain_hashes[0]),
+                "latestRootEpoch": 0,
+                "latestRootEpochHash": hex::encode(initial.keyring.chain_hashes[0]),
             })
             .to_string()
         };
