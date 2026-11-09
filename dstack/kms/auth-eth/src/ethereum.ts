@@ -6,7 +6,7 @@ import { ethers } from 'ethers';
 import { BootInfo, BootResponse, RootEpochInfo, AuthorizationResult, AuthorizationRequest } from './types';
 
 // Minimal ABI for DstackKms contract
-const DSTACK_KMS_ABI = [
+export const DSTACK_KMS_ABI = [
   "function currentAppEpoch(address appId) view returns (uint256)",
   "function authorizeKms(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,bytes32 operation,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",
   "function authorizeApp(((address appId,bytes32 composeHash,address instanceId,bytes32 deviceId,bytes32 mrAggregated,bytes32 mrSystem,bytes32 osImageHash,string tcbStatus,string[] advisoryIds) appInfo,bytes32 operation,(bool isSet,uint256 value) requestedAppEpoch,(bool isSet,uint256 value) requestedRootEpoch) request) view returns ((bool isAllowed,string rejectionReason,string gatewayAppId,uint256 currentRootEpoch,bytes32 currentRootEpochHash,uint256 currentAppEpoch))",

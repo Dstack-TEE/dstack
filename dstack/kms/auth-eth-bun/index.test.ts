@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import openApiSpec from './openapi.json';
+import { keccak256, toBytes } from 'viem';
 
 // Mock viem
 const mockReadContract = vi.fn();
@@ -870,6 +871,33 @@ describe('POST /authorizeApp', () => {
     expect((await authorize(0)).status).toBe(200);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       args: [expect.objectContaining({ requestedRootEpoch: { isSet: true, value: 0n } })],
+    }));
+  });
+
+  it.each([
+    ['authorizeKms', 'kms_import_keys', { requestedRootEpoch: 2 }],
+    ['authorizeApp', 'app_get_key', { requestedRootEpoch: 1, requestedAppEpoch: 3 }],
+    ['authorizeApp', 'app_get_cert', {}],
+  ] as const)('forwards the operation and both epochs to %s (%s)', async (method, operation, epochs) => {
+    mockReadContract.mockResolvedValueOnce({
+      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      currentAppEpoch: 3n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+    });
+    const response = await appFetch(new Request(`http://localhost/${method}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...appInfo, operation, ...epochs }),
+    }));
+    expect(response.status).toBe(200);
+    const selector = (value?: number) => ({ isSet: value !== undefined, value: BigInt(value ?? 0) });
+    const { requestedRootEpoch, requestedAppEpoch } = epochs as { requestedRootEpoch?: number, requestedAppEpoch?: number };
+    expect(mockReadContract).toHaveBeenCalledTimes(1);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      functionName: method,
+      args: [expect.objectContaining({
+        operation: keccak256(toBytes(operation)),
+        requestedRootEpoch: selector(requestedRootEpoch),
+        requestedAppEpoch: selector(requestedAppEpoch),
+      })],
     }));
   });
 

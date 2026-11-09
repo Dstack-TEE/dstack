@@ -390,6 +390,29 @@ describe('authorization endpoints', () => {
     body: JSON.stringify({ appId, operation: isKms ? 'kms_serve' : 'app_get_key', requestedAppEpoch, mrAggregated: '', osImageHash: '', composeHash: '', instanceId: '', deviceId: '' }),
   }));
 
+  it('applies the requested operation and both epochs', async () => {
+    vi.stubEnv('MOCK_ROOT_EPOCH', '1');
+    vi.stubEnv('MOCK_ROOT_EPOCH_HASH', '0x' + '11'.repeat(32));
+    vi.stubEnv('MOCK_APP_EPOCH', '2');
+    const request = async (route: string, fields: object) => (await appFetch(new Request(`http://localhost/${route}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: 'app', mrAggregated: '', osImageHash: '', composeHash: '', instanceId: '', deviceId: '', ...fields }),
+    }))).json();
+    try {
+      expect(await request('authorizeApp', { operation: 'app_get_cert', requestedRootEpoch: 1, requestedAppEpoch: 2 }))
+        .toMatchObject({ isAllowed: true, currentRootEpoch: 1, currentAppEpoch: 2 });
+      for (const [route, operation] of [['authorizeApp', 'kms_serve'], ['authorizeKms', 'app_get_key']]) {
+        expect(await request(route, { operation })).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
+      }
+      expect(await request('authorizeApp', { operation: 'app_get_key', requestedRootEpoch: 2 }))
+        .toMatchObject({ isAllowed: false, rejectionReason: 'Requested root epoch is not active' });
+      expect(await request('authorizeApp', { operation: 'app_get_key', requestedAppEpoch: 3 }))
+        .toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('requires registered roots and selects policy by app ID', async () => {
     vi.stubEnv('MOCK_ROOT_EPOCH', '');
     vi.stubEnv('MOCK_ROOT_EPOCH_HASH', '');

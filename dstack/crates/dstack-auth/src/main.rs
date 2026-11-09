@@ -515,11 +515,19 @@ mod tests {
         .unwrap();
         let kms = json!({"operation": "kms_serve", "appId": "11".repeat(20), "mrAggregated": "bb"});
         let app = json!({"operation": "app_get_key", "appId": "22".repeat(20), "composeHash": "cc", "osImageHash": "aa"});
+        let with_operation = |body: &serde_json::Value, operation: &str| {
+            let mut body = body.clone();
+            body["operation"] = operation.into();
+            body
+        };
         for (route, body, allowed) in [
             ("/authorizeKms", kms.clone(), true),
             ("/authorizeApp", app.clone(), true),
             ("/authorizeKms", app.clone(), false),
             ("/authorizeApp", kms.clone(), false),
+            // The caller matches the route, but the operation belongs to the other scope.
+            ("/authorizeKms", with_operation(&kms, "app_get_key"), false),
+            ("/authorizeApp", with_operation(&app, "kms_serve"), false),
         ] {
             let response = client
                 .post(route)

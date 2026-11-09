@@ -5,7 +5,7 @@
 import { FastifyInstance } from 'fastify';
 import { ethers } from 'ethers';
 import { build } from './server';
-import { rootEpochDenial } from './ethereum';
+import { DSTACK_KMS_ABI, rootEpochDenial } from './ethereum';
 import { BootInfo } from './types';
 
 // Mock EthereumBackend
@@ -298,6 +298,33 @@ describe('Ethereum root epoch registry', () => {
       { name: 'currentRootEpoch', blockTag: 100 },
     ]);
     expect(getBlockNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['authorizeKms', 'kms_import_keys', { requestedRootEpoch: 2 }],
+    ['authorizeApp', 'app_get_key', { requestedRootEpoch: 1, requestedAppEpoch: 3 }],
+    ['authorizeApp', 'app_get_cert', {}],
+  ] as const)('forwards the operation and both epochs to %s (%s)', async (method, operation, epochs) => {
+    const kms = new ethers.Interface(DSTACK_KMS_ABI);
+    const normalCall = call.getMockImplementation()!;
+    const forwarded: ethers.Result[] = [];
+    call.mockImplementation(async (tx: ethers.TransactionRequest) => {
+      const fn = kms.getFunction(tx.data!.slice(0, 10));
+      if (fn?.name !== method) return normalCall(tx);
+      forwarded.push(kms.decodeFunctionData(fn, tx.data!)[0]);
+      return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n]]);
+    });
+    const response = await app.inject({
+      method: 'POST', url: `/${method}`, payload: { ...bootInfo, operation, ...epochs },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(forwarded).toHaveLength(1);
+    const [request] = forwarded;
+    expect(request.operation).toBe(ethers.id(operation));
+    const selector = (value?: number) => [value !== undefined, BigInt(value ?? 0)];
+    const { requestedRootEpoch, requestedAppEpoch } = epochs as { requestedRootEpoch?: number, requestedAppEpoch?: number };
+    expect([...request.requestedRootEpoch]).toEqual(selector(requestedRootEpoch));
+    expect([...request.requestedAppEpoch]).toEqual(selector(requestedAppEpoch));
   });
 
   describe.each(['rootEpochCount', 'currentRootEpoch'])('%s failures', (getter) => {
