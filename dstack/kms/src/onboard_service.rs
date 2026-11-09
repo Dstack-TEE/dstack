@@ -780,6 +780,19 @@ mod tests {
         assert!(onboard(&cfg, behind, false, registered_up_to(&res, 2, 2))
             .await
             .is_err());
+        // A tail past the current epoch that stops short of the latest one cannot be
+        // checked, so a forked epoch 2 is refused while epoch 3 is registered.
+        let longer = handover(4);
+        let mut partial = handover(3);
+        partial.keys[..2].clone_from_slice(&longer.keys[..2]);
+        let error = onboard(&cfg, partial, false, registered_up_to(&longer, 1, 3))
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            format!("{error:#}").contains("only epoch 3 can be checked"),
+            "{error:#}"
+        );
     }
 
     #[rocket::async_test]
@@ -1343,6 +1356,14 @@ fn ensure_handover_registered(
             bail!(
                 "source KMS holds unregistered root epochs (up to {held}, registered up to {}); \
                  register them first or onboard from another source",
+                latest.epoch
+            );
+        }
+        // Only the latest registered epoch's hash binds epochs past the current one.
+        if held > current && held < latest.epoch {
+            bail!(
+                "source KMS holds root epochs up to {held}, past the current {current}, but only \
+                 epoch {} can be checked; onboard from a source holding every registered epoch",
                 latest.epoch
             );
         }

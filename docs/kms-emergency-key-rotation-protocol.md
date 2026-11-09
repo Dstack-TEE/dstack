@@ -249,7 +249,8 @@ registered epoch L (`latestRootEpoch`, `latestRootEpochHash`). It never selects 
 subset. A source holding epochs beyond L is refused ("source KMS holds
 unregistered root epochs"). When S = L, the chain hash of L must match; chain
 hashes are cumulative, so this binds the whole pending tail, not only the current
-prefix. A source behind L but at or past the current epoch still joins. With
+prefix. A source holding exactly the current epoch still joins; one stopping
+between the current epoch and L is refused, since its tail cannot be checked. With
 `rotate`, it then generates epoch S+1.
 
 | Mode | Source requirement | Result |
