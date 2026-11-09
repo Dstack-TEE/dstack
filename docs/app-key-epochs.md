@@ -46,9 +46,12 @@ epochs. For an image handover, explicitly approve the new image in the old row s
 it can migrate old keys, approve it in the new row, and remove the old image from
 the old row after the handover. The old image never needs access to the new row.
 
-Existing add/remove methods operate on the highest epoch: the latest **registered**
-root epoch (including a pending epoch), or the current app epoch. Before any root
-epoch is registered, they operate on epoch zero. The `*AtEpoch(epoch, material)`
+Existing `DstackKms` add/remove methods (OS images, KMS aggregated MRs, KMS
+devices) operate on every root row from the current epoch through the latest
+**registered** one, so a removal during a rotation revokes the material in both
+the serving and the pending row, and an addition allows it in both. Before any
+root epoch is registered, they operate on epoch zero. `DstackApp` add/remove
+methods operate on the current app epoch. The `*AtEpoch(epoch, material)`
 methods select a particular registered root/current-or-historical app epoch;
 removal affects only that row. `setAllowAnyDeviceAtEpoch(epoch, allowed)` is also
 row-specific. Single-material add/remove scripts in `Manage.s.sol` accept optional

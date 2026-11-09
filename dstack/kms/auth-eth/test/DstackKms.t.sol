@@ -505,10 +505,7 @@ contract DstackKmsTest is Test {
         vm.startPrank(owner);
         registerNextRootEpoch();
         registerNextRootEpoch();
-        kms.addOsImageHash(info.osImageHash);
-        kms.addKmsDevice(info.deviceId);
-        kms.addKmsAggregatedMr(info.mrAggregated);
-        // Default additions use the highest registered row, not the active row.
+        approveKmsAtEpoch(info, 1);
         assertFalse(kms.allowedOsImages(info.osImageHash));
         assertTrue(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
         assertFalse(authorize(info, true).isAllowed);
@@ -1078,5 +1075,72 @@ contract DstackKmsTest is Test {
         );
         vm.expectRevert(bytes("policy unavailable"));
         kms.authorizeApp(epochRequest(info, 0, 0));
+    }
+
+    function test_LegacySettersCoverCurrentAndPendingRows() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        kms.addOsImageHash(info.osImageHash);
+        kms.addKmsAggregatedMr(info.mrAggregated);
+        kms.addKmsDevice(info.deviceId);
+        info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        for (uint256 epoch = 0; epoch < 2; ++epoch) {
+            assertTrue(kms.allowedOsImagesAtEpoch(epoch, info.osImageHash));
+            assertTrue(kms.kmsAllowedAggregatedMrsAtEpoch(epoch, info.mrAggregated));
+            assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(epoch, info.deviceId));
+        }
+        assertTrue(authorize(info, true).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertTrue(authorize(info, false).isAllowed);
+
+        // A revocation during the rotation reaches the serving and the pending row.
+        kms.removeKmsAggregatedMr(info.mrAggregated);
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        kms.addKmsAggregatedMr(info.mrAggregated);
+        kms.removeKmsDevice(info.deviceId);
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        kms.addKmsDevice(info.deviceId);
+        kms.removeOsImageHash(info.osImageHash);
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertFalse(authorize(info, false).isAllowed);
+        activateNextRootEpoch();
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(authorize(info, false).isAllowed);
+
+        // Once epoch one is current, epoch zero is no longer written.
+        kms.addOsImageHash(info.osImageHash);
+        assertFalse(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        assertTrue(authorize(info, true).isAllowed);
+        assertTrue(authorize(info, false).isAllowed);
+        vm.stopPrank();
+    }
+
+    function test_AtEpochSettersChangeOnlyTheirRow() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        approveKmsAtEpoch(info, 1);
+        assertFalse(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        assertFalse(kms.kmsAllowedAggregatedMrsAtEpoch(0, info.mrAggregated));
+        assertFalse(kms.kmsAllowedDeviceIdsAtEpoch(0, info.deviceId));
+        assertFalse(authorize(info, true).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+
+        approveKmsAtEpoch(info, 0);
+        kms.removeOsImageHashAtEpoch(1, info.osImageHash);
+        kms.removeKmsAggregatedMrAtEpoch(1, info.mrAggregated);
+        kms.removeKmsDeviceAtEpoch(1, info.deviceId);
+        assertTrue(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        assertTrue(kms.kmsAllowedAggregatedMrsAtEpoch(0, info.mrAggregated));
+        assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(0, info.deviceId));
+        assertTrue(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        vm.stopPrank();
     }
 }

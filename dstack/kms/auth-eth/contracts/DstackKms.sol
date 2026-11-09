@@ -363,16 +363,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return epoch == 0 ? kmsAllowedAggregatedMrs[mrAggregated] : _kmsAggregatedMrsByEpoch[epoch][mrAggregated];
     }
 
-    function addKmsAggregatedMr(bytes32 mrAggregated) external {
-        addKmsAggregatedMrAtEpoch(_latestRootEpoch(), mrAggregated);
+    function addKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsAggregatedMr, mrAggregated, true);
     }
 
     function addKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
         _setKmsAggregatedMr(epoch, mrAggregated, true);
     }
 
-    function removeKmsAggregatedMr(bytes32 mrAggregated) external {
-        removeKmsAggregatedMrAtEpoch(_latestRootEpoch(), mrAggregated);
+    function removeKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsAggregatedMr, mrAggregated, false);
     }
 
     function removeKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
@@ -396,16 +396,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return epoch == 0 ? kmsAllowedDeviceIds[deviceId] : _kmsDeviceIdsByEpoch[epoch][deviceId];
     }
 
-    function addKmsDevice(bytes32 deviceId) external {
-        addKmsDeviceAtEpoch(_latestRootEpoch(), deviceId);
+    function addKmsDevice(bytes32 deviceId) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsDevice, deviceId, true);
     }
 
     function addKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         _setKmsDevice(epoch, deviceId, true);
     }
 
-    function removeKmsDevice(bytes32 deviceId) external {
-        removeKmsDeviceAtEpoch(_latestRootEpoch(), deviceId);
+    function removeKmsDevice(bytes32 deviceId) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsDevice, deviceId, false);
     }
 
     function removeKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
@@ -429,16 +429,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return epoch == 0 ? allowedOsImages[osImageHash] : _osImagesByEpoch[epoch][osImageHash];
     }
 
-    function addOsImageHash(bytes32 osImageHash) external {
-        addOsImageHashAtEpoch(_latestRootEpoch(), osImageHash);
+    function addOsImageHash(bytes32 osImageHash) external onlyOwner {
+        _setFromCurrentEpoch(_setOsImageHash, osImageHash, true);
     }
 
     function addOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
         _setOsImageHash(epoch, osImageHash, true);
     }
 
-    function removeOsImageHash(bytes32 osImageHash) external {
-        removeOsImageHashAtEpoch(_latestRootEpoch(), osImageHash);
+    function removeOsImageHash(bytes32 osImageHash) external onlyOwner {
+        _setFromCurrentEpoch(_setOsImageHash, osImageHash, false);
     }
 
     function removeOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
@@ -456,6 +456,23 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             _osImagesByEpoch[epoch][osImageHash] = allowed;
         }
         emit EpochPolicyChanged(keccak256("os-image"), osImageHash, epoch, allowed);
+    }
+
+    // The epoch-less setters change every row from the current epoch through
+    // any registered pending one, so a revocation during a rotation reaches
+    // both the serving and the prepared row. Use the *AtEpoch setters to change
+    // a single row.
+    function _setFromCurrentEpoch(
+        function(uint256, bytes32, bool) internal setter,
+        bytes32 value,
+        bool allowed
+    )
+        private
+    {
+        uint256 latest = _latestRootEpoch();
+        for (uint256 epoch = _currentRootEpoch; epoch <= latest; ++epoch) {
+            setter(epoch, value, allowed);
+        }
     }
 
     function _latestRootEpoch() private view returns (uint256) {
