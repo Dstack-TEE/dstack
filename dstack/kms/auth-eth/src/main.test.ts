@@ -334,7 +334,7 @@ describe('Ethereum root epoch registry', () => {
     const normalCall = call.getMockImplementation()!;
     call.mockImplementation(async (tx: ethers.TransactionRequest) => {
       const fn = kms.getFunction(tx.data!.slice(0, 10));
-      if (fn?.name === method) return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n]]);
+      if (fn?.name === method) return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n, 1n, hash]]);
       if (fn?.name === 'currentAppEpoch') return kms.encodeFunctionResult(fn, [2n]);
       return normalCall(tx);
     });
@@ -477,7 +477,9 @@ describe('Ethereum authorization result decoding', () => {
       ]]);
     });
     app.ethereum = new EthereumBackend(
-      { call, getNetwork: async () => ({ chainId: 1337n }) } as unknown as ethers.JsonRpcProvider,
+      {
+        call, getBlock: async () => ({ number: 100 }), getNetwork: async () => ({ chainId: 1337n }),
+      } as unknown as ethers.JsonRpcProvider,
       '0x' + '11'.repeat(20),
     );
     try {
