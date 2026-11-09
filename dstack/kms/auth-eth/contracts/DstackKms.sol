@@ -489,20 +489,19 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     {
         result.gatewayAppId = gatewayAppId;
         result.currentAppEpoch = isKms ? 0 : currentAppEpoch(request.appInfo.appId);
+        if (_rootEpochs.length > 0) {
+            result.currentRootEpoch = _currentRootEpoch;
+            result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        }
         if (!(isKms
                     ? AuthorizationOperation.isKms(request.operation)
                     : AuthorizationOperation.isApp(request.operation))) {
             result.rejectionReason = "Invalid authorization operation";
             return result;
         }
-        if (_rootEpochs.length == 0) {
-            if (request.operation != AuthorizationOperation.KMS_BOOTSTRAP) {
-                result.rejectionReason = "Root epoch not registered";
-                return result;
-            }
-        } else {
-            result.currentRootEpoch = _currentRootEpoch;
-            result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        if (_rootEpochs.length == 0 && request.operation != AuthorizationOperation.KMS_BOOTSTRAP) {
+            result.rejectionReason = "Root epoch not registered";
+            return result;
         }
         uint256 latestAllowedRoot = isKms ? _latestRootEpoch() : _currentRootEpoch;
         if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > latestAllowedRoot) {

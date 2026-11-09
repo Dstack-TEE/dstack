@@ -659,13 +659,23 @@ contract DstackKmsTest is Test {
         kms.activateRootEpoch(1, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1)));
         vm.stopPrank();
 
+        bytes32 hash1 = chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1));
         DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(user), false);
         assertFalse(result.isAllowed);
         assertEq(result.rejectionReason, "App not registered");
         assertEq(result.currentRootEpoch, 1);
-        assertEq(
-            result.currentRootEpochHash, chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1))
+        assertEq(result.currentRootEpochHash, hash1);
+
+        DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
+            authorizationInfo(user),
+            keccak256("kms_serve"),
+            DstackKms.OptionalUint256(false, 0),
+            DstackKms.OptionalUint256(false, 0)
         );
+        result = kms.authorizeApp(request);
+        assertEq(result.rejectionReason, "Invalid authorization operation");
+        assertEq(result.currentRootEpoch, 1);
+        assertEq(result.currentRootEpochHash, hash1);
     }
 
     function test_IsKmsAllowed() public {
