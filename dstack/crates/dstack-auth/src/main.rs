@@ -2,23 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! `dstack-auth` — the single-operator KMS auth webhook (Rust reimplementation
-//! of `auth-simple`).
+//! `dstack-auth` — the file-based KMS auth webhook.
 //!
 //! Runs on the host as `dstack-auth.service`; the KMS-in-CVM reaches it at
 //! `http://10.0.2.2:<port>` under user-mode networking and POSTs `BootInfo` to
 //! `/authorizeApp` (compose-hash allowlist) and `/authorizeKms` (mrAggregated
-//! allowlist). Legacy `/bootAuth/*` routes remain available for bootstrap. The allowlist JSON is re-read on every request, so `dstack run`
-//! can add an app without a restart. Fails closed: a missing/invalid allowlist
-//! denies everything.
+//! allowlist). Legacy `/bootAuth/*` routes remain available for bootstrap. The
+//! allowlist JSON is re-read on every request, so `dstack run` can add an app
+//! without a restart. Fails closed: a missing/invalid allowlist denies
+//! everything.
 //!
-//! Deliberate single-node deviation from `auth-simple`: it does NOT enforce
-//! `tcbStatus == UpToDate`. Real TDX hosts routinely report a non-`UpToDate`
-//! TCB (microcode / TDX-module behind), and in the single-node model the
-//! operator already controls and trusts their own host, so a hard TCB gate
-//! would be friction without a corresponding trust gain here. Re-add the check
-//! (capture `tcbStatus`, deny unless `UpToDate`) if this grows into a
-//! multi-tenant / hosted deployment.
+//! The allowlist format is the one the removed `auth-simple` server used, so
+//! its config files load unchanged. One default differs: the TCB status and
+//! advisory IDs are checked only when the allowlist sets `allowedTcbStatuses`
+//! / `allowedAdvisoryIds` (auth-simple defaulted to `["UpToDate"]` and `[]`).
+//! Real TDX hosts routinely report a non-`UpToDate` TCB (microcode / TDX
+//! module behind), and in the single-node model the operator already controls
+//! and trusts their own host, so a hard TCB gate would be friction without a
+//! corresponding trust gain there. Deployments that serve other parties should
+//! set both fields.
+//!
+//! KMS boots are not checked against `osImages`: `kms.mrAggregated` already
+//! pins the OS image measurements.
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -60,6 +65,12 @@ struct BootInfo {
     app_id: String,
     compose_hash: String,
     device_id: String,
+    /// verifier-derived TCB status, e.g. `UpToDate`; checked only when the
+    /// allowlist sets `allowedTcbStatuses`.
+    tcb_status: String,
+    /// security advisories reported for the platform; checked only when the
+    /// allowlist sets `allowedAdvisoryIds`.
+    advisory_ids: Vec<String>,
     /// the root epoch the asking KMS serves and its chain hash; absent from a
     /// KMS that predates root epochs, and from KMS checks made while onboarding.
     root_epoch: Option<usize>,
@@ -108,8 +119,18 @@ struct EpochInfo {
 #[serde(rename_all = "camelCase", default)]
 struct Allowlist {
     os_images: Vec<String>,
+    /// when set, deny unless the reported `tcbStatus` is listed; an empty list
+    /// denies everything. Absent: the TCB status is not checked.
+    allowed_tcb_statuses: Option<Vec<String>>,
+    /// when set, deny any reported advisory ID that is not listed; an empty
+    /// list denies any advisory. Absent: advisories are not checked.
+    allowed_advisory_ids: Option<Vec<String>>,
     kms_contract_addr: String,
     gateway_app_id: String,
+    /// informational, reported by `GET /`.
+    chain_id: u64,
+    /// informational, reported by `GET /`.
+    app_implementation: String,
     kms: KmsRules,
     apps: HashMap<String, AppRules>,
     /// root public keys of each KMS root epoch, indexed by epoch; append only.
@@ -258,7 +279,25 @@ fn allow(info: &BootInfo, al: &Allowlist) -> BootResponse {
     }
 }
 
+/// the opt-in platform checks shared by app and KMS policy.
+fn tcb_denial(info: &BootInfo, al: &Allowlist) -> Option<&'static str> {
+    if let Some(allowed) = &al.allowed_tcb_statuses {
+        if !allowed.contains(&info.tcb_status) {
+            return Some("tcb status not allowed");
+        }
+    }
+    if let Some(allowed) = &al.allowed_advisory_ids {
+        if info.advisory_ids.iter().any(|id| !allowed.contains(id)) {
+            return Some("advisory id not allowed");
+        }
+    }
+    None
+}
+
 fn app_policy(info: &BootInfo, al: &Allowlist) -> BootResponse {
+    if let Some(reason) = tcb_denial(info, al) {
+        return deny(al, reason);
+    }
     if al.os_images.is_empty() {
         return deny(al, "os image allowlist is empty");
     }
@@ -282,6 +321,9 @@ fn app_policy(info: &BootInfo, al: &Allowlist) -> BootResponse {
 }
 
 fn kms_policy(info: &BootInfo, al: &Allowlist) -> BootResponse {
+    if let Some(reason) = tcb_denial(info, al) {
+        return deny(al, reason);
+    }
     if !contains(&al.kms.mr_aggregated, &info.mr_aggregated) {
         return deny(al, "kms mrAggregated not allowed");
     }
@@ -382,14 +424,37 @@ fn unavailable(error: anyhow::Error) -> Status {
     Status::ServiceUnavailable
 }
 
+/// authorize and log the decision with the identities an operator needs to
+/// extend the allowlist (device ID, measurements, TCB status).
+fn authorize_logged(
+    request: &AuthorizationRequest,
+    is_kms: bool,
+    config: &PathBuf,
+) -> Result<Json<AuthorizationResult>, Status> {
+    let result = authorize(request, is_kms, &load(config)).map_err(unavailable)?;
+    let info = &request.boot_info;
+    rocket::info!(
+        "authorize {:?} app={} compose={} mr={} os={} device={} tcb={} advisories={:?} -> authorized={} ({})",
+        request.operation,
+        norm(&info.app_id),
+        norm(&info.compose_hash),
+        norm(&info.mr_aggregated),
+        norm(&info.os_image_hash),
+        norm(&info.device_id),
+        info.tcb_status,
+        info.advisory_ids,
+        result.authorized,
+        result.rejection_reason
+    );
+    Ok(Json(result))
+}
+
 #[post("/authorizeApp", data = "<request>")]
 fn authorize_app(
     request: Json<AuthorizationRequest>,
     cli: &State<Cli>,
 ) -> Result<Json<AuthorizationResult>, Status> {
-    authorize(&request, false, &load(&cli.config))
-        .map(Json)
-        .map_err(unavailable)
+    authorize_logged(&request, false, &cli.config)
 }
 
 #[post("/authorizeKms", data = "<request>")]
@@ -397,9 +462,7 @@ fn authorize_kms(
     request: Json<AuthorizationRequest>,
     cli: &State<Cli>,
 ) -> Result<Json<AuthorizationResult>, Status> {
-    authorize(&request, true, &load(&cli.config))
-        .map(Json)
-        .map_err(unavailable)
+    authorize_logged(&request, true, &cli.config)
 }
 
 #[get("/app/<app_id>")]
@@ -432,9 +495,12 @@ fn load(path: &PathBuf) -> Allowlist {
 fn boot_app(info: Json<BootInfo>, cli: &State<Cli>) -> Json<BootResponse> {
     let r = check_app(&info, &load(&cli.config));
     rocket::info!(
-        "bootAuth/app app={} compose={} -> allowed={} ({})",
+        "bootAuth/app app={} compose={} os={} device={} tcb={} -> allowed={} ({})",
         norm(&info.app_id),
         norm(&info.compose_hash),
+        norm(&info.os_image_hash),
+        norm(&info.device_id),
+        info.tcb_status,
         r.is_allowed,
         r.reason
     );
@@ -445,15 +511,17 @@ fn boot_app(info: Json<BootInfo>, cli: &State<Cli>) -> Json<BootResponse> {
 fn boot_kms(info: Json<BootInfo>, cli: &State<Cli>) -> Json<BootResponse> {
     let r = check_kms(&info, &load(&cli.config));
     rocket::info!(
-        "bootAuth/kms mr={} -> allowed={} ({})",
+        "bootAuth/kms mr={} device={} tcb={} -> allowed={} ({})",
         norm(&info.mr_aggregated),
+        norm(&info.device_id),
+        info.tcb_status,
         r.is_allowed,
         r.reason
     );
     Json(r)
 }
 
-/// info endpoint the KMS GETs to populate its metadata. Single-node: no chain.
+/// info endpoint the KMS GETs to populate its metadata.
 #[get("/")]
 fn info(cli: &State<Cli>) -> Result<Json<serde_json::Value>, Status> {
     info_json(&load(&cli.config)).map(Json).map_err(|error| {
@@ -468,8 +536,10 @@ fn info_json(al: &Allowlist) -> Result<serde_json::Value> {
         "kmsContractAddr": al.kms_contract_addr,
         "ethRpcUrl": "",
         "gatewayAppId": al.gateway_app_id,
-        "chainId": 0,
-        "appImplementation": "",
+        "chainId": al.chain_id,
+        // `appAuthImplementation` is the older name of `appImplementation`.
+        "appAuthImplementation": al.app_implementation,
+        "appImplementation": al.app_implementation,
     });
     if let Some(epoch) = al.current_root_epoch()? {
         info["rootEpoch"] = epoch.number.into();
@@ -721,6 +791,212 @@ mod tests {
         );
     }
 
+    async fn post_json(
+        client: &rocket::local::asynchronous::Client,
+        route: &str,
+        body: &serde_json::Value,
+    ) -> serde_json::Value {
+        let response = client
+            .post(route.to_string())
+            .header(rocket::http::ContentType::JSON)
+            .body(body.to_string())
+            .dispatch()
+            .await;
+        assert_eq!(response.status(), Status::Ok, "{route}");
+        response.into_json().await.unwrap()
+    }
+
+    async fn client_for(path: &std::path::Path) -> rocket::local::asynchronous::Client {
+        rocket::local::asynchronous::Client::tracked(server(Cli {
+            config: path.to_path_buf(),
+            address: "127.0.0.1".into(),
+            port: 0,
+        }))
+        .await
+        .unwrap()
+    }
+
+    #[rocket::async_test]
+    async fn tcb_status_and_advisories_are_checked_only_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allowlist.json");
+        let client = client_for(&path).await;
+        let base = json!({
+            "kmsContractAddr": "11".repeat(20),
+            "rootEpochs": [{"caPubkey": "aa", "k256Pubkey": "bb"}],
+            "osImages": ["aa"],
+            "kms": {"mrAggregated": ["bb"], "allowAnyDevice": true},
+            "apps": {"22".repeat(20): {"composeHashes": ["cc"], "allowAnyDevice": true}}
+        });
+        let kms = json!({"operation": "kms_serve", "appId": "11".repeat(20), "mrAggregated": "bb", "osImageHash": "aa"});
+        let app = json!({"operation": "app_get_key", "appId": "22".repeat(20), "composeHash": "cc", "osImageHash": "aa"});
+        let legacy = json!({"appId": "22".repeat(20), "composeHash": "cc", "osImageHash": "aa"});
+        let platform =
+            |tcb: &str, advisories: &[&str]| json!({"tcbStatus": tcb, "advisoryIds": advisories});
+        let cases = [
+            // Absent fields: neither the TCB status nor advisories are checked.
+            (json!({}), platform("OutOfDate", &["INTEL-SA-00001"]), true),
+            (json!({}), platform("", &[]), true),
+            (
+                json!({"allowedTcbStatuses": ["UpToDate"]}),
+                platform("UpToDate", &[]),
+                true,
+            ),
+            (
+                json!({"allowedTcbStatuses": ["UpToDate"]}),
+                platform("OutOfDate", &[]),
+                false,
+            ),
+            (
+                json!({"allowedTcbStatuses": ["UpToDate"]}),
+                platform("", &[]),
+                false,
+            ),
+            (
+                json!({"allowedTcbStatuses": ["UpToDate", "SWHardeningNeeded"]}),
+                platform("SWHardeningNeeded", &[]),
+                true,
+            ),
+            (
+                json!({"allowedTcbStatuses": []}),
+                platform("UpToDate", &[]),
+                false,
+            ),
+            (
+                json!({"allowedAdvisoryIds": []}),
+                platform("OutOfDate", &[]),
+                true,
+            ),
+            (
+                json!({"allowedAdvisoryIds": []}),
+                platform("UpToDate", &["INTEL-SA-00001"]),
+                false,
+            ),
+            (
+                json!({"allowedAdvisoryIds": ["INTEL-SA-00001"]}),
+                platform("UpToDate", &["INTEL-SA-00001"]),
+                true,
+            ),
+            (
+                json!({"allowedAdvisoryIds": ["INTEL-SA-00001"]}),
+                platform("UpToDate", &["INTEL-SA-00001", "INTEL-SA-00002"]),
+                false,
+            ),
+        ];
+        for (policy_fields, platform, allowed) in cases {
+            let mut policy = base.clone();
+            policy
+                .as_object_mut()
+                .unwrap()
+                .extend(policy_fields.as_object().unwrap().clone());
+            std::fs::write(&path, policy.to_string()).unwrap();
+            let with_platform = |body: &serde_json::Value| {
+                let mut body = body.clone();
+                body.as_object_mut()
+                    .unwrap()
+                    .extend(platform.as_object().unwrap().clone());
+                body
+            };
+            let context = format!("{policy_fields} {platform}");
+            let response = post_json(&client, "/authorizeKms", &with_platform(&kms)).await;
+            assert_eq!(response["authorized"], allowed, "kms {context}");
+            let response = post_json(&client, "/authorizeApp", &with_platform(&app)).await;
+            assert_eq!(response["authorized"], allowed, "app {context}");
+            let response = post_json(&client, "/bootAuth/app", &with_platform(&legacy)).await;
+            assert_eq!(response["isAllowed"], allowed, "bootAuth/app {context}");
+            if !allowed {
+                let reason = response["reason"].as_str().unwrap();
+                assert!(
+                    reason.starts_with("tcb status") || reason.starts_with("advisory"),
+                    "{reason}"
+                );
+            }
+        }
+    }
+
+    /// A config written for the removed auth-simple server, with every field it
+    /// read, keeps loading and authorizing.
+    #[rocket::async_test]
+    async fn an_auth_simple_config_file_still_authorizes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth-config.json");
+        let app_id = "0x7a3b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5B";
+        let gateway_id = "0x75537828f2ce51be7289709686A69CbFDbB714F1";
+        let kms_id = "0x1111111111111111111111111111111111111111";
+        let config = json!({
+            "gatewayAppId": gateway_id,
+            "kmsContractAddr": kms_id,
+            "chainId": 2035,
+            "appImplementation": "0x3333333333333333333333333333333333333333",
+            "osImages": ["0x0B327BCD"],
+            "allowedTcbStatuses": ["UpToDate"],
+            "allowedAdvisoryIds": [],
+            "kms": {"mrAggregated": ["0xAbCd"], "devices": ["0xD1"], "allowAnyDevice": false},
+            "apps": {
+                app_id: {"currentAppEpoch": 0, "composeHashes": ["0x700A"], "devices": ["0xD2"], "allowAnyDevice": false},
+                gateway_id: {"composeHashes": ["0x0123"], "allowAnyDevice": true}
+            },
+            "rootEpochs": [{"caPubkey": "0xaa", "k256Pubkey": "0xbb"}],
+            "currentRootEpoch": 0
+        });
+        std::fs::write(&path, config.to_string()).unwrap();
+        let client = client_for(&path).await;
+
+        let info: serde_json::Value = client.get("/").dispatch().await.into_json().await.unwrap();
+        assert_eq!(info["gatewayAppId"], gateway_id);
+        assert_eq!(info["kmsContractAddr"], kms_id);
+        assert_eq!(info["chainId"], 2035);
+        assert_eq!(
+            info["appImplementation"],
+            "0x3333333333333333333333333333333333333333"
+        );
+        assert_eq!(info["appAuthImplementation"], info["appImplementation"]);
+        assert_eq!(info["rootEpoch"], 0);
+
+        // Hex values match regardless of `0x` prefix and case, as in auth-simple.
+        let app = json!({
+            "operation": "app_get_key", "appId": app_id.to_lowercase(), "composeHash": "700a",
+            "osImageHash": "0b327bcd", "deviceId": "d2", "tcbStatus": "UpToDate", "advisoryIds": []
+        });
+        let response = post_json(&client, "/authorizeApp", &app).await;
+        assert_eq!(response["authorized"], true, "{response}");
+        assert_eq!(response["gatewayAppId"], gateway_id);
+        let mut other_device = app.clone();
+        other_device["deviceId"] = "d1".into();
+        let response = post_json(&client, "/authorizeApp", &other_device).await;
+        assert_eq!(response["authorized"], false);
+        assert_eq!(response["rejectionReason"], "device not allowed");
+
+        let kms = json!({
+            "operation": "kms_serve", "appId": kms_id, "mrAggregated": "abcd",
+            "deviceId": "0xD1", "tcbStatus": "UpToDate", "advisoryIds": []
+        });
+        let response = post_json(&client, "/authorizeKms", &kms).await;
+        assert_eq!(response["authorized"], true, "{response}");
+        let mut legacy = kms.clone();
+        legacy.as_object_mut().unwrap().remove("operation");
+        legacy["rootEpoch"] = 0.into();
+        legacy["rootEpochHash"] = response["currentRootEpochHash"].clone();
+        let response = post_json(&client, "/bootAuth/kms", &legacy).await;
+        assert_eq!(response["isAllowed"], true, "{response}");
+        legacy["tcbStatus"] = "OutOfDate".into();
+        let response = post_json(&client, "/bootAuth/kms", &legacy).await;
+        assert_eq!(response["isAllowed"], false);
+        assert_eq!(response["reason"], "tcb status not allowed");
+
+        let epoch: serde_json::Value = client
+            .get(format!(
+                "/app/{}",
+                app_id.to_uppercase().replacen("0X", "0x", 1)
+            ))
+            .dispatch()
+            .await
+            .into_json()
+            .await
+            .unwrap();
+        assert_eq!(epoch["currentAppEpoch"], 0);
+    }
+
     fn allowlist() -> Allowlist {
         serde_json::from_str(
             r#"{
@@ -835,14 +1111,11 @@ mod tests {
             serde_json::from_value(json!({"operation": "kms_serve", "appId": "11".repeat(20)}))
                 .unwrap();
         let result = authorize(&request, true, &al).unwrap();
-        let hashes = dstack_types::root_epoch::chain_hashes(
-            [
-                (&[0xaa][..], &[0xbb][..]),
-                (&[0xcc], &[0xdd]),
-                (&[0xee], &[0xff]),
-            ]
-            .into_iter(),
-        );
+        let hashes = dstack_types::root_epoch::chain_hashes([
+            (&[0xaa][..], &[0xbb][..]),
+            (&[0xcc], &[0xdd]),
+            (&[0xee], &[0xff]),
+        ]);
         assert_eq!(result.current_root_epoch, 1);
         assert_eq!(
             result.current_root_epoch_hash,
@@ -957,7 +1230,7 @@ mod tests {
             "deviceId": "0xDEV",
             "keyProviderInfo": "kp",
             "tcbStatus": "UpToDate",
-            "advisoryIds": []
+            "advisoryIds": ["INTEL-SA-00001"]
         }"#;
         let info: BootInfo = serde_json::from_str(wire).expect("kms BootInfo must deserialize");
         assert_eq!(norm(&info.mr_aggregated), "aabb");
@@ -965,6 +1238,8 @@ mod tests {
         assert_eq!(norm(&info.app_id), "app1");
         assert_eq!(norm(&info.compose_hash), "hash");
         assert_eq!(norm(&info.device_id), "dev");
+        assert_eq!(info.tcb_status, "UpToDate");
+        assert_eq!(info.advisory_ids, ["INTEL-SA-00001"]);
         // a check using this payload should pass against a matching allowlist.
         let info2: BootInfo = serde_json::from_str(wire).unwrap();
         let al: Allowlist = serde_json::from_str(
