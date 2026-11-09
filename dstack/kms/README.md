@@ -331,7 +331,7 @@ The response is an `AuthorizationResult`:
 ```
 
 Both successful and rejected decisions include the current epoch and chain hash
-from the same contract call or auth-simple configuration snapshot. `latestRootEpoch`
+from the same contract call or dstack-auth configuration snapshot. `latestRootEpoch`
 and `latestRootEpochHash` report the latest registered epoch, which may be pending
 activation; onboarding refuses a source holding epochs beyond it and, when the source
 holds it, requires its chain hash to match. Except for `kms_bootstrap`, with no
@@ -358,7 +358,7 @@ methods and `/bootAuth/app` and `/bootAuth/kms` endpoints remain available for
 older clients. Bootstrap uses the `kms_bootstrap` operation, which checks KMS policy at epoch zero
 even before roots are registered. Other operations require registered roots.
 Onboarding checks its source through `authorizeKms`, without a legacy fallback. For
-`auth-simple`, set `kmsContractAddr` to the attested KMS app ID and configure
+`dstack-auth`, set `kmsContractAddr` to the attested KMS app ID and configure
 `rootEpochs`. For development without a backend, use `[core.auth_api] type = "dev"`,
 which allows everything.
 

@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# KMS deployment with external auth-simple webhook
-# auth-simple runs outside the CVM (operator infrastructure)
+# KMS deployment with an external dstack-auth webhook.
+# dstack-auth runs outside the CVM, on the operator host; see
+# docs/dstack-auth-operations.md.
 
 services:
   kms:

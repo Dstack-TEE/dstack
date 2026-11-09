@@ -56,7 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - KMS: the `auth-mock` webhook backend. For development, use the built-in
   `[core.auth_api] type = "dev"`, which allows everything.
-
 - `auth-simple` (`dstack/kms/auth-simple`). Use `dstack-auth`, which reads the
   same config file. Differences: the TCB status and advisories are not checked
   unless `allowedTcbStatuses` / `allowedAdvisoryIds` are set (auth-simple

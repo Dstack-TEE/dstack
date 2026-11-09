@@ -316,7 +316,7 @@ Onboarding
 >
 > **Critical prerequisite:** before bootstrap can succeed, the KMS must already be authorized by your auth backend.
 >
-> - For `auth-simple`, add the KMS `mrAggregated` to `kms.mrAggregated`
+> - For `dstack-auth`, add the KMS `mrAggregated` to `kms.mrAggregated`
 > - For `auth-eth`, add the KMS `mrAggregated` on-chain with `addKmsAggregatedMr(...)`
 >
 > You can fetch the value before bootstrap with:

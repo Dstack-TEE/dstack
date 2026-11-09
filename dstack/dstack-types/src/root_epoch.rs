@@ -40,7 +40,7 @@ mod tests {
         (ca, k256)
     }
 
-    /// Shared with the DstackKms contract and auth-simple tests.
+    /// Shared with the DstackKms contract and dstack-auth tests.
     #[test]
     fn matches_the_contract_vectors() {
         let epochs = [test_keys(0xa0, 0xb0), test_keys(0xa1, 0xb1)];
