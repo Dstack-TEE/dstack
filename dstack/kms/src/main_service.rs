@@ -1795,6 +1795,185 @@ mod tests {
         assert_eq!(requests[1].1["operation"], "kms_export_keys");
     }
 
+    /// An SNP caller, which skips the OS image download in the attestation policy.
+    fn snp_caller() -> (VerifiedAttestation, String) {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let vm_config = snp_vm_config(&input, &mr_config);
+        let attestation = verified_snp_attestation_with_config(
+            measurement,
+            [0xab; 64],
+            vm_config.clone(),
+            &mr_config,
+        );
+        (attestation, vm_config)
+    }
+
+    fn auth_answer(state: &KmsState, allowed: bool) -> String {
+        serde_json::json!({
+            "isAllowed": allowed, "rejectionReason": "denied", "gatewayAppId": "",
+            "currentRootEpoch": 0, "currentAppEpoch": 0,
+            "currentRootEpochHash": hex::encode(state.keyring.chain_hashes[0]),
+        })
+        .to_string()
+    }
+
+    /// Wait for the auth API requests; a missing request fails instead of hanging.
+    fn auth_requests(
+        server: std::thread::JoinHandle<Vec<(String, serde_json::Value)>>,
+    ) -> Vec<(String, serde_json::Value)> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(server.join().unwrap()));
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("an expected auth API request was not made")
+    }
+
+    #[derive(Clone, Copy)]
+    struct HandoverCase {
+        snp_key_release: bool,
+        public_key_handover: bool,
+        admin: bool,
+    }
+
+    const ALLOWED_HANDOVER: HandoverCase = HandoverCase {
+        snp_key_release: true,
+        public_key_handover: true,
+        admin: false,
+    };
+
+    /// Run one handover with the auth API answering `answers` (self check, then
+    /// caller check), and return its
+    /// result with the requests the auth API received.
+    async fn handover(
+        case: HandoverCase,
+        answers: &[bool],
+    ) -> (Result<KmsKeyResponse>, Vec<(String, serde_json::Value)>) {
+        use upgrade_authority::tests::{boot_info, serve, webhook};
+        let dir = tempfile::tempdir().unwrap();
+        let initial = kms_state(dir.path(), "http://127.0.0.1:1");
+        let answers: Vec<_> = answers
+            .iter()
+            .map(|allowed| auth_answer(&initial, *allowed))
+            .collect();
+        let (url, server) = serve(answers);
+        let mut config = initial.config.clone();
+        config.enforce_self_authorization = true;
+        config.auth_api = webhook(url);
+        config.sev_snp_key_release = case.snp_key_release;
+        config.onboard.public_key_handover = case.public_key_handover;
+        let keyring = Keyring::load(&config).unwrap();
+        let state = KmsState::new(
+            config,
+            keyring,
+            initial.epoch_root(0).unwrap().ca.pem_cert.clone(),
+        )
+        .unwrap();
+        state.self_boot_info.insert((), boot_info(1)).await;
+        let (attestation, vm_config) = snp_caller();
+        let handler = RpcHandler {
+            state,
+            attestation: Some(attestation),
+        };
+        let request = GetKmsKeyRequest { vm_config };
+        let result = if case.admin {
+            handler.handover_keys(request).await
+        } else {
+            handler.get_kms_key(request).await
+        };
+        (result, auth_requests(server))
+    }
+
+    #[rocket::async_test]
+    async fn handover_runs_every_authorization_check() {
+        let (result, requests) = handover(ALLOWED_HANDOVER, &[true, true]).await;
+        assert_eq!(result.unwrap().keys.len(), 1);
+        let [(self_route, self_check), (caller_route, caller_check)] = &requests[..] else {
+            panic!("unexpected auth API requests: {requests:?}");
+        };
+        assert_eq!(self_route, "/authorizeKms");
+        assert_eq!(self_check["operation"], "kms_export_keys");
+        assert!(self_check.get("requestedRootEpoch").is_none());
+        assert_eq!(self_check["appId"], hex::encode([4; 20]));
+        assert_eq!(caller_route, "/authorizeKms");
+        assert_eq!(caller_check["operation"], "kms_import_keys");
+        assert_eq!(caller_check["requestedRootEpoch"], 0);
+        assert_eq!(caller_check["appId"], hex::encode([0x11; 20]));
+
+        let admin = HandoverCase {
+            admin: true,
+            public_key_handover: false,
+            ..ALLOWED_HANDOVER
+        };
+        let (result, requests) = handover(admin, &[true, true]).await;
+        assert!(result.is_ok());
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[rocket::async_test]
+    async fn handover_is_refused_when_any_check_denies() {
+        let (result, requests) = handover(ALLOWED_HANDOVER, &[false]).await;
+        assert!(format!("{:#}", result.unwrap_err()).contains("KMS self authorization failed"));
+        assert_eq!(requests[0].1["operation"], "kms_export_keys");
+
+        for admin in [false, true] {
+            let case = HandoverCase {
+                admin,
+                ..ALLOWED_HANDOVER
+            };
+            let (result, requests) = handover(case, &[true, false]).await;
+            assert!(result.is_err());
+            assert_eq!(requests[1].1["operation"], "kms_import_keys");
+
+            let case = HandoverCase {
+                snp_key_release: false,
+                admin,
+                ..ALLOWED_HANDOVER
+            };
+            let (result, _) = handover(case, &[true, true]).await;
+            let err = format!("{:#}", result.unwrap_err());
+            assert!(err.contains("sev-snp key release is not enabled"), "{err}");
+        }
+
+        let public_disabled = HandoverCase {
+            public_key_handover: false,
+            ..ALLOWED_HANDOVER
+        };
+        let (result, requests) = handover(public_disabled, &[]).await;
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(err.contains("public KMS key handover is disabled"), "{err}");
+        assert!(requests.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn handover_recipient_requires_the_source_to_be_allowed_to_export() {
+        use upgrade_authority::tests::{serve, webhook};
+        let dir = tempfile::tempdir().unwrap();
+        let state = kms_state(dir.path(), "http://127.0.0.1:1");
+        let (attestation, _) = snp_caller();
+        for allowed in [true, false] {
+            let (url, server) = serve(vec![auth_answer(&state, allowed)]);
+            let mut config = state.config.clone();
+            config.auth_api = webhook(url);
+            let result = upgrade_authority::ensure_kms_allowed(
+                &config,
+                &attestation,
+                &state.attestation_verifier,
+                false,
+                2,
+            )
+            .await;
+            assert_eq!(result.is_ok(), allowed);
+            let requests = auth_requests(server);
+            let [(route, check)] = &requests[..] else {
+                panic!("unexpected auth API requests: {requests:?}");
+            };
+            assert_eq!(route, "/authorizeKms");
+            assert_eq!(check["operation"], "kms_export_keys");
+            assert_eq!(check["requestedRootEpoch"], 2);
+        }
+    }
+
     #[rocket::async_test]
     async fn legacy_temp_ca_rpc_returns_a_separate_ca_and_the_served_root() {
         assert!(dstack_kms_rpc::kms_server::KMSMethod::from_str("GetTempCaCert").is_some());
