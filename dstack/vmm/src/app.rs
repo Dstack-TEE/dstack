@@ -1605,9 +1605,14 @@ impl App {
         Ok(())
     }
 
-    /// Store the encrypted env a guest re-encrypted at boot. Accepted once per
-    /// boot, before application code runs, and only over the env the VM booted
-    /// with, so an update made since then is never overwritten.
+    /// Close the boot's env update window and store the encrypted env the
+    /// guest re-encrypted, if any. Accepted once per boot, before application
+    /// code runs, and only over the env the VM booted with, so an update made
+    /// since then is never overwritten.
+    ///
+    /// Once the VM is found, the window is closed and the call succeeds whether
+    /// or not the env is stored: the guest starts application code only after
+    /// an answer.
     pub(crate) async fn update_sealed_env(&self, cid: u32, env: Vec<u8>) -> Result<()> {
         let id = self
             .lock()
@@ -1620,28 +1625,35 @@ impl App {
             .id
             .clone();
         let _launch = self.launch_lock(&id).await;
-        let boot_env = {
+        let (boot_env, supports_sealed_env) = {
             let mut state = self.lock();
             let vm = state.vms.get_mut(&id).context("VM not found")?;
             if vm.config.cid != cid {
                 bail!("VM CID changed");
             }
-            if !env.is_empty() && !vm.config.image.info.sealed_env {
+            (vm.state.env_update.take(), vm.config.image.info.sealed_env)
+        };
+        let stored = (|| {
+            let Some(boot_env) = boot_env else {
+                bail!("the env can only be updated once per boot, before applications start");
+            };
+            if env.is_empty() {
+                return Ok(false);
+            }
+            if !supports_sealed_env {
                 bail!("the VM image does not support sealed_env");
             }
-            vm.state.env_update.take()
-        };
-        let Some(boot_env) = boot_env else {
-            bail!("the env can only be updated once per boot, before applications start");
-        };
-        if env.is_empty() {
-            return Ok(());
+            if self.sha256_of_env(&id)? != boot_env {
+                bail!("the env changed since the VM booted; not replacing it");
+            }
+            self.work_dir(&id)?.write_env(&[], &env)?;
+            Ok(true)
+        })();
+        match stored {
+            Ok(true) => info!(id, "stored sealed env from the guest"),
+            Ok(false) => {}
+            Err(err) => warn!(id, "not storing the guest's sealed env: {err:#}"),
         }
-        if self.sha256_of_env(&id)? != boot_env {
-            bail!("the env changed since the VM booted; not replacing it");
-        }
-        self.work_dir(&id)?.write_env(&[], &env)?;
-        info!(id, "stored sealed env from the guest");
         Ok(())
     }
 
@@ -2714,8 +2726,8 @@ mod tests {
             .state
             .env_update
             .is_some());
-        let err = host.update_sealed_env(payload.clone()).await.unwrap_err();
-        assert!(format!("{err:#}").contains("once per boot"));
+        // A repeated call, as after a lost answer, is answered but stores nothing.
+        host.update_sealed_env(b"again".to_vec()).await.unwrap();
         assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), payload);
 
         // Even top-level forged JSON fields cannot select a VM or revive the CAS.
@@ -2735,13 +2747,12 @@ mod tests {
             let (status, body) = handler
                 .call("UpdateSealedEnv".into(), forged.clone(), true, false)
                 .await;
-            assert_eq!(status, 400);
-            let expected = if cid == 3 {
-                "once per boot"
+            if cid == 3 {
+                assert_eq!(status, 200);
             } else {
-                "VM not found"
-            };
-            assert!(String::from_utf8(body).unwrap().contains(expected));
+                assert_eq!(status, 400);
+                assert!(String::from_utf8(body).unwrap().contains("VM not found"));
+            }
         }
         assert!(crate::host_api_service::HostApiHandler::construct(
             CallContext::builder().state(&app).build()
@@ -2752,8 +2763,7 @@ mod tests {
         let hash = app.sha256_of_env("sender").unwrap();
         app.lock().vms.get_mut("sender").unwrap().state.env_update = Some(hash);
         sender.write_env(&[], b"owner update").unwrap();
-        let err = host.update_sealed_env(payload).await.unwrap_err();
-        assert!(format!("{err:#}").contains("changed since the VM booted"));
+        host.update_sealed_env(payload).await.unwrap();
         assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), b"owner update");
         assert_eq!(fs::read(victim.sealed_env_path()).unwrap(), b"victim");
         assert_eq!(fs::read(outside).unwrap(), b"untouched");
@@ -2778,14 +2788,15 @@ mod tests {
             let hash = app.sha256_of_env("vm-1").unwrap();
             app.lock().vms.get_mut("vm-1").unwrap().state.env_update = Some(hash);
         };
-        assert!(app.update_sealed_env(cid, b"new".to_vec()).await.is_err());
+        let window_open = || app.lock().vms["vm-1"].state.env_update.is_some();
+        // Every answer closes the window, whether or not the env is stored.
+        let update = |env: &[u8]| app.update_sealed_env(cid, env.to_vec());
+        update(b"new").await.unwrap();
+        assert!(!workdir.sealed_env_path().exists());
         workdir.write_env(b"legacy", &[]).unwrap();
         boot();
-        let err = app
-            .update_sealed_env(cid, b"sealed".to_vec())
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("does not support sealed_env"));
+        update(b"sealed").await.unwrap();
+        assert!(!window_open());
         assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"legacy");
         assert!(!workdir.sealed_env_path().exists());
         Arc::get_mut(&mut app.lock().vms.get_mut("vm-1").unwrap().config)
@@ -2793,42 +2804,52 @@ mod tests {
             .image
             .info
             .sealed_env = true;
-        app.update_sealed_env(cid, b"sealed".to_vec())
-            .await
-            .unwrap();
+        boot();
+        update(b"sealed").await.unwrap();
+        assert!(!window_open());
         assert!(!workdir.encrypted_env_path().exists());
         assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
-        assert!(app.update_sealed_env(cid, b"again".to_vec()).await.is_err());
+        update(b"again").await.unwrap();
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
 
         for name in [ENCRYPTED_ENV, SEALED_ENV] {
             let path = workdir.shared_dir().join(name);
             let _ = fs::remove_file(&path);
             boot();
             fs::write(&path, []).unwrap();
-            assert!(app.update_sealed_env(cid, b"stale".to_vec()).await.is_err());
+            update(b"stale").await.unwrap();
+            assert!(!window_open());
             assert_eq!(fs::read(&path).unwrap(), b"");
         }
 
         boot();
         let held = app.launch_lock("vm-1").await;
-        let guest = app.update_sealed_env(cid, b"stale".to_vec());
+        let guest = update(b"stale");
         tokio::pin!(guest);
         assert!(tokio::time::timeout(Duration::from_millis(20), &mut guest)
             .await
             .is_err());
         workdir.write_env(b"owner", &[]).unwrap();
         drop(held);
-        assert!(guest.await.is_err());
+        guest.await.unwrap();
         assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"owner");
         assert!(!workdir.sealed_env_path().exists());
 
+        // An empty update closes the window too.
         boot();
-        app.update_sealed_env(cid, Vec::new()).await.unwrap();
-        assert!(app.update_sealed_env(cid, b"again".to_vec()).await.is_err());
+        update(b"").await.unwrap();
+        assert!(!window_open());
+        update(b"again").await.unwrap();
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"owner");
+        // An application-stage progress report still closes it.
         boot();
         app.vm_event_report(cid, "boot.progress", "init-script".into())
             .unwrap();
-        assert!(app.update_sealed_env(cid, b"late".to_vec()).await.is_err());
+        assert!(!window_open());
+        update(b"late").await.unwrap();
+        assert!(!workdir.sealed_env_path().exists());
+        // A VM the host does not know gets an error.
+        assert!(app.update_sealed_env(cid + 1000, Vec::new()).await.is_err());
     }
 
     /// A launch that never reached a netd built nothing, so it must not leave

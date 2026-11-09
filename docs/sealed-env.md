@@ -115,6 +115,12 @@ an empty update closes the window without replacing files. Owner updates and
 guest replacement share the VM launch lock so an owner change cannot be lost
 between the snapshot comparison and write.
 
+The window is guaranteed closed before application code runs: the VMM closes it
+as soon as it identifies the VM and then always answers, logging why an env was
+not stored, and the guest starts init scripts and containers only after an
+answer, failing the boot if none comes after a few retries. A VMM that predates
+`UpdateSealedEnv` has no window; the guest recognizes its unknown-method answer.
+
 VM creation and update accept either `sealed_env` or legacy `encrypted_env`.
 Supplying both nonempty fields is rejected. Writing one format removes the other:
 an external legacy update after a guest sealed update therefore becomes the
