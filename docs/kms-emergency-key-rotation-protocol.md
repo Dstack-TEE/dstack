@@ -328,6 +328,9 @@ Protect root storage and independent admin access.
 
 ## 9. Invariants and acceptance
 
+[TLA+ models](formal/key-rotation/README.md) check the registry, disk
+migration and env update steps against crashes and interleavings.
+
 Authenticate actual secret-bearing connections; old-CA signatures alone do not
 replace evidence checks. Do not downgrade on failure or expose secrets in logs,
 command lines, swap, app key files, or host-shared storage. Released secrets
