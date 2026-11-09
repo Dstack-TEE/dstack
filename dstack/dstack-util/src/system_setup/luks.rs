@@ -244,19 +244,26 @@ pub(super) fn load_luks_header(device: &Path, header: &Path) -> Result<LuksHeade
 /// The keyslot of the validated `header` that `key` unlocks.
 fn unlocked_keyslot(header: &Path, state: &LuksHeaderState, key: &str) -> Result<Option<u8>> {
     for &slot in &state.keyslots {
-        let slot_arg = slot.to_string();
-        let test = cryptsetup(
-            &["open", "--test-passphrase", "--key-slot", &slot_arg, "-d-"],
-            header,
-        );
-        match run_with_input(test, key.as_bytes())? {
-            Some(0) => return Ok(Some(slot)),
-            // No key available with this passphrase.
-            Some(2) => {}
-            code => bail!("failed to test the LUKS passphrase: {code:?}"),
+        if unlocks(header, slot, key)? {
+            return Ok(Some(slot));
         }
     }
     Ok(None)
+}
+
+/// Whether `key` unlocks keyslot `slot` of the validated `header`.
+fn unlocks(header: &Path, slot: u8, key: &str) -> Result<bool> {
+    let slot_arg = slot.to_string();
+    let test = cryptsetup(
+        &["open", "--test-passphrase", "--key-slot", &slot_arg, "-d-"],
+        header,
+    );
+    match run_with_input(test, key.as_bytes())? {
+        Some(0) => Ok(true),
+        // No key available with this passphrase.
+        Some(2) => Ok(false),
+        code => bail!("failed to test the LUKS passphrase: {code:?}"),
+    }
 }
 
 /// Add `new_key` in keyslot `slot`, authorized by `old_key`. The old key is
@@ -333,14 +340,29 @@ where
     let slot = match unlocked_keyslot(header, &state, key)? {
         Some(slot) => slot,
         None => {
-            let &[old_slot] = &state.keyslots[..] else {
-                bail!("the data disk key unlocks none of the LUKS keyslots");
-            };
             if stored == target {
                 bail!("the data disk key does not unlock epochs {target:?}");
             }
+            // The keyslot holding the recorded epochs; a disk without a token
+            // is epoch 0 in slot 0.
+            let old_slot = state.token_keyslot.unwrap_or(0);
+            if !state.keyslots.contains(&old_slot) {
+                bail!("the recorded LUKS keyslot {old_slot} does not exist");
+            }
             info!("re-keying the data disk from epochs {stored:?} to {target:?}");
             let old_key = old_key(stored.0, stored.1).await?;
+            if !unlocks(header, old_slot, &old_key)? {
+                bail!(
+                    "the key of epochs {stored:?} does not unlock the recorded keyslot {old_slot}"
+                );
+            }
+            // A migration interrupted before a later rotation leaves a second
+            // keyslot whose epochs were never recorded, or are no longer the
+            // recorded ones. Drop it, now that the recorded key is confirmed,
+            // to make room for the current key.
+            for &stale in state.keyslots.iter().filter(|&&slot| slot != old_slot) {
+                kill_luks_slot(device, stale)?;
+            }
             add_luks_key(device, header, &old_key, key, old_slot ^ 1)?;
             state = load_luks_header(device, header)?;
             unlocked_keyslot(header, &state, key)?
@@ -821,6 +843,51 @@ async fn test_luks_epoch_migration_resumes_after_each_step() {
         disk.assert_synced("k2", (2, 0), 1);
         assert!(!disk.unlocks("k1"));
     }
+}
+
+#[tokio::test]
+async fn test_luks_epoch_migration_resumes_after_a_later_rotation() {
+    // Interrupted while migrating to epoch 1, then rotated to epoch 2 before
+    // the next boot: the current key unlocks neither keyslot.
+    for record in [false, true] {
+        let Some(disk) = TestDisk::new("k0", None) else {
+            return;
+        };
+        disk.add_key("k0", "k1", 1);
+        let old = if record {
+            write_luks_epochs(&disk.image, 1, 1, 0).unwrap();
+            (1, 0, "k1")
+        } else {
+            (0, 0, "k0")
+        };
+        disk.sync("k2", (2, 0), Some(old)).await.unwrap();
+        disk.assert_synced("k2", (2, 0), if record { 0 } else { 1 });
+        assert!(!disk.unlocks("k0"));
+        assert!(!disk.unlocks("k1"));
+    }
+}
+
+#[tokio::test]
+async fn test_luks_stale_keyslot_is_kept_until_the_recorded_key_is_confirmed() {
+    let Some(disk) = TestDisk::new("k0", None) else {
+        return;
+    };
+    disk.add_key("k0", "k1", 1);
+    let interrupted = disk.state();
+    // The KMS denies the recorded epoch, or hands out a key that does not
+    // unlock its keyslot: both keyslots stay.
+    assert!(disk.sync("k2", (2, 0), None).await.is_err());
+    let err = disk
+        .sync("k2", (2, 0), Some((0, 0, "k1")))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("does not unlock the recorded keyslot 0"),
+        "{err:#}"
+    );
+    assert_eq!(disk.state(), interrupted);
+    assert!(disk.unlocks("k0") && disk.unlocks("k1"));
 }
 
 #[tokio::test]

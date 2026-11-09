@@ -158,6 +158,8 @@ copy the header to tmpfs -> validate the copy
   token_or_0 > current -> refuse
   current key unlocks a keyslot of the copy -> finish
   otherwise, token_or_0 < current -> old keys of epoch token_or_0
+          -> check they unlock the recorded slot (token slot, else slot 0)
+          -> luksKillSlot any other slot
           -> luksAddKey (old key authorizes the new key in the free slot)
           -> recopy and validate -> finish
   finish: token import (current epochs, surviving slot) -> luksKillSlot others
@@ -167,7 +169,11 @@ copy the header to tmpfs -> validate the copy
 Each step is one LUKS2 metadata commit, which cryptsetup keeps crash-consistent
 across both header copies. Whatever step a crash interrupts, the next boot
 finds either the old key alone or a keyslot the current key already unlocks,
-so trying the current key first resumes the migration. A crash between
+so trying the current key first resumes the migration. If another rotation
+happens before that boot, the current key unlocks neither of the two keyslots
+an interrupted migration leaves; the token still names the slot of the recorded
+epochs, so the other slot is dropped, but only once the recorded epochs' key is
+confirmed to unlock that slot, and the migration restarts from it. A crash between
 `luksFormat` and the token import leaves the initialization label set, which is
 cleared only after the filesystem exists, so such a disk is reformatted. Never
 format on unlock failure. Invalid or unsupported metadata requires recovery.
