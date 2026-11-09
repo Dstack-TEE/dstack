@@ -20,7 +20,7 @@
 //! (capture `tcbStatus`, deny unless `UpToDate`) if this grows into a
 //! multi-tenant / hosted deployment.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use dstack_types::authorization::AuthorizationOperation as Operation;
 use rocket::http::Status;
@@ -93,10 +93,12 @@ struct AuthorizationResult {
     current_root_epoch: usize,
     current_root_epoch_hash: String,
     current_app_epoch: u32,
+    latest_root_epoch: usize,
+    latest_root_epoch_hash: String,
 }
 
-/// the current KMS root epoch and its chain hash, which commits to the root
-/// public keys of epochs 0..=number.
+/// a KMS root epoch and its chain hash, which commits to the root public keys
+/// of epochs 0..=number.
 struct EpochInfo {
     number: usize,
     hash: String,
@@ -134,15 +136,21 @@ impl Allowlist {
 
     /// `None` only when no epoch is configured; invalid configuration is an error.
     fn current_root_epoch(&self) -> Result<Option<EpochInfo>> {
+        Ok(self.root_epoch_info()?.map(|(current, _)| current))
+    }
+
+    /// the current and the latest configured root epochs; configured epochs
+    /// beyond the current one are pending activation.
+    fn root_epoch_info(&self) -> Result<Option<(EpochInfo, EpochInfo)>> {
         if self.root_epochs.is_empty() && self.current_root_epoch == 0 {
             return Ok(None);
         }
-        u32::try_from(self.current_root_epoch).context("root epoch exceeds uint32")?;
-        let epochs = self
+        u32::try_from(self.root_epochs.len()).context("root epoch exceeds uint32")?;
+        if self.current_root_epoch >= self.root_epochs.len() {
+            bail!("currentRootEpoch is not a configured root epoch");
+        }
+        let keys = self
             .root_epochs
-            .get(..=self.current_root_epoch)
-            .context("currentRootEpoch is not a configured root epoch")?;
-        let keys = epochs
             .iter()
             .map(|e| {
                 Ok((
@@ -155,10 +163,14 @@ impl Allowlist {
         let hashes = dstack_types::root_epoch::chain_hashes(
             keys.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
         );
-        Ok(Some(EpochInfo {
-            number: self.current_root_epoch,
-            hash: format!("0x{}", hex::encode(hashes[self.current_root_epoch])),
-        }))
+        let info = |number: usize| EpochInfo {
+            number,
+            hash: format!("0x{}", hex::encode(hashes[number])),
+        };
+        Ok(Some((
+            info(self.current_root_epoch),
+            info(self.root_epochs.len() - 1),
+        )))
     }
 }
 
@@ -312,16 +324,18 @@ fn authorize(
     is_kms: bool,
     al: &Allowlist,
 ) -> Result<AuthorizationResult> {
-    let current = al.current_root_epoch()?;
+    let epochs = al.root_epoch_info()?;
+    let current = epochs.as_ref().map(|(current, _)| current);
+    let latest = epochs.as_ref().map(|(_, latest)| latest);
+    let zero_hash = || format!("0x{}", "00".repeat(32));
     let mut result = AuthorizationResult {
         authorized: false,
         rejection_reason: String::new(),
         gateway_app_id: al.gateway_app_id.clone(),
-        current_root_epoch: current.as_ref().map_or(0, |epoch| epoch.number),
-        current_root_epoch_hash: current.as_ref().map_or_else(
-            || format!("0x{}", "00".repeat(32)),
-            |epoch| epoch.hash.clone(),
-        ),
+        current_root_epoch: current.map_or(0, |epoch| epoch.number),
+        current_root_epoch_hash: current.map_or_else(zero_hash, |epoch| epoch.hash.clone()),
+        latest_root_epoch: latest.map_or(0, |epoch| epoch.number),
+        latest_root_epoch_hash: latest.map_or_else(zero_hash, |epoch| epoch.hash.clone()),
         current_app_epoch: if is_kms {
             0
         } else {
@@ -542,6 +556,11 @@ mod tests {
             assert_eq!(response["authorized"], allowed);
             assert_eq!(response["currentRootEpoch"], 0);
             assert_eq!(response["currentAppEpoch"], 0);
+            assert_eq!(response["latestRootEpoch"], 0);
+            assert_eq!(
+                response["latestRootEpochHash"],
+                response["currentRootEpochHash"]
+            );
             assert_ne!(
                 response["currentRootEpochHash"],
                 format!("0x{}", "00".repeat(32))
@@ -589,6 +608,11 @@ mod tests {
         assert_eq!(response["authorized"], false);
         assert_eq!(
             response["currentRootEpochHash"],
+            format!("0x{}", "00".repeat(32))
+        );
+        assert_eq!(response["latestRootEpoch"], 0);
+        assert_eq!(
+            response["latestRootEpochHash"],
             format!("0x{}", "00".repeat(32))
         );
         policy["currentRootEpoch"] = 1.into();
@@ -794,6 +818,41 @@ mod tests {
         assert!(check_kms(&info, &al).is_allowed);
         // fail closed: empty allowlist denies (the single-node case never calls this).
         assert!(!check_kms(&info, &Allowlist::default()).is_allowed);
+    }
+
+    #[test]
+    fn authorization_reports_the_latest_configured_root_epoch() {
+        let al: Allowlist = serde_json::from_value(json!({
+            "rootEpochs": [
+                {"caPubkey": "aa", "k256Pubkey": "bb"},
+                {"caPubkey": "cc", "k256Pubkey": "dd"},
+                {"caPubkey": "ee", "k256Pubkey": "ff"}
+            ],
+            "currentRootEpoch": 1
+        }))
+        .unwrap();
+        let request: AuthorizationRequest =
+            serde_json::from_value(json!({"operation": "kms_serve", "appId": "11".repeat(20)}))
+                .unwrap();
+        let result = authorize(&request, true, &al).unwrap();
+        let hashes = dstack_types::root_epoch::chain_hashes(
+            [
+                (&[0xaa][..], &[0xbb][..]),
+                (&[0xcc], &[0xdd]),
+                (&[0xee], &[0xff]),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(result.current_root_epoch, 1);
+        assert_eq!(
+            result.current_root_epoch_hash,
+            format!("0x{}", hex::encode(hashes[1]))
+        );
+        assert_eq!(result.latest_root_epoch, 2);
+        assert_eq!(
+            result.latest_root_epoch_hash,
+            format!("0x{}", hex::encode(hashes[2]))
+        );
     }
 
     #[test]

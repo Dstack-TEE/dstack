@@ -28,6 +28,9 @@ struct AuthorizationResult {
     uint256 currentRootEpoch;
     bytes32 currentRootEpochHash;
     uint256 currentAppEpoch;
+    // The latest registered root epoch, which may be pending activation.
+    uint256 latestRootEpoch;
+    bytes32 latestRootEpochHash;
 }
 
 /// Optional epoch- and operation-aware policy capability. Legacy policies only authorize app epoch zero.
@@ -36,6 +39,6 @@ interface IAppEpochAuth {
 
     /// Receives the KMS request unchanged. The policy validates the operation and app
     /// epoch and fills `authorized`, `rejectionReason` and `currentAppEpoch`; the KMS
-    /// owns `gatewayAppId` and the root epoch fields.
+    /// owns `gatewayAppId` and the current and latest root epoch fields.
     function authorizeApp(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory);
 }

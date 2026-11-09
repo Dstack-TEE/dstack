@@ -40,6 +40,9 @@ export interface AuthorizationResult {
   currentRootEpoch: number;
   currentRootEpochHash: string;
   currentAppEpoch: number;
+  // The latest registered root epoch, which may be pending activation.
+  latestRootEpoch: number;
+  latestRootEpochHash: string;
 }
 
 export interface AuthorizationRequest extends Omit<BootInfo, 'rootEpoch' | 'rootEpochHash'> {

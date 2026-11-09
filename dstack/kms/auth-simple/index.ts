@@ -85,22 +85,34 @@ type AppConfig = z.infer<typeof AppConfigSchema>;
 
 const bytesOf = (hex: string) => hexToBytes(hex.replace(/^0x/i, ''));
 
-// The current root epoch and its chain hash, as DstackKms computes it:
+// The chain hash of root epoch `epoch`, as DstackKms computes it:
 // keccak256(previous || keccak256(caPubkey) || keccak256(k256Pubkey)),
-// with a zero previous hash for epoch 0. Empty when no epoch is configured.
+// with a zero previous hash for epoch 0.
+function rootEpochHash(config: AuthConfig, epoch: number): string {
+  let hash = new Uint8Array(32);
+  for (const keys of config.rootEpochs.slice(0, epoch + 1)) {
+    hash = keccak_256(concatBytes(
+      hash, keccak_256(bytesOf(keys.caPubkey)), keccak_256(bytesOf(keys.k256Pubkey))
+    ));
+  }
+  return '0x' + bytesToHex(hash);
+}
+
+// The current root epoch and its chain hash. Empty when no epoch is configured.
 function currentRootEpoch(config: AuthConfig): { rootEpoch?: number; rootEpochHash?: string } {
   const current = config.currentRootEpoch;
   if (config.rootEpochs.length === 0 && current === 0) return {};
   if (current >= config.rootEpochs.length) {
     throw new Error('currentRootEpoch is not a configured root epoch');
   }
-  let hash = new Uint8Array(32);
-  for (const keys of config.rootEpochs.slice(0, current + 1)) {
-    hash = keccak_256(concatBytes(
-      hash, keccak_256(bytesOf(keys.caPubkey)), keccak_256(bytesOf(keys.k256Pubkey))
-    ));
-  }
-  return { rootEpoch: current, rootEpochHash: '0x' + bytesToHex(hash) };
+  return { rootEpoch: current, rootEpochHash: rootEpochHash(config, current) };
+}
+
+// The last configured root epoch; epochs beyond the current one are pending activation.
+function latestRootEpoch(config: AuthConfig): { latestRootEpoch: number; latestRootEpochHash: string } {
+  const latest = config.rootEpochs.length - 1;
+  if (latest < 0) return { latestRootEpoch: 0, latestRootEpochHash: '0x' + '00'.repeat(32) };
+  return { latestRootEpoch: latest, latestRootEpochHash: rootEpochHash(config, latest) };
 }
 
 const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
@@ -175,6 +187,7 @@ class ConfigBackend {
       currentAppEpoch: appConfig?.currentAppEpoch ?? 0,
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
+      ...latestRootEpoch(config),
     };
     const kmsOperation = ['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys'].includes(appInfo.operation);
     if (kmsOperation !== isKms) {

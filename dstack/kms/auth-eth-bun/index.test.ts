@@ -864,11 +864,12 @@ describe('POST /authorizeApp', () => {
     const result = {
       authorized: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
       currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 3n, latestRootEpochHash: '0x' + '88'.repeat(32),
     };
     mockReadContract.mockResolvedValueOnce(result);
     const response = await authorize();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0 });
+    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0, latestRootEpoch: 3 });
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       functionName: 'authorizeApp', blockNumber: 98n,
@@ -880,6 +881,7 @@ describe('POST /authorizeApp', () => {
     mockReadContract.mockResolvedValueOnce({
       authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
       currentAppEpoch: 0n, currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 1n, latestRootEpochHash: '0x' + '77'.repeat(32),
     });
     expect((await authorize(0)).status).toBe(200);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
@@ -918,6 +920,7 @@ describe('POST /authorizeApp', () => {
     const rejection = {
       authorized: false, rejectionReason: 'invalid authorization request', gatewayAppId: '',
       currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32), currentAppEpoch: 0,
+      latestRootEpoch: 0, latestRootEpochHash: '0x' + '00'.repeat(32),
     };
     const requests = [
       { status: 400, body: JSON.stringify({ ...appInfo, operation: 'unknown' }) },

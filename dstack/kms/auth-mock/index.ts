@@ -52,6 +52,19 @@ function getRootEpoch(): { rootEpoch?: number; rootEpochHash?: string } {
   return { rootEpoch: z.coerce.number().int().min(0).parse(epoch), rootEpochHash: hash };
 }
 
+// MOCK_LATEST_ROOT_EPOCH and MOCK_LATEST_ROOT_EPOCH_HASH: the latest registered
+// root epoch, pending activation when ahead of the current one. Defaults to the current.
+function getLatestRootEpoch(current: { rootEpoch?: number; rootEpochHash?: string }) {
+  const epoch = process.env.MOCK_LATEST_ROOT_EPOCH;
+  const hash = process.env.MOCK_LATEST_ROOT_EPOCH_HASH;
+  if (!epoch && !hash) {
+    return { latestRootEpoch: current.rootEpoch ?? 0, latestRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32) };
+  }
+  if (!epoch || !hash) throw new Error('set both MOCK_LATEST_ROOT_EPOCH and MOCK_LATEST_ROOT_EPOCH_HASH');
+  const latestRootEpoch = z.coerce.number().int().min(current.rootEpoch ?? 0).parse(epoch);
+  return { latestRootEpoch, latestRootEpochHash: hash };
+}
+
 type BootInfo = z.infer<typeof BootInfoSchema>;
 type BootResponse = z.infer<typeof BootResponseSchema>;
 
@@ -123,6 +136,7 @@ class MockBackend {
       currentAppEpoch: isKms ? 0 : await this.getAppEpoch(appInfo.appId),
       currentRootEpoch: current.rootEpoch ?? 0,
       currentRootEpochHash: current.rootEpochHash ?? '0x' + '00'.repeat(32),
+      ...getLatestRootEpoch(current),
     };
     const kmsOperation = ['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys'].includes(appInfo.operation);
     if (kmsOperation !== isKms) {

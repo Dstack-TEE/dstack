@@ -514,11 +514,18 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         } else {
             result.rejectionReason = rejection;
         }
+        _fillRootEpochs(result);
+    }
+
+    /// The KMS-owned fields of every authorization result, read from the same state.
+    function _fillRootEpochs(AuthorizationResult memory result) private view {
         result.gatewayAppId = gatewayAppId;
-        if (_rootEpochs.length != 0) {
-            result.currentRootEpoch = _currentRootEpoch;
-            result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
-        }
+        if (_rootEpochs.length == 0) return;
+        result.currentRootEpoch = _currentRootEpoch;
+        result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        uint256 latest = _latestRootEpoch();
+        result.latestRootEpoch = latest;
+        result.latestRootEpochHash = _rootEpochs[latest].chainHash;
     }
 
     /// KMS-owned app checks; an empty string forwards the request to the app policy.
@@ -552,11 +559,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         view
         returns (AuthorizationResult memory result)
     {
-        result.gatewayAppId = gatewayAppId;
-        if (_rootEpochs.length > 0) {
-            result.currentRootEpoch = _currentRootEpoch;
-            result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
-        }
+        _fillRootEpochs(result);
         if (!AuthorizationOperation.isKms(request.operation)) {
             result.rejectionReason = "Invalid authorization operation";
             return result;

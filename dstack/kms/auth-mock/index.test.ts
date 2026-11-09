@@ -426,10 +426,21 @@ describe('authorization endpoints', () => {
       expect(await (await authorize('app')).json()).toMatchObject({
         authorized: false, rejectionReason: 'Root epoch not registered',
         currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32),
+        latestRootEpoch: 0, latestRootEpochHash: '0x' + '00'.repeat(32),
       });
       vi.stubEnv('MOCK_ROOT_EPOCH', '1');
       vi.stubEnv('MOCK_ROOT_EPOCH_HASH', '0x' + '11'.repeat(32));
-      expect(await (await authorize('app')).json()).toMatchObject({ authorized: true, rejectionReason: '', currentRootEpoch: 1 });
+      expect(await (await authorize('app')).json()).toMatchObject({
+        authorized: true, rejectionReason: '', currentRootEpoch: 1,
+        latestRootEpoch: 1, latestRootEpochHash: '0x' + '11'.repeat(32),
+      });
+      vi.stubEnv('MOCK_LATEST_ROOT_EPOCH', '2');
+      vi.stubEnv('MOCK_LATEST_ROOT_EPOCH_HASH', '0x' + '22'.repeat(32));
+      expect(await (await authorize('app')).json()).toMatchObject({
+        currentRootEpoch: 1, latestRootEpoch: 2, latestRootEpochHash: '0x' + '22'.repeat(32),
+      });
+      vi.stubEnv('MOCK_LATEST_ROOT_EPOCH', '');
+      vi.stubEnv('MOCK_LATEST_ROOT_EPOCH_HASH', '');
       expect(await (await authorize(process.env.KMS_CONTRACT_ADDR!, true)).json()).toMatchObject({
         authorized: false, rejectionReason: 'mock policy: deny-kms', currentRootEpoch: 1,
         currentRootEpochHash: '0x' + '11'.repeat(32),

@@ -96,6 +96,8 @@ export async function build(): Promise<FastifyInstance> {
     currentRootEpoch: 0,
     currentRootEpochHash: '0x' + '00'.repeat(32),
     currentAppEpoch: 0,
+    latestRootEpoch: 0,
+    latestRootEpochHash: '0x' + '00'.repeat(32),
   };
   const authorizationRoutes = new Set(['/authorizeKms', '/authorizeApp']);
 
@@ -149,7 +151,7 @@ export async function build(): Promise<FastifyInstance> {
         response: {
           200: {
             type: 'object',
-            required: ['authorized', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash', 'currentAppEpoch'],
+            required: ['authorized', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash', 'currentAppEpoch', 'latestRootEpoch', 'latestRootEpochHash'],
             properties: {
               authorized: { type: 'boolean' },
               rejectionReason: { type: 'string' },
@@ -157,6 +159,8 @@ export async function build(): Promise<FastifyInstance> {
               currentRootEpoch: { type: 'integer', minimum: 0 },
               currentAppEpoch: { type: 'integer', minimum: 0 },
               currentRootEpochHash: hex(32, 'Current root epoch chain hash'),
+              latestRootEpoch: { type: 'integer', minimum: 0 },
+              latestRootEpochHash: hex(32, 'Latest registered root epoch chain hash'),
             },
           },
         },

@@ -114,6 +114,8 @@ const AUTHORIZATION_ABI = {
       { name: 'currentRootEpoch', type: 'uint256' },
       { name: 'currentRootEpochHash', type: 'bytes32' },
       { name: 'currentAppEpoch', type: 'uint256' },
+      { name: 'latestRootEpoch', type: 'uint256' },
+      { name: 'latestRootEpochHash', type: 'bytes32' },
     ],
   }],
 } as const;
@@ -264,7 +266,9 @@ class EthereumBackend {
     }
     const currentAppEpoch = Number(result.currentAppEpoch);
     if (!Number.isSafeInteger(currentAppEpoch)) throw new Error('current app epoch exceeds the supported range');
-    return { ...result, currentRootEpoch, currentAppEpoch };
+    const latestRootEpoch = Number(result.latestRootEpoch);
+    if (!Number.isSafeInteger(latestRootEpoch)) throw new Error('latest root epoch exceeds the supported range');
+    return { ...result, currentRootEpoch, currentAppEpoch, latestRootEpoch };
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
@@ -399,6 +403,8 @@ const invalidAuthorization = {
   currentRootEpoch: 0,
   currentRootEpochHash: '0x' + '00'.repeat(32),
   currentAppEpoch: 0,
+  latestRootEpoch: 0,
+  latestRootEpochHash: '0x' + '00'.repeat(32),
 };
 
 // The schema caps a valid BootInfo well under this (advisoryIds alone at

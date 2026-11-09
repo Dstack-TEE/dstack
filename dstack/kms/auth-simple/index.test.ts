@@ -478,6 +478,21 @@ describe('auth-simple', () => {
         body: JSON.stringify({ ...baseBootInfo, operation: isKms ? 'kms_serve' : 'app_get_key', ...fields }),
       }))).json();
 
+    it('reports the last configured root epoch as the latest registered one', async () => {
+      writeTestConfig({ ...config, currentRootEpoch: 0 });
+      expect(await authorize()).toMatchObject({
+        authorized: true, currentRootEpoch: 0, currentRootEpochHash: h0, latestRootEpoch: 1, latestRootEpochHash: h1,
+      });
+      writeTestConfig({ ...config, currentRootEpoch: 1 });
+      expect(await authorize({ operation: 'kms_serve' }, true)).toMatchObject({
+        currentRootEpoch: 1, latestRootEpoch: 1, latestRootEpochHash: h1,
+      });
+      writeTestConfig({ ...config, rootEpochs: [] });
+      expect(await authorize({ operation: 'kms_bootstrap' }, true)).toMatchObject({
+        latestRootEpoch: 0, latestRootEpochHash: '0x' + '00'.repeat(32),
+      });
+    });
+
     it('checks the requested policy and returns the epoch on rejection', async () => {
       const kmsContractAddr = '0x' + '11'.repeat(20);
       writeTestConfig({ ...config, kmsContractAddr, currentRootEpoch: 1 });

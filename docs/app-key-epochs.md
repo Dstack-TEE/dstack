@@ -105,7 +105,7 @@ beyond the current one, app registration, OS image at the selected root epoch,
 deployed contract), then forwards the request unchanged to the policy's
 `authorizeApp`. The policy validates the operation and the requested app epoch and
 fills `authorized`, `rejectionReason` and `currentAppEpoch`; the KMS then sets
-`gatewayAppId`, `currentRootEpoch` and `currentRootEpochHash`. The decision and
+`gatewayAppId` and the current and latest root epoch fields. The decision and
 its app epoch therefore come from one policy call. Its interface ID is the XOR of
 both method selectors; policies advertising only either former single-method
 interface must upgrade to the combined interface. Policies without that capability can only
