@@ -151,6 +151,7 @@ slither .
 halmos --contract DstackAppSymbolicTest
 halmos --contract DstackAppEpochSymbolicTest
 halmos --contract DstackKmsSymbolicTest
+halmos --contract DstackKmsEpochSymbolicTest
 ```
 
 Forge 1.8 enables `dynamic_test_linking` by default, which compiles `new` in
