@@ -236,10 +236,14 @@ Configuration changes:
   through the public port, and turn it off afterwards.
 - Auto-bootstrap refuses to overwrite existing root keys.
 
-If you use `auth-simple`, three defaults now deny boots that 0.5.x allowed: an
-empty `devices` list denies every device unless `allowAnyDevice` is true,
-`allowedTcbStatuses` defaults to `["UpToDate"]`, and any advisory ID on a
-quote denies unless listed in `allowedAdvisoryIds`.
+If you use `auth-simple`, replace it with `dstack-auth`, which reads the same
+config file; see
+[Migrating from auth-simple](./dstack-auth-operations.md#migrating-from-auth-simple).
+Compared with 0.5.x auth-simple, an empty `devices` list now denies every device
+unless `allowAnyDevice` is true. To also deny a non-`UpToDate` TCB or any
+advisory ID, as auth-simple did by default, set
+`"allowedTcbStatuses": ["UpToDate"]` and `"allowedAdvisoryIds": []`; without
+them dstack-auth checks neither.
 
 ### Gateway
 

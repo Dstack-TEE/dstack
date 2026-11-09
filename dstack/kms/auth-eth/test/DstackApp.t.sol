@@ -282,8 +282,8 @@ contract DstackAppTest is Test {
             advisoryIds: advisoryIds
         });
 
-        // Legacy 5-arg init skips the TCB check (specification.md §3.4). This deliberately
-        // diverges from auth-simple's strict default; see auth-simple/index.test.ts.
+        // Legacy 5-arg init skips the TCB check (specification.md §3.4), like dstack-auth
+        // without `allowedTcbStatuses`.
         (bool allowed, string memory reason) = app.isAppAllowed(bootInfo);
         assertTrue(allowed);
 

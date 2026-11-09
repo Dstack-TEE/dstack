@@ -34,8 +34,8 @@ For a deeper authorization-focused runbook, also see:
 
 ```text
 Host / operator machine
-├── auth-simple-src  (policy for source KMS)
-├── auth-simple-dst  (policy for destination KMS)
+├── dstack-auth-src  (policy for source KMS)
+├── dstack-auth-dst  (policy for destination KMS)
 ├── kms-src          (bootstrapped first)
 └── kms-dst          (onboarded from kms-src)
 ```
@@ -60,14 +60,14 @@ Before starting, make sure the following are available:
 1. a KMS image or branch containing the code under test
 2. a working teepod / dstack-vmm target
 3. routable HTTPS entrypoints for onboard and runtime RPC
-4. `curl`, `jq`, Python 3, and `bun`
-5. an auth service such as `kms/auth-simple`, or an equivalent webhook
+4. `curl`, `jq`, and Python 3
+5. an auth service such as `dstack-auth` (`cargo build --release -p dstack-auth`), or an equivalent webhook
 
 Recommended references:
 
 - `docs/tutorials/kms-cvm-deployment.md`
 - `docs/tutorials/troubleshooting-kms-deployment.md`
-- `kms/auth-simple/README.md`
+- `docs/dstack-auth-operations.md`
 - `tests/docs/kms-self-authorization.md`
 
 Operational notes:
@@ -107,7 +107,7 @@ They can be:
 
 At minimum, both policies must allow the KMS instance they serve. During onboard, source-side policy must also allow the destination KMS caller.
 
-For `auth-simple`, `kms.mrAggregated = []` is a deny-all policy for KMS. Add the current KMS MR values explicitly when switching a test from deny to allow.
+For `dstack-auth`, `kms.mrAggregated = []` is a deny-all policy for KMS. Add the current KMS MR values explicitly when switching a test from deny to allow.
 
 You no longer need `"0x"` in the `osImages` array — the receiver-side check now resolves `osImageHash` automatically.
 

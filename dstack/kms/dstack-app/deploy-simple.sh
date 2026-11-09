@@ -4,8 +4,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Deploy KMS with external auth-simple webhook
-# auth-simple runs outside the CVM (operator infrastructure)
+# Deploy KMS with an external dstack-auth webhook.
+# dstack-auth runs outside the CVM, on the operator host. Start it first:
+#   cargo build --release -p dstack-auth
+#   dstack-auth --config auth-config.json --port 3001
+# See docs/dstack-auth-operations.md.
 
 set -e
 
@@ -20,14 +23,16 @@ else
   # Create a template .env.simple file
   echo "Creating template .env.simple file..."
   cat >.env.simple <<EOF
-# Environment variables for KMS deployment with auth-simple
-# auth-simple runs OUTSIDE the CVM on operator infrastructure
+# Environment variables for KMS deployment with dstack-auth
+# dstack-auth runs OUTSIDE the CVM on the operator host
 
 # Required: The URL of the dstack-vmm RPC service
 # VMM_RPC=unix:../../../build/vmm.sock
 
-# Required: External auth-simple webhook URL (running on operator infrastructure)
-# AUTH_WEBHOOK_URL=http://your-auth-server:3001
+# Required: dstack-auth webhook URL as seen from inside the CVM. With QEMU
+# user-mode networking the host is 10.0.2.2; dstack-auth's default
+# 127.0.0.1 bind is reachable there.
+# AUTH_WEBHOOK_URL=http://10.0.2.2:3001
 
 # Required: The address of the KMS service listening on Host machine
 # KMS_RPC_ADDR=0.0.0.0:9201
@@ -135,5 +140,5 @@ echo "KMS deployed successfully!"
 echo ""
 echo "Next steps:"
 echo "1. Open http://127.0.0.1:${KMS_RPC_ADDR##*:}/ in your browser"
-echo "2. Bootstrap the KMS with your domain"
-echo "3. Add the KMS mrAggregated to your auth-simple config"
+echo "2. Add the KMS mrAggregated (Onboard.GetAttestationInfo) to your dstack-auth config"
+echo "3. Bootstrap the KMS with your domain"
