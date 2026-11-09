@@ -275,9 +275,9 @@ describe('API Compatibility Tests', () => {
       expect(stale.reason).toMatch(/1 is current/);
       const forked = await boot('app', { rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) });
       expect(forked.reason).toMatch(/not the registered/);
-      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      // A KMS predating root epochs, and its apps, are cut off.
       expect((await boot('app', {})).reason).toMatch(/reports none/);
-      expect((await boot('kms', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).reason).toMatch(/reports none/);
 
       const info = await appFetch(new Request('http://localhost:3001/'));
       expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
@@ -297,9 +297,10 @@ describe('API Compatibility Tests', () => {
       expect(current).not.toHaveBeenCalled();
     });
 
-    it('allows old KMS app requests while epoch 0 is current', async () => {
+    it('serves an old KMS, and its apps, while epoch 0 is current', async () => {
       mockChain(() => [0n, hash], () => 1n);
       expect((await boot('app', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
     });
 
     it.each(['app', 'info'])('reads the registry at the same finalized block for %s', async (endpoint) => {

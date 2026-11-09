@@ -60,11 +60,11 @@ const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
 
 // Only a KMS serving the current root epoch, with the registered keys up to it,
 // may authorize. A KMS that predates root epochs reports none and holds only
-// epoch 0; KMS checks made while onboarding carry none and are not limited.
-function rootEpochDenial(bootInfo: BootInfo, isKms: boolean, current: RootEpochInfo): string | undefined {
+// epoch 0, so it is served only until another epoch is activated.
+function rootEpochDenial(bootInfo: BootInfo, current: RootEpochInfo): string | undefined {
   const currentEpoch = current.rootEpoch ?? 0;
   if (bootInfo.rootEpoch === undefined) {
-    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+    return currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
   }
   if (current.rootEpoch === undefined) {
     return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
@@ -297,7 +297,7 @@ class EthereumBackend {
     });
 
     const epochDenial = allowed
-      ? rootEpochDenial(bootInfo, isKms, await this.getRootEpoch(blockNumber))
+      ? rootEpochDenial(bootInfo, await this.getRootEpoch(blockNumber))
       : undefined;
     return {
       isAllowed: allowed && !epochDenial,

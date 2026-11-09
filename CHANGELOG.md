@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Auth backends: once a root epoch other than 0 is activated, `/bootAuth/kms`
+  denies a KMS that reports no root epoch, as `/bootAuth/app` already did, so
+  KMS binaries predating root epochs stop serving at activation. Upgrade every
+  KMS before activating a new root epoch.
 - KMS: retain `GetTempCaCert`, temporary CA files and legacy handover fields so
   KMS nodes can be upgraded before existing OS images.
 

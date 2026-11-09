@@ -177,8 +177,13 @@ describe('Mock Backend Tests', () => {
       try {
         expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).isAllowed).toBe(true);
         expect((await boot('app', { rootEpoch: 0, rootEpochHash: hash })).reason).toMatch(/1 is current/);
+        // A KMS predating root epochs, and its apps, are served only at epoch 0.
         expect((await boot('app', {})).reason).toMatch(/reports none/);
+        expect((await boot('kms', {})).reason).toMatch(/reports none/);
+        process.env.MOCK_ROOT_EPOCH = '0';
+        expect((await boot('app', {})).isAllowed).toBe(true);
         expect((await boot('kms', {})).isAllowed).toBe(true);
+        process.env.MOCK_ROOT_EPOCH = '1';
         const info = await appFetch(new Request('http://localhost:3002/'));
         expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
       } finally {

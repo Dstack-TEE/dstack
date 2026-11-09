@@ -533,15 +533,16 @@ describe('auth-simple', () => {
       expect(await info()).toMatchObject({ rootEpoch: 0, rootEpochHash: h0 });
       expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).isAllowed).toBe(true);
       expect((await boot('app', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
 
       writeTestConfig({ ...config, currentRootEpoch: 1 });
       expect(await info()).toMatchObject({ rootEpoch: 1, rootEpochHash: h1 });
       expect((await boot('app', { rootEpoch: 1, rootEpochHash: h1 })).isAllowed).toBe(true);
       expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).reason).toMatch(/1 is current/);
       expect((await boot('app', { rootEpoch: 1, rootEpochHash: h0 })).reason).toMatch(/not the registered/);
-      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      // A KMS predating root epochs, and its apps, are cut off.
       expect((await boot('app', {})).reason).toMatch(/reports none/);
-      expect((await boot('kms', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).reason).toMatch(/reports none/);
     });
 
     it.each([

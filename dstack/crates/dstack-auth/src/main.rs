@@ -213,15 +213,15 @@ fn deny(al: &Allowlist, reason: &str) -> BootResponse {
 
 /// allow, provided the asking KMS serves the current root epoch with the
 /// registered keys up to it. A KMS that predates root epochs reports none and
-/// holds only epoch 0; KMS checks made while onboarding carry none.
-fn allow(info: &BootInfo, is_kms: bool, al: &Allowlist) -> BootResponse {
+/// holds only epoch 0, so it is served only until another epoch is activated.
+fn allow(info: &BootInfo, al: &Allowlist) -> BootResponse {
     let current = match al.current_root_epoch() {
         Ok(current) => current,
         Err(error) => return deny(al, &format!("invalid root epoch configuration: {error}")),
     };
     let current_epoch = current.as_ref().map_or(0, |c| c.number);
     let denial = match (info.root_epoch, &current) {
-        (None, _) if is_kms || current_epoch == 0 => None,
+        (None, _) if current_epoch == 0 => None,
         (None, _) => Some(format!(
             "root epoch {current_epoch} is current, but the KMS reports none"
         )),
@@ -290,7 +290,7 @@ fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
     }
     let result = app_policy(info, al);
     if result.is_allowed {
-        allow(info, false, al)
+        allow(info, al)
     } else {
         result
     }
@@ -299,7 +299,7 @@ fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
 fn check_kms(info: &BootInfo, al: &Allowlist) -> BootResponse {
     let result = kms_policy(info, al);
     if result.is_allowed {
-        allow(info, true, al)
+        allow(info, al)
     } else {
         result
     }
@@ -759,6 +759,8 @@ mod tests {
         };
         assert_eq!(info_json(&al).unwrap()["rootEpochHash"], h0);
         assert!(check_kms(&info(Some(0), h0), &al).is_allowed);
+        // A KMS predating root epochs is served only while epoch 0 is current.
+        assert!(check_kms(&info(None, ""), &al).is_allowed);
 
         al.current_root_epoch = 1;
         assert_eq!(info_json(&al).unwrap()["rootEpoch"], 1);
@@ -766,8 +768,7 @@ mod tests {
         assert!(check_kms(&info(Some(1), &h1.to_uppercase()), &al).is_allowed);
         assert!(!check_kms(&info(Some(0), h0), &al).is_allowed);
         assert!(!check_kms(&info(Some(1), h0), &al).is_allowed);
-        // onboarding checks carry no epoch
-        assert!(check_kms(&info(None, ""), &al).is_allowed);
+        assert!(!check_kms(&info(None, ""), &al).is_allowed);
 
         al.current_root_epoch = 2;
         assert!(al.current_root_epoch().is_err());

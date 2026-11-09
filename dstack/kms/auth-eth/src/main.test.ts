@@ -139,16 +139,15 @@ describe('Server', () => {
       const current = { rootEpoch: 1, rootEpochHash: hash };
       const info = (fields: object) => ({ ...mockBootInfo, ...fields });
 
-      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash.toUpperCase().replace('0X', '') }), false, current)).toBeUndefined();
-      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), false, current)).toMatch(/1 is current/);
-      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) }), false, current)).toMatch(/not the registered/);
-      // A KMS predating root epochs is cut off once a rotation is current.
-      expect(rootEpochDenial(info({}), false, current)).toMatch(/reports none/);
-      expect(rootEpochDenial(info({}), false, { rootEpoch: 0, rootEpochHash: hash })).toBeUndefined();
-      expect(rootEpochDenial(info({}), true, current)).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash.toUpperCase().replace('0X', '') }), current)).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), current)).toMatch(/1 is current/);
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) }), current)).toMatch(/not the registered/);
+      // A KMS or app request predating root epochs is cut off once a rotation is current.
+      expect(rootEpochDenial(info({}), current)).toMatch(/reports none/);
+      expect(rootEpochDenial(info({}), { rootEpoch: 0, rootEpochHash: hash })).toBeUndefined();
       // Nothing registered: only epoch 0 serves.
-      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), false, {})).toBeUndefined();
-      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash }), false, {})).toMatch(/not registered/);
+      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), {})).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash }), {})).toMatch(/not registered/);
     });
 
     it('should list registered key epochs in the info response', async () => {
@@ -274,14 +273,15 @@ describe('Ethereum root epoch registry', () => {
     expect(registryCalls().every(({ name }) => name === 'rootEpochCount')).toBe(true);
   });
 
-  it('allows old KMS app requests only through epoch 0 while preserving onboarding', async () => {
+  it('serves an old KMS, and its apps, only while epoch 0 is current', async () => {
     count = 1n;
     epoch = 0n;
     expect((await boot('app')).isAllowed).toBe(true);
+    expect((await boot('kms')).isAllowed).toBe(true);
     count = 2n;
     epoch = 1n;
     expect((await boot('app')).reason).toMatch(/reports none/);
-    expect((await boot('kms')).isAllowed).toBe(true);
+    expect((await boot('kms')).reason).toMatch(/reports none/);
   });
 
   it.each(['app', 'info'])('pins both registry reads to the same block for %s', async (endpoint) => {

@@ -255,8 +255,9 @@ Every authorization request (app checks and the KMS self check that gates all
 RPCs) carries the epoch the KMS serves, so a backend refuses a stale or forked
 KMS. On a denial the KMS reads the current epoch from the info endpoint and
 restarts if it moved. A KMS predating root epochs sends none; backends treat it
-as epoch 0 and deny its app checks once a later epoch is current, so old KMS
-software is cut off too. In-flight operations are not cancelled.
+as epoch 0 and, once a later epoch is current, deny both its self check and its
+app checks, so old KMS software stops serving. Upgrade every KMS before
+activating a new epoch. In-flight operations are not cancelled.
 
 Backups retain full history; closing migration does not delete roots. Replacement
 KMS boot cannot depend on its own unavailable service or stopped gateway ingress.
