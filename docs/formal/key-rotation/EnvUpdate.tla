@@ -13,12 +13,14 @@
 (* and is applied only over that env; boot progress reaching application   *)
 (* code also closes it. Owner updates (UpdateVm) can happen at any time.   *)
 (*                                                                         *)
-(* Lossy lets the guest's two host notifications fail, as notify_q and     *)
-(* update_sealed_env failures are only logged.                             *)
+(* Lossy lets either host notification, or the answer to the guest's      *)
+(* update, be lost. With FailClosed (#1546) the guest starts applications *)
+(* only once the host answered its update, retrying or stopping the boot  *)
+(* otherwise; without it, an unanswered update is only logged.            *)
 (***************************************************************************)
 EXTENDS Naturals
 
-CONSTANTS MaxEpoch, MaxOwnerWrites, Lossy
+CONSTANTS MaxEpoch, MaxOwnerWrites, Lossy, FailClosed
 
 None == [owner |-> 0, epoch |-> 0, by |-> "none"]
 
@@ -54,13 +56,16 @@ Launch ==
     /\ UNCHANGED <<current, store, ownerWrites>>
 
 \* Re-encrypt to the current epoch if needed and send it, empty otherwise.
+\* An unanswered update, whether lost on the way or after the VMM applied
+\* it, is retried under FailClosed; the boot may also stop (Stop).
 GuestPush ==
     /\ vm = "booting"
-    /\ vm' = "pushed"
     /\ LET env == [owner |-> seen.owner, epoch |-> current, by |-> "guest"]
            empty == seen.epoch = current
-       IN \/ Deliver(env, empty)
-          \/ Lossy /\ UNCHANGED <<store, window>>
+           unanswered == IF FailClosed THEN "booting" ELSE "pushed"
+       IN \/ Deliver(env, empty) /\ vm' = "pushed"
+          \/ Lossy /\ Deliver(env, empty) /\ vm' = unanswered
+          \/ Lossy /\ UNCHANGED <<store, window>> /\ vm' = unanswered
     /\ UNCHANGED <<current, ownerWrites, seen>>
 
 \* boot.progress "init-script": application code starts after this.

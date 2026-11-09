@@ -46,14 +46,20 @@ Bootstrap(n) ==
     /\ fresh' = fresh + 1
     /\ UNCHANGED <<reg, cur, released>>
 
-\* Handover from src: src passes its kms_export_keys self-check (it serves
-\* the current epoch), the recipient's kms_import_keys check at the highest
-\* exported epoch (registered), and ensure_handover_registered (the keyring
-\* serves the current epoch; a rotation holds nothing beyond it).
+\* Handover from src (onboard_service.rs ensure_handover_registered): src
+\* passes its kms_export_keys self-check (it serves the current epoch) and
+\* holds nothing beyond the latest registered epoch. Epochs past the current
+\* one are checked only through the latest registered epoch's chain hash,
+\* so a source holding some of them must hold the latest one and match it.
+\* A rotation starts from the current epoch with nothing pending.
 CanHandOver(src, rotate) ==
-    /\ Serves(src)
-    /\ Latest(src) < Len(reg)
-    /\ rotate => Latest(src) = cur
+    LET held == Latest(src)
+        latest == Len(reg) - 1
+    IN /\ Serves(src)
+       /\ held <= latest
+       /\ ~(held > cur /\ held < latest)
+       /\ held = latest => kr[src] = reg
+       /\ rotate => held = cur /\ latest = cur
 
 Join(dst, src) ==
     /\ kr[dst] = <<>> /\ CanHandOver(src, FALSE)
