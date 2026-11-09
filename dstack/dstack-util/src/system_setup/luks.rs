@@ -315,8 +315,10 @@ fn kill_luks_slot(device: &Path, slot: u8) -> Result<()> {
 /// Each step is a single atomic LUKS2 metadata update: add the new key with
 /// the old one, record the new epochs, then remove the old keyslot. Whatever
 /// step a crash interrupts, the next boot finds either the old key alone or a
-/// keyslot `key` already unlocks, and finishes from there. `old_key` is only
-/// called when `key` unlocks no keyslot. An unrotated epoch-0 disk is left
+/// keyslot `key` already unlocks, and finishes from there. If another rotation
+/// came first, `key` unlocks neither keyslot; the migration then restarts from
+/// the keyslot the token records. `old_key` is only called when `key` unlocks
+/// no keyslot. An unrotated epoch-0 disk is left
 /// untouched, so it stays readable by older OS images.
 ///
 /// `header` holds the validated in-memory copy of `state` and is refreshed
