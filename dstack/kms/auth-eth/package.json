@@ -1,5 +1,5 @@
 {
-  "name": "auth-eth-bun",
+  "name": "auth-eth",
   "version": "1.0.0",
   "description": "dstack KMS ethereum backend with bun + hono + zod",
   "main": "index.ts",

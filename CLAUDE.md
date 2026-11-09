@@ -73,7 +73,7 @@ cd dstack/kms/auth-eth
 git submodule update --init --recursive lib/forge-std \
   lib/openzeppelin-contracts-upgradeable lib/openzeppelin-foundry-upgrades
 # Upgrade-safety validator called by `forge test --ffi`
-npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
+npx --yes @openzeppelin/upgrades-core@^1.37.0 --help > /dev/null
 
 # Build
 forge build       # Compile smart contracts
@@ -85,7 +85,7 @@ forge clean && forge test --ffi   # Run Foundry contract tests
 anvil             # Start local Ethereum node
 ```
 
-The KMS webhook server for these contracts is `dstack/kms/auth-eth-bun`
+The KMS webhook server for these contracts lives in the same directory
 (`bun install && bun run check`).
 
 ### Python SDK

@@ -2,39 +2,41 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: KMS auth-eth-bun
+name: KMS auth-eth
 
-# The auth-eth-bun webhook ships on its own cadence, separate from the KMS
-# image: a `kms-auth-eth-bun-v*` tag publishes
-# ghcr.io/dstack-tee/dstack-kms-auth-eth-bun:<version>. Pull requests and
+# The auth-eth webhook ships on its own cadence, separate from the KMS
+# image: a `kms-auth-eth-v*` tag publishes
+# ghcr.io/dstack-tee/dstack-kms-auth-eth:<version>. Pull requests and
 # pushes that touch the backend run the checks and build the image without
 # pushing it.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Existing release tag version without the kms-auth-eth-bun-v prefix
+        description: Existing release tag version without the kms-auth-eth-v prefix
         required: true
         type: string
   push:
     branches: [ next, 'release/**' ]
     tags:
-      - 'kms-auth-eth-bun-v*'
+      - 'kms-auth-eth-v*'
+    # Top-level files only: the server lives next to the Foundry project, whose
+    # contracts/, lib/, test/ and script/ are covered by foundry-test.yml.
     paths:
-      - 'dstack/kms/auth-eth-bun/**'
-      - '.github/workflows/kms-auth-eth-bun.yml'
+      - 'dstack/kms/auth-eth/*'
+      - '.github/workflows/kms-auth-eth.yml'
   pull_request:
     branches: [ next, 'release/**' ]
     paths:
-      - 'dstack/kms/auth-eth-bun/**'
-      - '.github/workflows/kms-auth-eth-bun.yml'
+      - 'dstack/kms/auth-eth/*'
+      - '.github/workflows/kms-auth-eth.yml'
 
 permissions:
   contents: read
 
 env:
-  IMAGE: ghcr.io/dstack-tee/dstack-kms-auth-eth-bun
-  BACKEND_DIR: dstack/kms/auth-eth-bun
+  IMAGE: ghcr.io/dstack-tee/dstack-kms-auth-eth
+  BACKEND_DIR: dstack/kms/auth-eth
 
 jobs:
   check:
@@ -43,7 +45,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('kms-auth-eth-bun-v{0}', inputs.version) || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('kms-auth-eth-v{0}', inputs.version) || github.sha }}
           persist-credentials: false
 
       - name: Set up Bun
@@ -88,7 +90,7 @@ jobs:
             VERSION=$DISPATCH_VERSION
           else
             case "$GITHUB_REF" in
-              refs/tags/kms-auth-eth-bun-v*) VERSION=${GITHUB_REF#refs/tags/kms-auth-eth-bun-v} ;;
+              refs/tags/kms-auth-eth-v*) VERSION=${GITHUB_REF#refs/tags/kms-auth-eth-v} ;;
             esac
           fi
           if [ -n "$VERSION" ]; then
@@ -107,7 +109,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('kms-auth-eth-bun-v{0}', inputs.version) || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('kms-auth-eth-v{0}', inputs.version) || github.sha }}
           persist-credentials: false
 
       - name: Resolve the revision to build
@@ -151,12 +153,12 @@ jobs:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           token=$(curl -fsSL \
-            "https://ghcr.io/token?scope=repository:dstack-tee/dstack-kms-auth-eth-bun:pull" \
+            "https://ghcr.io/token?scope=repository:dstack-tee/dstack-kms-auth-eth:pull" \
             | jq -er .token)
           curl -fsSL -o /dev/null \
             -H "Authorization: Bearer $token" \
             -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
-            "https://ghcr.io/v2/dstack-tee/dstack-kms-auth-eth-bun/manifests/$IMAGE_DIGEST"
+            "https://ghcr.io/v2/dstack-tee/dstack-kms-auth-eth/manifests/$IMAGE_DIGEST"
 
       - name: Generate artifact attestation
         if: env.PUBLISH == '1'

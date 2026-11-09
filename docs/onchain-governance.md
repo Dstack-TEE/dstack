@@ -49,7 +49,7 @@ export RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<your-alchemy-key>"
 
 ## Configure KMS for On-Chain Auth
 
-The KMS CVM includes an auth-api service, [auth-eth-bun](../dstack/kms/auth-eth-bun/), that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
+The KMS CVM includes an auth-api service, [auth-eth](../dstack/kms/auth-eth/), that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
 
 ```bash
 KMS_CONTRACT_ADDR=<your-dstack-kms-contract-address>

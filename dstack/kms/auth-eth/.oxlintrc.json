@@ -7,6 +7,10 @@
   },
   "ignorePatterns": [
     "node_modules/**",
+    "lib/**",
+    "out/**",
+    "cache/**",
+    "broadcast/**",
     "dist/**",
     "build/**",
     "coverage/**",
