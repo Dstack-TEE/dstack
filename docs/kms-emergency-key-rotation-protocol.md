@@ -245,9 +245,14 @@ generates epoch S+1.
 | Ordinary join | Holds the current epoch, possibly one pending activation | Keyring 0..S |
 | Rotation join (`rotate=true`) | Holds exactly up to the current epoch | Keyring 0..S plus fresh epoch S+1 and attestation evidence |
 
-Use admin authorization and recipient KMS attestation. Disable public legacy
-handover and reject incompatible legacy receivers without reducing the payload.
-A rotation also requires the source's certificate to carry its OS image hash.
+Every handover requires the recipient's KMS attestation: the source checks the
+attested RA-TLS client certificate on both `Admin.GetKmsKey` and the public
+`KMS.GetKmsKey`. Admin authorization (`source_token`) is recommended for joins
+and rotations alike, but not required: a rotation only produces a pending epoch
+N+1, which no node accepts until governance registers and activates it. Where
+possible, disable public legacy handover and reject incompatible legacy
+receivers without reducing the payload. The source's certificate must carry its
+OS image hash.
 Deployments that never registered epochs can still join at epoch 0.
 
 For rotation, generate fresh roots and attest them: report data is
