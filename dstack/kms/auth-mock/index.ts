@@ -126,19 +126,19 @@ class MockBackend {
     };
     const kmsOperation = ['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys'].includes(appInfo.operation);
     if (kmsOperation !== isKms) {
-      return { isAllowed: false, rejectionReason: 'Invalid authorization operation', gatewayAppId: this.mockGatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Invalid authorization operation', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     if (current.rootEpoch === undefined && appInfo.operation !== 'kms_bootstrap') {
-      return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Root epoch not registered', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > (current.rootEpoch ?? 0)) {
-      return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     if (appInfo.requestedAppEpoch !== undefined && appInfo.requestedAppEpoch > epoch.currentAppEpoch) {
-      return { isAllowed: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: this.mockGatewayAppId, ...epoch };
     }
     const result = this.evaluateBoot(appInfo, isKms);
-    return { isAllowed: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
+    return { authorized: result.isAllowed, rejectionReason: result.isAllowed ? '' : result.reason,
       gatewayAppId: this.mockGatewayAppId, ...epoch };
   }
 

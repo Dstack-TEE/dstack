@@ -34,7 +34,7 @@ export interface RootEpochInfo {
 // Removed KMS_CONTRACT_ABI and APP_CONTRACT_ABI since we're using typechain types now
 
 export interface AuthorizationResult {
-  isAllowed: boolean;
+  authorized: boolean;
   rejectionReason: string;
   gatewayAppId: string;
   currentRootEpoch: number;

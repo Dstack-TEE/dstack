@@ -371,7 +371,7 @@ impl KmsState {
             self.keyring
                 .servable_epoch(RootEpochRegistry::Current(current))?
         };
-        if !result.is_allowed {
+        if !result.authorized {
             bail!("Authorization denied: {}", result.rejection_reason);
         }
         let epoch = requested.unwrap_or(current);
@@ -1802,7 +1802,7 @@ mod tests {
         )
         .unwrap();
         let result = |epoch: u32| AuthorizationResult {
-            is_allowed: true,
+            authorized: true,
             rejection_reason: String::new(),
             gateway_app_id: String::new(),
             current_root_epoch: epoch,
@@ -1825,10 +1825,10 @@ mod tests {
         assert_eq!(state.rpc_ca_pubkey, initial.rpc_ca_pubkey);
 
         let mut rejected = result(1);
-        rejected.is_allowed = false;
+        rejected.authorized = false;
         rejected.rejection_reason = "Policy denied".into();
         assert!(state.authorized_epoch(&rejected, Some(0)).is_err());
-        rejected.is_allowed = true;
+        rejected.authorized = true;
         for hash in [
             "invalid".into(),
             hex::encode([0; 32]),
@@ -1852,7 +1852,7 @@ mod tests {
         let initial = kms_state(dir.path(), "http://127.0.0.1:1");
         let response = |allowed| {
             serde_json::json!({
-                "isAllowed": allowed, "rejectionReason": "export denied", "gatewayAppId": "",
+                "authorized": allowed, "rejectionReason": "export denied", "gatewayAppId": "",
                 "currentRootEpoch": 0, "currentAppEpoch": 0,
                 "currentRootEpochHash": hex::encode(initial.keyring.chain_hashes[0]),
             })

@@ -258,7 +258,7 @@ bun run test:run
 
 ### Authorization endpoints
 
-`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including `authorized`,
 `rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
 The selected endpoint determines the policy; the backend checks that the verified
 `appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;

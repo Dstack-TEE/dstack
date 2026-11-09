@@ -30,7 +30,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     struct AuthorizationResult {
-        bool isAllowed;
+        bool authorized;
         string rejectionReason;
         string gatewayAppId;
         uint256 currentRootEpoch;
@@ -566,9 +566,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
         uint256 appEpoch = request.requestedAppEpoch.isSet ? request.requestedAppEpoch.value : result.currentAppEpoch;
         if (isKms) {
-            (result.isAllowed, result.rejectionReason) = _isKmsAllowed(bootInfo, selectedRootEpoch);
+            (result.authorized, result.rejectionReason) = _isKmsAllowed(bootInfo, selectedRootEpoch);
         } else {
-            (result.isAllowed, result.rejectionReason) =
+            (result.authorized, result.rejectionReason) =
                 _isAppAllowed(bootInfo, selectedRootEpoch, appEpoch, request.operation);
         }
     }

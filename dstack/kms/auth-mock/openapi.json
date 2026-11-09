@@ -421,7 +421,7 @@
       "AuthorizationResult": {
         "type": "object",
         "required": [
-          "isAllowed",
+          "authorized",
           "rejectionReason",
           "gatewayAppId",
           "currentRootEpoch",
@@ -429,7 +429,7 @@
           "currentAppEpoch"
         ],
         "properties": {
-          "isAllowed": {
+          "authorized": {
             "type": "boolean"
           },
           "rejectionReason": {

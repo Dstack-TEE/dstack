@@ -87,7 +87,7 @@ struct AuthorizationRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthorizationResult {
-    is_allowed: bool,
+    authorized: bool,
     rejection_reason: String,
     gateway_app_id: String,
     current_root_epoch: usize,
@@ -314,7 +314,7 @@ fn authorize(
 ) -> Result<AuthorizationResult> {
     let current = al.current_root_epoch()?;
     let mut result = AuthorizationResult {
-        is_allowed: false,
+        authorized: false,
         rejection_reason: String::new(),
         gateway_app_id: al.gateway_app_id.clone(),
         current_root_epoch: current.as_ref().map_or(0, |epoch| epoch.number),
@@ -357,7 +357,7 @@ fn authorize(
         } else {
             app_policy(info, al)
         };
-        result.is_allowed = policy.is_allowed;
+        result.authorized = policy.is_allowed;
         policy.reason
     };
     Ok(result)
@@ -539,7 +539,7 @@ mod tests {
                 .await;
             assert_eq!(response.status(), Status::Ok);
             let response: serde_json::Value = response.into_json().await.unwrap();
-            assert_eq!(response["isAllowed"], allowed);
+            assert_eq!(response["authorized"], allowed);
             assert_eq!(response["currentRootEpoch"], 0);
             assert_eq!(response["currentAppEpoch"], 0);
             assert_ne!(
@@ -573,7 +573,7 @@ mod tests {
                 .into_json()
                 .await
                 .unwrap();
-            assert_eq!(response["isAllowed"], false);
+            assert_eq!(response["authorized"], false);
         }
         policy["rootEpochs"] = json!([]);
         std::fs::write(&path, policy.to_string()).unwrap();
@@ -586,7 +586,7 @@ mod tests {
             .into_json()
             .await
             .unwrap();
-        assert_eq!(response["isAllowed"], false);
+        assert_eq!(response["authorized"], false);
         assert_eq!(
             response["currentRootEpochHash"],
             format!("0x{}", "00".repeat(32))
@@ -662,7 +662,7 @@ mod tests {
                     .into_json()
                     .await
                     .unwrap();
-                assert_eq!(response["isAllowed"], allowed);
+                assert_eq!(response["authorized"], allowed);
                 assert_eq!(response["currentAppEpoch"], 2);
                 assert_eq!(response["currentRootEpoch"], 1);
             }

@@ -862,7 +862,7 @@ describe('POST /authorizeApp', () => {
 
   it('reads the complete result with one contract call at configured finality', async () => {
     const result = {
-      isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
+      authorized: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
       currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
     };
     mockReadContract.mockResolvedValueOnce(result);
@@ -878,7 +878,7 @@ describe('POST /authorizeApp', () => {
 
   it('encodes an explicit epoch zero as present', async () => {
     mockReadContract.mockResolvedValueOnce({
-      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
       currentAppEpoch: 0n, currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
     });
     expect((await authorize(0)).status).toBe(200);

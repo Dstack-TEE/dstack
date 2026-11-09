@@ -90,7 +90,7 @@ pub(crate) struct BootResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthorizationResult {
-    pub is_allowed: bool,
+    pub authorized: bool,
     pub rejection_reason: String,
     pub gateway_app_id: String,
     pub current_root_epoch: u32,
@@ -317,7 +317,7 @@ impl AuthApi {
         ensure_identity_widths(app_info)?;
         match self {
             AuthApi::Dev { dev } => Ok(AuthorizationResult {
-                is_allowed: true,
+                authorized: true,
                 rejection_reason: String::new(),
                 gateway_app_id: dev.gateway_app_id.clone(),
                 current_root_epoch: 0,
@@ -469,7 +469,7 @@ pub(crate) async fn ensure_self_kms_allowed(
         .authorize_kms(&boot_info, Operation::KmsBootstrap, None)
         .await
         .context("failed to call KMS bootstrap authorization")?;
-    if !response.is_allowed {
+    if !response.authorized {
         bail!("boot denied: {}", response.rejection_reason);
     }
     Ok(())
@@ -498,7 +498,7 @@ pub(crate) async fn ensure_kms_allowed(
         .authorize_kms(&boot_info, Operation::KmsExportKeys, Some(root_epoch))
         .await
         .context("failed to authorize source KMS key export")?;
-    if !response.is_allowed {
+    if !response.authorized {
         bail!("boot denied: {}", response.rejection_reason);
     }
     if cfg.auth_api.is_dev() {
@@ -773,7 +773,7 @@ pub(crate) mod tests {
             Operation::AppGetKey,
             Operation::AppGetCert,
         ];
-        let response = r#"{"isAllowed":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
+        let response = r#"{"authorized":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
         let (url, server) = serve(vec![response; operations.len()]);
         let auth = webhook(url);
         for operation in operations {
@@ -823,7 +823,7 @@ pub(crate) mod tests {
     async fn authorization_returns_the_epoch_with_each_decision() {
         let response = |allowed: bool, epoch: u32| {
             format!(
-                r#"{{"isAllowed":{allowed},"rejectionReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentAppEpoch":0,"currentRootEpochHash":"0x{}"}}"#,
+                r#"{{"authorized":{allowed},"rejectionReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentAppEpoch":0,"currentRootEpochHash":"0x{}"}}"#,
                 "11".repeat(32)
             )
         };
@@ -844,8 +844,8 @@ pub(crate) mod tests {
             .authorize_app(&info, Operation::AppGetKey, None, None)
             .await
             .unwrap();
-        assert!(first.is_allowed);
-        assert!(!second.is_allowed);
+        assert!(first.authorized);
+        assert!(!second.authorized);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
         auth.authorize_app(&info, Operation::AppGetKey, Some(0), Some(0))
@@ -859,7 +859,7 @@ pub(crate) mod tests {
                 .authorize_kms(&info, Operation::KmsImportKeys, Some(2))
                 .await
                 .unwrap()
-                .is_allowed
+                .authorized
         );
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 5);

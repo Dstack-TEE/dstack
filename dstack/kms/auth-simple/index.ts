@@ -178,19 +178,19 @@ class ConfigBackend {
     };
     const kmsOperation = ['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys'].includes(appInfo.operation);
     if (kmsOperation !== isKms) {
-      return { isAllowed: false, rejectionReason: 'Invalid authorization operation', gatewayAppId: config.gatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Invalid authorization operation', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     if (current.rootEpoch === undefined && appInfo.operation !== 'kms_bootstrap') {
-      return { isAllowed: false, rejectionReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Root epoch not registered', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     if (appInfo.requestedRootEpoch !== undefined && appInfo.requestedRootEpoch > (current.rootEpoch ?? 0)) {
-      return { isAllowed: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Requested root epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     if (appInfo.requestedAppEpoch !== undefined && appInfo.requestedAppEpoch > epoch.currentAppEpoch) {
-      return { isAllowed: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
+      return { authorized: false, rejectionReason: 'Requested app epoch is not active', gatewayAppId: config.gatewayAppId, ...epoch };
     }
     const result = this.evaluateBoot(appInfo, isKms, config, appConfig);
-    return { isAllowed: result.isAllowed, rejectionReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
+    return { authorized: result.isAllowed, rejectionReason: result.reason, gatewayAppId: result.gatewayAppId, ...epoch };
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {

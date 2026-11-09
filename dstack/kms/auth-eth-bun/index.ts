@@ -107,7 +107,7 @@ const AUTHORIZATION_ABI = {
     name: 'result',
     type: 'tuple',
     components: [
-      { name: 'isAllowed', type: 'bool' },
+      { name: 'authorized', type: 'bool' },
       { name: 'rejectionReason', type: 'string' },
       { name: 'gatewayAppId', type: 'string' },
       { name: 'currentRootEpoch', type: 'uint256' },

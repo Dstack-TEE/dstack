@@ -519,15 +519,15 @@ contract DstackKmsTest is Test {
         DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
             info, keccak256("kms_bootstrap"), DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0)
         );
-        assertTrue(kms.authorizeKms(request).isAllowed);
+        assertTrue(kms.authorizeKms(request).authorized);
         assertEq(kms.authorizeKms(request).currentRootEpochHash, bytes32(0));
         request.operation = keccak256("kms_export_keys");
         assertEq(kms.authorizeKms(request).rejectionReason, "Root epoch not registered");
         vm.prank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
-        assertTrue(kms.authorizeKms(request).isAllowed);
+        assertTrue(kms.authorizeKms(request).authorized);
         request.operation = keccak256("kms_import_keys");
-        assertTrue(kms.authorizeKms(request).isAllowed);
+        assertTrue(kms.authorizeKms(request).authorized);
         assertEq(kms.authorizeApp(request).rejectionReason, "Invalid authorization operation");
         request.operation = keccak256("app_get_cert");
         assertEq(kms.authorizeKms(request).rejectionReason, "Invalid authorization operation");
@@ -544,27 +544,27 @@ contract DstackKmsTest is Test {
         approveKmsAtEpoch(info, 1);
         assertFalse(kms.allowedOsImages(info.osImageHash));
         assertTrue(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
-        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(authorize(info, true).authorized);
         assertTrue(
-            kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed, "pending handover must be explicitly approved"
+            kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized, "pending handover must be explicitly approved"
         );
-        assertFalse(kms.authorizeApp(epochRequest(info, 1, 0)).isAllowed, "apps cannot fetch pending keys");
+        assertFalse(kms.authorizeApp(epochRequest(info, 1, 0)).authorized, "apps cannot fetch pending keys");
         DstackKms.AuthorizationResult memory result = kms.authorizeKms(kmsEpochRequest(info, 2, 0));
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Requested root epoch is not registered");
         activateNextRootEpoch();
         result = authorize(info, true);
-        assertTrue(result.isAllowed);
+        assertTrue(result.authorized);
         assertEq(result.currentRootEpoch, 1);
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed, "epoch one does not imply epoch zero");
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized, "epoch one does not imply epoch zero");
         approveKmsAtEpoch(info, 0);
-        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
         vm.stopPrank();
     }
 
     function test_CheckAuthorization_UnregisteredEpochReturnsRejection() public view {
         DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(address(kms)), true);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Root epoch not registered");
         assertEq(result.currentRootEpoch, 0);
         assertEq(result.currentRootEpochHash, bytes32(0));
@@ -582,36 +582,36 @@ contract DstackKmsTest is Test {
         vm.stopPrank();
 
         DstackKms.AuthorizationResult memory result = authorize(info, true);
-        assertTrue(result.isAllowed);
+        assertTrue(result.authorized);
         assertEq(result.rejectionReason, "");
         assertEq(result.gatewayAppId, "gateway");
         assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
 
         info.appId = user;
         result = authorize(info, false);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "App not registered");
 
         info.appId = appId;
         info.mrAggregated = bytes32(0);
         result = authorize(info, false);
-        assertTrue(result.isAllowed);
+        assertTrue(result.authorized);
         result = authorize(info, true);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
         DstackKms.AuthorizationRequest memory appRequest = DstackKms.AuthorizationRequest(
             info, keccak256("app_get_key"), DstackKms.OptionalUint256(true, 1), DstackKms.OptionalUint256(false, 0)
         );
         result = kms.authorizeApp(appRequest);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Requested app epoch is not active");
         assertEq(result.currentRootEpochHash, chainHash(bytes32(0), ca(0xa0), k256(0xb0)));
         info.appId = address(kms);
         result = authorize(info, false);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "App not registered");
         result = authorize(info, true);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
     }
 
@@ -689,20 +689,20 @@ contract DstackKmsTest is Test {
             info, keccak256("app_get_key"), DstackKms.OptionalUint256(false, 0), DstackKms.OptionalUint256(false, 0)
         );
         DstackKms.AuthorizationResult memory result = kms.authorizeApp(request);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Compose hash not allowed");
         assertEq(result.currentAppEpoch, 1);
         request.requestedAppEpoch = DstackKms.OptionalUint256(true, 0);
-        assertTrue(kms.authorizeApp(request).isAllowed);
+        assertTrue(kms.authorizeApp(request).authorized);
         request.requestedAppEpoch.value = 2;
         result = kms.authorizeApp(request);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.currentAppEpoch, 1);
         assertEq(result.rejectionReason, "Requested app epoch is not active");
         request.requestedAppEpoch = DstackKms.OptionalUint256(false, 0);
         request.appInfo.composeHash = bytes32(0);
         result = kms.authorizeApp(request);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.currentAppEpoch, 1);
         vm.prank(user);
         DstackApp(appId).advanceAppEpoch(1);
@@ -718,7 +718,7 @@ contract DstackKmsTest is Test {
 
         bytes32 hash1 = chainHash(chainHash(bytes32(0), ca(0xa0), k256(0xb0)), ca(0xa1), k256(0xb1));
         DstackKms.AuthorizationResult memory result = authorize(authorizationInfo(user), false);
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "App not registered");
         assertEq(result.currentRootEpoch, 1);
         assertEq(result.currentRootEpochHash, hash1);
@@ -994,28 +994,28 @@ contract DstackKmsTest is Test {
         approveKmsAtEpoch(info, 0);
         registerNextRootEpoch();
         activateNextRootEpoch();
-        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed);
-        assertFalse(authorize(info, true).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
+        assertFalse(authorize(info, true).authorized);
         (bool allowed,) = kms.isKmsAllowed(info);
         assertTrue(allowed, "legacy KMS check reads epoch 0");
         kms.addOsImageHash(info.osImageHash);
-        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(authorize(info, true).authorized);
         kms.addKmsAggregatedMr(info.mrAggregated);
-        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(authorize(info, true).authorized);
         kms.addKmsDevice(info.deviceId);
-        assertTrue(authorize(info, true).isAllowed);
+        assertTrue(authorize(info, true).authorized);
         kms.removeOsImageHash(info.osImageHash);
-        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(authorize(info, true).authorized);
         assertTrue(kms.allowedOsImages(info.osImageHash));
-        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
         kms.addOsImageHash(info.osImageHash);
         kms.removeKmsAggregatedMrAtEpoch(0, info.mrAggregated);
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed);
-        assertTrue(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
+        assertTrue(authorize(info, true).authorized);
         kms.addKmsAggregatedMrAtEpoch(0, info.mrAggregated);
         kms.removeKmsDeviceAtEpoch(0, info.deviceId);
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed);
-        assertTrue(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
+        assertTrue(authorize(info, true).authorized);
         vm.stopPrank();
     }
 
@@ -1031,23 +1031,23 @@ contract DstackKmsTest is Test {
         DstackApp policy = DstackApp(info.appId);
         vm.prank(user);
         policy.advanceAppEpoch(0);
-        assertFalse(kms.authorizeApp(epochRequest(info, 0, 1)).isAllowed);
-        assertFalse(kms.authorizeApp(epochRequest(info, 1, 0)).isAllowed);
-        assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).isAllowed);
+        assertFalse(kms.authorizeApp(epochRequest(info, 0, 1)).authorized);
+        assertFalse(kms.authorizeApp(epochRequest(info, 1, 0)).authorized);
+        assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).authorized);
         vm.startPrank(user);
         policy.addComposeHash(info.composeHash);
         policy.addDevice(info.deviceId);
         vm.stopPrank();
-        assertTrue(kms.authorizeApp(epochRequest(info, 0, 1)).isAllowed);
-        assertFalse(authorize(info, false).isAllowed);
+        assertTrue(kms.authorizeApp(epochRequest(info, 0, 1)).authorized);
+        assertFalse(authorize(info, false).authorized);
         vm.prank(owner);
         kms.addOsImageHash(info.osImageHash);
-        assertTrue(authorize(info, false).isAllowed);
-        assertTrue(kms.authorizeApp(epochRequest(info, 1, 0)).isAllowed);
+        assertTrue(authorize(info, false).authorized);
+        assertTrue(kms.authorizeApp(epochRequest(info, 1, 0)).authorized);
         vm.prank(owner);
         kms.removeOsImageHashAtEpoch(0, info.osImageHash);
-        assertFalse(kms.authorizeApp(epochRequest(info, 0, 0)).isAllowed);
-        assertTrue(authorize(info, false).isAllowed);
+        assertFalse(kms.authorizeApp(epochRequest(info, 0, 0)).authorized);
+        assertTrue(authorize(info, false).authorized);
     }
 
     function test_ExplicitRootEpochSettersRequireOwnerAndRegisteredEpoch() public {
@@ -1102,7 +1102,7 @@ contract DstackKmsTest is Test {
         DstackKms.AuthorizationRequest memory request = epochRequest(info, 0, 0);
         assertEq(kms.authorizeApp(request).rejectionReason, "key retrieval denied");
         request.operation = keccak256("app_get_cert");
-        assertTrue(kms.authorizeApp(request).isAllowed);
+        assertTrue(kms.authorizeApp(request).authorized);
         (bool allowed,) = kms.isAppAllowed(info);
         assertTrue(allowed);
     }
@@ -1120,12 +1120,12 @@ contract DstackKmsTest is Test {
             info.appId, abi.encodeCall(IERC165.supportsInterface, (type(IAppEpochAuth).interfaceId)), abi.encode(false)
         );
         vm.mockCall(info.appId, abi.encodeCall(IAppAuth.isAppAllowed, (info)), abi.encode(true, ""));
-        assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).isAllowed);
+        assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).authorized);
         DstackKms.AuthorizationResult memory result = authorize(info, false);
-        assertTrue(result.isAllowed);
+        assertTrue(result.authorized);
         assertEq(result.currentAppEpoch, 0);
         result = kms.authorizeApp(epochRequest(info, 0, 1));
-        assertFalse(result.isAllowed);
+        assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Requested app epoch is not active");
         vm.clearMockedCalls();
         vm.mockCallRevert(

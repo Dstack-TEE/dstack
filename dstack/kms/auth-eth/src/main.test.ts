@@ -95,7 +95,7 @@ describe('Server', () => {
     const appRequest = { ...mockBootInfo, operation: 'app_get_key', requestedAppEpoch: 0 };
     it('preserves the complete decision, including the epoch on rejection', async () => {
       const decision = {
-        isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
+        authorized: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
         currentAppEpoch: 0, currentRootEpoch: 1, currentRootEpochHash: '0x' + '11'.repeat(32),
       };
       app.ethereum.checkAuthorization = jest.fn().mockResolvedValue(decision);

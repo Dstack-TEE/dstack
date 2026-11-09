@@ -133,9 +133,9 @@ export async function build(): Promise<FastifyInstance> {
         response: {
           200: {
             type: 'object',
-            required: ['isAllowed', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash', 'currentAppEpoch'],
+            required: ['authorized', 'rejectionReason', 'gatewayAppId', 'currentRootEpoch', 'currentRootEpochHash', 'currentAppEpoch'],
             properties: {
-              isAllowed: { type: 'boolean' },
+              authorized: { type: 'boolean' },
               rejectionReason: { type: 'string' },
               gatewayAppId: { type: 'string' },
               currentRootEpoch: { type: 'integer', minimum: 0 },
