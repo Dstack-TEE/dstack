@@ -87,6 +87,34 @@ impl PrpcClient {
     }
 }
 
+/// A pRPC server answered with a status other than 200.
+///
+/// Carried in the returned `anyhow::Error`, so callers can tell, say, a method
+/// the server does not implement from other failures without parsing text.
+#[derive(Debug)]
+pub struct StatusError {
+    pub path: String,
+    pub status: u16,
+    /// The reason the server gave, if it gave one.
+    pub message: Option<String>,
+}
+
+impl std::fmt::Display for StatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            path,
+            status,
+            message,
+        } = self;
+        match message {
+            Some(message) => write!(f, "{path} failed with status {status}: {message}"),
+            None => write!(f, "Invalid status code: {status}, path={path}"),
+        }
+    }
+}
+
+impl std::error::Error for StatusError {}
+
 /// The reason a pRPC server gave for failing a JSON request, if it gave one.
 ///
 /// Servers built on `ra-rpc` answer a failed call with `{"error": "..."}`.
@@ -142,10 +170,12 @@ impl RequestClient for PrpcClient {
             None => request.await?,
         };
         if status != 200 {
-            match server_error_message(&body) {
-                Some(error) => anyhow::bail!("{path} failed with status {status}: {error}"),
-                None => anyhow::bail!("Invalid status code: {status}, path={path}"),
+            return Err(StatusError {
+                path,
+                status,
+                message: server_error_message(&body),
             }
+            .into());
         }
         let response = serde_json::from_slice(normalize_json_response_body(&body))
             .context("Failed to deserialize response")?;

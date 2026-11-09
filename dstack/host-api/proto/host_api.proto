@@ -37,7 +37,9 @@ service HostApi {
   rpc Info(google.protobuf.Empty) returns (HostInfo);
   rpc Notify(Notification) returns (google.protobuf.Empty);
   rpc GetSealingKey(GetSealingKeyRequest) returns (GetSealingKeyResponse);
-  // Replace this VM's stored encrypted env. Accepted once per boot, before
-  // application code runs, and only if the stored env is the one it booted with.
+  // Close this boot's env update window, replacing the VM's stored encrypted
+  // env if it is still the one the VM booted with. Accepted once per boot; any
+  // answer means the window is closed, and the guest starts application code
+  // only after one.
   rpc UpdateSealedEnv(SealedEnv) returns (google.protobuf.Empty);
 }

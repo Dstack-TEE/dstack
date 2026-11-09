@@ -208,14 +208,15 @@ Decrypt/re-encrypt only inside the CVM, using current env public key, existing
 format, and fresh randomness. The guest does not read the replacement back:
 sealing and opening are deterministic code, so integration tests guarantee that
 a re-sealed env opens on the next boot, after the VMM has replaced the old one.
-The guest pushes the result to the VMM with `HostApi.UpdateEncryptedEnv` on
+The guest pushes the result to the VMM with `HostApi.UpdateSealedEnv` on
 every boot, before any application code runs, sending an empty env when nothing
 changed. The host API is reached over the VM's own vsock, so the VMM knows which
 VM sent it. The VMM records the env each boot starts with and accepts one update
-per boot, only until the boot reports init scripts or containers starting, and
-only if the stored env is still the boot env, so an owner's concurrent update is
-never overwritten. Application containers and scripts therefore cannot replace
-the env. Rocket's per-method limit bounds the request (1 MiB by default). A
+per boot, only if the stored env is still the boot env, so an owner's concurrent
+update is never overwritten. The update closes the window, and the guest starts
+init scripts and containers only once the VMM has answered, failing the boot
+otherwise; application-stage progress reports close it as well. Application
+containers and scripts therefore cannot replace the env. Rocket's per-method limit bounds the request (1 MiB by default). A
 missed update is retried on the next boot. Plaintext and private keys never
 leave the CVM.
 

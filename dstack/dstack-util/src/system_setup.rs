@@ -3422,11 +3422,14 @@ impl Stage1<'_> {
                 )
             };
         self.write_env_file(&decrypted_env)?;
-        // Sent on every boot, empty when nothing changed: the host accepts one
-        // update per boot, and this one comes before any application code.
-        if let Err(err) = self.vmm.update_sealed_env(sealed).await {
-            warn!("failed to store the re-encrypted env on the host: {err:#}");
-        }
+        // Sent on every boot, empty when nothing changed: it closes the host's
+        // env update window, which must be shut before any application code
+        // runs, or that code could replace the env the next boot reads.
+        close_env_window(
+            || self.vmm.update_sealed_env(sealed.clone()),
+            &ENV_WINDOW_RETRY_DELAYS,
+        )
+        .await?;
         Ok(decrypted_env)
     }
 
@@ -3526,6 +3529,33 @@ impl Stage1<'_> {
         fs::write(DAEMON_ENV_FILE, serde_json::to_string(&daemon_env)?)?;
         Ok(())
     }
+}
+
+/// Waits between attempts to close the env update window.
+const ENV_WINDOW_RETRY_DELAYS: [Duration; 4] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+];
+
+/// Close the host's env update window, retrying `update` after each delay
+/// while the host gives no answer. Fails if the window may still be open.
+async fn close_env_window<F, Fut>(mut update: F, delays: &[Duration]) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    for delay in delays {
+        match update().await {
+            Ok(()) => return Ok(()),
+            Err(err) => warn!("failed to close the env update window, retrying: {err:#}"),
+        }
+        tokio::time::sleep(*delay).await;
+    }
+    update().await.context(
+        "the host did not confirm that the env update window is closed; refusing to start applications",
+    )
 }
 
 async fn decrypt_historical_env<I, F, Fut>(
@@ -4431,6 +4461,44 @@ mod sealed_env_file_tests {
             .unwrap_err()
             .to_string()
             .contains("exceeds current"));
+    }
+
+    /// Run `close_env_window` against `answers`, returning its result and how
+    /// often the host was asked.
+    async fn close_with(answers: Vec<Result<()>>) -> (Result<()>, usize) {
+        let mut answers = answers.into_iter();
+        let mut calls = 0;
+        let result = close_env_window(
+            || {
+                calls += 1;
+                std::future::ready(answers.next().unwrap())
+            },
+            &[Duration::ZERO; 2],
+        )
+        .await;
+        (result, calls)
+    }
+
+    #[tokio::test]
+    async fn applications_start_only_once_the_env_window_is_closed() {
+        let (result, calls) = close_with(vec![Ok(())]).await;
+        result.unwrap();
+        assert_eq!(calls, 1);
+        // A lost answer is retried.
+        let (result, calls) = close_with(vec![Err(anyhow!("connection reset")), Ok(())]).await;
+        result.unwrap();
+        assert_eq!(calls, 2);
+        // No answer within the retries fails the boot.
+        let (result, calls) = close_with(vec![
+            Err(anyhow!("timed out")),
+            Err(anyhow!("timed out")),
+            Err(anyhow!("connection refused")),
+        ])
+        .await;
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(err.contains("refusing to start applications"), "{err}");
+        assert!(err.contains("connection refused"), "{err}");
+        assert_eq!(calls, 3);
     }
 
     #[tokio::test]
