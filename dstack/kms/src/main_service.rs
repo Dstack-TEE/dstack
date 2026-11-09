@@ -1951,7 +1951,11 @@ mod tests {
     async fn handover(
         case: HandoverCase,
         answers: &[bool],
-    ) -> (Result<KmsKeyResponse>, Vec<(String, serde_json::Value)>) {
+    ) -> (
+        Result<KmsKeyResponse>,
+        Vec<(String, serde_json::Value)>,
+        String,
+    ) {
         use upgrade_authority::tests::{boot_info, serve, webhook};
         let dir = tempfile::tempdir().unwrap();
         let initial = kms_state(dir.path(), "http://127.0.0.1:1");
@@ -1975,21 +1979,28 @@ mod tests {
         state.self_boot_info.insert((), boot_info(1)).await;
         let (attestation, vm_config) = snp_caller();
         let handler = RpcHandler {
-            state,
+            state: state.clone(),
             attestation: Some(attestation),
+            remote_endpoint: None,
         };
         let request = GetKmsKeyRequest { vm_config };
         let result = if case.admin {
-            handler.handover_keys(request).await
+            handler
+                .handover_keys(KeyRelease::AdminHandover, request)
+                .await
         } else {
             handler.get_kms_key(request).await
         };
-        (result, auth_requests(server))
+        (
+            result,
+            auth_requests(server),
+            state.metrics().render_prometheus(),
+        )
     }
 
     #[rocket::async_test]
     async fn handover_runs_every_authorization_check() {
-        let (result, requests) = handover(ALLOWED_HANDOVER, &[true, true]).await;
+        let (result, requests, metrics) = handover(ALLOWED_HANDOVER, &[true, true]).await;
         assert_eq!(result.unwrap().keys.len(), 1);
         let [(self_route, self_check), (caller_route, caller_check)] = &requests[..] else {
             panic!("unexpected auth API requests: {requests:?}");
@@ -2002,38 +2013,52 @@ mod tests {
         assert_eq!(caller_check["operation"], "kms_import_keys");
         assert_eq!(caller_check["requestedRootEpoch"], 0);
         assert_eq!(caller_check["appId"], hex::encode([0x11; 20]));
+        assert!(metrics.contains(&key_releases("rpc", 1)), "{metrics}");
+        assert!(metrics.contains(&key_releases("admin", 0)), "{metrics}");
 
         let admin = HandoverCase {
             admin: true,
             public_key_handover: false,
             ..ALLOWED_HANDOVER
         };
-        let (result, requests) = handover(admin, &[true, true]).await;
+        let (result, requests, metrics) = handover(admin, &[true, true]).await;
         assert!(result.is_ok());
         assert_eq!(requests.len(), 2);
+        assert!(metrics.contains(&key_releases("admin", 1)), "{metrics}");
+        assert!(metrics.contains(&key_releases("rpc", 0)), "{metrics}");
+    }
+
+    fn key_releases(listener: &str, count: u64) -> String {
+        format!(
+            "dstack_kms_key_releases_total{{listener=\"{listener}\",operation=\"kms_export_keys\"}} {count}\n"
+        )
     }
 
     #[rocket::async_test]
     async fn handover_is_refused_when_any_check_denies() {
-        let (result, requests) = handover(ALLOWED_HANDOVER, &[false]).await;
+        let (result, requests, metrics) = handover(ALLOWED_HANDOVER, &[false]).await;
         assert!(format!("{:#}", result.unwrap_err()).contains("KMS self authorization failed"));
         assert_eq!(requests[0].1["operation"], "kms_export_keys");
+        // A refused handover releases nothing and is not counted.
+        assert!(metrics.contains(&key_releases("rpc", 0)), "{metrics}");
 
         for admin in [false, true] {
             let case = HandoverCase {
                 admin,
                 ..ALLOWED_HANDOVER
             };
-            let (result, requests) = handover(case, &[true, false]).await;
+            let (result, requests, metrics) = handover(case, &[true, false]).await;
             assert!(result.is_err());
             assert_eq!(requests[1].1["operation"], "kms_import_keys");
+            let listener = if admin { "admin" } else { "rpc" };
+            assert!(metrics.contains(&key_releases(listener, 0)), "{metrics}");
 
             let case = HandoverCase {
                 snp_key_release: false,
                 admin,
                 ..ALLOWED_HANDOVER
             };
-            let (result, _) = handover(case, &[true, true]).await;
+            let (result, _, _) = handover(case, &[true, true]).await;
             let err = format!("{:#}", result.unwrap_err());
             assert!(err.contains("sev-snp key release is not enabled"), "{err}");
         }
@@ -2042,7 +2067,7 @@ mod tests {
             public_key_handover: false,
             ..ALLOWED_HANDOVER
         };
-        let (result, requests) = handover(public_disabled, &[]).await;
+        let (result, requests, _) = handover(public_disabled, &[]).await;
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("public KMS key handover is disabled"), "{err}");
         assert!(requests.is_empty());
@@ -2079,6 +2104,7 @@ mod tests {
         let handler = RpcHandler {
             state: kms_state(dir.path(), &url),
             attestation: None,
+            remote_endpoint: None,
         };
         let request = AppId {
             app_id: vec![0x11; 20],
