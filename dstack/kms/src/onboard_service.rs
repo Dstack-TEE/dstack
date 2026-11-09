@@ -1061,9 +1061,6 @@ impl Keys {
         ensure_temp_ca(cfg)?;
         for (epoch, root) in (0..).zip(&self.history) {
             let paths = cfg.root_key_paths(epoch, self.epoch);
-            if let Some(dir) = paths.ca_key.parent() {
-                fs::create_dir_all(dir)?;
-            }
             safe_write(&paths.ca_cert, root.ca_cert.pem())?;
             safe_write_with_mode(&paths.ca_key, root.ca_key.serialize_pem(), 0o600)?;
             safe_write_with_mode(&paths.k256_key, root.k256_key.to_bytes(), 0o600)?;
