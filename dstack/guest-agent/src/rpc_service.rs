@@ -122,7 +122,10 @@ struct AppStateInner {
     keys: AppKeys,
     vm_config: String,
     cert_client: CertRequestClient,
-    /// Held across a fetch so concurrent requests for one epoch fetch it once.
+    /// Successfully fetched roots of earlier epochs. The lock is not held
+    /// while fetching, so concurrent first requests for one epoch may each ask
+    /// the KMS; the first result is kept. Failures are not cached, so a refused
+    /// epoch is asked for again on every call.
     historical_roots: tokio::sync::Mutex<HashMap<(u32, u32), AppRoot>>,
     demo_cert: tokio::sync::OnceCell<String>,
     /// When the last demo-cert request failed; held while one is running.
