@@ -2,6 +2,11 @@
 
 A Foundry-based smart contract project for dstack's Key Management System (KMS) authentication on Ethereum.
 
+This directory holds the contracts, their tests and the deployment and management
+scripts. The KMS reads these contracts through the
+[`auth-eth-bun`](../auth-eth-bun/) webhook server, which serves the `/bootAuth/*`,
+`/authorizeKms` and `/authorizeApp` endpoints.
+
 ## Overview
 
 This project contains upgradeable smart contracts for:
@@ -11,7 +16,7 @@ This project contains upgradeable smart contracts for:
 ## Prerequisites
 
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) - For smart contract development and testing
-- Node.js - For the bootAuth server and TypeScript development
+- Node.js/npm - Only for `@openzeppelin/upgrades-core`, which the upgrade-safety tests call through `--ffi`
 
 ## Upgrade order
 
@@ -23,45 +28,47 @@ subject to the existing authorization policy.
 
 ## Setup
 
-1. Install dependencies:
 ```bash
-# Install Foundry dependencies
-forge install
+# Fetch the Foundry dependencies (git submodules under lib/)
+git submodule update --init --recursive lib/forge-std \
+  lib/openzeppelin-contracts-upgradeable lib/openzeppelin-foundry-upgrades
 
-# Install Node.js dependencies for server
-npm install
-```
+# Install the OpenZeppelin upgrade-safety validator used by `forge test --ffi`
+npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
 
-2. Build contracts and server:
-```bash
-# Build smart contracts
+# Build the contracts
 forge build
-
-# Build TypeScript server
-npm run build
 ```
 
 ## Testing
 
-### Smart contract tests (Foundry)
 ```bash
+# Run `forge clean` first: stale build-info files make the upgrade validator
+# report the same contract twice.
+forge clean
 forge test --ffi
 ```
 
-### BootAuth server tests (Jest)
-```bash
-npm test
-```
+## Local chain
 
-### Local integration testing
-```bash
-# Quick test workflow — spins up Anvil, deploys, runs Jest + Foundry against the live chain
-npm run test:all
+To try the contracts together with the webhook server, deploy them to a local
+Anvil node and point [`auth-eth-bun`](../auth-eth-bun/) at the proxy:
 
-# Step-by-step workflow
-npm run test:setup        # Start Anvil and deploy contracts
-npm run test:run          # Run tests against deployed contracts
-npm run test:cleanup      # Stop all test processes
+```bash
+# Terminal 1: local node
+anvil
+
+# Terminal 2: deploy with Anvil's first prefunded account; the output prints
+# "DstackKms proxy deployed to: 0x..."
+PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
+  forge script script/Deploy.s.sol:DeployScript --broadcast --rpc-url http://127.0.0.1:8545
+
+# Terminal 3: webhook server. Anvil finalizes 64 blocks behind its head, so read
+# at the latest block.
+cd ../auth-eth-bun
+bun install
+ETH_RPC_URL=http://127.0.0.1:8545 ETH_BLOCK_TAG=latest KMS_CONTRACT_ADDR=0x... PORT=8000 \
+  bun index.ts
 ```
 
 ## Contract Management
@@ -108,35 +115,6 @@ forge script script/Upgrade.s.sol:UpgradeKmsToV2 --broadcast --rpc-url $RPC_URL 
 
 See `script/README.md` for complete documentation of all available scripts.
 
-## BootAuth Server
-
-The project includes a Fastify-based HTTP server for TEE boot validation:
-
-### Endpoints
-- **`GET /`** - Health check and contract information
-- **`POST /bootAuth/app`** - Validate application boot information
-- **`POST /bootAuth/kms`** - Validate KMS boot information
-
-### Configuration
-Set these environment variables:
-- **`ETH_RPC_URL`** - Ethereum RPC endpoint (default: `http://localhost:8545`)
-- **`KMS_CONTRACT_ADDR`** - Deployed DstackKms contract address
-- **`PORT`** - Server port (default: `8000`)
-- **`HOST`** - Server host (default: `127.0.0.1`)
-- **`ETH_BLOCK_TAG`** - Block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). Each request resolves the tag to one block and reads all state there. The server resolves the tag once at startup and refuses to start if the RPC cannot serve it. A later tag survives reorgs but delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet). Use `finalized` on L1. Set `latest` explicitly for an OP-stack chain read through the Helios light client, which tracks only the sequencer-signed unsafe head and serves neither `safe` nor `finalized`, and for local development chains such as Anvil, which finalizes 64 blocks behind its head.
-
-### Running the Server
-```bash
-# Development mode
-npm run dev
-
-# Production mode
-npm run build && npm start
-
-# Test the server
-npm test
-```
-
 ## Static Analysis & Symbolic Verification (local only)
 
 We run [Slither](https://github.com/crytic/slither) and
@@ -177,29 +155,6 @@ anvil
 ```
 
 Documentation: https://book.getfoundry.sh/
-
-
-### Authorization endpoints
-
-`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including `authorized`,
-`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, `currentAppEpoch`,
-`latestRootEpoch`, and `latestRootEpochHash` (the latest registered epoch, which may be pending activation).
-The selected endpoint determines the policy; the backend checks that the verified
-`appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
-omission uses the current app epoch, explicit zero selects epoch zero, and future
-values are denied. The optional
-`requestedRootEpoch` selects historical keys; omission uses the returned current
-epoch, and an explicit `0` selects epoch 0. See the
-[KMS authorization protocol](../README.md#authorization-protocol) for registration,
-bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
-remain available.
-
-### Authorization operations
-
-`/authorizeKms` and `/authorizeApp` require an `operation` string. See the
-[KMS authorization protocol](../README.md#authorization-protocol) for the names
-and subject semantics. Bootstrap alone may authorize before root registration;
-unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.
 
 
 ### Epoch-scoped material approvals

@@ -12,7 +12,7 @@ tags:
   - kms
   - ethereum
   - sepolia
-  - hardhat
+  - foundry
   - deployment
 difficulty: "intermediate"
 estimatedTime: "15 minutes"
@@ -58,31 +58,20 @@ git checkout next
 cd dstack/kms/auth-eth
 ```
 
-### Step 2: Install Node.js and Dependencies
+### Step 2: Install Foundry and Dependencies
 
-Install nvm (Node Version Manager), then use it to install the correct Node.js version:
+The contracts are built and deployed with [Foundry](https://book.getfoundry.sh/getting-started/installation). Install it if `forge --version` fails:
 
 ```bash
-# Install nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-
-# Load nvm into current shell
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-
-# Install and use Node.js 18 (LTS)
-nvm install 18
-nvm use 18
-
-# Verify versions
-node --version   # Should show v18.x.x
-npm --version    # Should show 9.x.x or 10.x.x
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
 ```
 
-Then install the project dependencies:
+Then fetch the contract dependencies (git submodules):
 
 ```bash
-npm install
+git submodule update --init --recursive lib/forge-std \
+  lib/openzeppelin-contracts-upgradeable lib/openzeppelin-foundry-upgrades
 ```
 
 ### Step 3: Load Credentials
@@ -117,36 +106,26 @@ You need at least 0.01 ETH (shown in wei: `10000000000000000`). If insufficient,
 ### Step 5: Compile Contracts
 
 ```bash
-npx hardhat compile
+forge build
 ```
 
-Expected output (compiler version and file count may vary):
-
-```
-Downloading compiler 0.8.22
-Generating typings for: 19 artifacts in dir: typechain-types for target: ethers-v6
-Successfully generated 72 typings!
-Compiled 19 Solidity files successfully (evm target: paris).
-```
-
-This generates the contract artifacts (ABI and bytecode) needed for deployment.
+This generates the contract artifacts (ABI and bytecode) under `out/`.
 
 ### Step 6: Deploy Contracts
 
 ```bash
-npx hardhat kms:deploy --with-app-impl --network custom
+forge script script/Deploy.s.sol:DeployScript --broadcast --rpc-url $RPC_URL
 ```
 
 Expected output:
 
 ```
 Deploying with account: 0xYourAddress
-Account balance: 0.123456789 ETH
-Step 1: Deploying DstackApp implementation...
+Account balance: 123456789000000000
 DstackApp implementation deployed to: 0x...
-Step 2: Deploying DstackKms...
-DstackKms Proxy deployed to: 0x...
-Complete KMS setup deployed successfully!
+DstackKms implementation deployed to: 0x...
+DstackKms proxy deployed to: 0x...
+Deployment complete!
 ```
 
 ### Step 7: Save Contract Addresses
@@ -252,5 +231,5 @@ With contracts deployed, you're ready to build and configure the KMS:
 ## Additional Resources
 
 - [Sepolia Etherscan](https://sepolia.etherscan.io/)
-- [Hardhat Deployment Guide](https://hardhat.org/hardhat-runner/docs/guides/deploying)
+- [Foundry scripting guide](https://book.getfoundry.sh/guides/scripting-with-solidity)
 - [dstack GitHub Repository](https://github.com/Dstack-TEE/dstack)

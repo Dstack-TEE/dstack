@@ -100,16 +100,16 @@ limit them per source in the reverse proxy or gateway in front of the KMS.
 1. **dstack-kms**
    - Main RPC service for app key requests
    - Quote verification and boot info validation
-   - Asks `dstack-kms-auth-eth` for permission
+   - Asks the auth webhook ([`auth-eth-bun`](auth-eth-bun/)) for permission
    - Builtin Replicator for root keys
 
-2. **dstack-kms-auth-eth**
+2. **[auth-eth-bun](auth-eth-bun/)**
    - Chain interface for permission checks
    - Two-step validation:
      1. KMS control contract check
      2. App control contract check
 
-3. **Authorization Contracts**
+3. **Authorization Contracts** ([`auth-eth`](auth-eth/))
    - `DstackKms.sol`
       - Maintains a registry for all Applications
       - Maintains the allowed KMS Instance MRs

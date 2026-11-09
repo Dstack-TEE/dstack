@@ -122,12 +122,12 @@ Production KMS requires:
 
 #### Auth Server Options
 
-> **Note:** the boot-authorization webhook below (dstack-auth / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Note:** the boot-authorization webhook below (dstack-auth / auth-eth-bun) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
 | [dstack-auth](./dstack-auth-operations.md) | Config-file-based whitelisting | JSON config file |
-| [auth-eth](../dstack/kms/auth-eth/) | On-chain governance via smart contracts | Ethereum RPC + contract |
+| [auth-eth-bun](../dstack/kms/auth-eth-bun/) | On-chain governance via the [auth-eth contracts](../dstack/kms/auth-eth/) | Ethereum RPC + contract |
 | Custom | Your own authorization logic | Implement webhook interface |
 
 All auth servers implement the same webhook interface:
@@ -186,7 +186,7 @@ a real network.
 
 For adding Gateway, apps, and other config fields, see [dstack-auth Operations Guide](./dstack-auth-operations.md).
 
-#### Using auth-eth (On-Chain)
+#### Using auth-eth-bun (On-Chain)
 
 For decentralized governance via smart contracts, see [On-Chain Governance](./onchain-governance.md).
 
@@ -232,7 +232,7 @@ Then run:
 ./deploy-simple.sh
 ```
 
-**For auth-eth (on-chain governance):**
+**For auth-eth-bun (on-chain governance):**
 
 > See [On-Chain Governance Guide](./onchain-governance.md) for deploying KMS with smart contract-based authorization.
 
@@ -329,7 +329,7 @@ Continue? [y/N]
 
 **Before pressing 'y'**, add the compose hash to your auth server whitelist:
 - For dstack-auth: Add to `composeHashes` array in `auth-config.json`
-- For auth-eth: Use Foundry scripts (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
+- For auth-eth-bun: Use Foundry scripts (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
 
 Then return to the first terminal and press 'y' to deploy.
 
@@ -609,7 +609,7 @@ After setup, deploy apps via the VMM dashboard or CLI.
 
 Before deploying, register your app in your auth server:
 - For dstack-auth: See [dstack-auth Operations Guide](./dstack-auth-operations.md#adding-an-app)
-- For auth-eth: See [On-Chain Governance](./onchain-governance.md#register-apps-on-chain)
+- For auth-eth-bun: See [On-Chain Governance](./onchain-governance.md#register-apps-on-chain)
 
 ### Deploy via UI
 

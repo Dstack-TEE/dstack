@@ -8,23 +8,25 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM node:22.23.4-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d
+        FROM oven/bun:1.4.4-alpine@sha256:4cf82f5686b196504fe119db3fcd9185b191f82ece82c40680e597228ec6070a
         WORKDIR /app
 
-        RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+        RUN apk add --no-cache git ca-certificates
         RUN git clone ${GIT_REPOSITORY} && \
             cd dstack && \
             git checkout ${GIT_REV}
-        WORKDIR /app/dstack/dstack/kms/auth-eth
-        RUN npm ci
-        RUN npm run build
-        CMD node dist/main.js
+        WORKDIR /app/dstack/dstack/kms/auth-eth-bun
+        RUN bun install --frozen-lockfile --production --ignore-scripts
+        ENV NODE_ENV=production
+        CMD ["bun", "index.ts"]
     environment:
-      - HOST=0.0.0.0
       - PORT=8000
       - ETH_RPC_URL=${ETH_RPC_URL}
       # finalized on L1; an OP-stack chain read through Helios requires latest.
       - ETH_BLOCK_TAG=${ETH_BLOCK_TAG}
+      - ETH_FINALITY_CONFIRMATIONS=${ETH_FINALITY_CONFIRMATIONS}
+      # Empty disables the chain ID check.
+      - ETH_CHAIN_ID=${ETH_CHAIN_ID}
       - KMS_CONTRACT_ADDR=${KMS_CONTRACT_ADDR}
     restart: unless-stopped
     ports:

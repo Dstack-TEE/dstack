@@ -1,6 +1,8 @@
 # dstack KMS auth-eth-bun
 
 a single-file implementation of the dstack KMS ethereum backend using bun + hono + zod.
+it serves the KMS auth webhook from the `DstackKms` and `DstackApp` contracts, whose
+source, tests and deployment scripts live in [`../auth-eth`](../auth-eth/).
 
 ## features
 
@@ -170,7 +172,7 @@ KMS boot authentication
 
 ## API compatibility
 
-this implementation is fully compatible with the original fastify + ethers version:
+this implementation keeps the API of the removed fastify + ethers server that used to live in `../auth-eth`:
 
 - **request/response schemas**: identical to original API
 - **OpenAPI specification**: available in `openapi.json`

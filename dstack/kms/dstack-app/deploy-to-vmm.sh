@@ -45,6 +45,12 @@ ETH_RPC_URL=https://rpc.phala.network
 # Use finalized on L1; an OP-stack chain read through Helios requires latest.
 # ETH_BLOCK_TAG=finalized
 
+# Reject decisions if the RPC reports a different chain ID (empty: no check).
+# ETH_CHAIN_ID=
+
+# Read this many blocks behind the block ETH_BLOCK_TAG resolves to (default: 0).
+# ETH_FINALITY_CONFIRMATIONS=0
+
 # The Git repository to deploy
 GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
 
@@ -99,8 +105,12 @@ subvar() {
 }
 
 ETH_BLOCK_TAG=${ETH_BLOCK_TAG:-finalized}
+ETH_CHAIN_ID=${ETH_CHAIN_ID:-}
+ETH_FINALITY_CONFIRMATIONS=${ETH_FINALITY_CONFIRMATIONS:-0}
 subvar ETH_RPC_URL
 subvar ETH_BLOCK_TAG
+subvar ETH_CHAIN_ID
+subvar ETH_FINALITY_CONFIRMATIONS
 subvar KMS_CONTRACT_ADDR
 subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL

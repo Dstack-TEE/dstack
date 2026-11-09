@@ -70,21 +70,23 @@ cargo clippy -- -D warnings --allow unused_variables
 
 ```bash
 cd dstack/kms/auth-eth
-npm install       # Install Node.js dependencies for bootAuth server
-forge install     # Install Foundry dependencies (submodules)
+git submodule update --init --recursive lib/forge-std \
+  lib/openzeppelin-contracts-upgradeable lib/openzeppelin-foundry-upgrades
+# Upgrade-safety validator called by `forge test --ffi`
+npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
 
 # Build
 forge build       # Compile smart contracts
-npm run build     # Build TypeScript server
 
 # Test
-forge test --ffi      # Run Foundry contract tests
-npm test              # Run TypeScript server tests
-npm run test:coverage # Run TypeScript tests with coverage
+forge clean && forge test --ffi   # Run Foundry contract tests
 
 # Local development
 anvil             # Start local Ethereum node
 ```
+
+The KMS webhook server for these contracts is `dstack/kms/auth-eth-bun`
+(`bun install && bun run check`).
 
 ### Python SDK
 
@@ -130,7 +132,7 @@ cargo test --all-features -- --show-output --test-threads=1
 cd dstack/kms/auth-eth
 
 # Run all Foundry tests
-forge test
+forge test --ffi
 
 # Run with verbosity
 forge test -vv
