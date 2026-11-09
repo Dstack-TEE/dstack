@@ -54,7 +54,9 @@ const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
 /// How long this KMS's own verified boot info is reused.
 ///
 /// Its measurements do not change while the KMS runs, but the TCB status and advisories do when
-/// the platform's collateral is updated, and the auth API judges them on every self check.
+/// the platform's collateral is updated. Self checks judge the cached copy, so a change to this
+/// KMS's TCB status takes effect up to this long later. Callers' attestations are verified on
+/// every request and are not affected.
 const SELF_BOOT_INFO_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]

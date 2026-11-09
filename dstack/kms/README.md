@@ -74,6 +74,18 @@ certificate plus the source's admin bearer token; other admin RPCs need no clien
 certificate. `core.onboard.public_key_handover = true` (the default) keeps
 `KMS.GetKmsKey` on the public listener for older clients.
 
+Three settings relax authorization, each over a different scope:
+
+| Setting | Effect |
+|---------|--------|
+| `core.enforce_self_authorization = false` | Skips only this KMS's self check. Root epochs are still checked against the registry (`servable_epoch`), and every app and caller is still authorized. |
+| `core.auth_api.type = "dev"` | Allows everything: no backend is consulted for self, app or KMS checks. Development only. |
+| `core.onboard.public_key_handover = true` | Only bypasses the admin listener for key handover: `KMS.GetKmsKey` stays on the public listener, still subject to the self, caller and key-release checks. |
+
+The self check caches this KMS's own boot info for an hour, so a change to its
+TCB status takes effect up to an hour later, and caches the backend's decision
+for a second.
+
 
 ## KMS Implementation
 
