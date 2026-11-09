@@ -98,6 +98,8 @@ cat > "$ENV_FILE" << EOF
 # Anvil Configuration
 ANVIL_PID=$ANVIL_PID
 ETH_RPC_URL=http://127.0.0.1:8545
+# Anvil finalizes 64 blocks behind its head.
+ETH_BLOCK_TAG=latest
 CHAIN_ID=31337
 
 # Deployed Contracts

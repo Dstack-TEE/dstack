@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import fastify, { FastifyInstance } from 'fastify';
-import { EthereumBackend } from './ethereum';
+import { EthereumBackend, parseBlockTag } from './ethereum';
 import { BootInfo, BootResponse, AuthorizationResult, AuthorizationRequest } from './types';
 import { ethers } from 'ethers';
 
@@ -77,7 +77,7 @@ export async function build(): Promise<FastifyInstance> {
   const rpcUrl = process.env.ETH_RPC_URL || 'http://localhost:8545';
   const kmsContractAddr = process.env.KMS_CONTRACT_ADDR || '0x0000000000000000000000000000000000000000';
   const provider = new ethers.JsonRpcProvider(rpcUrl);
-  server.decorate('ethereum', new EthereumBackend(provider, kmsContractAddr));
+  server.decorate('ethereum', new EthereumBackend(provider, kmsContractAddr, parseBlockTag(process.env.ETH_BLOCK_TAG)));
 
   const publicRpcEndpoint = (value: string): string => {
     try {
@@ -118,11 +118,12 @@ export async function build(): Promise<FastifyInstance> {
 
   server.get('/', async (_request, reply) => {
     try {
+      const block = await server.ethereum.resolveBlock();
       const batch = await Promise.all([
-        server.ethereum.getGatewayAppId(),
+        server.ethereum.getGatewayAppId(block),
         server.ethereum.getChainId(),
-        server.ethereum.getAppImplementation(),
-        server.ethereum.getRootEpoch(),
+        server.ethereum.getAppImplementation(block),
+        server.ethereum.getRootEpoch(block),
       ]);
       return {
         status: 'ok',

@@ -5,7 +5,7 @@
 import { FastifyInstance } from 'fastify';
 import { ethers } from 'ethers';
 import { build } from './server';
-import { DSTACK_KMS_ABI, rootEpochDenial } from './ethereum';
+import { DSTACK_KMS_ABI, parseBlockTag, rootEpochDenial } from './ethereum';
 import { BootInfo } from './types';
 
 // Mock EthereumBackend
@@ -180,6 +180,7 @@ describe('Server', () => {
     it('should list registered key epochs in the info response', async () => {
       const rootEpoch = { rootEpoch: 1, rootEpochHash: '0x' + '11'.repeat(32) };
       Object.assign(app.ethereum, {
+        resolveBlock: jest.fn().mockResolvedValue(100),
         getGatewayAppId: jest.fn().mockResolvedValue('gw'),
         getChainId: jest.fn().mockResolvedValue(1),
         getAppImplementation: jest.fn().mockResolvedValue('0x00'),
@@ -249,7 +250,7 @@ describe('Ethereum root epoch registry', () => {
     appId: '33'.repeat(20), composeHash: '44'.repeat(32),
     instanceId: '55'.repeat(20), deviceId: '66'.repeat(32),
   };
-  const getBlockNumber = jest.fn();
+  const getBlock = jest.fn();
   const call = jest.fn();
   let app: FastifyInstance;
   let count: bigint;
@@ -258,7 +259,7 @@ describe('Ethereum root epoch registry', () => {
   beforeAll(async () => {
     app = await build();
     app.ethereum = new EthereumBackend({
-      getBlockNumber, call, getNetwork: async () => ({ chainId: 1337n }),
+      getBlock, call, getNetwork: async () => ({ chainId: 1337n }),
     } as unknown as ethers.JsonRpcProvider,
       '0x' + '11'.repeat(20));
   });
@@ -267,7 +268,7 @@ describe('Ethereum root epoch registry', () => {
     jest.clearAllMocks();
     count = 2n;
     epoch = 1n;
-    getBlockNumber.mockResolvedValue(100);
+    getBlock.mockResolvedValue({ number: 100 });
     call.mockImplementation(async (tx: ethers.TransactionRequest) => {
       const fn = abi.getFunction(tx.data!.slice(0, 10));
       switch (fn?.name) {
@@ -311,20 +312,63 @@ describe('Ethereum root epoch registry', () => {
     expect((await boot('kms')).reason).toMatch(/reports none/);
   });
 
-  it.each(['app', 'info'])('pins both registry reads to the same block for %s', async (endpoint) => {
+  it.each(['app', 'info'])('pins every read to the resolved finalized block for %s', async (endpoint) => {
     if (endpoint === 'app') {
       expect((await boot('app', { rootEpoch: 1, rootEpochHash: hash })).isAllowed).toBe(true);
-      expect(call.mock.calls.every(([tx]) => tx.blockTag === 100)).toBe(true);
     } else {
       const response = await app.inject({ method: 'GET', url: '/' });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
     }
+    expect(call.mock.calls.every(([tx]) => tx.blockTag === 100)).toBe(true);
     expect(registryCalls()).toEqual([
       { name: 'rootEpochCount', blockTag: 100 },
       { name: 'currentRootEpoch', blockTag: 100 },
     ]);
-    expect(getBlockNumber).toHaveBeenCalledTimes(1);
+    expect(getBlock).toHaveBeenCalledTimes(1);
+    expect(getBlock).toHaveBeenCalledWith('finalized');
+  });
+
+  it.each(['authorizeKms', 'authorizeApp'] as const)('reads %s and app epochs at the resolved block', async (method) => {
+    const kms = new ethers.Interface(DSTACK_KMS_ABI);
+    const normalCall = call.getMockImplementation()!;
+    call.mockImplementation(async (tx: ethers.TransactionRequest) => {
+      const fn = kms.getFunction(tx.data!.slice(0, 10));
+      if (fn?.name === method) return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n]]);
+      if (fn?.name === 'currentAppEpoch') return kms.encodeFunctionResult(fn, [2n]);
+      return normalCall(tx);
+    });
+    const response = await app.inject({
+      method: 'POST', url: `/${method}`,
+      payload: { ...bootInfo, operation: method === 'authorizeKms' ? 'kms_serve' : 'app_get_key' },
+    });
+    expect(response.statusCode).toBe(200);
+    const epoch = await app.inject({ method: 'GET', url: `/app/0x${'33'.repeat(20)}` });
+    expect(epoch.json()).toEqual({ currentAppEpoch: 2 });
+    expect(call.mock.calls.map(([tx]) => tx.blockTag)).toEqual([100, 100]);
+    expect(getBlock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['an unsupported tag', () => getBlock.mockRejectedValue(new Error('invalid block tag'))],
+    ['a missing block', () => getBlock.mockResolvedValue(null)],
+  ])('fails closed on %s', async (_, failure) => {
+    failure();
+    for (const path of ['app', 'kms']) {
+      expect(await boot(path)).toEqual({
+        isAllowed: false, reason: 'authorization backend unavailable', gatewayAppId: '',
+      });
+    }
+    expect((await app.inject({ method: 'GET', url: '/' })).statusCode).toBe(500);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('accepts only the supported block tags, defaulting to finalized', () => {
+    expect(parseBlockTag(undefined)).toBe('finalized');
+    expect(parseBlockTag('')).toBe('finalized');
+    for (const tag of ['latest', 'safe', 'finalized']) expect(parseBlockTag(tag)).toBe(tag);
+    expect(() => parseBlockTag('pending')).toThrow(/ETH_BLOCK_TAG/);
+    expect(() => parseBlockTag('0x10')).toThrow(/ETH_BLOCK_TAG/);
   });
 
   it.each([

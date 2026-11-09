@@ -191,34 +191,51 @@ const DSTACK_KMS_ABI = [
 ] as const;
 
 // ethereum backend class
+const BLOCK_TAGS = ['latest', 'safe', 'finalized'] as const;
+type BlockTag = typeof BLOCK_TAGS[number];
+
+export function parseBlockTag(value: string | undefined): BlockTag {
+  const tag = value || 'finalized';
+  if (!(BLOCK_TAGS as readonly string[]).includes(tag)) {
+    throw new Error(`ETH_BLOCK_TAG must be one of ${BLOCK_TAGS.join(', ')}`);
+  }
+  return tag as BlockTag;
+}
+
 class EthereumBackend {
   private client: ReturnType<typeof createPublicClient>;
   private kmsContractAddr: Address;
   private expectedChainId?: number;
+  private blockTag: BlockTag;
   private finalityConfirmations: bigint;
 
   constructor(
     client: ReturnType<typeof createPublicClient>,
     kmsContractAddr: string,
     expectedChainId: number | undefined,
+    blockTag: BlockTag,
     finalityConfirmations: bigint,
   ) {
     this.client = client;
     this.kmsContractAddr = kmsContractAddr as Address;
     this.expectedChainId = expectedChainId;
+    this.blockTag = blockTag;
     this.finalityConfirmations = finalityConfirmations;
   }
 
-  private async finalizedBlockNumber(): Promise<bigint> {
+  /// Resolve the configured tag, less the confirmation depth, to one block so
+  /// that every read of a request sees the same state. An RPC that does not
+  /// support the tag fails closed.
+  async resolveBlock(): Promise<bigint> {
     const chainId = await this.client.getChainId();
     if (this.expectedChainId !== undefined && chainId !== this.expectedChainId) {
       throw new Error('authorization backend chain ID mismatch');
     }
-    const head = await this.client.getBlockNumber();
-    if (head < this.finalityConfirmations) {
+    const { number } = await this.client.getBlock({ blockTag: this.blockTag });
+    if (number === null || number < this.finalityConfirmations) {
       throw new Error('authorization backend has not reached configured finality');
     }
-    return head - this.finalityConfirmations;
+    return number - this.finalityConfirmations;
   }
 
   private decodeHex(hex: string, sz: number = 32): Hex {
@@ -247,7 +264,7 @@ class EthereumBackend {
   }
 
   async checkAuthorization(appInfo: AuthorizationRequest, method: 'authorizeKms' | 'authorizeApp') {
-    const blockNumber = await this.finalizedBlockNumber();
+    const blockNumber = await this.resolveBlock();
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
@@ -273,7 +290,7 @@ class EthereumBackend {
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const bootInfoStruct = this.contractAppInfo(bootInfo);
-    const blockNumber = await this.finalizedBlockNumber();
+    const blockNumber = await this.resolveBlock();
     let response;
     if (isKms) {
       response = await this.client.readContract({
@@ -313,7 +330,7 @@ class EthereumBackend {
 
   // The current root epoch and its chain hash; empty only when no epoch is registered.
   async getRootEpoch(blockNumber?: bigint): Promise<RootEpochInfo> {
-    blockNumber ??= await this.finalizedBlockNumber();
+    blockNumber ??= await this.resolveBlock();
     const count = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
@@ -333,17 +350,18 @@ class EthereumBackend {
   async getAppEpoch(appId: string): Promise<number> {
     const epoch = Number(await this.client.readContract({
       address: this.kmsContractAddr, abi: DSTACK_KMS_ABI, functionName: 'currentAppEpoch',
-      args: [this.decodeHex(appId, 20)], blockNumber: await this.finalizedBlockNumber(),
+      args: [this.decodeHex(appId, 20)], blockNumber: await this.resolveBlock(),
     }));
     if (!Number.isSafeInteger(epoch)) throw new Error('app epoch exceeds the supported range');
     return epoch;
   }
 
-  async getGatewayAppId(): Promise<string> {
+  async getGatewayAppId(blockNumber?: bigint): Promise<string> {
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
-      functionName: 'gatewayAppId'
+      functionName: 'gatewayAppId',
+      blockNumber: blockNumber ?? await this.resolveBlock(),
     });
     return result as string;
   }
@@ -353,11 +371,12 @@ class EthereumBackend {
     return Number(chainId);
   }
 
-  async getAppImplementation(): Promise<string> {
+  async getAppImplementation(blockNumber?: bigint): Promise<string> {
     const result = await this.client.readContract({
       address: this.kmsContractAddr,
       abi: DSTACK_KMS_ABI,
-      functionName: 'appImplementation'
+      functionName: 'appImplementation',
+      blockNumber: blockNumber ?? await this.resolveBlock(),
     });
     return result as string;
   }
@@ -383,7 +402,9 @@ const finalityConfirmations = BigInt(
 const client = createPublicClient({
   transport: http(rpcUrl)
 });
-const ethereum = new EthereumBackend(client, kmsContractAddr, expectedChainId, finalityConfirmations);
+const ethereum = new EthereumBackend(
+  client, kmsContractAddr, expectedChainId, parseBlockTag(process.env.ETH_BLOCK_TAG), finalityConfirmations,
+);
 
 const publicRpcEndpoint = (value: string): string => {
   try {
@@ -423,11 +444,12 @@ app.use('/bootAuth/*', bodyLimit({
 // health check and info endpoint
 app.get('/', async (c) => {
   try {
+    const block = await ethereum.resolveBlock();
     const batch = await Promise.all([
-      ethereum.getGatewayAppId(),
+      ethereum.getGatewayAppId(block),
       ethereum.getChainId(),
-      ethereum.getAppImplementation(),
-      ethereum.getRootEpoch(),
+      ethereum.getAppImplementation(block),
+      ethereum.getRootEpoch(block),
     ]);
     console.log('batch', batch);
 

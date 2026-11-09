@@ -123,6 +123,7 @@ Set these environment variables:
 - **`KMS_CONTRACT_ADDR`** - Deployed DstackKms contract address
 - **`PORT`** - Server port (default: `8000`)
 - **`HOST`** - Server host (default: `127.0.0.1`)
+- **`ETH_BLOCK_TAG`** - Block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). Each request resolves the tag to one block and reads all state there; an RPC that does not support the tag fails closed. A later tag survives reorgs but delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet, longer on L2s that wait for L1 finality). Use `latest` on local development chains.
 
 ### Running the Server
 ```bash

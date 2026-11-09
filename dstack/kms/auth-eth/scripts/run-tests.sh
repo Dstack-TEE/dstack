@@ -34,6 +34,7 @@ source "$ENV_FILE"
 
 # Export for child processes
 export ETH_RPC_URL
+export ETH_BLOCK_TAG
 export KMS_CONTRACT_ADDR
 export APP_IMPLEMENTATION
 

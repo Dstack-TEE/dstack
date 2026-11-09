@@ -41,6 +41,9 @@ else
 # The URL of the Ethereum RPC service
 ETH_RPC_URL=https://rpc.phala.network
 
+# The block the auth-api reads policy at: latest, safe or finalized
+# ETH_BLOCK_TAG=finalized
+
 # The Git repository to deploy
 GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
 
@@ -94,7 +97,9 @@ subvar() {
   sed -i "s|\${$1}|${!1}|g" "$COMPOSE_TMP"
 }
 
+ETH_BLOCK_TAG=${ETH_BLOCK_TAG:-finalized}
 subvar ETH_RPC_URL
+subvar ETH_BLOCK_TAG
 subvar KMS_CONTRACT_ADDR
 subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL
