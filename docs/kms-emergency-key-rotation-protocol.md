@@ -198,7 +198,9 @@ only until the env has been migrated. Ciphertext no key decrypts fails closed;
 env epoch is independent of the disk token. Empty env requires no migration.
 
 Decrypt/re-encrypt only inside the CVM, using current env public key, existing
-format, and fresh randomness. Locally verify replacement decryption.
+format, and fresh randomness. The guest does not read the replacement back:
+sealing and opening are deterministic code, so integration tests guarantee that
+a re-sealed env opens on the next boot, after the VMM has replaced the old one.
 The guest pushes the result to the VMM with `HostApi.UpdateEncryptedEnv` on
 every boot, before any application code runs, sending an empty env when nothing
 changed. The host API is reached over the VM's own vsock, so the VMM knows which
