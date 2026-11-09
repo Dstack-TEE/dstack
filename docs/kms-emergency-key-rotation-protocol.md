@@ -188,10 +188,14 @@ Old key-area wiping remains a release blocker.
 
 ## 6. Environment migration, application keys, and TLS
 
-First decrypt env using latest. On authentication failure, try historical epochs
-from current-1 down to 0, at most once each per boot; no platform metadata is
-required. Stop on authorization failure. Corrupt ciphertext fails closed; env epoch is independent of
-the disk token. Empty env requires no migration.
+First decrypt env using latest. On authentication failure, try historical keys
+from current down to 0, at most once each per boot; no platform metadata is
+required. Skip an epoch whose key the KMS refuses, or that does not decrypt, until
+one does: each historical key is still authorized by the KMS, and stopping at a
+refusal would strand env encrypted under an older epoch whose image is approved
+there but not in a newer row. The search costs at most current+1 RA-TLS requests,
+only until the env has been migrated. Ciphertext no key decrypts fails closed;
+env epoch is independent of the disk token. Empty env requires no migration.
 
 Decrypt/re-encrypt only inside the CVM, using current env public key, existing
 format, and fresh randomness. Locally verify replacement decryption.
