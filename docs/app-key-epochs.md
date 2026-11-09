@@ -15,7 +15,10 @@ historical epoch zero. Future epochs are denied through `rejectionReason`.
 `DstackApp.currentAppEpoch` starts at zero. Its owner calls
 `advanceAppEpoch(expectedCurrentEpoch)` to increment it. The expected value
 prevents a stale or retried transaction from advancing twice. Epochs cannot be
-rolled back and are limited to uint32. `AdvanceAppEpoch` in `Manage.s.sol` exposes
+rolled back and are limited to uint32. Prepare the next row before advancing, as
+with a pending root epoch: approve its materials with `*AtEpoch(N + 1, ...)`,
+then call `advanceAppEpoch(N)`, so guests that restart after the advance are
+authorized at once. `AdvanceAppEpoch` in `Manage.s.sol` exposes
 this operation; `GetAppEpoch` in `Query.s.sol` reads it. Upgrade the app policy
 implementation before advancing, and upgrade the KMS/auth backend and guests
 before using nonzero epochs. The ERC-165 `IAppEpochAuth` capability combines
@@ -51,9 +54,10 @@ devices) operate on every root row from the current epoch through the latest
 **registered** one, so a removal during a rotation revokes the material in both
 the serving and the pending row, and an addition allows it in both. Before any
 root epoch is registered, they operate on epoch zero. `DstackApp` add/remove
-methods operate on the current app epoch. The `*AtEpoch(epoch, material)`
-methods select a particular registered root/current-or-historical app epoch;
-removal affects only that row. `setAllowAnyDeviceAtEpoch(epoch, allowed)` is also
+methods, and `setAllowAnyDevice`, likewise operate on the current app epoch and
+the next one. The `*AtEpoch(epoch, material)` methods select a particular
+registered root epoch, or a historical, current or next app epoch; removal
+affects only that row. `setAllowAnyDeviceAtEpoch(epoch, allowed)` is also
 row-specific. Single-material add/remove scripts in `Manage.s.sol` accept optional
 `ROOT_EPOCH` or `APP_EPOCH` variables, respectively, as does `SetAllowAnyDevice`.
 
