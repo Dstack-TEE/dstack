@@ -149,8 +149,14 @@ than a gate.
 pipx install slither-analyzer halmos
 slither .
 halmos --contract DstackAppSymbolicTest
+halmos --contract DstackAppEpochSymbolicTest
 halmos --contract DstackKmsSymbolicTest
+halmos --contract DstackKmsEpochSymbolicTest
 ```
+
+Forge 1.8 enables `dynamic_test_linking` by default, which compiles `new` in
+tests to `vm.deployCode`, a cheat code Halmos 0.3.3 does not support. Disable
+it for Halmos runs with `FOUNDRY_DYNAMIC_TEST_LINKING=false`.
 
 Configuration lives in `slither.config.json` and `foundry.toml`.
 See `docs/formal-verification.md` for the verification roadmap, what each
