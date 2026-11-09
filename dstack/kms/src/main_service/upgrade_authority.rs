@@ -476,8 +476,34 @@ pub(crate) async fn ensure_self_kms_allowed(
     Ok(())
 }
 
+/// Whether a source KMS uses the legacy certificate format, which v0.5.x KMS
+/// instances still present: separate TDX_QUOTE and EVENT_LOG OIDs without a
+/// vm_config, so its boot info has no OS image hash. A source that presents a
+/// config but no OS image hash is not legacy.
+///
+/// Only a non-rotating join may accept such a source (`allow_legacy_cert`). It
+/// is the only way to migrate a v0.5.x cluster: a KMS in a CVM cannot upgrade in
+/// place, so a new instance must join an old one. Its image is then judged by
+/// mrAggregated alone, which on TDX already covers MRTD and RTMR0-3; device and
+/// TCB checks still apply. The fallback cannot be reached after a rotation: a
+/// legacy source runs an old binary that holds only epoch 0, so once a later
+/// epoch is current the handover check refuses its keyring, and its own self
+/// check fails.
+///
+/// TODO: remove once every source KMS runs v0.6 or later, which uses the
+/// unified PHALA_RATLS_ATTESTATION format.
+fn is_legacy_source(boot_info: &BootInfo, config: &str, allow_legacy_cert: bool) -> Result<bool> {
+    if !boot_info.os_image_hash.is_empty() || !config.is_empty() {
+        return Ok(false);
+    }
+    if !allow_legacy_cert {
+        bail!("the source KMS certificate does not carry its OS image hash");
+    }
+    Ok(true)
+}
+
 /// `allow_legacy_cert` accepts a source whose certificate predates the unified
-/// attestation format, judging its image by mrAggregated alone.
+/// attestation format; see [`is_legacy_source`].
 pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
@@ -487,16 +513,13 @@ pub(crate) async fn ensure_kms_allowed(
 ) -> Result<RootEpochRegistry> {
     let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
-    // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
-    // EVENT_LOG OIDs) which lacks vm_config, resulting in an empty os_image_hash.
-    // Fill it from the local KMS's own value, so only mrAggregated gates the source image here.
-    // A source that presents a config but no os_image_hash is not legacy and gets no fallback.
-    // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
-    if boot_info.os_image_hash.is_empty() && attestation.config.is_empty() {
-        if !allow_legacy_cert {
-            bail!("the source KMS certificate does not carry its OS image hash");
-        }
-        warn!("source KMS uses the legacy cert format, falling back to the local os_image_hash");
+    // Fill a legacy source's OS image hash from the local KMS's own value, so only
+    // mrAggregated gates the source image.
+    if is_legacy_source(&boot_info, &attestation.config, allow_legacy_cert)? {
+        warn!(
+            "source KMS uses the legacy certificate format of v0.5.x; judging its image by \
+             mrAggregated alone, with the local os_image_hash"
+        );
         let local_info = local_kms_boot_info(verifier)
             .await
             .context("failed to get local KMS boot info for os_image_hash fallback")?;
@@ -617,6 +640,23 @@ pub(crate) mod tests {
             requests
         });
         (format!("http://{address}"), handle)
+    }
+
+    #[test]
+    fn only_a_plain_join_accepts_a_legacy_source_certificate() {
+        let legacy = BootInfo {
+            os_image_hash: vec![],
+            ..boot_info(1)
+        };
+        // A rotation never takes the fallback.
+        let err = is_legacy_source(&legacy, "", false).unwrap_err();
+        assert!(err.to_string().contains("does not carry its OS image hash"));
+        assert!(is_legacy_source(&legacy, "", true).unwrap());
+        // A current certificate, or a config without an image hash, is not legacy.
+        for allow in [false, true] {
+            assert!(!is_legacy_source(&boot_info(1), "", allow).unwrap());
+            assert!(!is_legacy_source(&legacy, "{}", allow).unwrap());
+        }
     }
 
     pub(crate) fn webhook(url: String) -> AuthApi {

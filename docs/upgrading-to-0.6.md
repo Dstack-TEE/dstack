@@ -217,6 +217,12 @@ Both sides must authorize each other first: the new KMS allows the old
 `os_image_hash`. After onboarding, compare the KMS CA public keys; the CA
 certificate itself is reissued. The source must be 0.5.8 or later.
 
+A 0.5.x certificate carries no OS image hash, so the new KMS judges the source
+by its `mrAggregated` (plus device and TCB checks) and logs a warning. This
+fallback serves only a plain join, never `rotate`, and only before a rotation:
+a 0.5.x source holds epoch 0 alone, so once a later epoch is current its keyring
+is refused. It will be removed once no source runs a version before 0.6.
+
 Keep the old KMS running until every client has moved. While a 0.5.x KMS still
 verifies 0.6.0 guests, it can only measure guests with exactly 2 GiB or at
 least 2816 MiB of memory, and it must be able to download the 0.6.0 image.
