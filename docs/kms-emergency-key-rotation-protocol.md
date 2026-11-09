@@ -137,35 +137,38 @@ anchor: do not install it or compare it as though it were the current server pin
 
 ## 5. OS slot migration and LUKS header metadata
 
-Store the epoch in one LUKS2 JSON token:
+Store the epochs in one LUKS2 JSON token bound to the keyslot holding their key:
 
 ```json
-{"type":"dstack-kms","keyslots":["0"],"root_epoch":2}
+{"type":"dstack-kms","keyslots":["0"],"root_epoch":2,"app_epoch":0}
 ```
 
-The current `validate_single_luks2_header` rejects tokens, nonzero subsystem,
-unexpected labels, and any keyslot layout other than slot 0 alone. The new OS
-allows at most this one namespaced token, validates its epoch and slot-0 binding,
-and preserves the other checks. Validate both header copies consistently. Keep
-the existing initialization label; do not repurpose it or the subsystem field.
-Disks without the token are epoch 0.
+The validator rejects nonzero subsystem, unexpected labels, and any token but
+this one. It accepts keyslot 0, keyslot 1, or both (only mid-migration), each
+with the same pinned parameters, and requires both header copies to agree.
+Disks without the token are epoch 0. Requires cryptsetup 2.5 or later
+(`--token-replace`, `--new-key-slot`); Debian trixie ships 2.7.
 
 ```text
-GetAppKey(root_epoch unset) -> copy the header to tmpfs -> validate the copy
-  token_or_0 == current -> open with the copy
-  token_or_0 <  current -> old keys of epoch token_or_0 -> use only disk key
-          -> luksChangeKey + token import on the copy -> validate it again
-          -> luksHeaderRestore to the disk -> open with the copy
-  token_or_0 >  current -> refuse
-  -> continue boot using only latest application material
+copy the header to tmpfs -> validate the copy
+  initialization label set -> reformat (the disk holds no data yet)
+  token_or_0 > current -> refuse
+  current key unlocks a keyslot of the copy -> finish
+  otherwise, token_or_0 < current -> old keys of epoch token_or_0
+          -> luksAddKey (old key authorizes the new key in the free slot)
+          -> recopy and validate -> finish
+  finish: token import (current epochs, surviving slot) -> luksKillSlot others
+          -> recopy, validate, and check the result -> open with the copy
 ```
 
-Use `luksChangeKey` instead of a deliberate add/remove two-slot transition. A
-successful change retains slot 0. Never format on unlock failure. Invalid or
-unsupported metadata requires recovery. Migrating the validated in-memory copy
-keeps the boot from acting on a header the host swaps after validation, and the
-key change and epoch token reach the disk in one header restore, so the token
-always names the epoch of the key in slot 0.
+Each step is one LUKS2 metadata commit, which cryptsetup keeps crash-consistent
+across both header copies. Whatever step a crash interrupts, the next boot
+finds either the old key alone or a keyslot the current key already unlocks,
+so trying the current key first resumes the migration. A crash between
+`luksFormat` and the token import leaves the initialization label set, which is
+cleared only after the filesystem exists, so such a disk is reformatted. Never
+format on unlock failure. Invalid or unsupported metadata requires recovery.
+The disk is opened only with the last validated in-memory copy.
 
 No extra reboot is required. Historical material is confined to the migration
 step, not persisted or passed to applications.
@@ -175,12 +178,11 @@ that, an epoch-0 disk is never tagged: before any rotation the new OS leaves the
 header untouched, so rolling back to an older OS image still works. Disks
 formatted at a later epoch are tagged immediately.
 
-Preliminary test (Linux 6.8.0-1028-intel, cryptsetup 2.7.0, 32 MiB file image,
-LUKS2/PBKDF2, no dm mapping): format, change-key, token import, and
-test-passphrase succeeded; the completed change retained slot 0, rejected old
-credentials, and accepted new ones.
-Release blockers: shipped-tool compatibility, interruption recovery across both
-headers, and old key-area wiping. Completed-operation tests do not prove atomicity.
+Tested in a Debian trixie container (cryptsetup 2.7.5, 32 MiB file images,
+LUKS2/PBKDF2, no dm mapping): full migrations, resumption after each step,
+disagreeing header copies, failed `luksAddKey` or denied old epochs leaving the
+old epochs in place, failed token import, and disks recording newer epochs.
+Old key-area wiping remains a release blocker.
 
 ## 6. Environment migration, application keys, and TLS
 

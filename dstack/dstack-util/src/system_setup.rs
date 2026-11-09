@@ -28,8 +28,7 @@ use dstack_types::{
 };
 use fs_err as fs;
 use luks::{
-    rekey_luks_header_at_epochs, validate_luks2_headers, write_luks_epochs,
-    LUKS_INITIALIZING_LABEL, PAYLOAD_OFFSET,
+    load_luks_header, sync_luks_epochs, write_luks_epochs, LUKS_INITIALIZING_LABEL, PAYLOAD_OFFSET,
 };
 use ra_rpc::{
     client::{CertInfo, RaClient, RaClientConfig},
@@ -2812,13 +2811,13 @@ impl<'a> Stage0<'a> {
 
         let has_filesystem = if opts.storage_encrypted && disk_initialized {
             info!("Mounting encrypted data disk");
-            let initializing = self
-                .open_encrypted_volume(keys, name, opts.storage_discard)
+            let opened = self
+                .open_encrypted_volume(keys, name, opts.storage_discard, false)
                 .await?;
-            if initializing {
+            if !opened {
                 warn!("data disk initialization was interrupted, initializing it again");
             }
-            !initializing
+            opened
         } else {
             disk_initialized
         };
@@ -2830,7 +2829,7 @@ impl<'a> Stage0<'a> {
 
             if !opts.storage_encrypted {
                 info!("Skipping disk encryption as requested by kernel cmdline");
-            } else if !disk_initialized {
+            } else {
                 info!("Setting up disk encryption");
                 self.luks_setup(keys, name, opts.storage_discard).await?;
             }
@@ -3002,49 +3001,23 @@ impl<'a> Stage0<'a> {
         }
         if let Some(epoch) = kms_root_epoch(keys).filter(|epoch| *epoch > 0 || keys.app_epoch() > 0)
         {
-            write_luks_epochs(root_hd, epoch, keys.app_epoch())?;
+            write_luks_epochs(root_hd, 0, epoch, keys.app_epoch())?;
         }
-        self.open_encrypted_volume(keys, name, discard).await?;
-        Ok(())
-    }
-
-    /// Re-key the in-memory `header` of a data disk still protected by an
-    /// older KMS epoch, and write it back to the disk.
-    ///
-    /// Only the keyslot passphrase changes; the volume key stays. The epoch
-    /// is recorded in the header so the right old key is used after the next
-    /// rotation. An unrotated epoch-0 disk is left untouched, so it stays
-    /// readable by older OS images.
-    async fn migrate_disk_key(
-        &self,
-        keys: &AppKeys,
-        header: &Path,
-        from: (u32, u32),
-        to: (u32, u32),
-    ) -> Result<()> {
-        info!("re-keying the data disk from epochs {from:?} to {to:?}");
-        let old = self
-            .shared
-            .request_historical_keys(keys, from.0, from.1)
+        self.open_encrypted_volume(keys, name, discard, true)
             .await?;
-        rekey_luks_header_at_epochs(
-            header,
-            &hex::encode(&old.disk_crypt_key),
-            &hex::encode(&keys.disk_crypt_key),
-            to.0,
-            to.1,
-        )?;
-        let root_hd = &self.args.device;
-        cmd!(cryptsetup luksHeaderRestore --batch-mode --header-backup-file=$header $root_hd)
-            .context("failed to write the re-keyed LUKS header")?;
         Ok(())
     }
 
+    /// Open the data disk after bringing it to the current key epochs.
+    ///
+    /// Returns `false`, leaving the disk closed, when an earlier
+    /// initialization was interrupted, unless the disk was just formatted.
     async fn open_encrypted_volume(
         &self,
         keys: &AppKeys,
         name: &str,
         discard: bool,
+        formatted: bool,
     ) -> Result<bool> {
         let root_hd = &self.args.device;
         let disk_crypt_key = hex::encode(&keys.disk_crypt_key);
@@ -3064,41 +3037,24 @@ impl<'a> Stage0<'a> {
             info "Mounting tmpfs for in-memory LUKS header";
             mkdir -p $tmp_hdr_dir;
             mount -t tmpfs -o size=64M,mode=0700,nosuid,nodev,noexec tmpfs $tmp_hdr_dir;
-            info "Loading the LUKS2 header";
-            cryptsetup luksHeaderBackup --header-backup-file=$in_mem_hdr $root_hd;
         }
-        .context("Failed to load LUKS2 header")?;
+        .context("Failed to mount tmpfs for the LUKS2 header")?;
 
-        let validate = || {
-            let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
-            validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")
-        };
-        let mut header = validate()?;
+        let hdr = Path::new(&in_mem_hdr);
+        let header = load_luks_header(root_hd, hdr)?;
+        if header.initializing && !formatted {
+            return Ok(false);
+        }
         if let Some(current) = kms_root_epoch(keys) {
-            let stored = header.root_epoch.unwrap_or(0);
-            let current_app = keys.app_epoch();
-            if stored > current || header.app_epoch > current_app {
-                bail!(
-                    "the data disk epochs ({stored}, {}) exceed current ({current}, {current_app})",
-                    header.app_epoch
-                );
-            }
-            if stored != current || header.app_epoch != current_app {
-                self.migrate_disk_key(
-                    keys,
-                    Path::new(&in_mem_hdr),
-                    (stored, header.app_epoch),
-                    (current, current_app),
-                )
+            let old_key = async |root, app| {
+                let old = self.shared.request_historical_keys(keys, root, app).await?;
+                Ok(hex::encode(&old.disk_crypt_key))
+            };
+            let target = (current, keys.app_epoch());
+            sync_luks_epochs(root_hd, hdr, header, &disk_crypt_key, target, old_key)
                 .await
                 .context("failed to migrate the data disk key")?;
-                header = validate()?;
-                if header.root_epoch != Some(current) || header.app_epoch != current_app {
-                    bail!("the re-keyed LUKS header does not record epochs ({current}, {current_app})");
-                }
-            }
         }
-        let initializing = header.initializing;
 
         info!("Opening the device");
         let mut command = Command::new("cryptsetup");
@@ -3142,7 +3098,7 @@ impl<'a> Stage0<'a> {
             info!("Waiting for device mapper {}...", dm_path);
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        Ok(initializing)
+        Ok(true)
     }
 
     async fn measure_app_info(&self) -> Result<AppInfo> {

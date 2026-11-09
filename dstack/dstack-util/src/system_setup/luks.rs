@@ -19,6 +19,7 @@ use safe_write::safe_write_with_mode;
 use scopeguard::defer;
 use serde::{de::IgnoredAny, Deserialize};
 use serde_with::{serde_as, DisplayFromStr};
+use tracing::info;
 
 /// Size of the binary header that precedes each JSON area.
 const BINARY_HEADER_SIZE: u64 = 4096;
@@ -63,7 +64,7 @@ struct LuksJson {
     pub config: LuksConfig,
 }
 
-/// Type of the only token dstack writes: the KMS key epoch of keyslot 0.
+/// Type of the only token dstack writes: the KMS key epochs of one keyslot.
 const ROOT_EPOCH_TOKEN_TYPE: &str = "dstack-kms";
 
 #[derive(Deserialize)]
@@ -207,10 +208,11 @@ fn run_with_input(mut command: Command, input: &[u8]) -> Result<Option<i32>> {
         .code())
 }
 
-pub(super) fn write_luks_epochs(device: &Path, epoch: u32, app_epoch: u32) -> Result<()> {
+/// Record that keyslot `slot` holds the key of `epoch` and `app_epoch`.
+pub(super) fn write_luks_epochs(device: &Path, slot: u8, epoch: u32, app_epoch: u32) -> Result<()> {
     let token = serde_json::json!({
         "type": ROOT_EPOCH_TOKEN_TYPE,
-        "keyslots": ["0"],
+        "keyslots": [slot.to_string()],
         "root_epoch": epoch,
         "app_epoch": app_epoch,
     });
@@ -222,71 +224,176 @@ pub(super) fn write_luks_epochs(device: &Path, epoch: u32, app_epoch: u32) -> Re
     Ok(())
 }
 
-/// Replace the keyslot 0 passphrase of a detached LUKS `header` and record
-/// `epoch` in it. The new key goes over stdin; the old one is written next to
-/// the header, which must be in a private in-memory directory.
-pub(super) fn rekey_luks_header_at_epochs(
+/// Back up the LUKS header of `device` to `header` and validate the copy.
+pub(super) fn load_luks_header(device: &Path, header: &Path) -> Result<LuksHeaderState> {
+    if header.exists() {
+        fs::remove_file(header)?;
+    }
+    let status = Command::new("cryptsetup")
+        .args(["luksHeaderBackup", "--header-backup-file"])
+        .arg(header)
+        .arg(device)
+        .status()
+        .context("failed to start cryptsetup luksHeaderBackup")?;
+    if !status.success() {
+        bail!("failed to back up the LUKS header");
+    }
+    validate_luks2_headers(fs::File::open(header)?).context("failed to validate the LUKS2 header")
+}
+
+/// The keyslot of the validated `header` that `key` unlocks.
+fn unlocked_keyslot(header: &Path, state: &LuksHeaderState, key: &str) -> Result<Option<u8>> {
+    for &slot in &state.keyslots {
+        let slot_arg = slot.to_string();
+        let test = cryptsetup(
+            &["open", "--test-passphrase", "--key-slot", &slot_arg, "-d-"],
+            header,
+        );
+        match run_with_input(test, key.as_bytes())? {
+            Some(0) => return Ok(Some(slot)),
+            // No key available with this passphrase.
+            Some(2) => {}
+            code => bail!("failed to test the LUKS passphrase: {code:?}"),
+        }
+    }
+    Ok(None)
+}
+
+/// Add `new_key` in keyslot `slot`, authorized by `old_key`. The old key is
+/// written next to `header`, which must be in a private in-memory directory.
+fn add_luks_key(
+    device: &Path,
     header: &Path,
     old_key: &str,
     new_key: &str,
-    epoch: u32,
-    app_epoch: u32,
+    slot: u8,
 ) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    // luksHeaderBackup leaves the copy read-only.
-    fs::set_permissions(header, std::fs::Permissions::from_mode(0o600))?;
     let old_file = header.with_file_name("old-key");
     defer! {
         fs::remove_file(&old_file).ok();
     }
     safe_write_with_mode(&old_file, old_key, 0o600)?;
-    let mut command = cryptsetup(
-        &[
-            "luksChangeKey",
-            "--batch-mode",
-            "--pbkdf",
-            "pbkdf2",
-            "--key-slot",
-            "0",
-        ],
-        header,
-    );
+    let slot = slot.to_string();
+    let args = [
+        "luksAddKey",
+        "--batch-mode",
+        "--pbkdf",
+        "pbkdf2",
+        "--new-key-slot",
+        &slot,
+    ];
+    let mut command = cryptsetup(&args, device);
     command.arg("--key-file").arg(&old_file);
     if run_with_input(command, new_key.as_bytes())? != Some(0) {
-        bail!("cryptsetup luksChangeKey failed");
+        bail!("cryptsetup luksAddKey failed");
     }
-    write_luks_epochs(header, epoch, app_epoch)
+    Ok(())
 }
 
-#[cfg(test)]
-fn write_luks_root_epoch(device: &Path, epoch: u32) -> Result<()> {
-    write_luks_epochs(device, epoch, 0)
+fn kill_luks_slot(device: &Path, slot: u8) -> Result<()> {
+    let status = cryptsetup(&["luksKillSlot", "--batch-mode"], device)
+        .arg(slot.to_string())
+        .stdin(Stdio::null())
+        .status()
+        .context("failed to start cryptsetup luksKillSlot")?;
+    if !status.success() {
+        bail!("failed to remove LUKS keyslot {slot}");
+    }
+    Ok(())
 }
 
-#[cfg(test)]
-fn rekey_luks_header(header: &Path, old_key: &str, new_key: &str, epoch: u32) -> Result<()> {
-    rekey_luks_header_at_epochs(header, old_key, new_key, epoch, 0)
+/// Bring the data disk to the `target` epochs, so that `key` unlocks its only
+/// keyslot and the token records `target`.
+///
+/// Each step is a single atomic LUKS2 metadata update: add the new key with
+/// the old one, record the new epochs, then remove the old keyslot. Whatever
+/// step a crash interrupts, the next boot finds either the old key alone or a
+/// keyslot `key` already unlocks, and finishes from there. `old_key` is only
+/// called when `key` unlocks no keyslot. An unrotated epoch-0 disk is left
+/// untouched, so it stays readable by older OS images.
+///
+/// `header` holds the validated in-memory copy of `state` and is refreshed
+/// after every change.
+pub(super) async fn sync_luks_epochs<F, Fut>(
+    device: &Path,
+    header: &Path,
+    mut state: LuksHeaderState,
+    key: &str,
+    target: (u32, u32),
+    old_key: F,
+) -> Result<LuksHeaderState>
+where
+    F: FnOnce(u32, u32) -> Fut,
+    Fut: std::future::Future<Output = Result<String>>,
+{
+    let stored = (state.root_epoch.unwrap_or(0), state.app_epoch);
+    if stored.0 > target.0 || stored.1 > target.1 {
+        bail!("the data disk epochs {stored:?} exceed current {target:?}");
+    }
+    let slot = match unlocked_keyslot(header, &state, key)? {
+        Some(slot) => slot,
+        None => {
+            let &[old_slot] = &state.keyslots[..] else {
+                bail!("the data disk key unlocks none of the LUKS keyslots");
+            };
+            if stored == target {
+                bail!("the data disk key does not unlock epochs {target:?}");
+            }
+            info!("re-keying the data disk from epochs {stored:?} to {target:?}");
+            let old_key = old_key(stored.0, stored.1).await?;
+            add_luks_key(device, header, &old_key, key, old_slot ^ 1)?;
+            state = load_luks_header(device, header)?;
+            unlocked_keyslot(header, &state, key)?
+                .context("the added LUKS keyslot does not unlock with the data disk key")?
+        }
+    };
+    let mut changed = false;
+    let recorded = (
+        state.token_keyslot,
+        state.root_epoch.unwrap_or(0),
+        state.app_epoch,
+    );
+    let legacy = target == (0, 0) && state.token_keyslot.is_none();
+    if !legacy && recorded != (Some(slot), target.0, target.1) {
+        write_luks_epochs(device, slot, target.0, target.1)?;
+        changed = true;
+    }
+    for &stale in state.keyslots.iter().filter(|&&stale| stale != slot) {
+        kill_luks_slot(device, stale)?;
+        changed = true;
+    }
+    if changed {
+        state = load_luks_header(device, header)?;
+        let recorded = (state.token_keyslot, state.root_epoch, state.app_epoch);
+        if state.keyslots != [slot] || recorded != (Some(slot), Some(target.0), target.1) {
+            bail!("the updated LUKS header does not record epochs {target:?}");
+        }
+    }
+    Ok(state)
 }
 
 /// Set by luksFormat and cleared once the filesystem exists, so a disk still
 /// carrying it was interrupted mid-initialization and holds no data.
 pub(super) const LUKS_INITIALIZING_LABEL: &str = "dstack-initializing";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LuksHeaderState {
     /// The header carries [`LUKS_INITIALIZING_LABEL`].
     pub(super) initializing: bool,
     /// Root epoch recorded in the dstack token; `None` means epoch 0.
     pub(super) root_epoch: Option<u32>,
     pub(super) app_epoch: u32,
+    /// Keyslot the dstack token records the epochs of.
+    pub(super) token_keyslot: Option<u8>,
+    /// Sorted keyslot ids; a second one exists only mid-migration.
+    pub(super) keyslots: Vec<u8>,
 }
 
 pub(super) fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<LuksHeaderState> {
     let primary = validate_single_luks2_header(&mut reader, 0)?;
     let secondary = validate_single_luks2_header(&mut reader, 1)?;
-    if primary.root_epoch != secondary.root_epoch || primary.app_epoch != secondary.app_epoch {
-        bail!("LUKS header copies disagree on the key epoch");
+    if primary != secondary {
+        bail!("LUKS header copies disagree");
     }
     Ok(primary)
 }
@@ -362,17 +469,26 @@ fn validate_single_luks2_header(
             },
     } = serde_json::from_slice(&jsn_data).context("Failed to decode LUKS JSON")?;
 
-    if keyslots.len() != 1 {
+    let mut keyslot_ids: Vec<u8> = keyslots.keys().copied().collect();
+    keyslot_ids.sort_unstable();
+    if keyslot_ids != [0] && keyslot_ids != [1] && keyslot_ids != [0, 1] {
         bail!("Invalid LUKS keyslots");
     }
-    let root_epoch = match tokens.len() {
-        0 => None,
+    let (root_epoch, app_epoch, token_keyslot) = match tokens.len() {
+        0 => (None, 0, None),
         1 => {
             let token = tokens.get(&0).context("Invalid LUKS token id")?;
-            if token.kind != ROOT_EPOCH_TOKEN_TYPE || token.keyslots != ["0"] {
+            let slot = match &token.keyslots[..] {
+                [slot] => slot.parse::<u8>().ok(),
+                _ => None,
+            };
+            if token.kind != ROOT_EPOCH_TOKEN_TYPE
+                || !slot.is_some_and(|s| keyslots.contains_key(&s))
+            {
                 bail!("Invalid LUKS token");
             }
-            Some(token.root_epoch.context("LUKS token has no root epoch")?)
+            let root_epoch = token.root_epoch.context("LUKS token has no root epoch")?;
+            (Some(root_epoch), token.app_epoch, slot)
         }
         _ => bail!("Invalid LUKS tokens"),
     };
@@ -392,7 +508,7 @@ fn validate_single_luks2_header(
         bail!("Invalid LUKS requirements");
     }
 
-    {
+    for keyslot in keyslots.values() {
         let LuksKeyslot::Luks2 {
             key_size,
             area:
@@ -409,7 +525,7 @@ fn validate_single_luks2_header(
                     stripes,
                 },
             priority,
-        } = keyslots.get(&0).context("no LUKS keyslot")?;
+        } = keyslot;
         if encryption != "aes-xts-plain64" {
             bail!("Invalid LUKS keyslot encryption: {encryption}");
         }
@@ -484,7 +600,9 @@ fn validate_single_luks2_header(
         if hash != "sha256" {
             bail!("Invalid LUKS digest hash: {hash}");
         }
-        if keyslots != &[0] {
+        let mut keyslots = keyslots.clone();
+        keyslots.sort_unstable();
+        if keyslots != keyslot_ids {
             bail!("Invalid LUKS digest keyslots: {keyslots:?}");
         }
         if segments != &[0] {
@@ -494,7 +612,9 @@ fn validate_single_luks2_header(
     Ok(LuksHeaderState {
         initializing,
         root_epoch,
-        app_epoch: tokens.get(&0).map(|token| token.app_epoch).unwrap_or(0),
+        app_epoch,
+        token_keyslot,
+        keyslots: keyslot_ids,
     })
 }
 
@@ -508,11 +628,16 @@ fn test_validate_luks2_header() {
         LuksHeaderState {
             initializing: false,
             root_epoch: None,
-            app_epoch: 0
+            app_epoch: 0,
+            token_keyslot: None,
+            keyslots: vec![0],
         }
     );
-    header_data[24..24 + LUKS_INITIALIZING_LABEL.len()]
-        .copy_from_slice(LUKS_INITIALIZING_LABEL.as_bytes());
+    let hdr_size = LuksHeader::parse(&header_data).unwrap().hdr_size as usize;
+    for copy in [0, hdr_size] {
+        header_data[copy + 24..copy + 24 + LUKS_INITIALIZING_LABEL.len()]
+            .copy_from_slice(LUKS_INITIALIZING_LABEL.as_bytes());
+    }
     assert!(
         validate_luks2_headers(&mut &header_data[..])
             .expect("Failed to validate LUKS2 header")
@@ -561,101 +686,198 @@ fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usiz
     patched
 }
 
-#[test]
-fn test_disk_key_migration_with_cryptsetup() {
-    if Command::new("cryptsetup")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("cryptsetup is unavailable; skipping");
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let image = dir.path().join("disk.img");
-    fs::File::create(&image)
-        .unwrap()
-        .set_len(2 * PAYLOAD_OFFSET)
-        .unwrap();
-    let offset = (PAYLOAD_OFFSET / 512).to_string();
-    let format = cryptsetup(
-        &[
-            "luksFormat",
-            "--batch-mode",
-            "--type",
-            "luks2",
-            "--offset",
-            &offset,
-            "--cipher",
-            "aes-xts-plain64",
-            "--pbkdf",
-            "pbkdf2",
-            "--sector-size",
-            "512",
-            "-d-",
-        ],
-        &image,
-    );
-    assert_eq!(run_with_input(format, b"old").unwrap(), Some(0));
-    let unlocks = |key: &str| {
-        let test = cryptsetup(
-            &["open", "--test-passphrase", "--key-slot", "0", "-d-"],
+#[cfg(test)]
+struct TestDisk {
+    dir: tempfile::TempDir,
+    image: std::path::PathBuf,
+    header: std::path::PathBuf,
+}
+
+#[cfg(test)]
+impl TestDisk {
+    /// A disk formatted with `key` and recording `epochs`, or `None` without
+    /// cryptsetup.
+    fn new(key: &str, epochs: Option<(u32, u32)>) -> Option<Self> {
+        if Command::new("cryptsetup")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("cryptsetup is unavailable; skipping");
+            return None;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("disk.img");
+        let header = dir.path().join("header");
+        fs::File::create(&image)
+            .unwrap()
+            .set_len(2 * PAYLOAD_OFFSET)
+            .unwrap();
+        let offset = (PAYLOAD_OFFSET / 512).to_string();
+        let format = cryptsetup(
+            &[
+                "luksFormat",
+                "--batch-mode",
+                "--type",
+                "luks2",
+                "--offset",
+                &offset,
+                "--cipher",
+                "aes-xts-plain64",
+                "--pbkdf",
+                "pbkdf2",
+                "--sector-size",
+                "512",
+                "-d-",
+            ],
             &image,
         );
+        assert_eq!(run_with_input(format, key.as_bytes()).unwrap(), Some(0));
+        if let Some((root, app)) = epochs {
+            write_luks_epochs(&image, 0, root, app).unwrap();
+        }
+        Some(Self { dir, image, header })
+    }
+
+    fn state(&self) -> LuksHeaderState {
+        load_luks_header(&self.image, &self.header).unwrap()
+    }
+
+    fn unlocks(&self, key: &str) -> bool {
+        let test = cryptsetup(&["open", "--test-passphrase", "-d-"], &self.image);
         run_with_input(test, key.as_bytes()).unwrap() == Some(0)
+    }
+
+    fn add_key(&self, old: &str, new: &str, slot: u8) {
+        add_luks_key(&self.image, &self.header, old, new, slot).unwrap();
+    }
+
+    /// Sync to `target`; `old` is the only key the KMS would hand out.
+    async fn sync(
+        &self,
+        key: &str,
+        target: (u32, u32),
+        old: Option<(u32, u32, &str)>,
+    ) -> Result<LuksHeaderState> {
+        let old_key = |root, app| {
+            let key = old
+                .filter(|(r, a, _)| (*r, *a) == (root, app))
+                .map(|(_, _, key)| key.to_owned())
+                .context("the KMS does not serve this epoch");
+            std::future::ready(key)
+        };
+        sync_luks_epochs(
+            &self.image,
+            &self.header,
+            self.state(),
+            key,
+            target,
+            old_key,
+        )
+        .await
+    }
+
+    fn assert_synced(&self, key: &str, target: (u32, u32), slot: u8) {
+        let state = self.state();
+        assert_eq!(state.keyslots, [slot]);
+        assert_eq!(state.token_keyslot, Some(slot));
+        assert_eq!(
+            (state.root_epoch, state.app_epoch),
+            (Some(target.0), target.1)
+        );
+        assert!(self.unlocks(key));
+        assert!(!self.dir.path().join("old-key").exists());
+    }
+}
+
+#[tokio::test]
+async fn test_luks_epoch_migration() {
+    let Some(disk) = TestDisk::new("k1", Some((1, 0))) else {
+        return;
     };
+    disk.sync("k2", (2, 0), Some((1, 0, "k1"))).await.unwrap();
+    disk.assert_synced("k2", (2, 0), 1);
+    assert!(!disk.unlocks("k1"));
+    disk.sync("k3", (2, 1), Some((2, 0, "k2"))).await.unwrap();
+    disk.assert_synced("k3", (2, 1), 0);
+    assert!(!disk.unlocks("k2"));
+    // Already current: no key is requested.
+    disk.sync("k3", (2, 1), None).await.unwrap();
+    disk.assert_synced("k3", (2, 1), 0);
+}
 
-    // Re-key a detached copy of the header, as the boot does, and restore it.
-    let header = dir.path().join("header");
-    let backup = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
-        .arg(&image)
-        .status()
-        .unwrap();
-    assert!(backup.success());
-    rekey_luks_header(&header, "old", "new", 2).unwrap();
-    assert!(!dir.path().join("old-key").exists());
-    assert!(
-        unlocks("old"),
-        "the disk is unchanged until the header is restored"
-    );
-    let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
-    assert_eq!(state.root_epoch, Some(2));
+#[tokio::test]
+async fn test_luks_epoch_migration_resumes_after_each_step() {
+    // Crash after luksAddKey, then after the token import as well.
+    for record in [false, true] {
+        let Some(disk) = TestDisk::new("k1", Some((1, 0))) else {
+            return;
+        };
+        disk.add_key("k1", "k2", 1);
+        if record {
+            write_luks_epochs(&disk.image, 1, 2, 0).unwrap();
+        }
+        disk.sync("k2", (2, 0), None).await.unwrap();
+        disk.assert_synced("k2", (2, 0), 1);
+        assert!(!disk.unlocks("k1"));
+    }
+}
 
-    let restore = cryptsetup(
-        &["luksHeaderRestore", "--batch-mode", "--header-backup-file"],
-        &header,
-    )
-    .arg(&image)
-    .status()
-    .unwrap();
-    assert!(restore.success());
-    assert!(unlocks("new"));
-    assert!(!unlocks("old"));
+#[tokio::test]
+async fn test_luks_epoch_migration_with_disagreeing_header_copies() {
+    let Some(disk) = TestDisk::new("k1", Some((1, 0))) else {
+        return;
+    };
+    disk.add_key("k1", "k2", 1);
+    let before = fs::read(&disk.image).unwrap();
+    write_luks_epochs(&disk.image, 1, 2, 0).unwrap();
+    let after = fs::read(&disk.image).unwrap();
+    let hdr_size = LuksHeader::parse(&before).unwrap().hdr_size as usize;
+    // Interrupted between writing the two header copies, in either order.
+    for (primary, secondary) in [(&after, &before), (&before, &after)] {
+        let mut image = primary.clone();
+        image[hdr_size..2 * hdr_size].copy_from_slice(&secondary[hdr_size..2 * hdr_size]);
+        fs::write(&disk.image, image).unwrap();
+        disk.sync("k2", (2, 0), None).await.unwrap();
+        disk.assert_synced("k2", (2, 0), 1);
+    }
+}
 
-    // A later rotation replaces the recorded epoch.
-    write_luks_root_epoch(&image, 3).unwrap();
-    fs::remove_file(&header).unwrap();
-    let backup = cryptsetup(&["luksHeaderBackup", "--header-backup-file"], &header)
-        .arg(&image)
-        .status()
-        .unwrap();
-    assert!(backup.success());
-    let state = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
-    assert_eq!(state.root_epoch, Some(3));
-    rekey_luks_header_at_epochs(&header, "new", "app-epoch-one", 3, 1).unwrap();
-    let rotated = validate_luks2_headers(fs::File::open(&header).unwrap()).unwrap();
-    assert_eq!(rotated.root_epoch, Some(3));
-    assert_eq!(rotated.app_epoch, 1);
-    assert!(cryptsetup(
-        &["luksHeaderRestore", "--batch-mode", "--header-backup-file"],
-        &header
-    )
-    .arg(&image)
-    .status()
-    .unwrap()
-    .success());
-    assert!(!unlocks("new"));
-    assert!(unlocks("app-epoch-one"));
+#[tokio::test]
+async fn test_luks_epoch_migration_failures_keep_the_old_epochs() {
+    let Some(disk) = TestDisk::new("k1", Some((1, 0))) else {
+        return;
+    };
+    let unchanged = disk.state();
+    // The KMS denies the old epoch.
+    assert!(disk.sync("k2", (2, 0), None).await.is_err());
+    // luksAddKey fails: the KMS answers with a key that does not unlock.
+    assert!(disk.sync("k2", (2, 0), Some((1, 0, "bad"))).await.is_err());
+    // The disk records a root epoch newer than the current one.
+    let err = disk.sync("k0", (0, 3), None).await.unwrap_err();
+    assert!(err.to_string().contains("exceed"), "{err:#}");
+    assert_eq!(disk.state(), unchanged);
+    assert!(disk.unlocks("k1"));
+
+    let app_ahead = TestDisk::new("k1", Some((1, 2))).unwrap();
+    let err = app_ahead.sync("k1", (1, 1), None).await.unwrap_err();
+    assert!(err.to_string().contains("exceed"), "{err:#}");
+
+    // A failed token import is an error.
+    let not_luks = disk.dir.path().join("not-luks");
+    fs::write(&not_luks, [0; 4096]).unwrap();
+    assert!(write_luks_epochs(&not_luks, 0, 2, 0).is_err());
+}
+
+#[tokio::test]
+async fn test_luks_epoch_zero_disk_is_left_untouched() {
+    let Some(disk) = TestDisk::new("k0", None) else {
+        return;
+    };
+    let unchanged = disk.state();
+    disk.sync("k0", (0, 0), None).await.unwrap();
+    assert_eq!(disk.state(), unchanged);
+    assert_eq!(unchanged.token_keyslot, None);
 }
 
 #[test]
