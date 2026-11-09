@@ -17,27 +17,6 @@ import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeabl
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
-    struct OptionalUint256 {
-        bool isSet;
-        uint256 value;
-    }
-
-    struct AuthorizationRequest {
-        AppInfo appInfo;
-        bytes32 operation;
-        OptionalUint256 requestedAppEpoch;
-        OptionalUint256 requestedRootEpoch;
-    }
-
-    struct AuthorizationResult {
-        bool authorized;
-        string rejectionReason;
-        string gatewayAppId;
-        uint256 currentRootEpoch;
-        bytes32 currentRootEpochHash;
-        uint256 currentAppEpoch;
-    }
-
     // Struct for KMS information
     struct KmsInfo {
         bytes k256Pubkey;
@@ -509,30 +488,76 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     /// Authorize an attested identity and return the root epoch from the same state.
     /// The caller selects KMS or app policy; KMS authorization requires the proxy app ID.
     function authorizeKms(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory) {
-        return _checkAuthorization(request, true);
+        return _checkKmsAuthorization(request);
     }
 
-    function authorizeApp(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory) {
-        return _checkAuthorization(request, false);
+    /// Apply the KMS-owned checks, forward the request unchanged to an epoch-aware
+    /// policy, then fill the gateway and root epoch fields.
+    function authorizeApp(AuthorizationRequest calldata request)
+        external
+        view
+        returns (AuthorizationResult memory result)
+    {
+        address appId = request.appInfo.appId;
+        string memory rejection = _checkAppRequest(request);
+        if (bytes(rejection).length == 0) {
+            if (ERC165Checker.supportsInterface(appId, type(IAppEpochAuth).interfaceId)) {
+                // The policy owns the operation scope and the app epoch, so its
+                // decision and epoch come from one call.
+                result = IAppEpochAuth(appId).authorizeApp(request);
+            } else if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value != 0) {
+                result.rejectionReason = "Requested app epoch is not active";
+            } else {
+                // Legacy policies only know app epoch zero.
+                (result.authorized, result.rejectionReason) = IAppAuth(appId).isAppAllowed(request.appInfo);
+            }
+        } else {
+            result.rejectionReason = rejection;
+        }
+        result.gatewayAppId = gatewayAppId;
+        if (_rootEpochs.length != 0) {
+            result.currentRootEpoch = _currentRootEpoch;
+            result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        }
     }
 
-    function _checkAuthorization(
-        AuthorizationRequest calldata request,
-        bool isKms
+    /// KMS-owned app checks; an empty string forwards the request to the app policy.
+    function _checkAppRequest(AuthorizationRequest calldata request) private view returns (string memory) {
+        if (!AuthorizationOperation.isApp(request.operation)) return "Invalid authorization operation";
+        if (_rootEpochs.length == 0) return "Root epoch not registered";
+        if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _currentRootEpoch) {
+            return "Requested root epoch is not active";
+        }
+        uint256 selectedRootEpoch =
+            request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
+        return _checkAppDeployment(request.appInfo, selectedRootEpoch);
+    }
+
+    function _checkAppDeployment(
+        AppInfo calldata bootInfo,
+        uint256 selectedRootEpoch
     )
+        private
+        view
+        returns (string memory)
+    {
+        if (!registeredApps[bootInfo.appId]) return "App not registered";
+        if (!allowedOsImagesAtEpoch(selectedRootEpoch, bootInfo.osImageHash)) return "OS image is not allowed";
+        if (!isContract(bootInfo.appId)) return "App not deployed or invalid address";
+        return "";
+    }
+
+    function _checkKmsAuthorization(AuthorizationRequest calldata request)
         private
         view
         returns (AuthorizationResult memory result)
     {
         result.gatewayAppId = gatewayAppId;
-        result.currentAppEpoch = isKms ? 0 : _appEpoch(request.appInfo.appId);
         if (_rootEpochs.length > 0) {
             result.currentRootEpoch = _currentRootEpoch;
             result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
         }
-        if (!(isKms
-                    ? AuthorizationOperation.isKms(request.operation)
-                    : AuthorizationOperation.isApp(request.operation))) {
+        if (!AuthorizationOperation.isKms(request.operation)) {
             result.rejectionReason = "Invalid authorization operation";
             return result;
         }
@@ -540,37 +565,17 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             result.rejectionReason = "Root epoch not registered";
             return result;
         }
-        uint256 latestAllowedRoot = isKms ? _latestRootEpoch() : _currentRootEpoch;
-        if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > latestAllowedRoot) {
-            result.rejectionReason =
-                isKms ? "Requested root epoch is not registered" : "Requested root epoch is not active";
+        if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _latestRootEpoch()) {
+            result.rejectionReason = "Requested root epoch is not registered";
             return result;
         }
-        if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value > result.currentAppEpoch) {
+        if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value != 0) {
             result.rejectionReason = "Requested app epoch is not active";
             return result;
         }
-        AppInfo calldata appInfo = request.appInfo;
-        AppInfo memory bootInfo = AppInfo({
-            appId: appInfo.appId,
-            composeHash: appInfo.composeHash,
-            instanceId: appInfo.instanceId,
-            deviceId: appInfo.deviceId,
-            mrAggregated: appInfo.mrAggregated,
-            mrSystem: appInfo.mrSystem,
-            osImageHash: appInfo.osImageHash,
-            tcbStatus: appInfo.tcbStatus,
-            advisoryIds: appInfo.advisoryIds
-        });
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
-        uint256 appEpoch = request.requestedAppEpoch.isSet ? request.requestedAppEpoch.value : result.currentAppEpoch;
-        if (isKms) {
-            (result.authorized, result.rejectionReason) = _isKmsAllowed(bootInfo, selectedRootEpoch);
-        } else {
-            (result.authorized, result.rejectionReason) =
-                _isAppAllowed(bootInfo, selectedRootEpoch, appEpoch, request.operation);
-        }
+        (result.authorized, result.rejectionReason) = _isKmsAllowed(request.appInfo, selectedRootEpoch);
     }
 
     // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
@@ -619,39 +624,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (_appEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }
-        return _isAppAllowed(bootInfo, 0, 0, bytes32(0));
-    }
-
-    function _isAppAllowed(
-        AppInfo memory bootInfo,
-        uint256 selectedRootEpoch,
-        uint256 appEpoch,
-        bytes32 operation
-    )
-        private
-        view
-        returns (bool, string memory)
-    {
-        // Check if app is registered
-        if (!registeredApps[bootInfo.appId]) {
-            return (false, "App not registered");
-        }
-        // Check if the OS image is allowed
-        if (!allowedOsImagesAtEpoch(selectedRootEpoch, bootInfo.osImageHash)) {
-            return (false, "OS image is not allowed");
-        }
-
-        // Check if the contract exists at the appId address
-        if (!isContract(bootInfo.appId)) {
-            return (false, "App not deployed or invalid address");
-        }
-
-        if (operation != bytes32(0) && ERC165Checker.supportsInterface(bootInfo.appId, type(IAppEpochAuth).interfaceId))
-        {
-            return IAppEpochAuth(bootInfo.appId).authorizeApp(bootInfo, appEpoch, operation);
-        }
-        if (appEpoch != 0) return (false, "App policy does not support epoch authorization");
-
+        string memory rejection = _checkAppDeployment(bootInfo, 0);
+        if (bytes(rejection).length != 0) return (false, rejection);
         // Call the app's isAppAllowed function. The tuple is forwarded as the
         // function's return value; the slither detector trips on the named
         // return + forward pattern but the value is actually used.

@@ -278,18 +278,20 @@ contract DstackApp is
         return _authorizeApp(bootInfo, 0);
     }
 
-    function authorizeApp(
-        IAppAuth.AppInfo calldata bootInfo,
-        uint256 appEpoch,
-        bytes32 operation
-    )
+    /// Decide the request at the selected app epoch; the KMS fills gateway and root fields.
+    function authorizeApp(AuthorizationRequest calldata request)
         external
         view
         override
-        returns (bool isAllowed, string memory reason)
+        returns (AuthorizationResult memory result)
     {
-        if (!AuthorizationOperation.isApp(operation)) return (false, "Invalid authorization operation");
-        return _authorizeApp(bootInfo, appEpoch);
+        result.currentAppEpoch = currentAppEpoch;
+        if (!AuthorizationOperation.isApp(request.operation)) {
+            result.rejectionReason = "Invalid authorization operation";
+            return result;
+        }
+        uint256 appEpoch = request.requestedAppEpoch.isSet ? request.requestedAppEpoch.value : currentAppEpoch;
+        (result.authorized, result.rejectionReason) = _authorizeApp(request.appInfo, appEpoch);
     }
 
     function _authorizeApp(

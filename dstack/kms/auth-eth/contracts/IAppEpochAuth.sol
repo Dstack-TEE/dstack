@@ -8,16 +8,34 @@ pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
 
+/// An explicitly selected value; `isSet == false` selects the current one.
+struct OptionalUint256 {
+    bool isSet;
+    uint256 value;
+}
+
+struct AuthorizationRequest {
+    IAppAuth.AppInfo appInfo;
+    bytes32 operation;
+    OptionalUint256 requestedAppEpoch;
+    OptionalUint256 requestedRootEpoch;
+}
+
+struct AuthorizationResult {
+    bool authorized;
+    string rejectionReason;
+    string gatewayAppId;
+    uint256 currentRootEpoch;
+    bytes32 currentRootEpochHash;
+    uint256 currentAppEpoch;
+}
+
 /// Optional epoch- and operation-aware policy capability. Legacy policies only authorize app epoch zero.
 interface IAppEpochAuth {
     function currentAppEpoch() external view returns (uint256);
 
-    function authorizeApp(
-        IAppAuth.AppInfo calldata bootInfo,
-        uint256 appEpoch,
-        bytes32 operation
-    )
-        external
-        view
-        returns (bool isAllowed, string memory reason);
+    /// Receives the KMS request unchanged. The policy validates the operation and app
+    /// epoch and fills `authorized`, `rejectionReason` and `currentAppEpoch`; the KMS
+    /// owns `gatewayAppId` and the root epoch fields.
+    function authorizeApp(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory);
 }
