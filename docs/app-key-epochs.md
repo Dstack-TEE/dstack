@@ -68,9 +68,12 @@ The `*AtEpoch` getters read the selected row, including legacy epoch zero.
 `EpochPolicyChanged` events include the row and the resulting permission. Legacy
 bool getters and events describe **epoch zero only**; changing a nonzero row does
 not change its legacy bool or emit a misleading legacy material event.
-Pending root epoch numbers may be popped and reused; policy rows belong to epoch
-numbers, not key hashes. Review or clear a pending row before activating a
-replacement epoch with the same number.
+Root policy rows from epoch 1 belong to the epoch's keys: the contract stores
+them under its chain hash, so a row can be written only once the epoch is
+registered (register, prepare the row, then activate). A popped epoch's rows do
+not carry over: other keys registered under the same number start with empty
+rows, which must be prepared again before activation. Epoch 0 keeps the legacy
+mappings.
 
 ### KMS keyring handover
 

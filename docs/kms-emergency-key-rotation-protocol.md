@@ -55,7 +55,9 @@ making it current are separate: `registerRootEpoch` appends (epoch 0 becomes
 current at once) and `activateRootEpoch(n)` moves the current epoch forward one
 step. `popRootEpoch(n, chainHash)` drops the last epoch while it is still pending, for when
 the nodes holding it are lost before activation; a re-rotation then registers a
-new `n`. A current epoch is never popped. `kmsInfo` follows the current epoch:
+new `n`, whose OS image, KMS MR and device rows start empty because policy rows
+are keyed by the epoch's chain hash. Prepare them again before activating. A
+current epoch is never popped. `kmsInfo` follows the current epoch:
 registering epoch 0 and each activation copy its keys there and clear the legacy
 quote and event log, and `setKmsInfo` is refused once epochs exist. Epoch 0 must be the `kmsInfo` keys
 when those are set; a legacy `kmsInfo` quote and event log are converted off

@@ -277,6 +277,42 @@ contract DstackKmsTest is Test {
         kms.popRootEpoch(1, h1b);
     }
 
+    function test_PolicyRowsBelongToTheRegisteredKeysOfAnEpoch() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        // Epoch 0 keeps the legacy mappings, even before any registration.
+        approveKmsAtEpoch(info, 0);
+        assertTrue(kms.allowedOsImages(info.osImageHash));
+        assertTrue(kms.kmsAllowedAggregatedMrs(info.mrAggregated));
+        assertTrue(kms.kmsAllowedDeviceIds(info.deviceId));
+        // Rows of an unregistered epoch can be neither written nor read.
+        vm.expectRevert("Unknown root epoch");
+        kms.addOsImageHashAtEpoch(1, info.osImageHash);
+        vm.expectRevert("Unknown root epoch");
+        kms.addKmsAggregatedMrAtEpoch(1, info.mrAggregated);
+        vm.expectRevert("Unknown root epoch");
+        kms.addKmsDeviceAtEpoch(1, info.deviceId);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        approveKmsAtEpoch(info, 1);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+
+        (,,, bytes32 h1) = kms.rootEpoch(1);
+        kms.popRootEpoch(1, h1);
+        assertFalse(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
+        // Other keys registered under the same number start with empty rows.
+        kms.registerRootEpoch(ca(0xc1), k256(0xd1), "ipfs://replacement");
+        assertFalse(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
+        assertFalse(kms.kmsAllowedAggregatedMrsAtEpoch(1, info.mrAggregated));
+        assertFalse(kms.kmsAllowedDeviceIdsAtEpoch(1, info.deviceId));
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        approveKmsAtEpoch(info, 1);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        // Epoch 0 is untouched throughout.
+        assertTrue(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        vm.stopPrank();
+    }
+
     function test_SetRootEpochEvidenceUrl() public {
         vm.startPrank(owner);
         vm.expectRevert("Unknown root epoch");

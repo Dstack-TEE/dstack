@@ -550,7 +550,9 @@ for the full procedure; the KMS steps are:
    until it is onboarded again.
    If the nodes holding N are lost before N is activated, drop it with
    `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
-   that imported the dropped N must be onboarded again.
+   that imported the dropped N must be onboarded again. On chain, the policy
+   rows prepared for the dropped N do not apply to the new one; approve them
+   again before activating it.
 6. Boot CVMs on an OS that supports root epochs. At boot they re-key their data
    disk from the epoch recorded in its LUKS header to the current one. If an
    encrypted environment still uses an older epoch, the CVM re-encrypts it during
