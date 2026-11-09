@@ -72,7 +72,7 @@ bun run check
 - `KMS_CONTRACT_ADDR` - KMS contract address (default: 0x0000000000000000000000000000000000000000)
 - `PORT` - server port (default: 3000)
 - `ETH_CHAIN_ID` - reject every decision if the RPC reports a different chain ID (default: unset, no check)
-- `ETH_FINALITY_CONFIRMATIONS` - read policy this many blocks behind the RPC head (default: 0, the head)
+- `ETH_FINALITY_CONFIRMATIONS` - read policy this many blocks behind the RPC head (default: 0, the head). A deeper read survives longer reorgs but delays every policy change by the same depth, including emergency revocations
 
 The Bun server sets `idleTimeout` to 255s (Bun's maximum). Bun's default of 10s closes the socket while a slow `eth_call` is still in flight, which surfaces on the KMS side as `connection closed before message completed`.
 
