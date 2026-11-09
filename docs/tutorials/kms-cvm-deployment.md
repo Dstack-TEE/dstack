@@ -214,7 +214,7 @@ This docker-compose uses a Docker `configs` section to inject a complete `kms.to
 | `[rpc]` | RPC server address and port (9100) |
 | `[rpc.tls]` | TLS certificate paths for HTTPS |
 | `[core.image]` | OS image verification — downloads images from `download.dstack.org` to compute expected TDX measurements |
-| `[core.auth_api]` | Authentication via auth-eth webhook on localhost:9200 |
+| `[core.auth_api]` | Authentication via auth-eth-bun webhook on localhost:9200 |
 | `[core.onboard]` | Bootstrap settings — `auto_bootstrap_domain` is empty so KMS enters onboard mode for manual bootstrap |
 
 > **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. This ensures `bootstrap-info.json` (containing the TDX attestation quote and public keys) is written to disk. You'll need this file later to register the KMS on-chain.
@@ -225,7 +225,7 @@ This docker-compose uses a Docker `configs` section to inject a complete `kms.to
 |----------|----------|-------------|
 | `RUST_LOG` | Yes | KMS log level (`info`, `debug`, etc.) |
 | `KMS_DOMAIN` | Yes | KMS domain name (used by start-kms.sh for reference) |
-| `PORT` | Yes | auth-eth listen port — **must be `9200`** to match kms.toml webhook URL |
+| `PORT` | Yes | auth-eth-bun listen port — **must be `9200`** to match kms.toml webhook URL |
 | `ETH_RPC_URL` | Yes | Ethereum Sepolia RPC endpoint |
 | `KMS_CONTRACT_ADDR` | Yes | Your deployed KMS contract address |
 
@@ -317,7 +317,7 @@ Onboarding
 > **Critical prerequisite:** before bootstrap can succeed, the KMS must already be authorized by your auth backend.
 >
 > - For `dstack-auth`, add the KMS `mrAggregated` to `kms.mrAggregated`
-> - For `auth-eth`, add the KMS `mrAggregated` on-chain with `addKmsAggregatedMr(...)`
+> - For `auth-eth-bun`, add the KMS `mrAggregated` on-chain with `addKmsAggregatedMr(...)`
 >
 > You can fetch the value before bootstrap with:
 >
@@ -478,7 +478,7 @@ The TDX quote can be verified by:
 │  │  │  │     Docker Container              │   │   │   │
 │  │  │  │                                   │   │   │   │
 │  │  │  │  ┌─────────┐   ┌──────────────┐  │   │   │   │
-│  │  │  │  │  KMS    │◄──│  auth-eth    │  │   │   │   │
+│  │  │  │  │  KMS    │◄──│ auth-eth-bun │  │   │   │   │
 │  │  │  │  └────┬────┘   └──────┬───────┘  │   │   │   │
 │  │  │  │       │               │          │   │   │   │
 │  │  │  │       ▼               ▼          │   │   │   │

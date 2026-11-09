@@ -564,7 +564,7 @@ All items should show `[OK]`.
 
 ### Step 10: Verify KMS Can Reach On-Chain State
 
-The KMS auth-eth service queries the blockchain directly (via `eth_call`) for each attestation request — it does not cache state. Verify KMS can see the gateway app registration:
+The KMS auth-eth-bun service queries the blockchain directly (via `eth_call`) for each attestation request — it does not cache state. Verify KMS can see the gateway app registration:
 
 ```bash
 curl -sk https://localhost:9100/prpc/KMS.GetMeta | jq '.gateway_app_id'

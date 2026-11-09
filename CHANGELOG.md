@@ -64,6 +64,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   config path and port are `--config` / `--port` flags instead of
   `AUTH_CONFIG_PATH` / `PORT`, and it binds to `127.0.0.1` by default. See
   `docs/dstack-auth-operations.md#migrating-from-auth-simple`.
+- KMS: the Node `auth-eth` webhook server (`dstack/kms/auth-eth/src`) is
+  removed. Use `auth-eth-bun`, which serves the same webhook API and reads the
+  same environment variables, except that it binds all interfaces and ignores
+  `HOST`, and `PORT` defaults to 3000 from source (8000 in its image). The
+  `DstackKms`/`DstackApp` contracts, Foundry tests and deployment scripts stay
+  in `dstack/kms/auth-eth`. `kms/dstack-app/compose-dev.yaml` now builds
+  auth-eth-bun.
 
 ### Fixed
 

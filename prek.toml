@@ -75,7 +75,7 @@ hooks = [
     # runs from the repository root. Verified to add no findings: across the 95
     # scripts this hook covers, with both flags shellcheck reports nothing at
     # all, where without them it reports the SC1091s and nothing else.
-    { id = "shellcheck", args = ["-x", "-P", "SCRIPTDIR"], exclude = '^(os/yocto/.*|tools/(dev-stack\.sh|vm-runner/.*)|dstack/(cargo-check-all\.sh|guest-agent-simulator/install-systemd\.sh|kms/auth-eth/run-tests\.sh|scripts/(config-fw\.sh|setup-bridge\.sh)|supervisor/tests/(test-cli\.sh|test\.sh)|test-scripts/(get-app-key\.sh|inspect-cert\.sh)|verifier/test\.sh|vmm/(src/setup-user\.sh|src/tests/test-deployment\.sh|ui/scripts/build_proto\.sh|venv\.sh)))$' },
+    { id = "shellcheck", args = ["-x", "-P", "SCRIPTDIR"], exclude = '^(os/yocto/.*|tools/(dev-stack\.sh|vm-runner/.*)|dstack/(cargo-check-all\.sh|guest-agent-simulator/install-systemd\.sh|scripts/(config-fw\.sh|setup-bridge\.sh)|supervisor/tests/(test-cli\.sh|test\.sh)|test-scripts/(get-app-key\.sh|inspect-cert\.sh)|verifier/test\.sh|vmm/(src/setup-user\.sh|src/tests/test-deployment\.sh|ui/scripts/build_proto\.sh|venv\.sh)))$' },
 ]
 
 # --- Conventional commits (used by cliff.toml for changelog) ---

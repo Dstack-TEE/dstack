@@ -41,9 +41,9 @@ The dstack KMS provides:
 | Component | Purpose |
 |-----------|---------|
 | **dstack-kms** | Main KMS binary - generates and stores cryptographic keys |
-| **auth-eth** | Node.js service - verifies app permissions via smart contract |
+| **auth-eth-bun** | Bun webhook service - verifies app permissions via smart contract |
 | **kms.toml** | Configuration file for KMS settings |
-| **auth-eth.env** | Environment file with Ethereum RPC credentials |
+| **auth-eth-bun.env** | Environment file with Ethereum RPC credentials |
 | **Docker image** | Containerized KMS for deployment in a CVM |
 | **docker-compose.yml** | Deployment manifest for VMM |
 
@@ -197,7 +197,7 @@ subject_postfix = ".dstack"
 pccs_url = "https://pccs.phala.network/sgx/certification/v4"
 
 # Authentication API Configuration
-# Uses webhook to query Ethereum contract via auth-eth service
+# Uses webhook to query Ethereum contract via auth-eth-bun service
 [core.auth_api]
 type = "webhook"
 
@@ -223,60 +223,24 @@ EOF
 | `[rpc]` | `port` | RPC server port (9100) |
 | `[core]` | `cert_dir` | Directory for certificates |
 | `[core]` | `pccs_url` | PCCS endpoint for quote verification |
-| `[core.auth_api]` | `url` | Auth-eth webhook service URL |
+| `[core.auth_api]` | `url` | auth-eth-bun webhook service URL |
 | `[core.onboard]` | `enabled` | Enable bootstrap/onboard mode |
 
-## Step 5: Build Auth-ETH Service
+## Step 5: Prepare the auth-eth-bun Service
 
-The KMS requires the auth-eth service to query the Ethereum contract for authorization.
+The KMS requires the [auth-eth-bun](https://github.com/Dstack-TEE/dstack/tree/next/dstack/kms/auth-eth-bun) webhook service to query the Ethereum contract for authorization.
 
-### Install Node.js
-
-The auth-eth service requires Node.js. Install Node.js 20.x from NodeSource:
+auth-eth-bun runs directly from its TypeScript source with [Bun](https://bun.sh), so there is no build step. The Docker image in Step 7 installs Bun and the locked dependencies. Check that the source is present:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
+ls ~/dstack/dstack/kms/auth-eth-bun/
 ```
 
-Verify the installation:
+You should see `index.ts`, `package.json` and `bun.lock`.
 
-```bash
-node --version
-npm --version
-```
+## Step 6: Create auth-eth-bun Configuration
 
-You should see Node.js v20.x and npm v10.x (or later).
-
-### Navigate to auth-eth directory
-
-```bash
-cd ~/dstack/dstack/kms/auth-eth
-```
-
-### Install dependencies
-
-```bash
-npm install
-```
-
-### Build TypeScript
-
-```bash
-npx tsc --project tsconfig.json
-```
-
-### Verify build
-
-```bash
-ls -la dist/src/
-```
-
-You should see `main.js` and other compiled files.
-
-## Step 6: Create Auth-ETH Configuration
-
-Create environment configuration for the auth-eth service.
+Create environment configuration for the auth-eth-bun service.
 
 ### Get contract address from deployment
 
@@ -298,15 +262,17 @@ If you've lost the address, find it on [Sepolia Etherscan](https://sepolia.ether
 ### Create environment file
 
 ```bash
-cat > /etc/kms/auth-eth.env << EOF
-# Auth-ETH Service Configuration
+cat > /etc/kms/auth-eth-bun.env << EOF
+# auth-eth-bun Service Configuration
 
-# Server settings
-HOST=127.0.0.1
+# Server port (must match the kms.toml webhook URL)
 PORT=9200
 
 # Ethereum RPC endpoint (Sepolia testnet)
 ETH_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+
+# Reject decisions if the RPC serves a different chain (Sepolia)
+ETH_CHAIN_ID=11155111
 
 # KMS Authorization Contract Address
 KMS_CONTRACT_ADDR=$KMS_CONTRACT_ADDRESS
@@ -316,18 +282,18 @@ EOF
 ### Secure the file
 
 ```bash
-chmod 600 /etc/kms/auth-eth.env
+chmod 600 /etc/kms/auth-eth-bun.env
 ```
 
 ### Verify configuration
 
 ```bash
-cat /etc/kms/auth-eth.env
+cat /etc/kms/auth-eth-bun.env
 ```
 
 ## Step 7: Create Docker Image for CVM Deployment
 
-KMS runs inside a Confidential Virtual Machine (CVM) to enable TDX attestation. We need to create a Docker image that packages KMS and auth-eth together.
+KMS runs inside a Confidential Virtual Machine (CVM) to enable TDX attestation. We need to create a Docker image that packages KMS and auth-eth-bun together.
 
 ### Create deployment directory
 
@@ -357,7 +323,7 @@ Exclude `node_modules` from the build context to avoid transferring hundreds of 
 
 ```bash
 cat > .dockerignore << 'EOF'
-auth-eth/node_modules
+auth-eth-bun/node_modules
 EOF
 ```
 
@@ -368,6 +334,8 @@ The Dockerfile bakes all configuration into the image for reliable CVM deploymen
 ```bash
 cat > Dockerfile << 'EOF'
 # KMS Docker Image for CVM Deployment
+FROM oven/bun:1.4.4 AS bun
+
 FROM ubuntu:24.04
 
 # Install runtime dependencies
@@ -375,10 +343,8 @@ RUN apt-get update && \
     apt-get install -y ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20.x for auth-eth
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
+# Install Bun for auth-eth-bun
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 # Create directories
 RUN mkdir -p /etc/kms/certs /etc/kms/images /var/run/kms /var/log/kms
@@ -389,12 +355,13 @@ RUN chmod 755 /usr/local/bin/dstack-kms
 
 # Copy configuration files (baked into image)
 COPY kms.toml /etc/kms/kms.toml
-COPY auth-eth.env /etc/kms/auth-eth.env
 COPY sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
 
-# Copy auth-eth service and install dependencies
-COPY auth-eth /opt/auth-eth
-RUN cd /opt/auth-eth && npm install --production
+# Copy auth-eth-bun and install its locked dependencies. Bun loads .env from
+# the working directory; variables set in docker-compose take precedence.
+COPY auth-eth-bun /opt/auth-eth-bun
+COPY auth-eth-bun.env /opt/auth-eth-bun/.env
+RUN cd /opt/auth-eth-bun && bun install --frozen-lockfile --production --ignore-scripts
 
 # Copy startup script
 COPY start-kms.sh /usr/local/bin/start-kms.sh
@@ -408,19 +375,18 @@ EOF
 
 ### Create startup script
 
-The startup script runs both KMS and auth-eth services:
+The startup script runs both KMS and auth-eth-bun services:
 
 ```bash
 cat > start-kms.sh << 'EOF'
 #!/bin/bash
 set -e
 
-# Start auth-eth in background
-cd /opt/auth-eth
-node dist/src/main.js &
-AUTH_ETH_PID=$!
+# Start auth-eth-bun in background
+cd /opt/auth-eth-bun
+bun index.ts &
 
-# Wait for auth-eth to be ready
+# Wait for auth-eth-bun to be ready
 sleep 2
 
 # Start KMS (foreground)
@@ -499,11 +465,11 @@ EOF
 # Copy KMS binary
 cp ~/dstack/dstack/target/release/dstack-kms .
 
-# Copy auth-eth service
-cp -r ~/dstack/dstack/kms/auth-eth auth-eth
+# Copy auth-eth-bun service
+cp -r ~/dstack/dstack/kms/auth-eth-bun auth-eth-bun
 
-# Copy auth-eth environment config
-cp /etc/kms/auth-eth.env .
+# Copy auth-eth-bun environment config
+cp /etc/kms/auth-eth-bun.env .
 ```
 
 ### Build Docker image
@@ -568,7 +534,6 @@ services:
     volumes:
       # Mount config file from local directory
       - ./kms.toml:/etc/kms/kms.toml:ro
-      - ./auth-eth.env:/etc/kms/auth-eth.env:ro
       # Named volume for persistent certificates
       - kms-certs:/etc/kms/certs
     environment:
@@ -590,11 +555,11 @@ ls -la ~/kms-deployment/
 You should have:
 - `Dockerfile` - Container build definition
 - `dstack-kms` - KMS binary
-- `auth-eth/` - Auth-eth service directory
+- `auth-eth-bun/` - auth-eth-bun service directory
 - `start-kms.sh` - Startup script
 - `docker-compose.yml` - Deployment manifest
 - `kms.toml` - KMS configuration
-- `auth-eth.env` - Auth-eth environment
+- `auth-eth-bun.env` - auth-eth-bun environment
 - `sgx_default_qcnl.conf` - QCNL configuration for CVM PCCS access
 
 ## Step 9: Verify Configuration
@@ -608,11 +573,11 @@ The KMS loads configuration using the Rocket framework's Figment library:
 cat /etc/kms/kms.toml | python3 -c "import sys, tomllib; tomllib.load(sys.stdin.buffer); print('Valid TOML')"
 ```
 
-### Check auth-eth configuration
+### Check auth-eth-bun configuration
 
 ```bash
 # Source and verify environment
-source /etc/kms/auth-eth.env
+source /etc/kms/auth-eth-bun.env
 test -n "$ETH_RPC_URL" && echo "ETH_RPC_URL is set"
 echo "KMS_CONTRACT_ADDR: $KMS_CONTRACT_ADDR"
 ```
@@ -620,7 +585,7 @@ echo "KMS_CONTRACT_ADDR: $KMS_CONTRACT_ADDR"
 ### Test RPC connectivity
 
 ```bash
-source /etc/kms/auth-eth.env
+source /etc/kms/auth-eth-bun.env
 curl -s -X POST "$ETH_RPC_URL" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | \
@@ -632,7 +597,7 @@ Expected output shows the current block number.
 ### Verify contract exists
 
 ```bash
-source /etc/kms/auth-eth.env
+source /etc/kms/auth-eth-bun.env
 curl -s -X POST "$ETH_RPC_URL" \
   -H "Content-Type: application/json" \
   -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getCode\",\"params\":[\"$KMS_CONTRACT_ADDR\",\"latest\"],\"id\":1}" | \
@@ -647,7 +612,7 @@ curl -s -X POST "$ETH_RPC_URL" \
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌──────────────┐
-│   TEE App   │────►│     KMS     │────►│   Auth-ETH   │
+│   TEE App   │────►│     KMS     │────►│ auth-eth-bun │
 └─────────────┘     └─────────────┘     └──────────────┘
        │                   │                    │
        │                   │                    ▼
@@ -665,8 +630,8 @@ curl -s -X POST "$ETH_RPC_URL" \
 ### Data Flow
 
 1. **TEE App** requests key from **KMS**
-2. **KMS** calls **Auth-ETH** webhook to verify authorization
-3. **Auth-ETH** queries **Ethereum** smart contract
+2. **KMS** calls **auth-eth-bun** webhook to verify authorization
+3. **auth-eth-bun** queries **Ethereum** smart contract
 4. If authorized, **KMS** returns key to app
 5. **VMM** orchestrates the overall TEE environment
 
@@ -676,7 +641,7 @@ For detailed solutions, see the [KMS Deployment Troubleshooting Guide](/tutorial
 
 - [Build fails with missing dependencies](/tutorial/troubleshooting-kms-deployment#build-fails-with-missing-dependencies)
 - [Configuration file not found](/tutorial/troubleshooting-kms-deployment#configuration-file-not-found)
-- [Auth-eth npm install fails](/tutorial/troubleshooting-kms-deployment#auth-eth-npm-install-fails)
+- [auth-eth-bun install fails](/tutorial/troubleshooting-kms-deployment#auth-eth-bun-install-fails)
 - [Invalid TOML syntax](/tutorial/troubleshooting-kms-deployment#invalid-toml-syntax)
 - [RPC connection failed](/tutorial/troubleshooting-kms-deployment#rpc-connection-failed)
 - [Contract address not set](/tutorial/troubleshooting-kms-deployment#contract-address-not-set)

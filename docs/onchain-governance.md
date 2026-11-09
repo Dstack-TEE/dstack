@@ -16,14 +16,12 @@ On-chain governance adds:
 - Production dstack deployment with KMS and Gateway as CVMs (see [Deployment Guide](./deployment.md))
 - Ethereum wallet with funds on Sepolia testnet (or your target network)
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) installed
-- Node.js and npm installed (for the bootAuth server)
 
 ## Deploy DstackKms Contract
 
 ```bash
 cd dstack/kms/auth-eth
-npm install        # Install Node.js dependencies
-forge install      # Install Foundry dependencies
+forge install      # Install Foundry dependencies (git submodules)
 
 # Deploy contracts (deploys both DstackApp implementation and DstackKms proxy)
 PRIVATE_KEY=<your-key> forge script script/Deploy.s.sol:DeployScript \
@@ -51,11 +49,13 @@ export RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<your-alchemy-key>"
 
 ## Configure KMS for On-Chain Auth
 
-The KMS CVM includes an auth-api service that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
+The KMS CVM includes an auth-api service, [auth-eth-bun](../dstack/kms/auth-eth-bun/), that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
 
 ```bash
 KMS_CONTRACT_ADDR=<your-dstack-kms-contract-address>
 ETH_RPC_URL=<ethereum-rpc-endpoint>
+ETH_CHAIN_ID=<expected-chain-id>   # optional, rejects decisions from another chain
+ETH_BLOCK_TAG=finalized            # latest, safe or finalized (default)
 ```
 
 The auth-api validates boot requests against the smart contract. See [Deployment Guide](./deployment.md#2-deploy-kms-as-cvm) for complete setup instructions.
