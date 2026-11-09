@@ -235,4 +235,46 @@ contract DstackAppEpochSymbolicTest is Test {
 
         assert(allowedBefore == allowedAfter && reasonBefore == reasonAfter);
     }
+
+    function check_AuthorizeApp_MatchesPolicy(
+        uint256 which,
+        uint256 writeEpoch,
+        bytes32 word,
+        bool flag,
+        bool tcbFlag,
+        bytes32 composeHash,
+        bytes32 deviceId,
+        bool upToDate,
+        uint256 epoch,
+        bool getCert
+    )
+        external
+    {
+        vm.prank(OWNER);
+        app.setRequireTcbUpToDate(tcbFlag);
+        _ownerPolicyWrite(which, writeEpoch, word, flag);
+        IAppAuth.AppInfo memory info = _info(composeHash, deviceId, upToDate);
+        bytes32 op = getCert ? AuthorizationOperation.APP_GET_CERT : AuthorizationOperation.APP_GET_KEY;
+        (bool allowed,) = app.authorizeApp(info, epoch, op);
+        bool expected = epoch <= app.currentAppEpoch() && (!tcbFlag || upToDate)
+            && app.allowedComposeHashesAtEpoch(epoch, composeHash)
+            && (app.allowAnyDeviceAtEpoch(epoch) || app.allowedDeviceIdsAtEpoch(epoch, deviceId));
+        assert(allowed == expected);
+    }
+
+    function check_PolicyWrite_TakesEffect(uint256 which, uint256 epoch, bytes32 word, bool flag) external {
+        vm.assume(which < 5 && epoch <= app.currentAppEpoch());
+        (bytes memory data,) = _policyCall(which, epoch, word, flag);
+        vm.prank(OWNER);
+        (bool ok,) = address(app).call(data);
+        if (!ok) {
+            assert(word == bytes32(0) && (which == 0 || which == 2));
+            return;
+        }
+        if (which == 0) assert(app.allowedComposeHashesAtEpoch(epoch, word));
+        if (which == 1) assert(!app.allowedComposeHashesAtEpoch(epoch, word));
+        if (which == 2) assert(app.allowedDeviceIdsAtEpoch(epoch, word));
+        if (which == 3) assert(!app.allowedDeviceIdsAtEpoch(epoch, word));
+        if (which == 4) assert(app.allowAnyDeviceAtEpoch(epoch) == flag);
+    }
 }

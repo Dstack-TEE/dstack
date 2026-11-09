@@ -136,8 +136,15 @@ and admits one app per epoch, then one symbolic owner write where noted):
       one epoch, through the explicit or the current-epoch setters, never
       changes an authorization decision at another epoch, including epoch
       0's legacy fields.
+- [x] `check_AuthorizeApp_MatchesPolicy` — for both app operations,
+      `authorizeApp` allows exactly when the epoch is active, the TCB
+      requirement holds, and that epoch admits the compose hash and device.
+- [x] `check_PolicyWrite_TakesEffect` — each `*AtEpoch` setter on an active
+      epoch either sets the value it was given or reverts on a zero ID.
 
-Mutation-tested: dropping a setter's epoch bound, aliasing epoch 1 onto the
+Mutation-tested: requiring both the any-device flag and a listed device,
+ignoring the value of a per-epoch `allowAnyDevice` write, dropping a setter's
+epoch bound, aliasing epoch 1 onto the
 legacy fields, deciding `isAppAllowed` at epoch 0, a permissionless
 `advanceAppEpoch` and dropping its stale-transaction guard each produce a
 counterexample. Dropping the inactive-epoch check in `_authorizeApp` does
