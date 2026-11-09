@@ -5,6 +5,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
+import { HTTPException } from 'hono/http-exception';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { createPublicClient, http, keccak256, toBytes, type Address, type Hex } from 'viem';
@@ -107,12 +108,14 @@ const AUTHORIZATION_ABI = {
     name: 'result',
     type: 'tuple',
     components: [
-      { name: 'isAllowed', type: 'bool' },
+      { name: 'authorized', type: 'bool' },
       { name: 'rejectionReason', type: 'string' },
       { name: 'gatewayAppId', type: 'string' },
       { name: 'currentRootEpoch', type: 'uint256' },
       { name: 'currentRootEpochHash', type: 'bytes32' },
       { name: 'currentAppEpoch', type: 'uint256' },
+      { name: 'latestRootEpoch', type: 'uint256' },
+      { name: 'latestRootEpochHash', type: 'bytes32' },
     ],
   }],
 } as const;
@@ -263,7 +266,9 @@ class EthereumBackend {
     }
     const currentAppEpoch = Number(result.currentAppEpoch);
     if (!Number.isSafeInteger(currentAppEpoch)) throw new Error('current app epoch exceeds the supported range');
-    return { ...result, currentRootEpoch, currentAppEpoch };
+    const latestRootEpoch = Number(result.latestRootEpoch);
+    if (!Number.isSafeInteger(latestRootEpoch)) throw new Error('latest root epoch exceeds the supported range');
+    return { ...result, currentRootEpoch, currentAppEpoch, latestRootEpoch };
   }
 
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
@@ -391,6 +396,16 @@ const publicRpcEndpoint = (value: string): string => {
 
 const backendUnavailable = 'authorization backend unavailable';
 const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
+const invalidAuthorization = {
+  authorized: false,
+  rejectionReason: 'invalid authorization request',
+  gatewayAppId: '',
+  currentRootEpoch: 0,
+  currentRootEpochHash: '0x' + '00'.repeat(32),
+  currentAppEpoch: 0,
+  latestRootEpoch: 0,
+  latestRootEpochHash: '0x' + '00'.repeat(32),
+};
 
 // The schema caps a valid BootInfo well under this (advisoryIds alone at
 // 128 x 256 chars is 32 KiB); the limit stops an oversized body from being
@@ -445,10 +460,24 @@ app.get('/app/:appId', async (c) => {
   }
 });
 
+// Malformed JSON is rejected before the validator hook runs; keep the
+// AuthorizationResult shape for it on the authorization routes.
+const AUTHORIZATION_PATHS = new Set(['/authorizeKms', '/authorizeApp']);
+app.onError((error, c) => {
+  if (error instanceof HTTPException) {
+    if (error.status === 400 && AUTHORIZATION_PATHS.has(c.req.path)) return c.json(invalidAuthorization, 400);
+    return error.getResponse();
+  }
+  console.error(error);
+  return c.text('Internal Server Error', 500);
+});
+
 for (const method of ['authorizeKms', 'authorizeApp'] as const) {
   app.post(`/${method}`,
-    bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES }),
-    zValidator('json', AuthorizationRequestSchema),
+    bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES, onError: (c) => c.json(invalidAuthorization, 413) }),
+    zValidator('json', AuthorizationRequestSchema, (result, c) => {
+      if (!result.success) return c.json(invalidAuthorization, 400);
+    }),
     async (c) => {
       try {
         return c.json(await ethereum.checkAuthorization(c.req.valid('json'), method));

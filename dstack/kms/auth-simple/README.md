@@ -107,7 +107,7 @@ raw NitroTPM evidence by itself.
 | `apps.<appId>.composeHashes` | No | Allowed compose hashes for this app |
 | `apps.<appId>.devices` | No | Allowed device IDs for this app. Empty denies all unless `allowAnyDevice` is true. |
 | `apps.<appId>.allowAnyDevice` | No | If true, skip device ID check for this app |
-| `rootEpochs` | No | KMS root public keys of each root epoch, indexed by epoch, `[{"caPubkey": "0x...", "k256Pubkey": "0x..."}]`. Epoch 0 is the original roots. Append only. The info endpoint reports the current epoch as `rootEpoch` with its chain hash as `rootEpochHash`; boot checks from a KMS serving another epoch are denied. |
+| `rootEpochs` | No | KMS root public keys of each root epoch, indexed by epoch, `[{"caPubkey": "0x...", "k256Pubkey": "0x..."}]`. Epoch 0 is the original roots. Append only. The info endpoint reports the current epoch as `rootEpoch` with its chain hash as `rootEpochHash`; boot checks from a KMS serving another epoch are denied. The last entry is reported as `latestRootEpoch`; entries beyond `currentRootEpoch` are pending activation. |
 | `currentRootEpoch` | No | Root epoch KMS instances serve (default 0). Raise it only once every KMS node holds that epoch. |
 
 A missing or invalid config fails closed: `/`, `/app/:appId` and the `authorize*` endpoints return an error status and `/bootAuth/*` denies. `/app/:appId` returns 404 for an app that is not configured.
@@ -258,8 +258,9 @@ bun run test:run
 
 ### Authorization endpoints
 
-`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
-`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including `authorized`,
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, `currentAppEpoch`,
+`latestRootEpoch`, and `latestRootEpochHash` (the latest registered epoch, which may be pending activation).
 The selected endpoint determines the policy; the backend checks that the verified
 `appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
 omission uses the current app epoch, explicit zero selects epoch zero, and future

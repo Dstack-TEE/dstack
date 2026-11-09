@@ -39,7 +39,7 @@ use crate::{
         build_boot_info_for_attestation, root_chain_hashes, servable_epoch,
         upgrade_authority::{
             app_attest, dstack_client, ensure_kms_allowed, ensure_self_kms_allowed, pad64,
-            RootEpochRegistry,
+            RootEpochRegistration, RootEpochRegistry,
         },
     },
 };
@@ -562,8 +562,8 @@ mod tests {
         }
     }
 
-    /// The registry a correct handover of `res` would be checked against.
-    fn current_of(res: &KmsKeyResponse, epoch: u32) -> RootEpochRegistry {
+    /// Epoch `epoch` of `res` as governance would register it.
+    fn epoch_of(res: &KmsKeyResponse, epoch: u32) -> CurrentRootEpoch {
         let roots: Vec<_> = res
             .keys
             .iter()
@@ -581,19 +581,43 @@ mod tests {
         let hashes = dstack_types::root_epoch::chain_hashes(
             roots.iter().map(|(ca, k256)| (&ca[..], &k256[..])),
         );
-        RootEpochRegistry::Current(CurrentRootEpoch {
+        CurrentRootEpoch {
             epoch,
             chain_hash: hashes[epoch as usize],
-        })
+        }
+    }
+
+    /// The registry a correct handover of `res` would be checked against.
+    fn current_of(res: &KmsKeyResponse, epoch: u32) -> RootEpochRegistry {
+        RootEpochRegistry::Current(epoch_of(res, epoch))
+    }
+
+    /// Governance with `current` active and every epoch `res` holds registered.
+    fn registered(res: &KmsKeyResponse, current: u32) -> RootEpochRegistration {
+        registered_up_to(res, current, res.keys.len() as u32 - 1)
+    }
+
+    fn registered_up_to(res: &KmsKeyResponse, current: u32, latest: u32) -> RootEpochRegistration {
+        RootEpochRegistration {
+            registry: current_of(res, current),
+            latest: Some(epoch_of(res, latest)),
+        }
+    }
+
+    fn unregistered(registry: RootEpochRegistry) -> RootEpochRegistration {
+        RootEpochRegistration {
+            registry,
+            latest: None,
+        }
     }
 
     async fn onboard(
         cfg: &KmsConfig,
         res: KmsKeyResponse,
         rotate: bool,
-        registry: RootEpochRegistry,
+        registration: RootEpochRegistration,
     ) -> Result<Keys> {
-        Keys::from_key_response(cfg, res, "kms.example.com", rotate, registry).await
+        Keys::from_key_response(cfg, res, "kms.example.com", rotate, registration).await
     }
 
     #[test]
@@ -632,7 +656,7 @@ mod tests {
         let res = handover(3);
         let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
 
-        let keys = onboard(&cfg, res, false, RootEpochRegistry::Unchecked)
+        let keys = onboard(&cfg, res, false, unregistered(RootEpochRegistry::Unchecked))
             .await
             .unwrap();
         keys.store(&cfg).unwrap();
@@ -654,10 +678,10 @@ mod tests {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(cert_dir.path());
         let res = handover(2);
-        let registry = current_of(&res, 1);
+        let registration = registered(&res, 1);
         let sent: Vec<_> = res.keys.iter().map(|k| k.k256_key.clone()).collect();
 
-        let keys = onboard(&cfg, res, true, registry).await.unwrap();
+        let keys = onboard(&cfg, res, true, registration).await.unwrap();
         assert_eq!(keys.epoch, 2);
         keys.store(&cfg).unwrap();
 
@@ -677,37 +701,122 @@ mod tests {
         let other = handover(2);
 
         // A join may hold an epoch pending activation beyond the current one.
-        assert!(onboard(&cfg, res.clone(), false, current_of(&res, 1))
+        assert!(onboard(&cfg, res.clone(), false, registered(&res, 1))
             .await
             .is_ok());
-        assert!(onboard(&cfg, res.clone(), false, current_of(&res, 0))
+        assert!(onboard(&cfg, res.clone(), false, registered(&res, 0))
             .await
             .is_ok());
         // A rotation must start at the current epoch.
-        assert!(onboard(&cfg, res.clone(), true, current_of(&res, 0))
+        assert!(onboard(&cfg, res.clone(), true, registered(&res, 0))
             .await
             .is_err());
         // A keyring other than the registered one.
-        assert!(onboard(&cfg, res.clone(), false, current_of(&other, 1))
+        assert!(onboard(&cfg, res.clone(), false, registered(&other, 1))
             .await
             .is_err());
-        assert!(onboard(&cfg, res.clone(), true, current_of(&other, 1))
+        assert!(onboard(&cfg, res.clone(), true, registered(&other, 1))
             .await
             .is_err());
         // A source behind the current epoch.
-        assert!(onboard(&cfg, handover(1), false, current_of(&res, 1))
+        assert!(onboard(&cfg, handover(1), false, registered(&res, 1))
             .await
             .is_err());
         // A missing epoch shifts the rest, so the chain hash no longer matches.
         let mut gap = res.clone();
         gap.keys.remove(0);
-        assert!(onboard(&cfg, gap, false, current_of(&res, 0))
+        assert!(onboard(&cfg, gap, false, registered(&res, 0))
             .await
             .is_err());
+        assert!(onboard(
+            &cfg,
+            handover(0),
+            false,
+            unregistered(RootEpochRegistry::Unchecked)
+        )
+        .await
+        .is_err());
+    }
+
+    #[rocket::async_test]
+    async fn onboarding_binds_the_pending_tail_to_the_latest_registered_epoch() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let res = handover(3);
+        // A registered epoch pending activation imports before activation.
+        let keys = onboard(&cfg, res.clone(), false, registered(&res, 1))
+            .await
+            .unwrap();
+        assert_eq!(keys.epoch, 2);
+        // A tail nobody registered is refused.
+        let error = onboard(&cfg, res.clone(), false, registered_up_to(&res, 1, 1))
+            .await
+            .err()
+            .unwrap();
         assert!(
-            onboard(&cfg, handover(0), false, RootEpochRegistry::Unchecked)
+            format!("{error:#}").contains("source KMS holds unregistered root epochs"),
+            "{error:#}"
+        );
+        // A tail other than the registered one: same current epoch, different epoch 2.
+        let mut forked = handover(3);
+        forked.keys[..2].clone_from_slice(&res.keys[..2]);
+        let error = onboard(&cfg, forked, false, registered(&res, 1))
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            format!("{error:#}").contains("are not the registered ones"),
+            "{error:#}"
+        );
+        // A source behind the latest registered epoch still serves the current one.
+        let mut behind = res.clone();
+        behind.keys.pop();
+        assert!(
+            onboard(&cfg, behind.clone(), false, registered_up_to(&res, 1, 2))
                 .await
-                .is_err()
+                .is_ok()
+        );
+        // But not behind the current epoch.
+        assert!(onboard(&cfg, behind, false, registered_up_to(&res, 2, 2))
+            .await
+            .is_err());
+        // A tail past the current epoch that stops short of the latest one cannot be
+        // checked, so a forked epoch 2 is refused while epoch 3 is registered.
+        let longer = handover(4);
+        let mut partial = handover(3);
+        partial.keys[..2].clone_from_slice(&longer.keys[..2]);
+        let error = onboard(&cfg, partial, false, registered_up_to(&longer, 1, 3))
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            format!("{error:#}").contains("only epoch 3 can be checked"),
+            "{error:#}"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn rotation_refuses_a_registered_epoch_pending_activation() {
+        let cert_dir = tempfile::tempdir().unwrap();
+        let cfg = auto_bootstrap_config(cert_dir.path());
+        let res = handover(3);
+        let mut current = res.clone();
+        current.keys.pop();
+        // The locally generated epoch would collide with the registered epoch 2.
+        let error = onboard(&cfg, current.clone(), true, registered_up_to(&res, 1, 2))
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            format!("{error:#}").contains("activate it before rotating"),
+            "{error:#}"
+        );
+        assert_eq!(
+            onboard(&cfg, current.clone(), true, registered(&current, 1))
+                .await
+                .unwrap()
+                .epoch,
+            2
         );
     }
 
@@ -715,15 +824,30 @@ mod tests {
     async fn an_unregistered_deployment_can_only_join_at_epoch_0() {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(cert_dir.path());
-        assert!(onboard(&cfg, handover(1), false, RootEpochRegistry::Empty)
-            .await
-            .is_ok());
-        assert!(onboard(&cfg, handover(2), false, RootEpochRegistry::Empty)
-            .await
-            .is_err());
-        assert!(onboard(&cfg, handover(1), true, RootEpochRegistry::Empty)
-            .await
-            .is_err());
+        assert!(onboard(
+            &cfg,
+            handover(1),
+            false,
+            unregistered(RootEpochRegistry::Empty)
+        )
+        .await
+        .is_ok());
+        assert!(onboard(
+            &cfg,
+            handover(2),
+            false,
+            unregistered(RootEpochRegistry::Empty)
+        )
+        .await
+        .is_err());
+        assert!(onboard(
+            &cfg,
+            handover(1),
+            true,
+            unregistered(RootEpochRegistry::Empty)
+        )
+        .await
+        .is_err());
     }
 
     /// A stored keyring at `latest`, loaded back.
@@ -731,11 +855,16 @@ mod tests {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(cert_dir.path());
         let res = handover(epochs);
-        onboard(&cfg, res.clone(), false, RootEpochRegistry::Unchecked)
-            .await
-            .unwrap()
-            .store(&cfg)
-            .unwrap();
+        onboard(
+            &cfg,
+            res.clone(),
+            false,
+            unregistered(RootEpochRegistry::Unchecked),
+        )
+        .await
+        .unwrap()
+        .store(&cfg)
+        .unwrap();
         (cert_dir, cfg, res)
     }
 
@@ -1002,10 +1131,10 @@ impl Keys {
             .checked_sub(1)
             .context("source KMS handed over no keys")?;
         let highest = u32::try_from(highest).context("too many root epochs")?;
-        let registry = ensure_kms_allowed(cfg, &source_attestation()?, highest)
+        let registration = ensure_kms_allowed(cfg, &source_attestation()?, highest)
             .await
             .context("source KMS is not allowed for onboarding")?;
-        Self::from_key_response(cfg, keys_res, domain, rotate, registry).await
+        Self::from_key_response(cfg, keys_res, domain, rotate, registration).await
     }
 
     /// Import the source's whole keyring, epochs 0..=latest; a rotation then
@@ -1015,7 +1144,7 @@ impl Keys {
         keys_res: KmsKeyResponse,
         domain: &str,
         rotate: bool,
-        registry: RootEpochRegistry,
+        registration: RootEpochRegistration,
     ) -> Result<Self> {
         let latest = keys_res
             .keys
@@ -1032,7 +1161,7 @@ impl Keys {
                 Ok((ca_key, k256_key))
             })
             .collect::<Result<Vec<_>>>()?;
-        ensure_handover_registered(&roots, registry, rotate)?;
+        ensure_handover_registered(&roots, registration, rotate)?;
         let epoch = if rotate { latest + 1 } else { latest };
         let (ca_key, k256_key) = if rotate {
             (
@@ -1205,23 +1334,55 @@ pub(crate) async fn bootstrap_keys(cfg: &KmsConfig, verifier: &AttestationVerifi
 }
 
 /// Check the handed-over roots against governance: they must include the
-/// current epoch with a matching chain hash. A rotation must start from the
-/// current epoch with nothing pending activation, or it would collide with the
-/// next registered epoch.
+/// current epoch with a matching chain hash, and nothing beyond the latest
+/// registered epoch. When the source holds the latest registered epoch, its
+/// cumulative chain hash binds the pending tail as well. A rotation must start
+/// from the current epoch with nothing pending activation, or it would collide
+/// with the next registered epoch.
 fn ensure_handover_registered(
     roots: &[(KeyPair, SigningKey)],
-    registry: RootEpochRegistry,
+    registration: RootEpochRegistration,
     rotate: bool,
 ) -> Result<()> {
+    let RootEpochRegistration { registry, latest } = registration;
     if rotate && registry == RootEpochRegistry::Empty {
         bail!("register root epoch 0 before rotating");
     }
     let hashes = root_chain_hashes(roots.iter().map(|(ca, k256)| (ca, k256)));
     let current = servable_epoch(&hashes, registry)?;
-    let latest = roots.len() as u32 - 1;
-    if rotate && current != latest {
+    let held = roots.len() as u32 - 1;
+    if let Some(latest) = latest {
+        if held > latest.epoch {
+            bail!(
+                "source KMS holds unregistered root epochs (up to {held}, registered up to {}); \
+                 register them first or onboard from another source",
+                latest.epoch
+            );
+        }
+        // Only the latest registered epoch's hash binds epochs past the current one.
+        if held > current && held < latest.epoch {
+            bail!(
+                "source KMS holds root epochs up to {held}, past the current {current}, but only \
+                 epoch {} can be checked; onboard from a source holding every registered epoch",
+                latest.epoch
+            );
+        }
+        if held == latest.epoch && hashes[held as usize] != latest.chain_hash {
+            bail!(
+                "the source root keys up to epoch {held} are not the registered ones; \
+                 onboard from another source"
+            );
+        }
+        if rotate && latest.epoch != current {
+            bail!(
+                "root epoch {} is registered but {current} is current; activate it before rotating",
+                latest.epoch
+            );
+        }
+    }
+    if rotate && current != held {
         bail!(
-            "the source holds root epochs up to {latest}, but {current} is current; rotate from \
+            "the source holds root epochs up to {held}, but {current} is current; rotate from \
              a source at the current epoch with no epoch pending activation"
         );
     }

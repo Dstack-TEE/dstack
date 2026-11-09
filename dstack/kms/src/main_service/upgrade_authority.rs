@@ -90,29 +90,37 @@ pub(crate) struct BootResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthorizationResult {
-    pub is_allowed: bool,
+    pub authorized: bool,
     pub rejection_reason: String,
     pub gateway_app_id: String,
     pub current_root_epoch: u32,
     pub current_app_epoch: u32,
     pub current_root_epoch_hash: String,
+    pub latest_root_epoch: u32,
+    pub latest_root_epoch_hash: String,
 }
 
 impl AuthorizationResult {
     pub fn current_root(&self) -> Result<Option<CurrentRootEpoch>> {
-        let chain_hash: [u8; 32] =
-            hex::decode(self.current_root_epoch_hash.trim_start_matches("0x"))
-                .ok()
-                .and_then(|hash| hash.try_into().ok())
-                .context("invalid authorization root epoch chain hash")?;
-        if chain_hash == [0; 32] {
-            return Ok(None);
-        }
-        Ok(Some(CurrentRootEpoch {
-            epoch: self.current_root_epoch,
-            chain_hash,
-        }))
+        root_epoch(self.current_root_epoch, &self.current_root_epoch_hash)
     }
+
+    /// The latest registered root epoch, which may be pending activation.
+    pub fn latest_root(&self) -> Result<Option<CurrentRootEpoch>> {
+        root_epoch(self.latest_root_epoch, &self.latest_root_epoch_hash)
+    }
+}
+
+/// A zero chain hash means no epoch is registered.
+fn root_epoch(epoch: u32, hash: &str) -> Result<Option<CurrentRootEpoch>> {
+    let chain_hash: [u8; 32] = hex::decode(hash.trim_start_matches("0x"))
+        .ok()
+        .and_then(|hash| hash.try_into().ok())
+        .context("invalid authorization root epoch chain hash")?;
+    if chain_hash == [0; 32] {
+        return Ok(None);
+    }
+    Ok(Some(CurrentRootEpoch { epoch, chain_hash }))
 }
 
 /// The root epoch fields: the KMS sends the epoch it serves in boot checks,
@@ -154,8 +162,8 @@ impl RootEpochFields {
     }
 }
 
-/// The root epoch governance made current, with the chain hash committing to
-/// the root public keys of epochs 0..=epoch.
+/// A root epoch governance registered, with the chain hash committing to the
+/// root public keys of epochs 0..=epoch. Usually the current epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct CurrentRootEpoch {
     pub epoch: u32,
@@ -170,6 +178,16 @@ pub(crate) enum RootEpochRegistry {
     /// No epoch is registered, or the backend predates root epochs.
     Empty,
     Current(CurrentRootEpoch),
+}
+
+/// What governance says about root epochs at a key handover: the current epoch
+/// and the latest registered one. Chain hashes are cumulative, so the latest
+/// binds every registered epoch, including those pending activation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RootEpochRegistration {
+    pub registry: RootEpochRegistry,
+    /// Absent for the dev backend and when nothing is registered.
+    pub latest: Option<CurrentRootEpoch>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -317,12 +335,14 @@ impl AuthApi {
         ensure_identity_widths(app_info)?;
         match self {
             AuthApi::Dev { dev } => Ok(AuthorizationResult {
-                is_allowed: true,
+                authorized: true,
                 rejection_reason: String::new(),
                 gateway_app_id: dev.gateway_app_id.clone(),
                 current_root_epoch: 0,
                 current_app_epoch: 0,
                 current_root_epoch_hash: hex::encode([0; 32]),
+                latest_root_epoch: 0,
+                latest_root_epoch_hash: hex::encode([0; 32]),
             }),
             AuthApi::Webhook { webhook } => {
                 let url = url_join(&webhook.url, method);
@@ -469,7 +489,7 @@ pub(crate) async fn ensure_self_kms_allowed(
         .authorize_kms(&boot_info, Operation::KmsBootstrap, None)
         .await
         .context("failed to call KMS bootstrap authorization")?;
-    if !response.is_allowed {
+    if !response.authorized {
         bail!("boot denied: {}", response.rejection_reason);
     }
     Ok(())
@@ -489,7 +509,7 @@ pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
     root_epoch: u32,
-) -> Result<RootEpochRegistry> {
+) -> Result<RootEpochRegistration> {
     let boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
     ensure_source_os_image(&boot_info)?;
@@ -498,16 +518,26 @@ pub(crate) async fn ensure_kms_allowed(
         .authorize_kms(&boot_info, Operation::KmsExportKeys, Some(root_epoch))
         .await
         .context("failed to authorize source KMS key export")?;
-    if !response.is_allowed {
+    if !response.authorized {
         bail!("boot denied: {}", response.rejection_reason);
     }
     if cfg.auth_api.is_dev() {
-        return Ok(RootEpochRegistry::Unchecked);
+        return Ok(RootEpochRegistration {
+            registry: RootEpochRegistry::Unchecked,
+            latest: None,
+        });
     }
     let current = response
         .current_root()?
         .context("root epoch not registered")?;
-    Ok(RootEpochRegistry::Current(current))
+    let latest = response
+        .latest_root()?
+        .filter(|latest| latest.epoch >= current.epoch)
+        .context("the auth API reports no latest root epoch at or after the current one")?;
+    Ok(RootEpochRegistration {
+        registry: RootEpochRegistry::Current(current),
+        latest: Some(latest),
+    })
 }
 
 #[cfg(test)]
@@ -773,7 +803,7 @@ pub(crate) mod tests {
             Operation::AppGetKey,
             Operation::AppGetCert,
         ];
-        let response = r#"{"isAllowed":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
+        let response = r#"{"authorized":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000","latestRootEpoch":0,"latestRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
         let (url, server) = serve(vec![response; operations.len()]);
         let auth = webhook(url);
         for operation in operations {
@@ -823,8 +853,10 @@ pub(crate) mod tests {
     async fn authorization_returns_the_epoch_with_each_decision() {
         let response = |allowed: bool, epoch: u32| {
             format!(
-                r#"{{"isAllowed":{allowed},"rejectionReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentAppEpoch":0,"currentRootEpochHash":"0x{}"}}"#,
-                "11".repeat(32)
+                r#"{{"authorized":{allowed},"rejectionReason":"","gatewayAppId":"gw", "currentRootEpoch":{epoch},"currentAppEpoch":0,"currentRootEpochHash":"0x{}","latestRootEpoch":{latest},"latestRootEpochHash":"0x{}"}}"#,
+                "11".repeat(32),
+                "22".repeat(32),
+                latest = epoch + 1,
             )
         };
         let (url, server) = serve(vec![
@@ -844,10 +876,12 @@ pub(crate) mod tests {
             .authorize_app(&info, Operation::AppGetKey, None, None)
             .await
             .unwrap();
-        assert!(first.is_allowed);
-        assert!(!second.is_allowed);
+        assert!(first.authorized);
+        assert!(!second.authorized);
         assert_eq!(first.current_root().unwrap().unwrap().epoch, 0);
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
+        let latest = second.latest_root().unwrap().unwrap();
+        assert_eq!((latest.epoch, latest.chain_hash), (2, [0x22; 32]));
         auth.authorize_app(&info, Operation::AppGetKey, Some(0), Some(0))
             .await
             .unwrap();
@@ -859,7 +893,7 @@ pub(crate) mod tests {
                 .authorize_kms(&info, Operation::KmsImportKeys, Some(2))
                 .await
                 .unwrap()
-                .is_allowed
+                .authorized
         );
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 5);
@@ -876,6 +910,26 @@ pub(crate) mod tests {
         assert_eq!(requests[2].1["requestedAppEpoch"], 0);
         assert!(requests[0].1.get("requestedRootEpoch").is_none());
         assert_eq!(requests[2].1["requestedRootEpoch"], 0);
+    }
+
+    #[test]
+    fn authorization_requires_the_latest_root_epoch_fields() {
+        let base = serde_json::json!({
+            "authorized": true, "rejectionReason": "", "gatewayAppId": "",
+            "currentRootEpoch": 0, "currentAppEpoch": 0,
+            "currentRootEpochHash": format!("0x{}", "11".repeat(32)),
+        });
+        assert!(serde_json::from_value::<AuthorizationResult>(base.clone()).is_err());
+        let mut unregistered = base.clone();
+        unregistered["latestRootEpoch"] = 0.into();
+        unregistered["latestRootEpochHash"] = format!("0x{}", "00".repeat(32)).into();
+        let result: AuthorizationResult = serde_json::from_value(unregistered).unwrap();
+        assert_eq!(result.latest_root().unwrap(), None);
+        let mut invalid = base;
+        invalid["latestRootEpoch"] = 0.into();
+        invalid["latestRootEpochHash"] = "0x11".into();
+        let result: AuthorizationResult = serde_json::from_value(invalid).unwrap();
+        assert!(result.latest_root().is_err());
     }
 
     #[rocket::async_test]

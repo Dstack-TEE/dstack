@@ -243,14 +243,20 @@ outbound workers, until readiness.
 
 ## 7. Full-history KMS onboarding
 
-Onboarding imports the source's whole keyring, 0..S, and checks it by the
-current epoch's chain hash; it never selects a subset. With `rotate`, it then
-generates epoch S+1.
+Onboarding imports the source's whole keyring, 0..S, and checks it against the
+recipient's `authorizeKms` result: the current epoch's chain hash, and the latest
+registered epoch L (`latestRootEpoch`, `latestRootEpochHash`). It never selects a
+subset. A source holding epochs beyond L is refused ("source KMS holds
+unregistered root epochs"). When S = L, the chain hash of L must match; chain
+hashes are cumulative, so this binds the whole pending tail, not only the current
+prefix. A source holding exactly the current epoch still joins; one stopping
+between the current epoch and L is refused, since its tail cannot be checked. With
+`rotate`, it then generates epoch S+1.
 
 | Mode | Source requirement | Result |
 | --- | --- | --- |
-| Ordinary join | Holds the current epoch, possibly one pending activation | Keyring 0..S |
-| Rotation join (`rotate=true`) | Holds exactly up to the current epoch | Keyring 0..S plus fresh epoch S+1 and attestation evidence |
+| Ordinary join | Holds the current epoch and nothing unregistered; a registered tail pending activation must match the latest chain hash | Keyring 0..S |
+| Rotation join (`rotate=true`) | Holds exactly up to the current epoch, with no epoch registered beyond it | Keyring 0..S plus fresh epoch S+1 and attestation evidence |
 
 Every handover requires the recipient's KMS attestation: the source checks the
 attested RA-TLS client certificate on both `Admin.GetKmsKey` and the public
@@ -276,7 +282,9 @@ recomputes the report data from the published keys; the cluster keeps
 serving N-1. After the other nodes onboard and hold N, the owner activates N and
 every KMS restarts onto it. An old-root signature is not authorization.
 Competing generators cannot both be registered as N; a losing node's keyring no
-longer reproduces the chain hash, so it never serves and must onboard again.
+longer reproduces the chain hash, so it never serves and must onboard again. It
+also cannot hand its N over: joining from it fails the latest-epoch check while N
+is pending, so the wrong tail does not reach later joiners.
 
 Every authorization request (app checks and the KMS self check that gates all
 RPCs) carries the epoch the KMS serves, so a backend refuses a stale or forked

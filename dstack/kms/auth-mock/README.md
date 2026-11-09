@@ -73,6 +73,7 @@ bun run check
 - `MOCK_CHAIN_ID` - mock blockchain chain ID (default: 1337)
 - `MOCK_APP_IMPLEMENTATION` - mock app implementation address (default: 0xmockapp9876543210987654321098765432109)
 - `MOCK_ROOT_EPOCH`, `MOCK_ROOT_EPOCH_HASH` - current KMS root epoch and its chain hash, reported by the info endpoint as `rootEpoch`/`rootEpochHash`; boot checks from a KMS serving another epoch are denied (default: none registered, only epoch 0 serves)
+- `MOCK_LATEST_ROOT_EPOCH`, `MOCK_LATEST_ROOT_EPOCH_HASH` - latest registered root epoch and its chain hash, returned by `/authorizeKms` and `/authorizeApp` as `latestRootEpoch`/`latestRootEpochHash`; set both to simulate an epoch pending activation (default: the current epoch)
 
 ## API endpoints
 
@@ -171,8 +172,9 @@ the API remains identical, so no client code changes are needed.
 
 ### Authorization endpoints
 
-`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including
-`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, and `currentAppEpoch`.
+`POST /authorizeKms` and `POST /authorizeApp` return `AuthorizationResult`, including `authorized`,
+`rejectionReason`, `gatewayAppId`, `currentRootEpoch`, `currentRootEpochHash`, `currentAppEpoch`,
+`latestRootEpoch`, and `latestRootEpochHash` (the latest registered epoch, which may be pending activation).
 The selected endpoint determines the policy; the backend checks that the verified
 `appId` matches that scope. Optional `requestedAppEpoch` selects the app epoch;
 omission uses the current app epoch, explicit zero selects epoch zero, and future

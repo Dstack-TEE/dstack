@@ -95,8 +95,9 @@ describe('Server', () => {
     const appRequest = { ...mockBootInfo, operation: 'app_get_key', requestedAppEpoch: 0 };
     it('preserves the complete decision, including the epoch on rejection', async () => {
       const decision = {
-        isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
+        authorized: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
         currentAppEpoch: 0, currentRootEpoch: 1, currentRootEpochHash: '0x' + '11'.repeat(32),
+        latestRootEpoch: 2, latestRootEpochHash: '0x' + '22'.repeat(32),
       };
       app.ethereum.checkAuthorization = jest.fn().mockResolvedValue(decision);
       const response = await app.inject({ method: 'POST', url: '/authorizeApp', payload: appRequest });
@@ -107,6 +108,32 @@ describe('Server', () => {
       expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith(appRequest, 'authorizeKms');
       await app.inject({ method: 'POST', url: '/authorizeApp', payload: { ...appRequest, requestedRootEpoch: 0 } });
       expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...appRequest, requestedRootEpoch: 0 }, 'authorizeApp');
+    });
+
+    it('rejects invalid, malformed and oversized requests in the AuthorizationResult shape', async () => {
+      jest.clearAllMocks();
+      app.ethereum.checkAuthorization = jest.fn();
+      const rejection = {
+        authorized: false, rejectionReason: 'invalid authorization request', gatewayAppId: '',
+        currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32), currentAppEpoch: 0,
+        latestRootEpoch: 0, latestRootEpochHash: '0x' + '00'.repeat(32),
+      };
+      const requests = [
+        { status: 400, payload: JSON.stringify({ ...appRequest, operation: 'unknown' }) },
+        { status: 400, payload: JSON.stringify({ ...appRequest, mrAggregated: 'not-hex' }) },
+        { status: 400, payload: '{"appId":' },
+        { status: 413, payload: JSON.stringify({ ...appRequest, padding: 'a'.repeat(2 * 1024 * 1024) }) },
+      ];
+      for (const url of ['/authorizeApp', '/authorizeKms']) {
+        for (const { status, payload } of requests) {
+          const response = await app.inject({
+            method: 'POST', url, payload, headers: { 'content-type': 'application/json' },
+          });
+          expect(response.statusCode).toBe(status);
+          expect(JSON.parse(response.payload)).toEqual(rejection);
+        }
+      }
+      expect(app.ethereum.checkAuthorization).not.toHaveBeenCalled();
     });
 
     it('fails closed when the new contract method is unavailable', async () => {
@@ -312,7 +339,7 @@ describe('Ethereum root epoch registry', () => {
       const fn = kms.getFunction(tx.data!.slice(0, 10));
       if (fn?.name !== method) return normalCall(tx);
       forwarded.push(kms.decodeFunctionData(fn, tx.data!)[0]);
-      return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n]]);
+      return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n, 1n, hash]]);
     });
     const response = await app.inject({
       method: 'POST', url: `/${method}`, payload: { ...bootInfo, operation, ...epochs },
@@ -371,5 +398,41 @@ describe('Ethereum root epoch registry', () => {
       const info = await app.inject({ method: 'GET', url: '/' });
       expect(info.statusCode).toBe(500);
     });
+  });
+});
+
+describe('Ethereum authorization result decoding', () => {
+  const { EthereumBackend, DSTACK_KMS_ABI } = jest.requireActual<typeof import('./ethereum')>('./ethereum');
+  const abi = new ethers.Interface(DSTACK_KMS_ABI);
+  const request = {
+    mrAggregated: '11'.repeat(32), osImageHash: '22'.repeat(32),
+    appId: '33'.repeat(20), composeHash: '44'.repeat(32),
+    instanceId: '55'.repeat(20), deviceId: '66'.repeat(32),
+    operation: 'kms_export_keys', requestedRootEpoch: 2,
+  };
+
+  it('reports the latest registered root epoch beside the current one', async () => {
+    const app = await build();
+    const call = jest.fn(async (tx: ethers.TransactionRequest) => {
+      const fn = abi.getFunction(tx.data!.slice(0, 10))!;
+      return abi.encodeFunctionResult(fn, [[
+        true, '', 'gateway', 1n, '0x' + '11'.repeat(32), 0n, 2n, '0x' + '22'.repeat(32),
+      ]]);
+    });
+    app.ethereum = new EthereumBackend(
+      { call, getNetwork: async () => ({ chainId: 1337n }) } as unknown as ethers.JsonRpcProvider,
+      '0x' + '11'.repeat(20),
+    );
+    try {
+      const response = await app.inject({ method: 'POST', url: '/authorizeKms', payload: request });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
+        currentRootEpoch: 1, currentRootEpochHash: '0x' + '11'.repeat(32), currentAppEpoch: 0,
+        latestRootEpoch: 2, latestRootEpochHash: '0x' + '22'.repeat(32),
+      });
+    } finally {
+      await app.close();
+    }
   });
 });

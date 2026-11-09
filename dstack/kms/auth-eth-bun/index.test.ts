@@ -862,13 +862,14 @@ describe('POST /authorizeApp', () => {
 
   it('reads the complete result with one contract call at configured finality', async () => {
     const result = {
-      isAllowed: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
+      authorized: false, rejectionReason: 'App not registered', gatewayAppId: 'gateway',
       currentAppEpoch: 0n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 3n, latestRootEpochHash: '0x' + '88'.repeat(32),
     };
     mockReadContract.mockResolvedValueOnce(result);
     const response = await authorize();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0 });
+    expect(await response.json()).toEqual({ ...result, currentRootEpoch: 2, currentAppEpoch: 0, latestRootEpoch: 3 });
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       functionName: 'authorizeApp', blockNumber: 98n,
@@ -878,8 +879,9 @@ describe('POST /authorizeApp', () => {
 
   it('encodes an explicit epoch zero as present', async () => {
     mockReadContract.mockResolvedValueOnce({
-      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
       currentAppEpoch: 0n, currentRootEpoch: 1n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 1n, latestRootEpochHash: '0x' + '77'.repeat(32),
     });
     expect((await authorize(0)).status).toBe(200);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
@@ -893,8 +895,9 @@ describe('POST /authorizeApp', () => {
     ['authorizeApp', 'app_get_cert', {}],
   ] as const)('forwards the operation and both epochs to %s (%s)', async (method, operation, epochs) => {
     mockReadContract.mockResolvedValueOnce({
-      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
       currentAppEpoch: 3n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 2n, latestRootEpochHash: '0x' + '77'.repeat(32),
     });
     const response = await appFetch(new Request(`http://localhost/${method}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -912,6 +915,30 @@ describe('POST /authorizeApp', () => {
         requestedAppEpoch: selector(requestedAppEpoch),
       })],
     }));
+  });
+
+  it('rejects invalid, malformed and oversized requests in the AuthorizationResult shape', async () => {
+    const rejection = {
+      authorized: false, rejectionReason: 'invalid authorization request', gatewayAppId: '',
+      currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32), currentAppEpoch: 0,
+      latestRootEpoch: 0, latestRootEpochHash: '0x' + '00'.repeat(32),
+    };
+    const requests = [
+      { status: 400, body: JSON.stringify({ ...appInfo, operation: 'unknown' }) },
+      { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', mrAggregated: 'not-hex' }) },
+      { status: 400, body: '{"appId":' },
+      { status: 413, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', padding: 'a'.repeat(256 * 1024) }) },
+    ];
+    for (const path of ['/authorizeApp', '/authorizeKms']) {
+      for (const { status, body } of requests) {
+        const response = await appFetch(new Request(`http://localhost${path}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        }));
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual(rejection);
+      }
+    }
+    expect(mockReadContract).not.toHaveBeenCalled();
   });
 
   it('does not fall back to legacy authorization on a failed contract call', async () => {

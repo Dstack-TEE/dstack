@@ -421,15 +421,17 @@
       "AuthorizationResult": {
         "type": "object",
         "required": [
-          "isAllowed",
+          "authorized",
           "rejectionReason",
           "gatewayAppId",
           "currentRootEpoch",
           "currentRootEpochHash",
-          "currentAppEpoch"
+          "currentAppEpoch",
+          "latestRootEpoch",
+          "latestRootEpochHash"
         ],
         "properties": {
-          "isAllowed": {
+          "authorized": {
             "type": "boolean"
           },
           "rejectionReason": {
@@ -452,6 +454,16 @@
             "type": "integer",
             "minimum": 0,
             "description": "Current application epoch; zero until app rotation is supported."
+          },
+          "latestRootEpoch": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Latest registered root epoch; may be pending activation. Zero when none is registered."
+          },
+          "latestRootEpochHash": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "description": "Chain hash of the latest registered root epoch; zero when none is registered."
           }
         }
       },

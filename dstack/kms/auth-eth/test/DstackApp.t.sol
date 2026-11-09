@@ -417,19 +417,79 @@ contract DstackAppTest is Test {
         info.tcbStatus = "UpToDate";
     }
 
+    function appRequest(
+        IAppAuth.AppInfo memory info,
+        OptionalUint256 memory appEpoch,
+        bytes32 operation
+    )
+        internal
+        pure
+        returns (AuthorizationRequest memory)
+    {
+        return AuthorizationRequest(info, operation, appEpoch, OptionalUint256(false, 0));
+    }
+
+    function authorizeAt(
+        IAppAuth.AppInfo memory info,
+        uint256 epoch,
+        bytes32 operation
+    )
+        internal
+        view
+        returns (bool, string memory)
+    {
+        AuthorizationResult memory result = app.authorizeApp(appRequest(info, OptionalUint256(true, epoch), operation));
+        return (result.authorized, result.rejectionReason);
+    }
+
+    function test_AuthorizeAppOwnsOperationScopeAndAppEpoch() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHashAtEpoch(0, info.composeHash);
+        app.addDeviceAtEpoch(0, info.deviceId);
+        app.advanceAppEpoch(0);
+        vm.stopPrank();
+
+        AuthorizationResult memory result =
+            app.authorizeApp(appRequest(info, OptionalUint256(true, 0), keccak256("kms_serve")));
+        assertFalse(result.authorized);
+        assertEq(result.rejectionReason, "Invalid authorization operation");
+        assertEq(result.currentAppEpoch, 1);
+
+        result = app.authorizeApp(appRequest(info, OptionalUint256(true, 2), keccak256("app_get_key")));
+        assertFalse(result.authorized);
+        assertEq(result.rejectionReason, "Requested app epoch is not active");
+        assertEq(result.currentAppEpoch, 1);
+
+        // Omission selects the current epoch, whose row is still empty.
+        result = app.authorizeApp(appRequest(info, OptionalUint256(false, 0), keccak256("app_get_key")));
+        assertFalse(result.authorized);
+        assertEq(result.rejectionReason, "Compose hash not allowed");
+        assertEq(result.currentAppEpoch, 1);
+
+        result = app.authorizeApp(appRequest(info, OptionalUint256(true, 0), keccak256("app_get_key")));
+        assertTrue(result.authorized);
+        assertEq(result.rejectionReason, "");
+        assertEq(result.currentAppEpoch, 1);
+        // Gateway and root epoch fields belong to the KMS.
+        assertEq(result.gatewayAppId, "");
+        assertEq(result.currentRootEpoch, 0);
+        assertEq(result.currentRootEpochHash, bytes32(0));
+    }
+
     function test_AppOperationsSharePolicyButRejectUnknownOrKmsOperations() public {
         IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
         app.addComposeHash(info.composeHash);
         app.addDevice(info.deviceId);
         vm.stopPrank();
-        (bool allowed,) = app.authorizeApp(info, 0, keccak256("app_get_cert"));
+        (bool allowed,) = authorizeAt(info, 0, keccak256("app_get_cert"));
         assertTrue(allowed);
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
-        (allowed,) = app.authorizeApp(info, 0, keccak256("kms_import_keys"));
+        (allowed,) = authorizeAt(info, 0, keccak256("kms_import_keys"));
         assertFalse(allowed);
-        (allowed,) = app.authorizeApp(info, 0, bytes32(0));
+        (allowed,) = authorizeAt(info, 0, bytes32(0));
         assertFalse(allowed);
     }
 
@@ -441,7 +501,7 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         bool allowed = authorizeCurrent(info);
         assertFalse(allowed);
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         app.addComposeHash(info.composeHash);
         allowed = authorizeCurrent(info);
@@ -452,16 +512,16 @@ contract DstackAppTest is Test {
         app.removeComposeHash(info.composeHash);
         assertFalse(app.allowedComposeHashesAtEpoch(1, info.composeHash));
         assertTrue(app.allowedComposeHashes(info.composeHash));
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         app.addComposeHash(info.composeHash);
         app.removeDeviceAtEpoch(0, info.deviceId);
         assertFalse(app.allowedDeviceIds(info.deviceId));
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
         allowed = authorizeCurrent(info);
         assertTrue(allowed, "revoking epoch zero must not revoke epoch one");
-        (allowed,) = app.authorizeApp(info, 2, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 2, keccak256("app_get_key"));
         assertFalse(allowed);
         vm.stopPrank();
     }
@@ -476,15 +536,15 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         app.addComposeHash(newInfo.composeHash);
         app.addDevice(newInfo.deviceId);
-        (bool allowed,) = app.authorizeApp(newInfo, 0, keccak256("app_get_key"));
+        (bool allowed,) = authorizeAt(newInfo, 0, keccak256("app_get_key"));
         assertFalse(allowed, "new epoch approval must not imply historical access");
         app.addComposeHashAtEpoch(0, newInfo.composeHash);
-        (allowed,) = app.authorizeApp(newInfo, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(newInfo, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         allowed = authorizeCurrent(oldInfo);
         assertFalse(allowed, "old image cannot read new keys");
         app.removeComposeHashAtEpoch(0, oldInfo.composeHash);
-        (allowed,) = app.authorizeApp(oldInfo, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(oldInfo, 0, keccak256("app_get_key"));
         assertFalse(allowed);
         allowed = authorizeCurrent(newInfo);
         assertTrue(allowed);
@@ -508,7 +568,7 @@ contract DstackAppTest is Test {
         app.setAllowAnyDeviceAtEpoch(0, false);
         assertFalse(app.allowAnyDevice());
         assertTrue(app.allowAnyDeviceAtEpoch(1));
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
         allowed = authorizeCurrent(info);
         assertTrue(allowed);
@@ -519,7 +579,7 @@ contract DstackAppTest is Test {
     }
 
     function authorizeCurrent(IAppAuth.AppInfo memory info) internal view returns (bool allowed) {
-        (allowed,) = app.authorizeApp(info, app.currentAppEpoch(), keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, app.currentAppEpoch(), keccak256("app_get_key"));
     }
 
     function test_LegacyAppCheckRefusesOnceTheAppEpochAdvances() public {
@@ -540,9 +600,9 @@ contract DstackAppTest is Test {
         assertFalse(allowed);
         assertEq(reason, "App epoch requires epoch-aware authorization");
         // Epoch-aware callers keep working at both epochs.
-        (allowed,) = app.authorizeApp(info, 1, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 1, keccak256("app_get_key"));
         assertTrue(allowed);
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         vm.stopPrank();
     }
@@ -562,7 +622,7 @@ contract DstackAppTest is Test {
         assertTrue(allowed);
         allowed = authorizeCurrent(next);
         assertFalse(allowed);
-        (allowed,) = app.authorizeApp(next, 1, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(next, 1, keccak256("app_get_key"));
         assertFalse(allowed, "the next row is not active before advancing");
         vm.expectRevert("Unknown app epoch");
         app.addComposeHashAtEpoch(2, next.composeHash);
@@ -570,9 +630,9 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         allowed = authorizeCurrent(next);
         assertTrue(allowed, "a prepared row authorizes as soon as it is current");
-        (allowed,) = app.authorizeApp(next, 1, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(next, 1, keccak256("app_get_key"));
         assertTrue(allowed);
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         app.addComposeHashAtEpoch(2, next.composeHash);
         vm.stopPrank();
@@ -653,7 +713,7 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(row, info.composeHash);
         app.addDeviceAtEpoch(row, info.deviceId);
         vm.stopPrank();
-        (bool allowed,) = app.authorizeApp(info, selected, keccak256("app_get_key"));
+        (bool allowed,) = authorizeAt(info, selected, keccak256("app_get_key"));
         assertEq(allowed, selected == row);
     }
 }

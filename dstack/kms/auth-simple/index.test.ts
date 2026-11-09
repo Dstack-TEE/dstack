@@ -478,24 +478,39 @@ describe('auth-simple', () => {
         body: JSON.stringify({ ...baseBootInfo, operation: isKms ? 'kms_serve' : 'app_get_key', ...fields }),
       }))).json();
 
+    it('reports the last configured root epoch as the latest registered one', async () => {
+      writeTestConfig({ ...config, currentRootEpoch: 0 });
+      expect(await authorize()).toMatchObject({
+        authorized: true, currentRootEpoch: 0, currentRootEpochHash: h0, latestRootEpoch: 1, latestRootEpochHash: h1,
+      });
+      writeTestConfig({ ...config, currentRootEpoch: 1 });
+      expect(await authorize({ operation: 'kms_serve' }, true)).toMatchObject({
+        currentRootEpoch: 1, latestRootEpoch: 1, latestRootEpochHash: h1,
+      });
+      writeTestConfig({ ...config, rootEpochs: [] });
+      expect(await authorize({ operation: 'kms_bootstrap' }, true)).toMatchObject({
+        latestRootEpoch: 0, latestRootEpochHash: '0x' + '00'.repeat(32),
+      });
+    });
+
     it('checks the requested policy and returns the epoch on rejection', async () => {
       const kmsContractAddr = '0x' + '11'.repeat(20);
       writeTestConfig({ ...config, kmsContractAddr, currentRootEpoch: 1 });
       expect(await authorize()).toMatchObject({
-        isAllowed: true, rejectionReason: '', currentRootEpoch: 1, currentRootEpochHash: h1,
+        authorized: true, rejectionReason: '', currentRootEpoch: 1, currentRootEpochHash: h1,
       });
-      expect(await authorize({ requestedRootEpoch: 0 })).toMatchObject({ isAllowed: true, currentRootEpoch: 1 });
-      expect(await authorize({ requestedRootEpoch: 1 })).toMatchObject({ isAllowed: true });
-      expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active', currentRootEpoch: 1 });
-      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ requestedRootEpoch: 0 })).toMatchObject({ authorized: true, currentRootEpoch: 1 });
+      expect(await authorize({ requestedRootEpoch: 1 })).toMatchObject({ authorized: true });
+      expect(await authorize({ requestedAppEpoch: 1 })).toMatchObject({ authorized: false, rejectionReason: 'Requested app epoch is not active', currentRootEpoch: 1 });
+      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ authorized: true });
       expect(await authorize({ requestedRootEpoch: 2 })).toMatchObject({
-        isAllowed: false, rejectionReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,
+        authorized: false, rejectionReason: 'Requested root epoch is not active', currentRootEpoch: 1, currentRootEpochHash: h1,
       });
-      expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' }, true)).toMatchObject({ isAllowed: true });
+      expect(await authorize({ appId: kmsContractAddr, composeHash: 'not-an-app-compose' }, true)).toMatchObject({ authorized: true });
       expect(await authorize({ appId: kmsContractAddr, mrAggregated: '0xbad' }, true)).toMatchObject({
-        isAllowed: false, currentRootEpoch: 1, currentRootEpochHash: h1,
+        authorized: false, currentRootEpoch: 1, currentRootEpochHash: h1,
       });
-      expect(await authorize({ appId: '0x' + '22'.repeat(20) })).toMatchObject({ isAllowed: false });
+      expect(await authorize({ appId: '0x' + '22'.repeat(20) })).toMatchObject({ authorized: false });
     });
 
     it('rotates only the selected app and allows historical app epochs', async () => {
@@ -503,29 +518,29 @@ describe('auth-simple', () => {
         ...config.apps,
         '0xapp123': { ...config.apps['0xapp123'], currentAppEpoch: 2 },
       } });
-      expect(await authorize()).toMatchObject({ isAllowed: true, currentAppEpoch: 2, currentRootEpoch: 0 });
-      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ isAllowed: true, currentAppEpoch: 2 });
-      expect(await authorize({ requestedAppEpoch: 2 })).toMatchObject({ isAllowed: true });
-      expect(await authorize({ requestedAppEpoch: 3 })).toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active', currentAppEpoch: 2 });
+      expect(await authorize()).toMatchObject({ authorized: true, currentAppEpoch: 2, currentRootEpoch: 0 });
+      expect(await authorize({ requestedAppEpoch: 0 })).toMatchObject({ authorized: true, currentAppEpoch: 2 });
+      expect(await authorize({ requestedAppEpoch: 2 })).toMatchObject({ authorized: true });
+      expect(await authorize({ requestedAppEpoch: 3 })).toMatchObject({ authorized: false, rejectionReason: 'Requested app epoch is not active', currentAppEpoch: 2 });
       expect(await boot('app', {})).toMatchObject({ isAllowed: false, reason: 'App epoch requires epoch-aware authorization' });
     });
 
     it('denies authorization without registered roots, while bootstrap remains available', async () => {
       writeTestConfig({ ...config, rootEpochs: [] });
       expect(await authorize()).toMatchObject({
-        isAllowed: false, rejectionReason: 'Root epoch not registered',
+        authorized: false, rejectionReason: 'Root epoch not registered',
         currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32),
       });
       expect((await boot('kms', {})).isAllowed).toBe(true);
-      expect(await authorize({ operation: 'kms_bootstrap' }, true)).toMatchObject({ isAllowed: true });
-      expect(await authorize({ operation: 'kms_export_keys' }, true)).toMatchObject({ isAllowed: false });
+      expect(await authorize({ operation: 'kms_bootstrap' }, true)).toMatchObject({ authorized: true });
+      expect(await authorize({ operation: 'kms_export_keys' }, true)).toMatchObject({ authorized: false });
     });
 
     it('rejects operations belonging to the other authorization scope', async () => {
       writeTestConfig(config);
-      expect(await authorize({ operation: 'kms_serve' })).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
-      expect(await authorize({ operation: 'app_get_cert' }, true)).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
-      expect(await authorize({ operation: 'app_get_cert' })).toMatchObject({ isAllowed: true });
+      expect(await authorize({ operation: 'kms_serve' })).toMatchObject({ authorized: false, rejectionReason: 'Invalid authorization operation' });
+      expect(await authorize({ operation: 'app_get_cert' }, true)).toMatchObject({ authorized: false, rejectionReason: 'Invalid authorization operation' });
+      expect(await authorize({ operation: 'app_get_cert' })).toMatchObject({ authorized: true });
     });
 
     it('allows only a KMS serving the current root epoch', async () => {
@@ -570,10 +585,10 @@ describe('auth-simple', () => {
         } } });
         const lookup = await app.fetch(new Request(`http://localhost/app/${appId}`));
         expect((await lookup.json()).currentAppEpoch).toBe(1);
-        expect(await authorize({ appId })).toMatchObject({ isAllowed: true, currentAppEpoch: 1 });
-        expect((await authorize({ appId, requestedAppEpoch: 1 })).isAllowed).toBe(true);
-        expect((await authorize({ appId, requestedAppEpoch: 0 })).isAllowed).toBe(true);
-        expect((await authorize({ appId, requestedAppEpoch: 2 })).isAllowed).toBe(false);
+        expect(await authorize({ appId })).toMatchObject({ authorized: true, currentAppEpoch: 1 });
+        expect((await authorize({ appId, requestedAppEpoch: 1 })).authorized).toBe(true);
+        expect((await authorize({ appId, requestedAppEpoch: 0 })).authorized).toBe(true);
+        expect((await authorize({ appId, requestedAppEpoch: 2 })).authorized).toBe(false);
         expect((await boot('app', { appId })).isAllowed).toBe(false);
       }
     );

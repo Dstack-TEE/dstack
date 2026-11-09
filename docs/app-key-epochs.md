@@ -25,7 +25,8 @@ before using nonzero epochs. Once the app epoch is nonzero, the legacy
 `isAppAllowed` of both `DstackApp` and `DstackKms` refuses, since its callers
 derive epoch-zero keys, so the KMS contract calling the app policy must support
 epochs before the app epoch advances. The ERC-165 `IAppEpochAuth` capability combines
-`currentAppEpoch()` and `authorizeApp(...)` in one interface. Legacy policies
+`currentAppEpoch()` and `authorizeApp(AuthorizationRequest)` in one interface; the
+policy returns the same `AuthorizationResult` struct as `DstackKms`. Legacy policies
 without this capability remain at zero; failures of an advertised getter propagate.
 
 The Ethereum auth backends query the policy through the KMS contract. The simple
@@ -98,12 +99,18 @@ only row zero after upgrading: explicitly populate the intended nonzero rows.
 
 Upgrade the KMS policy before app policies, then approve the intended rows before
 restarting guests or activating a new root. `DstackApp` advertises the optional
-ERC-165 `IAppEpochAuth` capability so the KMS can discover the current epoch and
-pass the selected app epoch and operation to `authorizeApp`. Its interface ID is
-the XOR of both method selectors; policies advertising only either former
-single-method interface must upgrade to the combined interface. Policies without
-that capability can only authorize app epoch zero; failures of an advertised
-method propagate instead of falling back.
+ERC-165 `IAppEpochAuth` capability. `DstackKms.authorizeApp` first applies the
+checks it owns (operation scope, registered root epoch, requested root epoch not
+beyond the current one, app registration, OS image at the selected root epoch,
+deployed contract), then forwards the request unchanged to the policy's
+`authorizeApp`. The policy validates the operation and the requested app epoch and
+fills `authorized`, `rejectionReason` and `currentAppEpoch`; the KMS then sets
+`gatewayAppId` and the current and latest root epoch fields. The decision and
+its app epoch therefore come from one policy call. Its interface ID is the XOR of
+both method selectors; policies advertising only either former single-method
+interface must upgrade to the combined interface. Policies without that capability can only
+authorize app epoch zero; failures of an advertised method propagate instead of
+falling back.
 Direct legacy app checks use the current app epoch; legacy KMS app authorization
 still rejects nonzero app epochs.
 
