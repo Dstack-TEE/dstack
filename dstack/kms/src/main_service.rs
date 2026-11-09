@@ -1974,6 +1974,47 @@ mod tests {
         }
     }
 
+    /// Fetch an env public key while the auth API answers the app epoch query
+    /// with `status` and `body`.
+    async fn env_pub_key(sealed: bool, status: u16, body: &'static str) -> Result<()> {
+        let (url, server) =
+            upgrade_authority::tests::serve_with_status(vec![(200, AUTH_API_INFO), (status, body)]);
+        let dir = tempfile::tempdir().unwrap();
+        let handler = RpcHandler {
+            state: kms_state(dir.path(), &url),
+            attestation: None,
+        };
+        let request = AppId {
+            app_id: vec![0x11; 20],
+        };
+        let result = if sealed {
+            handler.get_sealed_env_pub_key(request).await.map(drop)
+        } else {
+            handler.get_app_env_encrypt_pub_key(request).await.map(drop)
+        };
+        let requests = auth_requests(server);
+        assert_eq!(requests[1].0, format!("/app/0x{}", "11".repeat(20)));
+        result
+    }
+
+    #[rocket::async_test]
+    async fn env_public_keys_require_the_backend_to_report_the_app_epoch() {
+        for sealed in [false, true] {
+            for (status, body) in [
+                (404, r#"{"error":"unknown app"}"#),
+                (503, r#"{"error":"authorization backend unavailable"}"#),
+                (500, r#"{"status":"error"}"#),
+            ] {
+                let err = env_pub_key(sealed, status, body).await.unwrap_err();
+                assert!(format!("{err:#}").contains(&status.to_string()), "{err:#}");
+            }
+            // A legacy app at epoch zero still gets its key.
+            env_pub_key(sealed, 200, r#"{"currentAppEpoch":0}"#)
+                .await
+                .unwrap();
+        }
+    }
+
     #[rocket::async_test]
     async fn legacy_temp_ca_rpc_returns_a_separate_ca_and_the_served_root() {
         assert!(dstack_kms_rpc::kms_server::KMSMethod::from_str("GetTempCaCert").is_some());

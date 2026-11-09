@@ -149,25 +149,23 @@ class ConfigBackend {
     return process.env.AUTH_CONFIG_PATH || './auth-config.json';
   }
 
+  // A missing or invalid config fails every request rather than reading as an
+  // empty policy, whose app epochs would silently fall back to zero.
   private loadConfig(): AuthConfig {
     const configPath = this.getConfigPath();
     if (!existsSync(configPath)) {
-      console.error(`config file not found: ${configPath}`);
-      return AuthConfigSchema.parse({});
+      throw new Error(`config file not found: ${configPath}`);
     }
-
     try {
-      const content = readFileSync(configPath, 'utf-8');
-      const parsed = JSON.parse(content);
-      return AuthConfigSchema.parse(parsed);
+      return AuthConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf-8')));
     } catch (error) {
-      console.error(`failed to load config: ${error}`);
-      return AuthConfigSchema.parse({});
+      throw new Error(`failed to load config: ${error}`);
     }
   }
 
-  async getAppEpoch(appId: string): Promise<number> {
-    return findApp(this.loadConfig(), appId)?.currentAppEpoch ?? 0;
+  /// The current epoch of a configured app; `undefined` for an unknown one.
+  async getAppEpoch(appId: string): Promise<number | undefined> {
+    return findApp(this.loadConfig(), appId)?.currentAppEpoch;
   }
 
   async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
@@ -382,11 +380,15 @@ app.get('/', async (c) => {
 app.get('/app/:appId', async (c) => {
   const appId = c.req.param('appId');
   if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  let currentAppEpoch;
   try {
-    return c.json({ currentAppEpoch: await backend.getAppEpoch(appId) });
-  } catch {
+    currentAppEpoch = await backend.getAppEpoch(appId);
+  } catch (error) {
+    console.error('app epoch lookup failed:', error);
     return c.json({ error: 'authorization backend unavailable' }, 503);
   }
+  if (currentAppEpoch === undefined) return c.json({ error: 'unknown app' }, 404);
+  return c.json({ currentAppEpoch });
 });
 
 for (const method of ['authorizeKms', 'authorizeApp'] as const) {

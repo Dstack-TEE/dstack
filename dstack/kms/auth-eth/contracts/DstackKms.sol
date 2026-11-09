@@ -479,8 +479,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return _rootEpochs.length == 0 ? 0 : _rootEpochs.length - 1;
     }
 
-    /// Legacy policies have epoch zero; an advertised epoch getter must succeed.
-    function currentAppEpoch(address appId) public view returns (uint256) {
+    /// Reverts for an unregistered or undeployed app rather than reporting epoch
+    /// zero for it. Legacy policies have epoch zero; an advertised getter must succeed.
+    function currentAppEpoch(address appId) external view returns (uint256) {
+        require(registeredApps[appId], "App not registered");
+        require(appId.code.length != 0, "App not deployed or invalid address");
+        return _appEpoch(appId);
+    }
+
+    /// Zero for an app authorization rejects anyway, so the decision reports the rejection.
+    function _appEpoch(address appId) private view returns (uint256) {
         if (!registeredApps[appId] || appId.code.length == 0) return 0;
         if (!ERC165Checker.supportsInterface(appId, type(IAppEpochAuth).interfaceId)) return 0;
         return IAppEpochAuth(appId).currentAppEpoch();
@@ -505,7 +513,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         returns (AuthorizationResult memory result)
     {
         result.gatewayAppId = gatewayAppId;
-        result.currentAppEpoch = isKms ? 0 : currentAppEpoch(request.appInfo.appId);
+        result.currentAppEpoch = isKms ? 0 : _appEpoch(request.appInfo.appId);
         if (_rootEpochs.length > 0) {
             result.currentRootEpoch = _currentRootEpoch;
             result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
@@ -596,7 +604,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         override
         returns (bool isAllowed, string memory reason)
     {
-        if (currentAppEpoch(bootInfo.appId) != 0) {
+        if (_appEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }
         return _isAppAllowed(bootInfo, 0, 0, bytes32(0));

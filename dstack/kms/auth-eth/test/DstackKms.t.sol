@@ -603,6 +603,30 @@ contract DstackKmsTest is Test {
         kms.currentAppEpoch(policy);
     }
 
+    function test_AppEpochQueryRevertsForUnregisteredOrUndeployedApps() public {
+        address policy = address(new DstackApp());
+        vm.expectRevert("App not registered");
+        kms.currentAppEpoch(policy);
+        address eoa = address(0xbeef);
+        kms.registerApp(eoa);
+        vm.expectRevert("App not deployed or invalid address");
+        kms.currentAppEpoch(eoa);
+        // A registered legacy policy without the capability is epoch zero.
+        kms.registerApp(policy);
+        vm.mockCall(
+            policy, abi.encodeCall(IERC165.supportsInterface, (type(IAppEpochAuth).interfaceId)), abi.encode(false)
+        );
+        assertEq(kms.currentAppEpoch(policy), 0);
+        // The authorization paths still report the rejection instead of reverting.
+        DstackKms.AppInfo memory info = authorizationInfo(address(0x1234));
+        (bool allowed, string memory reason) = kms.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "App not registered");
+        vm.prank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        assertEq(authorize(info, false).rejectionReason, "App not registered");
+    }
+
     function test_AppEpochRotationIsOwnerScopedAndDoesNotChangeRootEpoch() public {
         DstackKms.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);

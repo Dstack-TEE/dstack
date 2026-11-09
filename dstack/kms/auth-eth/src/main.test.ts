@@ -327,6 +327,27 @@ describe('Ethereum root epoch registry', () => {
     expect([...request.requestedAppEpoch]).toEqual(selector(requestedAppEpoch));
   });
 
+  it('reports an app epoch only when the contract can vouch for it', async () => {
+    const kms = new ethers.Interface(DSTACK_KMS_ABI);
+    const normalCall = call.getMockImplementation()!;
+    let revert = true;
+    call.mockImplementation(async (tx: ethers.TransactionRequest) => {
+      const fn = kms.getFunction(tx.data!.slice(0, 10));
+      if (fn?.name !== 'currentAppEpoch') return normalCall(tx);
+      if (revert) {
+        throw ethers.AbiCoder.getBuiltinCallException('call', { to: tx.to as string, data: tx.data! },
+          ethers.id('Error(string)').slice(0, 10) + ethers.AbiCoder.defaultAbiCoder().encode(['string'], ['App not registered']).slice(2));
+      }
+      return kms.encodeFunctionResult(fn, [0n]);
+    });
+    const url = `/app/0x${'33'.repeat(20)}`;
+    expect((await app.inject({ method: 'GET', url })).statusCode).not.toBe(200);
+    revert = false;
+    const legacy = await app.inject({ method: 'GET', url });
+    expect(legacy.statusCode).toBe(200);
+    expect(legacy.json()).toEqual({ currentAppEpoch: 0 });
+  });
+
   describe.each(['rootEpochCount', 'currentRootEpoch'])('%s failures', (getter) => {
     it.each(['missing getter', 'revert', 'RPC failure', 'malformed ABI data'])('fails closed on %s', async (failure) => {
       const normalCall = call.getMockImplementation()!;

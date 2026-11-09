@@ -548,12 +548,22 @@ pub(crate) mod tests {
     pub(crate) fn serve<S: Into<String>>(
         responses: Vec<S>,
     ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
-        let responses: Vec<String> = responses.into_iter().map(Into::into).collect();
+        serve_with_status(responses.into_iter().map(|body| (200, body)).collect())
+    }
+
+    /// Like [`serve`], answering each request with its own HTTP status.
+    pub(crate) fn serve_with_status<S: Into<String>>(
+        responses: Vec<(u16, S)>,
+    ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+        let responses: Vec<(u16, String)> = responses
+            .into_iter()
+            .map(|(status, body)| (status, body.into()))
+            .collect();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = thread::spawn(move || {
             let mut requests = Vec::new();
-            for response in responses {
+            for (status, response) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -598,7 +608,7 @@ pub(crate) mod tests {
                 requests.push((path, body));
                 write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     response.len(),
                     response
                 )

@@ -392,10 +392,10 @@ fn app_epoch(app_id: &str, cli: &State<Cli>) -> Result<Json<serde_json::Value>, 
     if hex::decode(&id).map_or(true, |bytes| bytes.len() != 20) {
         return Err(Status::BadRequest);
     }
-    let al = load(&cli.config);
-    Ok(Json(
-        json!({ "currentAppEpoch": al.app(&id).map_or(0, |app| app.current_app_epoch) }),
-    ))
+    // An unknown app is not epoch zero: its epoch cannot be vouched for.
+    let app = load(&cli.config);
+    let app = app.app(&id).ok_or(Status::NotFound)?;
+    Ok(Json(json!({ "currentAppEpoch": app.current_app_epoch })))
 }
 
 /// load the allowlist, failing closed (deny-all) if it's missing or invalid.
@@ -677,6 +677,19 @@ mod tests {
         assert_eq!(
             client.get("/app/not-hex").dispatch().await.status(),
             Status::BadRequest
+        );
+        assert_eq!(
+            client
+                .get(format!("/app/0x{}", "cd".repeat(20)))
+                .dispatch()
+                .await
+                .status(),
+            Status::NotFound
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            client.get(format!("/app/0x{id}")).dispatch().await.status(),
+            Status::NotFound
         );
     }
 
