@@ -359,8 +359,8 @@ older clients. Bootstrap uses the `kms_bootstrap` operation, which checks KMS po
 even before roots are registered. Other operations require registered roots.
 Onboarding checks its source through `authorizeKms`, without a legacy fallback. For
 `auth-simple`, set `kmsContractAddr` to the attested KMS app ID and configure
-`rootEpochs`; for `auth-mock`, set `KMS_CONTRACT_ADDR`, `MOCK_ROOT_EPOCH`, and
-`MOCK_ROOT_EPOCH_HASH`.
+`rootEpochs`. For development without a backend, use `[core.auth_api] type = "dev"`,
+which allows everything.
 
 
 ## Direct attested key retrieval

@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.appkeys.json` no longer carries them. Files written by older images still
   parse, but out-of-tree readers that require those fields fail on new files
 
+### Removed
+
+- KMS: the `auth-mock` webhook backend. For development, use the built-in
+  `[core.auth_api] type = "dev"`, which allows everything.
+
 ### Fixed
 
 - kms: onboarding with or without `source_token` verifies the source's
