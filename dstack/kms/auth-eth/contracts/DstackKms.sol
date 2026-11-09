@@ -536,9 +536,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
     }
 
-    // Function to check if KMS is allowed to boot
+    // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
     function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
-        return _isKmsAllowed(bootInfo, _currentRootEpoch);
+        return _isKmsAllowed(bootInfo, 0);
     }
 
     function _isKmsAllowed(
@@ -572,7 +572,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return (true, "");
     }
 
-    // Function to check if an app is allowed to boot
+    // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
     function isAppAllowed(AppInfo calldata bootInfo)
         external
         view
@@ -582,7 +582,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (currentAppEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }
-        return _isAppAllowed(bootInfo, _currentRootEpoch, 0, bytes32(0));
+        return _isAppAllowed(bootInfo, 0, 0, bytes32(0));
     }
 
     function _isAppAllowed(

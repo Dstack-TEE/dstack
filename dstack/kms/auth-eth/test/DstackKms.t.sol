@@ -940,7 +940,7 @@ contract DstackKmsTest is Test {
         assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed);
         assertFalse(authorize(info, true).isAllowed);
         (bool allowed,) = kms.isKmsAllowed(info);
-        assertFalse(allowed);
+        assertTrue(allowed, "legacy KMS check reads epoch 0");
         kms.addOsImageHash(info.osImageHash);
         assertFalse(authorize(info, true).isAllowed);
         kms.addKmsAggregatedMr(info.mrAggregated);
