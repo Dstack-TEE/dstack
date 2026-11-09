@@ -284,8 +284,11 @@ Protect root storage and independent admin access.
    services/ingress. Keep failed instances isolated for operator follow-up.
 7. Notify env public-key verifiers (vmm-cli signer whitelists, frontends, SDK
    callers) to replace the old k256 signer with the new one, preferably by reading
-   it from DstackKms. A stale whitelist entry does not break migration, but lets
-   anyone able to intercept client-to-KMS traffic forge env public keys.
+   it from DstackKms. For vmm-cli, run `kms remove <old signer>`, then
+   `kms add <new signer>`. A stale whitelist entry does not break migration, but
+   lets anyone holding the old root and able to intercept client-to-KMS traffic
+   forge env public keys; the `root_epoch` in a response is set by its signer
+   and protects nothing.
 
 ## 9. Invariants and acceptance
 
