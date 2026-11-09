@@ -51,6 +51,10 @@ pub(crate) mod upgrade_authority;
 /// in-flight request. App authorization is never cached.
 const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
 
+/// Apps whose epoch is cached at once. Floods of random app IDs still reach the
+/// auth API; limit them per source in a proxy in front of the KMS.
+const APP_EPOCH_CACHE_CAPACITY: u64 = 10_000;
+
 /// How long this KMS's own verified boot info is reused.
 ///
 /// Its measurements do not change while the KMS runs, but the TCB status and advisories do when
@@ -176,6 +180,9 @@ pub struct KmsStateInner {
     self_boot_info: Cache<(), BootInfo>,
     self_allowed: Cache<Operation, AuthorizationResult>,
     auth_api_info: Cache<(), GetInfoResponse>,
+    /// App epochs read for the unauthenticated env public key RPCs, so repeated
+    /// requests for one app do not each reach the auth API.
+    app_epochs: Cache<Vec<u8>, u32>,
     metrics: KmsMetrics,
 }
 
@@ -268,9 +275,19 @@ impl KmsState {
                     .build(),
                 self_allowed: short_lived_cache(4),
                 auth_api_info: short_lived_cache(1),
+                app_epochs: short_lived_cache(APP_EPOCH_CACHE_CAPACITY),
                 metrics: KmsMetrics::default(),
             }),
         })
+    }
+
+    /// The current epoch of an app, cached for [`AUTH_API_CACHE_TTL`]. Failures
+    /// are not cached.
+    async fn app_epoch(&self, app_id: &[u8]) -> Result<u32> {
+        self.app_epochs
+            .try_get_with(app_id.to_vec(), self.config.auth_api.app_epoch(app_id))
+            .await
+            .map_err(|err| anyhow!("{err:#}"))
     }
 
     pub(crate) fn metrics(&self) -> &KmsMetrics {
@@ -721,12 +738,7 @@ impl KmsRpc for RpcHandler {
             .context("KMS self authorization failed")?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let app_epoch = self
-            .state
-            .config
-            .auth_api
-            .app_epoch(&request.app_id)
-            .await?;
+        let app_epoch = self.state.app_epoch(&request.app_id).await?;
         if app_epoch != 0 {
             bail!("epoch-aware applications must use GetSealedEnvPubKey");
         }
@@ -773,12 +785,7 @@ impl KmsRpc for RpcHandler {
         let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let app_epoch = self
-            .state
-            .config
-            .auth_api
-            .app_epoch(&request.app_id)
-            .await?;
+        let app_epoch = self.state.app_epoch(&request.app_id).await?;
         let secret = derive_sealed_env_key(root, &request.app_id, app_epoch)?;
         let public_key =
             x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
@@ -2026,6 +2033,24 @@ mod tests {
         let temp_ca = CaCert::new(response.temp_ca_cert, response.temp_ca_key).unwrap();
         assert_ne!(temp_ca.key.public_key_der(), state.rpc_ca_pubkey);
         assert_eq!(response.ca_cert, state.epoch_root(0).unwrap().ca.pem_cert);
+    }
+
+    #[rocket::async_test]
+    async fn app_epoch_lookups_are_cached_per_app_for_one_second() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let (url, requests) = serve_concurrent_auth_api(r#"{"currentAppEpoch":2}"#);
+        let state = kms_state(dir.path(), &url);
+        for _ in 0..3 {
+            assert_eq!(state.app_epoch(&[0x11; 20]).await.unwrap(), 2);
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        // Another app is looked up separately.
+        state.app_epoch(&[0x22; 20]).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        tokio::time::sleep(AUTH_API_CACHE_TTL + Duration::from_millis(100)).await;
+        state.app_epoch(&[0x11; 20]).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
     }
 
     #[rocket::async_test]
