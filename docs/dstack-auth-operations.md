@@ -4,7 +4,7 @@
 
 `dstack-auth` is the file-based KMS authorization webhook. It allowlists OS
 images, KMS instances and apps in one JSON file. For on-chain governance, use
-[auth-eth-bun](../dstack/kms/auth-eth-bun/) instead
+[auth-eth](../dstack/kms/auth-eth/) instead
 (see [On-Chain Governance](./onchain-governance.md)).
 
 This guide covers running `dstack-auth` and managing apps and devices with it.

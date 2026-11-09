@@ -106,17 +106,18 @@ Verify the file exists and has correct permissions:
 ls -la /etc/kms/kms.toml
 ```
 
-### auth-eth-bun install fails
+### auth-eth install fails
 
 ```
 error: lockfile had changes, but lockfile is frozen
 ```
 
-The copied `auth-eth-bun/` directory does not match its `bun.lock`. Copy it again from a clean checkout of the dstack repository and rebuild the Docker image:
+The copied `auth-eth/` directory does not match its `bun.lock`. Copy it again from a clean checkout of the dstack repository and rebuild the Docker image:
 
 ```bash
-rm -rf ~/kms-deployment/auth-eth-bun
-cp -r ~/dstack/dstack/kms/auth-eth-bun ~/kms-deployment/auth-eth-bun
+rm -rf ~/kms-deployment/auth-eth
+mkdir -p ~/kms-deployment/auth-eth
+cp ~/dstack/dstack/kms/auth-eth/{index.ts,package.json,bun.lock} ~/kms-deployment/auth-eth/
 ```
 
 ### Invalid TOML syntax
@@ -308,7 +309,7 @@ sudo systemctl restart qgsd
 {"error": "error sending request for url (http://127.0.0.1:9200/): ...Connection refused (os error 111)"}
 ```
 
-**Root Cause:** auth-eth-bun listens on `PORT` (3000 when run from source, 8000 in its release image), but kms.toml expects the webhook at port 9200.
+**Root Cause:** auth-eth listens on `PORT` (3000 when run from source, 8000 in its release image), but kms.toml expects the webhook at port 9200.
 
 **Solution:** Ensure your docker-compose.yaml includes `PORT=9200` in the environment section:
 
@@ -334,7 +335,7 @@ Then regenerate the app-compose.json and redeploy:
 {"error": "error decoding response body: missing field `status` at line 1 column ..."}
 ```
 
-**Root Cause:** auth-eth-bun is reachable (port 9200 is correct), but it cannot read the contract. Without `ETH_RPC_URL` and `KMS_CONTRACT_ADDR`, auth-eth-bun defaults to `http://localhost:8545` (nothing there) and the zero address, and returns `{status: 'error', ...}` instead of the expected `{status: 'ok', ...}` response. If the RPC is unreachable at startup, auth-eth-bun exits instead, and GetMeta reports "Connection refused".
+**Root Cause:** auth-eth is reachable (port 9200 is correct), but it cannot read the contract. Without `ETH_RPC_URL` and `KMS_CONTRACT_ADDR`, auth-eth defaults to `http://localhost:8545` (nothing there) and the zero address, and returns `{status: 'error', ...}` instead of the expected `{status: 'ok', ...}` response. If the RPC is unreachable at startup, auth-eth exits instead, and GetMeta reports "Connection refused".
 
 **Solution:** Ensure your docker-compose.yaml includes both Ethereum configuration variables:
 
@@ -350,7 +351,7 @@ Get your contract address from `~/.dstack/secrets/kms-contract-address`. See Ste
 
 **Symptom:** `curl` to GetMeta hangs indefinitely or times out after 30+ seconds
 
-**Root Cause:** The auth-eth-bun service is using an unreachable or rate-limited Ethereum RPC endpoint.
+**Root Cause:** The auth-eth service is using an unreachable or rate-limited Ethereum RPC endpoint.
 
 **Solution:** Verify your `ETH_RPC_URL` environment variable points to a working Sepolia RPC:
 

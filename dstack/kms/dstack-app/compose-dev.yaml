@@ -15,7 +15,7 @@ services:
         RUN git clone ${GIT_REPOSITORY} && \
             cd dstack && \
             git checkout ${GIT_REV}
-        WORKDIR /app/dstack/dstack/kms/auth-eth-bun
+        WORKDIR /app/dstack/dstack/kms/auth-eth
         RUN bun install --frozen-lockfile --production --ignore-scripts
         ENV NODE_ENV=production
         CMD ["bun", "index.ts"]

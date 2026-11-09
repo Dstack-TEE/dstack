@@ -52,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.appkeys.json` no longer carries them. Files written by older images still
   parse, but out-of-tree readers that require those fields fail on new files
 
+- KMS: `auth-eth-bun` is renamed to `auth-eth`. The Bun webhook server moves
+  from `dstack/kms/auth-eth-bun` into `dstack/kms/auth-eth`, next to the
+  contracts. New releases are tagged `kms-auth-eth-v*` and published as
+  `ghcr.io/dstack-tee/dstack-kms-auth-eth`; images already published as
+  `ghcr.io/dstack-tee/dstack-kms-auth-eth-bun` remain available. Update image
+  references and source paths in deployments.
+
 ### Removed
 
 - KMS: the `auth-mock` webhook backend. For development, use the built-in
@@ -65,12 +72,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AUTH_CONFIG_PATH` / `PORT`, and it binds to `127.0.0.1` by default. See
   `docs/dstack-auth-operations.md#migrating-from-auth-simple`.
 - KMS: the Node `auth-eth` webhook server (`dstack/kms/auth-eth/src`) is
-  removed. Use `auth-eth-bun`, which serves the same webhook API and reads the
+  removed. Use the Bun server (formerly `auth-eth-bun`, now in the same
+  directory, see Changed), which serves the same webhook API and reads the
   same environment variables, except that it binds all interfaces and ignores
   `HOST`, and `PORT` defaults to 3000 from source (8000 in its image). The
   `DstackKms`/`DstackApp` contracts, Foundry tests and deployment scripts stay
   in `dstack/kms/auth-eth`. `kms/dstack-app/compose-dev.yaml` now builds
-  auth-eth-bun.
+  the Bun server.
 
 ### Fixed
 
