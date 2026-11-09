@@ -120,6 +120,30 @@ says `pre: msg.sender == owner()`, we trust the OZ modifier.
       init, both `initialize` overloads revert for any inputs.
       Verifies INV-3.
 
+`test/DstackAppEpoch.symbolic.t.sol` (app epochs; setUp advances to epoch 2
+and admits one app per epoch, then one symbolic owner write where noted):
+- [x] `check_AppEpoch_StepMonotonic` — no call to any enumerated mutating
+      function, by any caller, decreases `currentAppEpoch`; it moves only by
+      one, through the owner's `advanceAppEpoch(current)`.
+- [x] `check_PolicyWrite_RejectsInactiveEpoch` — every `*AtEpoch` setter
+      reverts for an epoch above the current one, for any caller.
+- [x] `check_AuthorizeApp_RejectsInactiveEpochAndForeignOperation` — an
+      epoch above the current one or a non-app operation is never authorized.
+- [x] `check_IsAppAllowed_EqualsCurrentEpochDecision` — the legacy
+      `isAppAllowed` returns exactly the `authorizeApp` result at the current
+      epoch, never an older policy.
+- [x] `check_PolicyWrite_PreservesOtherEpochDecisions` — a policy write at
+      one epoch, through the explicit or the current-epoch setters, never
+      changes an authorization decision at another epoch, including epoch
+      0's legacy fields.
+
+Mutation-tested: dropping a setter's epoch bound, aliasing epoch 1 onto the
+legacy fields, deciding `isAppAllowed` at epoch 0, a permissionless
+`advanceAppEpoch` and dropping its stale-transaction guard each produce a
+counterexample. Dropping the inactive-epoch check in `_authorizeApp` does
+not: policy for an inactive epoch cannot be written, so that check is
+defense in depth.
+
 Single-call (`test/DstackKms.symbolic.t.sol`):
 - [x] `check_RegisterApp_AnyCallerCanRegisterNonZeroAddress` + `_RejectsZeroAddress`
       — codifies the permissionless-by-design behavior; see "Findings"
