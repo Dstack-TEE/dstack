@@ -461,19 +461,37 @@ contract DstackKmsEpochSymbolicTest is Test {
     }
 
     // ---------------------------------------------------------------
-    // Legacy entry points: isKmsAllowed decides as KMS_SERVE at root
-    // epoch 0, and isAppAllowed never authorizes an app whose policy has
-    // left app epoch 0.
+    // Legacy entry points serve KMS binaries that only hold root epoch 0:
+    // before any rotation isKmsAllowed decides as KMS_SERVE at epoch 0,
+    // and once a later epoch is current both refuse. isAppAllowed never
+    // authorizes an app whose policy has left app epoch 0.
     // ---------------------------------------------------------------
 
-    function check_LegacyEntryPoints_ReadEpochZero(Identity calldata id) external view {
+    function check_LegacyEntryPoints_RefuseOnceRotated(Identity calldata id) external view {
+        IAppAuth.AppInfo memory info = _info(id);
+        bytes32 rotated = keccak256("Root epoch requires epoch-aware authorization");
+        (bool kmsAllowed, string memory kmsReason) = kms.isKmsAllowed(info);
+        assert(!kmsAllowed && keccak256(bytes(kmsReason)) == rotated);
+        (bool appAllowed, string memory appReason) = kms.isAppAllowed(info);
+        assert(!appAllowed && keccak256(bytes(appReason)) == rotated);
+    }
+
+    function check_LegacyKmsCheck_ReadsEpochZeroBeforeRotation(Identity calldata id) external {
+        bytes memory initData = abi.encodeCall(DstackKms.initialize, (OWNER, address(new DstackApp())));
+        kms = DstackKms(address(new ERC1967Proxy(address(new DstackKms()), initData)));
+        vm.startPrank(OWNER);
+        for (uint256 epoch = 0; epoch < 2; epoch++) {
+            kms.registerRootEpoch(_ca(bytes32(epoch + 1), bytes32(0)), _k256(true, bytes32(epoch + 1)), "evidence");
+            kms.addOsImageHashAtEpoch(epoch, _id(0x05, epoch));
+            kms.addKmsAggregatedMrAtEpoch(epoch, _id(0x0a, epoch));
+            kms.addKmsDeviceAtEpoch(epoch, _id(0x0d, epoch));
+        }
+        vm.stopPrank();
+        // Epoch 1 is registered and prepared but pending.
         IAppAuth.AppInfo memory info = _info(id);
         (bool kmsAllowed,) = kms.isKmsAllowed(info);
         AuthorizationResult memory serve =
             kms.authorizeKms(_request(info, AuthorizationOperation.KMS_SERVE, true, 0, false, 0));
         assert(kmsAllowed == serve.authorized);
-
-        (bool appAllowed,) = kms.isAppAllowed(info);
-        assert(!appAllowed);
     }
 }

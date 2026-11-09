@@ -187,14 +187,16 @@ per epoch, and deploys an app at app epoch 1):
       write at one root epoch, or through the epoch-less setters at every
       epoch from the current one to the latest, never changes a KMS decision
       at an epoch it did not write.
-- [x] `check_LegacyEntryPoints_ReadEpochZero` — `isKmsAllowed` decides as
-      `kms_serve` at root epoch 0, and `isAppAllowed` denies an app that has
-      left app epoch 0.
+- [x] `check_LegacyEntryPoints_RefuseOnceRotated` — once a later root epoch
+      is current, `isKmsAllowed` and `isAppAllowed` refuse.
+- [x] `check_LegacyKmsCheck_ReadsEpochZeroBeforeRotation` — before any
+      rotation, with the next epoch registered and prepared, `isKmsAllowed`
+      decides as `kms_serve` at root epoch 0.
 
 Mutation-tested: a chain hash that ignores the previous epoch, activation
 that leaves `kmsInfo` stale, a pop that ignores the chain hash, app requests
 selecting a pending root epoch, KMS requests limited to the current epoch,
-`isKmsAllowed` checking the current epoch, accepting an `0x04` k256 tag, an
+`isKmsAllowed` reading the pending epoch or still deciding after a rotation, accepting an `0x04` k256 tag, an
 OS image row aliasing epoch 1 onto the legacy row, an app check skipping the
 OS image, and non-bootstrap operations before registration each produce a
 counterexample.
