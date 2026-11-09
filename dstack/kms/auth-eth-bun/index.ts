@@ -5,6 +5,7 @@
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { secureHeaders } from 'hono/secure-headers';
+import { HTTPException } from 'hono/http-exception';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { createPublicClient, http, keccak256, toBytes, type Address, type Hex } from 'viem';
@@ -391,6 +392,14 @@ const publicRpcEndpoint = (value: string): string => {
 
 const backendUnavailable = 'authorization backend unavailable';
 const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
+const invalidAuthorization = {
+  authorized: false,
+  rejectionReason: 'invalid authorization request',
+  gatewayAppId: '',
+  currentRootEpoch: 0,
+  currentRootEpochHash: '0x' + '00'.repeat(32),
+  currentAppEpoch: 0,
+};
 
 // The schema caps a valid BootInfo well under this (advisoryIds alone at
 // 128 x 256 chars is 32 KiB); the limit stops an oversized body from being
@@ -445,10 +454,24 @@ app.get('/app/:appId', async (c) => {
   }
 });
 
+// Malformed JSON is rejected before the validator hook runs; keep the
+// AuthorizationResult shape for it on the authorization routes.
+const AUTHORIZATION_PATHS = new Set(['/authorizeKms', '/authorizeApp']);
+app.onError((error, c) => {
+  if (error instanceof HTTPException) {
+    if (error.status === 400 && AUTHORIZATION_PATHS.has(c.req.path)) return c.json(invalidAuthorization, 400);
+    return error.getResponse();
+  }
+  console.error(error);
+  return c.text('Internal Server Error', 500);
+});
+
 for (const method of ['authorizeKms', 'authorizeApp'] as const) {
   app.post(`/${method}`,
-    bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES }),
-    zValidator('json', AuthorizationRequestSchema),
+    bodyLimit({ maxSize: MAX_BOOT_INFO_BYTES, onError: (c) => c.json(invalidAuthorization, 413) }),
+    zValidator('json', AuthorizationRequestSchema, (result, c) => {
+      if (!result.success) return c.json(invalidAuthorization, 400);
+    }),
     async (c) => {
       try {
         return c.json(await ethereum.checkAuthorization(c.req.valid('json'), method));

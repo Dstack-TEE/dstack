@@ -89,9 +89,25 @@ export async function build(): Promise<FastifyInstance> {
   };
   const backendUnavailable = 'authorization backend unavailable';
   const invalidRequest = { isAllowed: false, reason: 'invalid authorization request', gatewayAppId: '' };
+  const invalidAuthorization: AuthorizationResult = {
+    authorized: false,
+    rejectionReason: 'invalid authorization request',
+    gatewayAppId: '',
+    currentRootEpoch: 0,
+    currentRootEpochHash: '0x' + '00'.repeat(32),
+    currentAppEpoch: 0,
+  };
+  const authorizationRoutes = new Set(['/authorizeKms', '/authorizeApp']);
 
   server.setErrorHandler((error, request, reply) => {
-    if (typeof error === 'object' && error !== null && 'validation' in error) {
+    const isValidation = typeof error === 'object' && error !== null && 'validation' in error;
+    if (authorizationRoutes.has(request.routeOptions.url ?? '')) {
+      // Malformed, invalid and oversized requests keep the AuthorizationResult shape.
+      const statusCode = isValidation ? 400 : (error as { statusCode?: number }).statusCode;
+      if (statusCode === 400 || statusCode === 413) {
+        return reply.code(statusCode).send(invalidAuthorization);
+      }
+    } else if (isValidation) {
       return reply.code(400).send(invalidRequest);
     }
     request.log.error('authorization request failed');

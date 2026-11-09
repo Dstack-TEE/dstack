@@ -914,6 +914,29 @@ describe('POST /authorizeApp', () => {
     }));
   });
 
+  it('rejects invalid, malformed and oversized requests in the AuthorizationResult shape', async () => {
+    const rejection = {
+      authorized: false, rejectionReason: 'invalid authorization request', gatewayAppId: '',
+      currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32), currentAppEpoch: 0,
+    };
+    const requests = [
+      { status: 400, body: JSON.stringify({ ...appInfo, operation: 'unknown' }) },
+      { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', mrAggregated: 'not-hex' }) },
+      { status: 400, body: '{"appId":' },
+      { status: 413, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', padding: 'a'.repeat(256 * 1024) }) },
+    ];
+    for (const path of ['/authorizeApp', '/authorizeKms']) {
+      for (const { status, body } of requests) {
+        const response = await appFetch(new Request(`http://localhost${path}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+        }));
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual(rejection);
+      }
+    }
+    expect(mockReadContract).not.toHaveBeenCalled();
+  });
+
   it('does not fall back to legacy authorization on a failed contract call', async () => {
     mockReadContract.mockRejectedValueOnce(new Error('contract unavailable'));
     expect((await authorize()).status).toBe(503);

@@ -109,6 +109,31 @@ describe('Server', () => {
       expect(app.ethereum.checkAuthorization).toHaveBeenLastCalledWith({ ...appRequest, requestedRootEpoch: 0 }, 'authorizeApp');
     });
 
+    it('rejects invalid, malformed and oversized requests in the AuthorizationResult shape', async () => {
+      jest.clearAllMocks();
+      app.ethereum.checkAuthorization = jest.fn();
+      const rejection = {
+        authorized: false, rejectionReason: 'invalid authorization request', gatewayAppId: '',
+        currentRootEpoch: 0, currentRootEpochHash: '0x' + '00'.repeat(32), currentAppEpoch: 0,
+      };
+      const requests = [
+        { status: 400, payload: JSON.stringify({ ...appRequest, operation: 'unknown' }) },
+        { status: 400, payload: JSON.stringify({ ...appRequest, mrAggregated: 'not-hex' }) },
+        { status: 400, payload: '{"appId":' },
+        { status: 413, payload: JSON.stringify({ ...appRequest, padding: 'a'.repeat(2 * 1024 * 1024) }) },
+      ];
+      for (const url of ['/authorizeApp', '/authorizeKms']) {
+        for (const { status, payload } of requests) {
+          const response = await app.inject({
+            method: 'POST', url, payload, headers: { 'content-type': 'application/json' },
+          });
+          expect(response.statusCode).toBe(status);
+          expect(JSON.parse(response.payload)).toEqual(rejection);
+        }
+      }
+      expect(app.ethereum.checkAuthorization).not.toHaveBeenCalled();
+    });
+
     it('fails closed when the new contract method is unavailable', async () => {
       jest.clearAllMocks();
       app.ethereum.checkAuthorization = jest.fn().mockRejectedValue(new Error('missing contract method'));
