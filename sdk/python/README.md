@@ -107,6 +107,9 @@ characters and produce a chain that silently never verifies.
 **Returns:** `GetKeyResponseV1` with `key: bytes`, `public_key: bytes` and
 `signature_chain: list[bytes]`.
 
+Derived keys are a function of the KMS root, so they are not suitable for
+holding assets; see [Blockchain helpers](#blockchain-helpers).
+
 ### `attest()`
 
 The sole CVM attestation entry point in v1. The dstack attestation format
@@ -596,6 +599,17 @@ print(keypair.pubkey())
 `to_account_secure` / `to_keypair_secure` hash the full key material with
 SHA-256 before deriving. The legacy `to_account()` / `to_keypair()` use raw key
 bytes and are kept only for backward compatibility.
+
+> **Do not hold assets in a wallet derived from `get_key`.** Derived keys are a
+> function of the KMS root: if the root leaks, anyone holding it can compute
+> the wallet's private key. Moving funds after a root rotation, or after
+> advancing the app epoch (the new key still comes from the same root), is a
+> race against whoever holds the leaked root, not a recovery. These helpers
+> suit low-value or rotatable signing only. To hold assets, make the derived key
+> a signer of a smart account whose owner can be replaced and which enforces
+> limits or a timelock, or generate a random key and keep it sealed under the
+> derived key. Signatures stay usable for authentication as long as relying
+> parties reject signature chains from old root epochs (`root_epoch`).
 
 ## Migration from TappdClient
 

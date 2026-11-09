@@ -100,6 +100,9 @@ Both arguments are required. `algorithm` is exactly `'secp256k1'` or `'ed25519'`
 
 `domain` is an opaque domain-separation string, not a DNS name and not a path. Derivation is **flat**: `'a/b'` is a string that happens to contain a slash, not a child of `'a'`, and no key derived here can derive another. It replaces v0's `path` plus `purpose`; both `domain` and `algorithm` now feed the KDF.
 
+Derived keys are a function of the KMS root, so they are not suitable for
+holding assets; see [Blockchain helpers](#blockchain-helpers).
+
 `signature_chain` has two links: the app root key over the v1 key claim, then the KMS root key over the app root public key. `docs/guest-api-v1.md` is the normative spec for verifying it — it gives the claim encoding, the recovery steps, and, critically, why the KMS root key has to come from a source you trust independently of the agent you are checking.
 
 ### `attest(reportData, includeBoottimeGpuEvidence?)`
@@ -395,6 +398,17 @@ const keypair = toKeypairSecure(key)
 ```
 
 Given a `GetTlsKeyResponse` both helpers hash the PEM key with SHA-256 first, which is what makes them "secure" relative to `toViemAccount` and `toKeypair`; those unhashed variants are kept for migration only and emit a warning.
+
+> **Do not hold assets in a wallet derived from `getKey`.** Derived keys are a
+> function of the KMS root: if the root leaks, anyone holding it can compute
+> the wallet's private key. Moving funds after a root rotation, or after
+> advancing the app epoch (the new key still comes from the same root), is a
+> race against whoever holds the leaked root, not a recovery. These helpers
+> suit low-value or rotatable signing only. To hold assets, make the derived key
+> a signer of a smart account whose owner can be replaced and which enforces
+> limits or a timelock, or generate a random key and keep it sealed under the
+> derived key. Signatures stay usable for authentication as long as relying
+> parties reject signature chains from old root epochs (`root_epoch`).
 
 ### Migrating v0 to v1
 
