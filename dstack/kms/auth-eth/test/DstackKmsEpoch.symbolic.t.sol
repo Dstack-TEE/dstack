@@ -12,6 +12,21 @@ import "../contracts/AuthorizationOperation.sol";
 import "../contracts/DstackApp.sol";
 import "../contracts/DstackKms.sol";
 
+function _appAuth(
+    DstackApp target,
+    IAppAuth.AppInfo memory info,
+    uint256 epoch,
+    bytes32 operation
+)
+    view
+    returns (bool, string memory)
+{
+    AuthorizationResult memory result = target.authorizeApp(
+        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0))
+    );
+    return (result.authorized, result.rejectionReason);
+}
+
 /// @notice Halmos symbolic tests for DstackKms root epochs and epoch-scoped
 /// authorization.
 ///
@@ -101,11 +116,9 @@ contract DstackKmsEpochSymbolicTest is Test {
     )
         internal
         pure
-        returns (DstackKms.AuthorizationRequest memory)
+        returns (AuthorizationRequest memory)
     {
-        return DstackKms.AuthorizationRequest(
-            info, operation, DstackKms.OptionalUint256(appSet, appEpoch), DstackKms.OptionalUint256(rootSet, root)
-        );
+        return AuthorizationRequest(info, operation, OptionalUint256(appSet, appEpoch), OptionalUint256(rootSet, root));
     }
 
     /// Calldata of one KMS policy setter and the root epoch it writes.
@@ -118,8 +131,10 @@ contract DstackKmsEpochSymbolicTest is Test {
         view
         returns (bytes memory data, uint256 target)
     {
-        // Setters without an epoch write the latest registered epoch, pending included.
-        target = which < 6 ? epoch : kms.rootEpochCount() - 1;
+        // Setters without an epoch write every row from the current epoch to the
+        // latest registered one; `target` is the lowest row written.
+        (target,) = kms.currentRootEpoch();
+        if (which < 6) target = epoch;
         if (which == 0) data = abi.encodeCall(DstackKms.addKmsAggregatedMrAtEpoch, (epoch, word));
         else if (which == 1) data = abi.encodeCall(DstackKms.removeKmsAggregatedMrAtEpoch, (epoch, word));
         else if (which == 2) data = abi.encodeCall(DstackKms.addKmsDeviceAtEpoch, (epoch, word));
@@ -312,8 +327,8 @@ contract DstackKmsEpochSymbolicTest is Test {
         external
         view
     {
-        DstackKms.AuthorizationRequest memory request = _request(_info(id), operation, rootSet, root, appSet, appEpoch);
-        DstackKms.AuthorizationResult memory result = isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
+        AuthorizationRequest memory request = _request(_info(id), operation, rootSet, root, appSet, appEpoch);
+        AuthorizationResult memory result = isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
 
         (uint256 current, bytes32 currentHash) = kms.currentRootEpoch();
         assert(result.currentRootEpoch == current && result.currentRootEpochHash == currentHash);
@@ -322,7 +337,7 @@ contract DstackKmsEpochSymbolicTest is Test {
         uint256 rootBound = isKms ? kms.rootEpochCount() - 1 : current;
         uint256 appBound = isKms ? 0 : app.currentAppEpoch();
         if (!kindMatches || (rootSet && root > rootBound) || (appSet && appEpoch > appBound)) {
-            assert(!result.isAllowed);
+            assert(!result.authorized);
         }
     }
 
@@ -347,9 +362,9 @@ contract DstackKmsEpochSymbolicTest is Test {
         fresh.addKmsDevice(id.deviceId);
         vm.stopPrank();
 
-        DstackKms.AuthorizationRequest memory request = _request(_info(id), operation, false, 0, false, 0);
-        DstackKms.AuthorizationResult memory result = isKms ? fresh.authorizeKms(request) : fresh.authorizeApp(request);
-        if (result.isAllowed) assert(isKms && operation == AuthorizationOperation.KMS_BOOTSTRAP);
+        AuthorizationRequest memory request = _request(_info(id), operation, false, 0, false, 0);
+        AuthorizationResult memory result = isKms ? fresh.authorizeKms(request) : fresh.authorizeApp(request);
+        if (result.authorized) assert(isKms && operation == AuthorizationOperation.KMS_BOOTSTRAP);
     }
 
     // ---------------------------------------------------------------
@@ -375,15 +390,14 @@ contract DstackKmsEpochSymbolicTest is Test {
             ok;
         }
 
-        DstackKms.AuthorizationResult memory result =
-            kms.authorizeKms(_request(_info(id), operation, rootSet, root, false, 0));
+        AuthorizationResult memory result = kms.authorizeKms(_request(_info(id), operation, rootSet, root, false, 0));
 
         uint256 epoch = rootSet ? root : _current();
         bool expected = AuthorizationOperation.isKms(operation) && epoch < kms.rootEpochCount() && id.upToDate
             && kms.allowedOsImagesAtEpoch(epoch, id.osImageHash)
             && kms.kmsAllowedAggregatedMrsAtEpoch(epoch, id.mrAggregated)
             && kms.kmsAllowedDeviceIdsAtEpoch(epoch, id.deviceId);
-        assert(result.isAllowed == expected);
+        assert(result.authorized == expected);
     }
 
     // ---------------------------------------------------------------
@@ -405,15 +419,14 @@ contract DstackKmsEpochSymbolicTest is Test {
     {
         bytes32 operation = getCert ? AuthorizationOperation.APP_GET_CERT : AuthorizationOperation.APP_GET_KEY;
         IAppAuth.AppInfo memory info = _info(id);
-        DstackKms.AuthorizationResult memory result =
-            kms.authorizeApp(_request(info, operation, rootSet, root, appSet, appEpoch));
+        AuthorizationResult memory result = kms.authorizeApp(_request(info, operation, rootSet, root, appSet, appEpoch));
 
         uint256 rootEpoch = rootSet ? root : _current();
         uint256 selectedAppEpoch = appSet ? appEpoch : app.currentAppEpoch();
         bool expected = rootEpoch <= _current() && selectedAppEpoch <= app.currentAppEpoch()
             && kms.allowedOsImagesAtEpoch(rootEpoch, id.osImageHash);
-        if (expected) (expected,) = app.authorizeApp(info, selectedAppEpoch, operation);
-        assert(result.isAllowed == expected);
+        if (expected) (expected,) = _appAuth(app, info, selectedAppEpoch, operation);
+        assert(result.authorized == expected);
     }
 
     // ---------------------------------------------------------------
@@ -433,31 +446,32 @@ contract DstackKmsEpochSymbolicTest is Test {
     {
         vm.assume(which < KMS_POLICY_SETTERS);
         (bytes memory data, uint256 target) = _kmsPolicyCall(which, writeEpoch, word);
-        vm.assume(target != root);
+        // Epoch-less setters write every row from `target` on.
+        vm.assume(which < 6 ? target != root : root < target);
 
-        DstackKms.AuthorizationRequest memory request = _request(_info(id), operation, true, root, false, 0);
-        DstackKms.AuthorizationResult memory before = kms.authorizeKms(request);
+        AuthorizationRequest memory request = _request(_info(id), operation, true, root, false, 0);
+        AuthorizationResult memory before = kms.authorizeKms(request);
         vm.prank(OWNER);
         (bool ok,) = address(kms).call(data);
         ok;
-        DstackKms.AuthorizationResult memory afterWrite = kms.authorizeKms(request);
+        AuthorizationResult memory afterWrite = kms.authorizeKms(request);
 
-        assert(before.isAllowed == afterWrite.isAllowed);
+        assert(before.authorized == afterWrite.authorized);
         assert(keccak256(bytes(before.rejectionReason)) == keccak256(bytes(afterWrite.rejectionReason)));
     }
 
     // ---------------------------------------------------------------
-    // Legacy entry points: isKmsAllowed decides as KMS_SERVE at the
-    // current root epoch, and isAppAllowed never authorizes an app
-    // whose policy has left app epoch 0.
+    // Legacy entry points: isKmsAllowed decides as KMS_SERVE at root
+    // epoch 0, and isAppAllowed never authorizes an app whose policy has
+    // left app epoch 0.
     // ---------------------------------------------------------------
 
-    function check_LegacyEntryPoints_FollowCurrentEpochs(Identity calldata id) external view {
+    function check_LegacyEntryPoints_ReadEpochZero(Identity calldata id) external view {
         IAppAuth.AppInfo memory info = _info(id);
         (bool kmsAllowed,) = kms.isKmsAllowed(info);
-        DstackKms.AuthorizationResult memory serve =
-            kms.authorizeKms(_request(info, AuthorizationOperation.KMS_SERVE, false, 0, false, 0));
-        assert(kmsAllowed == serve.isAllowed);
+        AuthorizationResult memory serve =
+            kms.authorizeKms(_request(info, AuthorizationOperation.KMS_SERVE, true, 0, false, 0));
+        assert(kmsAllowed == serve.authorized);
 
         (bool appAllowed,) = kms.isAppAllowed(info);
         assert(!appAllowed);

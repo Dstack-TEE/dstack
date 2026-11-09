@@ -11,6 +11,21 @@ import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../contracts/AuthorizationOperation.sol";
 import "../contracts/DstackApp.sol";
 
+function _appAuth(
+    DstackApp target,
+    IAppAuth.AppInfo memory info,
+    uint256 epoch,
+    bytes32 operation
+)
+    view
+    returns (bool, string memory)
+{
+    AuthorizationResult memory result = target.authorizeApp(
+        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0))
+    );
+    return (result.authorized, result.rejectionReason);
+}
+
 /// @notice Halmos symbolic tests for DstackApp app epochs.
 ///
 /// Halmos has no symbolic storage, so tests that quantify over policy states
@@ -93,7 +108,7 @@ contract DstackAppEpochSymbolicTest is Test {
     }
 
     function _decision(IAppAuth.AppInfo memory info, uint256 epoch) internal view returns (bool, bytes32) {
-        (bool allowed, string memory reason) = app.authorizeApp(info, epoch, AuthorizationOperation.APP_GET_KEY);
+        (bool allowed, string memory reason) = _appAuth(app, info, epoch, AuthorizationOperation.APP_GET_KEY);
         return (allowed, keccak256(bytes(reason)));
     }
 
@@ -140,7 +155,7 @@ contract DstackAppEpochSymbolicTest is Test {
     // No caller can write policy for an epoch that is not active yet.
     // ---------------------------------------------------------------
 
-    function check_PolicyWrite_RejectsInactiveEpoch(
+    function check_PolicyWrite_RejectsEpochPastNext(
         address caller,
         uint256 which,
         uint256 epoch,
@@ -149,7 +164,7 @@ contract DstackAppEpochSymbolicTest is Test {
     )
         external
     {
-        vm.assume(which < 5 && epoch > app.currentAppEpoch());
+        vm.assume(which < 5 && epoch > app.currentAppEpoch() + 1);
         (bytes memory data,) = _policyCall(which, epoch, word, flag);
         vm.prank(caller);
         (bool ok,) = address(app).call(data);
@@ -177,7 +192,7 @@ contract DstackAppEpochSymbolicTest is Test {
         _ownerPolicyWrite(which, writeEpoch, word, flag);
         IAppAuth.AppInfo memory info = _info(composeHash, deviceId, upToDate);
         vm.assume(epoch > app.currentAppEpoch() || !AuthorizationOperation.isApp(operation));
-        (bool allowed,) = app.authorizeApp(info, epoch, operation);
+        (bool allowed,) = _appAuth(app, info, epoch, operation);
         assert(!allowed);
     }
 
@@ -186,7 +201,7 @@ contract DstackAppEpochSymbolicTest is Test {
     // epoch-aware one at the current epoch, never an older policy.
     // ---------------------------------------------------------------
 
-    function check_IsAppAllowed_EqualsCurrentEpochDecision(
+    function check_IsAppAllowed_RefusesAtNonzeroEpoch(
         uint256 which,
         uint256 writeEpoch,
         bytes32 word,
@@ -198,9 +213,37 @@ contract DstackAppEpochSymbolicTest is Test {
         external
     {
         _ownerPolicyWrite(which, writeEpoch, word, flag);
+        (bool allowed, string memory reason) = app.isAppAllowed(_info(composeHash, deviceId, upToDate));
+        assert(!allowed);
+        assert(keccak256(bytes(reason)) == keccak256("App epoch requires epoch-aware authorization"));
+    }
+
+    function check_IsAppAllowed_EqualsEpochZeroDecisionBeforeAdvance(
+        uint256 which,
+        uint256 writeEpoch,
+        bytes32 word,
+        bool flag,
+        bytes32 composeHash,
+        bytes32 deviceId,
+        bool upToDate
+    )
+        external
+    {
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(address,bool,bool,bytes32,bytes32)", OWNER, false, false, bytes32(0), bytes32(0)
+        );
+        app = DstackApp(address(new ERC1967Proxy(address(new DstackApp()), initData)));
+        vm.startPrank(OWNER);
+        app.addComposeHash(bytes32(uint256(0xc0)));
+        app.addDevice(bytes32(uint256(0xd0)));
+        // A prepared next row must not leak into the legacy decision.
+        app.addComposeHashAtEpoch(1, bytes32(uint256(0xc1)));
+        app.setAllowAnyDeviceAtEpoch(1, true);
+        vm.stopPrank();
+        _ownerPolicyWrite(which, writeEpoch, word, flag);
         IAppAuth.AppInfo memory info = _info(composeHash, deviceId, upToDate);
         (bool allowed, string memory reason) = app.isAppAllowed(info);
-        (bool expected, bytes32 expectedReason) = _decision(info, app.currentAppEpoch());
+        (bool expected, bytes32 expectedReason) = _decision(info, 0);
         assert(allowed == expected && keccak256(bytes(reason)) == expectedReason);
     }
 
@@ -255,7 +298,7 @@ contract DstackAppEpochSymbolicTest is Test {
         _ownerPolicyWrite(which, writeEpoch, word, flag);
         IAppAuth.AppInfo memory info = _info(composeHash, deviceId, upToDate);
         bytes32 op = getCert ? AuthorizationOperation.APP_GET_CERT : AuthorizationOperation.APP_GET_KEY;
-        (bool allowed,) = app.authorizeApp(info, epoch, op);
+        (bool allowed,) = _appAuth(app, info, epoch, op);
         bool expected = epoch <= app.currentAppEpoch() && (!tcbFlag || upToDate)
             && app.allowedComposeHashesAtEpoch(epoch, composeHash)
             && (app.allowAnyDeviceAtEpoch(epoch) || app.allowedDeviceIdsAtEpoch(epoch, deviceId));

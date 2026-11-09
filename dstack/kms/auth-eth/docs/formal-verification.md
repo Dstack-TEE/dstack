@@ -125,13 +125,17 @@ and admits one app per epoch, then one symbolic owner write where noted):
 - [x] `check_AppEpoch_StepMonotonic` — no call to any enumerated mutating
       function, by any caller, decreases `currentAppEpoch`; it moves only by
       one, through the owner's `advanceAppEpoch(current)`.
-- [x] `check_PolicyWrite_RejectsInactiveEpoch` — every `*AtEpoch` setter
-      reverts for an epoch above the current one, for any caller.
+- [x] `check_PolicyWrite_RejectsEpochPastNext` — every `*AtEpoch` setter
+      reverts for an epoch above the next one, for any caller; the owner may
+      prepare the next epoch's row before advancing.
 - [x] `check_AuthorizeApp_RejectsInactiveEpochAndForeignOperation` — an
       epoch above the current one or a non-app operation is never authorized.
-- [x] `check_IsAppAllowed_EqualsCurrentEpochDecision` — the legacy
-      `isAppAllowed` returns exactly the `authorizeApp` result at the current
-      epoch, never an older policy.
+- [x] `check_IsAppAllowed_RefusesAtNonzeroEpoch` — once the app epoch has
+      advanced, the legacy `isAppAllowed` refuses, since its callers derive
+      epoch-0 keys.
+- [x] `check_IsAppAllowed_EqualsEpochZeroDecisionBeforeAdvance` — at app
+      epoch 0, with the next row prepared and any one owner write, the legacy
+      `isAppAllowed` returns exactly the `authorizeApp` result at epoch 0.
 - [x] `check_PolicyWrite_PreservesOtherEpochDecisions` — a policy write at
       one epoch, through the explicit or the current-epoch setters, never
       changes an authorization decision at another epoch, including epoch
@@ -144,8 +148,9 @@ and admits one app per epoch, then one symbolic owner write where noted):
 
 Mutation-tested: requiring both the any-device flag and a listed device,
 ignoring the value of a per-epoch `allowAnyDevice` write, dropping a setter's
-epoch bound, aliasing epoch 1 onto the
-legacy fields, deciding `isAppAllowed` at epoch 0, a permissionless
+epoch bound or widening it past the next epoch, aliasing epoch 1 onto the
+legacy fields, letting `isAppAllowed` decide at a nonzero epoch or read the
+prepared next row, a permissionless
 `advanceAppEpoch` and dropping its stale-transaction guard each produce a
 counterexample. Dropping the inactive-epoch check in `_authorizeApp` does
 not: policy for an inactive epoch cannot be written, so that check is
@@ -179,16 +184,17 @@ per epoch, and deploys an app at app epoch 1):
       exactly when both epochs are active, the selected root epoch admits
       the OS image, and the app's own `authorizeApp` admits it.
 - [x] `check_KmsPolicyWrite_PreservesOtherEpochDecisions` — a KMS policy
-      write at one root epoch, through the explicit or the latest-epoch
-      setters, never changes a KMS decision at another epoch.
-- [x] `check_LegacyEntryPoints_FollowCurrentEpochs` — `isKmsAllowed`
-      decides as `kms_serve` at the current root epoch, and `isAppAllowed`
-      denies an app that has left app epoch 0.
+      write at one root epoch, or through the epoch-less setters at every
+      epoch from the current one to the latest, never changes a KMS decision
+      at an epoch it did not write.
+- [x] `check_LegacyEntryPoints_ReadEpochZero` — `isKmsAllowed` decides as
+      `kms_serve` at root epoch 0, and `isAppAllowed` denies an app that has
+      left app epoch 0.
 
 Mutation-tested: a chain hash that ignores the previous epoch, activation
 that leaves `kmsInfo` stale, a pop that ignores the chain hash, app requests
 selecting a pending root epoch, KMS requests limited to the current epoch,
-`isKmsAllowed` checking the latest epoch, accepting an `0x04` k256 tag, an
+`isKmsAllowed` checking the current epoch, accepting an `0x04` k256 tag, an
 OS image row aliasing epoch 1 onto the legacy row, an app check skipping the
 OS image, and non-bootstrap operations before registration each produce a
 counterexample.
