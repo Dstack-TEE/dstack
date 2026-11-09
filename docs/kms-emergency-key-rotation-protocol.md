@@ -255,10 +255,17 @@ receivers without reducing the payload. The source's certificate must carry its
 OS image hash.
 Deployments that never registered epochs can still join at epoch 0.
 
-For rotation, generate fresh roots and attest them: report data is
-`keccak256("dstack-kms-generated-keys-v2:{N};{ca_pubkey_hex};{k256_pubkey_hex};")`
-(epoch 0 keeps the original v1 bootstrap encoding). The owner validates the
-evidence, approved code, and binding, then registers N; the cluster keeps
+For rotation, generate fresh roots and attest them with the bootstrap encoding
+used for every epoch: report data is
+`keccak256("dstack-kms-genereted-keys-v1:{ca_pubkey_hex};{k256_pubkey_hex};")`
+zero-padded to 64 bytes. The "genereted" spelling is part of the released format.
+The evidence only has to prove the key pair was generated in an approved TEE.
+It binds neither the epoch number, which comes from the on-chain registration
+order, nor the preceding chain hash, which joins already check against the
+registry; a mismatch in either is an availability problem that `servable_epoch`
+catches at once, not a key leak. Before registering N, the owner verifies the
+quote with dstack-verifier, checks the approved code and measurements, and
+recomputes the report data from the published keys; the cluster keeps
 serving N-1. After the other nodes onboard and hold N, the owner activates N and
 every KMS restarts onto it. An old-root signature is not authorization.
 Competing generators cannot both be registered as N; a losing node's keyring no
