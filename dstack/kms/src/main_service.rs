@@ -22,7 +22,7 @@ use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use moka::future::Cache;
 use p256::pkcs8::DecodePrivateKey;
-use ra_rpc::{CallContext, RpcCall};
+use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 use ra_tls::{
     attestation::{resolve_vm_config, AttestationVerifier, TeeVariant, VerifiedAttestation},
     cert::{CaCert, CertRequest, CertSigningRequestV1, CertSigningRequestV2, Csr},
@@ -30,7 +30,7 @@ use ra_tls::{
     rcgen::KeyPair,
 };
 use scale::Decode;
-use tracing::warn;
+use tracing::{info, warn};
 use upgrade_authority::{
     build_boot_info, ensure_app_id_len, local_kms_boot_info, AuthorizationResult, BootInfo,
     GetInfoResponse, Operation, RootEpochRegistry,
@@ -190,6 +190,28 @@ pub struct KmsStateInner {
 pub(crate) struct KmsMetrics {
     attestation_requests_total: AtomicU64,
     attestation_failures_total: AtomicU64,
+    key_releases_total: [AtomicU64; KeyRelease::ALL.len()],
+}
+
+/// A listener and operation that hands out key material.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum KeyRelease {
+    RpcHandover,
+    AdminHandover,
+    AppKey,
+}
+
+impl KeyRelease {
+    const ALL: [Self; 3] = [Self::RpcHandover, Self::AdminHandover, Self::AppKey];
+
+    /// The listener and operation labels.
+    fn labels(self) -> (&'static str, &'static str) {
+        match self {
+            Self::RpcHandover => ("rpc", "kms_export_keys"),
+            Self::AdminHandover => ("admin", "kms_export_keys"),
+            Self::AppKey => ("rpc", "app_get_key"),
+        }
+    }
 }
 
 impl KmsMetrics {
@@ -202,9 +224,24 @@ impl KmsMetrics {
         }
     }
 
+    fn record_key_release(&self, release: KeyRelease) {
+        self.key_releases_total[release as usize].fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn render_prometheus(&self) -> String {
         let attestation_requests_total = self.attestation_requests_total.load(Ordering::Relaxed);
         let attestation_failures_total = self.attestation_failures_total.load(Ordering::Relaxed);
+        let mut key_releases = String::from(
+            "# HELP dstack_kms_key_releases_total Total number of key material releases.\n\
+             # TYPE dstack_kms_key_releases_total counter\n",
+        );
+        for release in KeyRelease::ALL {
+            let count = self.key_releases_total[release as usize].load(Ordering::Relaxed);
+            let (listener, operation) = release.labels();
+            key_releases.push_str(&format!(
+                "dstack_kms_key_releases_total{{listener=\"{listener}\",operation=\"{operation}\"}} {count}\n"
+            ));
+        }
 
         format!(
             "# HELP dstack_kms_attestation_requests_total Total number of KMS attestation requests.\n\
@@ -212,7 +249,8 @@ impl KmsMetrics {
              dstack_kms_attestation_requests_total {attestation_requests_total}\n\
              # HELP dstack_kms_attestation_failures_total Total number of failed KMS attestation requests.\n\
              # TYPE dstack_kms_attestation_failures_total counter\n\
-             dstack_kms_attestation_failures_total {attestation_failures_total}\n"
+             dstack_kms_attestation_failures_total {attestation_failures_total}\n\
+             {key_releases}"
         )
     }
 }
@@ -445,6 +483,7 @@ pub(crate) fn read_root_epoch(config: &KmsConfig) -> Result<u32> {
 pub struct RpcHandler {
     state: KmsState,
     attestation: Option<VerifiedAttestation>,
+    remote_endpoint: Option<RemoteEndpoint>,
 }
 
 impl RpcHandler {
@@ -452,15 +491,56 @@ impl RpcHandler {
         Self {
             state: context.state.clone(),
             attestation: context.attestation,
+            remote_endpoint: context.remote_endpoint,
         }
     }
 
-    pub(crate) async fn handover_keys(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
+    /// Count a key release and log it, regardless of the metrics setting.
+    fn audit_key_release(
+        &self,
+        release: KeyRelease,
+        boot_info: &BootInfo,
+        requested: &str,
+        returned: &str,
+        cached: bool,
+    ) {
+        self.state.metrics().record_key_release(release);
+        let instance_id = match &boot_info.instance_id[..] {
+            [] => "UNKNOWN".to_string(),
+            id => hex::encode(id),
+        };
+        let (listener, operation) = release.labels();
+        info!(
+            target: "dstack_kms::audit",
+            listener,
+            operation,
+            app_id = %hex::encode(&boot_info.app_id),
+            instance_id = %instance_id,
+            remote = ?self.remote_endpoint,
+            requested_epoch = requested,
+            returned_epoch = returned,
+            cached,
+            "key release"
+        );
+    }
+
+    fn self_allowed_cached(&self, operation: Operation) -> bool {
+        self.state.self_allowed.contains_key(&operation)
+    }
+
+    pub(crate) async fn handover_keys(
+        self,
+        release: KeyRelease,
+        request: GetKmsKeyRequest,
+    ) -> Result<KmsKeyResponse> {
+        let cached = self.self_allowed_cached(Operation::KmsExportKeys);
         self.ensure_self_allowed(Operation::KmsExportKeys)
             .await
             .context("KMS self authorization failed")?;
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
         ensure_key_release_allowed(&info, (&self.state.config).into())?;
+        let returned = format!("root 0..={}", self.state.keyring.latest());
+        self.audit_key_release(release, &info, "all", &returned, cached);
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.temp_ca.key.serialize_pem(),
             keys: self
@@ -694,6 +774,7 @@ impl KmsRpc for RpcHandler {
         if request.api_version > 1 {
             bail!("Unsupported API version: {}", request.api_version);
         }
+        let cached = self.self_allowed_cached(Operation::KmsServe);
         self.ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
@@ -715,6 +796,18 @@ impl KmsRpc for RpcHandler {
         ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
         let root = self.state.epoch_root(root_epoch)?;
         let keys = derive_app_keys(root, &boot_info.app_id, &boot_info.instance_id, app_epoch)?;
+        let epoch = |epoch: Option<u32>| epoch.map_or("current".into(), |e| e.to_string());
+        self.audit_key_release(
+            KeyRelease::AppKey,
+            &boot_info,
+            &format!(
+                "root {} app {}",
+                epoch(request.root_epoch),
+                epoch(request.app_epoch)
+            ),
+            &format!("root {root_epoch} app {app_epoch}"),
+            cached,
+        );
 
         Ok(AppKeyResponse {
             ca_cert: root.ca.pem_cert.clone(),
@@ -843,7 +936,7 @@ impl KmsRpc for RpcHandler {
         if !self.state.config.onboard.public_key_handover {
             bail!("public KMS key handover is disabled; use the admin listener");
         }
-        self.handover_keys(request).await
+        self.handover_keys(KeyRelease::RpcHandover, request).await
     }
 
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
@@ -1780,6 +1873,7 @@ mod tests {
         let handler = RpcHandler {
             state,
             attestation: None,
+            remote_endpoint: None,
         };
         assert_eq!(
             handler
@@ -1857,7 +1951,11 @@ mod tests {
     async fn handover(
         case: HandoverCase,
         answers: &[bool],
-    ) -> (Result<KmsKeyResponse>, Vec<(String, serde_json::Value)>) {
+    ) -> (
+        Result<KmsKeyResponse>,
+        Vec<(String, serde_json::Value)>,
+        String,
+    ) {
         use upgrade_authority::tests::{boot_info, serve, webhook};
         let dir = tempfile::tempdir().unwrap();
         let initial = kms_state(dir.path(), "http://127.0.0.1:1");
@@ -1881,21 +1979,28 @@ mod tests {
         state.self_boot_info.insert((), boot_info(1)).await;
         let (attestation, vm_config) = snp_caller();
         let handler = RpcHandler {
-            state,
+            state: state.clone(),
             attestation: Some(attestation),
+            remote_endpoint: None,
         };
         let request = GetKmsKeyRequest { vm_config };
         let result = if case.admin {
-            handler.handover_keys(request).await
+            handler
+                .handover_keys(KeyRelease::AdminHandover, request)
+                .await
         } else {
             handler.get_kms_key(request).await
         };
-        (result, auth_requests(server))
+        (
+            result,
+            auth_requests(server),
+            state.metrics().render_prometheus(),
+        )
     }
 
     #[rocket::async_test]
     async fn handover_runs_every_authorization_check() {
-        let (result, requests) = handover(ALLOWED_HANDOVER, &[true, true]).await;
+        let (result, requests, metrics) = handover(ALLOWED_HANDOVER, &[true, true]).await;
         assert_eq!(result.unwrap().keys.len(), 1);
         let [(self_route, self_check), (caller_route, caller_check)] = &requests[..] else {
             panic!("unexpected auth API requests: {requests:?}");
@@ -1908,38 +2013,52 @@ mod tests {
         assert_eq!(caller_check["operation"], "kms_import_keys");
         assert_eq!(caller_check["requestedRootEpoch"], 0);
         assert_eq!(caller_check["appId"], hex::encode([0x11; 20]));
+        assert!(metrics.contains(&key_releases("rpc", 1)), "{metrics}");
+        assert!(metrics.contains(&key_releases("admin", 0)), "{metrics}");
 
         let admin = HandoverCase {
             admin: true,
             public_key_handover: false,
             ..ALLOWED_HANDOVER
         };
-        let (result, requests) = handover(admin, &[true, true]).await;
+        let (result, requests, metrics) = handover(admin, &[true, true]).await;
         assert!(result.is_ok());
         assert_eq!(requests.len(), 2);
+        assert!(metrics.contains(&key_releases("admin", 1)), "{metrics}");
+        assert!(metrics.contains(&key_releases("rpc", 0)), "{metrics}");
+    }
+
+    fn key_releases(listener: &str, count: u64) -> String {
+        format!(
+            "dstack_kms_key_releases_total{{listener=\"{listener}\",operation=\"kms_export_keys\"}} {count}\n"
+        )
     }
 
     #[rocket::async_test]
     async fn handover_is_refused_when_any_check_denies() {
-        let (result, requests) = handover(ALLOWED_HANDOVER, &[false]).await;
+        let (result, requests, metrics) = handover(ALLOWED_HANDOVER, &[false]).await;
         assert!(format!("{:#}", result.unwrap_err()).contains("KMS self authorization failed"));
         assert_eq!(requests[0].1["operation"], "kms_export_keys");
+        // A refused handover releases nothing and is not counted.
+        assert!(metrics.contains(&key_releases("rpc", 0)), "{metrics}");
 
         for admin in [false, true] {
             let case = HandoverCase {
                 admin,
                 ..ALLOWED_HANDOVER
             };
-            let (result, requests) = handover(case, &[true, false]).await;
+            let (result, requests, metrics) = handover(case, &[true, false]).await;
             assert!(result.is_err());
             assert_eq!(requests[1].1["operation"], "kms_import_keys");
+            let listener = if admin { "admin" } else { "rpc" };
+            assert!(metrics.contains(&key_releases(listener, 0)), "{metrics}");
 
             let case = HandoverCase {
                 snp_key_release: false,
                 admin,
                 ..ALLOWED_HANDOVER
             };
-            let (result, _) = handover(case, &[true, true]).await;
+            let (result, _, _) = handover(case, &[true, true]).await;
             let err = format!("{:#}", result.unwrap_err());
             assert!(err.contains("sev-snp key release is not enabled"), "{err}");
         }
@@ -1948,7 +2067,7 @@ mod tests {
             public_key_handover: false,
             ..ALLOWED_HANDOVER
         };
-        let (result, requests) = handover(public_disabled, &[]).await;
+        let (result, requests, _) = handover(public_disabled, &[]).await;
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("public KMS key handover is disabled"), "{err}");
         assert!(requests.is_empty());
@@ -1985,6 +2104,7 @@ mod tests {
         let handler = RpcHandler {
             state: kms_state(dir.path(), &url),
             attestation: None,
+            remote_endpoint: None,
         };
         let request = AppId {
             app_id: vec![0x11; 20],
@@ -2026,6 +2146,7 @@ mod tests {
         let response = RpcHandler {
             state: state.clone(),
             attestation: None,
+            remote_endpoint: None,
         }
         .get_temp_ca_cert()
         .await
@@ -2066,6 +2187,7 @@ mod tests {
                     RpcHandler {
                         state,
                         attestation: None,
+                        remote_endpoint: None,
                     }
                     .get_meta()
                     .await
