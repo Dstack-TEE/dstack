@@ -445,8 +445,8 @@ contract DstackAppTest is Test {
     function test_AuthorizeAppOwnsOperationScopeAndAppEpoch() public {
         IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
-        app.addComposeHash(info.composeHash);
-        app.addDevice(info.deviceId);
+        app.addComposeHashAtEpoch(0, info.composeHash);
+        app.addDeviceAtEpoch(0, info.deviceId);
         app.advanceAppEpoch(0);
         vm.stopPrank();
 
@@ -579,7 +579,7 @@ contract DstackAppTest is Test {
     }
 
     function authorizeCurrent(IAppAuth.AppInfo memory info) internal view returns (bool allowed) {
-        (allowed,) = app.authorizeApp(info, app.currentAppEpoch(), keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, app.currentAppEpoch(), keccak256("app_get_key"));
     }
 
     function test_LegacyAppCheckRefusesOnceTheAppEpochAdvances() public {
@@ -600,9 +600,9 @@ contract DstackAppTest is Test {
         assertFalse(allowed);
         assertEq(reason, "App epoch requires epoch-aware authorization");
         // Epoch-aware callers keep working at both epochs.
-        (allowed,) = app.authorizeApp(info, 1, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 1, keccak256("app_get_key"));
         assertTrue(allowed);
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         vm.stopPrank();
     }
@@ -622,7 +622,7 @@ contract DstackAppTest is Test {
         assertTrue(allowed);
         allowed = authorizeCurrent(next);
         assertFalse(allowed);
-        (allowed,) = app.authorizeApp(next, 1, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(next, 1, keccak256("app_get_key"));
         assertFalse(allowed, "the next row is not active before advancing");
         vm.expectRevert("Unknown app epoch");
         app.addComposeHashAtEpoch(2, next.composeHash);
@@ -630,9 +630,9 @@ contract DstackAppTest is Test {
         app.advanceAppEpoch(0);
         allowed = authorizeCurrent(next);
         assertTrue(allowed, "a prepared row authorizes as soon as it is current");
-        (allowed,) = app.authorizeApp(next, 1, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(next, 1, keccak256("app_get_key"));
         assertTrue(allowed);
-        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         app.addComposeHashAtEpoch(2, next.composeHash);
         vm.stopPrank();

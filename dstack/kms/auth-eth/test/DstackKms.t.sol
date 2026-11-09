@@ -295,7 +295,7 @@ contract DstackKmsTest is Test {
         registerNextRootEpoch();
         registerNextRootEpoch();
         approveKmsAtEpoch(info, 1);
-        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
 
         (,,, bytes32 h1) = kms.rootEpoch(1);
         kms.popRootEpoch(1, h1);
@@ -305,9 +305,9 @@ contract DstackKmsTest is Test {
         assertFalse(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
         assertFalse(kms.kmsAllowedAggregatedMrsAtEpoch(1, info.mrAggregated));
         assertFalse(kms.kmsAllowedDeviceIdsAtEpoch(1, info.deviceId));
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
         approveKmsAtEpoch(info, 1);
-        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
         // Epoch 0 is untouched throughout.
         assertTrue(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
         vm.stopPrank();
@@ -715,11 +715,8 @@ contract DstackKmsTest is Test {
         assertEq(result.currentRootEpoch, 1);
         assertEq(result.currentRootEpochHash, hash1);
 
-        DstackKms.AuthorizationRequest memory request = DstackKms.AuthorizationRequest(
-            authorizationInfo(user),
-            keccak256("kms_serve"),
-            DstackKms.OptionalUint256(false, 0),
-            DstackKms.OptionalUint256(false, 0)
+        AuthorizationRequest memory request = AuthorizationRequest(
+            authorizationInfo(user), keccak256("kms_serve"), OptionalUint256(false, 0), OptionalUint256(false, 0)
         );
         result = kms.authorizeApp(request);
         assertEq(result.rejectionReason, "Invalid authorization operation");
@@ -1218,32 +1215,32 @@ contract DstackKmsTest is Test {
             assertTrue(kms.kmsAllowedAggregatedMrsAtEpoch(epoch, info.mrAggregated));
             assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(epoch, info.deviceId));
         }
-        assertTrue(authorize(info, true).isAllowed);
-        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
-        assertTrue(authorize(info, false).isAllowed);
+        assertTrue(authorize(info, true).authorized);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
+        assertTrue(authorize(info, false).authorized);
 
         // A revocation during the rotation reaches the serving and the pending row.
         kms.removeKmsAggregatedMr(info.mrAggregated);
-        assertFalse(authorize(info, true).isAllowed);
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertFalse(authorize(info, true).authorized);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
         kms.addKmsAggregatedMr(info.mrAggregated);
         kms.removeKmsDevice(info.deviceId);
-        assertFalse(authorize(info, true).isAllowed);
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertFalse(authorize(info, true).authorized);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
         kms.addKmsDevice(info.deviceId);
         kms.removeOsImageHash(info.osImageHash);
-        assertFalse(authorize(info, true).isAllowed);
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
-        assertFalse(authorize(info, false).isAllowed);
+        assertFalse(authorize(info, true).authorized);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
+        assertFalse(authorize(info, false).authorized);
         activateNextRootEpoch();
-        assertFalse(authorize(info, true).isAllowed);
-        assertFalse(authorize(info, false).isAllowed);
+        assertFalse(authorize(info, true).authorized);
+        assertFalse(authorize(info, false).authorized);
 
         // Once epoch one is current, epoch zero is no longer written.
         kms.addOsImageHash(info.osImageHash);
         assertFalse(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
-        assertTrue(authorize(info, true).isAllowed);
-        assertTrue(authorize(info, false).isAllowed);
+        assertTrue(authorize(info, true).authorized);
+        assertTrue(authorize(info, false).authorized);
         vm.stopPrank();
     }
 
@@ -1256,8 +1253,8 @@ contract DstackKmsTest is Test {
         assertFalse(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
         assertFalse(kms.kmsAllowedAggregatedMrsAtEpoch(0, info.mrAggregated));
         assertFalse(kms.kmsAllowedDeviceIdsAtEpoch(0, info.deviceId));
-        assertFalse(authorize(info, true).isAllowed);
-        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertFalse(authorize(info, true).authorized);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
 
         approveKmsAtEpoch(info, 0);
         kms.removeOsImageHashAtEpoch(1, info.osImageHash);
@@ -1266,8 +1263,8 @@ contract DstackKmsTest is Test {
         assertTrue(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
         assertTrue(kms.kmsAllowedAggregatedMrsAtEpoch(0, info.mrAggregated));
         assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(0, info.deviceId));
-        assertTrue(authorize(info, true).isAllowed);
-        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertTrue(authorize(info, true).authorized);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
         vm.stopPrank();
     }
 }

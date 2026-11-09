@@ -1918,10 +1918,11 @@ mod tests {
     }
 
     fn auth_answer(state: &KmsState, allowed: bool) -> String {
+        let hash = hex::encode(state.keyring.chain_hashes[0]);
         serde_json::json!({
-            "isAllowed": allowed, "rejectionReason": "denied", "gatewayAppId": "",
-            "currentRootEpoch": 0, "currentAppEpoch": 0,
-            "currentRootEpochHash": hex::encode(state.keyring.chain_hashes[0]),
+            "authorized": allowed, "rejectionReason": "denied", "gatewayAppId": "",
+            "currentRootEpoch": 0, "currentAppEpoch": 0, "currentRootEpochHash": hash,
+            "latestRootEpoch": 0, "latestRootEpochHash": hash,
         })
         .to_string()
     }

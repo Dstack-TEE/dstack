@@ -405,14 +405,14 @@ describe('authorization endpoints', () => {
     }))).json();
     try {
       expect(await request('authorizeApp', { operation: 'app_get_cert', requestedRootEpoch: 1, requestedAppEpoch: 2 }))
-        .toMatchObject({ isAllowed: true, currentRootEpoch: 1, currentAppEpoch: 2 });
+        .toMatchObject({ authorized: true, currentRootEpoch: 1, currentAppEpoch: 2 });
       for (const [route, operation] of [['authorizeApp', 'kms_serve'], ['authorizeKms', 'app_get_key']]) {
-        expect(await request(route, { operation })).toMatchObject({ isAllowed: false, rejectionReason: 'Invalid authorization operation' });
+        expect(await request(route, { operation })).toMatchObject({ authorized: false, rejectionReason: 'Invalid authorization operation' });
       }
       expect(await request('authorizeApp', { operation: 'app_get_key', requestedRootEpoch: 2 }))
-        .toMatchObject({ isAllowed: false, rejectionReason: 'Requested root epoch is not active' });
+        .toMatchObject({ authorized: false, rejectionReason: 'Requested root epoch is not active' });
       expect(await request('authorizeApp', { operation: 'app_get_key', requestedAppEpoch: 3 }))
-        .toMatchObject({ isAllowed: false, rejectionReason: 'Requested app epoch is not active' });
+        .toMatchObject({ authorized: false, rejectionReason: 'Requested app epoch is not active' });
     } finally {
       vi.unstubAllEnvs();
     }

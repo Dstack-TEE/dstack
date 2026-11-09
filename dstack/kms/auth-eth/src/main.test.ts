@@ -339,7 +339,7 @@ describe('Ethereum root epoch registry', () => {
       const fn = kms.getFunction(tx.data!.slice(0, 10));
       if (fn?.name !== method) return normalCall(tx);
       forwarded.push(kms.decodeFunctionData(fn, tx.data!)[0]);
-      return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n]]);
+      return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n, 1n, hash]]);
     });
     const response = await app.inject({
       method: 'POST', url: `/${method}`, payload: { ...bootInfo, operation, ...epochs },

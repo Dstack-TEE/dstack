@@ -895,8 +895,9 @@ describe('POST /authorizeApp', () => {
     ['authorizeApp', 'app_get_cert', {}],
   ] as const)('forwards the operation and both epochs to %s (%s)', async (method, operation, epochs) => {
     mockReadContract.mockResolvedValueOnce({
-      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
       currentAppEpoch: 3n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 2n, latestRootEpochHash: '0x' + '77'.repeat(32),
     });
     const response = await appFetch(new Request(`http://localhost/${method}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
