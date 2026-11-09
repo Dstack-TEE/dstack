@@ -439,15 +439,15 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(0, info.composeHash);
         app.addDeviceAtEpoch(0, info.deviceId);
         app.advanceAppEpoch(0);
-        (bool allowed,) = app.isAppAllowed(info);
+        bool allowed = authorizeCurrent(info);
         assertFalse(allowed);
         (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
         app.addComposeHash(info.composeHash);
-        (allowed,) = app.isAppAllowed(info);
+        allowed = authorizeCurrent(info);
         assertFalse(allowed, "each material must be approved in the selected row");
         app.addDevice(info.deviceId);
-        (allowed,) = app.isAppAllowed(info);
+        allowed = authorizeCurrent(info);
         assertTrue(allowed);
         app.removeComposeHash(info.composeHash);
         assertFalse(app.allowedComposeHashesAtEpoch(1, info.composeHash));
@@ -459,7 +459,7 @@ contract DstackAppTest is Test {
         assertFalse(app.allowedDeviceIds(info.deviceId));
         (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
-        (allowed,) = app.isAppAllowed(info);
+        allowed = authorizeCurrent(info);
         assertTrue(allowed, "revoking epoch zero must not revoke epoch one");
         (allowed,) = app.authorizeApp(info, 2, keccak256("app_get_key"));
         assertFalse(allowed);
@@ -481,12 +481,12 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(0, newInfo.composeHash);
         (allowed,) = app.authorizeApp(newInfo, 0, keccak256("app_get_key"));
         assertTrue(allowed);
-        (allowed,) = app.isAppAllowed(oldInfo);
+        allowed = authorizeCurrent(oldInfo);
         assertFalse(allowed, "old image cannot read new keys");
         app.removeComposeHashAtEpoch(0, oldInfo.composeHash);
         (allowed,) = app.authorizeApp(oldInfo, 0, keccak256("app_get_key"));
         assertFalse(allowed);
-        (allowed,) = app.isAppAllowed(newInfo);
+        allowed = authorizeCurrent(newInfo);
         assertTrue(allowed);
         vm.stopPrank();
     }
@@ -498,10 +498,10 @@ contract DstackAppTest is Test {
         app.setAllowAnyDeviceAtEpoch(0, true);
         app.advanceAppEpoch(0);
         app.addComposeHash(info.composeHash);
-        (bool allowed,) = app.isAppAllowed(info);
+        bool allowed = authorizeCurrent(info);
         assertFalse(allowed);
         app.addDevice(info.deviceId);
-        (allowed,) = app.isAppAllowed(info);
+        allowed = authorizeCurrent(info);
         assertTrue(allowed, "explicit device can replace wildcard in a newer row");
         app.removeDevice(info.deviceId);
         app.setAllowAnyDevice(true);
@@ -510,11 +510,40 @@ contract DstackAppTest is Test {
         assertTrue(app.allowAnyDeviceAtEpoch(1));
         (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
         assertFalse(allowed);
-        (allowed,) = app.isAppAllowed(info);
+        allowed = authorizeCurrent(info);
         assertTrue(allowed);
         app.setAllowAnyDevice(false);
-        (allowed,) = app.isAppAllowed(info);
+        allowed = authorizeCurrent(info);
         assertFalse(allowed);
+        vm.stopPrank();
+    }
+
+    function authorizeCurrent(IAppAuth.AppInfo memory info) internal view returns (bool allowed) {
+        (allowed,) = app.authorizeApp(info, app.currentAppEpoch(), keccak256("app_get_key"));
+    }
+
+    function test_LegacyAppCheckRefusesOnceTheAppEpochAdvances() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHash(info.composeHash);
+        app.addDevice(info.deviceId);
+        // At epoch 0 the legacy check reads row 0, as in v0.6.0.
+        (bool allowed, string memory reason) = app.isAppAllowed(info);
+        assertTrue(allowed, reason);
+        app.removeComposeHashAtEpoch(1, info.composeHash);
+        (allowed,) = app.isAppAllowed(info);
+        assertTrue(allowed, "the prepared next row does not affect the legacy check");
+        app.addComposeHashAtEpoch(1, info.composeHash);
+
+        app.advanceAppEpoch(0);
+        (allowed, reason) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "App epoch requires epoch-aware authorization");
+        // Epoch-aware callers keep working at both epochs.
+        (allowed,) = app.authorizeApp(info, 1, keccak256("app_get_key"));
+        assertTrue(allowed);
+        (allowed,) = app.authorizeApp(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
         vm.stopPrank();
     }
 
@@ -529,9 +558,9 @@ contract DstackAppTest is Test {
         app.addDeviceAtEpoch(1, next.deviceId);
         app.setAllowAnyDeviceAtEpoch(1, true);
         // Preparing the next row leaves the current one as it was.
-        (bool allowed,) = app.isAppAllowed(info);
+        bool allowed = authorizeCurrent(info);
         assertTrue(allowed);
-        (allowed,) = app.isAppAllowed(next);
+        allowed = authorizeCurrent(next);
         assertFalse(allowed);
         (allowed,) = app.authorizeApp(next, 1, keccak256("app_get_key"));
         assertFalse(allowed, "the next row is not active before advancing");
@@ -539,7 +568,7 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(2, next.composeHash);
 
         app.advanceAppEpoch(0);
-        (allowed,) = app.isAppAllowed(next);
+        allowed = authorizeCurrent(next);
         assertTrue(allowed, "a prepared row authorizes as soon as it is current");
         (allowed,) = app.authorizeApp(next, 1, keccak256("app_get_key"));
         assertTrue(allowed);

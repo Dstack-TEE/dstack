@@ -21,7 +21,10 @@ then call `advanceAppEpoch(N)`, so guests that restart after the advance are
 authorized at once. `AdvanceAppEpoch` in `Manage.s.sol` exposes
 this operation; `GetAppEpoch` in `Query.s.sol` reads it. Upgrade the app policy
 implementation before advancing, and upgrade the KMS/auth backend and guests
-before using nonzero epochs. The ERC-165 `IAppEpochAuth` capability combines
+before using nonzero epochs. Once the app epoch is nonzero, the legacy
+`isAppAllowed` of both `DstackApp` and `DstackKms` refuses, since its callers
+derive epoch-zero keys, so the KMS contract calling the app policy must support
+epochs before the app epoch advances. The ERC-165 `IAppEpochAuth` capability combines
 `currentAppEpoch()` and `authorizeApp(...)` in one interface. Legacy policies
 without this capability remain at zero; failures of an advertised getter propagate.
 

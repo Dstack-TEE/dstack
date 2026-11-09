@@ -262,14 +262,16 @@ contract DstackApp is
         emit EpochPolicyChanged(keccak256("device"), deviceId, epoch, allowed);
     }
 
-    // Legacy callers authorize the current epoch, never an older policy implicitly.
+    // Legacy callers derive epoch-zero keys from this bool, so once the app epoch
+    // advances they are refused rather than handed keys the owner is retiring.
     function isAppAllowed(IAppAuth.AppInfo calldata bootInfo)
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
-        return _authorizeApp(bootInfo, currentAppEpoch);
+        if (currentAppEpoch != 0) return (false, "App epoch requires epoch-aware authorization");
+        return _authorizeApp(bootInfo, 0);
     }
 
     function authorizeApp(
