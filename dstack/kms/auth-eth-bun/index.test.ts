@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import openApiSpec from './openapi.json';
+import { keccak256, toBytes } from 'viem';
 
 // Mock viem
 const mockReadContract = vi.fn();
@@ -274,9 +275,9 @@ describe('API Compatibility Tests', () => {
       expect(stale.reason).toMatch(/1 is current/);
       const forked = await boot('app', { rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) });
       expect(forked.reason).toMatch(/not the registered/);
-      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      // A KMS predating root epochs, and its apps, are cut off.
       expect((await boot('app', {})).reason).toMatch(/reports none/);
-      expect((await boot('kms', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).reason).toMatch(/reports none/);
 
       const info = await appFetch(new Request('http://localhost:3001/'));
       expect(await info.json()).toMatchObject({ rootEpoch: 1, rootEpochHash: hash });
@@ -296,9 +297,10 @@ describe('API Compatibility Tests', () => {
       expect(current).not.toHaveBeenCalled();
     });
 
-    it('allows old KMS app requests while epoch 0 is current', async () => {
+    it('serves an old KMS, and its apps, while epoch 0 is current', async () => {
       mockChain(() => [0n, hash], () => 1n);
       expect((await boot('app', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
     });
 
     it.each(['app', 'info'])('reads the registry at the same finalized block for %s', async (endpoint) => {
@@ -835,6 +837,18 @@ describe('request hardening', () => {
 });
 
 
+describe('GET /app/:appId', () => {
+  it('reports an app epoch only when the contract can vouch for it', async () => {
+    const url = `http://localhost/app/0x${'11'.repeat(20)}`;
+    mockReadContract.mockRejectedValueOnce(new Error('execution reverted: App not registered'));
+    expect((await appFetch(new Request(url))).status).toBe(503);
+    mockReadContract.mockResolvedValueOnce(0n);
+    const legacy = await appFetch(new Request(url));
+    expect(legacy.status).toBe(200);
+    expect(await legacy.json()).toEqual({ currentAppEpoch: 0 });
+  });
+});
+
 describe('POST /authorizeApp', () => {
   const appInfo = {
     appId: '0x' + '11'.repeat(20), composeHash: '0x' + '22'.repeat(32),
@@ -870,6 +884,33 @@ describe('POST /authorizeApp', () => {
     expect((await authorize(0)).status).toBe(200);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       args: [expect.objectContaining({ requestedRootEpoch: { isSet: true, value: 0n } })],
+    }));
+  });
+
+  it.each([
+    ['authorizeKms', 'kms_import_keys', { requestedRootEpoch: 2 }],
+    ['authorizeApp', 'app_get_key', { requestedRootEpoch: 1, requestedAppEpoch: 3 }],
+    ['authorizeApp', 'app_get_cert', {}],
+  ] as const)('forwards the operation and both epochs to %s (%s)', async (method, operation, epochs) => {
+    mockReadContract.mockResolvedValueOnce({
+      isAllowed: true, rejectionReason: '', gatewayAppId: 'gateway',
+      currentAppEpoch: 3n, currentRootEpoch: 2n, currentRootEpochHash: '0x' + '77'.repeat(32),
+    });
+    const response = await appFetch(new Request(`http://localhost/${method}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...appInfo, operation, ...epochs }),
+    }));
+    expect(response.status).toBe(200);
+    const selector = (value?: number) => ({ isSet: value !== undefined, value: BigInt(value ?? 0) });
+    const { requestedRootEpoch, requestedAppEpoch } = epochs as { requestedRootEpoch?: number, requestedAppEpoch?: number };
+    expect(mockReadContract).toHaveBeenCalledTimes(1);
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      functionName: method,
+      args: [expect.objectContaining({
+        operation: keccak256(toBytes(operation)),
+        requestedRootEpoch: selector(requestedRootEpoch),
+        requestedAppEpoch: selector(requestedAppEpoch),
+      })],
     }));
   });
 

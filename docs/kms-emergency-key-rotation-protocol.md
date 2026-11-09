@@ -39,7 +39,8 @@ The name leaves room for a separate per-app epoch later. Generate
 independent fresh CA and secp256k1 roots for each new epoch; existing derivation
 formulas can remain unchanged. Never reuse an epoch for different roots.
 
-DstackKms keeps an append-only registry of each epoch's root public keys, an
+DstackKms keeps a registry of each epoch's root public keys, whose keys and
+chain hash never change once registered (a pending epoch may be popped), an
 `evidenceUrl` locating the attestation that proves where they were generated, and
 a chain hash `h_n = keccak256(h_{n-1} || keccak256(caPubkey) || keccak256(k256Pubkey))`
 (zero `h_{-1}`) committing to every key up to `n`; the position in the chain
@@ -55,7 +56,9 @@ making it current are separate: `registerRootEpoch` appends (epoch 0 becomes
 current at once) and `activateRootEpoch(n)` moves the current epoch forward one
 step. `popRootEpoch(n, chainHash)` drops the last epoch while it is still pending, for when
 the nodes holding it are lost before activation; a re-rotation then registers a
-new `n`. A current epoch is never popped. `kmsInfo` follows the current epoch:
+new `n`, whose OS image, KMS MR and device rows start empty because policy rows
+are keyed by the epoch's chain hash. Prepare them again before activating. A
+current epoch is never popped. `kmsInfo` follows the current epoch:
 registering epoch 0 and each activation copy its keys there and clear the legacy
 quote and event log, and `setKmsInfo` is refused once epochs exist. Epoch 0 must be the `kmsInfo` keys
 when those are set; a legacy `kmsInfo` quote and event log are converted off
@@ -137,35 +140,44 @@ anchor: do not install it or compare it as though it were the current server pin
 
 ## 5. OS slot migration and LUKS header metadata
 
-Store the epoch in one LUKS2 JSON token:
+Store the epochs in one LUKS2 JSON token bound to the keyslot holding their key:
 
 ```json
-{"type":"dstack-kms","keyslots":["0"],"root_epoch":2}
+{"type":"dstack-kms","keyslots":["0"],"root_epoch":2,"app_epoch":0}
 ```
 
-The current `validate_single_luks2_header` rejects tokens, nonzero subsystem,
-unexpected labels, and any keyslot layout other than slot 0 alone. The new OS
-allows at most this one namespaced token, validates its epoch and slot-0 binding,
-and preserves the other checks. Validate both header copies consistently. Keep
-the existing initialization label; do not repurpose it or the subsystem field.
-Disks without the token are epoch 0.
+The validator rejects nonzero subsystem, unexpected labels, and any token but
+this one. It accepts keyslot 0, keyslot 1, or both (only mid-migration), each
+with the same pinned parameters, and requires both header copies to agree.
+Disks without the token are epoch 0. Requires cryptsetup 2.5 or later
+(`--token-replace`, `--new-key-slot`); Debian trixie ships 2.7.
 
 ```text
-GetAppKey(root_epoch unset) -> copy the header to tmpfs -> validate the copy
-  token_or_0 == current -> open with the copy
-  token_or_0 <  current -> old keys of epoch token_or_0 -> use only disk key
-          -> luksChangeKey + token import on the copy -> validate it again
-          -> luksHeaderRestore to the disk -> open with the copy
-  token_or_0 >  current -> refuse
-  -> continue boot using only latest application material
+copy the header to tmpfs -> validate the copy
+  initialization label set -> reformat (the disk holds no data yet)
+  token_or_0 > current -> refuse
+  current key unlocks a keyslot of the copy -> finish
+  otherwise, token_or_0 < current -> old keys of epoch token_or_0
+          -> check they unlock the recorded slot (token slot, else slot 0)
+          -> luksKillSlot any other slot
+          -> luksAddKey (old key authorizes the new key in the free slot)
+          -> recopy and validate -> finish
+  finish: token import (current epochs, surviving slot) -> luksKillSlot others
+          -> recopy, validate, and check the result -> open with the copy
 ```
 
-Use `luksChangeKey` instead of a deliberate add/remove two-slot transition. A
-successful change retains slot 0. Never format on unlock failure. Invalid or
-unsupported metadata requires recovery. Migrating the validated in-memory copy
-keeps the boot from acting on a header the host swaps after validation, and the
-key change and epoch token reach the disk in one header restore, so the token
-always names the epoch of the key in slot 0.
+Each step is one LUKS2 metadata commit, which cryptsetup keeps crash-consistent
+across both header copies. Whatever step a crash interrupts, the next boot
+finds either the old key alone or a keyslot the current key already unlocks,
+so trying the current key first resumes the migration. If another rotation
+happens before that boot, the current key unlocks neither of the two keyslots
+an interrupted migration leaves; the token still names the slot of the recorded
+epochs, so the other slot is dropped, but only once the recorded epochs' key is
+confirmed to unlock that slot, and the migration restarts from it. A crash between
+`luksFormat` and the token import leaves the initialization label set, which is
+cleared only after the filesystem exists, so such a disk is reformatted. Never
+format on unlock failure. Invalid or unsupported metadata requires recovery.
+The disk is opened only with the last validated in-memory copy.
 
 No extra reboot is required. Historical material is confined to the migration
 step, not persisted or passed to applications.
@@ -175,22 +187,27 @@ that, an epoch-0 disk is never tagged: before any rotation the new OS leaves the
 header untouched, so rolling back to an older OS image still works. Disks
 formatted at a later epoch are tagged immediately.
 
-Preliminary test (Linux 6.8.0-1028-intel, cryptsetup 2.7.0, 32 MiB file image,
-LUKS2/PBKDF2, no dm mapping): format, change-key, token import, and
-test-passphrase succeeded; the completed change retained slot 0, rejected old
-credentials, and accepted new ones.
-Release blockers: shipped-tool compatibility, interruption recovery across both
-headers, and old key-area wiping. Completed-operation tests do not prove atomicity.
+Tested in a Debian trixie container (cryptsetup 2.7.5, 32 MiB file images,
+LUKS2/PBKDF2, no dm mapping): full migrations, resumption after each step,
+disagreeing header copies, failed `luksAddKey` or denied old epochs leaving the
+old epochs in place, failed token import, and disks recording newer epochs.
+Old key-area wiping remains a release blocker.
 
 ## 6. Environment migration, application keys, and TLS
 
-First decrypt env using latest. On authentication failure, try historical epochs
-from current-1 down to 0, at most once each per boot; no platform metadata is
-required. Stop on authorization failure. Corrupt ciphertext fails closed; env epoch is independent of
-the disk token. Empty env requires no migration.
+First decrypt env using latest. On authentication failure, try historical keys
+from current down to 0, at most once each per boot; no platform metadata is
+required. Skip an epoch whose key the KMS refuses, or that does not decrypt, until
+one does: each historical key is still authorized by the KMS, and stopping at a
+refusal would strand env encrypted under an older epoch whose image is approved
+there but not in a newer row. The search costs at most current+1 RA-TLS requests,
+only until the env has been migrated. Ciphertext no key decrypts fails closed;
+env epoch is independent of the disk token. Empty env requires no migration.
 
 Decrypt/re-encrypt only inside the CVM, using current env public key, existing
-format, and fresh randomness. Locally verify replacement decryption.
+format, and fresh randomness. The guest does not read the replacement back:
+sealing and opening are deterministic code, so integration tests guarantee that
+a re-sealed env opens on the next boot, after the VMM has replaced the old one.
 The guest pushes the result to the VMM with `HostApi.UpdateEncryptedEnv` on
 every boot, before any application code runs, sending an empty env when nothing
 changed. The host API is reached over the VM's own vsock, so the VMM knows which
@@ -235,15 +252,27 @@ generates epoch S+1.
 | Ordinary join | Holds the current epoch, possibly one pending activation | Keyring 0..S |
 | Rotation join (`rotate=true`) | Holds exactly up to the current epoch | Keyring 0..S plus fresh epoch S+1 and attestation evidence |
 
-Use admin authorization and recipient KMS attestation. Disable public legacy
-handover and reject incompatible legacy receivers without reducing the payload.
-A rotation also requires the source's certificate to carry its OS image hash.
+Every handover requires the recipient's KMS attestation: the source checks the
+attested RA-TLS client certificate on both `Admin.GetKmsKey` and the public
+`KMS.GetKmsKey`. Admin authorization (`source_token`) is recommended for joins
+and rotations alike, but not required: a rotation only produces a pending epoch
+N+1, which no node accepts until governance registers and activates it. Where
+possible, disable public legacy handover and reject incompatible legacy
+receivers without reducing the payload. The source's certificate must carry its
+OS image hash.
 Deployments that never registered epochs can still join at epoch 0.
 
-For rotation, generate fresh roots and attest them: report data is
-`keccak256("dstack-kms-generated-keys-v2:{N};{ca_pubkey_hex};{k256_pubkey_hex};")`
-(epoch 0 keeps the original v1 bootstrap encoding). The owner validates the
-evidence, approved code, and binding, then registers N; the cluster keeps
+For rotation, generate fresh roots and attest them with the bootstrap encoding
+used for every epoch: report data is
+`keccak256("dstack-kms-genereted-keys-v1:{ca_pubkey_hex};{k256_pubkey_hex};")`
+zero-padded to 64 bytes. The "genereted" spelling is part of the released format.
+The evidence only has to prove the key pair was generated in an approved TEE.
+It binds neither the epoch number, which comes from the on-chain registration
+order, nor the preceding chain hash, which joins already check against the
+registry; a mismatch in either is an availability problem that `servable_epoch`
+catches at once, not a key leak. Before registering N, the owner verifies the
+quote with dstack-verifier, checks the approved code and measurements, and
+recomputes the report data from the published keys; the cluster keeps
 serving N-1. After the other nodes onboard and hold N, the owner activates N and
 every KMS restarts onto it. An old-root signature is not authorization.
 Competing generators cannot both be registered as N; a losing node's keyring no
@@ -253,8 +282,9 @@ Every authorization request (app checks and the KMS self check that gates all
 RPCs) carries the epoch the KMS serves, so a backend refuses a stale or forked
 KMS. On a denial the KMS reads the current epoch from the info endpoint and
 restarts if it moved. A KMS predating root epochs sends none; backends treat it
-as epoch 0 and deny its app checks once a later epoch is current, so old KMS
-software is cut off too. In-flight operations are not cancelled.
+as epoch 0 and, once a later epoch is current, deny both its self check and its
+app checks, so old KMS software stops serving. Upgrade every KMS before
+activating a new epoch. In-flight operations are not cancelled.
 
 Backups retain full history; closing migration does not delete roots. Replacement
 KMS boot cannot depend on its own unavailable service or stopped gateway ingress.
@@ -279,8 +309,11 @@ Protect root storage and independent admin access.
    services/ingress. Keep failed instances isolated for operator follow-up.
 7. Notify env public-key verifiers (vmm-cli signer whitelists, frontends, SDK
    callers) to replace the old k256 signer with the new one, preferably by reading
-   it from DstackKms. A stale whitelist entry does not break migration, but lets
-   anyone able to intercept client-to-KMS traffic forge env public keys.
+   it from DstackKms. For vmm-cli, run `kms remove <old signer>`, then
+   `kms add <new signer>`. A stale whitelist entry does not break migration, but
+   lets anyone holding the old root and able to intercept client-to-KMS traffic
+   forge env public keys; the `root_epoch` in a response is set by its signer
+   and protects nothing.
 
 ## 9. Invariants and acceptance
 

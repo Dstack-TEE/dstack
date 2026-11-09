@@ -15,10 +15,16 @@ historical epoch zero. Future epochs are denied through `rejectionReason`.
 `DstackApp.currentAppEpoch` starts at zero. Its owner calls
 `advanceAppEpoch(expectedCurrentEpoch)` to increment it. The expected value
 prevents a stale or retried transaction from advancing twice. Epochs cannot be
-rolled back and are limited to uint32. `AdvanceAppEpoch` in `Manage.s.sol` exposes
+rolled back and are limited to uint32. Prepare the next row before advancing, as
+with a pending root epoch: approve its materials with `*AtEpoch(N + 1, ...)`,
+then call `advanceAppEpoch(N)`, so guests that restart after the advance are
+authorized at once. `AdvanceAppEpoch` in `Manage.s.sol` exposes
 this operation; `GetAppEpoch` in `Query.s.sol` reads it. Upgrade the app policy
 implementation before advancing, and upgrade the KMS/auth backend and guests
-before using nonzero epochs. The ERC-165 `IAppEpochAuth` capability combines
+before using nonzero epochs. Once the app epoch is nonzero, the legacy
+`isAppAllowed` of both `DstackApp` and `DstackKms` refuses, since its callers
+derive epoch-zero keys, so the KMS contract calling the app policy must support
+epochs before the app epoch advances. The ERC-165 `IAppEpochAuth` capability combines
 `currentAppEpoch()` and `authorizeApp(...)` in one interface. Legacy policies
 without this capability remain at zero; failures of an advertised getter propagate.
 
@@ -46,11 +52,15 @@ epochs. For an image handover, explicitly approve the new image in the old row s
 it can migrate old keys, approve it in the new row, and remove the old image from
 the old row after the handover. The old image never needs access to the new row.
 
-Existing add/remove methods operate on the highest epoch: the latest **registered**
-root epoch (including a pending epoch), or the current app epoch. Before any root
-epoch is registered, they operate on epoch zero. The `*AtEpoch(epoch, material)`
-methods select a particular registered root/current-or-historical app epoch;
-removal affects only that row. `setAllowAnyDeviceAtEpoch(epoch, allowed)` is also
+Existing `DstackKms` add/remove methods (OS images, KMS aggregated MRs, KMS
+devices) operate on every root row from the current epoch through the latest
+**registered** one, so a removal during a rotation revokes the material in both
+the serving and the pending row, and an addition allows it in both. Before any
+root epoch is registered, they operate on epoch zero. `DstackApp` add/remove
+methods, and `setAllowAnyDevice`, likewise operate on the current app epoch and
+the next one. The `*AtEpoch(epoch, material)` methods select a particular
+registered root epoch, or a historical, current or next app epoch; removal
+affects only that row. `setAllowAnyDeviceAtEpoch(epoch, allowed)` is also
 row-specific. Single-material add/remove scripts in `Manage.s.sol` accept optional
 `ROOT_EPOCH` or `APP_EPOCH` variables, respectively, as does `SetAllowAnyDevice`.
 
@@ -58,9 +68,12 @@ The `*AtEpoch` getters read the selected row, including legacy epoch zero.
 `EpochPolicyChanged` events include the row and the resulting permission. Legacy
 bool getters and events describe **epoch zero only**; changing a nonzero row does
 not change its legacy bool or emit a misleading legacy material event.
-Pending root epoch numbers may be popped and reused; policy rows belong to epoch
-numbers, not key hashes. Review or clear a pending row before activating a
-replacement epoch with the same number.
+Root policy rows from epoch 1 belong to the epoch's keys: the contract stores
+them under its chain hash, so a row can be written only once the epoch is
+registered (register, prepare the row, then activate). A popped epoch's rows do
+not carry over: other keys registered under the same number start with empty
+rows, which must be prepared again before activation. Epoch 0 keeps the legacy
+mappings.
 
 ### KMS keyring handover
 

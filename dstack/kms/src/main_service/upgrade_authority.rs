@@ -15,7 +15,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tracing::warn;
 
 /// The KMS `bootAuth` payload. This is the verifier's `PolicyBootInfo` — the one
 /// canonical struct shared by the producer (KMS) and the policy input the
@@ -476,32 +475,24 @@ pub(crate) async fn ensure_self_kms_allowed(
     Ok(())
 }
 
-/// `allow_legacy_cert` accepts a source whose certificate predates the unified
-/// attestation format, judging its image by mrAggregated alone.
+/// A source must present its OS image hash. KMS releases before 0.6 issue
+/// certificates without a vm_config, and so without one; they cannot be joined
+/// directly. Upgrade such a cluster to 0.6 first.
+fn ensure_source_os_image(boot_info: &BootInfo) -> Result<()> {
+    if boot_info.os_image_hash.is_empty() {
+        bail!("the source KMS certificate does not carry its OS image hash; onboard from a v0.6+ source");
+    }
+    Ok(())
+}
+
 pub(crate) async fn ensure_kms_allowed(
     cfg: &KmsConfig,
     attestation: &VerifiedAttestation,
-    verifier: &AttestationVerifier,
-    allow_legacy_cert: bool,
     root_epoch: u32,
 ) -> Result<RootEpochRegistry> {
-    let mut boot_info = build_boot_info_for_attestation(attestation, false, "")
+    let boot_info = build_boot_info_for_attestation(attestation, false, "")
         .context("failed to build KMS boot info from attestation")?;
-    // Workaround: old source KMS instances use the legacy cert format (separate TDX_QUOTE +
-    // EVENT_LOG OIDs) which lacks vm_config, resulting in an empty os_image_hash.
-    // Fill it from the local KMS's own value, so only mrAggregated gates the source image here.
-    // A source that presents a config but no os_image_hash is not legacy and gets no fallback.
-    // TODO: remove once all source KMS instances use the unified PHALA_RATLS_ATTESTATION format.
-    if boot_info.os_image_hash.is_empty() && attestation.config.is_empty() {
-        if !allow_legacy_cert {
-            bail!("the source KMS certificate does not carry its OS image hash");
-        }
-        warn!("source KMS uses the legacy cert format, falling back to the local os_image_hash");
-        let local_info = local_kms_boot_info(verifier)
-            .await
-            .context("failed to get local KMS boot info for os_image_hash fallback")?;
-        boot_info.os_image_hash = local_info.os_image_hash;
-    }
+    ensure_source_os_image(&boot_info)?;
     let response = cfg
         .auth_api
         .authorize_kms(&boot_info, Operation::KmsExportKeys, Some(root_epoch))
@@ -548,12 +539,22 @@ pub(crate) mod tests {
     pub(crate) fn serve<S: Into<String>>(
         responses: Vec<S>,
     ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
-        let responses: Vec<String> = responses.into_iter().map(Into::into).collect();
+        serve_with_status(responses.into_iter().map(|body| (200, body)).collect())
+    }
+
+    /// Like [`serve`], answering each request with its own HTTP status.
+    pub(crate) fn serve_with_status<S: Into<String>>(
+        responses: Vec<(u16, S)>,
+    ) -> (String, thread::JoinHandle<Vec<(String, Value)>>) {
+        let responses: Vec<(u16, String)> = responses
+            .into_iter()
+            .map(|(status, body)| (status, body.into()))
+            .collect();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = thread::spawn(move || {
             let mut requests = Vec::new();
-            for response in responses {
+            for (status, response) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 4096];
@@ -598,7 +599,7 @@ pub(crate) mod tests {
                 requests.push((path, body));
                 write!(
                     stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     response.len(),
                     response
                 )
@@ -607,6 +608,21 @@ pub(crate) mod tests {
             requests
         });
         (format!("http://{address}"), handle)
+    }
+
+    /// Joins and rotations share this check, so both refuse such a source.
+    #[test]
+    fn a_source_certificate_without_an_os_image_hash_is_refused() {
+        let legacy = BootInfo {
+            os_image_hash: vec![],
+            ..boot_info(1)
+        };
+        let err = ensure_source_os_image(&legacy).unwrap_err();
+        assert!(
+            err.to_string().contains("onboard from a v0.6+ source"),
+            "{err:#}"
+        );
+        ensure_source_os_image(&boot_info(1)).unwrap();
     }
 
     pub(crate) fn webhook(url: String) -> AuthApi {

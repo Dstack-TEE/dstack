@@ -11,7 +11,7 @@ import "openzeppelin-foundry-upgrades/Upgrades.sol";
 import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
 import "../contracts/IAppAuth.sol";
-import "../contracts/test-utils/LegacyDstackKms.sol";
+import { DstackKms as DstackKmsV059 } from "../contracts/test-utils/reference/v0.5.9/DstackKmsV059.sol";
 
 contract DstackKmsTest is Test {
     DstackKms public kms;
@@ -54,11 +54,11 @@ contract DstackKmsTest is Test {
     function upgradeLegacyKms() internal {
         vm.startPrank(owner);
         address proxy = Upgrades.deployUUPSProxy(
-            "LegacyDstackKms.sol", abi.encodeCall(LegacyDstackKms.initialize, (owner, address(appImpl)))
+            "DstackKmsV059.sol:DstackKms", abi.encodeCall(DstackKmsV059.initialize, (owner, address(appImpl)))
         );
-        LegacyDstackKms(proxy).setKmsInfo(LegacyDstackKms.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
+        DstackKmsV059(proxy).setKmsInfo(DstackKmsV059.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
         Options memory opts;
-        opts.referenceContract = "LegacyDstackKms.sol";
+        opts.referenceContract = "DstackKmsV059.sol:DstackKms";
         Upgrades.upgradeProxy(proxy, "DstackKms.sol", "", opts);
         vm.stopPrank();
         kms = DstackKms(proxy);
@@ -275,6 +275,42 @@ contract DstackKmsTest is Test {
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
         kms.popRootEpoch(1, h1b);
+    }
+
+    function test_PolicyRowsBelongToTheRegisteredKeysOfAnEpoch() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        // Epoch 0 keeps the legacy mappings, even before any registration.
+        approveKmsAtEpoch(info, 0);
+        assertTrue(kms.allowedOsImages(info.osImageHash));
+        assertTrue(kms.kmsAllowedAggregatedMrs(info.mrAggregated));
+        assertTrue(kms.kmsAllowedDeviceIds(info.deviceId));
+        // Rows of an unregistered epoch can be neither written nor read.
+        vm.expectRevert("Unknown root epoch");
+        kms.addOsImageHashAtEpoch(1, info.osImageHash);
+        vm.expectRevert("Unknown root epoch");
+        kms.addKmsAggregatedMrAtEpoch(1, info.mrAggregated);
+        vm.expectRevert("Unknown root epoch");
+        kms.addKmsDeviceAtEpoch(1, info.deviceId);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        approveKmsAtEpoch(info, 1);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+
+        (,,, bytes32 h1) = kms.rootEpoch(1);
+        kms.popRootEpoch(1, h1);
+        assertFalse(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
+        // Other keys registered under the same number start with empty rows.
+        kms.registerRootEpoch(ca(0xc1), k256(0xd1), "ipfs://replacement");
+        assertFalse(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
+        assertFalse(kms.kmsAllowedAggregatedMrsAtEpoch(1, info.mrAggregated));
+        assertFalse(kms.kmsAllowedDeviceIdsAtEpoch(1, info.deviceId));
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        approveKmsAtEpoch(info, 1);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        // Epoch 0 is untouched throughout.
+        assertTrue(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        vm.stopPrank();
     }
 
     function test_SetRootEpochEvidenceUrl() public {
@@ -505,10 +541,7 @@ contract DstackKmsTest is Test {
         vm.startPrank(owner);
         registerNextRootEpoch();
         registerNextRootEpoch();
-        kms.addOsImageHash(info.osImageHash);
-        kms.addKmsDevice(info.deviceId);
-        kms.addKmsAggregatedMr(info.mrAggregated);
-        // Default additions use the highest registered row, not the active row.
+        approveKmsAtEpoch(info, 1);
         assertFalse(kms.allowedOsImages(info.osImageHash));
         assertTrue(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
         assertFalse(authorize(info, true).isAllowed);
@@ -604,6 +637,30 @@ contract DstackKmsTest is Test {
         vm.mockCallRevert(policy, abi.encodeCall(IAppEpochAuth.currentAppEpoch, ()), "epoch unavailable");
         vm.expectRevert("epoch unavailable");
         kms.currentAppEpoch(policy);
+    }
+
+    function test_AppEpochQueryRevertsForUnregisteredOrUndeployedApps() public {
+        address policy = address(new DstackApp());
+        vm.expectRevert("App not registered");
+        kms.currentAppEpoch(policy);
+        address eoa = address(0xbeef);
+        kms.registerApp(eoa);
+        vm.expectRevert("App not deployed or invalid address");
+        kms.currentAppEpoch(eoa);
+        // A registered legacy policy without the capability is epoch zero.
+        kms.registerApp(policy);
+        vm.mockCall(
+            policy, abi.encodeCall(IERC165.supportsInterface, (type(IAppEpochAuth).interfaceId)), abi.encode(false)
+        );
+        assertEq(kms.currentAppEpoch(policy), 0);
+        // The authorization paths still report the rejection instead of reverting.
+        DstackKms.AppInfo memory info = authorizationInfo(address(0x1234));
+        (bool allowed, string memory reason) = kms.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "App not registered");
+        vm.prank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        assertEq(authorize(info, false).rejectionReason, "App not registered");
     }
 
     function test_AppEpochRotationIsOwnerScopedAndDoesNotChangeRootEpoch() public {
@@ -940,7 +997,7 @@ contract DstackKmsTest is Test {
         assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).isAllowed);
         assertFalse(authorize(info, true).isAllowed);
         (bool allowed,) = kms.isKmsAllowed(info);
-        assertFalse(allowed);
+        assertTrue(allowed, "legacy KMS check reads epoch 0");
         kms.addOsImageHash(info.osImageHash);
         assertFalse(authorize(info, true).isAllowed);
         kms.addKmsAggregatedMr(info.mrAggregated);
@@ -1078,5 +1135,72 @@ contract DstackKmsTest is Test {
         );
         vm.expectRevert(bytes("policy unavailable"));
         kms.authorizeApp(epochRequest(info, 0, 0));
+    }
+
+    function test_LegacySettersCoverCurrentAndPendingRows() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        kms.addOsImageHash(info.osImageHash);
+        kms.addKmsAggregatedMr(info.mrAggregated);
+        kms.addKmsDevice(info.deviceId);
+        info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        for (uint256 epoch = 0; epoch < 2; ++epoch) {
+            assertTrue(kms.allowedOsImagesAtEpoch(epoch, info.osImageHash));
+            assertTrue(kms.kmsAllowedAggregatedMrsAtEpoch(epoch, info.mrAggregated));
+            assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(epoch, info.deviceId));
+        }
+        assertTrue(authorize(info, true).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertTrue(authorize(info, false).isAllowed);
+
+        // A revocation during the rotation reaches the serving and the pending row.
+        kms.removeKmsAggregatedMr(info.mrAggregated);
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        kms.addKmsAggregatedMr(info.mrAggregated);
+        kms.removeKmsDevice(info.deviceId);
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        kms.addKmsDevice(info.deviceId);
+        kms.removeOsImageHash(info.osImageHash);
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        assertFalse(authorize(info, false).isAllowed);
+        activateNextRootEpoch();
+        assertFalse(authorize(info, true).isAllowed);
+        assertFalse(authorize(info, false).isAllowed);
+
+        // Once epoch one is current, epoch zero is no longer written.
+        kms.addOsImageHash(info.osImageHash);
+        assertFalse(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        assertTrue(authorize(info, true).isAllowed);
+        assertTrue(authorize(info, false).isAllowed);
+        vm.stopPrank();
+    }
+
+    function test_AtEpochSettersChangeOnlyTheirRow() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        registerNextRootEpoch();
+        approveKmsAtEpoch(info, 1);
+        assertFalse(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        assertFalse(kms.kmsAllowedAggregatedMrsAtEpoch(0, info.mrAggregated));
+        assertFalse(kms.kmsAllowedDeviceIdsAtEpoch(0, info.deviceId));
+        assertFalse(authorize(info, true).isAllowed);
+        assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+
+        approveKmsAtEpoch(info, 0);
+        kms.removeOsImageHashAtEpoch(1, info.osImageHash);
+        kms.removeKmsAggregatedMrAtEpoch(1, info.mrAggregated);
+        kms.removeKmsDeviceAtEpoch(1, info.deviceId);
+        assertTrue(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
+        assertTrue(kms.kmsAllowedAggregatedMrsAtEpoch(0, info.mrAggregated));
+        assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(0, info.deviceId));
+        assertTrue(authorize(info, true).isAllowed);
+        assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).isAllowed);
+        vm.stopPrank();
     }
 }

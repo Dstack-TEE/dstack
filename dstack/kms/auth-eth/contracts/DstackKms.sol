@@ -57,13 +57,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Mapping of registered apps
     mapping(address => bool) public registeredApps;
 
-    // Mapping of allowed aggregated MR measurements for running KMS
+    /// @notice Allowed aggregated MR measurements for running KMS. Epoch 0 only; for other epochs use the *AtEpoch
+    /// getters and EpochPolicyChanged.
     mapping(bytes32 => bool) public kmsAllowedAggregatedMrs;
 
-    // Mapping of allowed KMS device IDs
+    /// @notice Allowed KMS device IDs. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     mapping(bytes32 => bool) public kmsAllowedDeviceIds;
 
-    // Mapping of allowed image measurements
+    /// @notice Allowed OS image measurements. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedOsImages;
 
     // DstackApp implementation contract address for factory deployment
@@ -87,17 +89,21 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Root keys of each KMS root epoch, indexed by epoch; epoch 0 is the
-    // original roots. Append-only: a registered epoch is never changed.
+    // original roots. A registered epoch's keys and chain hash never change.
+    // A pending epoch can be popped, and the owner can update evidenceUrl:
+    // the evidence proves itself, so the URL only says where it is stored.
     RootEpoch[] private _rootEpochs;
 
     // The epoch KMS instances serve. Registering epoch 0 makes it current;
     // later epochs take effect only when activated, one at a time.
     uint256 private _currentRootEpoch;
 
-    // Epoch zero continues to use the original fields above after an upgrade.
-    mapping(uint256 => mapping(bytes32 => bool)) private _kmsAggregatedMrsByEpoch;
-    mapping(uint256 => mapping(bytes32 => bool)) private _kmsDeviceIdsByEpoch;
-    mapping(uint256 => mapping(bytes32 => bool)) private _osImagesByEpoch;
+    // Policy rows of epochs from 1, keyed by the epoch's chain hash so that they
+    // belong to its keys: a popped and re-registered epoch starts empty. Epoch
+    // zero continues to use the original fields above after an upgrade.
+    mapping(bytes32 => mapping(bytes32 => bool)) private _kmsAggregatedMrsByRoot;
+    mapping(bytes32 => mapping(bytes32 => bool)) private _kmsDeviceIdsByRoot;
+    mapping(bytes32 => mapping(bytes32 => bool)) private _osImagesByRoot;
 
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
@@ -106,6 +112,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // slither-disable-next-line unindexed-event-address
     event AppRegistered(address appId);
     event KmsInfoSet(bytes k256Pubkey);
+    /// @notice Legacy material events. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     event KmsAggregatedMrAdded(bytes32 mrAggregated);
     event KmsAggregatedMrRemoved(bytes32 mrAggregated);
     event KmsDeviceAdded(bytes32 deviceId);
@@ -244,7 +251,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Drop the last registered epoch while it is still pending, for when the
     // nodes holding it are lost before enough others have onboarded it. The
     // epoch is named by number and chain hash, so a stale call cannot drop a
-    // later registration of the same number.
+    // later registration of the same number. Its policy rows stay with its chain
+    // hash: registering other keys under the same number starts with empty rows,
+    // which must be prepared again before activation.
     function popRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
         require(epoch + 1 == _rootEpochs.length && epoch > _currentRootEpoch, "Not the pending root epoch");
         require(_rootEpochs[epoch].chainHash == chainHash, "Root epoch chain hash mismatch");
@@ -360,19 +369,20 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     function kmsAllowedAggregatedMrsAtEpoch(uint256 epoch, bytes32 mrAggregated) public view returns (bool) {
-        return epoch == 0 ? kmsAllowedAggregatedMrs[mrAggregated] : _kmsAggregatedMrsByEpoch[epoch][mrAggregated];
+        if (epoch == 0) return kmsAllowedAggregatedMrs[mrAggregated];
+        return epoch < _rootEpochs.length && _kmsAggregatedMrsByRoot[_rootEpochs[epoch].chainHash][mrAggregated];
     }
 
-    function addKmsAggregatedMr(bytes32 mrAggregated) external {
-        addKmsAggregatedMrAtEpoch(_latestRootEpoch(), mrAggregated);
+    function addKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsAggregatedMr, mrAggregated, true);
     }
 
     function addKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
         _setKmsAggregatedMr(epoch, mrAggregated, true);
     }
 
-    function removeKmsAggregatedMr(bytes32 mrAggregated) external {
-        removeKmsAggregatedMrAtEpoch(_latestRootEpoch(), mrAggregated);
+    function removeKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsAggregatedMr, mrAggregated, false);
     }
 
     function removeKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
@@ -387,25 +397,26 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             else emit KmsAggregatedMrRemoved(mrAggregated);
             _emitPolicy("kms-aggregated-mr", mrAggregated, allowed);
         } else {
-            _kmsAggregatedMrsByEpoch[epoch][mrAggregated] = allowed;
+            _kmsAggregatedMrsByRoot[_rootEpochs[epoch].chainHash][mrAggregated] = allowed;
         }
         emit EpochPolicyChanged(keccak256("kms-aggregated-mr"), mrAggregated, epoch, allowed);
     }
 
     function kmsAllowedDeviceIdsAtEpoch(uint256 epoch, bytes32 deviceId) public view returns (bool) {
-        return epoch == 0 ? kmsAllowedDeviceIds[deviceId] : _kmsDeviceIdsByEpoch[epoch][deviceId];
+        if (epoch == 0) return kmsAllowedDeviceIds[deviceId];
+        return epoch < _rootEpochs.length && _kmsDeviceIdsByRoot[_rootEpochs[epoch].chainHash][deviceId];
     }
 
-    function addKmsDevice(bytes32 deviceId) external {
-        addKmsDeviceAtEpoch(_latestRootEpoch(), deviceId);
+    function addKmsDevice(bytes32 deviceId) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsDevice, deviceId, true);
     }
 
     function addKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         _setKmsDevice(epoch, deviceId, true);
     }
 
-    function removeKmsDevice(bytes32 deviceId) external {
-        removeKmsDeviceAtEpoch(_latestRootEpoch(), deviceId);
+    function removeKmsDevice(bytes32 deviceId) external onlyOwner {
+        _setFromCurrentEpoch(_setKmsDevice, deviceId, false);
     }
 
     function removeKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
@@ -420,25 +431,26 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             else emit KmsDeviceRemoved(deviceId);
             _emitPolicy("kms-device", deviceId, allowed);
         } else {
-            _kmsDeviceIdsByEpoch[epoch][deviceId] = allowed;
+            _kmsDeviceIdsByRoot[_rootEpochs[epoch].chainHash][deviceId] = allowed;
         }
         emit EpochPolicyChanged(keccak256("kms-device"), deviceId, epoch, allowed);
     }
 
     function allowedOsImagesAtEpoch(uint256 epoch, bytes32 osImageHash) public view returns (bool) {
-        return epoch == 0 ? allowedOsImages[osImageHash] : _osImagesByEpoch[epoch][osImageHash];
+        if (epoch == 0) return allowedOsImages[osImageHash];
+        return epoch < _rootEpochs.length && _osImagesByRoot[_rootEpochs[epoch].chainHash][osImageHash];
     }
 
-    function addOsImageHash(bytes32 osImageHash) external {
-        addOsImageHashAtEpoch(_latestRootEpoch(), osImageHash);
+    function addOsImageHash(bytes32 osImageHash) external onlyOwner {
+        _setFromCurrentEpoch(_setOsImageHash, osImageHash, true);
     }
 
     function addOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
         _setOsImageHash(epoch, osImageHash, true);
     }
 
-    function removeOsImageHash(bytes32 osImageHash) external {
-        removeOsImageHashAtEpoch(_latestRootEpoch(), osImageHash);
+    function removeOsImageHash(bytes32 osImageHash) external onlyOwner {
+        _setFromCurrentEpoch(_setOsImageHash, osImageHash, false);
     }
 
     function removeOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
@@ -453,17 +465,42 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             else emit OsImageHashRemoved(osImageHash);
             _emitPolicy("os-image", osImageHash, allowed);
         } else {
-            _osImagesByEpoch[epoch][osImageHash] = allowed;
+            _osImagesByRoot[_rootEpochs[epoch].chainHash][osImageHash] = allowed;
         }
         emit EpochPolicyChanged(keccak256("os-image"), osImageHash, epoch, allowed);
+    }
+
+    // The epoch-less setters change every row from the current epoch through
+    // any registered pending one, so a revocation during a rotation reaches
+    // both the serving and the prepared row. Use the *AtEpoch setters to change
+    // a single row.
+    function _setFromCurrentEpoch(
+        function(uint256, bytes32, bool) internal setter,
+        bytes32 value,
+        bool allowed
+    )
+        private
+    {
+        uint256 latest = _latestRootEpoch();
+        for (uint256 epoch = _currentRootEpoch; epoch <= latest; ++epoch) {
+            setter(epoch, value, allowed);
+        }
     }
 
     function _latestRootEpoch() private view returns (uint256) {
         return _rootEpochs.length == 0 ? 0 : _rootEpochs.length - 1;
     }
 
-    /// Legacy policies have epoch zero; an advertised epoch getter must succeed.
-    function currentAppEpoch(address appId) public view returns (uint256) {
+    /// Reverts for an unregistered or undeployed app rather than reporting epoch
+    /// zero for it. Legacy policies have epoch zero; an advertised getter must succeed.
+    function currentAppEpoch(address appId) external view returns (uint256) {
+        require(registeredApps[appId], "App not registered");
+        require(appId.code.length != 0, "App not deployed or invalid address");
+        return _appEpoch(appId);
+    }
+
+    /// Zero for an app authorization rejects anyway, so the decision reports the rejection.
+    function _appEpoch(address appId) private view returns (uint256) {
         if (!registeredApps[appId] || appId.code.length == 0) return 0;
         if (!ERC165Checker.supportsInterface(appId, type(IAppEpochAuth).interfaceId)) return 0;
         return IAppEpochAuth(appId).currentAppEpoch();
@@ -488,7 +525,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         returns (AuthorizationResult memory result)
     {
         result.gatewayAppId = gatewayAppId;
-        result.currentAppEpoch = isKms ? 0 : currentAppEpoch(request.appInfo.appId);
+        result.currentAppEpoch = isKms ? 0 : _appEpoch(request.appInfo.appId);
         if (_rootEpochs.length > 0) {
             result.currentRootEpoch = _currentRootEpoch;
             result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
@@ -536,9 +573,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
     }
 
-    // Function to check if KMS is allowed to boot
+    // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
     function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
-        return _isKmsAllowed(bootInfo, _currentRootEpoch);
+        return _isKmsAllowed(bootInfo, 0);
     }
 
     function _isKmsAllowed(
@@ -572,17 +609,17 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return (true, "");
     }
 
-    // Function to check if an app is allowed to boot
+    // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
     function isAppAllowed(AppInfo calldata bootInfo)
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
-        if (currentAppEpoch(bootInfo.appId) != 0) {
+        if (_appEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }
-        return _isAppAllowed(bootInfo, _currentRootEpoch, 0, bytes32(0));
+        return _isAppAllowed(bootInfo, 0, 0, bytes32(0));
     }
 
     function _isAppAllowed(

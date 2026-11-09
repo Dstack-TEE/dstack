@@ -22,18 +22,22 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
  */
 interface IAppAuthBasicManagement is IERC165 {
     /// @notice Emitted when a new compose hash is added to the allowed list
+    /// @dev Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     /// @param composeHash The compose hash that was added
     event ComposeHashAdded(bytes32 composeHash);
 
     /// @notice Emitted when a compose hash is removed from the allowed list
+    /// @dev Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     /// @param composeHash The compose hash that was removed
     event ComposeHashRemoved(bytes32 composeHash);
 
     /// @notice Emitted when a new device ID is added to the allowed list
+    /// @dev Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     /// @param deviceId The device ID that was added
     event DeviceAdded(bytes32 deviceId);
 
     /// @notice Emitted when a device ID is removed from the allowed list
+    /// @dev Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     /// @param deviceId The device ID that was removed
     event DeviceRemoved(bytes32 deviceId);
 

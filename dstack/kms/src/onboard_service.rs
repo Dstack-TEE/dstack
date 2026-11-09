@@ -597,6 +597,21 @@ mod tests {
     }
 
     #[test]
+    fn generated_keys_report_data_matches_the_published_format() {
+        let report_data = generated_keys_report_data(&[0xa0; 3], &[0xb0; 3]);
+        // keccak256("dstack-kms-genereted-keys-v1:a0a0a0;b0b0b0;"), zero-padded to 64 bytes.
+        assert_eq!(
+            hex::encode(&report_data),
+            format!(
+                "01597f74286b5a55b295f839d5b63946462681c7b07ab93b679262fc10946580{}",
+                "00".repeat(32)
+            )
+        );
+        assert_ne!(generated_keys_report_data(&[], &[0xb0; 3]), report_data);
+        assert_ne!(generated_keys_report_data(&[0xa0; 3], &[]), report_data);
+    }
+
+    #[test]
     fn compatibility_ca_survives_restart_and_recovers_a_missing_certificate() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(dir.path());
@@ -859,12 +874,11 @@ impl Keys {
         Self::from_keys(ca_key, rpc_key, k256_key, domain, attest_rpc_cert).await
     }
 
-    /// Attest the current root public keys. Epoch 0 keeps the original
-    /// bootstrap encoding; later epochs also bind the epoch number.
+    /// Attest the current root public keys.
     async fn attest(&self) -> Result<BootstrapResponse> {
         let ca_pubkey = self.ca_key.public_key_der();
         let k256_pubkey = self.k256_key.verifying_key().to_sec1_bytes().to_vec();
-        let attestation = attest_keys(self.epoch, &ca_pubkey, &k256_pubkey).await?;
+        let attestation = attest_keys(&ca_pubkey, &k256_pubkey).await?;
         Ok(BootstrapResponse {
             ca_pubkey,
             k256_pubkey,
@@ -988,15 +1002,9 @@ impl Keys {
             .checked_sub(1)
             .context("source KMS handed over no keys")?;
         let highest = u32::try_from(highest).context("too many root epochs")?;
-        let registry = ensure_kms_allowed(
-            cfg,
-            &source_attestation()?,
-            &attestation_verifier,
-            !rotate,
-            highest,
-        )
-        .await
-        .context("source KMS is not allowed for onboarding")?;
+        let registry = ensure_kms_allowed(cfg, &source_attestation()?, highest)
+            .await
+            .context("source KMS is not allowed for onboarding")?;
         Self::from_key_response(cfg, keys_res, domain, rotate, registry).await
     }
 
@@ -1053,9 +1061,6 @@ impl Keys {
         ensure_temp_ca(cfg)?;
         for (epoch, root) in (0..).zip(&self.history) {
             let paths = cfg.root_key_paths(epoch, self.epoch);
-            if let Some(dir) = paths.ca_key.parent() {
-                fs::create_dir_all(dir)?;
-            }
             safe_write(&paths.ca_cert, root.ca_cert.pem())?;
             safe_write_with_mode(&paths.ca_key, root.ca_key.serialize_pem(), 0o600)?;
             safe_write_with_mode(&paths.k256_key, root.k256_key.to_bytes(), 0o600)?;
@@ -1233,18 +1238,22 @@ fn self_signed_root_ca(ca_key: &KeyPair) -> Result<Certificate> {
         .self_signed()
 }
 
-async fn attest_keys(epoch: u32, p256_pubkey: &[u8], k256_pubkey: &[u8]) -> Result<Vec<u8>> {
-    let p256_hex = hex::encode(p256_pubkey);
-    let k256_hex = hex::encode(k256_pubkey);
-    let content_to_quote = if epoch == 0 {
-        format!("dstack-kms-genereted-keys-v1:{p256_hex};{k256_hex};")
-    } else {
-        format!("dstack-kms-generated-keys-v2:{epoch};{p256_hex};{k256_hex};")
-    };
-    let hash = keccak256(content_to_quote.as_bytes());
-    let report_data = pad64(hash);
-    let res = app_attest(report_data).await?;
-    Ok(res.attestation)
+/// Report data binding freshly generated root public keys, for every epoch. The
+/// evidence only proves the keys were generated in an approved TEE; the epoch
+/// number and preceding chain come from the on-chain registration. The
+/// "genereted" spelling is part of the released format.
+fn generated_keys_report_data(p256_pubkey: &[u8], k256_pubkey: &[u8]) -> Vec<u8> {
+    let content = format!(
+        "dstack-kms-genereted-keys-v1:{};{};",
+        hex::encode(p256_pubkey),
+        hex::encode(k256_pubkey)
+    );
+    pad64(keccak256(content.as_bytes()))
+}
+
+async fn attest_keys(p256_pubkey: &[u8], k256_pubkey: &[u8]) -> Result<Vec<u8>> {
+    let report_data = generated_keys_report_data(p256_pubkey, k256_pubkey);
+    Ok(app_attest(report_data).await?.attestation)
 }
 
 fn keccak256(msg: &[u8]) -> [u8; 32] {

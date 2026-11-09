@@ -5,7 +5,7 @@
 import { FastifyInstance } from 'fastify';
 import { ethers } from 'ethers';
 import { build } from './server';
-import { rootEpochDenial } from './ethereum';
+import { DSTACK_KMS_ABI, rootEpochDenial } from './ethereum';
 import { BootInfo } from './types';
 
 // Mock EthereumBackend
@@ -139,16 +139,15 @@ describe('Server', () => {
       const current = { rootEpoch: 1, rootEpochHash: hash };
       const info = (fields: object) => ({ ...mockBootInfo, ...fields });
 
-      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash.toUpperCase().replace('0X', '') }), false, current)).toBeUndefined();
-      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), false, current)).toMatch(/1 is current/);
-      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) }), false, current)).toMatch(/not the registered/);
-      // A KMS predating root epochs is cut off once a rotation is current.
-      expect(rootEpochDenial(info({}), false, current)).toMatch(/reports none/);
-      expect(rootEpochDenial(info({}), false, { rootEpoch: 0, rootEpochHash: hash })).toBeUndefined();
-      expect(rootEpochDenial(info({}), true, current)).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash.toUpperCase().replace('0X', '') }), current)).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), current)).toMatch(/1 is current/);
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: '0x' + '22'.repeat(32) }), current)).toMatch(/not the registered/);
+      // A KMS or app request predating root epochs is cut off once a rotation is current.
+      expect(rootEpochDenial(info({}), current)).toMatch(/reports none/);
+      expect(rootEpochDenial(info({}), { rootEpoch: 0, rootEpochHash: hash })).toBeUndefined();
       // Nothing registered: only epoch 0 serves.
-      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), false, {})).toBeUndefined();
-      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash }), false, {})).toMatch(/not registered/);
+      expect(rootEpochDenial(info({ rootEpoch: 0, rootEpochHash: hash }), {})).toBeUndefined();
+      expect(rootEpochDenial(info({ rootEpoch: 1, rootEpochHash: hash }), {})).toMatch(/not registered/);
     });
 
     it('should list registered key epochs in the info response', async () => {
@@ -274,14 +273,15 @@ describe('Ethereum root epoch registry', () => {
     expect(registryCalls().every(({ name }) => name === 'rootEpochCount')).toBe(true);
   });
 
-  it('allows old KMS app requests only through epoch 0 while preserving onboarding', async () => {
+  it('serves an old KMS, and its apps, only while epoch 0 is current', async () => {
     count = 1n;
     epoch = 0n;
     expect((await boot('app')).isAllowed).toBe(true);
+    expect((await boot('kms')).isAllowed).toBe(true);
     count = 2n;
     epoch = 1n;
     expect((await boot('app')).reason).toMatch(/reports none/);
-    expect((await boot('kms')).isAllowed).toBe(true);
+    expect((await boot('kms')).reason).toMatch(/reports none/);
   });
 
   it.each(['app', 'info'])('pins both registry reads to the same block for %s', async (endpoint) => {
@@ -298,6 +298,54 @@ describe('Ethereum root epoch registry', () => {
       { name: 'currentRootEpoch', blockTag: 100 },
     ]);
     expect(getBlockNumber).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['authorizeKms', 'kms_import_keys', { requestedRootEpoch: 2 }],
+    ['authorizeApp', 'app_get_key', { requestedRootEpoch: 1, requestedAppEpoch: 3 }],
+    ['authorizeApp', 'app_get_cert', {}],
+  ] as const)('forwards the operation and both epochs to %s (%s)', async (method, operation, epochs) => {
+    const kms = new ethers.Interface(DSTACK_KMS_ABI);
+    const normalCall = call.getMockImplementation()!;
+    const forwarded: ethers.Result[] = [];
+    call.mockImplementation(async (tx: ethers.TransactionRequest) => {
+      const fn = kms.getFunction(tx.data!.slice(0, 10));
+      if (fn?.name !== method) return normalCall(tx);
+      forwarded.push(kms.decodeFunctionData(fn, tx.data!)[0]);
+      return kms.encodeFunctionResult(fn, [[true, '', 'gateway-app', 1n, hash, 0n]]);
+    });
+    const response = await app.inject({
+      method: 'POST', url: `/${method}`, payload: { ...bootInfo, operation, ...epochs },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(forwarded).toHaveLength(1);
+    const [request] = forwarded;
+    expect(request.operation).toBe(ethers.id(operation));
+    const selector = (value?: number) => [value !== undefined, BigInt(value ?? 0)];
+    const { requestedRootEpoch, requestedAppEpoch } = epochs as { requestedRootEpoch?: number, requestedAppEpoch?: number };
+    expect([...request.requestedRootEpoch]).toEqual(selector(requestedRootEpoch));
+    expect([...request.requestedAppEpoch]).toEqual(selector(requestedAppEpoch));
+  });
+
+  it('reports an app epoch only when the contract can vouch for it', async () => {
+    const kms = new ethers.Interface(DSTACK_KMS_ABI);
+    const normalCall = call.getMockImplementation()!;
+    let revert = true;
+    call.mockImplementation(async (tx: ethers.TransactionRequest) => {
+      const fn = kms.getFunction(tx.data!.slice(0, 10));
+      if (fn?.name !== 'currentAppEpoch') return normalCall(tx);
+      if (revert) {
+        throw ethers.AbiCoder.getBuiltinCallException('call', { to: tx.to as string, data: tx.data! },
+          ethers.id('Error(string)').slice(0, 10) + ethers.AbiCoder.defaultAbiCoder().encode(['string'], ['App not registered']).slice(2));
+      }
+      return kms.encodeFunctionResult(fn, [0n]);
+    });
+    const url = `/app/0x${'33'.repeat(20)}`;
+    expect((await app.inject({ method: 'GET', url })).statusCode).not.toBe(200);
+    revert = false;
+    const legacy = await app.inject({ method: 'GET', url });
+    expect(legacy.statusCode).toBe(200);
+    expect(legacy.json()).toEqual({ currentAppEpoch: 0 });
   });
 
   describe.each(['rootEpochCount', 'currentRootEpoch'])('%s failures', (getter) => {

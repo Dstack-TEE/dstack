@@ -30,6 +30,8 @@ extra_output = ["storageLayout"]
 fuzz = { runs = 10_000 }
 
 [fmt]
+# Released contract sources kept verbatim as upgrade references.
+ignore = ["contracts/test-utils/reference/**"]
 bracket_spacing = true
 int_types = "long"
 line_length = 120

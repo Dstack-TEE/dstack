@@ -197,10 +197,9 @@ fn contains(list: &[String], value: &str) -> bool {
     list.iter().any(|x| norm(x) == v)
 }
 
-/// matches auth-simple: an empty `devices` list means "any device" even when
-/// `allowAnyDevice` is false (it only enforces a non-empty list).
+/// An empty `devices` list allows no device; any device needs `allowAnyDevice`.
 fn device_ok(allow_any: bool, devices: &[String], device_id: &str) -> bool {
-    allow_any || devices.is_empty() || contains(devices, device_id)
+    allow_any || contains(devices, device_id)
 }
 
 fn deny(al: &Allowlist, reason: &str) -> BootResponse {
@@ -213,15 +212,15 @@ fn deny(al: &Allowlist, reason: &str) -> BootResponse {
 
 /// allow, provided the asking KMS serves the current root epoch with the
 /// registered keys up to it. A KMS that predates root epochs reports none and
-/// holds only epoch 0; KMS checks made while onboarding carry none.
-fn allow(info: &BootInfo, is_kms: bool, al: &Allowlist) -> BootResponse {
+/// holds only epoch 0, so it is served only until another epoch is activated.
+fn allow(info: &BootInfo, al: &Allowlist) -> BootResponse {
     let current = match al.current_root_epoch() {
         Ok(current) => current,
         Err(error) => return deny(al, &format!("invalid root epoch configuration: {error}")),
     };
     let current_epoch = current.as_ref().map_or(0, |c| c.number);
     let denial = match (info.root_epoch, &current) {
-        (None, _) if is_kms || current_epoch == 0 => None,
+        (None, _) if current_epoch == 0 => None,
         (None, _) => Some(format!(
             "root epoch {current_epoch} is current, but the KMS reports none"
         )),
@@ -248,7 +247,10 @@ fn allow(info: &BootInfo, is_kms: bool, al: &Allowlist) -> BootResponse {
 }
 
 fn app_policy(info: &BootInfo, al: &Allowlist) -> BootResponse {
-    if !al.os_images.is_empty() && !contains(&al.os_images, &info.os_image_hash) {
+    if al.os_images.is_empty() {
+        return deny(al, "os image allowlist is empty");
+    }
+    if !contains(&al.os_images, &info.os_image_hash) {
         return deny(al, "os image not allowed");
     }
     let Some(app) = al.app(&info.app_id) else {
@@ -290,7 +292,7 @@ fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
     }
     let result = app_policy(info, al);
     if result.is_allowed {
-        allow(info, false, al)
+        allow(info, al)
     } else {
         result
     }
@@ -299,7 +301,7 @@ fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
 fn check_kms(info: &BootInfo, al: &Allowlist) -> BootResponse {
     let result = kms_policy(info, al);
     if result.is_allowed {
-        allow(info, true, al)
+        allow(info, al)
     } else {
         result
     }
@@ -392,10 +394,10 @@ fn app_epoch(app_id: &str, cli: &State<Cli>) -> Result<Json<serde_json::Value>, 
     if hex::decode(&id).map_or(true, |bytes| bytes.len() != 20) {
         return Err(Status::BadRequest);
     }
-    let al = load(&cli.config);
-    Ok(Json(
-        json!({ "currentAppEpoch": al.app(&id).map_or(0, |app| app.current_app_epoch) }),
-    ))
+    // An unknown app is not epoch zero: its epoch cannot be vouched for.
+    let app = load(&cli.config);
+    let app = app.app(&id).ok_or(Status::NotFound)?;
+    Ok(Json(json!({ "currentAppEpoch": app.current_app_epoch })))
 }
 
 /// load the allowlist, failing closed (deny-all) if it's missing or invalid.
@@ -502,8 +504,8 @@ mod tests {
             "kmsContractAddr": "0x1111111111111111111111111111111111111111",
             "rootEpochs": [{"caPubkey": "aa", "k256Pubkey": "bb"}],
             "osImages": ["aa"],
-            "kms": {"mrAggregated": ["bb"]},
-            "apps": {"0x2222222222222222222222222222222222222222": {"composeHashes": ["cc"]}}
+            "kms": {"mrAggregated": ["bb"], "allowAnyDevice": true},
+            "apps": {"0x2222222222222222222222222222222222222222": {"composeHashes": ["cc"], "allowAnyDevice": true}}
         });
         std::fs::write(&path, policy.to_string()).unwrap();
         let client = Client::tracked(server(Cli {
@@ -515,11 +517,19 @@ mod tests {
         .unwrap();
         let kms = json!({"operation": "kms_serve", "appId": "11".repeat(20), "mrAggregated": "bb"});
         let app = json!({"operation": "app_get_key", "appId": "22".repeat(20), "composeHash": "cc", "osImageHash": "aa"});
+        let with_operation = |body: &serde_json::Value, operation: &str| {
+            let mut body = body.clone();
+            body["operation"] = operation.into();
+            body
+        };
         for (route, body, allowed) in [
             ("/authorizeKms", kms.clone(), true),
             ("/authorizeApp", app.clone(), true),
             ("/authorizeKms", app.clone(), false),
             ("/authorizeApp", kms.clone(), false),
+            // The caller matches the route, but the operation belongs to the other scope.
+            ("/authorizeKms", with_operation(&kms, "app_get_key"), false),
+            ("/authorizeApp", with_operation(&app, "kms_serve"), false),
         ] {
             let response = client
                 .post(route)
@@ -617,7 +627,8 @@ mod tests {
                 "kmsContractAddr": "11".repeat(20),
                 "rootEpochs": [{"caPubkey": "aa", "k256Pubkey": "bb"}, {"caPubkey": "cc", "k256Pubkey": "dd"}],
                 "currentRootEpoch": 1,
-                "apps": {configured_id: {"currentAppEpoch": 2, "composeHashes": ["ee"]}}
+                "osImages": ["aa"],
+                "apps": {configured_id: {"currentAppEpoch": 2, "composeHashes": ["ee"], "allowAnyDevice": true}}
             });
             std::fs::write(&path, policy.to_string()).unwrap();
             let response: serde_json::Value = client
@@ -641,6 +652,7 @@ mod tests {
                 request["operation"] = "app_get_key".into();
                 request["appId"] = id.clone().into();
                 request["composeHash"] = "ee".into();
+                request["osImageHash"] = "aa".into();
                 let response: serde_json::Value = client
                     .post("/authorizeApp")
                     .header(ContentType::JSON)
@@ -669,6 +681,19 @@ mod tests {
         assert_eq!(
             client.get("/app/not-hex").dispatch().await.status(),
             Status::BadRequest
+        );
+        assert_eq!(
+            client
+                .get(format!("/app/0x{}", "cd".repeat(20)))
+                .dispatch()
+                .await
+                .status(),
+            Status::NotFound
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            client.get(format!("/app/0x{id}")).dispatch().await.status(),
+            Status::NotFound
         );
     }
 
@@ -708,6 +733,58 @@ mod tests {
     }
 
     #[test]
+    fn empty_lists_allow_nothing() {
+        let device = |devices: &[&str], allow_any| -> Allowlist {
+            let devices: Vec<_> = devices.iter().map(|d| d.to_string()).collect();
+            serde_json::from_value(json!({
+                "osImages": ["0xIMG"],
+                "kms": {"mrAggregated": ["0xMR"], "devices": devices, "allowAnyDevice": allow_any},
+                "apps": {"0xApp1": {"composeHashes": ["0xHASH"], "devices": devices, "allowAnyDevice": allow_any}}
+            }))
+            .unwrap()
+        };
+        let mut app = boot("0xApp1", "0xHASH", "0xIMG");
+        app.device_id = "0xDEV".into();
+        let kms = BootInfo {
+            mr_aggregated: "0xMR".into(),
+            device_id: "0xDEV".into(),
+            ..Default::default()
+        };
+        for al in [device(&[], false), device(&["0xOTHER"], false)] {
+            assert_eq!(check_app(&app, &al).reason, "device not allowed");
+            assert_eq!(check_kms(&kms, &al).reason, "device not allowed");
+        }
+        for al in [device(&["0xdev"], false), device(&[], true)] {
+            assert!(check_app(&app, &al).is_allowed);
+            assert!(check_kms(&kms, &al).is_allowed);
+        }
+        let mut al = allowlist();
+        al.os_images.clear();
+        assert_eq!(check_app(&app, &al).reason, "os image allowlist is empty");
+    }
+
+    /// The shape `dstack-cli-core` generates (`auth_allowlist_json` plus an app
+    /// entry added by `register_app_in_allowlist`) keeps working.
+    #[test]
+    fn the_generated_default_allowlist_still_allows() {
+        let al: Allowlist = serde_json::from_value(json!({
+            "osImages": ["0xIMG"],
+            "kms": {"mrAggregated": ["0xMR"], "devices": [], "allowAnyDevice": true},
+            "apps": {"app1": {"composeHashes": ["hash"], "devices": [], "allowAnyDevice": true}}
+        }))
+        .unwrap();
+        let mut app = boot("0xAPP1", "0xHASH", "img");
+        app.device_id = "0xANY".into();
+        assert!(check_app(&app, &al).is_allowed);
+        let kms = BootInfo {
+            mr_aggregated: "0xmr".into(),
+            device_id: "0xANY".into(),
+            ..Default::default()
+        };
+        assert!(check_kms(&kms, &al).is_allowed);
+    }
+
+    #[test]
     fn kms_allowlist_and_empty_default() {
         let al = allowlist();
         let info = BootInfo {
@@ -725,7 +802,7 @@ mod tests {
         let h0 = "0x10ab6b6c8e7601901b0f1767985bf40d35bf3129e0866fe12dcc7c8f04a298f2";
         let h1 = "0x50152a82023f2219a31723b476c13bc5f608ab4147946dabdec15d4f3d648ed4";
         let mut al: Allowlist = serde_json::from_str(
-            r#"{"kms":{"mrAggregated":["0xMR"]},
+            r#"{"kms":{"mrAggregated":["0xMR"],"allowAnyDevice":true},
                 "rootEpochs":[{"caPubkey":"0x3059301306072a8648ce3d020106082a8648ce3d03010703420004a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0","k256Pubkey":"0x02b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"},
                               {"caPubkey":"0x3059301306072a8648ce3d020106082a8648ce3d03010703420004a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1","k256Pubkey":"0x02b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"}]}"#,
         )
@@ -738,6 +815,8 @@ mod tests {
         };
         assert_eq!(info_json(&al).unwrap()["rootEpochHash"], h0);
         assert!(check_kms(&info(Some(0), h0), &al).is_allowed);
+        // A KMS predating root epochs is served only while epoch 0 is current.
+        assert!(check_kms(&info(None, ""), &al).is_allowed);
 
         al.current_root_epoch = 1;
         assert_eq!(info_json(&al).unwrap()["rootEpoch"], 1);
@@ -745,8 +824,7 @@ mod tests {
         assert!(check_kms(&info(Some(1), &h1.to_uppercase()), &al).is_allowed);
         assert!(!check_kms(&info(Some(0), h0), &al).is_allowed);
         assert!(!check_kms(&info(Some(1), h0), &al).is_allowed);
-        // onboarding checks carry no epoch
-        assert!(check_kms(&info(None, ""), &al).is_allowed);
+        assert!(!check_kms(&info(None, ""), &al).is_allowed);
 
         al.current_root_epoch = 2;
         assert!(al.current_root_epoch().is_err());

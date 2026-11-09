@@ -539,9 +539,15 @@ for the full procedure; the KMS steps are:
    onboard UI) from a KMS at the current epoch N-1. It imports epochs 0..N-1,
    generates epoch N, and returns the new public keys with an attestation whose
    report data is
-   `keccak256("dstack-kms-generated-keys-v2:{N};{ca_pubkey_hex};{k256_pubkey_hex};")`.
-3. Verify the attestation, publish it, and register epoch N with its URL. The
-   cluster keeps serving N-1.
+   `keccak256("dstack-kms-genereted-keys-v1:{ca_pubkey_hex};{k256_pubkey_hex};")`
+   zero-padded to 64 bytes, the same encoding as the original bootstrap (the
+   spelling is part of the format). It binds both public keys; the epoch number
+   comes from the on-chain registration order.
+3. Before registering, verify the attestation with
+   [dstack-verifier](../dstack/verifier/README.md) (`POST /verify`): check the
+   quote, the approved KMS image and measurements, and that its report data
+   equals the value recomputed from the returned public keys. Then publish it
+   and register epoch N with its URL. The cluster keeps serving N-1.
 4. Onboard the other KMS nodes from the rotated one; they import 0..N and keep
    serving N-1.
 5. Activate epoch N (`ActivateRootEpoch`, or `currentRootEpoch` for
@@ -550,7 +556,9 @@ for the full procedure; the KMS steps are:
    until it is onboarded again.
    If the nodes holding N are lost before N is activated, drop it with
    `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
-   that imported the dropped N must be onboarded again.
+   that imported the dropped N must be onboarded again. On chain, the policy
+   rows prepared for the dropped N do not apply to the new one; approve them
+   again before activating it.
 6. Boot CVMs on an OS that supports root epochs. At boot they re-key their data
    disk from the epoch recorded in its LUKS header to the current one. If an
    encrypted environment still uses an older epoch, the CVM re-encrypts it during

@@ -217,6 +217,10 @@ Both sides must authorize each other first: the new KMS allows the old
 `os_image_hash`. After onboarding, compare the KMS CA public keys; the CA
 certificate itself is reissued. The source must be 0.5.8 or later.
 
+KMS releases after 0.6 can join only from a 0.6+ source: a 0.5.x certificate
+carries no OS image hash, and they refuse such a source. Upgrade a 0.5.x
+cluster to 0.6.x first, then onboard later releases from it.
+
 Keep the old KMS running until every client has moved. While a 0.5.x KMS still
 verifies 0.6.0 guests, it can only measure guests with exactly 2 GiB or at
 least 2816 MiB of memory, and it must be able to download the 0.6.0 image.

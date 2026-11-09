@@ -526,6 +526,12 @@ Manage trusted KMS public keys for enhanced security:
 
 The whitelist is stored in `~/.dstack-vmm/kms-whitelist.json`.
 
+After a KMS root rotation, first remove the old signer with `kms remove`, then
+add the new one with `kms add`. The whitelist is a flat set and the CLI cannot
+tell which epoch is current, so a signer left in it stays trusted: anyone
+holding the rotated, possibly leaked, root can sign env public keys that the
+CLI accepts, whatever root epoch the response claims.
+
 ### Updating Running VMs
 
 #### Update Environment Variables

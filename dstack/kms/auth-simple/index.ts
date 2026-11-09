@@ -107,15 +107,14 @@ const normHash = (hash?: string) => hash?.toLowerCase().replace(/^0x/, '');
 
 // Only a KMS serving the current root epoch, with the registered keys up to it,
 // may authorize. A KMS that predates root epochs reports none and holds only
-// epoch 0; KMS checks made while onboarding carry none and are not limited.
+// epoch 0, so it is served only until another epoch is activated.
 function rootEpochDenial(
   bootInfo: BootInfo,
-  isKms: boolean,
   current: { rootEpoch?: number; rootEpochHash?: string }
 ): string | undefined {
   const currentEpoch = current.rootEpoch ?? 0;
   if (bootInfo.rootEpoch === undefined) {
-    return isKms || currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
+    return currentEpoch === 0 ? undefined : `root epoch ${currentEpoch} is current, but the KMS reports none`;
   }
   if (current.rootEpoch === undefined) {
     return bootInfo.rootEpoch === 0 ? undefined : `root epoch ${bootInfo.rootEpoch} is not registered`;
@@ -149,25 +148,23 @@ class ConfigBackend {
     return process.env.AUTH_CONFIG_PATH || './auth-config.json';
   }
 
+  // A missing or invalid config fails every request rather than reading as an
+  // empty policy, whose app epochs would silently fall back to zero.
   private loadConfig(): AuthConfig {
     const configPath = this.getConfigPath();
     if (!existsSync(configPath)) {
-      console.error(`config file not found: ${configPath}`);
-      return AuthConfigSchema.parse({});
+      throw new Error(`config file not found: ${configPath}`);
     }
-
     try {
-      const content = readFileSync(configPath, 'utf-8');
-      const parsed = JSON.parse(content);
-      return AuthConfigSchema.parse(parsed);
+      return AuthConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf-8')));
     } catch (error) {
-      console.error(`failed to load config: ${error}`);
-      return AuthConfigSchema.parse({});
+      throw new Error(`failed to load config: ${error}`);
     }
   }
 
-  async getAppEpoch(appId: string): Promise<number> {
-    return findApp(this.loadConfig(), appId)?.currentAppEpoch ?? 0;
+  /// The current epoch of a configured app; `undefined` for an unknown one.
+  async getAppEpoch(appId: string): Promise<number | undefined> {
+    return findApp(this.loadConfig(), appId)?.currentAppEpoch;
   }
 
   async checkAuthorization(appInfo: AuthorizationRequest, isKms: boolean) {
@@ -204,7 +201,7 @@ class ConfigBackend {
     }
     const response = this.evaluateBoot(bootInfo, isKms, config, appConfig);
     const epochDenial = response.isAllowed
-      ? rootEpochDenial(bootInfo, isKms, currentRootEpoch(config))
+      ? rootEpochDenial(bootInfo, currentRootEpoch(config))
       : undefined;
     return epochDenial ? { ...response, isAllowed: false, reason: epochDenial } : response;
   }
@@ -382,11 +379,15 @@ app.get('/', async (c) => {
 app.get('/app/:appId', async (c) => {
   const appId = c.req.param('appId');
   if (!/^0x[0-9a-fA-F]{40}$/.test(appId)) return c.json({ error: 'invalid app ID' }, 400);
+  let currentAppEpoch;
   try {
-    return c.json({ currentAppEpoch: await backend.getAppEpoch(appId) });
-  } catch {
+    currentAppEpoch = await backend.getAppEpoch(appId);
+  } catch (error) {
+    console.error('app epoch lookup failed:', error);
     return c.json({ error: 'authorization backend unavailable' }, 503);
   }
+  if (currentAppEpoch === undefined) return c.json({ error: 'unknown app' }, 404);
+  return c.json({ currentAppEpoch });
 });
 
 for (const method of ['authorizeKms', 'authorizeApp'] as const) {

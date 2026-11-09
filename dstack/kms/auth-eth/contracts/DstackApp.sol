@@ -24,16 +24,19 @@ contract DstackApp is
     IAppAuthBasicManagement,
     IAppEpochAuth
 {
-    // Mapping of allowed compose hashes for this app
+    /// @notice Allowed compose hashes for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedComposeHashes;
 
     // State variable to track if upgrades are disabled
     bool private _upgradesDisabled;
 
-    // Whether allow any device to boot this app or only allow devices
+    /// @notice Whether any device may boot this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     bool public allowAnyDevice;
 
-    // Mapping of allowed device IDs for this app
+    /// @notice Allowed device IDs for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedDeviceIds;
 
     // Whether to require TCB status to be UpToDate
@@ -51,6 +54,7 @@ contract DstackApp is
 
     // Additional events specific to DstackApp
     event UpgradesDisabled();
+    /// @notice Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     event AllowAnyDeviceSet(bool allowAny);
     event RequireTcbUpToDateSet(bool requireUpToDate);
     /// @notice Additive audit event for reconstructing authorization policy.
@@ -168,8 +172,11 @@ contract DstackApp is
         return epoch == 0 ? allowAnyDevice : _allowAnyDeviceByEpoch[epoch];
     }
 
+    // The epoch-less setters change the current row and the next one, which the
+    // owner prepares with the *AtEpoch setters before calling advanceAppEpoch.
     function addComposeHash(bytes32 composeHash) external {
         addComposeHashAtEpoch(currentAppEpoch, composeHash);
+        addComposeHashAtEpoch(currentAppEpoch + 1, composeHash);
     }
 
     function addComposeHashAtEpoch(uint256 epoch, bytes32 composeHash) public onlyOwner {
@@ -179,14 +186,19 @@ contract DstackApp is
 
     function removeComposeHash(bytes32 composeHash) external {
         removeComposeHashAtEpoch(currentAppEpoch, composeHash);
+        removeComposeHashAtEpoch(currentAppEpoch + 1, composeHash);
     }
 
     function removeComposeHashAtEpoch(uint256 epoch, bytes32 composeHash) public onlyOwner {
         _setComposeHash(epoch, composeHash, false);
     }
 
+    function _requireWritableEpoch(uint256 epoch) private view {
+        require(epoch <= currentAppEpoch + 1, "Unknown app epoch");
+    }
+
     function _setComposeHash(uint256 epoch, bytes32 composeHash, bool allowed) private {
-        require(epoch <= currentAppEpoch, "Unknown app epoch");
+        _requireWritableEpoch(epoch);
         if (epoch == 0) {
             allowedComposeHashes[composeHash] = allowed;
             if (allowed) emit ComposeHashAdded(composeHash);
@@ -200,10 +212,11 @@ contract DstackApp is
 
     function setAllowAnyDevice(bool allowed) external {
         setAllowAnyDeviceAtEpoch(currentAppEpoch, allowed);
+        setAllowAnyDeviceAtEpoch(currentAppEpoch + 1, allowed);
     }
 
     function setAllowAnyDeviceAtEpoch(uint256 epoch, bool allowed) public onlyOwner {
-        require(epoch <= currentAppEpoch, "Unknown app epoch");
+        _requireWritableEpoch(epoch);
         if (epoch == 0) {
             allowAnyDevice = allowed;
             emit AllowAnyDeviceSet(allowed);
@@ -223,6 +236,7 @@ contract DstackApp is
 
     function addDevice(bytes32 deviceId) external {
         addDeviceAtEpoch(currentAppEpoch, deviceId);
+        addDeviceAtEpoch(currentAppEpoch + 1, deviceId);
     }
 
     function addDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
@@ -232,6 +246,7 @@ contract DstackApp is
 
     function removeDevice(bytes32 deviceId) external {
         removeDeviceAtEpoch(currentAppEpoch, deviceId);
+        removeDeviceAtEpoch(currentAppEpoch + 1, deviceId);
     }
 
     function removeDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
@@ -239,7 +254,7 @@ contract DstackApp is
     }
 
     function _setDevice(uint256 epoch, bytes32 deviceId, bool allowed) private {
-        require(epoch <= currentAppEpoch, "Unknown app epoch");
+        _requireWritableEpoch(epoch);
         if (epoch == 0) {
             allowedDeviceIds[deviceId] = allowed;
             if (allowed) emit DeviceAdded(deviceId);
@@ -251,14 +266,16 @@ contract DstackApp is
         emit EpochPolicyChanged(keccak256("device"), deviceId, epoch, allowed);
     }
 
-    // Legacy callers authorize the current epoch, never an older policy implicitly.
+    // Legacy callers derive epoch-zero keys from this bool, so once the app epoch
+    // advances they are refused rather than handed keys the owner is retiring.
     function isAppAllowed(IAppAuth.AppInfo calldata bootInfo)
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
-        return _authorizeApp(bootInfo, currentAppEpoch);
+        if (currentAppEpoch != 0) return (false, "App epoch requires epoch-aware authorization");
+        return _authorizeApp(bootInfo, 0);
     }
 
     function authorizeApp(

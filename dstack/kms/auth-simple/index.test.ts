@@ -533,15 +533,16 @@ describe('auth-simple', () => {
       expect(await info()).toMatchObject({ rootEpoch: 0, rootEpochHash: h0 });
       expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).isAllowed).toBe(true);
       expect((await boot('app', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).isAllowed).toBe(true);
 
       writeTestConfig({ ...config, currentRootEpoch: 1 });
       expect(await info()).toMatchObject({ rootEpoch: 1, rootEpochHash: h1 });
       expect((await boot('app', { rootEpoch: 1, rootEpochHash: h1 })).isAllowed).toBe(true);
       expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).reason).toMatch(/1 is current/);
       expect((await boot('app', { rootEpoch: 1, rootEpochHash: h0 })).reason).toMatch(/not the registered/);
-      // A KMS predating root epochs is cut off; onboarding checks carry none.
+      // A KMS predating root epochs, and its apps, are cut off.
       expect((await boot('app', {})).reason).toMatch(/reports none/);
-      expect((await boot('kms', {})).isAllowed).toBe(true);
+      expect((await boot('kms', {})).reason).toMatch(/reports none/);
     });
 
     it.each([
@@ -582,6 +583,35 @@ describe('auth-simple', () => {
       expect((await info()).rootEpoch).toBeUndefined();
       expect((await boot('app', { rootEpoch: 0, rootEpochHash: h0 })).isAllowed).toBe(true);
       expect((await boot('app', { rootEpoch: 1, rootEpochHash: h1 })).reason).toMatch(/not registered/);
+    });
+  });
+
+  describe('unavailable policy', () => {
+    const appId = '0x' + 'ab'.repeat(20);
+    const request = (path: string, body?: object) => app.fetch(new Request(`http://localhost${path}`, body === undefined
+      ? { method: 'GET' }
+      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
+
+    it.each([
+      ['missing', () => { if (existsSync(TEST_CONFIG_PATH)) unlinkSync(TEST_CONFIG_PATH); }],
+      ['corrupt', () => writeFileSync(TEST_CONFIG_PATH, '{"apps": ')],
+      ['invalid', () => writeTestConfig({ apps: { [appId]: { currentAppEpoch: -1 } } })],
+    ])('fails closed when the config is %s', async (_name, breakConfig) => {
+      breakConfig();
+      expect((await request(`/app/${appId}`)).status).toBe(503);
+      for (const route of ['authorizeApp', 'authorizeKms']) {
+        const operation = route === 'authorizeKms' ? 'kms_serve' : 'app_get_key';
+        expect((await request(`/${route}`, { ...baseBootInfo, appId, operation })).status).toBe(503);
+      }
+      const boot = await request('/bootAuth/app', baseBootInfo);
+      expect((await boot.json()).isAllowed).toBe(false);
+    });
+
+    it('reports an unknown app instead of epoch zero', async () => {
+      writeTestConfig({ apps: { [appId]: { currentAppEpoch: 2, composeHashes: [] }, ['0x' + 'cd'.repeat(20)]: {} } });
+      expect(await (await request(`/app/${appId}`)).json()).toEqual({ currentAppEpoch: 2 });
+      expect(await (await request(`/app/0x${'cd'.repeat(20)}`)).json()).toEqual({ currentAppEpoch: 0 });
+      expect((await request(`/app/0x${'ef'.repeat(20)}`)).status).toBe(404);
     });
   });
 

@@ -197,8 +197,9 @@ unknown operations are rejected. Legacy `/bootAuth/*` routes are unchanged.
 ### Epoch-scoped material approvals
 
 Material approvals use exact root/app epoch rows; neither older nor newer rows
-are implicitly authorized. Existing add/remove methods default to the highest
-registered root epoch or current app epoch. The `*AtEpoch` methods and optional
+are implicitly authorized. Existing add/remove methods change every root row from
+the current epoch through the latest registered one, and the current and next
+app rows. The `*AtEpoch` methods and optional
 `ROOT_EPOCH` / `APP_EPOCH` variables on single-material management scripts select
 an explicit row. Original bool mappings and events remain epoch-zero views after
 upgrading; epoch-specific getters/events describe the new rows. KMS keyring

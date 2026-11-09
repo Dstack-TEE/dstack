@@ -51,10 +51,16 @@ pub(crate) mod upgrade_authority;
 /// in-flight request. App authorization is never cached.
 const AUTH_API_CACHE_TTL: Duration = Duration::from_secs(1);
 
+/// Apps whose epoch is cached at once. Floods of random app IDs still reach the
+/// auth API; limit them per source in a proxy in front of the KMS.
+const APP_EPOCH_CACHE_CAPACITY: u64 = 10_000;
+
 /// How long this KMS's own verified boot info is reused.
 ///
 /// Its measurements do not change while the KMS runs, but the TCB status and advisories do when
-/// the platform's collateral is updated, and the auth API judges them on every self check.
+/// the platform's collateral is updated. Self checks judge the cached copy, so a change to this
+/// KMS's TCB status takes effect up to this long later. Callers' attestations are verified on
+/// every request and are not affected.
 const SELF_BOOT_INFO_TTL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
@@ -174,6 +180,9 @@ pub struct KmsStateInner {
     self_boot_info: Cache<(), BootInfo>,
     self_allowed: Cache<Operation, AuthorizationResult>,
     auth_api_info: Cache<(), GetInfoResponse>,
+    /// App epochs read for the unauthenticated env public key RPCs, so repeated
+    /// requests for one app do not each reach the auth API.
+    app_epochs: Cache<Vec<u8>, u32>,
     metrics: KmsMetrics,
 }
 
@@ -266,9 +275,19 @@ impl KmsState {
                     .build(),
                 self_allowed: short_lived_cache(4),
                 auth_api_info: short_lived_cache(1),
+                app_epochs: short_lived_cache(APP_EPOCH_CACHE_CAPACITY),
                 metrics: KmsMetrics::default(),
             }),
         })
+    }
+
+    /// The current epoch of an app, cached for [`AUTH_API_CACHE_TTL`]. Failures
+    /// are not cached.
+    async fn app_epoch(&self, app_id: &[u8]) -> Result<u32> {
+        self.app_epochs
+            .try_get_with(app_id.to_vec(), self.config.auth_api.app_epoch(app_id))
+            .await
+            .map_err(|err| anyhow!("{err:#}"))
     }
 
     pub(crate) fn metrics(&self) -> &KmsMetrics {
@@ -719,12 +738,7 @@ impl KmsRpc for RpcHandler {
             .context("KMS self authorization failed")?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let app_epoch = self
-            .state
-            .config
-            .auth_api
-            .app_epoch(&request.app_id)
-            .await?;
+        let app_epoch = self.state.app_epoch(&request.app_id).await?;
         if app_epoch != 0 {
             bail!("epoch-aware applications must use GetSealedEnvPubKey");
         }
@@ -771,12 +785,7 @@ impl KmsRpc for RpcHandler {
         let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
         let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let app_epoch = self
-            .state
-            .config
-            .auth_api
-            .app_epoch(&request.app_id)
-            .await?;
+        let app_epoch = self.state.app_epoch(&request.app_id).await?;
         let secret = derive_sealed_env_key(root, &request.app_id, app_epoch)?;
         let public_key =
             x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
@@ -1795,6 +1804,219 @@ mod tests {
         assert_eq!(requests[1].1["operation"], "kms_export_keys");
     }
 
+    /// An SNP caller, which skips the OS image download in the attestation policy.
+    fn snp_caller() -> (VerifiedAttestation, String) {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let vm_config = snp_vm_config(&input, &mr_config);
+        let attestation = verified_snp_attestation_with_config(
+            measurement,
+            [0xab; 64],
+            vm_config.clone(),
+            &mr_config,
+        );
+        (attestation, vm_config)
+    }
+
+    fn auth_answer(state: &KmsState, allowed: bool) -> String {
+        serde_json::json!({
+            "isAllowed": allowed, "rejectionReason": "denied", "gatewayAppId": "",
+            "currentRootEpoch": 0, "currentAppEpoch": 0,
+            "currentRootEpochHash": hex::encode(state.keyring.chain_hashes[0]),
+        })
+        .to_string()
+    }
+
+    /// Wait for the auth API requests; a missing request fails instead of hanging.
+    fn auth_requests(
+        server: std::thread::JoinHandle<Vec<(String, serde_json::Value)>>,
+    ) -> Vec<(String, serde_json::Value)> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(server.join().unwrap()));
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("an expected auth API request was not made")
+    }
+
+    #[derive(Clone, Copy)]
+    struct HandoverCase {
+        snp_key_release: bool,
+        public_key_handover: bool,
+        admin: bool,
+    }
+
+    const ALLOWED_HANDOVER: HandoverCase = HandoverCase {
+        snp_key_release: true,
+        public_key_handover: true,
+        admin: false,
+    };
+
+    /// Run one handover with the auth API answering `answers` (self check, then
+    /// caller check), and return its
+    /// result with the requests the auth API received.
+    async fn handover(
+        case: HandoverCase,
+        answers: &[bool],
+    ) -> (Result<KmsKeyResponse>, Vec<(String, serde_json::Value)>) {
+        use upgrade_authority::tests::{boot_info, serve, webhook};
+        let dir = tempfile::tempdir().unwrap();
+        let initial = kms_state(dir.path(), "http://127.0.0.1:1");
+        let answers: Vec<_> = answers
+            .iter()
+            .map(|allowed| auth_answer(&initial, *allowed))
+            .collect();
+        let (url, server) = serve(answers);
+        let mut config = initial.config.clone();
+        config.enforce_self_authorization = true;
+        config.auth_api = webhook(url);
+        config.sev_snp_key_release = case.snp_key_release;
+        config.onboard.public_key_handover = case.public_key_handover;
+        let keyring = Keyring::load(&config).unwrap();
+        let state = KmsState::new(
+            config,
+            keyring,
+            initial.epoch_root(0).unwrap().ca.pem_cert.clone(),
+        )
+        .unwrap();
+        state.self_boot_info.insert((), boot_info(1)).await;
+        let (attestation, vm_config) = snp_caller();
+        let handler = RpcHandler {
+            state,
+            attestation: Some(attestation),
+        };
+        let request = GetKmsKeyRequest { vm_config };
+        let result = if case.admin {
+            handler.handover_keys(request).await
+        } else {
+            handler.get_kms_key(request).await
+        };
+        (result, auth_requests(server))
+    }
+
+    #[rocket::async_test]
+    async fn handover_runs_every_authorization_check() {
+        let (result, requests) = handover(ALLOWED_HANDOVER, &[true, true]).await;
+        assert_eq!(result.unwrap().keys.len(), 1);
+        let [(self_route, self_check), (caller_route, caller_check)] = &requests[..] else {
+            panic!("unexpected auth API requests: {requests:?}");
+        };
+        assert_eq!(self_route, "/authorizeKms");
+        assert_eq!(self_check["operation"], "kms_export_keys");
+        assert!(self_check.get("requestedRootEpoch").is_none());
+        assert_eq!(self_check["appId"], hex::encode([4; 20]));
+        assert_eq!(caller_route, "/authorizeKms");
+        assert_eq!(caller_check["operation"], "kms_import_keys");
+        assert_eq!(caller_check["requestedRootEpoch"], 0);
+        assert_eq!(caller_check["appId"], hex::encode([0x11; 20]));
+
+        let admin = HandoverCase {
+            admin: true,
+            public_key_handover: false,
+            ..ALLOWED_HANDOVER
+        };
+        let (result, requests) = handover(admin, &[true, true]).await;
+        assert!(result.is_ok());
+        assert_eq!(requests.len(), 2);
+    }
+
+    #[rocket::async_test]
+    async fn handover_is_refused_when_any_check_denies() {
+        let (result, requests) = handover(ALLOWED_HANDOVER, &[false]).await;
+        assert!(format!("{:#}", result.unwrap_err()).contains("KMS self authorization failed"));
+        assert_eq!(requests[0].1["operation"], "kms_export_keys");
+
+        for admin in [false, true] {
+            let case = HandoverCase {
+                admin,
+                ..ALLOWED_HANDOVER
+            };
+            let (result, requests) = handover(case, &[true, false]).await;
+            assert!(result.is_err());
+            assert_eq!(requests[1].1["operation"], "kms_import_keys");
+
+            let case = HandoverCase {
+                snp_key_release: false,
+                admin,
+                ..ALLOWED_HANDOVER
+            };
+            let (result, _) = handover(case, &[true, true]).await;
+            let err = format!("{:#}", result.unwrap_err());
+            assert!(err.contains("sev-snp key release is not enabled"), "{err}");
+        }
+
+        let public_disabled = HandoverCase {
+            public_key_handover: false,
+            ..ALLOWED_HANDOVER
+        };
+        let (result, requests) = handover(public_disabled, &[]).await;
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(err.contains("public KMS key handover is disabled"), "{err}");
+        assert!(requests.is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn handover_recipient_requires_the_source_to_be_allowed_to_export() {
+        use upgrade_authority::tests::{serve, webhook};
+        let dir = tempfile::tempdir().unwrap();
+        let state = kms_state(dir.path(), "http://127.0.0.1:1");
+        let (attestation, _) = snp_caller();
+        for allowed in [true, false] {
+            let (url, server) = serve(vec![auth_answer(&state, allowed)]);
+            let mut config = state.config.clone();
+            config.auth_api = webhook(url);
+            let result = upgrade_authority::ensure_kms_allowed(&config, &attestation, 2).await;
+            assert_eq!(result.is_ok(), allowed);
+            let requests = auth_requests(server);
+            let [(route, check)] = &requests[..] else {
+                panic!("unexpected auth API requests: {requests:?}");
+            };
+            assert_eq!(route, "/authorizeKms");
+            assert_eq!(check["operation"], "kms_export_keys");
+            assert_eq!(check["requestedRootEpoch"], 2);
+        }
+    }
+
+    /// Fetch an env public key while the auth API answers the app epoch query
+    /// with `status` and `body`.
+    async fn env_pub_key(sealed: bool, status: u16, body: &'static str) -> Result<()> {
+        let (url, server) =
+            upgrade_authority::tests::serve_with_status(vec![(200, AUTH_API_INFO), (status, body)]);
+        let dir = tempfile::tempdir().unwrap();
+        let handler = RpcHandler {
+            state: kms_state(dir.path(), &url),
+            attestation: None,
+        };
+        let request = AppId {
+            app_id: vec![0x11; 20],
+        };
+        let result = if sealed {
+            handler.get_sealed_env_pub_key(request).await.map(drop)
+        } else {
+            handler.get_app_env_encrypt_pub_key(request).await.map(drop)
+        };
+        let requests = auth_requests(server);
+        assert_eq!(requests[1].0, format!("/app/0x{}", "11".repeat(20)));
+        result
+    }
+
+    #[rocket::async_test]
+    async fn env_public_keys_require_the_backend_to_report_the_app_epoch() {
+        for sealed in [false, true] {
+            for (status, body) in [
+                (404, r#"{"error":"unknown app"}"#),
+                (503, r#"{"error":"authorization backend unavailable"}"#),
+                (500, r#"{"status":"error"}"#),
+            ] {
+                let err = env_pub_key(sealed, status, body).await.unwrap_err();
+                assert!(format!("{err:#}").contains(&status.to_string()), "{err:#}");
+            }
+            // A legacy app at epoch zero still gets its key.
+            env_pub_key(sealed, 200, r#"{"currentAppEpoch":0}"#)
+                .await
+                .unwrap();
+        }
+    }
+
     #[rocket::async_test]
     async fn legacy_temp_ca_rpc_returns_a_separate_ca_and_the_served_root() {
         assert!(dstack_kms_rpc::kms_server::KMSMethod::from_str("GetTempCaCert").is_some());
@@ -1811,6 +2033,24 @@ mod tests {
         let temp_ca = CaCert::new(response.temp_ca_cert, response.temp_ca_key).unwrap();
         assert_ne!(temp_ca.key.public_key_der(), state.rpc_ca_pubkey);
         assert_eq!(response.ca_cert, state.epoch_root(0).unwrap().ca.pem_cert);
+    }
+
+    #[rocket::async_test]
+    async fn app_epoch_lookups_are_cached_per_app_for_one_second() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let (url, requests) = serve_concurrent_auth_api(r#"{"currentAppEpoch":2}"#);
+        let state = kms_state(dir.path(), &url);
+        for _ in 0..3 {
+            assert_eq!(state.app_epoch(&[0x11; 20]).await.unwrap(), 2);
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        // Another app is looked up separately.
+        state.app_epoch(&[0x22; 20]).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        tokio::time::sleep(AUTH_API_CACHE_TTL + Duration::from_millis(100)).await;
+        state.app_epoch(&[0x11; 20]).await.unwrap();
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
     }
 
     #[rocket::async_test]
