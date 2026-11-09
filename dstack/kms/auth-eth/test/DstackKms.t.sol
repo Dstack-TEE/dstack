@@ -11,7 +11,7 @@ import "openzeppelin-foundry-upgrades/Upgrades.sol";
 import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
 import "../contracts/IAppAuth.sol";
-import "../contracts/test-utils/LegacyDstackKms.sol";
+import { DstackKms as DstackKmsV059 } from "../contracts/test-utils/reference/v0.5.9/DstackKmsV059.sol";
 
 contract DstackKmsTest is Test {
     DstackKms public kms;
@@ -54,11 +54,11 @@ contract DstackKmsTest is Test {
     function upgradeLegacyKms() internal {
         vm.startPrank(owner);
         address proxy = Upgrades.deployUUPSProxy(
-            "LegacyDstackKms.sol", abi.encodeCall(LegacyDstackKms.initialize, (owner, address(appImpl)))
+            "DstackKmsV059.sol:DstackKms", abi.encodeCall(DstackKmsV059.initialize, (owner, address(appImpl)))
         );
-        LegacyDstackKms(proxy).setKmsInfo(LegacyDstackKms.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
+        DstackKmsV059(proxy).setKmsInfo(DstackKmsV059.KmsInfo(k256(0xb0), ca(0xa0), hex"0d", hex"0e"));
         Options memory opts;
-        opts.referenceContract = "LegacyDstackKms.sol";
+        opts.referenceContract = "DstackKmsV059.sol:DstackKms";
         Upgrades.upgradeProxy(proxy, "DstackKms.sol", "", opts);
         vm.stopPrank();
         kms = DstackKms(proxy);

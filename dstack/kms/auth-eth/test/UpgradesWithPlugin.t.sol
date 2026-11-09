@@ -24,6 +24,45 @@ contract UpgradesWithPluginTest is Test {
         Upgrades.upgradeProxy(proxy, "contracts/test-utils/DstackAppV2.sol:DstackAppV2", "");
     }
 
+    /// Deployed releases; their sources are kept verbatim in contracts/test-utils/reference.
+    string[2] internal kmsReleases = ["DstackKmsV059.sol:DstackKms", "DstackKmsV060.sol:DstackKms"];
+    string[2] internal appReleases = ["DstackAppV059.sol:DstackApp", "DstackAppV060.sol:DstackApp"];
+
+    function test_ReleasedStorageLayoutsUpgradeToTheCurrentContracts() public {
+        for (uint256 i = 0; i < kmsReleases.length; ++i) {
+            Options memory opts;
+            opts.referenceContract = kmsReleases[i];
+            Upgrades.validateUpgrade("DstackKms.sol", opts);
+            opts.referenceContract = appReleases[i];
+            Upgrades.validateUpgrade("DstackApp.sol", opts);
+        }
+    }
+
+    function test_ReleasedAppProxyKeepsItsAllowlistAfterUpgrade() public {
+        bytes32 composeHash = bytes32(uint256(0xc0));
+        bytes32 deviceId = bytes32(uint256(0xd0));
+        vm.startPrank(owner);
+        address proxy = Upgrades.deployUUPSProxy(
+            "DstackAppV059.sol:DstackApp",
+            abi.encodeWithSignature(
+                "initialize(address,bool,bool,bool,bytes32,bytes32)", owner, false, true, false, deviceId, composeHash
+            )
+        );
+        Options memory opts;
+        opts.referenceContract = appReleases[0];
+        Upgrades.upgradeProxy(proxy, "DstackApp.sol", "", opts);
+        vm.stopPrank();
+        DstackApp app = DstackApp(proxy);
+        assertEq(app.owner(), owner);
+        assertTrue(app.requireTcbUpToDate());
+        assertTrue(app.allowedComposeHashes(composeHash));
+        assertTrue(app.allowedDeviceIds(deviceId));
+        assertFalse(app.allowAnyDevice());
+        assertEq(app.currentAppEpoch(), 0);
+        assertTrue(app.allowedComposeHashesAtEpoch(0, composeHash));
+        assertTrue(app.allowedDeviceIdsAtEpoch(0, deviceId));
+    }
+
     function attemptKmsUpgrade(address proxy) external {
         Upgrades.upgradeProxy(proxy, "contracts/test-utils/DstackKmsV2.sol:DstackKmsV2", "");
     }
