@@ -953,7 +953,10 @@ class VmmCLI:
 
         if signer_pubkey:
             whitelist = load_whitelist()
-            if whitelist and signer_pubkey not in whitelist:
+            normalized_signer = signer_pubkey.removeprefix("0x")
+            if whitelist and normalized_signer not in {
+                pin.removeprefix("0x") for pin in whitelist
+            }:
                 print(
                     f"WARNING: Signer {signer_pubkey} is not in the trusted whitelist!"
                 )
