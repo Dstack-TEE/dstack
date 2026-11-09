@@ -39,7 +39,8 @@ The name leaves room for a separate per-app epoch later. Generate
 independent fresh CA and secp256k1 roots for each new epoch; existing derivation
 formulas can remain unchanged. Never reuse an epoch for different roots.
 
-DstackKms keeps an append-only registry of each epoch's root public keys, an
+DstackKms keeps a registry of each epoch's root public keys, whose keys and
+chain hash never change once registered (a pending epoch may be popped), an
 `evidenceUrl` locating the attestation that proves where they were generated, and
 a chain hash `h_n = keccak256(h_{n-1} || keccak256(caPubkey) || keccak256(k256Pubkey))`
 (zero `h_{-1}`) committing to every key up to `n`; the position in the chain

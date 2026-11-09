@@ -89,7 +89,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Root keys of each KMS root epoch, indexed by epoch; epoch 0 is the
-    // original roots. Append-only: a registered epoch is never changed.
+    // original roots. A registered epoch's keys and chain hash never change.
+    // A pending epoch can be popped, and the owner can update evidenceUrl:
+    // the evidence proves itself, so the URL only says where it is stored.
     RootEpoch[] private _rootEpochs;
 
     // The epoch KMS instances serve. Registering epoch 0 makes it current;
