@@ -14,6 +14,7 @@ async function main() {
     const host = process.env.HOST || '127.0.0.1';
 
     const server = await build();
+    await server.ethereum.probeBlockTag();
     await server.listen({ port, host });
     console.log(`Server listening on ${host}:${port}`);
 

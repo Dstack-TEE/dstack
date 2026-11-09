@@ -67,7 +67,7 @@ export DSTACK_VMM_AUTH_PASSWORD=$(cat ~/.dstack/secrets/vmm-auth-token)
 
 **Symptom:** `curl -sk https://localhost:9100/prpc/KMS.GetMeta | jq '.gateway_app_id'` returns the wrong app ID, an empty string, or KMS is unreachable.
 
-**Cause:** The KMS auth-eth service queries the blockchain directly (via `eth_call`) — it does not cache state. If KMS was deployed with a different `ETH_RPC_URL` or the KMS CVM is having connectivity issues, it may fail to read on-chain changes. Alternatively, you may need to redeploy KMS after port binding changes from the KMS tutorial.
+**Cause:** The KMS auth-eth service queries the blockchain directly (via `eth_call`) — it does not cache state. If KMS was deployed with a different `ETH_RPC_URL` or the KMS CVM is having connectivity issues, it may fail to read on-chain changes. By default it reads the `finalized` block, so a transaction takes effect only once finalized; set `ETH_BLOCK_TAG=latest` on development chains. Alternatively, you may need to redeploy KMS after port binding changes from the KMS tutorial.
 
 **Solution:** Redeploy the KMS CVM:
 

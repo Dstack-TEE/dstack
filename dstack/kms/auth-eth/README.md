@@ -123,6 +123,7 @@ Set these environment variables:
 - **`KMS_CONTRACT_ADDR`** - Deployed DstackKms contract address
 - **`PORT`** - Server port (default: `8000`)
 - **`HOST`** - Server host (default: `127.0.0.1`)
+- **`ETH_BLOCK_TAG`** - Block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). Each request resolves the tag to one block and reads all state there. The server resolves the tag once at startup and refuses to start if the RPC cannot serve it. A later tag survives reorgs but delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet). Use `finalized` on L1. Set `latest` explicitly for an OP-stack chain read through the Helios light client, which tracks only the sequencer-signed unsafe head and serves neither `safe` nor `finalized`, and for local development chains such as Anvil, which finalizes 64 blocks behind its head.
 
 ### Running the Server
 ```bash

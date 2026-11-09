@@ -9,14 +9,14 @@ import { keccak256, toBytes } from 'viem';
 // Mock viem
 const mockReadContract = vi.fn();
 const mockGetChainId = vi.fn();
-const mockGetBlockNumber = vi.fn();
+const mockGetBlock = vi.fn();
 
 vi.mock('viem', async (importOriginal) => ({
   ...await importOriginal<typeof import('viem')>(),
   createPublicClient: vi.fn(() => ({
     readContract: mockReadContract,
     getChainId: mockGetChainId,
-    getBlockNumber: mockGetBlockNumber,
+    getBlock: mockGetBlock,
   })),
   http: vi.fn(),
   getContract: vi.fn(),
@@ -42,7 +42,7 @@ beforeEach(() => {
   // Reset mocks before each test
   vi.clearAllMocks();
   mockGetChainId.mockResolvedValue(1337);
-  mockGetBlockNumber.mockResolvedValue(100n);
+  mockGetBlock.mockResolvedValue({ number: 100n });
 });
 
 describe('server runtime config', () => {
@@ -315,7 +315,7 @@ describe('API Compatibility Tests', () => {
         .filter(({ functionName }) => ['rootEpochCount', 'currentRootEpoch'].includes(functionName));
       expect(calls.map(({ functionName }) => functionName)).toEqual(['rootEpochCount', 'currentRootEpoch']);
       expect(calls.every(({ blockNumber }) => blockNumber === 98n)).toBe(true);
-      expect(mockGetBlockNumber).toHaveBeenCalledTimes(1);
+      expect(mockGetBlock).toHaveBeenCalledTimes(1);
     });
 
     describe.each(['rootEpochCount', 'currentRootEpoch'])('%s failures', (getter) => {
@@ -648,7 +648,7 @@ describe('Ethereum finalized snapshot authorization', () => {
   }));
 
   it('reads the decision and gateway identity from one confirmation-depth snapshot', async () => {
-    mockGetBlockNumber.mockResolvedValue(100n);
+    mockGetBlock.mockResolvedValue({ number: 100n });
     mockReadContract.mockImplementation((params) => {
       expect(params.blockNumber).toBe(98n);
       if (params.functionName === 'rootEpochCount') return 0n;
@@ -659,11 +659,38 @@ describe('Ethereum finalized snapshot authorization', () => {
 
     const response = await authorize();
     expect(await response.json()).toMatchObject({ isAllowed: true, reason: 'finalized allow' });
-    expect(mockGetBlockNumber).toHaveBeenCalledTimes(1);
+    expect(mockGetBlock).toHaveBeenCalledTimes(1);
+    expect(mockGetBlock).toHaveBeenCalledWith({ blockTag: 'finalized' });
+  });
+
+  it('probes the block tag at startup and names the fix when the RPC cannot serve it', async () => {
+    const { EthereumBackend } = await import('./index.ts');
+    const getBlock = vi.fn().mockResolvedValue({ number: 5n });
+    const client = { getChainId: async () => 1337, getBlock };
+    const backend = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'safe', 0n);
+    await expect(backend.probeBlockTag()).resolves.toBeUndefined();
+    expect(getBlock).toHaveBeenCalledWith({ blockTag: 'safe' });
+    getBlock.mockRejectedValue(new Error('invalid block tag'));
+    await expect(backend.probeBlockTag()).rejects.toThrow(
+      /^ETH_BLOCK_TAG=safe is not supported by the RPC \(.+\); OP-stack via Helios requires latest$/,
+    );
+    // Behind the confirmation depth counts as unavailable too.
+    getBlock.mockResolvedValue({ number: 1n });
+    const deep = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'finalized', 2n);
+    await expect(deep.probeBlockTag()).rejects.toThrow(/ETH_BLOCK_TAG=finalized/);
+  });
+
+  it('accepts only the supported block tags, defaulting to finalized', async () => {
+    const { parseBlockTag } = await import('./index.ts');
+    expect(parseBlockTag(undefined)).toBe('finalized');
+    expect(parseBlockTag('')).toBe('finalized');
+    for (const tag of ['latest', 'safe', 'finalized']) expect(parseBlockTag(tag)).toBe(tag);
+    expect(() => parseBlockTag('pending')).toThrow(/ETH_BLOCK_TAG/);
+    expect(() => parseBlockTag('0x10')).toThrow(/ETH_BLOCK_TAG/);
   });
 
   it('re-evaluates the canonical finalized snapshot after a short reorg', async () => {
-    mockGetBlockNumber.mockResolvedValueOnce(100n).mockResolvedValueOnce(101n);
+    mockGetBlock.mockResolvedValueOnce({ number: 100n }).mockResolvedValueOnce({ number: 101n });
     let decisions = 0;
     const observedBlocks: bigint[] = [];
     mockReadContract.mockImplementation((params) => {
@@ -686,8 +713,9 @@ describe('Ethereum finalized snapshot authorization', () => {
 
   it.each([
     ['wrong chain', () => mockGetChainId.mockResolvedValue(1)],
-    ['stale head', () => mockGetBlockNumber.mockResolvedValue(1n)],
-    ['head timeout', () => mockGetBlockNumber.mockRejectedValue(new Error('timeout'))],
+    ['stale head', () => mockGetBlock.mockResolvedValue({ number: 1n })],
+    ['head timeout', () => mockGetBlock.mockRejectedValue(new Error('timeout'))],
+    ['unsupported block tag', () => mockGetBlock.mockRejectedValue(new Error('invalid block tag'))],
   ])('fails closed for %s and recovers without retained decisions', async (_name, inject) => {
     inject();
     const failed = await authorize();
@@ -698,7 +726,7 @@ describe('Ethereum finalized snapshot authorization', () => {
     });
 
     mockGetChainId.mockResolvedValue(1337);
-    mockGetBlockNumber.mockResolvedValue(102n);
+    mockGetBlock.mockResolvedValue({ number: 102n });
     mockReadContract.mockImplementation((params) => {
       if (params.functionName === 'rootEpochCount') return 0n;
       if (params.functionName === 'isAppAllowed') return [true, 'recovered'];

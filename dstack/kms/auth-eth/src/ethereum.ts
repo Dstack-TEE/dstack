@@ -40,17 +40,52 @@ export function rootEpochDenial(bootInfo: BootInfo, current: RootEpochInfo): str
   return undefined;
 }
 
+export const BLOCK_TAGS = ['latest', 'safe', 'finalized'] as const;
+export type BlockTag = typeof BLOCK_TAGS[number];
+
+export function parseBlockTag(value: string | undefined): BlockTag {
+  const tag = value || 'finalized';
+  if (!(BLOCK_TAGS as readonly string[]).includes(tag)) {
+    throw new Error(`ETH_BLOCK_TAG must be one of ${BLOCK_TAGS.join(', ')}`);
+  }
+  return tag as BlockTag;
+}
+
 export class EthereumBackend {
   private provider: ethers.JsonRpcProvider;
   private kmsContract: ethers.Contract;
+  private blockTag: BlockTag;
 
-  constructor(provider: ethers.JsonRpcProvider, kmsContractAddr: string) {
+  constructor(provider: ethers.JsonRpcProvider, kmsContractAddr: string, blockTag: BlockTag = 'finalized') {
     this.provider = provider;
+    this.blockTag = blockTag;
     this.kmsContract = new ethers.Contract(
       ethers.getAddress(kmsContractAddr),
       DSTACK_KMS_ABI,
       provider
     );
+  }
+
+  /// Resolve the configured tag to one block, so that every read of a request
+  /// sees the same state. An RPC that does not support the tag fails closed.
+  async resolveBlock(): Promise<number> {
+    const block = await this.provider.getBlock(this.blockTag);
+    if (!block) throw new Error(`the RPC returned no ${this.blockTag} block`);
+    return block.number;
+  }
+
+  /// Resolve the tag once at startup, so an RPC that cannot serve it fails the
+  /// deployment instead of every later request.
+  async probeBlockTag(): Promise<void> {
+    try {
+      await this.resolveBlock();
+    } catch (err) {
+      // ethers and viem both put a one-line summary in shortMessage.
+      const detail = (err as { shortMessage?: string }).shortMessage ?? (err instanceof Error ? err.message : String(err));
+      throw new Error(
+        `ETH_BLOCK_TAG=${this.blockTag} is not supported by the RPC (${detail}); OP-stack via Helios requires latest`,
+      );
+    }
   }
 
   private decodeHex(hex: string, sz: number = 32): string {
@@ -85,7 +120,7 @@ export class EthereumBackend {
       operation: ethers.id(appInfo.operation),
       requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: appInfo.requestedAppEpoch ?? 0 },
       requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: appInfo.requestedRootEpoch ?? 0 },
-    });
+    }, { blockTag: await this.resolveBlock() });
     return {
       authorized: result.authorized,
       rejectionReason: result.rejectionReason,
@@ -101,7 +136,7 @@ export class EthereumBackend {
   async checkBoot(bootInfo: BootInfo, isKms: boolean): Promise<BootResponse> {
     const bootInfoStruct = this.contractAppInfo(bootInfo);
     // Read the whole decision from one block.
-    const blockTag = await this.provider.getBlockNumber();
+    const blockTag = await this.resolveBlock();
     let response;
     if (isKms) {
       response = await this.kmsContract.isKmsAllowed(bootInfoStruct, { blockTag });
@@ -122,7 +157,7 @@ export class EthereumBackend {
 
   // The current root epoch and its chain hash; empty only when no epoch is registered.
   async getRootEpoch(blockTag?: number): Promise<RootEpochInfo> {
-    blockTag ??= await this.provider.getBlockNumber();
+    blockTag ??= await this.resolveBlock();
     const count = await this.kmsContract.rootEpochCount({ blockTag });
     if (count === 0n) return {};
     const [epoch, chainHash] = await this.kmsContract.currentRootEpoch({ blockTag });
@@ -130,11 +165,13 @@ export class EthereumBackend {
   }
 
   async getAppEpoch(appId: string): Promise<number> {
-    return ethers.toNumber(await this.kmsContract.currentAppEpoch(this.decodeHex(appId, 20)));
+    const blockTag = await this.resolveBlock();
+    return ethers.toNumber(await this.kmsContract.currentAppEpoch(this.decodeHex(appId, 20), { blockTag }));
   }
 
-  async getGatewayAppId(): Promise<string> {
-    return await this.kmsContract.gatewayAppId();
+  async getGatewayAppId(blockTag?: number): Promise<string> {
+    blockTag ??= await this.resolveBlock();
+    return await this.kmsContract.gatewayAppId({ blockTag });
   }
 
   async getChainId(): Promise<number> {
@@ -142,7 +179,8 @@ export class EthereumBackend {
     return Number(chainId);
   }
 
-  async getAppImplementation(): Promise<string> {
-    return await this.kmsContract.appImplementation();
+  async getAppImplementation(blockTag?: number): Promise<string> {
+    blockTag ??= await this.resolveBlock();
+    return await this.kmsContract.appImplementation({ blockTag });
   }
 }
