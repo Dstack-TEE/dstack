@@ -578,22 +578,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
-        (result.authorized, result.rejectionReason) = _isKmsAllowed(request.appInfo, selectedRootEpoch);
+        (result.authorized, result.rejectionReason) = _kmsPolicy(request.appInfo, selectedRootEpoch);
     }
 
     // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
     function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
-        return _isKmsAllowed(bootInfo, 0);
+        return _kmsPolicy(bootInfo, 0);
     }
 
-    function _isKmsAllowed(
-        AppInfo memory bootInfo,
-        uint256 selectedRootEpoch
-    )
-        private
-        view
-        returns (bool, string memory)
-    {
+    function _kmsPolicy(AppInfo memory bootInfo, uint256 selectedRootEpoch) private view returns (bool, string memory) {
         // Check if the TCB status is up to date
         if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
