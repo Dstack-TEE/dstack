@@ -23,6 +23,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - ETH_RPC_URL=${ETH_RPC_URL}
+      # finalized on L1; an OP-stack chain read through Helios requires latest.
       - ETH_BLOCK_TAG=${ETH_BLOCK_TAG}
       - KMS_CONTRACT_ADDR=${KMS_CONTRACT_ADDR}
     restart: unless-stopped

@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   denies a KMS that reports no root epoch, as `/bootAuth/app` already did, so
   KMS binaries predating root epochs stop serving at activation. Upgrade every
   KMS before activating a new root epoch.
+- auth-eth, auth-eth-bun: policy is read at the `finalized` block by default
+  instead of `latest`, so on-chain changes, including revocations, take effect
+  only once finalized. Set `ETH_BLOCK_TAG=latest` (or `safe`) to override; an
+  OP-stack chain read through the Helios light client requires `latest`. The
+  server refuses to start if the RPC cannot serve the configured tag. In
+  auth-eth-bun, `ETH_FINALITY_CONFIRMATIONS` now counts back from that block.
 - KMS: retain `GetTempCaCert`, temporary CA files and legacy handover fields so
   KMS nodes can be upgraded before existing OS images.
 

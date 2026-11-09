@@ -41,7 +41,8 @@ else
 # The URL of the Ethereum RPC service
 ETH_RPC_URL=https://rpc.phala.network
 
-# The block the auth-api reads policy at: latest, safe or finalized
+# The block the auth-api reads policy at: latest, safe or finalized (default).
+# Use finalized on L1; an OP-stack chain read through Helios requires latest.
 # ETH_BLOCK_TAG=finalized
 
 # The Git repository to deploy

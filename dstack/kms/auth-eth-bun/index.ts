@@ -202,7 +202,7 @@ export function parseBlockTag(value: string | undefined): BlockTag {
   return tag as BlockTag;
 }
 
-class EthereumBackend {
+export class EthereumBackend {
   private client: ReturnType<typeof createPublicClient>;
   private kmsContractAddr: Address;
   private expectedChainId?: number;
@@ -236,6 +236,20 @@ class EthereumBackend {
       throw new Error('authorization backend has not reached configured finality');
     }
     return number - this.finalityConfirmations;
+  }
+
+  /// Resolve the tag once at startup, so an RPC that cannot serve it fails the
+  /// deployment instead of every later request.
+  async probeBlockTag(): Promise<void> {
+    try {
+      await this.resolveBlock();
+    } catch (err) {
+      // ethers and viem both put a one-line summary in shortMessage.
+      const detail = (err as { shortMessage?: string }).shortMessage ?? (err instanceof Error ? err.message : String(err));
+      throw new Error(
+        `ETH_BLOCK_TAG=${this.blockTag} is not supported by the RPC (${detail}); OP-stack via Helios requires latest`,
+      );
+    }
   }
 
   private decodeHex(hex: string, sz: number = 32): Hex {
@@ -557,6 +571,7 @@ app.post('/bootAuth/kms',
 );
 
 // start server
+if (import.meta.main) await ethereum.probeBlockTag();
 const port = parseInt(process.env.PORT || '3000');
 console.log(`starting server on port ${port}`);
 

@@ -363,6 +363,19 @@ describe('Ethereum root epoch registry', () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it('probes the block tag at startup and names the fix when the RPC cannot serve it', async () => {
+    await expect(app.ethereum.probeBlockTag()).resolves.toBeUndefined();
+    for (const failure of [
+      () => getBlock.mockRejectedValue(new Error('invalid block tag')),
+      () => getBlock.mockResolvedValue(null),
+    ]) {
+      failure();
+      await expect(app.ethereum.probeBlockTag()).rejects.toThrow(
+        /^ETH_BLOCK_TAG=finalized is not supported by the RPC \(.+\); OP-stack via Helios requires latest$/,
+      );
+    }
+  });
+
   it('accepts only the supported block tags, defaulting to finalized', () => {
     expect(parseBlockTag(undefined)).toBe('finalized');
     expect(parseBlockTag('')).toBe('finalized');

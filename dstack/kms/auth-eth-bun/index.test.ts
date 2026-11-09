@@ -663,6 +663,23 @@ describe('Ethereum finalized snapshot authorization', () => {
     expect(mockGetBlock).toHaveBeenCalledWith({ blockTag: 'finalized' });
   });
 
+  it('probes the block tag at startup and names the fix when the RPC cannot serve it', async () => {
+    const { EthereumBackend } = await import('./index.ts');
+    const getBlock = vi.fn().mockResolvedValue({ number: 5n });
+    const client = { getChainId: async () => 1337, getBlock };
+    const backend = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'safe', 0n);
+    await expect(backend.probeBlockTag()).resolves.toBeUndefined();
+    expect(getBlock).toHaveBeenCalledWith({ blockTag: 'safe' });
+    getBlock.mockRejectedValue(new Error('invalid block tag'));
+    await expect(backend.probeBlockTag()).rejects.toThrow(
+      /^ETH_BLOCK_TAG=safe is not supported by the RPC \(.+\); OP-stack via Helios requires latest$/,
+    );
+    // Behind the confirmation depth counts as unavailable too.
+    getBlock.mockResolvedValue({ number: 1n });
+    const deep = new EthereumBackend(client as never, '0x' + '11'.repeat(20), 1337, 'finalized', 2n);
+    await expect(deep.probeBlockTag()).rejects.toThrow(/ETH_BLOCK_TAG=finalized/);
+  });
+
   it('accepts only the supported block tags, defaulting to finalized', async () => {
     const { parseBlockTag } = await import('./index.ts');
     expect(parseBlockTag(undefined)).toBe('finalized');

@@ -74,6 +74,20 @@ export class EthereumBackend {
     return block.number;
   }
 
+  /// Resolve the tag once at startup, so an RPC that cannot serve it fails the
+  /// deployment instead of every later request.
+  async probeBlockTag(): Promise<void> {
+    try {
+      await this.resolveBlock();
+    } catch (err) {
+      // ethers and viem both put a one-line summary in shortMessage.
+      const detail = (err as { shortMessage?: string }).shortMessage ?? (err instanceof Error ? err.message : String(err));
+      throw new Error(
+        `ETH_BLOCK_TAG=${this.blockTag} is not supported by the RPC (${detail}); OP-stack via Helios requires latest`,
+      );
+    }
+  }
+
   private decodeHex(hex: string, sz: number = 32): string {
     // Remove '0x' prefix if present
     hex = hex.startsWith('0x') ? hex.slice(2) : hex;
