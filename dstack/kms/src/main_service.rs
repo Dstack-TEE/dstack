@@ -1955,14 +1955,7 @@ mod tests {
             let (url, server) = serve(vec![auth_answer(&state, allowed)]);
             let mut config = state.config.clone();
             config.auth_api = webhook(url);
-            let result = upgrade_authority::ensure_kms_allowed(
-                &config,
-                &attestation,
-                &state.attestation_verifier,
-                false,
-                2,
-            )
-            .await;
+            let result = upgrade_authority::ensure_kms_allowed(&config, &attestation, 2).await;
             assert_eq!(result.is_ok(), allowed);
             let requests = auth_requests(server);
             let [(route, check)] = &requests[..] else {

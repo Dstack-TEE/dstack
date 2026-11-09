@@ -697,27 +697,6 @@ mod tests {
     }
 
     #[rocket::async_test]
-    async fn a_pre_epoch_source_cannot_hand_over_once_a_later_epoch_is_current() {
-        let cert_dir = tempfile::tempdir().unwrap();
-        let cfg = auto_bootstrap_config(cert_dir.path());
-        // A v0.5.x source holds only the original epoch 0 roots.
-        let legacy = handover(1);
-        assert!(onboard(&cfg, legacy.clone(), false, current_of(&legacy, 0))
-            .await
-            .is_ok());
-        let mut rotated = handover(2);
-        rotated.keys[0] = legacy.keys[0].clone();
-        for rotate in [false, true] {
-            assert!(
-                onboard(&cfg, legacy.clone(), rotate, current_of(&rotated, 1))
-                    .await
-                    .is_err(),
-                "rotate={rotate}"
-            );
-        }
-    }
-
-    #[rocket::async_test]
     async fn an_unregistered_deployment_can_only_join_at_epoch_0() {
         let cert_dir = tempfile::tempdir().unwrap();
         let cfg = auto_bootstrap_config(cert_dir.path());
@@ -1009,16 +988,9 @@ impl Keys {
             .checked_sub(1)
             .context("source KMS handed over no keys")?;
         let highest = u32::try_from(highest).context("too many root epochs")?;
-        let registry = ensure_kms_allowed(
-            cfg,
-            &source_attestation()?,
-            &attestation_verifier,
-            // Only a plain join may migrate from a v0.5.x source; see `is_legacy_source`.
-            !rotate,
-            highest,
-        )
-        .await
-        .context("source KMS is not allowed for onboarding")?;
+        let registry = ensure_kms_allowed(cfg, &source_attestation()?, highest)
+            .await
+            .context("source KMS is not allowed for onboarding")?;
         Self::from_key_response(cfg, keys_res, domain, rotate, registry).await
     }
 
