@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - KMS root and application key epochs, epoch-scoped authorization, SealedEnv
   HPKE encryption, automatic environment migration, and epoch-aware SDK key
   selection.
+- dstack-auth: opt-in `allowedTcbStatuses` and `allowedAdvisoryIds` allowlists,
+  applied to app and KMS requests on `/authorize*` and `/bootAuth/*`. When set,
+  a `tcbStatus` outside the list, or any advisory ID outside the list, denies;
+  when absent, neither is checked. `GET /` reports the configured `chainId` and
+  `appImplementation`, and each decision is logged with the device ID,
+  measurements and TCB status.
 
 ### Changed
 
@@ -50,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - KMS: the `auth-mock` webhook backend. For development, use the built-in
   `[core.auth_api] type = "dev"`, which allows everything.
+
+- `auth-simple` (`dstack/kms/auth-simple`). Use `dstack-auth`, which reads the
+  same config file. Differences: the TCB status and advisories are not checked
+  unless `allowedTcbStatuses` / `allowedAdvisoryIds` are set (auth-simple
+  defaulted to `["UpToDate"]` and `[]`); `/authorize*` requires
+  `kmsContractAddr`; KMS requests are not matched against `osImages`; the
+  config path and port are `--config` / `--port` flags instead of
+  `AUTH_CONFIG_PATH` / `PORT`, and it binds to `127.0.0.1` by default. See
+  `docs/dstack-auth-operations.md#migrating-from-auth-simple`.
 
 ### Fixed
 
