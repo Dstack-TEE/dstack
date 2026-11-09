@@ -581,8 +581,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         (result.authorized, result.rejectionReason) = _kmsPolicy(request.appInfo, selectedRootEpoch);
     }
 
-    // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
+    // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
+    // once a later root epoch is current.
     function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+        if (_currentRootEpoch != 0) {
+            return (false, "Root epoch requires epoch-aware authorization");
+        }
         return _kmsPolicy(bootInfo, 0);
     }
 
@@ -610,13 +614,17 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         return (true, "");
     }
 
-    // Legacy entry point for pre-epoch KMS binaries; always reads epoch 0.
+    // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
+    // once a later root epoch is current.
     function isAppAllowed(AppInfo calldata bootInfo)
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
+        if (_currentRootEpoch != 0) {
+            return (false, "Root epoch requires epoch-aware authorization");
+        }
         if (_appEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }

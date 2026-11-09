@@ -982,8 +982,9 @@ contract DstackKmsTest is Test {
         activateNextRootEpoch();
         assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
         assertFalse(authorize(info, true).authorized);
-        (bool allowed,) = kms.isKmsAllowed(info);
-        assertTrue(allowed, "legacy KMS check reads epoch 0");
+        (bool allowed, string memory reason) = kms.isKmsAllowed(info);
+        assertFalse(allowed, "legacy KMS check ends at rotation");
+        assertEq(reason, "Root epoch requires epoch-aware authorization");
         kms.addOsImageHash(info.osImageHash);
         assertFalse(authorize(info, true).authorized);
         kms.addKmsAggregatedMr(info.mrAggregated);
@@ -1068,7 +1069,7 @@ contract DstackKmsTest is Test {
         vm.stopPrank();
     }
 
-    function test_AppOperationIsForwardedAndLegacyAuthorizationStaysAvailable() public {
+    function test_AppOperationIsForwardedAndLegacyAuthorizationEndsAtRotation() public {
         IAppAuth.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
         registerNextRootEpoch();
@@ -1091,6 +1092,15 @@ contract DstackKmsTest is Test {
         assertTrue(kms.authorizeApp(request).authorized);
         (bool allowed,) = kms.isAppAllowed(info);
         assertTrue(allowed);
+
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        activateNextRootEpoch();
+        vm.stopPrank();
+        string memory reason;
+        (allowed, reason) = kms.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "Root epoch requires epoch-aware authorization");
     }
 
     function test_AuthorizeAppForwardsRequestAndFillsKmsFields() public {
