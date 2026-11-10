@@ -173,7 +173,7 @@ impl VmWorkDir {
         };
         instance_info.app_id = app_id.clone();
         instance_info.instance_id = instance_id.clone();
-        fs::write(
+        safe_write::safe_write(
             self.instance_info_path(),
             serde_json::to_string(&instance_info).context("failed to serialize instance info")?,
         )
