@@ -40,7 +40,6 @@ function failed(reason) {
   return {
     ok: false,
     osImageHash: null,
-    acpiTablesVerified: false,
     reason: reason == null ? 'verification failed' : String(reason),
   }
 }
@@ -53,8 +52,7 @@ function readOutput(exports, raw) {
   exports.dealloc(ptr, len)
   return {
     ok: Boolean(json.ok),
-    osImageHash: json.os_image_hash ?? null,
-    acpiTablesVerified: Boolean(json.acpi_tables_verified),
+    osImageHash: json.ok ? (json.os_image_hash ?? null) : null,
     reason: json.reason ?? null,
   }
 }

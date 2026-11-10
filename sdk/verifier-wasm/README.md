@@ -102,7 +102,6 @@ verifyTdxLiteOs(input: {
 }): {
   ok: boolean
   osImageHash: string | null
-  acpiTablesVerified: boolean
   reason: string | null
 }
 ```
@@ -129,8 +128,8 @@ typically a few milliseconds, later calls about 1 ms.
 | `failed to recompute expected TDX lite ACPI table digests` | VM shape the generator cannot model (`swtpm`; QEMU older than 8.0). |
 | `MRs do not match: MRTD\|RTMR0\|RTMR1\|RTMR2 mismatch` | Recomputed register disagrees with the quote. |
 
-`osImageHash` is the hex `os_image_hash` from `vm_config` when that JSON
-parsed; `acpiTablesVerified` is true only after the ACPI digests matched.
+`osImageHash` is the hex OS identity only when `ok` is true. On any failure
+it is `null`, including when `vm_config` names a hash that did not verify.
 
 ## Runtimes
 

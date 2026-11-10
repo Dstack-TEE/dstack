@@ -6,7 +6,7 @@
 //!
 //! Zero imports, no wasm-bindgen. JSON in/out:
 //! input `{mrtd, rtmr0, rtmr1, rtmr2, event_log, vm_config}`,
-//! output `{ok, os_image_hash, acpi_tables_verified, reason}`.
+//! output `{ok, os_image_hash, reason}`. `os_image_hash` is set only when `ok`.
 
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
@@ -30,7 +30,6 @@ struct Input {
 struct Output {
     ok: bool,
     os_image_hash: Option<String>,
-    acpi_tables_verified: bool,
     reason: Option<String>,
 }
 
@@ -46,10 +45,9 @@ fn parse_mr(name: &str, value: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn verify_input(input: &Input, out: &mut Output) -> Result<()> {
+fn verify_input(input: Input) -> Result<Output> {
     let vm: VmConfig =
         serde_json::from_str(&input.vm_config).context("vm_config is not valid JSON")?;
-    out.os_image_hash = Some(hex::encode(&vm.os_image_hash));
     let mrs = TdxMeasurements {
         mrtd: parse_mr("mrtd", &input.mrtd)?,
         rtmr0: parse_mr("rtmr0", &input.rtmr0)?,
@@ -59,23 +57,25 @@ fn verify_input(input: &Input, out: &mut Output) -> Result<()> {
     let events: Vec<TdxEvent> =
         serde_json::from_str(&input.event_log).context("event_log is not valid JSON")?;
     let check = verify_tdx_lite_os(&mrs, &events, &vm)?;
-    out.os_image_hash = Some(hex::encode(&check.os_image_hash));
-    out.acpi_tables_verified = check.acpi_tables_verified;
-    Ok(())
+    Ok(Output {
+        ok: true,
+        os_image_hash: Some(hex::encode(&check.os_image_hash)),
+        reason: None,
+    })
 }
 
 fn run(bytes: &[u8]) -> Output {
-    let mut out = Output::default();
-    let result = serde_json::from_slice::<Input>(bytes)
+    match serde_json::from_slice::<Input>(bytes)
         .context("input is not valid JSON")
-        .and_then(|input| verify_input(&input, &mut out));
-    if let Err(err) = result {
-        out.ok = false;
-        out.reason = Some(format!("{err:#}"));
-    } else {
-        out.ok = true;
+        .and_then(verify_input)
+    {
+        Ok(out) => out,
+        Err(err) => Output {
+            ok: false,
+            os_image_hash: None,
+            reason: Some(format!("{err:#}")),
+        },
     }
-    out
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -156,9 +156,32 @@ mod tests {
     fn fixture_is_accepted() {
         let out = run(&fixture_payload(false));
         assert!(out.ok, "{:?}", out.reason);
-        assert!(out.acpi_tables_verified);
         assert!(out.os_image_hash.is_some());
         assert!(out.reason.is_none());
+    }
+
+    #[test]
+    fn stuffed_os_image_hash_is_not_returned_on_failure() {
+        let fixture: GetQuoteFixture = serde_json::from_str(include_str!(
+            "../../../verifier/fixtures/tdx-lite-getquote.json"
+        ))
+        .expect("fixture parses");
+        let (mrtd, rtmr0, rtmr1, rtmr2) = mrs_from_quote_hex(&fixture.quote);
+        let mut vm: serde_json::Value =
+            serde_json::from_str(&fixture.vm_config).expect("vm_config parses");
+        vm["os_image_hash"] = serde_json::Value::String("ab".repeat(32));
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "mrtd": mrtd,
+            "rtmr0": rtmr0,
+            "rtmr1": rtmr1,
+            "rtmr2": rtmr2,
+            "event_log": fixture.event_log,
+            "vm_config": vm.to_string(),
+        }))
+        .expect("payload serializes");
+        let out = run(&payload);
+        assert!(!out.ok);
+        assert_eq!(out.os_image_hash, None);
     }
 
     #[test]
@@ -174,5 +197,6 @@ mod tests {
         );
         assert!(!out.ok);
         assert!(out.reason.is_some());
+        assert_eq!(out.os_image_hash, None);
     }
 }

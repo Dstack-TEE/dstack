@@ -66,6 +66,8 @@ jobs:
 
       - name: Build wasm package
         working-directory: .
+        env:
+          REPRO_CHECK: '1'
         run: bash sdk/verifier-wasm/scripts/build-in-container.sh
 
       - name: Print wasm sha256

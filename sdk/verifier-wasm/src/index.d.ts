@@ -14,7 +14,6 @@ export interface VerifyTdxLiteOsInput {
 export interface VerifyTdxLiteOsResult {
   ok: boolean
   osImageHash: string | null
-  acpiTablesVerified: boolean
   reason: string | null
 }
 

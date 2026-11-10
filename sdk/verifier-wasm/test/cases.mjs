@@ -59,27 +59,35 @@ export function buildCases(fixture) {
     {
       name: 'accepts the public TDX lite getquote fixture',
       input: base,
-      expect: { ok: true, acpiTablesVerified: true, osImageHash: 'string', reason: null },
+      expect: { ok: true, osImageHash: vm.os_image_hash, reason: null },
     },
     {
       name: 'accepts mixed-case measurement hex',
       input: { ...base, mrtd: base.mrtd.toUpperCase() },
-      expect: { ok: true },
+      expect: { ok: true, osImageHash: vm.os_image_hash },
+    },
+    {
+      name: 'does not return a stuffed os_image_hash on failure',
+      input: {
+        ...base,
+        vmConfig: JSON.stringify({ ...vm, os_image_hash: 'ab'.repeat(32) }),
+      },
+      expect: { ok: false, osImageHash: null, reason: 'string' },
     },
     ...vmTampers.map(([name, patch]) => ({
       name: `rejects tampered ${name}`,
       input: { ...base, vmConfig: JSON.stringify({ ...vm, ...patch }) },
-      expect: { ok: false, reason: 'string' },
+      expect: { ok: false, osImageHash: null, reason: 'string' },
     })),
     {
       name: 'rejects a tampered ACPI digest',
       input: { ...base, eventLog: JSON.stringify(tamperedEvents) },
-      expect: { ok: false, reasonIncludes: 'acpi-tables' },
+      expect: { ok: false, osImageHash: null, reasonIncludes: 'acpi-tables' },
     },
     {
       name: 'rejects zeroed RTMR2',
       input: { ...base, rtmr2: '00'.repeat(48) },
-      expect: { ok: false, reasonIncludes: 'RTMR2' },
+      expect: { ok: false, osImageHash: null, reasonIncludes: 'RTMR2' },
     },
     {
       name: 'rejects garbage measurements without throwing',
@@ -91,22 +99,22 @@ export function buildCases(fixture) {
         eventLog: '[]',
         vmConfig: '{}',
       },
-      expect: { ok: false, reason: 'string', throws: false },
+      expect: { ok: false, osImageHash: null, reason: 'string', throws: false },
     },
     {
       name: 'rejects null input without throwing',
       input: null,
-      expect: { ok: false, throws: false },
+      expect: { ok: false, osImageHash: null, throws: false },
     },
     {
       name: 'rejects undefined input without throwing',
       input: undefined,
-      expect: { ok: false, throws: false },
+      expect: { ok: false, osImageHash: null, throws: false },
     },
     {
       name: 'rejects empty object without throwing',
       input: {},
-      expect: { ok: false, throws: false },
+      expect: { ok: false, osImageHash: null, throws: false },
     },
   ]
 }
@@ -121,12 +129,9 @@ function checkExpect(expect, output, threw) {
   if (Boolean(output.ok) !== Boolean(expect.ok)) {
     return `ok=${output.ok} reason=${output.reason}`
   }
-  if (expect.acpiTablesVerified !== undefined
-    && Boolean(output.acpiTablesVerified) !== Boolean(expect.acpiTablesVerified)) {
-    return `acpiTablesVerified=${output.acpiTablesVerified}`
-  }
-  if (expect.osImageHash === 'string' && typeof output.osImageHash !== 'string') {
-    return `osImageHash type ${typeof output.osImageHash}`
+  if (Object.prototype.hasOwnProperty.call(expect, 'osImageHash')
+    && output.osImageHash !== expect.osImageHash) {
+    return `osImageHash=${output.osImageHash}`
   }
   if (expect.reason === null && output.reason != null) {
     return `reason=${output.reason}`
