@@ -82,6 +82,8 @@ url = "http://10.0.2.2:{args.auth_port}"
 
 [core.onboard]
 enabled = true
+# Onboarding without source_token and 0.5.x destinations use the public handover.
+public_key_handover = true
 auto_bootstrap_domain = ""
 # Required by KMS 0.5.8. Current KMS ignores this retired field.
 quote_enabled = true

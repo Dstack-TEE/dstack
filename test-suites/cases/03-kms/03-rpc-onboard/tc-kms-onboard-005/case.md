@@ -19,13 +19,13 @@
 - Read `DSTACK_TEST_RUNTIME_MANIFEST` once and use its prepared binaries, shared Cargo target, fixture paths, commit, and toolchain as authoritative. Do not rediscover them from processes, old sessions, or broad source searches.
 - Runtime state and evidence remain case-scoped even though immutable build outputs are shared.
 - The `kms-onboard` fixture provides a bootstrapped source KMS (`values.kms`, with its admin listener and token file), an attested simulator client (`values.kms_attested_client`), and a clean onboarding target whose configuration is the template for a third, case-owned target on the unused substrate ports `verifier` (RPC), `aux4` (onboarding), and `vmm` (admin).
-- PR #1307 added `Admin.GetKmsKey`, optional `[core.admin.tls]` (which makes the admin listener accept RA-TLS client certificates), `core.onboard.public_key_handover` (default `true`), and `OnboardRequest.source_token`, which the onboarding client sends as `Authorization: Bearer`.
+- PR #1307 added `Admin.GetKmsKey`, optional `[core.admin.tls]` (which makes the admin listener accept RA-TLS client certificates), `core.onboard.public_key_handover` (default `true` there; #1552 changed it to `false`), and `OnboardRequest.source_token`, which the onboarding client sends as `Authorization: Bearer`.
 - With `source_token`, the target mints a self-issued RA-TLS client certificate and calls `Admin.GetKmsKey` with the bearer token; it does not call `GetTempCaCert`. Before PR #1406, onboarding with a token failed with `Service not found: GetTempCaCert`.
 - Keep key responses in memory. Record status codes, bounded redacted errors, and fingerprint or public-key equality only.
 
 ## Objective
 
-Verify that root-key handover can be moved to the admin listener: `Admin.GetKmsKey` requires both the admin bearer token and an attested client certificate, other admin RPCs do not require a client certificate, `public_key_handover = false` refuses the public `KMS.GetKmsKey`, and a new KMS onboards through the admin listener with `source_token`.
+Verify that root-key handover can be moved to the admin listener: `Admin.GetKmsKey` requires both the admin bearer token and an attested client certificate, other admin RPCs do not require a client certificate, the default `public_key_handover = false` refuses the public `KMS.GetKmsKey`, and a new KMS onboards through the admin listener with `source_token`.
 
 ## Preconditions
 
@@ -39,18 +39,18 @@ A run-scoped onboarding domain `<lease>.admin-onboard.test`, the fixture admin t
 ## Steps
 
 <a id="tc-kms-onboard-005-step-01"></a>
-### Step 1: Record the default public handover
+### Step 1: Record the enabled public handover
 
-With the fixture configuration (no `public_key_handover` key), call `KMS.GetKmsKey` on the public listener with the attested client, and read `KMS.GetMeta.k256_pubkey`.
+With the fixture configuration (`public_key_handover = true`), call `KMS.GetKmsKey` on the public listener with the attested client, and read `KMS.GetMeta.k256_pubkey`.
 
 **Expected results:**
 
-- HTTP 200 with exactly one key entry; its fingerprint is the baseline root key. The default keeps public handover on for rolling upgrades.
+- HTTP 200 with exactly one key entry; its fingerprint is the baseline root key.
 
 <a id="tc-kms-onboard-005-step-02"></a>
 ### Step 2: Move handover to the admin listener
 
-Restart the source with `[core.onboard] public_key_handover = false` and `[core.admin.tls]` using its own RPC key and certificate. Call `KMS.GetKmsKey` on the public listener, then `Admin.GetKmsKey` over HTTPS with the token and client certificate, with the token only, and with the certificate only. Call `Admin.ClearImageCache` with the token and no client certificate.
+Restart the source without the `public_key_handover` key, so the default `false` applies, and with `[core.admin.tls]` using its own RPC key and certificate. Call `KMS.GetKmsKey` on the public listener, then `Admin.GetKmsKey` over HTTPS with the token and client certificate, with the token only, and with the certificate only. Call `Admin.ClearImageCache` with the token and no client certificate.
 
 **Expected results:**
 

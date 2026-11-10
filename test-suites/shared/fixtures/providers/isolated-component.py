@@ -164,6 +164,7 @@ type = "dev"
 gateway_app_id = "any"
 [core.onboard]
 enabled = true
+public_key_handover = true
 auto_bootstrap_domain = "{"localhost" if auto_bootstrap else ""}"
 address = "127.0.0.1"
 port = {onboard_port}

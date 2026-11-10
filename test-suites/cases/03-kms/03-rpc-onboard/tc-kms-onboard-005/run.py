@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exercise KMS root-key handover on the admin listener (PR #1307).
 
-The source KMS is restarted with `[core.admin.tls]` and
-`core.onboard.public_key_handover = false`. `Admin.GetKmsKey` must then need
+The source KMS is restarted with `[core.admin.tls]` and without
+`core.onboard.public_key_handover`, which defaults to `false`. `Admin.GetKmsKey` must then need
 both the admin bearer token and an attested RA-TLS client certificate, the
 public `KMS.GetKmsKey` must refuse, and a fresh target must onboard through the
 admin listener with `source_token`.
@@ -204,25 +204,23 @@ def main() -> int:
         )
         if not source_pubkey:
             raise AssertionError("source GetMeta omitted k256_pubkey")
-        row("public_handover_default_on", True, status=code)
+        row("public_handover_enabled", True, status=code)
         steps.append(
             emit(
                 f"{CASE_ID}-step-01",
                 "PASS",
-                "With the default public_key_handover the attested client received the current root key on the public listener.",
+                "With public_key_handover = true the attested client received the current root key on the public listener.",
             )
         )
 
         stop(int(kms["pid"]))
-        hardened = original_config.replace(
-            "[core.onboard]\n", "[core.onboard]\npublic_key_handover = false\n", 1
-        )
+        if "public_key_handover = true\n" not in original_config:
+            raise RuntimeError("source fixture does not enable public_key_handover")
+        hardened = original_config.replace("public_key_handover = true\n", "", 1)
         hardened += (
             f'\n[core.admin.tls]\nkey = "{source_cert_dir / "rpc.key"}"\n'
             f'certs = "{source_cert_dir / "rpc.crt"}"\n'
         )
-        if "public_key_handover = false" not in hardened:
-            raise RuntimeError("source config has no [core.onboard] section")
         source_config.write_text(hardened)
         source = start(
             binary, source_config, agent_socket, artifacts / "source-kms-hardened.log"

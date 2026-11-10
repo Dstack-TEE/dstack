@@ -179,7 +179,7 @@ def old_config(
         if auth_url
         else '[core.auth_api]\ntype = "dev"\n[core.auth_api.dev]\ngateway_app_id = "any"\n'
     )
-    return f'''[rpc]\naddress = "0.0.0.0"\nport = 8000\n[rpc.tls]\nkey = "/etc/kms/certs/rpc.key"\ncerts = "/etc/kms/certs/rpc.crt"\n[rpc.tls.mutual]\nca_certs = "/etc/kms/certs/tmp-ca.crt"\nmandatory = false\n[core]\ncert_dir = "/etc/kms/certs"\nsubject_postfix = ".dstack"\n{modern_fields}[core.image]\nverify = {str(verify_image).lower()}\ncache_dir = "/etc/kms/images"\ndownload_url = "{image_download_url}"\ndownload_timeout = "2s"\n{metrics}{auth}[core.onboard]\nenabled = true\nauto_bootstrap_domain = "{auto_domain}"\n{quote}address = "0.0.0.0"\nport = 8000\n'''
+    return f'''[rpc]\naddress = "0.0.0.0"\nport = 8000\n[rpc.tls]\nkey = "/etc/kms/certs/rpc.key"\ncerts = "/etc/kms/certs/rpc.crt"\n[rpc.tls.mutual]\nca_certs = "/etc/kms/certs/tmp-ca.crt"\nmandatory = false\n[core]\ncert_dir = "/etc/kms/certs"\nsubject_postfix = ".dstack"\n{modern_fields}[core.image]\nverify = {str(verify_image).lower()}\ncache_dir = "/etc/kms/images"\ndownload_url = "{image_download_url}"\ndownload_timeout = "2s"\n{metrics}{auth}[core.onboard]\nenabled = true\npublic_key_handover = true\nauto_bootstrap_domain = "{auto_domain}"\n{quote}address = "0.0.0.0"\nport = 8000\n'''
 
 
 def candidate_config(
@@ -195,7 +195,7 @@ def candidate_config(
         if auth_url
         else '[core.auth_api]\ntype = "dev"\n[core.auth_api.dev]\ngateway_app_id = "any"\n'
     )
-    return f'''[rpc]\naddress = "0.0.0.0"\nport = 8000\n[rpc.tls]\nkey = "/etc/kms/certs/rpc.key"\ncerts = "/etc/kms/certs/rpc.crt"\n[rpc.tls.mutual]\nca_certs = "/etc/kms/certs/tmp-ca.crt"\nmandatory = false\n[core]\ncert_dir = "/etc/kms/certs"\nenforce_self_authorization = false\n[core.image]\nverify = {str(verify_image).lower()}\ncache_dir = "/etc/kms/images"\ndownload_url = "{image_download_url}"\ndownload_timeout = "2s"\n[core.metrics]\nenabled = true\n[core.admin]\nenabled = false\n{auth}[core.onboard]\nenabled = true\nauto_bootstrap_domain = "{auto_domain}"\naddress = "0.0.0.0"\nport = 8000\n'''
+    return f'''[rpc]\naddress = "0.0.0.0"\nport = 8000\n[rpc.tls]\nkey = "/etc/kms/certs/rpc.key"\ncerts = "/etc/kms/certs/rpc.crt"\n[rpc.tls.mutual]\nca_certs = "/etc/kms/certs/tmp-ca.crt"\nmandatory = false\n[core]\ncert_dir = "/etc/kms/certs"\nenforce_self_authorization = false\n[core.image]\nverify = {str(verify_image).lower()}\ncache_dir = "/etc/kms/images"\ndownload_url = "{image_download_url}"\ndownload_timeout = "2s"\n[core.metrics]\nenabled = true\n[core.admin]\nenabled = false\n{auth}[core.onboard]\nenabled = true\npublic_key_handover = true\nauto_bootstrap_domain = "{auto_domain}"\naddress = "0.0.0.0"\nport = 8000\n'''
 
 
 class MatrixRun:

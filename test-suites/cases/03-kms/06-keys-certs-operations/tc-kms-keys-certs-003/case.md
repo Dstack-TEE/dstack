@@ -66,7 +66,7 @@ Re-query the public status/state interfaces, inspect component and peer logs, an
 
 ## Post-baseline regression coverage (PR #1307)
 
-- `KMS.GetKmsKey` on the public listener remains available because `core.onboard.public_key_handover` defaults to `true`; the fixture leaves it unset and this case asserts that default. The admin-listener route (`Admin.GetKmsKey`), the `public_key_handover = false` refusal, and onboarding with `source_token` are covered by `tc-kms-onboard-005`.
+- `KMS.GetKmsKey` on the public listener is available because the fixture sets `core.onboard.public_key_handover = true` (the default is `false`). The admin-listener route (`Admin.GetKmsKey`), the default refusal, and onboarding with `source_token` are covered by `tc-kms-onboard-005`.
 
 ## Postconditions
 
