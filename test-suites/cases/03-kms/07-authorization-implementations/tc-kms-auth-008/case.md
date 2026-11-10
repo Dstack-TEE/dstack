@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-kms-auth-008](../../../../catalog/feature-audit.md#req-kms-auth-008)
 - Risks: [risk-kms-auth-008](../../../../catalog/feature-audit.md#risk-kms-auth-008)
-- Source: `dstack/kms/auth-eth-bun/openapi.json`
+- Source: `dstack/kms/auth-eth/openapi.json`
 
 ## Prepared execution knowledge
 

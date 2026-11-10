@@ -12,32 +12,26 @@ CASE = "tc-kms-rotation-015"
 def main():
     if os.environ.get("DSTACK_TEST_CASE_ID") != CASE:
         raise SystemExit("unsupported case")
-    repo = pathlib.Path(
-        json.loads(
-            pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
-        )["repository"]
+    runtime = json.loads(
+        pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
     )
+    repo = pathlib.Path(runtime["repository"])
+    env = dict(os.environ, CARGO_TARGET_DIR=str(runtime["cargo_target_dir"]))
     rows = []
-    for path in [
-        "dstack/kms/auth-simple",
-        "dstack/kms/auth-mock",
-        "dstack/kms/auth-eth-bun",
-        "dstack/kms/auth-eth",
+    for path, cmd in [
+        ("dstack", ["cargo", "test", "--locked", "-p", "dstack-auth"]),
+        ("dstack/kms/auth-eth", ["npm", "test", "--", "--run"]),
     ]:
-        cmd = (
-            ["npm", "test", "--", "--run"]
-            if path != "dstack/kms/auth-eth"
-            else ["npm", "test", "--", "--runInBand"]
-        )
         r = subprocess.run(
             cmd,
             cwd=repo / path,
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=300,
+            timeout=900,
         )
-        rows.append({"path": path, "returncode": r.returncode})
+        rows.append({"path": path, "command": cmd, "returncode": r.returncode})
     status = "PASS" if all(x["returncode"] == 0 for x in rows) else "FAIL"
     rd = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     (rd / "artifacts").mkdir(parents=True, exist_ok=True)

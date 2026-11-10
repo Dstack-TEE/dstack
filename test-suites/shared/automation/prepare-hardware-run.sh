@@ -314,16 +314,8 @@ test -s "$repo/dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades/src/Upgrade
 # into shared package directories from concurrent cases races and previously
 # left auth services without tsc or a healthy listener.
 (
-  cd "$repo/dstack/kms/auth-simple"
-  "$bun_bin" install --frozen-lockfile
-)
-(
-  cd "$repo/dstack/kms/auth-eth-bun"
-  "$bun_bin" install --frozen-lockfile
-)
-(
   cd "$repo/dstack/kms/auth-eth"
-  npm ci --ignore-scripts
+  "$bun_bin" install --frozen-lockfile
 )
 
 # This public, immutable image is required by four verifier harnesses. Bind the

@@ -19,7 +19,7 @@ runner="$repo/test-suites/runner/dstack-test"
 # repeated in the parallel round.
 preflight_cases=(
   tc-gos-attestatio-002
-  tc-kms-auth-002
+  tc-kms-kms-004
   tc-ver-input-plat-007
   tc-int-failure-se-008
   tc-gos-yocto-004

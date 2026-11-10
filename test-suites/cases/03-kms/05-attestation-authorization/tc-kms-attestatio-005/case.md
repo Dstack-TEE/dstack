@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-kms-attestatio-005](../../../../catalog/feature-audit.md#req-kms-attestatio-005)
 - Risks: [risk-kms-attestatio-005](../../../../catalog/feature-audit.md#risk-kms-attestatio-005)
-- Source: `dstack/kms/auth-simple/index.ts`
+- Source: `dstack/crates/dstack-auth/src/main.rs`
 
 ## Prepared execution knowledge
 
@@ -51,7 +51,7 @@ Query the relevant health, configuration, and baseline state for authorization b
 <a id="tc-kms-attestatio-005-step-02"></a>
 ### Step 2: Exercise the behavior
 
-Run mock, simple, Ethereum/Bun, and contract-backed authorization allow/deny/error/timeouts.
+Run file-based (dstack-auth), Ethereum (auth-eth), and contract-backed authorization allow/deny/error/timeouts.
 
 **Expected results:**
 

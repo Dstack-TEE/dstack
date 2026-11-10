@@ -27,6 +27,7 @@ GATEWAY_SELECTOR = "0x95f51931"
 APP_IMPLEMENTATION_SELECTOR = "0x25a992da"
 APP_ALLOWED_SELECTOR = "0x1e079198"
 KMS_ALLOWED_SELECTOR = "0xe067ec9d"
+ROOT_EPOCH_COUNT_SELECTOR = "0xb6b6d452"
 
 
 def free_port() -> int:
@@ -91,12 +92,16 @@ class RpcHandler(http.server.BaseHTTPRequestHandler):
                 result = "0x7a69"
             elif method == "eth_blockNumber":
                 result = "0x100"
+            elif method == "eth_getBlockByNumber":
+                result = {"number": "0x100", "hash": "0x" + "00" * 32}
             elif method == "eth_call":
                 data = request.get("params", [{}])[0].get("data", "")[:10]
                 if data == GATEWAY_SELECTOR:
                     result = "0x" + encoded_string("gateway-runtime-test")
                 elif data == APP_IMPLEMENTATION_SELECTOR:
                     result = "0x" + ("00" * 12) + ("22" * 20)
+                elif data == ROOT_EPOCH_COUNT_SELECTOR:
+                    result = "0x" + word(0)
                 elif data in {APP_ALLOWED_SELECTOR, KMS_ALLOWED_SELECTOR}:
                     result = "0x" + encoded_decision(True, "allowed")
                 else:
@@ -188,7 +193,7 @@ def main() -> int:
     result_dir = Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     runtime = json.loads(Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text())
     repo = Path(runtime["repository"])
-    package = repo / "dstack/kms/auth-eth-bun"
+    package = repo / "dstack/kms/auth-eth"
     bun = shutil.which("bun")
     if bun is None:
         raise RuntimeError("missing required command: bun")

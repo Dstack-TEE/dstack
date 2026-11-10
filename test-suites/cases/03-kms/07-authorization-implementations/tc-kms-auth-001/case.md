@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-kms-auth-001](../../../../catalog/feature-audit.md#req-kms-auth-001)
 - Risks: [risk-kms-auth-001](../../../../catalog/feature-audit.md#risk-kms-auth-001)
-- Source: `dstack/kms/auth-simple`
+- Source: `dstack/crates/dstack-auth`
 
 ## Prepared execution knowledge
 

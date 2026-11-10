@@ -4,7 +4,7 @@
 
 ## Objective
 
-Verify auth-simple, auth-mock, auth-eth, and auth-eth-bun preserve operation names and root/app epoch selectors, reject stale or mismatched epochs, and keep legacy epoch-zero behavior compatible.
+Verify dstack-auth and auth-eth preserve operation names and root/app epoch selectors, reject stale or mismatched epochs, and keep legacy epoch-zero behavior compatible.
 
 ## Execution and expected results
 

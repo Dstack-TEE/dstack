@@ -378,7 +378,6 @@ This audit is derived from the repository source inventory and is the traceabili
 | Requirement | Risk | Case | Priority |
 |---|---|---|---|
 <a id="req-kms-auth-001"></a><a id="risk-kms-auth-001"></a>| `req-kms-auth-001` | `risk-kms-auth-001` | [tc-kms-auth-001](../cases/03-kms/07-authorization-implementations/tc-kms-auth-001/case.md#tc-kms-auth-001) — Simple authorization configuration rules | P0 |
-<a id="req-kms-auth-002"></a><a id="risk-kms-auth-002"></a>| `req-kms-auth-002` | `risk-kms-auth-002` | [tc-kms-auth-002](../cases/03-kms/07-authorization-implementations/tc-kms-auth-002/case.md#tc-kms-auth-002) — Mock authorization safety boundary | P0 |
 <a id="req-kms-auth-003"></a><a id="risk-kms-auth-003"></a>| `req-kms-auth-003` | `risk-kms-auth-003` | [tc-kms-auth-003](../cases/03-kms/07-authorization-implementations/tc-kms-auth-003/case.md#tc-kms-auth-003) — Ethereum authorization freshness and domain binding | P0 |
 <a id="req-kms-auth-004"></a><a id="risk-kms-auth-004"></a>| `req-kms-auth-004` | `risk-kms-auth-004` | [tc-kms-auth-004](../cases/03-kms/07-authorization-implementations/tc-kms-auth-004/case.md#tc-kms-auth-004) — KMS contract ownership roles and upgrade controls | P0 |
 <a id="req-kms-auth-005"></a><a id="risk-kms-auth-005"></a>| `req-kms-auth-005` | `risk-kms-auth-005` | [tc-kms-auth-005](../cases/03-kms/07-authorization-implementations/tc-kms-auth-005/case.md#tc-kms-auth-005) — KMS node registration and authorization lifecycle | P0 |
@@ -430,7 +429,6 @@ This audit is derived from the repository source inventory and is the traceabili
 | Requirement | Risk | Case | Priority |
 |---|---|---|---|
 <a id="req-kms-runtime-001"></a><a id="risk-kms-runtime-001"></a>| `req-kms-runtime-001` | `risk-kms-runtime-001` | [tc-kms-runtime-001](../cases/03-kms/11-auth-service-runtime/tc-kms-runtime-001/case.md#tc-kms-runtime-001) — Ethereum authorization HTTP server schema and listener | P0 |
-<a id="req-kms-runtime-002"></a><a id="risk-kms-runtime-002"></a>| `req-kms-runtime-002` | `risk-kms-runtime-002` | [tc-kms-runtime-002](../cases/03-kms/11-auth-service-runtime/tc-kms-runtime-002/case.md#tc-kms-runtime-002) — Bun and Node authorization implementation parity | P0 |
 <a id="req-kms-runtime-003"></a><a id="risk-kms-runtime-003"></a>| `req-kms-runtime-003` | `risk-kms-runtime-003` | [tc-kms-runtime-003](../cases/03-kms/11-auth-service-runtime/tc-kms-runtime-003/case.md#tc-kms-runtime-003) — Authorization deployment and management scripts | P0 |
 <a id="req-kms-runtime-004"></a><a id="risk-kms-runtime-004"></a>| `req-kms-runtime-004` | `risk-kms-runtime-004` | [tc-kms-runtime-004](../cases/03-kms/11-auth-service-runtime/tc-kms-runtime-004/case.md#tc-kms-runtime-004) — Authorization service container deployment | P1 |
 <a id="req-kms-runtime-005"></a><a id="risk-kms-runtime-005"></a>| `req-kms-runtime-005` | `risk-kms-runtime-005` | [tc-kms-runtime-005](../cases/03-kms/11-auth-service-runtime/tc-kms-runtime-005/case.md#tc-kms-runtime-005) — DstackApp device compose TCB and upgrade-disable policy | P0 |

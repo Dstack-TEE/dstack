@@ -111,10 +111,6 @@ def main() -> int:
     checks = {}
     retained = {}
     failure = ""
-    dockerfile = root / "Dockerfile"
-    dockerfile.write_text(
-        """FROM node:20-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0\nWORKDIR /app\nCOPY package.json package-lock.json ./\nRUN npm ci\nCOPY tsconfig.json ./\nCOPY src ./src\nRUN npm run build && npm prune --omit=dev\nUSER node\nCMD ["node", "dist/main.js"]\n"""
-    )
     mock = root / "mock-rpc.py"
     helper = (
         repo / "test-suites/shared/automation/kms-runtime-001-capability-case.py"
@@ -167,8 +163,6 @@ def main() -> int:
                 "-p",
                 f"127.0.0.1:{port}:8000",
                 "-e",
-                "HOST=0.0.0.0",
-                "-e",
                 "PORT=8000",
                 "-e",
                 "ETH_RPC_URL=http://rpc:8545",
@@ -179,6 +173,15 @@ def main() -> int:
                 image,
             ]
         )
+
+    start_mock = [
+        "exec",
+        "-d",
+        rpc,
+        "sh",
+        "-c",
+        "echo $$ > /tmp/rpc.pid && exec python /mock-rpc.py",
+    ]
 
     try:
         runs["compose_dev_config"] = docker(
@@ -203,15 +206,13 @@ def main() -> int:
             ],
             120,
         )
-        runs["build"] = docker(
-            ["build", "-f", str(dockerfile), "-t", image, str(package)], 600
-        )
+        runs["build"] = docker(["build", "-t", image, str(package)], 600)
         if runs["build"]["exit_code"]:
             raise RuntimeError(runs["build"]["output_tail"])
         runs["network"] = docker(docker_network_args(network))
-        runs["auth_start"] = start_auth()
-        outage = wait_health(port, 500)
-        outage_status, outage_boot = request(port, "/bootAuth/app", valid)
+        # auth-eth probes the RPC at startup, so the outage is injected after
+        # it is up. Only the mock process stops: a stopped container would
+        # turn the outage into slow DNS failures for its alias.
         runs["rpc_start"] = docker(
             [
                 "run",
@@ -225,10 +226,17 @@ def main() -> int:
                 "-v",
                 f"{mock}:/mock-rpc.py:ro",
                 "python:3.11-slim",
-                "python",
-                "/mock-rpc.py",
+                "sleep",
+                "infinity",
             ]
         )
+        runs["rpc_serve"] = docker(start_mock)
+        runs["auth_start"] = start_auth()
+        wait_health(port, 200)
+        runs["rpc_stop"] = docker(["exec", rpc, "sh", "-c", "kill $(cat /tmp/rpc.pid)"])
+        outage = wait_health(port, 500)
+        outage_status, outage_boot = request(port, "/bootAuth/app", valid)
+        runs["rpc_restart"] = docker(start_mock)
         healthy = wait_health(port, 200)
         app_status, app = request(port, "/bootAuth/app", valid)
         kms_status, kms = request(port, "/bootAuth/kms", valid)
@@ -239,6 +247,7 @@ def main() -> int:
         replaced = wait_health(port, 200)
         runs["logs"] = docker(["logs", auth])
         runs["inspect"] = docker(["inspect", auth])
+        runs["top"] = docker(["top", auth])
         inspect_text = runs["inspect"]["output_tail"]
         log_text = runs["logs"]["output_tail"]
         checks = {
@@ -255,7 +264,7 @@ def main() -> int:
             and kms.get("isAllowed") is True,
             "restart_healthy": restarted.get("status") == "ok",
             "replacement_identity": replaced == healthy,
-            "single_auth_process": inspect_text.count('"dist/main.js"') == 1,
+            "single_auth_process": runs["top"]["output_tail"].count("index.ts") == 1,
             "no_secret_material": "PRIVATE_KEY" not in inspect_text
             and "PRIVATE_KEY" not in log_text
             and "WALLET" not in inspect_text,

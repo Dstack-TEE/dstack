@@ -11,7 +11,7 @@
 - Automation: Yes
 - Requirements: [req-kms-auth-003](../../../../catalog/feature-audit.md#req-kms-auth-003)
 - Risks: [risk-kms-auth-003](../../../../catalog/feature-audit.md#risk-kms-auth-003)
-- Source: `dstack/kms/auth-eth-bun/index.ts`
+- Source: `dstack/kms/auth-eth/index.ts`
 
 ## Prepared execution knowledge
 

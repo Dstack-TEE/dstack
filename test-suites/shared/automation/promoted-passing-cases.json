@@ -1846,13 +1846,6 @@
       "environment": "LOCAL_DETERMINISTIC_AUTH_BACKENDS"
     },
     {
-      "case_id": "tc-kms-auth-002",
-      "source_run": "central-fixtures-20260724T032131Z",
-      "source_status": "PASS",
-      "entrypoint": "cases/03-kms/07-authorization-implementations/tc-kms-auth-002/run.py",
-      "environment": "SIMULATION"
-    },
-    {
       "case_id": "tc-kms-auth-003",
       "source_run": "kms-auth-eth-countfix-official-001",
       "source_status": "PASS",
@@ -2164,15 +2157,6 @@
       "promoted_at": "2026-07-29T18:33:24Z",
       "notes": "4/4 groups and 11/11 checks exercise the real Bun HTTP listener with schema boundaries, app/KMS decisions, adjacent identity, 8 concurrent requests, RPC fail-closed recovery, restart, endpoint redaction, and owned cleanup",
       "environment": "LOCAL_BUN_ETHEREUM_RPC"
-    },
-    {
-      "case_id": "tc-kms-runtime-002",
-      "source_run": "kms-runtime-parity-retained-002",
-      "source_status": "PASS",
-      "entrypoint": "cases/03-kms/11-auth-service-runtime/tc-kms-runtime-002/run.py",
-      "promoted_at": "2026-07-29T18:43:03Z",
-      "notes": "4/4 groups and 10/10 checks compare Node/Fastify and Bun/Hono over one seven-row corpus, equal health metadata, 6+6 concurrent requests, RPC fail-closed recovery, restart, credential redaction, and cleanup",
-      "environment": "LOCAL_NODE_BUN_ETHEREUM_RPC"
     },
     {
       "case_id": "tc-kms-runtime-003",

@@ -75,7 +75,7 @@ def main() -> int:
     runtime = json.loads(
         pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
     )
-    source = pathlib.Path(runtime["repository"]) / "dstack/kms/auth-eth-bun"
+    source = pathlib.Path(runtime["repository"]) / "dstack/kms/auth-eth"
     bun = shutil.which("bun")
     if bun is None:
         raise RuntimeError("missing required command: bun")

@@ -75,7 +75,7 @@ def main() -> int:
     runtime = json.loads(
         pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
     )
-    source = pathlib.Path(runtime["repository"]) / "dstack/kms/auth-eth-bun"
+    source = pathlib.Path(runtime["repository"]) / "dstack/kms/auth-eth"
     bun = shutil.which("bun")
     if bun is None:
         raise RuntimeError("missing required command: bun")
@@ -111,7 +111,7 @@ def main() -> int:
                 "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
             }
             rows.append(row)
-            if rc or tests != 5:
+            if rc or tests != 8:
                 raise RuntimeError(f"fresh process {process_index} failed: {row}")
         install_evidence = {
             "returncode": install_rc,

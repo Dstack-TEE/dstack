@@ -117,10 +117,10 @@ def wait_health(port: int) -> dict[str, Any]:
                 return payload
         except Exception:  # noqa: BLE001
             time.sleep(0.1)
-    raise RuntimeError("auth-simple did not become healthy")
+    raise RuntimeError("dstack-auth did not become healthy")
 
 
-def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
+def lifecycle(binary: Path) -> dict[str, Any]:
     sentinel = "AUTH_SECRET_SENTINEL_7d13"
     valid = {
         "gatewayAppId": "gateway-test",
@@ -143,24 +143,18 @@ def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
         "advisoryIds": [],
         "mrSystem": "0x07",
     }
-    with tempfile.TemporaryDirectory(prefix="dstack-auth-simple-") as raw:
+    with tempfile.TemporaryDirectory(prefix="dstack-auth-") as raw:
         root = Path(raw)
         config = root / "auth.json"
         log = root / "service.log"
         config.write_text(json.dumps(valid) + "\n")
         port = free_port()
-        service_env = dict(
-            env,
-            PORT=str(port),
-            AUTH_CONFIG_PATH=str(config),
-            AUTH_TEST_SENTINEL=sentinel,
-        )
+        service_env = dict(os.environ, AUTH_TEST_SENTINEL=sentinel)
 
         def start() -> tuple[subprocess.Popen[str], Any]:
             output = log.open("a", encoding="utf-8")
             proc = subprocess.Popen(
-                [bun, "run", "index.ts"],
-                cwd=package,
+                [str(binary), "--config", str(config), "--port", str(port)],
                 env=service_env,
                 text=True,
                 stdout=output,
@@ -225,7 +219,7 @@ def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
                 200,
                 {
                     "isAllowed": False,
-                    "reason": "app is not allowed to boot on this device",
+                    "reason": "device not allowed",
                     "gatewayAppId": valid["gatewayAppId"],
                 },
             )
@@ -234,7 +228,7 @@ def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
                 200,
                 {
                     "isAllowed": False,
-                    "reason": "KMS is not allowed to boot on this device",
+                    "reason": "device not allowed",
                     "gatewayAppId": valid["gatewayAppId"],
                 },
             ),
@@ -254,7 +248,7 @@ def lifecycle(package: Path, bun: str, env: dict[str, str]) -> dict[str, Any]:
         }
 
 
-def run_matrix(repo: Path, cache: Path) -> dict[str, Any]:
+def run_matrix(repo: Path, cache: Path, cargo_target: Path) -> dict[str, Any]:
     bun = shutil.which("bun")
     if bun is None or not Path(bun).is_file():
         raise RuntimeError("Bun is unavailable")
@@ -262,51 +256,59 @@ def run_matrix(repo: Path, cache: Path) -> dict[str, Any]:
     base_env["PATH"] = os.pathsep.join(
         [str(node20_bin()), str(Path(bun).parent), base_env.get("PATH", "")]
     )
-    packages = {
-        name: repo / "dstack/kms" / name for name in ("auth-simple", "auth-eth-bun")
+    cargo_env = dict(base_env, CARGO_TARGET_DIR=str(cargo_target))
+    workspace = repo / "dstack"
+    runs: dict[str, Any] = {
+        "dstack-auth_tests": command(
+            ["cargo", "test", "--locked", "-p", "dstack-auth"],
+            workspace,
+            cargo_env,
+            900,
+        ),
+        "dstack-auth_build": command(
+            ["cargo", "build", "--locked", "-p", "dstack-auth"],
+            workspace,
+            cargo_env,
+            900,
+        ),
     }
-    runs: dict[str, Any] = {}
-    for name, package in packages.items():
-        env = dict(base_env)
-        env["PATH"] = os.pathsep.join([str(package / "node_modules/.bin"), env["PATH"]])
-        runs[f"{name}_install"] = command(
-            [bun, "install", "--frozen-lockfile"], package, env
-        )
-        if runs[f"{name}_install"]["exit_code"] == 0:
-            runs[f"{name}_tests"] = command([bun, "run", "test:run"], package, env)
-            if name == "auth-eth-bun":
-                runs["auth-eth-bun_schema_tests"] = command(
-                    [bun, "run", "test:run", "--", "-t", "API Schema Compatibility"],
-                    package,
-                    env,
-                )
-                runs["auth-eth-bun_error_tests"] = command(
-                    [bun, "run", "test:run", "--", "-t", "handle contract errors"],
-                    package,
-                    env,
-                )
-    simple_env = dict(base_env)
-    simple_env["PATH"] = os.pathsep.join(
-        [str(packages["auth-simple"] / "node_modules/.bin"), simple_env["PATH"]]
+    if runs["dstack-auth_build"]["exit_code"] != 0:
+        raise RuntimeError("dstack-auth build failed")
+    package = repo / "dstack/kms/auth-eth"
+    env = dict(base_env)
+    env["PATH"] = os.pathsep.join([str(package / "node_modules/.bin"), env["PATH"]])
+    runs["auth-eth_install"] = command(
+        [bun, "install", "--frozen-lockfile"], package, env
     )
-    life = lifecycle(packages["auth-simple"], bun, simple_env)
-    simple_output = runs.get("auth-simple_tests", {}).get("output_tail", "")
+    if runs["auth-eth_install"]["exit_code"] == 0:
+        runs["auth-eth_tests"] = command([bun, "run", "test:run"], package, env)
+        runs["auth-eth_schema_tests"] = command(
+            [bun, "run", "test:run", "--", "-t", "API Schema Compatibility"],
+            package,
+            env,
+        )
+        runs["auth-eth_error_tests"] = command(
+            [bun, "run", "test:run", "--", "-t", "handle contract errors"],
+            package,
+            env,
+        )
+    life = lifecycle(cargo_target / "debug/dstack-auth")
     rows = {
         "simple_native": {
             "status": "PASS"
-            if runs.get("auth-simple_tests", {}).get("exit_code") == 0
+            if runs["dstack-auth_tests"].get("exit_code") == 0
             else "FAIL",
-            "evidence": "auth-simple native decision suite",
+            "evidence": "dstack-auth native decision suite",
         },
         "ethereum_native": {
             "status": "PASS"
-            if runs.get("auth-eth-bun_tests", {}).get("exit_code") == 0
+            if runs.get("auth-eth_tests", {}).get("exit_code") == 0
             else "FAIL",
-            "evidence": "auth-eth-bun native backend suite",
+            "evidence": "auth-eth native backend suite",
         },
         "schema_compatibility": {
             "status": "PASS"
-            if runs.get("auth-eth-bun_schema_tests", {}).get("exit_code") == 0
+            if runs.get("auth-eth_schema_tests", {}).get("exit_code") == 0
             else "FAIL",
             "evidence": "BootInfo, BootResponse, and SystemInfo schema groups",
         },
@@ -339,7 +341,7 @@ def run_matrix(repo: Path, cache: Path) -> dict[str, Any]:
         "backend_fail_closed": {
             "status": "PASS"
             if life["checks"]["malformed_fail_closed"]
-            and runs.get("auth-eth-bun_error_tests", {}).get("exit_code") == 0
+            and runs.get("auth-eth_error_tests", {}).get("exit_code") == 0
             else "FAIL",
             "evidence": life["checks"],
         },
@@ -349,7 +351,6 @@ def run_matrix(repo: Path, cache: Path) -> dict[str, Any]:
         "rows": rows,
         "runs": runs,
         "lifecycle": life,
-        "simple_suite_observed": "auth-simple" in simple_output,
     }
     temporary = cache.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n")
@@ -374,7 +375,9 @@ def main() -> int:
     with (cache_dir / f"{commit}.lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         payload = (
-            json.loads(cache.read_text()) if cache.exists() else run_matrix(repo, cache)
+            json.loads(cache.read_text())
+            if cache.exists()
+            else run_matrix(repo, cache, Path(runtime["cargo_target_dir"]))
         )
     selected = [{"name": name, **payload["rows"][name]} for name in CASES[case_id]]
     status = "PASS" if all(row["status"] == "PASS" for row in selected) else "FAIL"

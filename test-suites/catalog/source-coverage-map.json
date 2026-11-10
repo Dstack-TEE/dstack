@@ -4155,82 +4155,15 @@
     },
     {
       "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/.oxlintrc.json",
+      "source": "dstack/kms/auth-eth/.oxlintrc.json",
       "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002"
+        "tc-kms-build-001"
       ],
       "rationale": "direct source reference"
     },
     {
       "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/README.md",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/bun.lock",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/index.test.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002"
-      ],
-      "rationale": "direct source reference; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/index.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002",
-        "tc-kms-auth-003",
-        "tc-kms-auth-007"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/openapi.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002",
-        "tc-kms-auth-008"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/package.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002"
-      ],
-      "rationale": "direct source reference; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth-bun/vitest.config.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/.env.example",
+      "source": "dstack/kms/auth-eth/README.md",
       "case_ids": [
         "tc-kms-build-001",
         "tc-kms-auth-003",
@@ -4243,7 +4176,67 @@
         "tc-kms-runtime-003",
         "tc-kms-runtime-005"
       ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/bun.lock",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/index.test.ts",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/index.ts",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-007"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/openapi.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-008"
+      ],
+      "rationale": "direct source reference"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/package.json",
+      "case_ids": [
+        "tc-kms-build-001",
+        "tc-kms-auth-003",
+        "tc-kms-auth-004",
+        "tc-kms-auth-005",
+        "tc-kms-auth-006",
+        "tc-kms-auth-007",
+        "tc-kms-auth-009",
+        "tc-kms-runtime-001",
+        "tc-kms-runtime-003",
+        "tc-kms-runtime-005"
+      ],
+      "rationale": "direct source reference; component build/generated/existing-test gate"
+    },
+    {
+      "component": "kms",
+      "source": "dstack/kms/auth-eth/vitest.config.ts",
+      "case_ids": [
+        "tc-kms-build-001"
+      ],
+      "rationale": "direct source reference"
     },
     {
       "component": "kms",
@@ -4265,40 +4258,6 @@
     {
       "component": "kms",
       "source": "dstack/kms/auth-eth/.openzeppelin/unknown-2035.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/README.md",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/TESTING.md",
       "case_ids": [
         "tc-kms-build-001",
         "tc-kms-auth-003",
@@ -4468,74 +4427,6 @@
     },
     {
       "component": "kms",
-      "source": "dstack/kms/auth-eth/jest.config.js",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/package-lock.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/package.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/run-tests.sh",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
       "source": "dstack/kms/auth-eth/script/Deploy.s.sol",
       "case_ids": [
         "tc-kms-build-001",
@@ -4621,91 +4512,6 @@
     },
     {
       "component": "kms",
-      "source": "dstack/kms/auth-eth/scripts/README.md",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/scripts/cleanup.sh",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/scripts/run-tests.sh",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/scripts/setup-local-chain.sh",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/scripts/test-all.sh",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
       "source": "dstack/kms/auth-eth/slither.config.json",
       "case_ids": [
         "tc-kms-build-001",
@@ -4720,92 +4526,6 @@
         "tc-kms-runtime-005"
       ],
       "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/src/ethereum.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005",
-        "tc-kms-runtime-002"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/src/main.test.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/src/main.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/src/server.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/src/types.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-runtime-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
     },
     {
       "component": "kms",
@@ -4891,177 +4611,6 @@
         "tc-kms-runtime-005"
       ],
       "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-eth/tsconfig.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-003",
-        "tc-kms-auth-004",
-        "tc-kms-auth-005",
-        "tc-kms-auth-006",
-        "tc-kms-auth-007",
-        "tc-kms-auth-009",
-        "tc-kms-runtime-001",
-        "tc-kms-runtime-003",
-        "tc-kms-runtime-005"
-      ],
-      "rationale": "direct source reference; Ethereum authorization runtime/contract/tooling; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/.oxlintrc.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/Dockerfile",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/README.md",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/bun.lock",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/index.test.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/index.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/openapi.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/package.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-mock/vitest.config.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-002"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/.oxlintrc.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/README.md",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/auth-config.example.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/bun.lock",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/index.test.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001"
-      ],
-      "rationale": "direct source reference; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/index.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001",
-        "tc-kms-attestatio-005"
-      ],
-      "rationale": "direct source reference"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/package.json",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001"
-      ],
-      "rationale": "direct source reference; component build/generated/existing-test gate"
-    },
-    {
-      "component": "kms",
-      "source": "dstack/kms/auth-simple/vitest.config.ts",
-      "case_ids": [
-        "tc-kms-build-001",
-        "tc-kms-auth-001"
-      ],
-      "rationale": "direct source reference"
     },
     {
       "component": "kms",
@@ -6202,7 +5751,10 @@
       "case_ids": [
         "tc-vmm-configurat-002",
         "tc-gw-cluster-ad-005",
-        "tc-kms-keys-certs-007"
+        "tc-kms-keys-certs-007",
+        "tc-kms-auth-001",
+        "tc-kms-attestatio-005",
+        "tc-kms-rotation-015"
       ],
       "rationale": "shared authentication policy"
     },
@@ -6212,7 +5764,10 @@
       "case_ids": [
         "tc-vmm-configurat-002",
         "tc-gw-cluster-ad-005",
-        "tc-kms-keys-certs-007"
+        "tc-kms-keys-certs-007",
+        "tc-kms-auth-001",
+        "tc-kms-attestatio-005",
+        "tc-kms-rotation-015"
       ],
       "rationale": "shared authentication policy"
     },
