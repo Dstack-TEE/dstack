@@ -7,6 +7,43 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$root/dstack"
 
+add_remap() {
+  local from=$1
+  local to=$2
+  if [[ ! -d "$from" ]]; then
+    return 0
+  fi
+  local logical physical
+  logical=$(cd "$from" && pwd)
+  physical=$(cd "$from" && pwd -P)
+  remap+=("--remap-path-prefix=${logical}=${to}")
+  if [[ $logical != "$physical" ]]; then
+    remap+=("--remap-path-prefix=${physical}=${to}")
+  fi
+}
+
+remap=()
+add_remap "${CARGO_HOME:-$HOME/.cargo}" /cargo
+add_remap "${RUSTUP_HOME:-$HOME/.rustup}" /rustup
+add_remap "$root" /source
+sysroot=$(rustc --print sysroot)
+add_remap "$sysroot" /rustc-sysroot
+
+# Encode so paths with spaces survive. Keep any caller RUSTFLAGS.
+encoded=()
+if [[ -n ${CARGO_ENCODED_RUSTFLAGS:-} ]]; then
+  IFS=$'\x1f' read -r -a encoded <<<"$CARGO_ENCODED_RUSTFLAGS"
+elif [[ -n ${RUSTFLAGS:-} ]]; then
+  # shellcheck disable=SC2206
+  encoded=($RUSTFLAGS)
+fi
+encoded+=("${remap[@]}")
+export CARGO_ENCODED_RUSTFLAGS
+CARGO_ENCODED_RUSTFLAGS=$(printf '%s\x1f' "${encoded[@]}")
+CARGO_ENCODED_RUSTFLAGS=${CARGO_ENCODED_RUSTFLAGS%$'\x1f'}
+unset RUSTFLAGS
+
+export CARGO_INCREMENTAL=0
 export CARGO_PROFILE_RELEASE_OPT_LEVEL=z
 export CARGO_PROFILE_RELEASE_LTO=true
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
@@ -23,11 +60,19 @@ fi
 
 node "$root/sdk/verifier-wasm/scripts/embed-wasm.mjs" "$wasm" "$root/sdk/verifier-wasm/src/wasm-bytes.js"
 
-python3 - "$wasm" <<'PY'
-import gzip, sys
+python3 - "$wasm" "$root/sdk/verifier-wasm/src/wasm-bytes.js" <<'PY'
+import base64, gzip, hashlib, re, sys
 from pathlib import Path
-path = Path(sys.argv[1])
-raw = path.stat().st_size
-gz = len(gzip.compress(path.read_bytes(), compresslevel=9))
-print(f"wasm raw={raw} gzip={gz}")
+
+wasm = Path(sys.argv[1]).read_bytes()
+js = Path(sys.argv[2]).read_text()
+match = re.search(r"wasmBase64 = '([^']+)'", js)
+if not match:
+    raise SystemExit("wasm-bytes.js has no wasmBase64")
+decoded = base64.b64decode(match.group(1))
+if decoded != wasm:
+    raise SystemExit("embedded wasm does not match the .wasm file")
+print(f"wasm raw={len(wasm)} gzip={len(gzip.compress(wasm, compresslevel=9))}")
+print(f"wasm sha256={hashlib.sha256(wasm).hexdigest()}")
+print(f"wasm-bytes.js sha256={hashlib.sha256(js.encode()).hexdigest()}")
 PY

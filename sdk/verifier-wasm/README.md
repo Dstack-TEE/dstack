@@ -150,21 +150,23 @@ version.
 
 ## Verifying the build
 
-The wasm is built with the repo `rust-toolchain.toml` (currently 1.92,
-`wasm32-unknown-unknown`):
+`scripts/build.sh` remaps `CARGO_HOME`, rustup, the rustc sysroot, and the
+repo root so the wasm does not embed host paths. Rebuild with the pinned
+toolchain (`rust-toolchain.toml`, currently 1.92, `wasm32-unknown-unknown`)
+and compare sha256 of the decoded wasm to the published file. They must match.
 
 ```bash
 git clone https://github.com/Dstack-TEE/dstack
 cd dstack
 git checkout <tag-matching-the-package-version>
 cd sdk/verifier-wasm
-npm run build   # scripts/build.sh
-npm test
+npm run build   # scripts/build.sh; prints wasm sha256=...
+python3 -c "import base64,hashlib,pathlib,re; t=pathlib.Path('src/wasm-bytes.js').read_text(); b=re.search(r\"wasmBase64 = '([^']+)'\", t).group(1); print(hashlib.sha256(base64.b64decode(b)).hexdigest())"
 ```
 
-Compare `src/wasm-bytes.js` with the published tarball
-(`npm pack @phala/dstack-verifier-wasm@<version>` and unpack). Once CI
-publishes with provenance, check signatures:
+Unpack the published tarball (`npm pack @phala/dstack-verifier-wasm@<version>`)
+and hash its `package/src/wasm-bytes.js` the same way. Once CI publishes with
+provenance, check signatures:
 
 ```bash
 npm audit signatures

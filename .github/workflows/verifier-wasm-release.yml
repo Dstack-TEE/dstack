@@ -73,6 +73,19 @@ jobs:
         working-directory: .
         run: bash sdk/verifier-wasm/scripts/build.sh
 
+      - name: Print wasm sha256
+        working-directory: .
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, re, base64
+          js = pathlib.Path('sdk/verifier-wasm/src/wasm-bytes.js')
+          text = js.read_text()
+          b64 = re.search(r"wasmBase64 = '([^']+)'", text).group(1)
+          wasm = base64.b64decode(b64)
+          print(f"wasm sha256={hashlib.sha256(wasm).hexdigest()}")
+          print(f"wasm-bytes.js sha256={hashlib.sha256(text.encode()).hexdigest()}")
+          PY
+
       - name: Run Node tests
         run: node test/run-cases.mjs
 

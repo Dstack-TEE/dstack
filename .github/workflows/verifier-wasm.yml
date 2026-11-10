@@ -98,6 +98,41 @@ jobs:
       - name: Build wasm package
         run: bash sdk/verifier-wasm/scripts/build.sh
 
+      - name: Reproducible build check
+        run: |
+          set -euo pipefail
+          hash1=$(python3 - <<'PY'
+          import hashlib, pathlib, re, base64
+          text = pathlib.Path('sdk/verifier-wasm/src/wasm-bytes.js').read_text()
+          b64 = re.search(r"wasmBase64 = '([^']+)'", text).group(1)
+          wasm = base64.b64decode(b64)
+          print(hashlib.sha256(wasm).hexdigest())
+          PY
+          )
+          echo "build1 wasm sha256=$hash1"
+          second="$RUNNER_TEMP/repro-src"
+          cargo2="$RUNNER_TEMP/repro-cargo"
+          git clone --local . "$second"
+          mkdir -p "$cargo2"
+          src_cargo="${CARGO_HOME:-$HOME/.cargo}"
+          if [ -d "$src_cargo/registry" ]; then
+            cp -a "$src_cargo/registry" "$cargo2/registry"
+          fi
+          CARGO_HOME="$cargo2" bash "$second/sdk/verifier-wasm/scripts/build.sh"
+          hash2=$(python3 - "$second/sdk/verifier-wasm/src/wasm-bytes.js" <<'PY'
+          import hashlib, pathlib, re, base64, sys
+          text = pathlib.Path(sys.argv[1]).read_text()
+          b64 = re.search(r"wasmBase64 = '([^']+)'", text).group(1)
+          wasm = base64.b64decode(b64)
+          print(hashlib.sha256(wasm).hexdigest())
+          PY
+          )
+          echo "build2 wasm sha256=$hash2"
+          if [ "$hash1" != "$hash2" ]; then
+            echo "wasm bytes differ across CARGO_HOME and checkout path" >&2
+            exit 1
+          fi
+
       - name: Check wasm imports
         run: |
           node -e "
