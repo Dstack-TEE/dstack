@@ -25,7 +25,7 @@ Lite without `tdx_measurement` returns
 ## Install
 
 ```bash
-npm install @phala/dstack-verifier-wasm@0.6.3-beta.0
+npm install @phala/dstack-verifier-wasm@0.1.0-beta.0
 ```
 
 Requires Node `>=20.19.0`. The wasm bytes are embedded in the JS module: no
@@ -141,7 +141,8 @@ module has zero imports.
 
 ## Versioning
 
-This package tracks `dstack-mr` and `qemu-acpi`. Pin an **exact** version.
+The package version is independent of dstack's. Each release notes the dstack
+commit it was built from. Pin an **exact** version.
 
 Bump the package when dstack models new QEMU ACPI behaviour or VM topology, or
 when the measurement-material format changes. A new OS image only needs the
