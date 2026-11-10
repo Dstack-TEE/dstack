@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: TDX lite verifier wasm
+
+on:
+  push:
+    branches: [ next, 'release/**' ]
+  pull_request:
+    branches: [ next, 'release/**' ]
+
+permissions:
+  contents: read
+
+jobs:
+  verifier-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect relevant changes
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -z "$BASE_SHA" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "push build: running everything"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE_SHA...HEAD")
+          echo "$changed"
+          if echo "$changed" | grep -qE '^(dstack/(dstack-mr|dstack-types|cc-eventlog|verifier/fixtures|crates/(qemu-acpi|dstack-verifier-wasm))|sdk/verifier-wasm|rust-toolchain\.toml|\.github/workflows/verifier-wasm\.yml)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "nothing this job covers changed"
+          fi
+
+      - name: Install Rust
+        if: steps.changes.outputs.relevant == 'true'
+        uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        if: steps.changes.outputs.relevant == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dstack
+          save-if: ${{ github.event_name == 'push' }}
+
+      - name: Build wasm package
+        if: steps.changes.outputs.relevant == 'true'
+        run: bash sdk/verifier-wasm/scripts/build.sh
+
+      - name: Check wasm imports
+        if: steps.changes.outputs.relevant == 'true'
+        run: |
+          node -e "
+            const { readFileSync } = require('node:fs');
+            const wasm = readFileSync('dstack/target/wasm32-unknown-unknown/release/dstack_verifier_wasm.wasm');
+            const imports = WebAssembly.Module.imports(new WebAssembly.Module(wasm));
+            if (imports.length !== 0) {
+              console.error(imports);
+              process.exit(1);
+            }
+            console.log('imports: none');
+          "
+
+      - name: Test on Node 20
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20.19'
+
+      - name: Run JS tests (Node 20)
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: sdk/verifier-wasm
+        run: node --test test/verify.test.mjs
+
+      - name: Test on Node 24
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Run JS tests (Node 24)
+        if: steps.changes.outputs.relevant == 'true'
+        working-directory: sdk/verifier-wasm
+        run: node --test test/verify.test.mjs

@@ -2262,6 +2262,7 @@ dependencies = [
  "anyhow",
  "binrw",
  "bon",
+ "cc-eventlog",
  "dstack-types",
  "flate2",
  "fs-err",
@@ -2493,6 +2494,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x509-parser 0.16.0",
+]
+
+[[package]]
+name = "dstack-verifier-wasm"
+version = "0.6.3"
+dependencies = [
+ "anyhow",
+ "cc-eventlog",
+ "dstack-mr",
+ "dstack-types",
+ "hex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

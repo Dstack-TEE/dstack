@@ -1,0 +1,35 @@
+{
+  "name": "@phala/dstack-verifier-wasm",
+  "version": "0.6.3",
+  "description": "Local TDX lite OS verification for dstack 0.6.x CVMs",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "test": "node --test test/verify.test.mjs"
+  },
+  "keywords": [
+    "dstack",
+    "tdx",
+    "attestation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dstack-TEE/dstack",
+    "directory": "sdk/verifier-wasm"
+  },
+  "license": "Apache-2.0"
+}
