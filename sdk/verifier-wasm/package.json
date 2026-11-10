@@ -15,7 +15,8 @@
     "node": ">=20.19.0"
   },
   "files": [
-    "src"
+    "src",
+    "LICENSE"
   ],
   "scripts": {
     "build": "bash scripts/build.sh",
