@@ -171,7 +171,7 @@ jobs:
           path: sdk/verifier-wasm/src
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Install Electron
         run: |
           mkdir -p "$RUNNER_TEMP/electron"
@@ -179,7 +179,7 @@ jobs:
           npm init -y >/dev/null
           npm install "electron@${{ matrix.electron }}"
           echo "ELECTRON_BIN=$RUNNER_TEMP/electron/node_modules/.bin/electron" >> "$GITHUB_ENV"
-          "$RUNNER_TEMP/electron/node_modules/.bin/electron" --version
+          ELECTRON_RUN_AS_NODE=1 "$RUNNER_TEMP/electron/node_modules/.bin/electron" -e 'console.log(process.versions.electron)'
       - name: Run cases as Node
         working-directory: sdk/verifier-wasm
         run: ELECTRON_RUN_AS_NODE=1 "$ELECTRON_BIN" test/run-cases.mjs
@@ -206,14 +206,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: '20'
-      - name: Install Playwright
+      - name: Install Playwright and run cases
+        working-directory: sdk/verifier-wasm
         run: |
-          mkdir -p "$RUNNER_TEMP/playwright"
-          cd "$RUNNER_TEMP/playwright"
-          npm init -y >/dev/null
-          npm install playwright
+          npm install --no-save --no-package-lock playwright
           npx playwright install --with-deps ${{ matrix.browser }}
-      - name: Run cases
-        env:
-          NODE_PATH: ${{ runner.temp }}/playwright/node_modules
-        run: node sdk/verifier-wasm/test/browser/playwright.mjs ${{ matrix.browser }}
+          node test/browser/playwright.mjs ${{ matrix.browser }}
