@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "build": "bash scripts/build.sh",
+    "build:container": "bash scripts/build-in-container.sh",
     "test": "node test/run-cases.mjs",
     "test:node": "node --test test/verify.test.mjs"
   },

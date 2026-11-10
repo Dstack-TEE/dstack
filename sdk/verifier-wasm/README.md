@@ -150,18 +150,21 @@ version.
 
 ## Verifying the build
 
-`scripts/build.sh` remaps `CARGO_HOME`, rustup, the rustc sysroot, and the
-repo root so the wasm does not embed host paths. Rebuild with the pinned
-toolchain (`rust-toolchain.toml`, currently 1.92, `wasm32-unknown-unknown`)
-and compare sha256 of the decoded wasm to the published file. They must match.
+The published wasm is built in a digest-pinned `linux/amd64` container
+(`rust:1.92.0-bookworm@sha256:5c38a9e735664861e84ce6918e98ce7f05dbac210230d45381bcf870b2d58083`)
+so the host toolchain binaries (LLVM codegen and/or rust-lld) cannot affect
+it. Builds on other hosts or outside that image may differ.
+
+Verification means running `scripts/build-in-container.sh` at the matching
+tag (docker or podman) and comparing the sha256 of the decoded wasm to the
+published file. They must match.
 
 ```bash
 git clone https://github.com/Dstack-TEE/dstack
 cd dstack
 git checkout <tag-matching-the-package-version>
-cd sdk/verifier-wasm
-npm run build   # scripts/build.sh; prints wasm sha256=...
-python3 -c "import base64,hashlib,pathlib,re; t=pathlib.Path('src/wasm-bytes.js').read_text(); b=re.search(r\"wasmBase64 = '([^']+)'\", t).group(1); print(hashlib.sha256(base64.b64decode(b)).hexdigest())"
+bash sdk/verifier-wasm/scripts/build-in-container.sh
+python3 -c "import base64,hashlib,pathlib,re; t=pathlib.Path('sdk/verifier-wasm/src/wasm-bytes.js').read_text(); b=re.search(r\"wasmBase64 = '([^']+)'\", t).group(1); print(hashlib.sha256(base64.b64decode(b)).hexdigest())"
 ```
 
 Unpack the published tarball (`npm pack @phala/dstack-verifier-wasm@<version>`)
