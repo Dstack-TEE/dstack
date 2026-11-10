@@ -22,12 +22,17 @@ add_remap() {
   fi
 }
 
+commit=$(rustc -vV | sed -n 's/^commit-hash: //p')
+sysroot=$(rustc --print sysroot)
+
+# More specific prefixes first: rust-src lives under the sysroot (and thus
+# rustup). Without rust-src, rustc already emits /rustc/<commit>/...; with it,
+# remap the local sources to that same virtual path so both toolchains match.
 remap=()
+add_remap "$sysroot/lib/rustlib/src/rust" "/rustc/${commit}"
 add_remap "${CARGO_HOME:-$HOME/.cargo}" /cargo
 add_remap "${RUSTUP_HOME:-$HOME/.rustup}" /rustup
 add_remap "$root" /source
-sysroot=$(rustc --print sysroot)
-add_remap "$sysroot" /rustc-sysroot
 
 # Encode so paths with spaces survive. Keep any caller RUSTFLAGS.
 encoded=()

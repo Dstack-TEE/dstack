@@ -80,7 +80,15 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rust_src: 'false'
+          - os: macos-latest
+            rust_src: 'true'
     steps:
       - uses: actions/checkout@v5
 
@@ -88,6 +96,10 @@ jobs:
         uses: dtolnay/rust-toolchain@1.92.0
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Install rust-src
+        if: matrix.rust_src == 'true'
+        run: rustup component add rust-src
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -148,12 +160,58 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: verifier-wasm-bytes
+          name: verifier-wasm-bytes-${{ matrix.os }}
           path: sdk/verifier-wasm/src/wasm-bytes.js
           if-no-files-found: error
 
-  node:
+  compare:
     needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: verifier-wasm-bytes-*
+          path: artifacts
+      - name: Require identical wasm across OS and rust-src
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, pathlib, re, sys
+
+          def wasm_sha(path):
+              text = path.read_text()
+              b64 = re.search(r"wasmBase64 = '([^']+)'", text).group(1)
+              wasm = base64.b64decode(b64)
+              return hashlib.sha256(wasm).hexdigest(), len(wasm), wasm
+
+          files = sorted(pathlib.Path('artifacts').rglob('wasm-bytes.js'))
+          if len(files) < 2:
+              print('expected at least two artifacts, found', files, file=sys.stderr)
+              sys.exit(1)
+          hashes = {}
+          blobs = {}
+          for path in files:
+              digest, size, wasm = wasm_sha(path)
+              label = path.parent.name
+              hashes[label] = (digest, size)
+              blobs[label] = wasm
+              print(f'{label} wasm sha256={digest} raw={size}')
+          unique = {digest for digest, _ in hashes.values()}
+          if len(unique) != 1:
+              labels = list(blobs)
+              a, b = labels[0], labels[1]
+              print(f'mismatch {a} vs {b}', file=sys.stderr)
+              sys.exit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verifier-wasm-bytes
+          path: artifacts/verifier-wasm-bytes-ubuntu-latest/wasm-bytes.js
+          if-no-files-found: error
+
+  node:
+    needs: [changes, compare]
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -174,7 +232,7 @@ jobs:
         run: node test/run-cases.mjs
 
   bun:
-    needs: [changes, build]
+    needs: [changes, compare]
     if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -191,7 +249,7 @@ jobs:
         run: bun test/run-cases.mjs
 
   electron:
-    needs: [changes, build]
+    needs: [changes, compare]
     if: needs.changes.outputs.relevant == 'true' && needs.changes.outputs.runtimes == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -225,7 +283,7 @@ jobs:
         run: xvfb-run -a "$ELECTRON_BIN" --no-sandbox test/electron-main.mjs
 
   browser:
-    needs: [changes, build]
+    needs: [changes, compare]
     if: needs.changes.outputs.relevant == 'true' && needs.changes.outputs.runtimes == 'true'
     runs-on: ubuntu-latest
     strategy:
