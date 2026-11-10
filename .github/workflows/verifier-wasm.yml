@@ -122,6 +122,8 @@ jobs:
         with:
           platforms: amd64
       - name: Build wasm in pinned amd64 container under emulation
+        env:
+          RUST_MIN_STACK: '16777216'
         run: bash sdk/verifier-wasm/scripts/build-in-container.sh
       - uses: actions/upload-artifact@v4
         with:

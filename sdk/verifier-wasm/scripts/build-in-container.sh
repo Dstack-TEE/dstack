@@ -99,11 +99,16 @@ else
   exit 1
 fi
 
-"$engine" run --rm --platform "$PLATFORM" \
-  -v "$root:/work" \
-  -w /work \
-  -e REPRO_CHECK="${REPRO_CHECK:-0}" \
-  -e HOST_UID="$(id -u)" \
-  -e HOST_GID="$(id -g)" \
-  "$IMAGE" \
+run_args=(
+  --rm --platform "$PLATFORM"
+  -v "$root:/work"
+  -w /work
+  -e REPRO_CHECK="${REPRO_CHECK:-0}"
+  -e HOST_UID="$(id -u)"
+  -e HOST_GID="$(id -g)"
+)
+if [ -n "${RUST_MIN_STACK:-}" ]; then
+  run_args+=(-e "RUST_MIN_STACK=$RUST_MIN_STACK")
+fi
+"$engine" run "${run_args[@]}" "$IMAGE" \
   bash /work/sdk/verifier-wasm/scripts/build-in-container.sh --inner
