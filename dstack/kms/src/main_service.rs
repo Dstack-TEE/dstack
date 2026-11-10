@@ -632,6 +632,23 @@ fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) ->
     }
 }
 
+/// Reject GetAppKey when the app opted into boot-stage attestation and the
+/// quote's verified event log already contains `system-ready`.
+///
+/// Quote verification replays the **full** event log against RTMR3/PCR14
+/// (`to_event: None`). `find_event` stops at `system-ready` only when reading
+/// app identity, so this check must scan the full log: a truncated prefix
+/// cannot replay to a post-boot quote.
+fn ensure_boot_stage_key_release(att: &VerifiedAttestation) -> Result<()> {
+    if !att.runtime_event_present(dstack_types::KMS_BOOT_STAGE_ATTESTATION_EVENT) {
+        return Ok(());
+    }
+    if att.runtime_event_present("system-ready") {
+        bail!("app requires boot-stage attestation; quote event log contains system-ready");
+    }
+    Ok(())
+}
+
 impl RpcHandler {
     async fn ensure_self_allowed(&self, operation: Operation) -> Result<u32> {
         if !self.state.config.enforce_self_authorization {
@@ -789,6 +806,7 @@ impl KmsRpc for RpcHandler {
         self.ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
+        ensure_boot_stage_key_release(self.ensure_attested()?)?;
         let BootConfig {
             boot_info,
             gateway_app_id,
@@ -1481,6 +1499,47 @@ mod tests {
         // The boot-time snapshot truncates the launch log at boot-mr-done, so
         // its aggregated MR differs from the full runtime MR.
         assert_ne!(runtime.mr_aggregated, boottime.mr_aggregated);
+    }
+
+    #[test]
+    fn boot_stage_option_accepts_pre_system_ready_and_rejects_runtime_quotes() {
+        let key_provider_info = aws_nitro_tpm_key_provider_info();
+        let mut events = aws_nitro_tpm_runtime_events(vec![0x22; 32], &key_provider_info);
+        let boot_mr_done = events
+            .iter()
+            .position(|event| event.event == "boot-mr-done")
+            .expect("fixture includes boot-mr-done");
+        events.insert(
+            boot_mr_done,
+            runtime_event(dstack_types::KMS_BOOT_STAGE_ATTESTATION_EVENT, Vec::new()),
+        );
+
+        let (runtime_attestation, ..) = verified_aws_nitro_tpm_attestation_with_events(
+            events.clone(),
+            0x04,
+            key_provider_info.clone(),
+        );
+        let err = ensure_boot_stage_key_release(&runtime_attestation).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("system-ready"),
+            "unexpected error: {err:#}"
+        );
+
+        let boot_events: Vec<_> = events
+            .into_iter()
+            .take_while(|event| event.event != "system-ready")
+            .collect();
+        let (boot_attestation, ..) =
+            verified_aws_nitro_tpm_attestation_with_events(boot_events, 0x04, key_provider_info);
+        ensure_boot_stage_key_release(&boot_attestation)
+            .expect("quotes taken before system-ready must still be accepted");
+    }
+
+    #[test]
+    fn boot_stage_option_default_off_allows_runtime_quotes() {
+        let (attestation, ..) = verified_aws_nitro_tpm_attestation(vec![0x22; 32], 0x04);
+        ensure_boot_stage_key_release(&attestation)
+            .expect("runtime quotes remain accepted when the compose option is off");
     }
 
     #[test]

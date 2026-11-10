@@ -2102,6 +2102,15 @@ impl<T> Attestation<T> {
         Err(anyhow!("event {name} not found"))
     }
 
+    /// Whether `name` appears anywhere in the verified runtime event log.
+    ///
+    /// Unlike [`Self::find_event`], this does not stop at `system-ready`.
+    /// Quote verification replays the full log against RTMR3/PCR14, so a
+    /// present event here is bound to the quote.
+    pub fn runtime_event_present(&self, name: &str) -> bool {
+        self.runtime_events.iter().any(|event| event.event == name)
+    }
+
     /// Replay event logs
     pub fn replay_runtime_events<H: Hasher>(&self, to_event: Option<&str>) -> H::Output {
         cc_eventlog::replay_events::<H>(&self.runtime_events, to_event)

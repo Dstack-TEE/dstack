@@ -304,6 +304,29 @@ def test_ephemeral_data_disk_off_hashes_as_if_it_were_absent():
     assert get_compose_hash(absent) == get_compose_hash(disabled)
 
 
+def test_kms_require_boot_stage_attestation_changes_the_hash():
+    from dstack_sdk.get_compose_hash import Requirements
+
+    plain = AppCompose(
+        runner="docker-compose", requirements=Requirements(launch_token_hash="ff00")
+    )
+    gated = AppCompose(
+        runner="docker-compose",
+        requirements=Requirements(
+            launch_token_hash="ff00", kms_require_boot_stage_attestation=True
+        ),
+    )
+    disabled = AppCompose(
+        runner="docker-compose",
+        requirements=Requirements(
+            launch_token_hash="ff00", kms_require_boot_stage_attestation=False
+        ),
+    )
+
+    assert get_compose_hash(plain) != get_compose_hash(gated)
+    assert get_compose_hash(plain) == get_compose_hash(disabled)
+
+
 def test_health_status_file_is_part_of_the_hash():
     """`health_status_file` selects the verdict source, so it is not cosmetic."""
     from dstack_sdk.get_compose_hash import Requirements

@@ -539,7 +539,26 @@ pub struct Requirements {
     /// disk before any app code runs, discarding what earlier boots left on it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ephemeral_data_disk: bool,
+    /// When true, KMS `GetAppKey` rejects quotes whose verified runtime event
+    /// log contains `system-ready`.
+    ///
+    /// App keys are provisioned during guest setup, before that event. A quote
+    /// produced by a running application always has it, so this blocks using a
+    /// post-boot `getQuote` result as an RA-TLS client certificate to draw the
+    /// app's own keys. Default off.
+    ///
+    /// Under `requirements` so older guests (`deny_unknown_fields`, and
+    /// `manifest_version` < 3) fail closed instead of ignoring the flag. The
+    /// guest emits a `kms-boot-stage-attestation` launch event when this is
+    /// set; KMS reads that event from the verified log. The flag is also part
+    /// of compose-hash, so turning it off changes app identity.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub kms_require_boot_stage_attestation: bool,
 }
+
+/// Launch event emitted when [`Requirements::kms_require_boot_stage_attestation`]
+/// is set. Presence in the verified event log is what KMS enforces.
+pub const KMS_BOOT_STAGE_ATTESTATION_EVENT: &str = "kms-boot-stage-attestation";
 
 impl Requirements {
     pub fn is_empty(&self) -> bool {
@@ -550,6 +569,7 @@ impl Requirements {
             && !self.health_check
             && self.health_status_file.is_none()
             && !self.ephemeral_data_disk
+            && !self.kms_require_boot_stage_attestation
     }
 }
 
@@ -827,6 +847,12 @@ impl AppCompose {
                 }
             }
         }
+    }
+
+    pub fn kms_require_boot_stage_attestation(&self) -> bool {
+        self.requirements
+            .as_ref()
+            .is_some_and(|requirements| requirements.kms_require_boot_stage_attestation)
     }
 }
 
@@ -1152,6 +1178,49 @@ mod app_compose_tests {
         }))
         .unwrap_err();
         assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn kms_require_boot_stage_attestation_defaults_off_and_skips_false() {
+        assert!(!parse_compose(serde_json::json!("3"))
+            .unwrap()
+            .kms_require_boot_stage_attestation());
+
+        let enabled: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "kms_require_boot_stage_attestation": true
+            }
+        }))
+        .unwrap();
+        assert!(enabled.kms_require_boot_stage_attestation());
+        let serde_json::Value::Object(map) =
+            serde_json::to_value(enabled.requirements.as_ref().unwrap()).unwrap()
+        else {
+            panic!("requirements must serialize as an object");
+        };
+        assert_eq!(
+            map.get("kms_require_boot_stage_attestation"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        let disabled: AppCompose = serde_json::from_value(serde_json::json!({
+            "manifest_version": "3",
+            "name": "test",
+            "runner": "docker-compose",
+            "requirements": {
+                "kms_require_boot_stage_attestation": false
+            }
+        }))
+        .unwrap();
+        let serde_json::Value::Object(map) =
+            serde_json::to_value(disabled.requirements.as_ref().unwrap()).unwrap()
+        else {
+            panic!("requirements must serialize as an object");
+        };
+        assert!(!map.contains_key("kms_require_boot_stage_attestation"));
     }
 
     #[test]
