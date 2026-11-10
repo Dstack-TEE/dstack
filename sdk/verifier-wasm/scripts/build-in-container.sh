@@ -52,6 +52,10 @@ ensure_toolchain() {
 }
 
 if [ "${1:-}" = --inner ]; then
+  # Repo rust-toolchain.toml pulls extra targets/components. Use the image
+  # toolchain; rustc under qemu-user SIGSEGV'd while rustup installed that overlay.
+  cd /tmp
+  export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-$(rustc -vV | sed -n 's/^release: //p')}
   cd /work
   ensure_toolchain
   export CARGO_TARGET_DIR=/tmp/dstack-wasm-target
