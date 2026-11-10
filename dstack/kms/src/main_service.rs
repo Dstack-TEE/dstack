@@ -934,7 +934,10 @@ impl KmsRpc for RpcHandler {
 
     async fn get_kms_key(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
         if !self.state.config.onboard.public_key_handover {
-            bail!("public KMS key handover is disabled; use the admin listener");
+            bail!(
+                "public KMS key handover is disabled; onboard through the admin listener with \
+                 the source admin token, or set core.onboard.public_key_handover = true"
+            );
         }
         self.handover_keys(KeyRelease::RpcHandover, request).await
     }
