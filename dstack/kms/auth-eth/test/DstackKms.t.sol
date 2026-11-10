@@ -15,6 +15,10 @@ import { DstackKms as DstackKmsV059 } from "../contracts/test-utils/reference/v0
 import { DstackApp as DstackAppV059 } from "../contracts/test-utils/reference/v0.5.9/DstackAppV059.sol";
 
 contract DstackKmsTest is Test {
+    // Finding B2 needs an upgrade-time initializer that registers root epoch 0;
+    // the name is the test's assumption.
+    string private constant ROOT_EPOCH_REINIT = "reinitializeRootEpoch(string)";
+
     DstackKms public kms;
     DstackApp public appImpl;
     address public owner;
@@ -1405,5 +1409,62 @@ contract DstackKmsTest is Test {
         (bool allowed, string memory reason) = kms.isAppAllowed(info);
         assertFalse(allowed);
         assertEq(reason, "App epoch requires epoch-aware authorization");
+    }
+
+    function test_finding_B2_upgrade_registers_root_epoch_zero_in_one_transaction() public {
+        vm.skip(!vm.envOr("RUN_FINDINGS", false));
+        // finding B2: expected to fail until B2 is fixed (reinitializer name is the test's assumption)
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        address proxy = deployReleasedKms(info);
+        vm.startPrank(owner);
+        info.appId = DstackKmsV059(proxy).deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        address implementation = address(new DstackKms());
+        (bool ok,) = proxy.call(
+            abi.encodeCall(
+                UUPSUpgradeable.upgradeToAndCall,
+                (implementation, abi.encodeWithSignature(ROOT_EPOCH_REINIT, "ipfs://c0"))
+            )
+        );
+        vm.stopPrank();
+        assertTrue(ok, "upgrade and root epoch 0 registration must be one transaction");
+        assertEq(Upgrades.getImplementationAddress(proxy), implementation);
+        kms = DstackKms(proxy);
+        assertEq(kms.rootEpochCount(), 1);
+        (bytes memory caKey, bytes memory k256Key,,) = kms.rootEpoch(0);
+        assertEq(caKey, ca(0xa0));
+        assertEq(k256Key, k256(0xb0));
+        assertTrue(authorize(info, false).authorized);
+    }
+
+    function test_finding_B3a_current_kms_identity_is_not_a_key_handover_authorization() public {
+        vm.skip(!vm.envOr("RUN_FINDINGS", false));
+        // finding B3-a: expected to fail until B3-a is fixed
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        approveKmsAtEpoch(info, 0);
+        vm.stopPrank();
+        assertTrue(authorize(info, true).authorized);
+        AuthorizationRequest memory request = AuthorizationRequest(
+            info, keccak256("kms_import_keys"), OptionalUint256(false, 0), OptionalUint256(false, 0)
+        );
+        assertFalse(kms.authorizeKms(request).authorized, "kms_import_keys must be denied by default");
+        request.operation = keccak256("kms_export_keys");
+        assertFalse(kms.authorizeKms(request).authorized, "kms_export_keys must be denied by default");
+    }
+
+    function test_finding_B8b_current_app_epoch_propagates_capability_probe_failures() public {
+        vm.skip(!vm.envOr("RUN_FINDINGS", false));
+        // finding B8-b: expected to fail until B8-b is fixed
+        address policy = address(new DstackApp());
+        kms.registerApp(policy);
+        vm.mockCall(
+            policy, abi.encodeCall(IERC165.supportsInterface, (type(IAppEpochAuth).interfaceId)), abi.encode(false)
+        );
+        assertEq(kms.currentAppEpoch(policy), 0);
+        vm.clearMockedCalls();
+        vm.mockCallRevert(policy, abi.encodeWithSelector(IERC165.supportsInterface.selector), "probe unavailable");
+        vm.expectRevert();
+        kms.currentAppEpoch(policy);
     }
 }
