@@ -10,8 +10,9 @@ import "forge-std/Test.sol";
 import "openzeppelin-foundry-upgrades/Upgrades.sol";
 import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
+import "./RootKeyFixtures.sol";
 
-contract EventAuditTest is Test {
+contract EventAuditTest is Test, RootKeyFixtures {
     bytes32 private constant AUDIT_TOPIC = keccak256("PolicyChanged(address,bytes32,bytes32,bool)");
 
     address private owner;
@@ -172,13 +173,13 @@ contract EventAuditTest is Test {
     function test_RootEpochLifecycleIsAudited() public {
         vm.startPrank(owner);
         vm.recordLogs();
-        kms.registerRootEpoch(_ca(0xa0), _k256(0xb0), "ipfs://c0");
-        kms.registerRootEpoch(_ca(0xa1), _k256(0xb1), "ipfs://c1");
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
         (,,, bytes32 h1) = kms.rootEpoch(1);
         vm.expectEmit(address(kms));
-        emit KmsInfoSet(_k256(0xb1));
+        emit KmsInfoSet(k256(0xb1));
         kms.activateRootEpoch(1, h1);
-        kms.registerRootEpoch(_ca(0xa2), _k256(0xb2), "ipfs://c2");
+        kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2");
         (,,, bytes32 h2) = kms.rootEpoch(2);
         kms.popRootEpoch(2, h2);
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -198,8 +199,8 @@ contract EventAuditTest is Test {
         bytes32 device = keccak256("audit-epoch-device");
         bytes32 image = keccak256("audit-epoch-image");
         vm.startPrank(owner);
-        kms.registerRootEpoch(_ca(0xa0), _k256(0xb0), "ipfs://c0");
-        kms.registerRootEpoch(_ca(0xa1), _k256(0xb1), "ipfs://c1");
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
         vm.expectEmit(address(kms));
         emit EpochPolicyChanged(keccak256("kms-aggregated-mr"), mr, 1, true);
         kms.addKmsAggregatedMrAtEpoch(1, mr);
@@ -236,21 +237,6 @@ contract EventAuditTest is Test {
         emit EpochPolicyChanged(keccak256("allow-any-device"), bytes32(0), 1, true);
         app.setAllowAnyDeviceAtEpoch(1, true);
         vm.stopPrank();
-    }
-
-    function _ca(uint8 fill) private pure returns (bytes memory key) {
-        key = bytes.concat(hex"3059301306072a8648ce3d020106082a8648ce3d03010703420004", new bytes(64));
-        for (uint256 i = 27; i < 91; i++) {
-            key[i] = bytes1(fill);
-        }
-    }
-
-    function _k256(uint8 fill) private pure returns (bytes memory key) {
-        key = new bytes(33);
-        key[0] = 0x02;
-        for (uint256 i = 1; i < 33; i++) {
-            key[i] = bytes1(fill);
-        }
     }
 
     function _assertAudit(

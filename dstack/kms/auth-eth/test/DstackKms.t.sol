@@ -13,8 +13,9 @@ import "../contracts/DstackApp.sol";
 import "../contracts/IAppAuth.sol";
 import { DstackKms as DstackKmsV059 } from "../contracts/test-utils/reference/v0.5.9/DstackKmsV059.sol";
 import { DstackApp as DstackAppV059 } from "../contracts/test-utils/reference/v0.5.9/DstackAppV059.sol";
+import "./RootKeyFixtures.sol";
 
-contract DstackKmsTest is Test {
+contract DstackKmsTest is Test, RootKeyFixtures {
     // Finding B2 needs an upgrade-time initializer that registers root epoch 0;
     // the name is the test's assumption.
     string private constant ROOT_EPOCH_REINIT = "reinitializeRootEpoch(string)";
@@ -114,23 +115,6 @@ contract DstackKmsTest is Test {
         upgradeLegacyKms();
         assertLegacySettersDisabled(owner);
         assertLegacySettersDisabled(user);
-    }
-
-    // Well-formed root public keys whose point bytes are all `fill`; shared with
-    // the off-chain implementations' tests.
-    function ca(uint8 fill) internal pure returns (bytes memory key) {
-        key = bytes.concat(hex"3059301306072a8648ce3d020106082a8648ce3d03010703420004", new bytes(64));
-        for (uint256 i = 27; i < 91; i++) {
-            key[i] = bytes1(fill);
-        }
-    }
-
-    function k256(uint8 fill) internal pure returns (bytes memory key) {
-        key = new bytes(33);
-        key[0] = 0x02;
-        for (uint256 i = 1; i < 33; i++) {
-            key[i] = bytes1(fill);
-        }
     }
 
     function chainHash(bytes32 previous, bytes memory caKey, bytes memory k256Key) internal pure returns (bytes32) {
