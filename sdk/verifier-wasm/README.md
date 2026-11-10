@@ -153,11 +153,12 @@ version.
 The published wasm is built in a digest-pinned `linux/amd64` container
 (`rust:1.92.0-bookworm@sha256:5c38a9e735664861e84ce6918e98ce7f05dbac210230d45381bcf870b2d58083`)
 so the host toolchain binaries (LLVM codegen and/or rust-lld) cannot affect
-it. Builds on other hosts or outside that image may differ.
+it. Rebuild with `scripts/build-in-container.sh` on a **linux/amd64** host
+(native or an x86_64 VM) and compare the sha256 of the decoded wasm. They
+must match.
 
-Verification means running `scripts/build-in-container.sh` at the matching
-tag (docker or podman) and comparing the sha256 of the decoded wasm to the
-published file. They must match.
+Emulated amd64 on arm64 hosts is not verified: qemu-user crashes rustc 1.92.0.
+Docker on Apple Silicon is untested; do not assume it matches.
 
 ```bash
 git clone https://github.com/Dstack-TEE/dstack

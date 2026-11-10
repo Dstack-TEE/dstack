@@ -111,62 +111,6 @@ jobs:
           path: sdk/verifier-wasm/src/wasm-bytes.js
           if-no-files-found: error
 
-  build-emulated:
-    needs: changes
-    if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v5
-      - uses: docker/setup-qemu-action@v3
-        with:
-          platforms: amd64
-      - name: Build wasm in pinned amd64 container under emulation
-        env:
-          RUST_MIN_STACK: '16777216'
-        run: bash sdk/verifier-wasm/scripts/build-in-container.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: verifier-wasm-bytes-emulated
-          path: sdk/verifier-wasm/src/wasm-bytes.js
-          if-no-files-found: error
-
-  compare-emulated:
-    needs: [changes, build, build-emulated]
-    if: needs.changes.outputs.relevant == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: verifier-wasm-bytes
-          path: native
-      - uses: actions/download-artifact@v4
-        with:
-          name: verifier-wasm-bytes-emulated
-          path: emulated
-      - name: Require identical wasm on amd64 host and arm64 host emulating amd64
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import base64, hashlib, pathlib, re, sys
-
-          def wasm_sha(path):
-              text = path.read_text()
-              b64 = re.search(r"wasmBase64 = '([^']+)'", text).group(1)
-              wasm = base64.b64decode(b64)
-              return hashlib.sha256(wasm).hexdigest(), len(wasm)
-
-          native = pathlib.Path('native/wasm-bytes.js')
-          emulated = pathlib.Path('emulated/wasm-bytes.js')
-          n_sha, n_len = wasm_sha(native)
-          e_sha, e_len = wasm_sha(emulated)
-          print(f'native   wasm sha256={n_sha} raw={n_len}')
-          print(f'emulated wasm sha256={e_sha} raw={e_len}')
-          if n_sha != e_sha:
-              print('wasm bytes differ between amd64 host and arm64-emulated amd64', file=sys.stderr)
-              sys.exit(1)
-          PY
-
   node:
     needs: [changes, build]
     if: needs.changes.outputs.relevant == 'true'
