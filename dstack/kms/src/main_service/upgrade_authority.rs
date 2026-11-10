@@ -544,7 +544,7 @@ pub(crate) async fn ensure_kms_allowed(
 pub(crate) mod tests {
     use super::*;
     use crate::config::Webhook;
-    use crate::main_service::tests::{kms_config, snp_source_kms};
+    use crate::main_service::tests::{kms_config, legacy_tdx_source_kms, snp_source_kms};
     use ra_tls::attestation::TeeVariant;
     use serde_json::Value;
     use std::io::{Read, Write};
@@ -1120,6 +1120,20 @@ pub(crate) mod tests {
             format!("{err:#}").contains("root epoch not registered"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[rocket::async_test]
+    async fn a_source_without_its_os_image_hash_is_refused_before_authorization() {
+        let (url, requests) = serve_with(|_, _| decision(true, 0, [0x11; 32]));
+        let (_dir, cfg) = receiver(&url);
+        let err = ensure_kms_allowed(&cfg, &legacy_tdx_source_kms(), 0)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("does not carry its OS image hash"),
+            "the source was not refused outright: {err:#}"
+        );
+        assert!(requests.lock().unwrap().is_empty());
     }
 
     #[test]

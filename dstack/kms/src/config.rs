@@ -296,6 +296,24 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "finding B3-c: expected to fail until B3-c is fixed"]
+    fn finding_b3c_public_key_handover_is_off_by_default() {
+        let shipped: KmsConfig = load_config_figment(None)
+            .focus("core")
+            .extract()
+            .expect("kms.toml must parse into KmsConfig");
+        assert!(
+            !shipped.onboard.public_key_handover,
+            "kms.toml enables the public KMS key handover"
+        );
+        let omitted = default_config_without("public_key_handover = true");
+        assert!(
+            !omitted.onboard.public_key_handover,
+            "an omitted public_key_handover enables the public KMS key handover"
+        );
+    }
+
+    #[test]
     fn omitting_the_key_keeps_the_attested_default() {
         // Configs written before this key existed must keep working, and must
         // land on the attested side.

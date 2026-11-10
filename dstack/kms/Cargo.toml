@@ -53,6 +53,7 @@ moka = { workspace = true, features = ["future"] }
 
 [dev-dependencies]
 cc-eventlog.workspace = true
+dcap-qvl.workspace = true
 
 [features]
 default = []

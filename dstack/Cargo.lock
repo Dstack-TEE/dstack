@@ -2201,6 +2201,7 @@ dependencies = [
  "anyhow",
  "cc-eventlog",
  "clap",
+ "dcap-qvl",
  "dstack-api-auth",
  "dstack-attest",
  "dstack-build-info",

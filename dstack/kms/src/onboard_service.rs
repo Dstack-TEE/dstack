@@ -954,6 +954,42 @@ mod tests {
         assert!(format!("{err:#}").contains("failed to parse k256 key"));
     }
 
+    #[rocket::async_test]
+    #[ignore = "finding SF8: expected to fail until SF8 is fixed"]
+    async fn finding_sf8_a_rotation_without_a_source_token_is_refused_before_contacting_the_source()
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let source = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = source.local_addr().unwrap();
+        let connections = Arc::new(AtomicUsize::new(0));
+        let counted = connections.clone();
+        std::thread::spawn(move || {
+            for stream in source.incoming() {
+                counted.fetch_add(1, Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        let cert_dir = tempfile::tempdir().unwrap();
+        let handler = OnboardHandler {
+            state: OnboardState::new(auto_bootstrap_config(cert_dir.path())).unwrap(),
+        };
+        let result = handler
+            .onboard(OnboardRequest {
+                source_url: format!("http://{address}"),
+                domain: "kms.example.com".into(),
+                source_token: String::new(),
+                rotate: true,
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            0,
+            "the rotation contacted the source before it was refused"
+        );
+    }
+
     #[test]
     fn ca_certificate_is_renewed_only_within_the_renewal_window() {
         let now = UNIX_EPOCH + Duration::from_secs(2_000_000_000);

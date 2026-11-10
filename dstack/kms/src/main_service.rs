@@ -1835,6 +1835,56 @@ mod tests {
         verified_snp_attestation_with_config(measurement, [0xab; 64], vm_config, &mr_config)
     }
 
+    /// A TDX source KMS certificate in the legacy format: a quote and runtime
+    /// events, but no vm_config, so it carries no OS image hash.
+    pub(crate) fn legacy_tdx_source_kms() -> VerifiedAttestation {
+        use dcap_qvl::{
+            quote::{Report, TDReport10},
+            tcb_info::{TcbStatus, TcbStatusWithAdvisory},
+            verify::VerifiedReport,
+        };
+        let report = VerifiedReport {
+            status: "UpToDate".into(),
+            advisory_ids: Vec::new(),
+            report: Report::TD10(TDReport10 {
+                tee_tcb_svn: [0; 16],
+                mr_seam: [0; 48],
+                mr_signer_seam: [0; 48],
+                seam_attributes: [0; 8],
+                td_attributes: [0; 8],
+                xfam: [0; 8],
+                mr_td: [0; 48],
+                mr_config_id: [0; 48],
+                mr_owner: [0; 48],
+                mr_owner_config: [0; 48],
+                rt_mr0: [0; 48],
+                rt_mr1: [0; 48],
+                rt_mr2: [0; 48],
+                rt_mr3: [0; 48],
+                report_data: [0; 64],
+            }),
+            ppid: Vec::new(),
+            qe_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+            platform_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+        };
+        VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackTdx(
+                ra_tls::attestation::TdxQuote {
+                    quote: include_bytes!("../../ra-tls/assets/tdx_quote").to_vec(),
+                    event_log: Vec::new(),
+                },
+            ),
+            runtime_events: vec![
+                runtime_event("app-id", vec![0x11; 20]),
+                runtime_event("compose-hash", vec![0x22; 32]),
+                runtime_event("instance-id", vec![0x33; 20]),
+            ],
+            report_data: [0; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackTdx(report),
+        }
+    }
+
     fn handler(state: &KmsState, attestation: Option<VerifiedAttestation>) -> RpcHandler {
         RpcHandler {
             state: state.clone(),
@@ -2114,6 +2164,123 @@ mod tests {
             "unexpected error: {err:#}"
         );
         assert!(Keyring::load(&config).is_err());
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding B3-c: expected to fail until B3-c is fixed"]
+    async fn finding_b3c_handover_response_carries_no_temp_ca_key() {
+        let (_dir, state, _) = governed_kms(1, 0, &[], snp_key_release).await;
+        let (attestation, vm_config) = snp_guest();
+        let response = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await
+            .unwrap();
+        assert!(
+            response.temp_ca_key.is_empty(),
+            "the handover response carries the temp CA private key"
+        );
+    }
+
+    /// The auth backend's decision that `epoch` of `state`'s keyring is current.
+    fn current_decision(state: &KmsState, epoch: u32) -> AuthorizationResult {
+        AuthorizationResult {
+            authorized: true,
+            rejection_reason: String::new(),
+            gateway_app_id: String::new(),
+            current_root_epoch: epoch,
+            current_app_epoch: 0,
+            current_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
+            latest_root_epoch: epoch,
+            latest_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
+        }
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding B6: expected to fail until B6 is fixed"]
+    async fn finding_b6_a_kms_never_serves_a_root_epoch_older_than_one_it_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = kms_config(dir.path(), "http://127.0.0.1:1");
+        write_keyring(&config, 2);
+        let state = serving(config.clone());
+        assert_eq!(
+            state
+                .authorized_epoch(&current_decision(&state, 1), None)
+                .unwrap(),
+            1
+        );
+        assert!(
+            state
+                .authorized_epoch(&current_decision(&state, 0), None)
+                .is_err(),
+            "after serving root epoch 1, the KMS served epoch 0 when the backend reported it current"
+        );
+        drop(state);
+        let restarted = serving(config);
+        assert!(
+            restarted
+                .authorized_epoch(&current_decision(&restarted, 0), None)
+                .is_err(),
+            "after a restart, the KMS forgot that it had served root epoch 1"
+        );
+
+        // A node that never served epoch 1 serves epoch 0, and still checks its chain hash.
+        let fresh_dir = tempfile::tempdir().unwrap();
+        let fresh_config = kms_config(fresh_dir.path(), "http://127.0.0.1:1");
+        write_keyring(&fresh_config, 2);
+        let fresh = serving(fresh_config);
+        assert_eq!(
+            fresh
+                .authorized_epoch(&current_decision(&fresh, 0), None)
+                .unwrap(),
+            0
+        );
+        let mut forged = current_decision(&fresh, 0);
+        forged.current_root_epoch_hash = hex::encode([0x55; 32]);
+        assert!(fresh.authorized_epoch(&forged, None).is_err());
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding SF5: expected to fail until SF5 is fixed"]
+    async fn finding_sf5_handover_judges_this_kms_by_its_current_attestation() {
+        // The cached self boot info says UpToDate. No current attestation of
+        // this KMS can be had here, standing in for one the backend would judge
+        // OutOfDate, so a handover that re-attests must be refused.
+        let (_dir, state, _) = governed_kms(1, 0, &[], |config| {
+            config.enforce_self_authorization = true;
+            snp_key_release(config);
+        })
+        .await;
+        let (attestation, vm_config) = snp_guest();
+        let result = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await;
+        assert!(
+            result.is_err(),
+            "the handover was authorized from the cached self boot info"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn sealed_env_pub_key_requests_share_one_app_epoch_lookup() {
+        let (_dir, state, requests) = governed_kms(1, 1, &[], |_| {}).await;
+        for _ in 0..3 {
+            handler(&state, None)
+                .get_sealed_env_pub_key(AppId {
+                    app_id: vec![0x11; 20],
+                })
+                .await
+                .unwrap();
+        }
+        let lookups = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| path.starts_with("/app/"))
+            .count();
+        assert_eq!(
+            lookups, 1,
+            "each GetSealedEnvPubKey call looked up the app epoch again"
+        );
     }
 
     #[test]
