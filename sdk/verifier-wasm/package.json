@@ -19,7 +19,8 @@
   ],
   "scripts": {
     "build": "bash scripts/build.sh",
-    "test": "node --test test/verify.test.mjs"
+    "test": "node test/run-cases.mjs",
+    "test:node": "node --test test/verify.test.mjs"
   },
   "keywords": [
     "dstack",

@@ -7,15 +7,26 @@ name: TDX lite verifier wasm
 on:
   push:
     branches: [ next, 'release/**' ]
+    tags: ['*']
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
     branches: [ next, 'release/**' ]
+  workflow_dispatch:
+    inputs:
+      runtimes:
+        description: Run Electron and browser jobs
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 jobs:
-  verifier-wasm:
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.changes.outputs.relevant }}
+      runtimes: ${{ steps.changes.outputs.runtimes }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -25,40 +36,69 @@ jobs:
         id: changes
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'verifier-wasm-runtimes') }}
+          DISPATCH_RUNTIMES: ${{ github.event_name == 'workflow_dispatch' && inputs.runtimes }}
         run: |
-          if [ -z "$BASE_SHA" ]; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "push build: running everything"
-            exit 0
-          fi
-          changed=$(git diff --name-only "$BASE_SHA...HEAD")
-          echo "$changed"
-          if echo "$changed" | grep -qE '^(dstack/(dstack-mr|dstack-types|cc-eventlog|verifier/fixtures|crates/(qemu-acpi|dstack-verifier-wasm))|sdk/verifier-wasm|rust-toolchain\.toml|\.github/workflows/verifier-wasm\.yml)'; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          relevant=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [[ "$REF" == refs/tags/* ]]; then
+            relevant=true
+            echo "dispatch or tag: running"
           else
-            echo "relevant=false" >> "$GITHUB_OUTPUT"
-            echo "nothing this job covers changed"
+            if [ -n "$BASE_SHA" ]; then
+              changed=$(git diff --name-only "$BASE_SHA...HEAD")
+            elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              changed=$(git diff --name-only "$BEFORE_SHA...HEAD")
+            else
+              changed=$(git diff --name-only HEAD~1...HEAD)
+            fi
+            echo "$changed"
+            if echo "$changed" | grep -qE '^(sdk/verifier-wasm/|dstack/crates/dstack-verifier-wasm/|dstack/dstack-mr/|dstack/crates/qemu-acpi/|dstack/dstack-types/|dstack/cc-eventlog/|dstack/Cargo.lock|\.github/workflows/verifier-wasm\.yml)'; then
+              relevant=true
+            else
+              echo "nothing this job covers changed"
+            fi
           fi
 
+          runtimes=false
+          if [ "$relevant" = true ]; then
+            if [ "$DISPATCH_RUNTIMES" = "true" ]; then
+              runtimes=true
+            elif [ "$EVENT_NAME" = "push" ] && { [ "$REF" = "refs/heads/next" ] || [[ "$REF" == refs/tags/* ]]; }; then
+              runtimes=true
+            elif [ "$HAS_LABEL" = "true" ]; then
+              runtimes=true
+            fi
+          fi
+
+          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
+          echo "runtimes=$runtimes" >> "$GITHUB_OUTPUT"
+          echo "relevant=$relevant runtimes=$runtimes"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
       - name: Install Rust
-        if: steps.changes.outputs.relevant == 'true'
         uses: dtolnay/rust-toolchain@1.92.0
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
-        if: steps.changes.outputs.relevant == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: dstack
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Build wasm package
-        if: steps.changes.outputs.relevant == 'true'
         run: bash sdk/verifier-wasm/scripts/build.sh
 
       - name: Check wasm imports
-        if: steps.changes.outputs.relevant == 'true'
         run: |
           node -e "
             const { readFileSync } = require('node:fs');
@@ -71,24 +111,109 @@ jobs:
             console.log('imports: none');
           "
 
-      - name: Test on Node 20
-        if: steps.changes.outputs.relevant == 'true'
-        uses: actions/setup-node@v5
+      - uses: actions/upload-artifact@v4
         with:
-          node-version: '20.19'
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src/wasm-bytes.js
+          if-no-files-found: error
 
-      - name: Run JS tests (Node 20)
-        if: steps.changes.outputs.relevant == 'true'
-        working-directory: sdk/verifier-wasm
-        run: node --test test/verify.test.mjs
-
-      - name: Test on Node 24
-        if: steps.changes.outputs.relevant == 'true'
-        uses: actions/setup-node@v5
+  node:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.19.0', '22', '24']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
         with:
-          node-version: '24'
-
-      - name: Run JS tests (Node 24)
-        if: steps.changes.outputs.relevant == 'true'
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Run cases
         working-directory: sdk/verifier-wasm
-        run: node --test test/verify.test.mjs
+        run: node test/run-cases.mjs
+
+  bun:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Run cases
+        working-directory: sdk/verifier-wasm
+        run: bun test/run-cases.mjs
+
+  electron:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true' && needs.changes.outputs.runtimes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        electron: ['31', 'latest']
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - name: Install Electron
+        run: |
+          mkdir -p "$RUNNER_TEMP/electron"
+          cd "$RUNNER_TEMP/electron"
+          npm init -y >/dev/null
+          npm install "electron@${{ matrix.electron }}"
+          echo "ELECTRON_BIN=$RUNNER_TEMP/electron/node_modules/.bin/electron" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/electron/node_modules/.bin/electron" --version
+      - name: Run cases as Node
+        working-directory: sdk/verifier-wasm
+        run: ELECTRON_RUN_AS_NODE=1 "$ELECTRON_BIN" test/run-cases.mjs
+      - name: Install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Run cases in Electron main
+        working-directory: sdk/verifier-wasm
+        run: xvfb-run -a "$ELECTRON_BIN" --no-sandbox test/electron-main.mjs
+
+  browser:
+    needs: [changes, build]
+    if: needs.changes.outputs.relevant == 'true' && needs.changes.outputs.runtimes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: verifier-wasm-bytes
+          path: sdk/verifier-wasm/src
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - name: Install Playwright
+        run: |
+          mkdir -p "$RUNNER_TEMP/playwright"
+          cd "$RUNNER_TEMP/playwright"
+          npm init -y >/dev/null
+          npm install playwright
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Run cases
+        env:
+          NODE_PATH: ${{ runner.temp }}/playwright/node_modules
+        run: node sdk/verifier-wasm/test/browser/playwright.mjs ${{ matrix.browser }}
