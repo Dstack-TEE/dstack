@@ -36,6 +36,19 @@ def load_vmm_cli():
 VMM_CLI = load_vmm_cli()
 
 
+def pin_epoch_signers(signers):
+    """Trust each signer for the root epoch it is keyed by.
+
+    How a signer is pinned to one epoch is the SF1 test's assumption: the CLI
+    only has an unscoped list today, so this pins every signer for all epochs.
+    The SF1 fix replaces this one helper.
+    """
+    pins = [
+        signer.public_key.to_compressed_bytes().hex() for signer in signers.values()
+    ]
+    return patch.object(VMM_CLI, "load_whitelist", return_value=pins)
+
+
 class UpdateVmTests(unittest.TestCase):
     """Verify update flags are not silently discarded by the CLI."""
 
@@ -435,6 +448,91 @@ class SealedEnvTests(unittest.TestCase):
                         else:
                             self.assertIn("encrypted_env", payload)
                             self.assertNotIn("sealed_env", payload)
+
+    def test_image_capability_requires_boolean_true(self):
+        """Treat only a JSON true as SealedEnv support, never a truthy value."""
+        for value, expected in [
+            (True, True),
+            (False, False),
+            ("true", False),
+            ("false", False),
+            (1, False),
+            ({"enabled": True}, False),
+        ]:
+            with self.subTest(value=value):
+                self.cli.rpc_call = Mock(
+                    return_value={"images": [{"name": "image", "sealed_env": value}]}
+                )
+                self.assertIs(self.cli.image_supports_sealed_env("image"), expected)
+
+    def sign_sealed_key(self, signer, root_epoch):
+        """Return a correctly signed GetSealedEnvPubKey response."""
+        digest = keccak(
+            b"dstack-sealed-env-pubkey-v1:"
+            + bytes.fromhex(self.app_id)
+            + root_epoch.to_bytes(4, "big")
+            + (0).to_bytes(4, "big")
+            + bytes.fromhex(self.response["public_key"])
+            + self.timestamp.to_bytes(8, "big")
+        )
+        return {
+            **self.response,
+            "root_epoch": root_epoch,
+            "signature": signer.sign_msg_hash(digest).to_bytes().hex(),
+        }
+
+    # finding SF1: expected to fail until SF1 is fixed
+    @unittest.expectedFailure
+    def test_finding_sf1_pinned_signer_is_scoped_to_its_root_epoch(self):
+        """A signer pinned for epoch 0 cannot vouch for an epoch-1 key."""
+        epoch0 = self.signer
+        epoch1 = keys.PrivateKey(b"\x44" * 32)
+        self.epoch = 1
+        with pin_epoch_signers({0: epoch0, 1: epoch1}):
+            self.cli.client.request.return_value = (
+                200,
+                self.sign_sealed_key(epoch1, 1),
+            )
+            self.decrypt(
+                self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
+            )
+            self.cli.client.request.return_value = (
+                200,
+                self.sign_sealed_key(epoch0, 1),
+            )
+            with self.assertRaises(ValueError):
+                self.cli.encrypt_env_payload(self.envs, self.app_id, None, True)
+
+    # finding SF2: expected to fail until SF2 is fixed
+    @unittest.expectedFailure
+    def test_finding_sf2_legacy_key_without_pins_is_refused_without_prompting(self):
+        """Without trusted signers, the legacy path accepts no signer at all."""
+        del self.cli.get_app_env_encrypt_pub_key
+        public_key = bytes.fromhex(self.response["public_key"])
+        digest = keccak(
+            b"dstack-env-encrypt-pubkey:"
+            + bytes.fromhex(self.app_id)
+            + self.timestamp.to_bytes(8, "big")
+            + public_key
+        )
+        self.cli.rpc_call = Mock(
+            return_value={
+                "public_key": public_key.hex(),
+                "signature_v1": self.signer.sign_msg_hash(digest).to_bytes().hex(),
+                "timestamp": self.timestamp,
+            }
+        )
+        with (
+            patch.object(VMM_CLI, "load_whitelist", return_value=[]),
+            patch.object(
+                self.cli, "confirm_untrusted_signer", return_value=True
+            ) as confirm,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaises(Exception):
+                self.cli.encrypt_env_payload(self.envs, self.app_id, None, False)
+        confirm.assert_not_called()
 
 
 if __name__ == "__main__":

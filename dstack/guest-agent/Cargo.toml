@@ -67,3 +67,5 @@ lspci.workspace = true
 # the synthetic-attestation helpers. Declared here so the production build of
 # this crate does not carry them.
 dstack-attest = { workspace = true, features = ["simulator"] }
+# Builds a KMS client against a local stand-in to count historical key fetches.
+dstack-kms-rpc.workspace = true

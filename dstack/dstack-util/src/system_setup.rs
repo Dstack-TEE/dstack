@@ -4599,6 +4599,32 @@ mod sealed_env_file_tests {
     }
 
     #[test]
+    #[ignore = "finding CR3: expected to fail until CR3 is fixed"]
+    fn finding_cr3_guest_resolves_the_legacy_env_that_replaced_a_sealed_env() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(SYS_CONFIG), br#"{"vm_config":""}"#).unwrap();
+        fs::write(
+            dir.path().join(APP_COMPOSE),
+            br#"{"manifest_version":"2","name":"test","runner":"docker-compose"}"#,
+        )
+        .unwrap();
+        // The VMM published the owner's legacy env over an older sealed env
+        // and was interrupted before removing the sealed file it replaces.
+        let sealed_path = dir.path().join(SEALED_ENV);
+        fs::write(&sealed_path, b"replaced sealed env").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&sealed_path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+            .unwrap();
+        fs::write(dir.path().join(ENCRYPTED_ENV), b"owner legacy env").unwrap();
+        let shared = HostShared::load(dir.path()).unwrap();
+        assert_eq!(shared.sealed_env, None);
+        assert_eq!(shared.encrypted_env, b"owner legacy env");
+    }
+
+    #[test]
     fn missing_empty_and_unreadable_env_are_distinct() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(SEALED_ENV);
@@ -4610,5 +4636,336 @@ mod sealed_env_file_tests {
                 .is_err()
         );
         assert!(read_optional_env(dir.path()).is_err());
+    }
+
+    fn work_dir_args(dir: &tempfile::TempDir) -> SetupArgs {
+        SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        }
+    }
+
+    fn with_app_epoch(mut stage: Stage1<'_>, epoch: u32) -> Stage1<'_> {
+        if let KeyProvider::Kms { app_epoch, .. } = &mut stage.keys.key_provider {
+            *app_epoch = epoch;
+        }
+        stage
+    }
+
+    #[tokio::test]
+    async fn an_envelope_from_a_future_app_epoch_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = work_dir_args(&dir);
+        let plaintext = br#"{"env":[{"key":"VALUE","value":"future"}]}"#;
+        let sealed = seal_env_at_epochs(&[7; 32], 3, 3, plaintext).unwrap();
+        let current = with_app_epoch(stage(&args, Some(sealed), vec![]), 2);
+        let err = current.decrypt_env().await.unwrap_err();
+        assert!(format!("{err:#}").contains("exceeds current"), "{err:#}");
+    }
+
+    /// The current key opens only an envelope labelled with both current
+    /// epochs. One from any other epoch pair needs that pair's key, even when
+    /// its ciphertext happens to open under the current one.
+    #[tokio::test]
+    async fn an_envelope_from_another_epoch_is_never_opened_with_the_current_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = work_dir_args(&dir);
+        let plaintext = br#"{"env":[{"key":"VALUE","value":"other-epoch"}]}"#;
+        for (root, app) in [(3, 1), (2, 2)] {
+            let sealed = seal_env_at_epochs(&[7; 32], root, app, plaintext).unwrap();
+            let current = with_app_epoch(stage(&args, Some(sealed), vec![]), 2);
+            let opened = current.decrypt_env().await;
+            assert!(
+                opened.is_err(),
+                "envelope at ({root}, {app}) opened with the key of (3, 2)"
+            );
+        }
+    }
+
+    /// How the KMS words a refusal (`get_app_key` in the KMS main service).
+    /// That the guest tells a denial apart by it is the test's assumption.
+    const KMS_DENIAL: &str = "Authorization denied: app epoch is retired";
+
+    #[tokio::test]
+    #[ignore = "finding SF3: expected to fail until SF3 is fixed (denial text is the test's assumption)"]
+    async fn finding_sf3_historical_env_search_stops_at_the_first_denial() {
+        let secret = x25519_dalek::StaticSecret::from([8; 32]);
+        let public = x25519_dalek::PublicKey::from(&secret);
+        let plaintext = br#"{"env":[{"key":"SECRET","value":"synthetic"}]}"#;
+        let encrypted = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let mut requested = Vec::new();
+        let decrypted = decrypt_historical_env(&encrypted, (0..=2).rev(), |epoch| {
+            requested.push(epoch);
+            std::future::ready(match epoch {
+                2 => Err(anyhow!(KMS_DENIAL)),
+                0 => Ok(secret.to_bytes().to_vec()),
+                _ => Ok(vec![3; 32]),
+            })
+        })
+        .await;
+        assert_eq!(requested, [2], "epochs requested after a KMS denial");
+        assert!(decrypted.is_err());
+    }
+}
+
+#[cfg(test)]
+mod data_disk_epoch_tests {
+    //! Data disk setup on file-backed LUKS2 images. They need cryptsetup and
+    //! root (the detached header is staged in a tmpfs), so they run in the
+    //! cryptsetup container with `--privileged`, and skip elsewhere.
+    use super::*;
+    use std::os::unix::fs::MetadataExt as _;
+
+    /// `open_encrypted_volume` stages every header in the same directory.
+    static STAGING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    const DISK_KEY: [u8; 32] = [5; 32];
+    /// The key of the epochs an older disk was formatted at.
+    const OLD_DISK_KEY: [u8; 32] = [4; 32];
+
+    fn disk_tools_available() -> bool {
+        let root = fs::metadata("/proc/self").is_ok_and(|meta| meta.uid() == 0);
+        if !root {
+            eprintln!("root is unavailable; skipping");
+        }
+        root && luks::cryptsetup_available()
+    }
+
+    fn keys_at(root_epoch: u32, app_epoch: u32) -> AppKeys {
+        AppKeys {
+            disk_crypt_key: DISK_KEY.to_vec(),
+            env_crypt_key: vec![],
+            sealed_env_key: vec![],
+            k256_key: vec![],
+            k256_signature: vec![],
+            gateway_app_id: String::new(),
+            ca_cert: String::new(),
+            key_provider: KeyProvider::Kms {
+                url: "http://127.0.0.1:1".into(),
+                pubkey: vec![],
+                root_epoch,
+                app_epoch,
+            },
+        }
+    }
+
+    struct Disk {
+        dir: tempfile::TempDir,
+        args: SetupArgs,
+    }
+
+    impl Disk {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let device = dir.path().join("disk.img");
+            fs::File::create(&device)
+                .unwrap()
+                .set_len(2 * PAYLOAD_OFFSET)
+                .unwrap();
+            let args = SetupArgs {
+                work_dir: dir.path().into(),
+                device,
+                mount_point: dir.path().join("mnt"),
+            };
+            Self { dir, args }
+        }
+
+        /// Format the image with `key` the way `luks_setup` does, recording
+        /// `epochs` if given, and leave the initializing label in place.
+        fn format(&self, key: &[u8], epochs: Option<(u32, u32)>) {
+            let offset = (PAYLOAD_OFFSET / 512).to_string();
+            let mut child = Command::new("cryptsetup")
+                .args([
+                    "luksFormat",
+                    "--batch-mode",
+                    "--type",
+                    "luks2",
+                    "--offset",
+                    &offset,
+                    "--cipher",
+                    "aes-xts-plain64",
+                    "--pbkdf",
+                    "pbkdf2",
+                    "--sector-size",
+                    "512",
+                    "--label",
+                    LUKS_INITIALIZING_LABEL,
+                    "-d-",
+                ])
+                .arg(&self.args.device)
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(hex::encode(key).as_bytes())
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+            if let Some((root, app)) = epochs {
+                write_luks_epochs(&self.args.device, 0, root, app).unwrap();
+            }
+        }
+
+        /// Clear the initializing label, as a completed setup does.
+        fn finish_initialization(&self) {
+            let status = Command::new("cryptsetup")
+                .args(["config", "--label="])
+                .arg(&self.args.device)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+
+        fn stage(&self) -> Stage0<'_> {
+            Stage0 {
+                args: &self.args,
+                vmm: HostApi::default(),
+                shared: HostShared {
+                    dir: HostShareDir::new(self.dir.path()),
+                    sys_config: serde_json::from_value(serde_json::json!({"vm_config": ""}))
+                        .unwrap(),
+                    app_compose: serde_json::from_value(serde_json::json!({
+                        "manifest_version": "2", "name": "disk-test", "runner": "docker-compose"
+                    }))
+                    .unwrap(),
+                    instance_info: InstanceInfo::default(),
+                    sealed_env: None,
+                    encrypted_env: vec![],
+                },
+            }
+        }
+
+        /// The header state recorded on the image itself.
+        fn recorded(&self) -> luks::LuksHeaderState {
+            load_luks_header(&self.args.device, &self.dir.path().join("header-copy")).unwrap()
+        }
+    }
+
+    impl Disk {
+        /// The epochs in the image's dstack token, read with cryptsetup alone.
+        fn recorded_token(&self) -> Option<(u32, u32)> {
+            let export = Command::new("cryptsetup")
+                .args(["token", "export", "--token-id", "0"])
+                .arg(&self.args.device)
+                .output()
+                .unwrap();
+            if !export.status.success() {
+                return None;
+            }
+            let token: Value = serde_json::from_slice(&export.stdout).unwrap();
+            let epoch = |field: &str| token[field].as_u64().unwrap() as u32;
+            Some((epoch("root_epoch"), epoch("app_epoch")))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_disk_recorded_at_a_newer_epoch_is_refused() {
+        if !disk_tools_available() {
+            return;
+        }
+        let _staging = STAGING.lock().await;
+        for (recorded, (root, app)) in [((3, 0), (2, 0)), ((2, 1), (2, 0))] {
+            let disk = Disk::new();
+            disk.format(&DISK_KEY, Some(recorded));
+            disk.finish_initialization();
+            let err = disk
+                .stage()
+                .open_encrypted_volume(&keys_at(root, app), "dstack_test_newer", false, false)
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{err:#}").contains("exceed current"),
+                "disk at {recorded:?} with keys at ({root}, {app}): {err:#}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_disk_at_an_older_epoch_is_rekeyed_before_it_is_opened() {
+        if !disk_tools_available() {
+            return;
+        }
+        let _staging = STAGING.lock().await;
+        for (recorded, (root, app)) in [((2, 0), (2, 1)), ((1, 1), (2, 1))] {
+            let disk = Disk::new();
+            disk.format(&OLD_DISK_KEY, Some(recorded));
+            disk.finish_initialization();
+            let err = disk
+                .stage()
+                .open_encrypted_volume(&keys_at(root, app), "dstack_test_older", false, false)
+                .await
+                .unwrap_err();
+            assert!(
+                format!("{err:#}").contains("failed to migrate the data disk key"),
+                "disk at {recorded:?} with keys at ({root}, {app}): {err:#}"
+            );
+            let state = disk.recorded();
+            assert_eq!(
+                (state.root_epoch, state.app_epoch),
+                (Some(recorded.0), recorded.1),
+                "a failed re-key must leave the disk as it was"
+            );
+        }
+    }
+
+    /// A new disk records the epochs of the key that formatted it, so the
+    /// next boot finds that key without a migration. An epoch-0 disk records
+    /// nothing and stays readable by older OS images.
+    #[tokio::test]
+    async fn a_new_disk_records_the_epochs_it_was_formatted_at() {
+        if !disk_tools_available() {
+            return;
+        }
+        let _staging = STAGING.lock().await;
+        for ((root, app), recorded) in [
+            ((0, 0), None),
+            ((2, 0), Some((2, 0))),
+            ((0, 1), Some((0, 1))),
+            ((2, 1), Some((2, 1))),
+        ] {
+            let disk = Disk::new();
+            let name = "dstack_test_setup";
+            // cryptsetup gives a file image 4096-byte sectors, which the
+            // header validation before luksOpen refuses, so only what setup
+            // wrote to the header is asserted here.
+            if disk
+                .stage()
+                .luks_setup(&keys_at(root, app), name, false)
+                .await
+                .is_ok()
+            {
+                Command::new("cryptsetup")
+                    .args(["close", name])
+                    .status()
+                    .unwrap();
+            }
+            assert_eq!(
+                disk.recorded_token(),
+                recorded,
+                "disk formatted at ({root}, {app})"
+            );
+        }
+    }
+
+    /// luksFormat finished but the epoch token was never written: the disk
+    /// stays closed so that it is initialized again, without a migration.
+    #[tokio::test]
+    async fn an_interrupted_initialization_is_not_opened() {
+        if !disk_tools_available() {
+            return;
+        }
+        let _staging = STAGING.lock().await;
+        let disk = Disk::new();
+        disk.format(&DISK_KEY, None);
+        let opened = disk
+            .stage()
+            .open_encrypted_volume(&keys_at(2, 0), "dstack_test_interrupted", false, false)
+            .await
+            .unwrap();
+        assert!(!opened);
+        assert_eq!(disk.recorded_token(), None);
     }
 }

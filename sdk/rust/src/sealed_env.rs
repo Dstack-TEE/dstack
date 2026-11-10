@@ -302,6 +302,48 @@ mod tests {
     }
 
     #[test]
+    fn validly_signed_key_from_another_app_epoch_is_rejected() {
+        use k256::ecdsa::SigningKey;
+        let signer = SigningKey::from_slice(&[7; 32]).unwrap();
+        let app_id = [9; 20];
+        let mut key = SealedEnvPublicKey {
+            app_epoch: 1,
+            public_key: [10; 32],
+            root_epoch: 42,
+            timestamp: 1_000,
+            signature: [0; 65],
+        };
+        let mut claim = b"dstack-sealed-env-pubkey-v1:".to_vec();
+        claim.extend_from_slice(&app_id);
+        claim.extend_from_slice(&42u32.to_be_bytes());
+        claim.extend_from_slice(&1u32.to_be_bytes());
+        claim.extend_from_slice(&key.public_key);
+        claim.extend_from_slice(&key.timestamp.to_be_bytes());
+        let (signature, recovery_id) = signer
+            .sign_prehash_recoverable(&Keccak256::digest(claim))
+            .unwrap();
+        key.signature[..64].copy_from_slice(&signature.to_bytes());
+        key.signature[64] = recovery_id.to_byte();
+        // The signature itself is valid for app epoch 1.
+        verify_sealed_env_public_key_at_epochs(&app_id, &key, 42, 1, signer.verifying_key(), 1_000)
+            .unwrap();
+        let err = verify_sealed_env_public_key_at_epochs(
+            &app_id,
+            &key,
+            42,
+            2,
+            signer.verifying_key(),
+            1_000,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("app epoch mismatch"), "{err:#}");
+        // The legacy wrapper expects app epoch 0.
+        let err = verify_sealed_env_public_key(&app_id, &key, 42, signer.verifying_key(), 1_000)
+            .unwrap_err();
+        assert!(err.to_string().contains("app epoch mismatch"), "{err:#}");
+    }
+
+    #[test]
     fn rejects_invalid_public_keys() {
         for key in [vec![], vec![0; 31], vec![0; 32], vec![0; 33]] {
             assert!(seal_env(&[("KEY", "value")], &key, 0).is_err());

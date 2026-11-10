@@ -10,14 +10,19 @@ import "forge-std/Test.sol";
 import "openzeppelin-foundry-upgrades/Upgrades.sol";
 import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
+import "./RootKeyFixtures.sol";
 
-contract EventAuditTest is Test {
+contract EventAuditTest is Test, RootKeyFixtures {
     bytes32 private constant AUDIT_TOPIC = keccak256("PolicyChanged(address,bytes32,bytes32,bool)");
 
     address private owner;
     address private outsider;
     DstackKms private kms;
     DstackApp private app;
+
+    event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
+    event KmsInfoSet(bytes k256Pubkey);
+    event AppEpochAdvanced(uint256 indexed epoch);
 
     function setUp() public {
         owner = makeAddr("audit-owner");
@@ -151,6 +156,87 @@ contract EventAuditTest is Test {
 
         _assertAudit(logs, owner, "implementation-upgrade", bytes32(uint256(uint160(address(replacement)))), true);
         assertEq(Upgrades.getImplementationAddress(address(app)), address(replacement));
+    }
+
+    function test_KmsUpgradeAuditIncludesActorAndImplementation() public {
+        vm.startPrank(owner);
+        DstackKms replacement = new DstackKms();
+        vm.recordLogs();
+        kms.upgradeToAndCall(address(replacement), "");
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        vm.stopPrank();
+
+        _assertAudit(logs, owner, "implementation-upgrade", bytes32(uint256(uint160(address(replacement)))), true);
+        assertEq(Upgrades.getImplementationAddress(address(kms)), address(replacement));
+    }
+
+    function test_RootEpochLifecycleIsAudited() public {
+        vm.startPrank(owner);
+        vm.recordLogs();
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
+        (,,, bytes32 h1) = kms.rootEpoch(1);
+        vm.expectEmit(address(kms));
+        emit KmsInfoSet(k256(0xb1));
+        kms.activateRootEpoch(1, h1);
+        kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2");
+        (,,, bytes32 h2) = kms.rootEpoch(2);
+        kms.popRootEpoch(2, h2);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        vm.stopPrank();
+
+        (,,, bytes32 h0) = kms.rootEpoch(0);
+        _assertAudit(logs, owner, "root-epoch", h0, true);
+        _assertAudit(logs, owner, "root-epoch", h1, true);
+        _assertAudit(logs, owner, "root-epoch-activated", bytes32(uint256(1)), true);
+        _assertAudit(logs, owner, "root-epoch", h2, true);
+        _assertAudit(logs, owner, "root-epoch", h2, false);
+        assertEq(kms.rootEpochCount(), 2);
+    }
+
+    function test_KmsEpochRowChangesAreAuditedWithTheirEpoch() public {
+        bytes32 mr = keccak256("audit-epoch-mr");
+        bytes32 device = keccak256("audit-epoch-device");
+        bytes32 image = keccak256("audit-epoch-image");
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
+        kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
+        vm.expectEmit(address(kms));
+        emit EpochPolicyChanged(keccak256("kms-aggregated-mr"), mr, 1, true);
+        kms.addKmsAggregatedMrAtEpoch(1, mr);
+        vm.expectEmit(address(kms));
+        emit EpochPolicyChanged(keccak256("kms-device"), device, 1, true);
+        kms.addKmsDeviceAtEpoch(1, device);
+        vm.expectEmit(address(kms));
+        emit EpochPolicyChanged(keccak256("os-image"), image, 1, true);
+        kms.addOsImageHashAtEpoch(1, image);
+        vm.expectEmit(address(kms));
+        emit EpochPolicyChanged(keccak256("os-image"), image, 1, false);
+        kms.removeOsImageHashAtEpoch(1, image);
+        vm.stopPrank();
+    }
+
+    function test_AppEpochAdvanceAndEpochRowChangesAreAudited() public {
+        bytes32 composeHash = keccak256("audit-epoch-compose");
+        bytes32 device = keccak256("audit-epoch-app-device");
+        vm.startPrank(owner);
+        vm.recordLogs();
+        vm.expectEmit(address(app));
+        emit AppEpochAdvanced(1);
+        app.advanceAppEpoch(0);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        _assertAudit(logs, owner, "app-epoch", bytes32(uint256(1)), true);
+
+        vm.expectEmit(address(app));
+        emit EpochPolicyChanged(keccak256("compose-hash"), composeHash, 1, true);
+        app.addComposeHashAtEpoch(1, composeHash);
+        vm.expectEmit(address(app));
+        emit EpochPolicyChanged(keccak256("device"), device, 1, true);
+        app.addDeviceAtEpoch(1, device);
+        vm.expectEmit(address(app));
+        emit EpochPolicyChanged(keccak256("allow-any-device"), bytes32(0), 1, true);
+        app.setAllowAnyDeviceAtEpoch(1, true);
+        vm.stopPrank();
     }
 
     function _assertAudit(

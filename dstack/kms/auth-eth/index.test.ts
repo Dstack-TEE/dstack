@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
-import openApiSpec from './openapi.json';
 import { keccak256, toBytes } from 'viem';
+import openApiSpec from './openapi.json';
 
 // Mock viem
 const mockReadContract = vi.fn();
@@ -295,6 +295,17 @@ describe('API Compatibility Tests', () => {
       expect(info.status).toBe(200);
       expect(await info.json()).not.toHaveProperty('rootEpoch');
       expect(current).not.toHaveBeenCalled();
+    });
+
+    it.each(['0x' + '11'.repeat(33), 'not-hex'])('rejects a malformed root epoch hash %s before reading the contract', async (rootEpochHash) => {
+      mockChain(() => [1n, hash]);
+      const response = await appFetch(new Request('http://localhost:3001/bootAuth/app', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...validBootInfo, rootEpoch: 1, rootEpochHash }),
+      }));
+      expect(response.status).toBe(400);
+      expect(mockReadContract).not.toHaveBeenCalled();
     });
 
     it('serves an old KMS, and its apps, while epoch 0 is current', async () => {
@@ -973,5 +984,42 @@ describe('POST /authorizeApp', () => {
     mockReadContract.mockRejectedValueOnce(new Error('contract unavailable'));
     expect((await authorize()).status).toBe(503);
     expect(mockReadContract).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { operation: 'app_delete_key' },
+    { requestedAppEpoch: 2 ** 32 },
+    { requestedRootEpoch: 2 ** 32 },
+  ])('rejects a request outside the wire contract before reading the contract: %j', async (fields) => {
+    const response = await appFetch(new Request('http://localhost/authorizeApp', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...appInfo, operation: 'app_get_key', ...fields }),
+    }));
+    expect(response.status).toBe(400);
+    expect(mockReadContract).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['authorizeKms', { operation: 'kms_import_keys', requestedRootEpoch: 3 }],
+    ['authorizeApp', { operation: 'app_get_cert', requestedAppEpoch: 5 }],
+  ] as const)('forwards the operation and requested epochs to %s', async (method, fields) => {
+    mockReadContract.mockResolvedValueOnce({
+      authorized: true, rejectionReason: '', gatewayAppId: 'gateway',
+      currentAppEpoch: 5n, currentRootEpoch: 3n, currentRootEpochHash: '0x' + '77'.repeat(32),
+      latestRootEpoch: 3n, latestRootEpochHash: '0x' + '77'.repeat(32),
+    });
+    const response = await appFetch(new Request(`http://localhost/${method}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...appInfo, ...fields }),
+    }));
+    expect(response.status).toBe(200);
+    const epoch = (value?: number) => ({ isSet: value !== undefined, value: BigInt(value ?? 0) });
+    expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
+      functionName: method,
+      args: [expect.objectContaining({
+        operation: keccak256(toBytes(fields.operation)),
+        requestedAppEpoch: epoch('requestedAppEpoch' in fields ? fields.requestedAppEpoch : undefined),
+        requestedRootEpoch: epoch('requestedRootEpoch' in fields ? fields.requestedRootEpoch : undefined),
+      })],
+    }));
   });
 });

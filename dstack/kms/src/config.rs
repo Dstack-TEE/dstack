@@ -283,6 +283,40 @@ mod tests {
         );
     }
 
+    /// The shipped config with `line` removed, as a config written before that key existed.
+    fn default_config_without(line: &str) -> KmsConfig {
+        let config = DEFAULT_CONFIG.replace(line, "");
+        assert_ne!(config, DEFAULT_CONFIG, "{line:?} is not in kms.toml");
+        Figment::from(Toml::string(&config))
+            .focus("core")
+            .extract()
+            .expect("kms.toml without the key must parse into KmsConfig")
+    }
+
+    #[test]
+    fn self_authorization_is_enforced_when_the_key_is_omitted() {
+        let config = default_config_without("enforce_self_authorization = true");
+        assert!(config.enforce_self_authorization);
+    }
+
+    #[test]
+    #[ignore = "finding B3-c: expected to fail until B3-c is fixed"]
+    fn finding_b3c_public_key_handover_is_off_by_default() {
+        let shipped: KmsConfig = load_config_figment(None)
+            .focus("core")
+            .extract()
+            .expect("kms.toml must parse into KmsConfig");
+        assert!(
+            !shipped.onboard.public_key_handover,
+            "kms.toml enables the public KMS key handover"
+        );
+        let omitted = default_config_without("public_key_handover = true");
+        assert!(
+            !omitted.onboard.public_key_handover,
+            "an omitted public_key_handover enables the public KMS key handover"
+        );
+    }
+
     #[test]
     fn omitting_the_key_keeps_the_attested_default() {
         // Configs written before this key existed must keep working, and must

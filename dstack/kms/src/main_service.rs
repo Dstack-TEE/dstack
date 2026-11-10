@@ -1052,7 +1052,9 @@ mod tests {
         nitro_enclave: true,
     };
 
+    use serde_json::Value;
     use std::collections::BTreeMap;
+    use upgrade_authority::tests::{boot_info, serve_with, Requests};
 
     fn hex_of(byte: u8, len: usize) -> String {
         hex::encode(vec![byte; len])
@@ -1675,31 +1677,12 @@ mod tests {
         (format!("http://{address}"), requests)
     }
 
-    /// A `KmsState` backed by freshly generated root material in `cert_dir`,
-    /// with its auth API pointed at `webhook_url`.
-    fn kms_state(cert_dir: &Path, webhook_url: &str) -> KmsState {
-        use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
+    /// A KMS configuration over `cert_dir`, with its auth API pointed at `webhook_url`.
+    pub(crate) fn kms_config(cert_dir: &Path, webhook_url: &str) -> KmsConfig {
         use rocket::figment::{
             providers::{Format, Toml},
             Figment,
         };
-
-        let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let ca_cert = CertRequest::builder()
-            .org_name("Dstack")
-            .subject("Dstack KMS CA")
-            .ca_level(1)
-            .key(&ca_key)
-            .build()
-            .self_signed()
-            .unwrap();
-        fs::write(cert_dir.join("root-ca.key"), ca_key.serialize_pem()).unwrap();
-        fs::write(cert_dir.join("root-ca.crt"), ca_cert.pem()).unwrap();
-        fs::write(
-            cert_dir.join("root-k256.key"),
-            SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
-        )
-        .unwrap();
 
         let overrides = format!(
             r#"
@@ -1720,14 +1703,587 @@ mod tests {
             cert_dir.display(),
             cert_dir.display(),
         );
-        let config: KmsConfig = Figment::from(rocket::Config::default())
+        Figment::from(rocket::Config::default())
             .merge(Toml::string(crate::config::DEFAULT_CONFIG))
             .merge(Toml::string(&overrides))
             .focus("core")
             .extract()
+            .unwrap()
+    }
+
+    /// Fresh root keys of epochs `0..epochs`, stored where `Keyring::load` reads them.
+    fn write_keyring(config: &KmsConfig, epochs: u32) {
+        use ra_tls::rcgen::PKCS_ECDSA_P256_SHA256;
+
+        let latest = epochs - 1;
+        for epoch in 0..epochs {
+            let paths = config.root_key_paths(epoch, latest);
+            fs::create_dir_all(paths.ca_key.parent().unwrap()).unwrap();
+            let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+            let ca_cert = CertRequest::builder()
+                .org_name("Dstack")
+                .subject("Dstack KMS CA")
+                .ca_level(1)
+                .key(&ca_key)
+                .build()
+                .self_signed()
+                .unwrap();
+            fs::write(&paths.ca_key, ca_key.serialize_pem()).unwrap();
+            fs::write(&paths.ca_cert, ca_cert.pem()).unwrap();
+            fs::write(
+                &paths.k256_key,
+                SigningKey::random(&mut rand::rngs::OsRng).to_bytes(),
+            )
             .unwrap();
+        }
+        fs::write(config.root_epoch(), latest.to_string()).unwrap();
+    }
+
+    /// A KMS whose TLS listener was issued by the root CA of its newest epoch.
+    fn serving(config: KmsConfig) -> KmsState {
         let keyring = Keyring::load(&config).unwrap();
-        KmsState::new(config, keyring, ca_cert.pem()).unwrap()
+        let rpc_ca = keyring.roots[keyring.latest() as usize].ca.pem_cert.clone();
+        KmsState::new(config, keyring, rpc_ca).unwrap()
+    }
+
+    /// A `KmsState` backed by freshly generated root material in `cert_dir`,
+    /// with its auth API pointed at `webhook_url`.
+    fn kms_state(cert_dir: &Path, webhook_url: &str) -> KmsState {
+        let config = kms_config(cert_dir, webhook_url);
+        write_keyring(&config, 1);
+        serving(config)
+    }
+
+    /// An auth backend for a deployment whose current root epoch is `root_epoch`
+    /// with `chain_hash`, and whose apps are at `app_epoch`. It allows every
+    /// authorization except the operations in `denied`.
+    fn serve_governance(
+        root_epoch: u32,
+        chain_hash: [u8; 32],
+        app_epoch: u32,
+        denied: &'static [&'static str],
+    ) -> (String, Requests) {
+        serve_with(move |path, body| {
+            if path == "/" {
+                serde_json::json!({
+                    "status": "ok", "kmsContractAddr": "0xkms", "gatewayAppId": "0xgateway",
+                    "chainId": 1, "appImplementation": "0ximpl",
+                    "rootEpoch": root_epoch, "rootEpochHash": hex::encode(chain_hash),
+                })
+            } else if path.starts_with("/app/") {
+                serde_json::json!({ "currentAppEpoch": app_epoch })
+            } else {
+                let operation = body["operation"].as_str().unwrap_or_default();
+                serde_json::json!({
+                    "authorized": !denied.contains(&operation),
+                    "rejectionReason": format!("{operation} denied by the test policy"),
+                    "gatewayAppId": "0xgateway",
+                    "currentRootEpoch": root_epoch,
+                    "currentAppEpoch": app_epoch,
+                    "currentRootEpochHash": hex::encode(chain_hash),
+                    "latestRootEpoch": root_epoch,
+                    "latestRootEpochHash": hex::encode(chain_hash),
+                })
+            }
+            .to_string()
+        })
+    }
+
+    /// A KMS holding root epochs `0..epochs`, the newest of them current, behind
+    /// a [`serve_governance`] backend. When it enforces self authorization, its
+    /// own boot info is already cached, as a KMS inside a CVM would have it.
+    async fn governed_kms(
+        epochs: u32,
+        app_epoch: u32,
+        denied: &'static [&'static str],
+        configure: impl FnOnce(&mut KmsConfig),
+    ) -> (tempfile::TempDir, KmsState, Requests) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = kms_config(dir.path(), "http://127.0.0.1:1");
+        write_keyring(&config, epochs);
+        let chain_hash = *Keyring::load(&config).unwrap().chain_hashes.last().unwrap();
+        let (url, requests) = serve_governance(epochs - 1, chain_hash, app_epoch, denied);
+        config.auth_api = upgrade_authority::tests::webhook(url);
+        configure(&mut config);
+        let state = serving(config);
+        if state.config.enforce_self_authorization {
+            state.self_boot_info.insert((), boot_info(1)).await;
+        }
+        (dir, state, requests)
+    }
+
+    fn snp_key_release(config: &mut KmsConfig) {
+        config.sev_snp_key_release = true;
+    }
+
+    /// An SNP guest's verified attestation and the vm_config it boots with.
+    /// SNP binds its image through the launch measurement rather than an image
+    /// download, so handlers run end to end on it.
+    fn snp_guest() -> (VerifiedAttestation, String) {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        (
+            verified_snp_attestation(measurement, [0xab; 64]),
+            snp_vm_config(&input, &mr_config),
+        )
+    }
+
+    /// A source KMS's attestation, which carries its own vm_config.
+    pub(crate) fn snp_source_kms() -> VerifiedAttestation {
+        let input = valid_snp_measurement_input();
+        let measurement = compute_expected_measurement(&input).unwrap();
+        let mr_config = valid_snp_mr_config();
+        let vm_config = snp_vm_config(&input, &mr_config);
+        verified_snp_attestation_with_config(measurement, [0xab; 64], vm_config, &mr_config)
+    }
+
+    /// A TDX source KMS certificate in the legacy format: a quote and runtime
+    /// events, but no vm_config, so it carries no OS image hash.
+    pub(crate) fn legacy_tdx_source_kms() -> VerifiedAttestation {
+        use dcap_qvl::{
+            quote::{Report, TDReport10},
+            tcb_info::{TcbStatus, TcbStatusWithAdvisory},
+            verify::VerifiedReport,
+        };
+        let report = VerifiedReport {
+            status: "UpToDate".into(),
+            advisory_ids: Vec::new(),
+            report: Report::TD10(TDReport10 {
+                tee_tcb_svn: [0; 16],
+                mr_seam: [0; 48],
+                mr_signer_seam: [0; 48],
+                seam_attributes: [0; 8],
+                td_attributes: [0; 8],
+                xfam: [0; 8],
+                mr_td: [0; 48],
+                mr_config_id: [0; 48],
+                mr_owner: [0; 48],
+                mr_owner_config: [0; 48],
+                rt_mr0: [0; 48],
+                rt_mr1: [0; 48],
+                rt_mr2: [0; 48],
+                rt_mr3: [0; 48],
+                report_data: [0; 64],
+            }),
+            ppid: Vec::new(),
+            qe_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+            platform_status: TcbStatusWithAdvisory::new(TcbStatus::UpToDate, Vec::new()),
+        };
+        VerifiedAttestation {
+            quote: ra_tls::attestation::AttestationQuote::DstackTdx(
+                ra_tls::attestation::TdxQuote {
+                    quote: include_bytes!("../../ra-tls/assets/tdx_quote").to_vec(),
+                    event_log: Vec::new(),
+                },
+            ),
+            runtime_events: vec![
+                runtime_event("app-id", vec![0x11; 20]),
+                runtime_event("compose-hash", vec![0x22; 32]),
+                runtime_event("instance-id", vec![0x33; 20]),
+            ],
+            report_data: [0; 64],
+            config: String::new(),
+            report: ra_tls::attestation::DstackVerifiedReport::DstackTdx(report),
+        }
+    }
+
+    fn handler(state: &KmsState, attestation: Option<VerifiedAttestation>) -> RpcHandler {
+        RpcHandler {
+            state: state.clone(),
+            attestation,
+            remote_endpoint: None,
+        }
+    }
+
+    fn requests_to(requests: &Requests, path: &str) -> Vec<Value> {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(to, _)| to == path)
+            .map(|(_, body)| body.clone())
+            .collect()
+    }
+
+    fn app_key_request(vm_config: &str, app_epoch: Option<u32>) -> GetAppKeyRequest {
+        GetAppKeyRequest {
+            api_version: 1,
+            vm_config: vm_config.into(),
+            root_epoch: None,
+            app_epoch,
+        }
+    }
+
+    #[rocket::async_test]
+    async fn handover_is_refused_when_this_kms_may_not_export_keys() {
+        let (_dir, state, requests) = governed_kms(1, 0, &["kms_export_keys"], |config| {
+            config.enforce_self_authorization = true;
+            snp_key_release(config);
+        })
+        .await;
+        let (attestation, vm_config) = snp_guest();
+        let err = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("KMS self authorization failed"),
+            "unexpected error: {err:#}"
+        );
+        let checked = requests_to(&requests, "/authorizeKms");
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0]["operation"], "kms_export_keys");
+    }
+
+    #[rocket::async_test]
+    async fn handover_is_refused_when_the_receiver_may_not_import_keys() {
+        let (_dir, state, requests) =
+            governed_kms(1, 0, &["kms_import_keys"], snp_key_release).await;
+        let (attestation, vm_config) = snp_guest();
+        let err = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("kms_import_keys denied"),
+            "unexpected error: {err:#}"
+        );
+        assert_eq!(requests_to(&requests, "/authorizeKms").len(), 1);
+    }
+
+    #[rocket::async_test]
+    async fn handover_releases_no_keys_to_a_receiver_without_the_local_opt_in() {
+        let (_dir, state, _) = governed_kms(1, 0, &[], |_| {}).await;
+        let (attestation, vm_config) = snp_guest();
+        let err = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("amd sev-snp key release is not enabled"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn handover_asks_to_approve_the_receiver_importing_every_held_epoch() {
+        let (_dir, state, requests) = governed_kms(2, 0, &[], snp_key_release).await;
+        let (attestation, vm_config) = snp_guest();
+        let response = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await
+            .unwrap();
+        assert_eq!(response.keys.len(), 2);
+        let checked = requests_to(&requests, "/authorizeKms");
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0]["operation"], "kms_import_keys");
+        assert_eq!(checked[0]["requestedRootEpoch"], 1);
+    }
+
+    #[rocket::async_test]
+    async fn public_key_handover_disabled_refuses_get_kms_key() {
+        let (_dir, state, requests) = governed_kms(1, 0, &[], |config| {
+            snp_key_release(config);
+            config.onboard.public_key_handover = false;
+        })
+        .await;
+        let (attestation, vm_config) = snp_guest();
+        let err = handler(&state, Some(attestation))
+            .get_kms_key(GetKmsKeyRequest { vm_config })
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("public KMS key handover is disabled"),
+            "unexpected error: {err:#}"
+        );
+        assert!(requests.lock().unwrap().is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn get_app_key_is_refused_when_this_kms_may_not_serve() {
+        let (_dir, state, requests) = governed_kms(1, 0, &["kms_serve"], |config| {
+            config.enforce_self_authorization = true;
+            snp_key_release(config);
+        })
+        .await;
+        let (attestation, vm_config) = snp_guest();
+        let err = handler(&state, Some(attestation))
+            .get_app_key(app_key_request(&vm_config, None))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("KMS self authorization failed"),
+            "unexpected error: {err:#}"
+        );
+        assert!(requests_to(&requests, "/authorizeApp").is_empty());
+    }
+
+    #[rocket::async_test]
+    async fn get_app_key_releases_no_keys_without_the_local_opt_in() {
+        let (_dir, state, _) = governed_kms(1, 0, &[], |_| {}).await;
+        let (attestation, vm_config) = snp_guest();
+        let err = handler(&state, Some(attestation))
+            .get_app_key(app_key_request(&vm_config, None))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("amd sev-snp key release is not enabled"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn temp_ca_cert_is_refused_to_a_kms_without_the_local_opt_in() {
+        let (_dir, state, _) = governed_kms(1, 0, &[], |config| {
+            config.enforce_self_authorization = true;
+        })
+        .await;
+        let mut self_boot_info = boot_info(1);
+        self_boot_info.tee_variant = TeeVariant::DstackAmdSevSnp;
+        state.self_boot_info.insert((), self_boot_info).await;
+        let err = handler(&state, None).get_temp_ca_cert().await.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("amd sev-snp key release is not enabled"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn get_app_key_defaults_to_the_current_app_epoch() {
+        let (_dir, state, requests) = governed_kms(2, 2, &[], snp_key_release).await;
+        let (attestation, vm_config) = snp_guest();
+        let app = build_boot_info_for_attestation(&attestation, false, &vm_config).unwrap();
+        let response = handler(&state, Some(attestation))
+            .get_app_key(app_key_request(&vm_config, None))
+            .await
+            .unwrap();
+        assert_eq!(response.root_epoch, 1);
+        assert_eq!(response.app_epoch, 2);
+        let expected = derive_app_keys(
+            state.epoch_root(1).unwrap(),
+            &app.app_id,
+            &app.instance_id,
+            2,
+        )
+        .unwrap();
+        assert_eq!(response.disk_crypt_key, expected.disk_crypt_key);
+        assert_eq!(response.sealed_env_key, expected.sealed_env_key);
+        let checked = requests_to(&requests, "/authorizeApp");
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0]["operation"], "app_get_key");
+        assert!(checked[0].get("requestedAppEpoch").is_none());
+    }
+
+    #[rocket::async_test]
+    async fn get_app_key_refuses_an_app_epoch_above_the_current_one() {
+        let (_dir, state, _) = governed_kms(1, 2, &[], snp_key_release).await;
+        let (attestation, vm_config) = snp_guest();
+        let err = handler(&state, Some(attestation))
+            .get_app_key(app_key_request(&vm_config, Some(3)))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("requested app epoch is not active"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn env_encrypt_pub_key_is_derived_from_the_current_root_epoch() {
+        let (_dir, state, _) = governed_kms(2, 0, &[], |_| {}).await;
+        let app_id = vec![0x11; 20];
+        let response = handler(&state, None)
+            .get_app_env_encrypt_pub_key(AppId {
+                app_id: app_id.clone(),
+            })
+            .await
+            .unwrap();
+        let public_key_of = |epoch| {
+            let root = state.epoch_root(epoch).unwrap();
+            let secret =
+                kdf::derive_dh_secret(&root.ca.key, &[&app_id[..], b"env-encrypt-key"]).unwrap();
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret))
+                .to_bytes()
+                .to_vec()
+        };
+        assert_eq!(response.public_key, public_key_of(1));
+        assert_ne!(response.public_key, public_key_of(0));
+    }
+
+    #[rocket::async_test]
+    async fn env_encrypt_pub_key_is_refused_to_epoch_aware_apps() {
+        let (_dir, state, _) = governed_kms(1, 1, &[], |_| {}).await;
+        let err = handler(&state, None)
+            .get_app_env_encrypt_pub_key(AppId {
+                app_id: vec![0x11; 20],
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("must use GetSealedEnvPubKey"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn sealed_env_pub_key_is_derived_from_the_current_root_and_app_epochs() {
+        let (_dir, state, _) = governed_kms(2, 2, &[], |_| {}).await;
+        let app_id = vec![0x11; 20];
+        let response = handler(&state, None)
+            .get_sealed_env_pub_key(AppId {
+                app_id: app_id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.root_epoch, 1);
+        assert_eq!(response.app_epoch, 2);
+        let secret = derive_sealed_env_key(state.epoch_root(1).unwrap(), &app_id, 2).unwrap();
+        let expected =
+            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
+        assert_eq!(response.public_key, expected);
+    }
+
+    #[rocket::async_test]
+    async fn auth_api_info_is_fetched_again_once_the_cache_expires() {
+        let (_dir, state, requests) = governed_kms(1, 0, &[], |_| {}).await;
+        handler(&state, None).get_meta().await.unwrap();
+        handler(&state, None).get_meta().await.unwrap();
+        assert_eq!(requests_to(&requests, "/").len(), 1);
+        rocket::tokio::time::sleep(Duration::from_millis(1500)).await;
+        handler(&state, None).get_meta().await.unwrap();
+        assert_eq!(requests_to(&requests, "/").len(), 2);
+    }
+
+    #[test]
+    fn a_corrupt_root_epoch_file_is_an_error_not_epoch_0() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = kms_config(dir.path(), "http://127.0.0.1:1");
+        write_keyring(&config, 1);
+        fs::write(config.root_epoch(), "not-an-epoch").unwrap();
+        let err = read_root_epoch(&config).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("invalid root epoch file"),
+            "unexpected error: {err:#}"
+        );
+        assert!(Keyring::load(&config).is_err());
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding B3-c: expected to fail until B3-c is fixed"]
+    async fn finding_b3c_handover_response_carries_no_temp_ca_key() {
+        let (_dir, state, _) = governed_kms(1, 0, &[], snp_key_release).await;
+        let (attestation, vm_config) = snp_guest();
+        let response = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await
+            .unwrap();
+        assert!(
+            response.temp_ca_key.is_empty(),
+            "the handover response carries the temp CA private key"
+        );
+    }
+
+    /// The auth backend's decision that `epoch` of `state`'s keyring is current.
+    fn current_decision(state: &KmsState, epoch: u32) -> AuthorizationResult {
+        AuthorizationResult {
+            authorized: true,
+            rejection_reason: String::new(),
+            gateway_app_id: String::new(),
+            current_root_epoch: epoch,
+            current_app_epoch: 0,
+            current_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
+            latest_root_epoch: epoch,
+            latest_root_epoch_hash: hex::encode(state.keyring.chain_hashes[epoch as usize]),
+        }
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding B6: expected to fail until B6 is fixed"]
+    async fn finding_b6_a_kms_never_serves_a_root_epoch_older_than_one_it_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = kms_config(dir.path(), "http://127.0.0.1:1");
+        write_keyring(&config, 2);
+        let state = serving(config.clone());
+        assert_eq!(
+            state
+                .authorized_epoch(&current_decision(&state, 1), None)
+                .unwrap(),
+            1
+        );
+        assert!(
+            state
+                .authorized_epoch(&current_decision(&state, 0), None)
+                .is_err(),
+            "after serving root epoch 1, the KMS served epoch 0 when the backend reported it current"
+        );
+        drop(state);
+        let restarted = serving(config);
+        assert!(
+            restarted
+                .authorized_epoch(&current_decision(&restarted, 0), None)
+                .is_err(),
+            "after a restart, the KMS forgot that it had served root epoch 1"
+        );
+
+        // A node that never served epoch 1 serves epoch 0, and still checks its chain hash.
+        let fresh_dir = tempfile::tempdir().unwrap();
+        let fresh_config = kms_config(fresh_dir.path(), "http://127.0.0.1:1");
+        write_keyring(&fresh_config, 2);
+        let fresh = serving(fresh_config);
+        assert_eq!(
+            fresh
+                .authorized_epoch(&current_decision(&fresh, 0), None)
+                .unwrap(),
+            0
+        );
+        let mut forged = current_decision(&fresh, 0);
+        forged.current_root_epoch_hash = hex::encode([0x55; 32]);
+        assert!(fresh.authorized_epoch(&forged, None).is_err());
+    }
+
+    #[rocket::async_test]
+    #[ignore = "finding SF5: expected to fail until SF5 is fixed"]
+    async fn finding_sf5_handover_judges_this_kms_by_its_current_attestation() {
+        // The cached self boot info says UpToDate. No current attestation of
+        // this KMS can be had here, standing in for one the backend would judge
+        // OutOfDate, so a handover that re-attests must be refused.
+        let (_dir, state, _) = governed_kms(1, 0, &[], |config| {
+            config.enforce_self_authorization = true;
+            snp_key_release(config);
+        })
+        .await;
+        let (attestation, vm_config) = snp_guest();
+        let result = handler(&state, Some(attestation))
+            .handover_keys(KeyRelease::RpcHandover, GetKmsKeyRequest { vm_config })
+            .await;
+        assert!(
+            result.is_err(),
+            "the handover was authorized from the cached self boot info"
+        );
+    }
+
+    #[rocket::async_test]
+    async fn sealed_env_pub_key_requests_share_one_app_epoch_lookup() {
+        let (_dir, state, requests) = governed_kms(1, 1, &[], |_| {}).await;
+        for _ in 0..3 {
+            handler(&state, None)
+                .get_sealed_env_pub_key(AppId {
+                    app_id: vec![0x11; 20],
+                })
+                .await
+                .unwrap();
+        }
+        let lookups = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(path, _)| path.starts_with("/app/"))
+            .count();
+        assert_eq!(
+            lookups, 1,
+            "each GetSealedEnvPubKey call looked up the app epoch again"
+        );
     }
 
     #[test]
@@ -1852,7 +2408,7 @@ mod tests {
 
     #[rocket::async_test]
     async fn self_authorization_cache_cannot_authorize_a_different_operation() {
-        use upgrade_authority::tests::{boot_info, serve};
+        use upgrade_authority::tests::serve;
         let dir = tempfile::tempdir().unwrap();
         let initial = kms_state(dir.path(), "http://127.0.0.1:1");
         let response = |allowed| {
