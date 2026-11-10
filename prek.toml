@@ -11,8 +11,8 @@
 repo = "https://github.com/pre-commit/pre-commit-hooks"
 rev = "v5.0.0"
 hooks = [
-    { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^(os/yocto/|os/mkosi/(patches/|components/[^/]+/patches/)|tools/(dev-stack\.sh|vm-runner/)|dstack/(dstack-util/tests/fixtures/key-provider-docker-compose\.yaml|gateway/src/main_service/snapshots/.*))' },
-    { id = "end-of-file-fixer", exclude = "^(os/yocto/|os/mkosi/(patches/|components/[^/]+/patches/)|tools/(dev-stack\\.sh|vm-runner/))" },
+    { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"], exclude = '^(os/yocto/|os/mkosi/(patches/|components/[^/]+/patches/)|tools/(dev-stack\.sh|vm-runner/)|dstack/(dstack-util/tests/fixtures/key-provider-docker-compose\.yaml|gateway/src/main_service/snapshots/.*|kms/auth-eth/contracts/test-utils/reference/))' },
+    { id = "end-of-file-fixer", exclude = "^(os/yocto/|os/mkosi/(patches/|components/[^/]+/patches/)|tools/(dev-stack\\.sh|vm-runner/)|dstack/kms/auth-eth/contracts/test-utils/reference/)" },
     { id = "check-yaml", args = ["--allow-multiple-documents"], exclude = "dstack/gateway/templates/" },
     { id = "check-toml" },
     { id = "check-json" },
