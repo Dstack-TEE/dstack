@@ -84,6 +84,14 @@ jobs:
           # the entries that are actually shared.
           save-if: ${{ github.event_name == 'push' }}
 
+      # Pin the interpreter: the runner image's system Python can be newer than
+      # the PyO3 versions in the Python SDK's locked dependencies support.
+      - name: Install Python
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: SDK tests
         if: steps.changes.outputs.relevant == 'true'
         run: cd sdk && ./run-tests.sh
