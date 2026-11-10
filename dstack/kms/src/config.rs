@@ -241,8 +241,8 @@ pub(crate) struct RootKeyPaths {
 pub(crate) struct OnboardConfig {
     pub enabled: bool,
     pub auto_bootstrap_domain: String,
-    /// Keep GetKmsKey available on the public RPC listener for compatibility.
-    #[serde(default = "default_true")]
+    /// Also serve GetKmsKey on the public RPC listener, for legacy onboarding clients.
+    #[serde(default)]
     pub public_key_handover: bool,
 }
 
@@ -264,6 +264,10 @@ mod tests {
             "default admin token must be empty (fail-closed)"
         );
         assert!(!config.admin.insecure_no_auth);
+        assert!(
+            !config.onboard.public_key_handover,
+            "public key handover must be off by default"
+        );
     }
 
     #[test]

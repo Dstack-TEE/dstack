@@ -232,6 +232,9 @@ Requirements for **both** VMs:
 - `core.onboard.auto_bootstrap_domain = ""`
 - `core.auth_api.type = "webhook"`
 
+`kms-dst` onboards through the public `KMS.GetKmsKey` without a `source_token`,
+so `kms-src` also needs `core.onboard.public_key_handover = true`.
+
 Point them at different auth services. If using host-local `dstack-auth` with QEMU user-mode networking:
 
 - `kms-src` → `http://10.0.2.2:3101`

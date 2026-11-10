@@ -71,8 +71,9 @@ below, which decides whether a CVM may boot and receive keys.
 
 KMS-to-KMS onboarding calls `Admin.GetKmsKey` with a self-issued RA-TLS client
 certificate plus the source's admin bearer token; other admin RPCs need no client
-certificate. `core.onboard.public_key_handover = true` (the default) keeps
-`KMS.GetKmsKey` on the public listener for older clients.
+certificate. `core.onboard.public_key_handover` is off by default; set it to
+`true` only to also serve `KMS.GetKmsKey` on the public listener for older
+clients.
 
 Three settings relax authorization, each over a different scope:
 

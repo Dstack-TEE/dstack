@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- KMS: `core.onboard.public_key_handover` defaults to `false`, so
+  `KMS.GetKmsKey` is no longer served on the public port. Onboard through the
+  source's admin listener with `source_token`; a source that still onboards
+  0.5.x KMS nodes must set the option to `true` until they are upgraded.
 - KMS: onboarding refuses a source whose certificate carries no OS image hash,
   which drops the fallback for KMS 0.5.x sources. Join only from a 0.6+ source;
   upgrade a 0.5.x cluster to 0.6.x first.

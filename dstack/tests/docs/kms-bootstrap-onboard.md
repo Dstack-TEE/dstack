@@ -119,6 +119,9 @@ Deploy both KMS instances in onboard mode with:
 - `core.onboard.auto_bootstrap_domain = ""`
 - `core.auth_api.type = "webhook"`
 
+`kms-dst` onboards through the public `KMS.GetKmsKey` without a `source_token`,
+so `kms-src` also needs `core.onboard.public_key_handover = true`.
+
 Record:
 
 ```bash

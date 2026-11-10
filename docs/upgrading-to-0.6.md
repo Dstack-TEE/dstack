@@ -232,8 +232,10 @@ Configuration changes:
 - Key release on AMD SEV-SNP, AWS NitroTPM, and AWS Nitro Enclaves stays off
   until you set `sev_snp_key_release`, `aws_nitro_tpm_key_release`, or
   `nitro_enclave_key_release`.
-- Keep `core.onboard.public_key_handover = true` while any KMS still onboards
-  through the public port, and turn it off afterwards.
+- `core.onboard.public_key_handover` now defaults to `false`, which removes
+  `KMS.GetKmsKey` from the public port. While a 0.5.x KMS still onboards from
+  this cluster, it can only use that public entry, so set the option to `true`
+  on the source node, and remove it once every node is upgraded.
 - Auto-bootstrap refuses to overwrite existing root keys.
 
 If you use `auth-simple`, replace it with `dstack-auth`, which reads the same

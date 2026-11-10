@@ -429,7 +429,8 @@ The unauthenticated or non-client-certificate surface includes bootstrap, env-en
 
 KMS-to-KMS root-key handover is served by `Admin.GetKmsKey` on the authenticated
 admin listener, which additionally requires a verified RA-TLS client certificate.
-The legacy public `KMS.GetKmsKey` is controlled by `core.onboard.public_key_handover`.
+The legacy public `KMS.GetKmsKey` is off by default and is served only when
+`core.onboard.public_key_handover = true` is set explicitly.
 
 ## Limitations
 
