@@ -1,5 +1,5 @@
 annotated-types==0.7.0
-cffi==1.17.1
+cffi==2.0.0
 cryptography==50.0.0
 cytoolz==1.0.1
 eth-hash==0.7.1

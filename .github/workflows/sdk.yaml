@@ -11,7 +11,7 @@ on:
   push:
     branches: [next, 'release/**']
   pull_request:
-    branches: [next, 'release/**']
+    branches: [next, 'release/**', 'feat/**']
 
 env:
   CARGO_TERM_COLOR: always

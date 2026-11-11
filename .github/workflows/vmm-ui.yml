@@ -7,18 +7,24 @@ name: VMM UI build
 permissions:
   contents: read
 
-# Only the VMM's web UI is built here. Not a required status check, so a
-# workflow-level filter is safe.
+# The VMM's web UI and vmm-cli are built and tested here. Not a required
+# status check, so a workflow-level filter is safe.
 on:
   push:
     branches: [ next, 'release/**' ]
     paths:
       - 'dstack/vmm/ui/**'
+      - 'dstack/vmm/src/vmm-cli.py'
+      - 'dstack/vmm/src/tests/test_vmm_cli.py'
+      - 'dstack/vmm/requirements.txt'
       - '.github/workflows/vmm-ui.yml'
   pull_request:
-    branches: [ next, 'release/**' ]
+    branches: [ next, 'release/**', 'feat/**' ]
     paths:
       - 'dstack/vmm/ui/**'
+      - 'dstack/vmm/src/vmm-cli.py'
+      - 'dstack/vmm/src/tests/test_vmm_cli.py'
+      - 'dstack/vmm/requirements.txt'
       - '.github/workflows/vmm-ui.yml'
 
 jobs:
@@ -47,3 +53,26 @@ jobs:
           git status --porcelain
           exit 1
         fi
+
+    # `--if-present`: the UI test script is not on every branch yet.
+    - name: Test vmm UI
+      run: npm run test --if-present
+      working-directory: dstack/vmm/ui
+
+  vmm-cli:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install vmm-cli dependencies
+      run: pip install -r requirements.txt
+      working-directory: dstack/vmm
+
+    - name: Test vmm-cli
+      run: python3 -m unittest -v tests/test_vmm_cli.py
+      working-directory: dstack/vmm/src
