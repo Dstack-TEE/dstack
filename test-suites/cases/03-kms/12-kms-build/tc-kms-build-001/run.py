@@ -20,7 +20,6 @@ IMAGE_BUILD_FILES = (
     "dstack/kms/dstack-app/builder/Dockerfile",
     "dstack/gateway/dstack-app/builder/Dockerfile",
     "dstack/verifier/builder/Dockerfile",
-    "dstack/kms/dstack-app/docker-compose.yaml",
 )
 ONBOARD_PAGE = "dstack/kms/src/www/onboard.html"
 

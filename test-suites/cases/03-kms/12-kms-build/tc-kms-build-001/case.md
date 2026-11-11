@@ -77,7 +77,7 @@ Introduce one temporary source/test-fixture/schema/config mismatch outside the c
 
 ## Post-baseline regression coverage (PRs #1349, #1396, #1403)
 
-- #1403: every `cargo build` of a dstack package in the KMS, gateway, and verifier builder Dockerfiles and in `dstack/kms/dstack-app/docker-compose.yaml` passes `--locked`, so an image build fails instead of resolving dependencies that differ from `Cargo.lock`. The harness requires all four builds to be locked. The third-party Helios build in the same compose file is out of scope.
+- #1403: every `cargo build` of a dstack package in the KMS, gateway, and verifier builder Dockerfiles passes `--locked`, so an image build fails instead of resolving dependencies that differ from `Cargo.lock`. The harness requires all three builds to be locked. The KMS dev compose no longer builds Rust from source.
 - #1396: the KMS onboarding page loads Vue from a versioned unpkg URL with a `sha384` `integrity` attribute and `crossorigin="anonymous"`. The harness requires every remote `<script src>` in `onboard.html` to carry all three. It does not fetch the script, so it does not re-derive the hash.
 - #1349: `ct_monitor` now reports a log that fails its check and continues the pass, advancing its watermark. The monitor queries `https://crt.sh` directly and has no configurable endpoint, so no hermetic end-to-end run is possible; `cargo test --locked -p ct_monitor` must pass at least the 6 scan tests the PR added.
 
