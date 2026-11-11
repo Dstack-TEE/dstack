@@ -390,7 +390,8 @@ still bind the root identity; a valid quote alone is not a KMS policy decision.
 `--root-ca` additionally pins the CLI connection before sending the request.
 
 Onboarding with an admin token uses a self-issued client certificate. Tokenless
-onboarding obtains the source temp CA first so pre-0.6 sources remain usable.
+onboarding, which needs a source with `core.onboard.public_key_handover = true`,
+obtains the source temp CA first so pre-0.6 sources remain usable.
 Both paths check the source attestation captured from the key-carrying connection
 against local KMS policy before importing anything. Retries and reconnects repeat
 verification on the response connection; no assumption relies on one TCP session

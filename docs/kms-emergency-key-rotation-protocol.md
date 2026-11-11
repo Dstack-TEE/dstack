@@ -261,11 +261,11 @@ between the current epoch and L is refused, since its tail cannot be checked. Wi
 
 Every handover requires the recipient's KMS attestation: the source checks the
 attested RA-TLS client certificate on both `Admin.GetKmsKey` and the public
-`KMS.GetKmsKey`. Admin authorization (`source_token`) is recommended for joins
-and rotations alike, but not required: a rotation only produces a pending epoch
-N+1, which no node accepts until governance registers and activates it. Where
-possible, disable public legacy handover and reject incompatible legacy
-receivers without reducing the payload. The source's certificate must carry its
+`KMS.GetKmsKey`. Admin authorization (`source_token`) is required for joins
+and rotations alike, because the public `KMS.GetKmsKey` is off by default
+(`core.onboard.public_key_handover = false`). Enable it on a source only for
+receivers that cannot use the admin listener, such as 0.5.x KMS nodes, and
+reject incompatible legacy receivers without reducing the payload. The source's certificate must carry its
 OS image hash.
 Deployments that never registered epochs can still join at epoch 0.
 
