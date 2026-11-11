@@ -6,14 +6,14 @@ The goal is to validate the following behaviors without depending on `kms/e2e/` 
 
 1. **Bootstrap self-check**: a KMS must call the auth API and verify that **itself** is allowed before bootstrap succeeds.
 2. **Onboard receiver-side source check**: a new KMS must reject onboarding if the **source KMS** is not allowed by the receiver's auth policy.
-3. **Trusted RPC self-check**: trusted KMS RPCs such as `GetTempCaCert`, `GetKmsKey`, `GetAppKey`, and `SignCert` must fail when the running KMS is no longer allowed by its auth policy.
+3. **Trusted RPC self-check**: trusted KMS RPCs such as `GetAppEnvEncryptPubKey`, `GetKmsKey`, `GetAppKey`, and `SignCert` must fail when the running KMS is no longer allowed by its auth policy.
 4. **Attestation requirement**: KMS always requires attestation; for local development without TDX hardware, use `sdk/simulator`.
 
 This guide is written as a deployment-and-test runbook so an AI agent can follow it end-to-end.
 
 > **Execution notes from real runs on teepod2 (2026-03-19):**
 >
-> 1. Do **not** assume a host-local `auth-simple` instance is reachable from a CVM. In practice, the auth API must be:
+> 1. Do **not** assume a host-local `dstack-auth` instance is reachable from a CVM. In practice, the auth API must be:
 >    - publicly reachable by the CVM, or
 >    - deployed as a sidecar/internal service inside the same test environment.
 >    - dstack CVMs use QEMU user-mode networking — the host is reachable at **`10.0.2.2`** from inside the CVM.
@@ -23,7 +23,7 @@ This guide is written as a deployment-and-test runbook so an AI agent can follow
 > 5. The onboard completion endpoint is **GET `/finish`**, not POST.
 > 6. Do **not** reuse a previously captured `mr_aggregated` across redeploys. Auth policies must be generated from the attestation of the **current** VM under test.
 > 7. KMS now always requires quote/attestation. For local development without TDX hardware, use `sdk/simulator` instead of trying to run a no-attestation KMS flow.
-> 8. For `auth-simple`, `kms.mrAggregated = []` is a deny-all policy for KMS. Use that as the baseline deny configuration, then add the measured KMS MR values for allow cases.
+> 8. For `dstack-auth`, `kms.mrAggregated = []` is a deny-all policy for KMS. Use that as the baseline deny configuration, then add the measured KMS MR values for allow cases.
 > 9. **Port forwarding is simpler than gateway for testing.** Using `--gateway` requires the auth API to return a valid `gatewayAppId`, which adds unnecessary complexity. Use `--port tcp:0.0.0.0:<host-port>:8000` instead.
 > 10. **~~Remote KMS attestation has an empty `osImageHash`.~~** Fixed: RA-TLS certs now use the unified `PHALA_RATLS_ATTESTATION` format which preserves `vm_config`. For old source KMS instances that still use the legacy cert format, the receiver-side `ensure_kms_allowed` automatically fills `osImageHash` from the local KMS's own value. No special `"0x"` entry in `osImages` is needed anymore.
 > 11. The `source_url` in the `Onboard.Onboard` request must use an address **reachable from inside the CVM** (e.g., `https://10.0.2.2:<port>/prpc`), not `127.0.0.1` which is the CVM's own loopback.
@@ -52,7 +52,7 @@ This guide is written as a deployment-and-test runbook so an AI agent can follow
 This guide provides a standalone test procedure that does not depend on a dedicated e2e framework. It uses:
 
 - existing KMS deploy flows
-- `auth-simple` as a controllable auth API
+- `dstack-auth` as a controllable auth API
 - manual RPC calls via `curl`
 
 This exercises real deployment paths with minimal dependencies.
@@ -61,11 +61,11 @@ This exercises real deployment paths with minimal dependencies.
 
 ## 2. Test strategy
 
-Use **real KMS CVMs** with a hot-reloadable `auth-simple` policy.
+Use **real KMS CVMs** with a hot-reloadable `dstack-auth` policy.
 
-Why `auth-simple`:
+Why `dstack-auth`:
 
-- it implements the same `/bootAuth/kms` webhook contract used by KMS
+- it implements the same webhook contract (`/authorizeKms`, `/bootAuth/kms`) used by KMS
 - its config is re-read on every request
 - allow/deny behavior can be changed without restarting the service
 
@@ -79,18 +79,18 @@ Use the following layout:
 
 ```text
 Host / operator machine
-├── auth-simple-src  (source KMS auth policy)
-├── auth-simple-dst  (target KMS auth policy)
+├── dstack-auth-src  (source KMS auth policy)
+├── dstack-auth-dst  (target KMS auth policy)
 ├── kms-src          (bootstrapped, later used as source KMS)
 ├── kms-dst          (fresh KMS used for onboard tests)
 ```
 
 Policy responsibilities:
 
-- `auth-simple-src` must authorize:
+- `dstack-auth-src` must authorize:
   - `kms-src` itself, for bootstrap and trusted RPC self-checks
   - `kms-dst`, when `kms-dst` calls `GetKmsKey` during onboarding
-- `auth-simple-dst` decides whether `kms-dst` accepts `kms-src` as an allowed source KMS
+- `dstack-auth-dst` decides whether `kms-dst` accepts `kms-src` as an allowed source KMS
 
 ---
 
@@ -101,14 +101,14 @@ Before starting, make sure the following are available:
 1. A KMS image built from current `master` (includes PR #573 auth checks, #579 mandatory attestation, #581 dedup refactor)
 2. A working `dstack-vmm` or teepod deployment target
 3. Two routable KMS onboard URLs
-4. `bun` installed on the host, because `kms/auth-simple` runs on Bun
+4. A `dstack-auth` binary on the host (`cargo build --release -p dstack-auth` in `dstack/`, or the one `dstackup` installs)
 5. `jq`, `curl`, and Python 3 on the host
 
 Recommended references:
 
 - KMS deployment tutorial: `docs/tutorials/kms-cvm-deployment.md`
 - KMS troubleshooting: `docs/tutorials/troubleshooting-kms-deployment.md`
-- `auth-simple` usage: `kms/auth-simple/README.md`
+- `dstack-auth` usage: `docs/dstack-auth-operations.md`
 
 If deploying on teepod/dstack-vmm, the easiest pattern is:
 
@@ -144,11 +144,11 @@ cd /tmp/kms-self-auth
 
 ### 5.2 Make the auth API reachable from the test KMS instances
 
-The original plan was to run two host-local `auth-simple` processes. In practice, this only works if the CVMs can reach that host directly.
+The original plan was to run two host-local `dstack-auth` processes. In practice, this only works if the CVMs can reach that host directly.
 
 Choose one of these options:
 
-1. **Preferred:** run `auth-simple` on the operator host and point KMS at `http://10.0.2.2:<port>` (QEMU host gateway). This is the simplest if the CVMs use QEMU user-mode networking.
+1. **Preferred:** run `dstack-auth` on the operator host and point KMS at `http://10.0.2.2:<port>` (QEMU host gateway). This is the simplest if the CVMs use QEMU user-mode networking.
 2. **Also fine:** deploy the auth API as a separate public service or CVM
 3. **Sidecar:** run the auth API as a sidecar in the same KMS test deployment
 
@@ -159,11 +159,12 @@ If you use the sidecar/public-service pattern, keep the same logical split:
 
 and make sure you still have a way to update allow/deny policy during the test.
 
-### 5.3 If using host-local `auth-simple`, install and start two instances
+### 5.3 If using host-local `dstack-auth`, start two instances
 
 ```bash
-cd "$REPO_ROOT/dstack/kms/auth-simple"
-bun install
+cd "$REPO_ROOT/dstack"
+cargo build --release -p dstack-auth
+DSTACK_AUTH="$REPO_ROOT/dstack/target/release/dstack-auth"
 ```
 
 Create placeholder configs:
@@ -200,13 +201,16 @@ These placeholder configs intentionally deny all KMS boots until you populate `k
 
 Start the services:
 
+`dstack-auth` binds to `127.0.0.1` by default, which CVMs on QEMU user-mode
+networking reach as `10.0.2.2`. Pass `--address 0.0.0.0` only if the CVMs reach
+the host another way.
+
 ```bash
-cd "$REPO_ROOT/dstack/kms/auth-simple"
-AUTH_CONFIG_PATH=/tmp/kms-self-auth/auth-src.json PORT=3101 bun run start \
+"$DSTACK_AUTH" --config /tmp/kms-self-auth/auth-src.json --port 3101 \
   >/tmp/kms-self-auth/auth-src.log 2>&1 &
 echo $! >/tmp/kms-self-auth/auth-src.pid
 
-AUTH_CONFIG_PATH=/tmp/kms-self-auth/auth-dst.json PORT=3102 bun run start \
+"$DSTACK_AUTH" --config /tmp/kms-self-auth/auth-dst.json --port 3102 \
   >/tmp/kms-self-auth/auth-dst.log 2>&1 &
 echo $! >/tmp/kms-self-auth/auth-dst.pid
 ```
@@ -228,7 +232,10 @@ Requirements for **both** VMs:
 - `core.onboard.auto_bootstrap_domain = ""`
 - `core.auth_api.type = "webhook"`
 
-Point them at different auth services. If using host-local `auth-simple` with QEMU user-mode networking:
+`kms-dst` onboards through the public `KMS.GetKmsKey` without a `source_token`,
+so `kms-src` also needs `core.onboard.public_key_handover = true`.
+
+Point them at different auth services. If using host-local `dstack-auth` with QEMU user-mode networking:
 
 - `kms-src` → `http://10.0.2.2:3101`
 - `kms-dst` → `http://10.0.2.2:3102`
@@ -307,7 +314,7 @@ DST_MR=$(jq -r '.mr_aggregated' /tmp/kms-self-auth/kms-dst-attestation.json)
 DST_DEV=$(jq -r '.device_id' /tmp/kms-self-auth/kms-dst-attestation.json)
 ```
 
-All three values above are expected to be hex strings **without** the `0x` prefix. When writing `auth-simple` config, prepend `0x`.
+All three values above are expected to be hex strings **without** the `0x` prefix. When writing `dstack-auth` config, prepend `0x`.
 
 ### 5.6 Helper configs
 
@@ -388,7 +395,7 @@ sed "s/REPLACE_OS/$SRC_OS/g" \
   >/tmp/kms-self-auth/auth-dst-deny-src.json
 ```
 
-Because `auth-simple` hot reloads its config on every request, switching policy is just a file copy:
+Because `dstack-auth` hot reloads its config on every request, switching policy is just a file copy:
 
 ```bash
 cp /tmp/kms-self-auth/auth-src-deny-self.json /tmp/kms-self-auth/auth-src.json
@@ -409,7 +416,7 @@ Verify that a KMS refuses bootstrap if the auth API denies **its own** measureme
 ### Steps
 
 1. Make sure `kms-src` is still fresh and not bootstrapped yet.
-2. Apply the deny-self policy to `auth-simple-src`:
+2. Apply the deny-self policy to `dstack-auth-src`:
 
 ```bash
 cp /tmp/kms-self-auth/auth-src-deny-self.json /tmp/kms-self-auth/auth-src.json
@@ -448,7 +455,7 @@ Verify that bootstrap succeeds once the same KMS is explicitly allowed.
 
 ### Steps
 
-1. Switch `auth-simple-src` to allow `kms-src`:
+1. Switch `dstack-auth-src` to allow `kms-src`:
 
 ```bash
 cp /tmp/kms-self-auth/auth-src-allow-self.json /tmp/kms-self-auth/auth-src.json
@@ -502,10 +509,10 @@ Verify that the onboarding receiver rejects a source KMS whose attestation is de
 
 For this scenario to reach the receiver-side check:
 
-- `auth-simple-src` must allow **both** `kms-src` and `kms-dst`
+- `dstack-auth-src` must allow **both** `kms-src` and `kms-dst`
   - `kms-src` must allow itself, because trusted RPC self-checks run on the source
   - `kms-src` must also allow `kms-dst`, because `GetKmsKey` verifies the caller KMS
-- `auth-simple-dst` must initially **deny** `kms-src`
+- `dstack-auth-dst` must initially **deny** `kms-src`
 
 ### Steps
 
@@ -589,18 +596,19 @@ Verify that a running KMS re-checks its own authorization on trusted RPCs.
 
 ### Recommended canary RPC
 
-Use `GetTempCaCert` first. It is simpler than `GetAppKey` because it does not require preparing an attested app client, but it still exercises the new runtime self-check.
+Use `GetAppEnvEncryptPubKey` first. It is simpler than `GetAppKey` because it does not require preparing an attested app client, but it still exercises the new runtime self-check.
 
 ### Steps
 
 1. While `kms-src` is healthy, confirm the canary RPC works:
 
 ```bash
-curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-self-auth/get-temp-ca-allowed.json | jq .
+curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetAppEnvEncryptPubKey?json" \
+  -H 'Content-Type: application/json' -d '{"app_id":"1111111111111111111111111111111111111111"}' \
+  | tee /tmp/kms-self-auth/get-env-pubkey-allowed.json | jq .
 ```
 
-2. Flip `auth-simple-src` to deny `kms-src` itself:
+2. Flip `dstack-auth-src` to deny `kms-src` itself:
 
 ```bash
 cp /tmp/kms-self-auth/auth-src-deny-self.json /tmp/kms-self-auth/auth-src.json
@@ -609,13 +617,14 @@ cp /tmp/kms-self-auth/auth-src-deny-self.json /tmp/kms-self-auth/auth-src.json
 3. Retry the same RPC:
 
 ```bash
-curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetTempCaCert?json" \
-  | tee /tmp/kms-self-auth/get-temp-ca-denied.json | jq .
+curl -sk "${KMS_SRC_RUNTIME%/}/prpc/KMS.GetAppEnvEncryptPubKey?json" \
+  -H 'Content-Type: application/json' -d '{"app_id":"1111111111111111111111111111111111111111"}' \
+  | tee /tmp/kms-self-auth/get-env-pubkey-denied.json | jq .
 ```
 
 ### Expected result
 
-- before the policy flip: `GetTempCaCert` succeeds
+- before the policy flip: `GetAppEnvEncryptPubKey` succeeds
 - after the policy flip: the response contains `.error`
 - the error should indicate KMS self-authorization failed, or that the KMS is not allowed
 
@@ -667,7 +676,7 @@ For each run, save:
 2. auth config snapshots used for each step
 3. bootstrap/onboard RPC responses
 4. `KMS.GetMeta` output after successful boot
-5. `GetTempCaCert` allow/deny responses
+5. `GetAppEnvEncryptPubKey` allow/deny responses
 6. relevant CVM logs if a step fails unexpectedly
 
 Recommended archive:

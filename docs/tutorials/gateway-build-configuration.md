@@ -278,7 +278,7 @@ echo "OS image hash: 0x$OS_IMAGE_HASH"
 ```
 
 ```bash
-cast send "$KMS_CONTRACT_ADDR" "addOsImageHash(bytes32)" "0x$OS_IMAGE_HASH" --rpc-url "$ETH_RPC_URL" --private-key "$PRIVATE_KEY"
+cast send "$KMS_CONTRACT_ADDR" "addOsImageHashAtEpoch(uint256,bytes32)" 0 "0x$OS_IMAGE_HASH" --rpc-url "$ETH_RPC_URL" --private-key "$PRIVATE_KEY"
 ```
 
 Verify it was added:
@@ -510,7 +510,9 @@ export GATEWAY_APP_ID=$(cat ~/.dstack/secrets/gateway-app-id)
 Add the compose hash to the gateway app's allowed list:
 
 ```bash
-cast send "$GATEWAY_APP_ID" "addComposeHash(bytes32)" "0x$COMPOSE_HASH" --rpc-url "$ETH_RPC_URL" --private-key "$PRIVATE_KEY"
+# App contracts deployed before app epochs (0.6.x or earlier) take "addComposeHash(bytes32)" "0x$COMPOSE_HASH";
+# see onchain-governance.md#apps-deployed-before-app-epochs.
+cast send "$GATEWAY_APP_ID" "addComposeHashAtEpoch(uint256,bytes32)" 0 "0x$COMPOSE_HASH" --rpc-url "$ETH_RPC_URL" --private-key "$PRIVATE_KEY"
 ```
 
 Verify the hash was added:

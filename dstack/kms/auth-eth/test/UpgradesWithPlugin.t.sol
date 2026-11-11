@@ -24,6 +24,45 @@ contract UpgradesWithPluginTest is Test {
         Upgrades.upgradeProxy(proxy, "contracts/test-utils/DstackAppV2.sol:DstackAppV2", "");
     }
 
+    /// Deployed releases; their sources are kept verbatim in contracts/test-utils/reference.
+    string[2] internal kmsReleases = ["DstackKmsV059.sol:DstackKms", "DstackKmsV060.sol:DstackKms"];
+    string[2] internal appReleases = ["DstackAppV059.sol:DstackApp", "DstackAppV060.sol:DstackApp"];
+
+    function test_ReleasedStorageLayoutsUpgradeToTheCurrentContracts() public {
+        for (uint256 i = 0; i < kmsReleases.length; ++i) {
+            Options memory opts;
+            opts.referenceContract = kmsReleases[i];
+            Upgrades.validateUpgrade("DstackKms.sol", opts);
+            opts.referenceContract = appReleases[i];
+            Upgrades.validateUpgrade("DstackApp.sol", opts);
+        }
+    }
+
+    function test_ReleasedAppProxyKeepsItsAllowlistAfterUpgrade() public {
+        bytes32 composeHash = bytes32(uint256(0xc0));
+        bytes32 deviceId = bytes32(uint256(0xd0));
+        vm.startPrank(owner);
+        address proxy = Upgrades.deployUUPSProxy(
+            "DstackAppV059.sol:DstackApp",
+            abi.encodeWithSignature(
+                "initialize(address,bool,bool,bool,bytes32,bytes32)", owner, false, true, false, deviceId, composeHash
+            )
+        );
+        Options memory opts;
+        opts.referenceContract = appReleases[0];
+        Upgrades.upgradeProxy(proxy, "DstackApp.sol", "", opts);
+        vm.stopPrank();
+        DstackApp app = DstackApp(proxy);
+        assertEq(app.owner(), owner);
+        assertTrue(app.requireTcbUpToDate());
+        assertTrue(app.allowedComposeHashes(composeHash));
+        assertTrue(app.allowedDeviceIds(deviceId));
+        assertFalse(app.allowAnyDevice());
+        assertEq(app.currentAppEpoch(), 0);
+        assertTrue(app.allowedComposeHashesAtEpoch(0, composeHash));
+        assertTrue(app.allowedDeviceIdsAtEpoch(0, deviceId));
+    }
+
     function attemptKmsUpgrade(address proxy) external {
         Upgrades.upgradeProxy(proxy, "contracts/test-utils/DstackKmsV2.sol:DstackKmsV2", "");
     }
@@ -85,7 +124,7 @@ contract UpgradesWithPluginTest is Test {
         // Set some state to verify it's preserved
         kms.setGatewayAppId("original-gateway");
         bytes32 mrAggregated = bytes32(uint256(123));
-        kms.addKmsAggregatedMr(mrAggregated);
+        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
 
         // Upgrade to new implementation using plugin
         Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol", "");
@@ -114,9 +153,9 @@ contract UpgradesWithPluginTest is Test {
         // Set some state to verify it's preserved
         bytes32 deviceId = bytes32(uint256(456));
         bytes32 composeHash = bytes32(uint256(789));
-        app.addDevice(deviceId);
-        app.addComposeHash(composeHash);
-        app.setAllowAnyDevice(true);
+        app.addDeviceAtEpoch(0, deviceId);
+        app.addComposeHashAtEpoch(0, composeHash);
+        app.setAllowAnyDeviceAtEpoch(0, true);
 
         // Upgrade to new implementation using plugin
         Upgrades.upgradeProxy(appProxy, "DstackAppV2.sol", "");
@@ -266,8 +305,8 @@ contract UpgradesWithPluginTest is Test {
         bytes32 osImageHash = bytes32(uint256(0xA1));
         bytes32 composeHash = bytes32(uint256(0xA2));
         bytes32 mrAggregated = bytes32(uint256(0xA3));
-        kms.addOsImageHash(osImageHash);
-        kms.addKmsAggregatedMr(mrAggregated);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
 
         address appId = kms.deployAndRegisterApp(
             owner,
@@ -284,7 +323,7 @@ contract UpgradesWithPluginTest is Test {
         assertTrue(app.allowAnyDevice());
         assertTrue(app.allowedComposeHashes(composeHash));
 
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),
@@ -320,8 +359,8 @@ contract UpgradesWithPluginTest is Test {
         bytes32 osImageHash = bytes32(uint256(0xB1));
         bytes32 composeHash = bytes32(uint256(0xB2));
         bytes32 mrAggregated = bytes32(uint256(0xB3));
-        kms.addOsImageHash(osImageHash);
-        kms.addKmsAggregatedMr(mrAggregated);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
 
         address appId = kms.deployAndRegisterApp(
             owner,
@@ -335,7 +374,7 @@ contract UpgradesWithPluginTest is Test {
         assertFalse(app.requireTcbUpToDate());
 
         // Outdated TCB still allowed when flag is off
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),
@@ -380,8 +419,8 @@ contract UpgradesWithPluginTest is Test {
         bytes32 osImageHash = bytes32(uint256(789));
         bytes32 mrAggregated = bytes32(uint256(101_112));
 
-        kms.addOsImageHash(osImageHash);
-        kms.addKmsAggregatedMr(mrAggregated);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
         kms.setGatewayAppId("complex-test-gateway");
 
         // Upgrade both contracts
@@ -399,7 +438,7 @@ contract UpgradesWithPluginTest is Test {
         assertEq(app.owner(), owner);
 
         // Test the full flow still works
-        IAppAuth.AppBootInfo memory bootInfo = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
             appId: appId,
             composeHash: composeHash,
             instanceId: address(0),

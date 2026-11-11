@@ -14,6 +14,8 @@ use size_parser::human_size;
 /// infrastructure-provider initialization stages.
 pub const MAX_INIT_SCRIPTS: usize = 5;
 
+pub mod authorization;
+
 pub mod init_script_hashes {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_human_bytes::ByteBuf;
@@ -2398,6 +2400,8 @@ pub struct AppKeys {
     pub disk_crypt_key: Vec<u8>,
     #[serde(with = "hex_bytes", default)]
     pub env_crypt_key: Vec<u8>,
+    #[serde(with = "hex_bytes", default)]
+    pub sealed_env_key: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub k256_key: Vec<u8>,
     #[serde(with = "hex_bytes")]
@@ -2405,6 +2409,24 @@ pub struct AppKeys {
     pub gateway_app_id: String,
     pub ca_cert: String,
     pub key_provider: KeyProvider,
+}
+
+impl AppKeys {
+    pub fn app_epoch(&self) -> u32 {
+        match self.key_provider {
+            KeyProvider::Kms { app_epoch, .. } => app_epoch,
+            _ => 0,
+        }
+    }
+
+    /// KMS root epoch the keys were derived from; 0 for other key providers,
+    /// which have a single root.
+    pub fn root_epoch(&self) -> u32 {
+        match self.key_provider {
+            KeyProvider::Kms { root_epoch, .. } => root_epoch,
+            _ => 0,
+        }
+    }
 }
 
 /// Maximum length of a framed message exchanged with the local key provider.
@@ -2429,6 +2451,11 @@ pub enum KeyProvider {
         url: String,
         #[serde(with = "hex_bytes")]
         pubkey: Vec<u8>,
+        /// KMS root key epoch the keys were derived from.
+        #[serde(default)]
+        root_epoch: u32,
+        #[serde(default)]
+        app_epoch: u32,
     },
 }
 
@@ -2491,7 +2518,7 @@ mod key_provider_tests {
         assert_eq!(
             serde_json::to_value(provider).unwrap(),
             serde_json::json!({
-                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd" }
+                "Kms": { "url": "https://kms.example/prpc", "pubkey": "abcd", "root_epoch": 0, "app_epoch": 0 }
             })
         );
     }
@@ -2508,8 +2535,10 @@ mod key_provider_tests {
         assert_eq!(tpm.kind(), KeyProviderKind::Tpm);
 
         let kms = KeyProvider::Kms {
+            app_epoch: 0,
             url: "https://kms.example".into(),
             pubkey: vec![0xab; 32],
+            root_epoch: 0,
         };
         assert_eq!(kms.id(), &[0xab; 32]);
     }
@@ -2541,6 +2570,7 @@ pub struct ImageInfo {
 }
 
 pub mod mr_config;
+pub mod root_epoch;
 pub mod sha256sum;
 pub mod shared_filenames;
 pub mod version;

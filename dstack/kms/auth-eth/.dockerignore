@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# This directory also holds the Foundry project (contracts/, lib/, test/,
+# script/, ...). The image only needs the server source and its lockfile.
+*
+!package.json
+!bun.lock
+!index.ts

@@ -10,7 +10,7 @@ use dstack_types::{
     Platform,
 };
 use host_api::{
-    client::{new_client, DefaultClient},
+    client::{new_client, DefaultClient, StatusError},
     Notification,
 };
 use ra_tls::attestation::validate_tcb;
@@ -80,6 +80,29 @@ impl HostApi {
         Ok(())
     }
 
+    /// Close the host's env update window for this boot, handing it the env
+    /// re-encrypted to the current root epoch, or an empty one when nothing
+    /// changed. An error means the window may still be open.
+    pub async fn update_sealed_env(&self, sealed_env: Vec<u8>) -> Result<()> {
+        if !matches!(Platform::detect_or_dstack(), Platform::Dstack) {
+            return Ok(());
+        }
+        let Some(client) = &self.client else {
+            return Ok(());
+        };
+        let response = tokio::time::timeout(
+            HOST_API_TIMEOUT,
+            client.update_sealed_env(host_api::SealedEnv { sealed_env }),
+        )
+        .await
+        .context("Timed out updating the sealed env on the host")?;
+        match response {
+            // A VMM predating UpdateSealedEnv has no window to close.
+            Err(err) if is_unknown_method(&err) => Ok(()),
+            response => response.map(drop),
+        }
+    }
+
     pub async fn notify_q(&self, event: &str, payload: &str) {
         if let Err(err) = self.notify(event, payload).await {
             warn!("Failed to notify event {event} to host: {:?}", err);
@@ -139,5 +162,82 @@ impl HostApi {
             .ok()
             .context("Invalid sealing key length")?;
         Ok(KeyProvision { sk, mr })
+    }
+}
+
+/// Whether the host does not implement the method at all: a VMM since 0.6
+/// answers 404, and older ones 400 with the pRPC dispatcher's fixed
+/// "Service not found" message.
+fn is_unknown_method(err: &anyhow::Error) -> bool {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<StatusError>())
+        .is_some_and(|err| {
+            err.status == 404
+                || (err.status == 400
+                    && err
+                        .message
+                        .as_deref()
+                        .is_some_and(|message| message.starts_with("Service not found: ")))
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// A host API answering one request with `status` and a JSON `body`.
+    fn host(status: u16, body: String) -> HostApi {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 4096];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).unwrap();
+                request.extend_from_slice(&chunk[..read]);
+            }
+            write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        HostApi::new(Some(url), None)
+    }
+
+    #[tokio::test]
+    async fn only_an_answer_or_a_host_without_a_window_closes_the_env_window() {
+        assert!(matches!(Platform::detect_or_dstack(), Platform::Dstack));
+        let unknown = r#"{"error":"Service not found: UpdateSealedEnv"}"#;
+        for (status, body, closed) in [
+            (200, "", true),
+            // A VMM since 0.6, and one before, that does not know the method.
+            (404, unknown, true),
+            (400, unknown, true),
+            // Anything else may leave the window open.
+            (400, r#"{"error":"VM not found"}"#, false),
+            (500, "{}", false),
+        ] {
+            let result = host(status, body.into())
+                .update_sealed_env(b"env".to_vec())
+                .await;
+            assert_eq!(result.is_ok(), closed, "{status} {body}");
+        }
+        // No host listening at all.
+        let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", gone.local_addr().unwrap());
+        drop(gone);
+        assert!(HostApi::new(Some(url), None)
+            .update_sealed_env(Vec::new())
+            .await
+            .is_err());
+        // No host API configured means no window.
+        HostApi::new(None, None)
+            .update_sealed_env(Vec::new())
+            .await
+            .unwrap();
     }
 }

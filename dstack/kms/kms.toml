@@ -82,11 +82,14 @@ cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
 download_timeout = "2m"
 
-# Admin API: serves operator RPCs (e.g. ClearImageCache) on a dedicated
-# listener behind the shared HTTP authenticator. Disabled by default; when
-# enabled it fails closed unless auth_token or htpasswd_file is set.
+# Admin API: serves operator RPCs (e.g. ClearImageCache) and the key handover
+# to onboarding KMS nodes on a dedicated listener behind the shared HTTP
+# authenticator. It fails closed: the KMS does not start until auth_token (or
+# DSTACK_KMS_ADMIN_TOKEN), auth_token_hash or htpasswd_file is set. Unless
+# core.onboard.public_key_handover = true, the KMS also requires this
+# listener and its TLS below, so that other KMS nodes can onboard.
 [core.admin]
-enabled = false
+enabled = true
 # Bind address/port for the admin listener (keep it off the public network).
 address = "127.0.0.1"
 port = 8001
@@ -95,19 +98,24 @@ port = 8001
 # `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
 # Required unless insecure_no_auth = true. Generate with: openssl rand -hex 32
 auth_token = ""
+# Or the token's hex SHA-256, for a config that is not secret (an app compose).
+# The hash is public there, so the token must be high-entropy random, or it can
+# be brute-forced offline: TOKEN=$(openssl rand -hex 32)
+# printf '%s' "$TOKEN" | sha256sum
+auth_token_hash = ""
 # Optional Apache bcrypt htpasswd file (create with `htpasswd -B -c file admin`).
 htpasswd_file = ""
 # Development/testing escape hatch only. Never enable this on an admin
 # interface that is reachable from the network.
 insecure_no_auth = false
 
-# Optional TLS for the admin listener. When configured, clients may present an
-# RA-TLS certificate. GetKmsKey requires it; other admin RPCs do not. To serve
-# KMS onboarding, enable this and bind `address` to one the new KMS can reach.
+# TLS for the admin listener, so that clients may present an RA-TLS
+# certificate. GetKmsKey requires it; other admin RPCs do not. To serve KMS
+# onboarding, also bind `address` to one the new KMS can reach.
 # No `[core.admin.tls.mutual]` is needed, as for `[rpc.tls]` above.
-# [core.admin.tls]
-# key = "/etc/kms/certs/rpc.key"
-# certs = "/etc/kms/certs/rpc.crt"
+[core.admin.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
 
 [core.metrics]
 # Expose unauthenticated Prometheus metrics on /metrics.
@@ -129,8 +137,8 @@ gateway_app_id = "any"
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""
-# Keep KMS.GetKmsKey on the public RPC listener for older onboarding clients.
-# New deployments should point onboarding at the admin listener instead.
-public_key_handover = true
+# Also serve KMS.GetKmsKey on the public RPC listener, for onboarding clients
+# that cannot reach the admin listener (KMS 0.5.x, or no source admin token).
+public_key_handover = false
 address = "0.0.0.0"
 port = 8000

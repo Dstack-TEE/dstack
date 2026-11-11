@@ -32,6 +32,7 @@ reqwest = { workspace = true, features = ["json"] }
 sha2.workspace = true
 sha3.workspace = true
 k256.workspace = true
+p256.workspace = true
 rand.workspace = true
 dstack-guest-agent-rpc.workspace = true
 http-client = { workspace = true, features = ["prpc"] }
@@ -52,6 +53,7 @@ moka = { workspace = true, features = ["future"] }
 
 [dev-dependencies]
 cc-eventlog.workspace = true
+mock-attestation = { path = "../crates/mock-attestation" }
 
 [features]
 default = []

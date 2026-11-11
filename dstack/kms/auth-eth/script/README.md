@@ -28,21 +28,26 @@ Type-safe contract management scripts. Set the environment variables and run the
 
 ### KMS Management
 
+The KMS material scripts below write root epoch rows: `ROOT_EPOCH=e` one row, or
+`FROM_ROOT_EPOCH` through `TO_ROOT_EPOCH`. One of them is required. A request
+may select any epoch up to the current one, so revoke a value with
+`FROM_ROOT_EPOCH=0` and `TO_ROOT_EPOCH` the latest registered epoch.
+
 #### Add KMS Aggregated MR
 ```bash
-KMS_CONTRACT_ADDR=0x... MR_AGGREGATED=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 MR_AGGREGATED=0x1234... \
 forge script script/Manage.s.sol:AddKmsAggregatedMr --broadcast --rpc-url $RPC_URL
 ```
 
 #### Add OS Image
 ```bash
-KMS_CONTRACT_ADDR=0x... OS_IMAGE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 OS_IMAGE_HASH=0x1234... \
 forge script script/Manage.s.sol:AddOsImage --broadcast --rpc-url $RPC_URL
 ```
 
 #### Add KMS Device
 ```bash
-KMS_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:AddKmsDevice --broadcast --rpc-url $RPC_URL
 ```
 
@@ -52,27 +57,67 @@ KMS_CONTRACT_ADDR=0x... GATEWAY_APP_ID="my-gateway" \
 forge script script/Manage.s.sol:SetGatewayAppId --broadcast --rpc-url $RPC_URL
 ```
 
-#### Set KMS Info
+#### Register a KMS Root Epoch
+Use this for initial setup as well as subsequent root rotations. The legacy
+`setKmsInfo`, `setKmsQuote`, and `setKmsEventlog` entry points have been removed;
+calls to them revert even before epoch 0 is registered. For an upgraded proxy
+with legacy roots in `kmsInfo`, epoch 0 must register those same public keys.
+
+Appends the next root epoch (the original roots are epoch 0). Epoch 0 takes
+effect when registered; later epochs take effect when activated, and each takes
+over `kmsInfo` then, clearing its quote and event log. `EVIDENCE_URL`
+points to the attestation the KMS returned when it generated the keys (Bootstrap,
+or Onboard with `rotate`), published where verifiers can fetch it; verify it
+before registering. Registered keys cannot be changed, only a pending epoch popped;
+the evidence URL can be updated when the evidence moves.
 ```bash
-KMS_CONTRACT_ADDR=0x... K256_PUBKEY=0x... CA_PUBKEY=0x... QUOTE=0x... EVENTLOG=0x... \
-forge script script/Manage.s.sol:SetKmsInfo --broadcast --rpc-url $RPC_URL
+KMS_CONTRACT_ADDR=0x... CA_PUBKEY=0x... K256_PUBKEY=0x... EVIDENCE_URL=ipfs://... \
+forge script script/Manage.s.sol:RegisterRootEpoch --broadcast --rpc-url $RPC_URL
+```
+
+#### Activate a KMS Root Epoch
+Makes the next registered root epoch the one KMS instances serve. Activate it
+only once every KMS node holds it; nodes still at the previous epoch stop
+serving, and nodes holding it restart to switch. Epochs only move forward.
+`CHAIN_HASH` is the expected epoch chain hash (see `Query.s.sol`),
+so a stale activation cannot activate replacement keys at the same epoch.
+```bash
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=1 CHAIN_HASH=0x... \
+forge script script/Manage.s.sol:ActivateRootEpoch --broadcast --rpc-url $RPC_URL
+```
+
+#### Update a Root Epoch's Evidence URL
+Points an epoch at a new copy of its attestation, e.g. when the old host goes away.
+```bash
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 EVIDENCE_URL=ipfs://... \
+forge script script/Manage.s.sol:SetRootEpochEvidenceUrl --broadcast --rpc-url $RPC_URL
+```
+
+#### Pop a Pending KMS Root Epoch
+Drops the last registered epoch while it is not yet current, e.g. when the nodes
+holding it are lost before it could be activated. Re-rotate to register a new one.
+`CHAIN_HASH` is the epoch's chain hash (see `Query.s.sol`), so only that exact
+registration is dropped.
+```bash
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=1 CHAIN_HASH=0x... \
+forge script script/Manage.s.sol:PopRootEpoch --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove KMS Aggregated MR
 ```bash
-KMS_CONTRACT_ADDR=0x... MR_AGGREGATED=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 MR_AGGREGATED=0x1234... \
 forge script script/Manage.s.sol:RemoveKmsAggregatedMr --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove OS Image
 ```bash
-KMS_CONTRACT_ADDR=0x... OS_IMAGE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 OS_IMAGE_HASH=0x1234... \
 forge script script/Manage.s.sol:RemoveOsImage --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove KMS Device
 ```bash
-KMS_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:RemoveKmsDevice --broadcast --rpc-url $RPC_URL
 ```
 
@@ -91,7 +136,7 @@ forge script script/Manage.s.sol:RegisterApp --broadcast --rpc-url $RPC_URL
 #### Batch KMS Setup
 Configure multiple settings at once:
 ```bash
-KMS_CONTRACT_ADDR=0x... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 \
 GATEWAY_APP_ID="my-gateway" \
 MR_AGGREGATED_LIST=0x1111...,0x2222...,0x3333... \
 OS_IMAGE_LIST=0xaaaa...,0xbbbb... \
@@ -101,33 +146,39 @@ forge script script/Manage.s.sol:BatchKmsSetup --broadcast --rpc-url $RPC_URL
 
 ### App Management
 
+The app scripts write app epoch rows: `APP_EPOCH=e`, or `FROM_APP_EPOCH` through
+`TO_APP_EPOCH` (at most the next epoch); one of them is required. Revoke a value
+with `FROM_APP_EPOCH=0` and `TO_APP_EPOCH` the current app epoch. App contracts
+deployed before app epochs (no `IAppEpochManagement`) have only app epoch 0: the
+scripts call their epoch-less setters and accept only `APP_EPOCH=0` or no epoch.
+
 #### Add Compose Hash
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... COMPOSE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 COMPOSE_HASH=0x1234... \
 forge script script/Manage.s.sol:AddComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
 #### Add Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:AddDevice --broadcast --rpc-url $RPC_URL
 ```
 
 #### Set Allow Any Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... ALLOW_ANY_DEVICE=true \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 ALLOW_ANY_DEVICE=true \
 forge script script/Manage.s.sol:SetAllowAnyDevice --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove Compose Hash
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... COMPOSE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 COMPOSE_HASH=0x1234... \
 forge script script/Manage.s.sol:RemoveComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:RemoveDevice --broadcast --rpc-url $RPC_URL
 ```
 

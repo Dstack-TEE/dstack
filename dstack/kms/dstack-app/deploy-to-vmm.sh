@@ -32,6 +32,10 @@ else
 # The address of the KMS service listening on Host machine
 # KMS_RPC_ADDR=0.0.0.0:9201
 
+# Optional: the address of the KMS admin listener on the Host machine, which
+# other KMS nodes onboard from with ADMIN_TOKEN; firewall it to KMS nodes only
+# KMS_ADMIN_ADDR=127.0.0.1:9203
+
 # The address of the guest agent service listening on Host machine
 # GUEST_AGENT_ADDR=127.0.0.1:9205
 
@@ -40,6 +44,16 @@ else
 
 # The URL of the Ethereum RPC service
 ETH_RPC_URL=https://rpc.phala.network
+
+# The block the auth-api reads policy at: latest, safe or finalized (default).
+# Use finalized on L1; an OP-stack chain read through Helios requires latest.
+# ETH_BLOCK_TAG=finalized
+
+# Reject decisions if the RPC reports a different chain ID (empty: no check).
+# ETH_CHAIN_ID=
+
+# Read this many blocks behind the block ETH_BLOCK_TAG resolves to (default: 0).
+# ETH_FINALITY_CONFIRMATIONS=0
 
 # The Git repository to deploy
 GIT_REPOSITORY=https://github.com/Dstack-TEE/dstack.git
@@ -94,7 +108,13 @@ subvar() {
   sed -i "s|\${$1}|${!1}|g" "$COMPOSE_TMP"
 }
 
+ETH_BLOCK_TAG=${ETH_BLOCK_TAG:-finalized}
+ETH_CHAIN_ID=${ETH_CHAIN_ID:-}
+ETH_FINALITY_CONFIRMATIONS=${ETH_FINALITY_CONFIRMATIONS:-0}
 subvar ETH_RPC_URL
+subvar ETH_BLOCK_TAG
+subvar ETH_CHAIN_ID
+subvar ETH_FINALITY_CONFIRMATIONS
 subvar KMS_CONTRACT_ADDR
 subvar GIT_REV
 subvar IMAGE_DOWNLOAD_URL
@@ -136,6 +156,7 @@ $CLI deploy \
   --compose .app-compose.json \
   --image "$OS_IMAGE" \
   --port tcp:"$KMS_RPC_ADDR":8000 \
+  ${KMS_ADMIN_ADDR:+--port "tcp:$KMS_ADMIN_ADDR:8002"} \
   --port tcp:"$AUTH_API_RPC_ADDR":8001 \
   --port tcp:"$GUEST_AGENT_ADDR":8090 \
   --vcpu 8 \

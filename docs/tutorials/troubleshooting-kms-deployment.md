@@ -27,13 +27,15 @@ This appendix consolidates troubleshooting content from the KMS Deployment tutor
 ### Artifact not found
 
 ```
-Error HH700: Artifact for contract "DstackApp" not found.
+Error: could not find artifact
 ```
 
-Contracts must be compiled before deployment. Run:
+Contracts must be compiled, with their dependencies checked out, before deployment. In `dstack/kms/auth-eth`, run:
 
 ```bash
-npx hardhat compile
+git submodule update --init --recursive lib/forge-std \
+  lib/openzeppelin-contracts-upgradeable lib/openzeppelin-foundry-upgrades
+forge build
 ```
 
 ### Insufficient funds
@@ -104,19 +106,18 @@ Verify the file exists and has correct permissions:
 ls -la /etc/kms/kms.toml
 ```
 
-### Auth-eth npm install fails
+### auth-eth install fails
 
 ```
-Error: EACCES permission denied
+error: lockfile had changes, but lockfile is frozen
 ```
 
-Fix npm permissions:
+The copied `auth-eth/` directory does not match its `bun.lock`. Copy it again from a clean checkout of the dstack repository and rebuild the Docker image:
 
 ```bash
-mkdir -p ~/.npm-global
-npm config set prefix '~/.npm-global'
-export PATH=~/.npm-global/bin:$PATH
-npm install
+rm -rf ~/kms-deployment/auth-eth
+mkdir -p ~/kms-deployment/auth-eth
+cp ~/dstack/dstack/kms/auth-eth/{index.ts,package.json,bun.lock} ~/kms-deployment/auth-eth/
 ```
 
 ### Invalid TOML syntax
@@ -303,12 +304,12 @@ sudo systemctl restart qgsd
 
 ### GetMeta Returns "Connection refused" on Port 9200
 
-**Symptom:** KMS responds to `GetTempCaCert` but GetMeta returns:
+**Symptom:** The KMS health endpoint responds but GetMeta returns:
 ```json
 {"error": "error sending request for url (http://127.0.0.1:9200/): ...Connection refused (os error 111)"}
 ```
 
-**Root Cause:** auth-eth defaults to port 8000, but kms.toml expects the webhook at port 9200.
+**Root Cause:** auth-eth listens on `PORT` (3000 when run from source, 8000 in its release image), but kms.toml expects the webhook at port 9200.
 
 **Solution:** Ensure your docker-compose.yaml includes `PORT=9200` in the environment section:
 
@@ -334,7 +335,7 @@ Then regenerate the app-compose.json and redeploy:
 {"error": "error decoding response body: missing field `status` at line 1 column ..."}
 ```
 
-**Root Cause:** auth-eth is running and reachable (port 9200 is correct), but it cannot connect to Ethereum RPC. Without `ETH_RPC_URL` and `KMS_CONTRACT_ADDR`, auth-eth defaults to `http://localhost:8545` (nothing there) and returns a Fastify error instead of the expected `{status: 'ok', ...}` response.
+**Root Cause:** auth-eth is reachable (port 9200 is correct), but it cannot read the contract. Without `ETH_RPC_URL` and `KMS_CONTRACT_ADDR`, auth-eth defaults to `http://localhost:8545` (nothing there) and the zero address, and returns `{status: 'error', ...}` instead of the expected `{status: 'ok', ...}` response. If the RPC is unreachable at startup, auth-eth exits instead, and GetMeta reports "Connection refused".
 
 **Solution:** Ensure your docker-compose.yaml includes both Ethereum configuration variables:
 

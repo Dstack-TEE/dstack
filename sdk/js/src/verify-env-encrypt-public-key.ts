@@ -126,3 +126,38 @@ export function verifyEnvEncryptPublicKeyLegacy(
   const message = concat(prefix, separator, appIdBytes, publicKey)
   return recoverSigner(keccak_256(message), signature)
 }
+
+/**
+ * Recover the epoch root signer of a SealedEnv public-key response.
+ * Compare the returned key with a trusted rootEpoch(epoch).k256Pubkey or pin.
+ */
+export function verifySealedEnvPublicKey(
+  publicKey: Uint8Array,
+  signature: Uint8Array,
+  appId: string,
+  rootEpoch: number,
+  timestamp: bigint | number,
+  options?: VerifyOptions & { appEpoch?: number },
+): string | null {
+  if (publicKey.length !== 32 || signature.length !== 65 ||
+      !Number.isInteger(rootEpoch) || rootEpoch < 0 || rootEpoch > 0xffffffff) return null
+  const appEpoch = options?.appEpoch ?? 0
+  if (!Number.isInteger(appEpoch) || appEpoch < 0 || appEpoch > 0xffffffff) return null
+  const app = hexToBytes(appId)
+  if (!app || app.length !== 20) return null
+  if (typeof timestamp === 'number' && !Number.isSafeInteger(timestamp)) return null
+  const ts = BigInt(timestamp)
+  if (ts < 0n || ts > 0xffffffffffffffffn) return null
+  const maxAge = options?.maxAgeSeconds ?? DEFAULT_MAX_AGE_SECONDS
+  if (!Number.isSafeInteger(maxAge) || maxAge < 0) return null
+  const age = BigInt(Math.floor(Date.now() / 1000)) - ts
+  if (age < -60n || age > BigInt(maxAge)) return null
+  return recoverSigner(keccak_256(concat(
+    new TextEncoder().encode('dstack-sealed-env-pubkey-v1:'),
+    app,
+    bigintToBeBytes(BigInt(rootEpoch), 4),
+    bigintToBeBytes(BigInt(appEpoch), 4),
+    publicKey,
+    bigintToBeBytes(ts, 8),
+  )), signature)
+}

@@ -32,7 +32,7 @@ contract MockConfigurableApp {
         _ret = ret;
     }
 
-    function isAppAllowed(IAppAuth.AppBootInfo calldata) external view returns (bool, string memory) {
+    function isAppAllowed(IAppAuth.AppInfo calldata) external view returns (bool, string memory) {
         return (_ret, "");
     }
 }
@@ -41,7 +41,7 @@ contract MockConfigurableApp {
 ///      to verify that a malicious registered contract's revert
 ///      propagates out of `kms.isAppAllowed` rather than being swallowed.
 contract MockRevertingApp {
-    function isAppAllowed(IAppAuth.AppBootInfo calldata) external pure returns (bool, string memory) {
+    function isAppAllowed(IAppAuth.AppInfo calldata) external pure returns (bool, string memory) {
         revert("malicious app revert");
     }
 }
@@ -87,14 +87,14 @@ contract DstackKmsSymbolicTest is Test {
     // the (false, reason) return without delegating.
     // ---------------------------------------------------------------
 
-    function check_IsAppAllowed_RejectsUnregisteredApp(IAppAuth.AppBootInfo calldata bootInfo) external view {
+    function check_IsAppAllowed_RejectsUnregisteredApp(IAppAuth.AppInfo calldata bootInfo) external view {
         // No apps registered in setUp(), so any bootInfo.appId is rejected.
         (bool allowed, string memory reason) = kms.isAppAllowed(bootInfo);
         assert(!allowed);
         assert(keccak256(bytes(reason)) == keccak256(bytes("App not registered")));
     }
 
-    function check_IsAppAllowed_RejectsUnknownOsImage(address appId, IAppAuth.AppBootInfo calldata bootInfo) external {
+    function check_IsAppAllowed_RejectsUnknownOsImage(address appId, IAppAuth.AppInfo calldata bootInfo) external {
         vm.assume(appId != address(0));
 
         // Register the appId so the registration check passes.
@@ -125,10 +125,10 @@ contract DstackKmsSymbolicTest is Test {
 
         vm.startPrank(OWNER);
         kms.registerApp(address(mock));
-        kms.addOsImageHash(osImageHash);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(mock),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -155,10 +155,10 @@ contract DstackKmsSymbolicTest is Test {
 
         vm.startPrank(OWNER);
         kms.registerApp(address(mock));
-        kms.addOsImageHash(osImageHash);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
         vm.stopPrank();
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(mock),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -190,9 +190,9 @@ contract DstackKmsSymbolicTest is Test {
         // Allow the OS image so the second gate passes; leave
         // kmsAllowedAggregatedMrs empty.
         vm.prank(OWNER);
-        kms.addOsImageHash(osImageHash);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -217,12 +217,12 @@ contract DstackKmsSymbolicTest is Test {
         external
     {
         vm.startPrank(OWNER);
-        kms.addOsImageHash(osImageHash);
-        kms.addKmsAggregatedMr(mrAggregated);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
         vm.stopPrank();
         // kmsAllowedDeviceIds is left empty.
 
-        IAppAuth.AppBootInfo memory b = IAppAuth.AppBootInfo({
+        IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(0),
             composeHash: bytes32(0),
             instanceId: address(0),
@@ -338,17 +338,18 @@ contract DstackKmsSymbolicTest is Test {
         } else if (which == 2) {
             data = abi.encodeWithSelector(DstackKms.registerApp.selector, addr);
         } else if (which == 3) {
-            data = abi.encodeWithSelector(DstackKms.addKmsAggregatedMr.selector, word);
+            data = abi.encodeWithSelector(DstackKms.addKmsAggregatedMrAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 4) {
-            data = abi.encodeWithSelector(DstackKms.removeKmsAggregatedMr.selector, word);
+            data =
+                abi.encodeWithSelector(DstackKms.removeKmsAggregatedMrAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 5) {
-            data = abi.encodeWithSelector(DstackKms.addKmsDevice.selector, word);
+            data = abi.encodeWithSelector(DstackKms.addKmsDeviceAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 6) {
-            data = abi.encodeWithSelector(DstackKms.removeKmsDevice.selector, word);
+            data = abi.encodeWithSelector(DstackKms.removeKmsDeviceAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 7) {
-            data = abi.encodeWithSelector(DstackKms.addOsImageHash.selector, word);
+            data = abi.encodeWithSelector(DstackKms.addOsImageHashAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 8) {
-            data = abi.encodeWithSelector(DstackKms.removeOsImageHash.selector, word);
+            data = abi.encodeWithSelector(DstackKms.removeOsImageHashAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 9) {
             data = abi.encodeWithSelector(
                 bytes4(keccak256("deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)")),
@@ -369,10 +370,6 @@ contract DstackKmsSymbolicTest is Test {
                 word
             );
         } else if (which == 11) {
-            data = abi.encodeWithSelector(DstackKms.setKmsQuote.selector, "");
-        } else if (which == 12) {
-            data = abi.encodeWithSelector(DstackKms.setKmsEventlog.selector, "");
-        } else if (which == 13) {
             data = abi.encodeWithSelector(UUPSUpgradeable.upgradeToAndCall.selector, addr, "");
         } else {
             return; // outside the enumerated KMS-own mutating surface

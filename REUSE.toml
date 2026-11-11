@@ -34,17 +34,15 @@ path = [
     "**/tsconfig.json",
     "**/tsconfig.node.json",
     "**/tsconfig.browser.json",
-    "dstack/kms/auth-eth-bun/.oxlintrc.json",
+    "dstack/kms/auth-eth/.oxlintrc.json",
     "dstack/kms/auth-eth/slither.config.json",
     "**/package-lock.json",
     "dstack/kms/auth-eth/.openzeppelin/unknown-2035.json",
-    "dstack/kms/auth-mock/.oxlintrc.json",
-    "dstack/kms/auth-simple/.oxlintrc.json",
-    "dstack/kms/auth-simple/auth-config.example.json",
     "tools/sca/examples/heartbeat/config.json",
     "tools/sca/examples/hello-c/config.json",
     "tools/sca/examples/heartbeat/rootfs/etc/heartbeat/interval",
     "sdk/simulator/*.json",
+    "sdk/fixtures/sealed-env/*.json",
     "sdk/go/go.sum",
     "sdk/go/ratls/go.sum",
     "dstack/kms/dstack-app/builder/shared/builder-pinned-packages.txt",
@@ -193,11 +191,6 @@ SPDX-License-Identifier = "MIT OR Apache-2.0"
 precedence = "override"
 
 # Generated files
-
-[[annotations]]
-path = "dstack/kms/auth-eth/typechain-types/**"
-SPDX-FileCopyrightText = "NONE"
-SPDX-License-Identifier = "CC0-1.0"
 
 [[annotations]]
 path = "**/*.lock"

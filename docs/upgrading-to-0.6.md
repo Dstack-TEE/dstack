@@ -217,6 +217,10 @@ Both sides must authorize each other first: the new KMS allows the old
 `os_image_hash`. After onboarding, compare the KMS CA public keys; the CA
 certificate itself is reissued. The source must be 0.5.8 or later.
 
+KMS releases after 0.6 can join only from a 0.6+ source: a 0.5.x certificate
+carries no OS image hash, and they refuse such a source. Upgrade a 0.5.x
+cluster to 0.6.x first, then onboard later releases from it.
+
 Keep the old KMS running until every client has moved. While a 0.5.x KMS still
 verifies 0.6.0 guests, it can only measure guests with exactly 2 GiB or at
 least 2816 MiB of memory, and it must be able to download the 0.6.0 image.
@@ -228,14 +232,27 @@ Configuration changes:
 - Key release on AMD SEV-SNP, AWS NitroTPM, and AWS Nitro Enclaves stays off
   until you set `sev_snp_key_release`, `aws_nitro_tpm_key_release`, or
   `nitro_enclave_key_release`.
-- Keep `core.onboard.public_key_handover = true` while any KMS still onboards
-  through the public port, and turn it off afterwards.
+- `core.onboard.public_key_handover` now defaults to `false`, which removes
+  `KMS.GetKmsKey` from the public port. While a 0.5.x KMS still onboards from
+  this cluster, it can only use that public entry, so set the option to `true`
+  on the source node, and remove it once every node is upgraded.
+- A KMS without a key handover path does not start. Configure the admin
+  listener with `[core.admin.tls]` (`key` and `certs`) and an admin token, or
+  set `core.onboard.public_key_handover = true`. The built-in default enables
+  the admin listener with TLS, so it needs `core.admin.auth_token`,
+  `DSTACK_KMS_ADMIN_TOKEN` or `core.admin.auth_token_hash` to start. In a KMS
+  app compose, which is public, use `auth_token_hash` with a high-entropy random
+  token (`openssl rand -hex 32`), since its hash can be brute-forced offline.
 - Auto-bootstrap refuses to overwrite existing root keys.
 
-If you use `auth-simple`, three defaults now deny boots that 0.5.x allowed: an
-empty `devices` list denies every device unless `allowAnyDevice` is true,
-`allowedTcbStatuses` defaults to `["UpToDate"]`, and any advisory ID on a
-quote denies unless listed in `allowedAdvisoryIds`.
+If you use `auth-simple`, replace it with `dstack-auth`, which reads the same
+config file; see
+[Migrating from auth-simple](./dstack-auth-operations.md#migrating-from-auth-simple).
+Compared with 0.5.x auth-simple, an empty `devices` list now denies every device
+unless `allowAnyDevice` is true. To also deny a non-`UpToDate` TCB or any
+advisory ID, as auth-simple did by default, set
+`"allowedTcbStatuses": ["UpToDate"]` and `"allowedAdvisoryIds": []`; without
+them dstack-auth checks neither.
 
 ### Gateway
 

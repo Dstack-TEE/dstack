@@ -21,7 +21,7 @@ correctness matters more than gas.
 
 - `contracts/DstackApp.sol` (209 LOC) — per-app boot authorization
 - `contracts/DstackKms.sol` (276 LOC) — KMS whitelist + factory
-- `contracts/IAppAuth.sol`, `contracts/IAppAuthBasicManagement.sol` — interfaces
+- `contracts/IAppAuth.sol`, `contracts/IAppEpochAuth.sol`, `contracts/IAppEpochManagement.sol` — interfaces
 
 ## Layer 0 — Slither (static analysis)
 
@@ -84,8 +84,8 @@ reuse the existing `.t.sol` scaffolding and OZ-foundry-upgrades plugin.
 ### Setup
 
 - [x] `pipx install halmos` documented in `README.md`
-- [ ] No CI integration (intentional — see "What's intentionally not in
-      scope" below)
+- [x] Runs in CI (`.github/workflows/halmos.yml`) when `dstack/kms/auth-eth`
+      changes, with pinned Halmos and Forge versions
 
 ### What we verify
 
@@ -120,11 +120,113 @@ says `pre: msg.sender == owner()`, we trust the OZ modifier.
       init, both `initialize` overloads revert for any inputs.
       Verifies INV-3.
 
+`test/DstackAppEpoch.symbolic.t.sol` (app epochs; setUp advances to epoch 2
+and admits one app per epoch, then one symbolic owner write where noted):
+- [x] `check_AppEpoch_StepMonotonic` — no call to any enumerated mutating
+      function, by any caller, decreases `currentAppEpoch`; it moves only by
+      one, through the owner's `advanceAppEpoch(current)`.
+- [x] `check_PolicyWrite_RejectsEpochPastNext` — every `*AtEpoch` setter
+      reverts for an epoch above the next one, and every `*AtEpochs` setter
+      for a range ending above it, for any caller; the owner may prepare the
+      next epoch's row before advancing.
+- [x] `check_AuthorizeApp_RejectsInactiveEpochAndForeignOperation` — an
+      epoch above the current one or a non-app operation is never authorized.
+- [x] `check_IsAppAllowed_RefusesAtNonzeroEpoch` — once the app epoch has
+      advanced, the legacy `isAppAllowed` refuses, since its callers derive
+      epoch-0 keys.
+- [x] `check_IsAppAllowed_EqualsEpochZeroDecisionBeforeAdvance` — at app
+      epoch 0, with the next row prepared and any one owner write, the legacy
+      `isAppAllowed` returns exactly the `authorizeApp` result at epoch 0.
+- [x] `check_PolicyWrite_PreservesOtherEpochDecisions` — a write never
+      changes an authorization decision at an epoch outside the rows it names
+      (one epoch, or a symbolic range), including epoch 0's legacy fields.
+- [x] `check_AuthorizeApp_MatchesPolicy` — for both app operations,
+      `authorizeApp` allows exactly when the epoch is active, the TCB
+      requirement holds, and that epoch admits the compose hash and device.
+- [x] `check_PolicyWrite_TakesEffect` — each `*AtEpoch` setter on an epoch
+      up to the next one, and each `*AtEpochs` setter on every row of a range
+      ending at most there, either sets the value it was given or reverts on
+      a zero ID.
+- [x] `check_FullRangeRemoval_RevokesAtEveryAppEpoch` — after removing a
+      compose hash, or a device and the any-device flag, from rows 0 through
+      the next epoch, no app epoch authorizes it, for either app operation.
+
+Mutation-tested: requiring both the any-device flag and a listed device,
+ignoring the value of a per-epoch `allowAnyDevice` write, dropping a setter's
+epoch bound or widening it past the next epoch, aliasing epoch 1 onto the
+legacy fields, letting `isAppAllowed` decide at a nonzero epoch or read the
+prepared next row, a permissionless
+`advanceAppEpoch` and dropping its stale-transaction guard each produce a
+counterexample. Dropping the inactive-epoch check in `_authorizeApp` does
+not: policy for an inactive epoch cannot be written, so that check is
+defense in depth.
+
+`test/DstackKmsEpoch.symbolic.t.sol` (root epochs; setUp registers epochs
+0-2, activates 1 so that 2 is pending, admits one KMS identity and OS image
+per epoch, and deploys an app at app epoch 1):
+- [x] `check_RootRegistry_StepInvariant` — after any single call to any
+      enumerated mutating function, by any caller with symbolic args: the
+      current epoch stays registered and moves only by one, through the
+      owner's activation naming its chain hash; the registry changes by at
+      most one entry at its end, and only the owner's pop of a pending
+      epoch naming its chain hash removes one; existing entries keep their
+      keys and hashes; every chain hash commits to its keys and the previous
+      hash; `kmsInfo` holds the current keys without legacy evidence.
+- [x] `check_RegisterRootEpoch_AcceptsOnlyCanonicalEncodings` — registration
+      succeeds exactly for a 91-byte uncompressed P-256 SPKI and a 33-byte
+      compressed secp256k1 key.
+- [x] `check_Authorize_EnforcesEpochBounds` — a wrong-kind operation, an app
+      or `kms_serve` root epoch above the current one, another KMS root epoch
+      above the latest registered one, or an app epoch above the app's current one is never
+      authorized; every result reports the current root epoch and hash.
+- [x] `check_Authorize_OnlyBootstrapBeforeRegistration` — with no root epoch
+      registered, only `kms_bootstrap` can be authorized.
+- [x] `check_AuthorizeKms_MatchesEpochPolicy` — after any one owner write,
+      KMS authorization allows exactly when the selected root epoch is
+      registered (current at most for `kms_serve`), the TCB is up to date, and that epoch's row admits the OS
+      image, aggregated MR and device.
+- [x] `check_AuthorizeApp_MatchesKmsAndAppPolicy` — app authorization allows
+      exactly when both epochs are active, the selected root epoch admits
+      the OS image, and the app's own `authorizeApp` admits it.
+- [x] `check_KmsPolicyWrite_PreservesOtherEpochDecisions` — a KMS policy
+      write never changes a KMS decision at a root epoch outside the rows it
+      names (one epoch, or a symbolic range).
+- [x] `check_FullRangeRemoval_RevokesAtEveryEpoch` — after removing an OS
+      image, aggregated MR or KMS device from rows 0 through the latest, no
+      request carrying it is authorized at any root or app epoch, for any KMS
+      operation, nor for app operations in the OS image case.
+- [x] `check_PopThenRegister_StartsWithEmptyRows` — popping the pending
+      epoch and registering the number again, with the same keys or others,
+      leaves all three of its rows empty.
+- [x] `check_EpochZeroRows_AreTheLegacyMappings` — after any one owner
+      write, the v0.5.x getters and the epoch 0 getters agree.
+- [x] `check_AuthorizeApp_LegacyPolicyOnlyAtAppEpochZero` — an app policy
+      without `IAppEpochAuth`, like v0.5.x and v0.6.0 `DstackApp`, is
+      authorized exactly when the KMS checks pass at the selected root epoch,
+      no nonzero app epoch is requested, and its `isAppAllowed` admits it;
+      its app epoch is reported as 0.
+- [x] `check_LegacyEntryPoints_RefuseOnceRotated` — once a later root epoch
+      is current, `isKmsAllowed` and `isAppAllowed` refuse.
+- [x] `check_LegacyKmsCheck_ReadsEpochZeroBeforeRotation` — before any
+      rotation, with the next epoch registered and prepared, `isKmsAllowed`
+      decides as `kms_serve` at root epoch 0.
+
+Mutation-tested: a chain hash that ignores the previous epoch, activation
+that leaves `kmsInfo` stale, a pop that ignores the chain hash, app requests
+selecting a pending root epoch, KMS requests limited to the current epoch,
+`isKmsAllowed` reading the pending epoch or still deciding after a rotation, accepting an `0x04` k256 tag, an
+OS image row aliasing epoch 1 onto the legacy row, an app check skipping the
+OS image, and non-bootstrap operations before registration each produce a
+counterexample.
+
+The bounds test found that wrong-kind rejections reported root epoch
+`(0, 0x0)`, contrary to the KMS README; fixed in #1538.
+
 Single-call (`test/DstackKms.symbolic.t.sol`):
 - [x] `check_RegisterApp_AnyCallerCanRegisterNonZeroAddress` + `_RejectsZeroAddress`
       — codifies the permissionless-by-design behavior; see "Findings"
 - [x] `check_IsAppAllowed_RejectsUnregisteredApp` / `_RejectsUnknownOsImage`
-      — fully symbolic `AppBootInfo`; the failing gate produces the
+      — fully symbolic `AppInfo`; the failing gate produces the
       right rejection reason without delegating
 - [x] `check_IsAppAllowed_DelegatesFaithfully` — when both KMS gates
       pass, the outer return equals the registered `IAppAuth`'s return.
@@ -235,10 +337,8 @@ If we revisit, target the same invariants as Layer 2 but add:
 
 ## What's intentionally not in scope
 
-- **CI gating of Slither / Halmos.** Symbolic execution is slow, solver-
-  version-sensitive, and produces non-actionable noise as a PR gate.
-  Run locally during development; treat these as design checks rather
-  than blocking lints.
+- **CI gating of Slither.** It produces non-actionable noise as a PR gate;
+  run it locally during development.
 - **Echidna** — overlaps with Foundry's built-in fuzzer (already runs 10k
   iterations under `FOUNDRY_PROFILE=ci` in `.github/workflows/foundry-test.yml`).
 - **Manticore / Mythril** — bytecode-level tools, slow, awkward with our

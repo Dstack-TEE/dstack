@@ -107,6 +107,9 @@ class GetKeyResponseV1(BaseModel):
     # Two links: the app root key's signature over the v1 key claim, then the
     # KMS root key's signature over the app root public key.
     signature_chain: List[HexBytes]
+    # KMS root key epoch the key was derived from.
+    root_epoch: int = 0
+    app_epoch: int = 0
 
 
 class GpuEvidenceBundleV1(BaseModel):
@@ -237,7 +240,13 @@ class AsyncDstackClientV1(AsyncBaseClient):
         result = await self._send_rpc_request("IssueCert", data)
         return IssueCertResponseV1(**result)
 
-    async def get_key(self, domain: str, algorithm: str) -> GetKeyResponseV1:
+    async def get_key(
+        self,
+        domain: str,
+        algorithm: str,
+        root_epoch: Optional[int] = None,
+        app_epoch: Optional[int] = None,
+    ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``.
 
         Both arguments are required. Derivation is flat: two domains yield
@@ -245,12 +254,30 @@ class AsyncDstackClientV1(AsyncBaseClient):
         exactly ``secp256k1`` or ``ed25519`` -- there is no default and no
         ``k256`` alias, because in v0 a typo silently produced a key of the
         wrong type under a name the caller thought meant something else.
+
+        ``root_epoch`` selects the KMS root key epoch; the default ``None`` is
+        the current epoch, and epoch 0 is the original root keys. Name an older
+        epoch only to reach a key from before a KMS root key rotation, for
+        example to migrate off it.
         """
         if not algorithm:
             raise ValueError("algorithm is required, use `secp256k1` or `ed25519`")
         data: Dict[str, Any] = {"domain": domain, "algorithm": algorithm}
+        if root_epoch is not None:
+            if type(root_epoch) is not int or not 0 <= root_epoch <= 0xFFFFFFFF:
+                raise ValueError("root_epoch must be a uint32")
+            data["root_epoch"] = root_epoch
+        if app_epoch is not None:
+            if type(app_epoch) is not int or not 0 <= app_epoch <= 0xFFFFFFFF:
+                raise ValueError("app_epoch must be a uint32")
+            data["app_epoch"] = app_epoch
         result = await self._send_rpc_request("GetKey", data)
-        return GetKeyResponseV1(**result)
+        response = GetKeyResponseV1(**result)
+        if (root_epoch is not None and response.root_epoch != root_epoch) or (
+            app_epoch is not None and response.app_epoch != app_epoch
+        ):
+            raise ValueError("GetKey returned different epochs than requested")
+        return response
 
     async def attest(
         self,
@@ -350,7 +377,13 @@ class DstackClientV1(BaseClient):
         raise NotImplementedError
 
     @call_async
-    def get_key(self, domain: str, algorithm: str) -> GetKeyResponseV1:
+    def get_key(
+        self,
+        domain: str,
+        algorithm: str,
+        root_epoch: Optional[int] = None,
+        app_epoch: Optional[int] = None,
+    ) -> GetKeyResponseV1:
         """Derive an application key from ``(domain, algorithm)``."""
         raise NotImplementedError
 

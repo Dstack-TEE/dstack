@@ -73,8 +73,6 @@ Inside the CVM at `/etc/kms/certs/`:
 | `root-ca.key` | Root CA signing key (P256 ECDSA) |
 | `rpc.crt` | TLS certificate for RPC server |
 | `rpc.key` | RPC server private key |
-| `tmp-ca.crt` | Temp CA, served by the legacy `GetTempCaCert` bootstrap RPC |
-| `tmp-ca.key` | Temp CA private key, served alongside it |
 | `root-k256.key` | Ethereum signing key (secp256k1) |
 | `bootstrap-info.json` | Public keys and TDX attestation quote |
 
@@ -137,6 +135,7 @@ services:
     image: registry.yourdomain.com/dstack-kms:fixed
     ports:
       - "9100:9100"
+      - "9101:9101"
     volumes:
       - /var/run/dstack.sock:/var/run/dstack.sock
       - kms-certs:/etc/kms/certs
@@ -186,6 +185,18 @@ configs:
       [core.auth_api.webhook]
       url = "http://127.0.0.1:9200"
 
+      # Admin listener: serves the key handover to other KMS nodes, so a
+      # KMS requires it. Only the token's SHA-256 goes into the compose.
+      [core.admin]
+      enabled = true
+      address = "0.0.0.0"
+      port = 9101
+      auth_token_hash = "ADMIN_TOKEN_HASH"
+
+      [core.admin.tls]
+      key = "/etc/kms/certs/rpc.key"
+      certs = "/etc/kms/certs/rpc.crt"
+
       [core.onboard]
       enabled = true
       auto_bootstrap_domain = ""
@@ -205,6 +216,10 @@ sed -i 's|kms.yourdomain.com|kms.your-actual-domain.com|g' docker-compose.yaml
 
 # KMS contract address (from contract deployment tutorial)
 sed -i "s|YOUR_CONTRACT_ADDRESS|$(cat ~/.dstack/secrets/kms-contract-address)|g" docker-compose.yaml
+
+# KMS admin token: keep the token, put only its SHA-256 in the compose
+(umask 077 && openssl rand -hex 32 > ~/.dstack/secrets/kms-admin-token)
+sed -i "s|ADMIN_TOKEN_HASH|$(tr -d '\n' < ~/.dstack/secrets/kms-admin-token | sha256sum | cut -d' ' -f1)|g" docker-compose.yaml
 ```
 
 This docker-compose uses a Docker `configs` section to inject a complete `kms.toml` into the container at `/etc/kms/kms.toml`, overriding the config baked into the image. This approach lets you change KMS configuration without rebuilding the Docker image.
@@ -217,6 +232,7 @@ This docker-compose uses a Docker `configs` section to inject a complete `kms.to
 | `[rpc.tls]` | TLS certificate paths for HTTPS |
 | `[core.image]` | OS image verification — downloads images from `download.dstack.org` to compute expected TDX measurements |
 | `[core.auth_api]` | Authentication via auth-eth webhook on localhost:9200 |
+| `[core.admin]` | Admin listener on port 9101 with TLS; other KMS nodes onboard through it with the admin token. Without it (or `core.onboard.public_key_handover = true`) the KMS does not start |
 | `[core.onboard]` | Bootstrap settings — `auto_bootstrap_domain` is empty so KMS enters onboard mode for manual bootstrap |
 
 > **Why manual bootstrap?** With `auto_bootstrap_domain` left empty, KMS starts in "onboard mode" — a plain HTTP server on port 9100 that waits for you to trigger bootstrap via an RPC call. This ensures `bootstrap-info.json` (containing the TDX attestation quote and public keys) is written to disk. You'll need this file later to register the KMS on-chain.
@@ -318,8 +334,8 @@ Onboarding
 >
 > **Critical prerequisite:** before bootstrap can succeed, the KMS must already be authorized by your auth backend.
 >
-> - For `auth-simple`, add the KMS `mrAggregated` to `kms.mrAggregated`
-> - For `auth-eth`, add the KMS `mrAggregated` on-chain with `addKmsAggregatedMr(...)`
+> - For `dstack-auth`, add the KMS `mrAggregated` to `kms.mrAggregated`
+> - For `auth-eth`, add the KMS `mrAggregated` on-chain with `script/Manage.s.sol:AddKmsAggregatedMr`
 >
 > You can fetch the value before bootstrap with:
 >
@@ -480,7 +496,7 @@ The TDX quote can be verified by:
 │  │  │  │     Docker Container              │   │   │   │
 │  │  │  │                                   │   │   │   │
 │  │  │  │  ┌─────────┐   ┌──────────────┐  │   │   │   │
-│  │  │  │  │  KMS    │◄──│  auth-eth    │  │   │   │   │
+│  │  │  │  │  KMS    │◄──│   auth-eth   │  │   │   │   │
 │  │  │  │  └────┬────┘   └──────┬───────┘  │   │   │   │
 │  │  │  │       │               │          │   │   │   │
 │  │  │  │       ▼               ▼          │   │   │   │

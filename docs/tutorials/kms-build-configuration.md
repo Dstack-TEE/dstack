@@ -41,7 +41,7 @@ The dstack KMS provides:
 | Component | Purpose |
 |-----------|---------|
 | **dstack-kms** | Main KMS binary - generates and stores cryptographic keys |
-| **auth-eth** | Node.js service - verifies app permissions via smart contract |
+| **auth-eth** | Bun webhook service - verifies app permissions via smart contract |
 | **kms.toml** | Configuration file for KMS settings |
 | **auth-eth.env** | Environment file with Ethereum RPC credentials |
 | **Docker image** | Containerized KMS for deployment in a CVM |
@@ -204,6 +204,19 @@ type = "webhook"
 [core.auth_api.webhook]
 url = "http://127.0.0.1:9200"
 
+# Admin listener, which serves the key handover to other KMS nodes; a serving
+# KMS requires it. ADMIN_TOKEN_HASH is the token's SHA-256, filled in by the
+# KMS CVM deployment tutorial.
+[core.admin]
+enabled = true
+address = "0.0.0.0"
+port = 9101
+auth_token_hash = "ADMIN_TOKEN_HASH"
+
+[core.admin.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+
 # Onboarding Configuration
 [core.onboard]
 enabled = true
@@ -223,58 +236,23 @@ EOF
 | `[rpc]` | `port` | RPC server port (9100) |
 | `[core]` | `cert_dir` | Directory for certificates |
 | `[core]` | `pccs_url` | PCCS endpoint for quote verification |
-| `[core.auth_api]` | `url` | Auth-eth webhook service URL |
+| `[core.auth_api]` | `url` | auth-eth webhook service URL |
+| `[core.admin]` | `auth_token_hash` | SHA-256 of the admin token; the admin listener with `[core.admin.tls]` is required to serve |
 | `[core.onboard]` | `enabled` | Enable bootstrap/onboard mode |
 
-## Step 5: Build Auth-ETH Service
+## Step 5: Prepare the auth-eth Service
 
-The KMS requires the auth-eth service to query the Ethereum contract for authorization.
+The KMS requires the [auth-eth](https://github.com/Dstack-TEE/dstack/tree/next/dstack/kms/auth-eth) webhook service to query the Ethereum contract for authorization.
 
-### Install Node.js
-
-The auth-eth service requires Node.js. Install Node.js 20.x from NodeSource:
+auth-eth runs directly from its TypeScript source with [Bun](https://bun.sh), so there is no build step. The Docker image in Step 7 installs Bun and the locked dependencies. Check that the source is present:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
+ls ~/dstack/dstack/kms/auth-eth/index.ts ~/dstack/dstack/kms/auth-eth/package.json ~/dstack/dstack/kms/auth-eth/bun.lock
 ```
 
-Verify the installation:
+The same directory also holds the Foundry project for the contracts; the server needs only these three files.
 
-```bash
-node --version
-npm --version
-```
-
-You should see Node.js v20.x and npm v10.x (or later).
-
-### Navigate to auth-eth directory
-
-```bash
-cd ~/dstack/dstack/kms/auth-eth
-```
-
-### Install dependencies
-
-```bash
-npm install
-```
-
-### Build TypeScript
-
-```bash
-npx tsc --project tsconfig.json
-```
-
-### Verify build
-
-```bash
-ls -la dist/src/
-```
-
-You should see `main.js` and other compiled files.
-
-## Step 6: Create Auth-ETH Configuration
+## Step 6: Create auth-eth Configuration
 
 Create environment configuration for the auth-eth service.
 
@@ -299,14 +277,16 @@ If you've lost the address, find it on [Sepolia Etherscan](https://sepolia.ether
 
 ```bash
 cat > /etc/kms/auth-eth.env << EOF
-# Auth-ETH Service Configuration
+# auth-eth Service Configuration
 
-# Server settings
-HOST=127.0.0.1
+# Server port (must match the kms.toml webhook URL)
 PORT=9200
 
 # Ethereum RPC endpoint (Sepolia testnet)
 ETH_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+
+# Reject decisions if the RPC serves a different chain (Sepolia)
+ETH_CHAIN_ID=11155111
 
 # KMS Authorization Contract Address
 KMS_CONTRACT_ADDR=$KMS_CONTRACT_ADDRESS
@@ -368,6 +348,8 @@ The Dockerfile bakes all configuration into the image for reliable CVM deploymen
 ```bash
 cat > Dockerfile << 'EOF'
 # KMS Docker Image for CVM Deployment
+FROM oven/bun:1.4.4 AS bun
+
 FROM ubuntu:24.04
 
 # Install runtime dependencies
@@ -375,10 +357,8 @@ RUN apt-get update && \
     apt-get install -y ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Node.js 20.x for auth-eth
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
+# Install Bun for auth-eth
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 # Create directories
 RUN mkdir -p /etc/kms/certs /etc/kms/images /var/run/kms /var/log/kms
@@ -389,12 +369,13 @@ RUN chmod 755 /usr/local/bin/dstack-kms
 
 # Copy configuration files (baked into image)
 COPY kms.toml /etc/kms/kms.toml
-COPY auth-eth.env /etc/kms/auth-eth.env
 COPY sgx_default_qcnl.conf /etc/sgx_default_qcnl.conf
 
-# Copy auth-eth service and install dependencies
+# Copy auth-eth and install its locked dependencies. Bun loads .env from
+# the working directory; variables set in docker-compose take precedence.
 COPY auth-eth /opt/auth-eth
-RUN cd /opt/auth-eth && npm install --production
+COPY auth-eth.env /opt/auth-eth/.env
+RUN cd /opt/auth-eth && bun install --frozen-lockfile --production --ignore-scripts
 
 # Copy startup script
 COPY start-kms.sh /usr/local/bin/start-kms.sh
@@ -417,8 +398,7 @@ set -e
 
 # Start auth-eth in background
 cd /opt/auth-eth
-node dist/src/main.js &
-AUTH_ETH_PID=$!
+bun index.ts &
 
 # Wait for auth-eth to be ready
 sleep 2
@@ -499,8 +479,9 @@ EOF
 # Copy KMS binary
 cp ~/dstack/dstack/target/release/dstack-kms .
 
-# Copy auth-eth service
-cp -r ~/dstack/dstack/kms/auth-eth auth-eth
+# Copy the auth-eth webhook server (not the Foundry project next to it)
+mkdir -p auth-eth
+cp ~/dstack/dstack/kms/auth-eth/{index.ts,package.json,bun.lock} auth-eth/
 
 # Copy auth-eth environment config
 cp /etc/kms/auth-eth.env .
@@ -568,7 +549,6 @@ services:
     volumes:
       # Mount config file from local directory
       - ./kms.toml:/etc/kms/kms.toml:ro
-      - ./auth-eth.env:/etc/kms/auth-eth.env:ro
       # Named volume for persistent certificates
       - kms-certs:/etc/kms/certs
     environment:
@@ -590,11 +570,11 @@ ls -la ~/kms-deployment/
 You should have:
 - `Dockerfile` - Container build definition
 - `dstack-kms` - KMS binary
-- `auth-eth/` - Auth-eth service directory
+- `auth-eth/` - auth-eth webhook server (`index.ts`, `package.json`, `bun.lock`)
 - `start-kms.sh` - Startup script
 - `docker-compose.yml` - Deployment manifest
 - `kms.toml` - KMS configuration
-- `auth-eth.env` - Auth-eth environment
+- `auth-eth.env` - auth-eth environment
 - `sgx_default_qcnl.conf` - QCNL configuration for CVM PCCS access
 
 ## Step 9: Verify Configuration
@@ -647,7 +627,7 @@ curl -s -X POST "$ETH_RPC_URL" \
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌──────────────┐
-│   TEE App   │────►│     KMS     │────►│   Auth-ETH   │
+│   TEE App   │────►│     KMS     │────►│   auth-eth   │
 └─────────────┘     └─────────────┘     └──────────────┘
        │                   │                    │
        │                   │                    ▼
@@ -665,8 +645,8 @@ curl -s -X POST "$ETH_RPC_URL" \
 ### Data Flow
 
 1. **TEE App** requests key from **KMS**
-2. **KMS** calls **Auth-ETH** webhook to verify authorization
-3. **Auth-ETH** queries **Ethereum** smart contract
+2. **KMS** calls **auth-eth** webhook to verify authorization
+3. **auth-eth** queries **Ethereum** smart contract
 4. If authorized, **KMS** returns key to app
 5. **VMM** orchestrates the overall TEE environment
 
@@ -676,7 +656,7 @@ For detailed solutions, see the [KMS Deployment Troubleshooting Guide](/tutorial
 
 - [Build fails with missing dependencies](/tutorial/troubleshooting-kms-deployment#build-fails-with-missing-dependencies)
 - [Configuration file not found](/tutorial/troubleshooting-kms-deployment#configuration-file-not-found)
-- [Auth-eth npm install fails](/tutorial/troubleshooting-kms-deployment#auth-eth-npm-install-fails)
+- [auth-eth install fails](/tutorial/troubleshooting-kms-deployment#auth-eth-install-fails)
 - [Invalid TOML syntax](/tutorial/troubleshooting-kms-deployment#invalid-toml-syntax)
 - [RPC connection failed](/tutorial/troubleshooting-kms-deployment#rpc-connection-failed)
 - [Contract address not set](/tutorial/troubleshooting-kms-deployment#contract-address-not-set)

@@ -122,28 +122,39 @@ Production KMS requires:
 
 #### Auth Server Options
 
-> **Note:** the boot-authorization webhook below (auth-simple / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Note:** the boot-authorization webhook below (dstack-auth / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
-| [auth-simple](../dstack/kms/auth-simple/) | Config-file-based whitelisting | JSON config file |
-| [auth-eth](../dstack/kms/auth-eth/) | On-chain governance via smart contracts | Ethereum RPC + contract |
+| [dstack-auth](./dstack-auth-operations.md) | Config-file-based whitelisting | JSON config file |
+| [auth-eth](../dstack/kms/auth-eth/) | On-chain governance via the `DstackKms`/`DstackApp` contracts in the same directory | Ethereum RPC + contract |
 | Custom | Your own authorization logic | Implement webhook interface |
 
 All auth servers implement the same webhook interface:
-- `GET /` - Health check
-- `POST /bootAuth/app` - App boot authorization
-- `POST /bootAuth/kms` - KMS boot authorization
 
-#### Using auth-simple (Config-Based)
+- `GET /` - Health check and current root epoch
+- `POST /authorizeApp` - Application key and certificate authorization
+- `POST /authorizeKms` - KMS self-authorization and key handover
 
-auth-simple validates boot requests against a JSON config file.
+The legacy `/bootAuth/app` and `/bootAuth/kms` routes remain available for older
+clients and KMS bootstrap/onboarding checks.
+
+#### Using dstack-auth (Config-Based)
+
+dstack-auth validates requests against a JSON config file. Build it:
+
+```bash
+cd dstack
+cargo build --release -p dstack-auth
+```
 
 Create `auth-config.json` for initial KMS deployment:
 
 ```json
 {
   "osImages": ["0x<os-image-hash>"],
+  "allowedTcbStatuses": ["UpToDate"],
+  "allowedAdvisoryIds": [],
   "kms": {
     "mrAggregated": ["0x<kms-mr-aggregated>"],
     "allowAnyDevice": true
@@ -152,21 +163,41 @@ Create `auth-config.json` for initial KMS deployment:
 }
 ```
 
-> **Important:** `auth-simple` now treats an empty `kms.mrAggregated` allowlist as deny-all for KMS. Capture the current KMS measurement with `Onboard.GetAttestationInfo` and add it before bootstrap.
+> **Important:** an empty `kms.mrAggregated` allowlist denies every KMS. Capture the current KMS measurement with `Onboard.GetAttestationInfo` and add it before bootstrap.
 
-Run auth-simple:
+`allowedTcbStatuses` and `allowedAdvisoryIds` are opt-in: without them the TCB
+status and advisories are not checked. Keep them unless you operate and trust
+the host yourself; see [TCB and advisory policy](./dstack-auth-operations.md#tcb-and-advisory-policy).
+
+Bootstrap needs only the fields above. Before the KMS serves keys, set
+`kmsContractAddr` to the KMS CVM's app ID and register its root keys as
+`rootEpochs` (see [Rotating KMS Root Keys](#rotating-kms-root-keys)); every
+other operation is denied until both are set.
+
+Run dstack-auth on the operator host:
 
 ```bash
-cd dstack/kms/auth-simple
-bun install
-PORT=3001 AUTH_CONFIG_PATH=/path/to/auth-config.json bun run start
+./target/release/dstack-auth --config /path/to/auth-config.json --port 3001
 ```
 
-For adding Gateway, apps, and other config fields, see [auth-simple Operations Guide](./auth-simple-operations.md).
+It binds to `127.0.0.1`, which a KMS CVM on QEMU user-mode networking reaches as
+`http://10.0.2.2:3001`. Add `--address 0.0.0.0` if the KMS reaches the host over
+a real network.
+
+For adding Gateway, apps, and other config fields, see [dstack-auth Operations Guide](./dstack-auth-operations.md).
 
 #### Using auth-eth (On-Chain)
 
 For decentralized governance via smart contracts, see [On-Chain Governance](./onchain-governance.md).
+
+auth-eth reads policy at the block `ETH_BLOCK_TAG` names, `finalized` by
+default. Only `finalized` protects policy from reorgs. With `latest` (required
+for an OP-stack chain read through Helios) or `safe`, a reorg can revert both
+activations and revocations: a removed image or compose hash is authorized
+again, and a rolled-back root epoch activation makes every KMS restart onto the
+previous epoch. `ETH_FINALITY_CONFIRMATIONS=N` hides reorgs shallower than N
+blocks but delays every policy change, emergency revocations included, by N
+blocks. See [reorgs and the block tag](../dstack/kms/auth-eth/README.md#reorgs-and-the-block-tag).
 
 #### Getting OS Image Hash
 
@@ -179,15 +210,15 @@ cat dstack-0.5.5/digest.txt
 # Output: 0b327bcd642788b0517de3ff46d31ebd3847b6c64ea40bacde268bb9f1c8ec83
 ```
 
-Add `0x` prefix for auth-simple config: `0x0b327bcd...`
+Add `0x` prefix for the dstack-auth config: `0x0b327bcd...`
 
 #### Deploy KMS CVM
 
 Choose the deployment script based on your auth server:
 
-**For auth-simple (external webhook):**
+**For dstack-auth (external webhook):**
 
-auth-simple runs on your infrastructure, outside the CVM.
+dstack-auth runs on your infrastructure, outside the CVM.
 
 ```bash
 cd dstack/kms/dstack-app/
@@ -197,7 +228,7 @@ Edit `.env.simple`:
 
 ```bash
 VMM_RPC=http://127.0.0.1:9080
-AUTH_WEBHOOK_URL=http://your-auth-server:3001
+AUTH_WEBHOOK_URL=http://10.0.2.2:3001
 KMS_RPC_ADDR=0.0.0.0:9201
 GUEST_AGENT_ADDR=127.0.0.1:9205
 OS_IMAGE=dstack-0.5.5
@@ -286,7 +317,7 @@ OS_IMAGE=dstack-0.5.5
 
 **Note on hex formats:**
 - Gateway `.env` file: Use raw hex without `0x` prefix (e.g., `GATEWAY_APP_ID=32467b43...`)
-- auth-simple config: Use `0x` prefix (e.g., `"0x32467b43..."`). The server normalizes both formats.
+- dstack-auth config: Use `0x` prefix (e.g., `"0x32467b43..."`). The server normalizes both formats.
 
 Run the script again:
 
@@ -306,7 +337,7 @@ Continue? [y/N]
 ```
 
 **Before pressing 'y'**, add the compose hash to your auth server whitelist:
-- For auth-simple: Add to `composeHashes` array in `auth-config.json`
+- For dstack-auth: Add to `composeHashes` array in `auth-config.json`
 - For auth-eth: Use Foundry scripts (see [On-Chain Governance](./onchain-governance.md#register-gateway-app))
 
 Then return to the first terminal and press 'y' to deploy.
@@ -470,14 +501,16 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 **How it works:**
 
 1. New KMS starts in onboard mode (empty `auto_bootstrap_domain`)
-2. New KMS generates an RA-TLS client certificate with its TDX quote: self-issued when given a `source_token`, or minted from the temp CA fetched with `GetTempCaCert` for a source older than 0.6.0
-3. New KMS calls `GetKmsKey` over mTLS: `Admin.GetKmsKey` with the token, or the legacy public `KMS.GetKmsKey` without one
-4. Source KMS verifies attestation via `bootAuth/kms` webhook
+2. New KMS generates an RA-TLS client certificate with its attestation: self-issued with an admin token, or signed by the source temporary CA for tokenless legacy onboarding
+3. New KMS calls `GetKmsKey` over mTLS: `Admin.GetKmsKey` with the token, or the explicitly enabled public `KMS.GetKmsKey` without one
+4. Source KMS verifies the attestation and authorizes handover via `/authorizeKms`
 5. If approved, source KMS returns root keys
 6. New KMS verifies the source's attestation on that same connection and checks it against its own policy before using the keys
 7. Both KMS instances now derive identical keys
 
 **Configure the source KMS for key handover:**
+
+Every KMS needs this, or `core.onboard.public_key_handover = true`: without a handover path it refuses to start, before onboarding or bootstrap, naming the missing setting. In a public config such as an app compose, set `auth_token_hash` (the token's SHA-256) instead of `auth_token`, with a high-entropy random token (`openssl rand -hex 32`), since the hash can be brute-forced offline.
 
 `Admin.GetKmsKey` only works on an admin listener with `[core.admin.tls]`: without TLS the listener speaks plain HTTP, so the new KMS can present no RA-TLS certificate and the call fails with `No attestation provided`. The admin listener binds to `127.0.0.1` by default; bind it to an address the new KMS can reach and restrict access to the KMS nodes at the network layer.
 
@@ -528,7 +561,71 @@ curl http://<new-kms>:9203/finish
 
 > **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 >
-> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`: omit `source_token` and pass the source's public RPC URL instead.
+> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request; the token is required unless the source enables the public handover. The legacy public `KMS.GetKmsKey` is off by default; set `core.onboard.public_key_handover = true` on the source only when an onboarding KMS cannot use the admin listener, such as a 0.5.x KMS or an onboarding request without `source_token`.
+
+#### Rotating KMS Root Keys
+
+KMS root keys are versioned by epoch; epoch 0 is the original roots. Every KMS
+keeps all epochs so CVMs can migrate from any of them, and serves the epoch
+governance made current. See the [rotation design](./kms-emergency-key-rotation-protocol.md)
+for the full procedure; the KMS steps are:
+
+1. If epochs were never registered, publish the attestation the KMS produced at
+   bootstrap (kept in `bootstrap-info.json` on the bootstrapped node) and
+   register the current root public keys as epoch 0:
+   `DstackKms.registerRootEpoch(caPubkey, k256Pubkey, evidenceUrl)`, via
+   `script/Manage.s.sol:RegisterRootEpoch`, or a `rootEpochs` entry in the
+   dstack-auth config. Epoch 0 is current once registered, and must be the
+   `kmsInfo` keys when those are set. A deployment whose `kmsInfo` holds a
+   legacy `quote` and `eventlog` instead of an attestation converts them with
+   `dstack-kms legacy-attestation --quote <hex> --eventlog <hex>` and publishes
+   the result first: from then on `kmsInfo` follows the current epoch's keys and
+   its quote and event log are cleared.
+2. Onboard a fresh KMS with `"rotate": true` (the **Rotate** checkbox in the
+   onboard UI) from a KMS at the current epoch N-1. It imports epochs 0..N-1,
+   generates epoch N, and returns the new public keys with an attestation whose
+   report data is
+   `keccak256("dstack-kms-genereted-keys-v1:{ca_pubkey_hex};{k256_pubkey_hex};")`
+   zero-padded to 64 bytes, the same encoding as the original bootstrap (the
+   spelling is part of the format). It binds both public keys; the epoch number
+   comes from the on-chain registration order.
+3. Before registering, verify the attestation with
+   [dstack-verifier](../dstack/verifier/README.md) (`POST /verify`): check the
+   quote, the approved KMS image and measurements, and that its report data
+   equals the value recomputed from the returned public keys. Then publish it
+   and register epoch N with its URL. The cluster keeps serving N-1.
+4. Onboard the other KMS nodes from the rotated one; they import 0..N and keep
+   serving N-1. A join checks the source's keyring against the latest registered
+   epoch as well as the current one, so a source holding an unregistered or
+   different epoch N is refused.
+5. Activate epoch N (`ActivateRootEpoch`, or `currentRootEpoch` for
+   dstack-auth). Each KMS restarts onto N on its next uncached authorization
+   check; a KMS that does not hold N waits
+   until it is onboarded again.
+   If the nodes holding N are lost before N is activated, drop it with
+   `PopRootEpoch` (or remove the `rootEpochs` entry) and rotate again; nodes
+   that imported the dropped N must be onboarded again. On chain, the policy
+   rows prepared for the dropped N do not apply to the new one; approve them
+   again before activating it.
+6. Boot CVMs on an OS that supports root epochs. At boot they re-key their data
+   disk from the epoch recorded in its LUKS header to the current one. If an
+   encrypted environment still uses an older epoch, the CVM re-encrypts it during
+   boot and the VMM replaces the ciphertext only if it was not changed concurrently.
+   See [SealedEnv](./sealed-env.md) for the new format, file precedence, and rollback requirements.
+
+Each `authorizeKms` or `authorizeApp` result carries the current epoch and its chain hash,
+and the latest registered epoch (`latestRootEpoch`, `latestRootEpochHash`), which may be
+pending activation, including when authorization is denied. KMS verifies these against its keyring;
+there is no cached serving epoch. An optional `requestedRootEpoch` selects historical
+keys, and omission selects the returned current epoch. Requests for future
+epochs are denied. No registered epoch returns a rejection with
+`rejectionReason: "Root epoch not registered"` and a zero hash.
+
+RPC certificates still require a listener restart when their root CA changes;
+callers retry after the certificate is refreshed. Register epoch 0 before normal
+key release. Bootstrap keeps using scoped KMS authorization so it can generate
+the first roots before registration. See the
+[authorization protocol](../dstack/kms/README.md#authorization-protocol).
 
 ---
 
@@ -539,7 +636,7 @@ After setup, deploy apps via the VMM dashboard or CLI.
 ### Register App
 
 Before deploying, register your app in your auth server:
-- For auth-simple: See [auth-simple Operations Guide](./auth-simple-operations.md#adding-an-app)
+- For dstack-auth: See [dstack-auth Operations Guide](./dstack-auth-operations.md#adding-an-app)
 - For auth-eth: See [On-Chain Governance](./onchain-governance.md#register-apps-on-chain)
 
 ### Deploy via UI

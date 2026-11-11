@@ -7,6 +7,9 @@
 pragma solidity ^0.8.24;
 
 import "./IAppAuth.sol";
+import "./AuthorizationOperation.sol";
+import "./IAppEpochAuth.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -22,7 +25,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         bytes eventlog;
     }
 
-    // KMS information
+    // Retained for proxy storage compatibility and legacy readers. Only root
+    // epoch registration and activation may update this identity.
     KmsInfo public kmsInfo;
 
     // The dstack-gateway App ID
@@ -32,23 +36,67 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Mapping of registered apps
     mapping(address => bool) public registeredApps;
 
-    // Mapping of allowed aggregated MR measurements for running KMS
+    /// @notice Allowed aggregated MR measurements for running KMS. Epoch 0 only; for other epochs use the *AtEpoch
+    /// getters and EpochPolicyChanged.
     mapping(bytes32 => bool) public kmsAllowedAggregatedMrs;
 
-    // Mapping of allowed KMS device IDs
+    /// @notice Allowed KMS device IDs. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     mapping(bytes32 => bool) public kmsAllowedDeviceIds;
 
-    // Mapping of allowed image measurements
+    /// @notice Allowed OS image measurements. Epoch 0 only; for other epochs use the *AtEpoch getters and
+    /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedOsImages;
 
     // DstackApp implementation contract address for factory deployment
     address public appImplementation;
+
+    // DER SubjectPublicKeyInfo prefix of a P-256 key with an uncompressed point;
+    // the 64 bytes of the point follow.
+    bytes27 private constant P256_SPKI_PREFIX = 0x3059301306072a8648ce3d020106082a8648ce3d03010703420004;
+
+    struct RootEpoch {
+        bytes caPubkey;
+        bytes k256Pubkey;
+        // Where to fetch the generating KMS's attestation. Its report data binds
+        // both public keys, so the evidence proves itself: anyone can check the
+        // keys came from an approved KMS in a TEE.
+        string evidenceUrl;
+        // Commits to the public keys of this epoch and every earlier one:
+        // keccak256(previous chainHash || keccak256(caPubkey) ||
+        // keccak256(k256Pubkey)), with a zero previous hash for epoch 0.
+        bytes32 chainHash;
+        // Keys this epoch's policy rows; unique to each registration.
+        uint256 registration;
+    }
+
+    // Root keys of each KMS root epoch, indexed by epoch; epoch 0 is the
+    // original roots. A registered epoch's keys and chain hash never change.
+    // A pending epoch can be popped, and the owner can update evidenceUrl:
+    // the evidence proves itself, so the URL only says where it is stored.
+    RootEpoch[] private _rootEpochs;
+
+    // The epoch KMS instances serve. Registering epoch 0 makes it current;
+    // later epochs take effect only when activated, one at a time.
+    uint256 private _currentRootEpoch;
+
+    // Number of root epoch registrations, popped ones included.
+    uint256 private _rootEpochRegistrations;
+
+    // Policy rows of epochs from 1, keyed by the epoch's registration so that a
+    // popped and re-registered epoch starts empty, even with the same keys.
+    // Epoch zero continues to use the original fields above after an upgrade.
+    mapping(uint256 => mapping(bytes32 => bool)) private _kmsAggregatedMrsByRoot;
+    mapping(uint256 => mapping(bytes32 => bool)) private _kmsDeviceIdsByRoot;
+    mapping(uint256 => mapping(bytes32 => bool)) private _osImagesByRoot;
+
+    event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     // Events
     // appId is unindexed for backward compatibility with deployed log indexers.
     // slither-disable-next-line unindexed-event-address
     event AppRegistered(address appId);
     event KmsInfoSet(bytes k256Pubkey);
+    /// @notice Legacy material events. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     event KmsAggregatedMrAdded(bytes32 mrAggregated);
     event KmsAggregatedMrRemoved(bytes32 mrAggregated);
     event KmsDeviceAdded(bytes32 deviceId);
@@ -58,6 +106,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event GatewayAppIdSet(string gatewayAppId);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
+    event RootEpochRegistered(
+        uint256 indexed epoch, bytes32 chainHash, bytes caPubkey, bytes k256Pubkey, string evidenceUrl
+    );
+    event RootEpochActivated(uint256 indexed epoch);
+    event RootEpochPopped(uint256 indexed epoch, bytes32 chainHash);
+    event RootEpochEvidenceUrlSet(uint256 indexed epoch, string evidenceUrl);
     event AppDeployedViaFactory(address indexed appId, address indexed deployer);
     /// @notice Additive audit event for reconstructing authorization policy.
     /// @dev `value` is the affected bytes32 value, address, or hash of dynamic public data.
@@ -108,21 +162,109 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         emit PolicyChanged(msg.sender, keccak256(bytes(policy)), value, enabled);
     }
 
-    // Function to set KMS information
-    function setKmsInfo(KmsInfo memory info) external onlyOwner {
-        kmsInfo = info;
-        emit KmsInfoSet(info.k256Pubkey);
-        _emitPolicy("kms-info", keccak256(info.k256Pubkey), true);
+    // Register the root public keys of the next KMS root epoch, with where to
+    // fetch the attestation proving where they were generated. It is not served until
+    // activated, except epoch 0, which is current from the start and must be
+    // the kmsInfo keys when those are set.
+    function registerRootEpoch(
+        // P-256 DER SubjectPublicKeyInfo, uncompressed (91 bytes)
+        bytes calldata caPubkey,
+        // secp256k1 SEC1 compressed (33 bytes)
+        bytes calldata k256Pubkey,
+        string calldata evidenceUrl
+    )
+        external
+        onlyOwner
+        returns (uint256 epoch)
+    {
+        require(caPubkey.length == 91 && bytes27(caPubkey[:27]) == P256_SPKI_PREFIX, "Invalid epoch CA public key");
+        require(
+            k256Pubkey.length == 33 && (k256Pubkey[0] == 0x02 || k256Pubkey[0] == 0x03), "Invalid epoch k256 public key"
+        );
+        require(bytes(evidenceUrl).length > 0, "Empty epoch evidence URL");
+        epoch = _rootEpochs.length;
+        if (epoch == 0 && kmsInfo.k256Pubkey.length > 0) {
+            require(
+                keccak256(caPubkey) == keccak256(kmsInfo.caPubkey)
+                    && keccak256(k256Pubkey) == keccak256(kmsInfo.k256Pubkey),
+                "Epoch 0 keys differ from kmsInfo"
+            );
+        }
+        bytes32 previous = epoch == 0 ? bytes32(0) : _rootEpochs[epoch - 1].chainHash;
+        bytes32 chainHash = keccak256(abi.encodePacked(previous, keccak256(caPubkey), keccak256(k256Pubkey)));
+        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, evidenceUrl, chainHash, _rootEpochRegistrations++));
+        emit RootEpochRegistered(epoch, chainHash, caPubkey, k256Pubkey, evidenceUrl);
+        _emitPolicy("root-epoch", chainHash, true);
+        if (epoch == 0) {
+            _useRootEpoch(0);
+        }
     }
 
-    // Function to set KMS quote
-    function setKmsQuote(bytes memory quote) external onlyOwner {
-        kmsInfo.quote = quote;
+    // Make the next registered root epoch the one KMS instances serve. Bind
+    // activation to its chain hash in case a pending epoch has been replaced.
+    function activateRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
+        require(epoch == _currentRootEpoch + 1 && epoch < _rootEpochs.length, "Invalid root epoch activation");
+        require(_rootEpochs[epoch].chainHash == chainHash, "root epoch chain hash mismatch");
+        _currentRootEpoch = epoch;
+        _useRootEpoch(epoch);
+        _emitPolicy("root-epoch-activated", bytes32(epoch), true);
     }
 
-    // Function to set KMS eventlog
-    function setKmsEventlog(bytes memory eventlog) external onlyOwner {
-        kmsInfo.eventlog = eventlog;
+    // Point kmsInfo at the keys of the now current epoch, for readers of the
+    // legacy KMS identity. Its quote and event log described the previous keys;
+    // the epoch's evidence is at its evidenceUrl.
+    function _useRootEpoch(uint256 epoch) private {
+        RootEpoch storage keys = _rootEpochs[epoch];
+        kmsInfo.caPubkey = keys.caPubkey;
+        kmsInfo.k256Pubkey = keys.k256Pubkey;
+        delete kmsInfo.quote;
+        delete kmsInfo.eventlog;
+        emit KmsInfoSet(keys.k256Pubkey);
+        emit RootEpochActivated(epoch);
+    }
+
+    // Point an epoch at a new copy of its evidence, for when the old location
+    // goes away. The evidence proves itself, so only its location changes.
+    function setRootEpochEvidenceUrl(uint256 epoch, string calldata evidenceUrl) external onlyOwner {
+        require(epoch < _rootEpochs.length, "Unknown root epoch");
+        require(bytes(evidenceUrl).length > 0, "Empty epoch evidence URL");
+        _rootEpochs[epoch].evidenceUrl = evidenceUrl;
+        emit RootEpochEvidenceUrlSet(epoch, evidenceUrl);
+    }
+
+    // Drop the last registered epoch while it is still pending, for when the
+    // nodes holding it are lost before enough others have onboarded it. The
+    // epoch is named by number and chain hash, so a stale call cannot drop a
+    // later registration of the same number. Its policy rows go with it: the
+    // next registration of the number starts with empty rows, whatever its keys,
+    // which must be prepared again before activation.
+    function popRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
+        require(epoch + 1 == _rootEpochs.length && epoch > _currentRootEpoch, "Not the pending root epoch");
+        require(_rootEpochs[epoch].chainHash == chainHash, "Root epoch chain hash mismatch");
+        _rootEpochs.pop();
+        emit RootEpochPopped(epoch, chainHash);
+        _emitPolicy("root-epoch", chainHash, false);
+    }
+
+    function rootEpochCount() external view returns (uint256) {
+        return _rootEpochs.length;
+    }
+
+    // The root epoch KMS instances serve and its chain hash
+    function currentRootEpoch() external view returns (uint256 epoch, bytes32 chainHash) {
+        require(_rootEpochs.length > 0, "No root epoch registered");
+        epoch = _currentRootEpoch;
+        chainHash = _rootEpochs[epoch].chainHash;
+    }
+
+    function rootEpoch(uint256 epoch)
+        external
+        view
+        returns (bytes memory caPubkey, bytes memory k256Pubkey, string memory evidenceUrl, bytes32 chainHash)
+    {
+        require(epoch < _rootEpochs.length, "Unknown root epoch");
+        RootEpoch storage keys = _rootEpochs[epoch];
+        return (keys.caPubkey, keys.k256Pubkey, keys.evidenceUrl, keys.chainHash);
     }
 
     // Function to set trusted Gateway App ID
@@ -210,94 +352,306 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         );
     }
 
-    // Function to register an aggregated MR measurement
-    function addKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
-        kmsAllowedAggregatedMrs[mrAggregated] = true;
-        emit KmsAggregatedMrAdded(mrAggregated);
-        _emitPolicy("kms-aggregated-mr", mrAggregated, true);
+    function kmsAllowedAggregatedMrsAtEpoch(uint256 epoch, bytes32 mrAggregated) public view returns (bool) {
+        if (epoch == 0) return kmsAllowedAggregatedMrs[mrAggregated];
+        return epoch < _rootEpochs.length && _kmsAggregatedMrsByRoot[_rootEpochs[epoch].registration][mrAggregated];
     }
 
-    // Function to deregister an aggregated MR measurement
-    function removeKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
-        kmsAllowedAggregatedMrs[mrAggregated] = false;
-        emit KmsAggregatedMrRemoved(mrAggregated);
-        _emitPolicy("kms-aggregated-mr", mrAggregated, false);
+    function addKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
+        _setKmsAggregatedMr(epoch, mrAggregated, true);
     }
 
-    // Function to register a KMS device ID
-    function addKmsDevice(bytes32 deviceId) external onlyOwner {
-        kmsAllowedDeviceIds[deviceId] = true;
-        emit KmsDeviceAdded(deviceId);
-        _emitPolicy("kms-device", deviceId, true);
+    function addKmsAggregatedMrAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 mrAggregated) external onlyOwner {
+        _setAtEpochs(_setKmsAggregatedMr, fromEpoch, toEpoch, mrAggregated, true);
     }
 
-    // Function to deregister a KMS device ID
-    function removeKmsDevice(bytes32 deviceId) external onlyOwner {
-        kmsAllowedDeviceIds[deviceId] = false;
-        emit KmsDeviceRemoved(deviceId);
-        _emitPolicy("kms-device", deviceId, false);
+    function removeKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
+        _setKmsAggregatedMr(epoch, mrAggregated, false);
     }
 
-    // Function to register an image measurement
-    function addOsImageHash(bytes32 osImageHash) external onlyOwner {
-        allowedOsImages[osImageHash] = true;
-        emit OsImageHashAdded(osImageHash);
-        _emitPolicy("os-image", osImageHash, true);
+    function removeKmsAggregatedMrAtEpochs(
+        uint256 fromEpoch,
+        uint256 toEpoch,
+        bytes32 mrAggregated
+    )
+        external
+        onlyOwner
+    {
+        _setAtEpochs(_setKmsAggregatedMr, fromEpoch, toEpoch, mrAggregated, false);
     }
 
-    // Function to deregister an image measurement
-    function removeOsImageHash(bytes32 osImageHash) external onlyOwner {
-        allowedOsImages[osImageHash] = false;
-        emit OsImageHashRemoved(osImageHash);
-        _emitPolicy("os-image", osImageHash, false);
+    function _setKmsAggregatedMr(uint256 epoch, bytes32 mrAggregated, bool allowed) private {
+        require(epoch <= _latestRootEpoch(), "Unknown root epoch");
+        if (epoch == 0) {
+            kmsAllowedAggregatedMrs[mrAggregated] = allowed;
+            if (allowed) emit KmsAggregatedMrAdded(mrAggregated);
+            else emit KmsAggregatedMrRemoved(mrAggregated);
+            _emitPolicy("kms-aggregated-mr", mrAggregated, allowed);
+        } else {
+            _kmsAggregatedMrsByRoot[_rootEpochs[epoch].registration][mrAggregated] = allowed;
+        }
+        emit EpochPolicyChanged(keccak256("kms-aggregated-mr"), mrAggregated, epoch, allowed);
     }
 
-    // Function to check if KMS is allowed to boot
-    function isKmsAllowed(AppBootInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+    function kmsAllowedDeviceIdsAtEpoch(uint256 epoch, bytes32 deviceId) public view returns (bool) {
+        if (epoch == 0) return kmsAllowedDeviceIds[deviceId];
+        return epoch < _rootEpochs.length && _kmsDeviceIdsByRoot[_rootEpochs[epoch].registration][deviceId];
+    }
+
+    function addKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
+        _setKmsDevice(epoch, deviceId, true);
+    }
+
+    function addKmsDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
+        _setAtEpochs(_setKmsDevice, fromEpoch, toEpoch, deviceId, true);
+    }
+
+    function removeKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
+        _setKmsDevice(epoch, deviceId, false);
+    }
+
+    function removeKmsDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
+        _setAtEpochs(_setKmsDevice, fromEpoch, toEpoch, deviceId, false);
+    }
+
+    function _setKmsDevice(uint256 epoch, bytes32 deviceId, bool allowed) private {
+        require(epoch <= _latestRootEpoch(), "Unknown root epoch");
+        if (epoch == 0) {
+            kmsAllowedDeviceIds[deviceId] = allowed;
+            if (allowed) emit KmsDeviceAdded(deviceId);
+            else emit KmsDeviceRemoved(deviceId);
+            _emitPolicy("kms-device", deviceId, allowed);
+        } else {
+            _kmsDeviceIdsByRoot[_rootEpochs[epoch].registration][deviceId] = allowed;
+        }
+        emit EpochPolicyChanged(keccak256("kms-device"), deviceId, epoch, allowed);
+    }
+
+    function allowedOsImagesAtEpoch(uint256 epoch, bytes32 osImageHash) public view returns (bool) {
+        if (epoch == 0) return allowedOsImages[osImageHash];
+        return epoch < _rootEpochs.length && _osImagesByRoot[_rootEpochs[epoch].registration][osImageHash];
+    }
+
+    function addOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
+        _setOsImageHash(epoch, osImageHash, true);
+    }
+
+    function addOsImageHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 osImageHash) external onlyOwner {
+        _setAtEpochs(_setOsImageHash, fromEpoch, toEpoch, osImageHash, true);
+    }
+
+    function removeOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
+        _setOsImageHash(epoch, osImageHash, false);
+    }
+
+    function removeOsImageHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 osImageHash) external onlyOwner {
+        _setAtEpochs(_setOsImageHash, fromEpoch, toEpoch, osImageHash, false);
+    }
+
+    function _setOsImageHash(uint256 epoch, bytes32 osImageHash, bool allowed) private {
+        require(epoch <= _latestRootEpoch(), "Unknown root epoch");
+        if (epoch == 0) {
+            allowedOsImages[osImageHash] = allowed;
+            if (allowed) emit OsImageHashAdded(osImageHash);
+            else emit OsImageHashRemoved(osImageHash);
+            _emitPolicy("os-image", osImageHash, allowed);
+        } else {
+            _osImagesByRoot[_rootEpochs[epoch].registration][osImageHash] = allowed;
+        }
+        emit EpochPolicyChanged(keccak256("os-image"), osImageHash, epoch, allowed);
+    }
+
+    // A request may select any epoch up to the current one and is decided on
+    // that epoch's row, so revoking a value takes every row that allows it:
+    // 0 through rootEpochCount() - 1.
+    function _setAtEpochs(
+        function(uint256, bytes32, bool) internal setter,
+        uint256 fromEpoch,
+        uint256 toEpoch,
+        bytes32 value,
+        bool allowed
+    )
+        private
+    {
+        require(fromEpoch <= toEpoch, "Invalid root epoch range");
+        for (uint256 epoch = fromEpoch; epoch <= toEpoch; ++epoch) {
+            setter(epoch, value, allowed);
+        }
+    }
+
+    function _latestRootEpoch() private view returns (uint256) {
+        return _rootEpochs.length == 0 ? 0 : _rootEpochs.length - 1;
+    }
+
+    /// Reverts for an unregistered or undeployed app rather than reporting epoch
+    /// zero for it. Legacy policies have epoch zero; an advertised getter must succeed.
+    function currentAppEpoch(address appId) external view returns (uint256) {
+        require(registeredApps[appId], "App not registered");
+        require(appId.code.length != 0, "App not deployed or invalid address");
+        return _appEpoch(appId);
+    }
+
+    /// Zero for an app authorization rejects anyway, so the decision reports the rejection.
+    function _appEpoch(address appId) private view returns (uint256) {
+        if (!registeredApps[appId] || appId.code.length == 0) return 0;
+        if (!ERC165Checker.supportsInterface(appId, type(IAppEpochAuth).interfaceId)) return 0;
+        return IAppEpochAuth(appId).currentAppEpoch();
+    }
+
+    /// Authorize an attested identity and return the root epoch from the same state.
+    /// The caller selects KMS or app policy.
+    function authorizeKms(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory) {
+        return _checkKmsAuthorization(request);
+    }
+
+    /// Apply the KMS-owned checks, forward the request unchanged to an epoch-aware
+    /// policy, then fill the gateway and root epoch fields.
+    function authorizeApp(AuthorizationRequest calldata request)
+        external
+        view
+        returns (AuthorizationResult memory result)
+    {
+        address appId = request.appInfo.appId;
+        string memory rejection = _checkAppRequest(request);
+        if (bytes(rejection).length == 0) {
+            if (ERC165Checker.supportsInterface(appId, type(IAppEpochAuth).interfaceId)) {
+                // The policy owns the operation scope and the app epoch, so its
+                // decision and epoch come from one call.
+                result = IAppEpochAuth(appId).authorizeApp(request);
+            } else if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value != 0) {
+                result.rejectionReason = "Requested app epoch is not active";
+            } else {
+                // Legacy policies only know app epoch zero.
+                (result.authorized, result.rejectionReason) = IAppAuth(appId).isAppAllowed(request.appInfo);
+            }
+        } else {
+            result.rejectionReason = rejection;
+        }
+        _fillRootEpochs(result);
+    }
+
+    /// The KMS-owned fields of every authorization result, read from the same state.
+    function _fillRootEpochs(AuthorizationResult memory result) private view {
+        result.gatewayAppId = gatewayAppId;
+        if (_rootEpochs.length == 0) return;
+        result.currentRootEpoch = _currentRootEpoch;
+        result.currentRootEpochHash = _rootEpochs[_currentRootEpoch].chainHash;
+        uint256 latest = _latestRootEpoch();
+        result.latestRootEpoch = latest;
+        result.latestRootEpochHash = _rootEpochs[latest].chainHash;
+    }
+
+    /// KMS-owned app checks; an empty string forwards the request to the app policy.
+    function _checkAppRequest(AuthorizationRequest calldata request) private view returns (string memory) {
+        if (!AuthorizationOperation.isApp(request.operation)) return "Invalid authorization operation";
+        if (_rootEpochs.length == 0) return "Root epoch not registered";
+        if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _currentRootEpoch) {
+            return "Requested root epoch is not active";
+        }
+        uint256 selectedRootEpoch =
+            request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
+        return _checkAppDeployment(request.appInfo, selectedRootEpoch);
+    }
+
+    function _checkAppDeployment(
+        AppInfo calldata bootInfo,
+        uint256 selectedRootEpoch
+    )
+        private
+        view
+        returns (string memory)
+    {
+        if (!registeredApps[bootInfo.appId]) return "App not registered";
+        if (!allowedOsImagesAtEpoch(selectedRootEpoch, bootInfo.osImageHash)) return "OS image is not allowed";
+        if (!isContract(bootInfo.appId)) return "App not deployed or invalid address";
+        return "";
+    }
+
+    function _checkKmsAuthorization(AuthorizationRequest calldata request)
+        private
+        view
+        returns (AuthorizationResult memory result)
+    {
+        _fillRootEpochs(result);
+        if (!AuthorizationOperation.isKms(request.operation)) {
+            result.rejectionReason = "Invalid authorization operation";
+            return result;
+        }
+        if (_rootEpochs.length == 0 && request.operation != AuthorizationOperation.KMS_BOOTSTRAP) {
+            result.rejectionReason = "Root epoch not registered";
+            return result;
+        }
+        if (request.requestedRootEpoch.isSet && request.requestedRootEpoch.value > _latestRootEpoch()) {
+            result.rejectionReason = "Requested root epoch is not registered";
+            return result;
+        }
+        // Serving issues keys of the epoch, so only the current one; the key
+        // handover may move a pending epoch between instances.
+        if (
+            request.operation == AuthorizationOperation.KMS_SERVE && request.requestedRootEpoch.isSet
+                && request.requestedRootEpoch.value > _currentRootEpoch
+        ) {
+            result.rejectionReason = "Requested root epoch is not active";
+            return result;
+        }
+        if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value != 0) {
+            result.rejectionReason = "Requested app epoch is not active";
+            return result;
+        }
+        uint256 selectedRootEpoch =
+            request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
+        (result.authorized, result.rejectionReason) = _kmsPolicy(request.appInfo, selectedRootEpoch);
+    }
+
+    // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
+    // once a later root epoch is current.
+    function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+        if (_currentRootEpoch != 0) {
+            return (false, "Root epoch requires epoch-aware authorization");
+        }
+        return _kmsPolicy(bootInfo, 0);
+    }
+
+    function _kmsPolicy(AppInfo memory bootInfo, uint256 selectedRootEpoch) private view returns (bool, string memory) {
         // Check if the TCB status is up to date
         if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
         }
 
         // Check if the OS image is allowed
-        if (!allowedOsImages[bootInfo.osImageHash]) {
+        if (!allowedOsImagesAtEpoch(selectedRootEpoch, bootInfo.osImageHash)) {
             return (false, "OS image is not allowed");
         }
 
         // Check if the aggregated MR is allowed
-        if (!kmsAllowedAggregatedMrs[bootInfo.mrAggregated]) {
+        if (!kmsAllowedAggregatedMrsAtEpoch(selectedRootEpoch, bootInfo.mrAggregated)) {
             return (false, "Aggregated MR not allowed");
         }
 
         // Check if the KMS device ID is allowed
-        if (!kmsAllowedDeviceIds[bootInfo.deviceId]) {
+        if (!kmsAllowedDeviceIdsAtEpoch(selectedRootEpoch, bootInfo.deviceId)) {
             return (false, "KMS is not allowed to boot on this device");
         }
 
         return (true, "");
     }
 
-    // Function to check if an app is allowed to boot
-    function isAppAllowed(AppBootInfo calldata bootInfo)
+    // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
+    // once a later root epoch is current.
+    function isAppAllowed(AppInfo calldata bootInfo)
         external
         view
         override
         returns (bool isAllowed, string memory reason)
     {
-        // Check if app is registered
-        if (!registeredApps[bootInfo.appId]) {
-            return (false, "App not registered");
+        if (_currentRootEpoch != 0) {
+            return (false, "Root epoch requires epoch-aware authorization");
         }
-        // Check if the OS image is allowed
-        if (!allowedOsImages[bootInfo.osImageHash]) {
-            return (false, "OS image is not allowed");
+        if (_appEpoch(bootInfo.appId) != 0) {
+            return (false, "App epoch requires epoch-aware authorization");
         }
-
-        // Check if the contract exists at the appId address
-        if (!isContract(bootInfo.appId)) {
-            return (false, "App not deployed or invalid address");
-        }
-
+        string memory rejection = _checkAppDeployment(bootInfo, 0);
+        if (bytes(rejection).length != 0) return (false, rejection);
         // Call the app's isAppAllowed function. The tuple is forwarded as the
         // function's return value; the slither detector trips on the named
         // return + forward pattern but the value is actually used.
@@ -306,7 +660,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[50] private __gap;
+    uint256[44] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

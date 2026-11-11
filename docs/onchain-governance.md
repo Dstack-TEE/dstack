@@ -16,14 +16,12 @@ On-chain governance adds:
 - Production dstack deployment with KMS and Gateway as CVMs (see [Deployment Guide](./deployment.md))
 - Ethereum wallet with funds on Sepolia testnet (or your target network)
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) installed
-- Node.js and npm installed (for the bootAuth server)
 
 ## Deploy DstackKms Contract
 
 ```bash
 cd dstack/kms/auth-eth
-npm install        # Install Node.js dependencies
-forge install      # Install Foundry dependencies
+forge install      # Install Foundry dependencies (git submodules)
 
 # Deploy contracts (deploys both DstackApp implementation and DstackKms proxy)
 PRIVATE_KEY=<your-key> forge script script/Deploy.s.sol:DeployScript \
@@ -51,11 +49,13 @@ export RPC_URL="https://eth-sepolia.g.alchemy.com/v2/<your-alchemy-key>"
 
 ## Configure KMS for On-Chain Auth
 
-The KMS CVM includes an auth-api service that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
+The KMS CVM includes an auth-api service, [auth-eth](../dstack/kms/auth-eth/), that connects to your DstackKms contract. Configure it via environment variables in the KMS CVM:
 
 ```bash
 KMS_CONTRACT_ADDR=<your-dstack-kms-contract-address>
 ETH_RPC_URL=<ethereum-rpc-endpoint>
+ETH_CHAIN_ID=<expected-chain-id>   # optional, rejects decisions from another chain
+ETH_BLOCK_TAG=finalized            # latest, safe or finalized (default)
 ```
 
 The auth-api validates boot requests against the smart contract. See [Deployment Guide](./deployment.md#2-deploy-kms-as-cvm) for complete setup instructions.
@@ -63,7 +63,7 @@ The auth-api validates boot requests against the smart contract. See [Deployment
 ## Whitelist OS Image
 
 ```bash
-OS_IMAGE_HASH=0x<os-image-hash> \
+OS_IMAGE_HASH=0x<os-image-hash> ROOT_EPOCH=0 \
   forge script script/Manage.s.sol:AddOsImage --broadcast --rpc-url $RPC_URL
 ```
 
@@ -109,7 +109,7 @@ sha256sum /path/to/gateway-compose.json | awk '{print "0x"$1}'
 Then add it:
 
 ```bash
-APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> \
+APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> APP_EPOCH=0 \
   forge script script/Manage.s.sol:AddComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
@@ -139,7 +139,7 @@ sha256sum /path/to/your-app-compose.json | awk '{print "0x"$1}'
 Then add it:
 
 ```bash
-APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> \
+APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> APP_EPOCH=0 \
   forge script script/Manage.s.sol:AddComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
@@ -155,8 +155,8 @@ The central governance contract that manages OS image whitelisting, app registra
 
 | Function | Description |
 |----------|-------------|
-| `addOsImageHash(bytes32)` | Whitelist an OS image hash |
-| `removeOsImageHash(bytes32)` | Remove an OS image from whitelist |
+| `addOsImageHashAtEpochs(uint256,uint256,bytes32)` | Whitelist an OS image hash in a range of root epochs |
+| `removeOsImageHashAtEpochs(uint256,uint256,bytes32)` | Remove an OS image from a range of root epochs; `0` through the latest revokes it |
 | `setGatewayAppId(string)` | Set the trusted Gateway app ID(s) |
 | `registerApp(address)` | Register an app contract |
 | `deployAndRegisterApp(...)` | Deploy and register app in one transaction |
@@ -165,17 +165,39 @@ The central governance contract that manages OS image whitelisting, app registra
 
 ### DstackApp (Per-App Contract)
 
-Each app has its own contract controlling which compose hashes and devices are allowed.
+Each app has its own contract controlling which compose hashes and devices are allowed,
+per app epoch. Every setter names the app epoch rows it writes: one epoch, or a range up
+to the next epoch. Removing a value from rows `0` through the current epoch revokes it.
 
 | Function | Description |
 |----------|-------------|
-| `addComposeHash(bytes32)` | Whitelist a compose hash |
-| `removeComposeHash(bytes32)` | Remove a compose hash from whitelist |
-| `addDevice(bytes32)` | Whitelist a device ID |
-| `removeDevice(bytes32)` | Remove a device from whitelist |
-| `setAllowAnyDevice(bool)` | Allow any device to run this app |
-| `isAppAllowed(AppBootInfo)` | Check if app can boot with given config |
+| `addComposeHashAtEpoch(uint256,bytes32)` / `addComposeHashAtEpochs(uint256,uint256,bytes32)` | Whitelist a compose hash in one app epoch or a range |
+| `removeComposeHashAtEpoch(uint256,bytes32)` / `removeComposeHashAtEpochs(uint256,uint256,bytes32)` | Remove a compose hash from one app epoch or a range |
+| `addDeviceAtEpoch(uint256,bytes32)` / `addDeviceAtEpochs(uint256,uint256,bytes32)` | Whitelist a device ID |
+| `removeDeviceAtEpoch(uint256,bytes32)` / `removeDeviceAtEpochs(uint256,uint256,bytes32)` | Remove a device |
+| `setAllowAnyDeviceAtEpoch(uint256,bool)` / `setAllowAnyDeviceAtEpochs(uint256,uint256,bool)` | Allow any device to run this app |
+| `currentAppEpoch()` | The app epoch new keys are derived for |
+| `isAppAllowed(AppBootInfo)` | Check if app can boot with given config (app epoch 0 only) |
 | `disableUpgrades()` | Permanently disable contract upgrades |
+
+#### Apps deployed before app epochs
+
+App contracts deployed from dstack 0.6.x or earlier, and not upgraded since, have only
+app epoch 0 and the epoch-less setters `addComposeHash(bytes32)`,
+`removeComposeHash(bytes32)`, `addDevice(bytes32)`, `removeDevice(bytes32)` and
+`setAllowAnyDevice(bool)`. They keep working with an upgraded `DstackKms` and KMS,
+which authorize them for app epoch 0. Tell the two kinds apart by ERC-165 interface ID:
+
+```bash
+cast call <app-id> "supportsInterface(bytes4)(bool)" 0x853d2b79 --rpc-url $RPC_URL  # IAppEpochManagement: epoch setters
+cast call <app-id> "supportsInterface(bytes4)(bool)" 0x8fd37527 --rpc-url $RPC_URL  # IAppAuthBasicManagement: epoch-less setters
+```
+
+The `Manage.s.sol` app scripts check this themselves: on an older app they call the
+epoch-less setter and accept only `APP_EPOCH=0` or no epoch; on a current app they
+require `APP_EPOCH`, or `FROM_APP_EPOCH` and `TO_APP_EPOCH`. Upgrading an older app to
+the current `DstackApp` keeps its compose hashes, devices and `allowAnyDevice` as app
+epoch 0.
 
 ### AppBootInfo Structure
 

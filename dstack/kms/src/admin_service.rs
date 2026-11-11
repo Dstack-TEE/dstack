@@ -14,7 +14,7 @@ use dstack_kms_rpc::{
 };
 use ra_rpc::{CallContext, RpcCall};
 
-use crate::main_service::{KmsState, RpcHandler};
+use crate::main_service::{KeyRelease, KmsState, RpcHandler};
 
 pub struct AdminRpcHandler {
     state: KmsState,
@@ -28,7 +28,9 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn get_kms_key(self, request: GetKmsKeyRequest) -> Result<KmsKeyResponse> {
-        self.rpc.handover_keys(request).await
+        self.rpc
+            .handover_keys(KeyRelease::AdminHandover, request)
+            .await
     }
 }
 

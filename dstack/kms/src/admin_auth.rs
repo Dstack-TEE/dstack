@@ -8,11 +8,13 @@
 //! attestation), the admin API is reached by operators/tooling, so it uses the
 //! same shared-token/htpasswd HTTP mechanism as the VMM and gateway. The token
 //! is configured via `core.admin.auth_token`, or the `DSTACK_KMS_ADMIN_TOKEN` /
-//! `ADMIN_API_TOKEN` environment variables.
+//! `ADMIN_API_TOKEN` environment variables, or as its SHA-256 in
+//! `core.admin.auth_token_hash`.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use dstack_api_auth::{Authenticator, HttpAuthConfig, HttpAuthFairing};
 use rocket::Route;
+use sha2::{Digest, Sha256};
 
 use crate::config::AdminConfig;
 
@@ -29,28 +31,47 @@ impl AdminAuthFairing {
                 http_config(),
             )));
         }
-        let token = if !config.auth_token.is_empty() {
-            config.auth_token.trim().to_owned()
-        } else {
-            std::env::var(ENV_ADMIN_TOKEN)
-                .or_else(|_| std::env::var(ENV_ADMIN_TOKEN_COMPAT))
-                .unwrap_or_default()
-                .trim()
-                .to_owned()
-        };
-        if token.is_empty() && config.htpasswd_file.as_os_str().is_empty() {
-            bail!(
-                "admin API is enabled but neither auth_token nor htpasswd_file is configured; \
-                 set core.admin.auth_token, {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, \
-                 core.admin.htpasswd_file, or insecure_no_auth = true (testing only)"
-            );
-        }
-        let mut auth = Authenticator::from_tokens([token]);
-        if !config.htpasswd_file.as_os_str().is_empty() {
-            auth = auth.with_htpasswd_file(&config.htpasswd_file)?;
-        }
-        Ok(Self(HttpAuthFairing::new(auth, http_config())))
+        Ok(Self(HttpAuthFairing::new(
+            authenticator(config)?,
+            http_config(),
+        )))
     }
+}
+
+fn authenticator(config: &AdminConfig) -> Result<Authenticator> {
+    let token = if !config.auth_token.is_empty() {
+        config.auth_token.trim().to_owned()
+    } else {
+        std::env::var(ENV_ADMIN_TOKEN)
+            .or_else(|_| std::env::var(ENV_ADMIN_TOKEN_COMPAT))
+            .unwrap_or_default()
+            .trim()
+            .to_owned()
+    };
+    let mut hashes = Vec::new();
+    if !token.is_empty() {
+        hashes.push(Sha256::digest(token.as_bytes()).into());
+    }
+    let hash = config.auth_token_hash.trim();
+    if !hash.is_empty() {
+        let hash = hex::decode(hash)
+            .ok()
+            .and_then(|hash| <[u8; 32]>::try_from(hash).ok())
+            .context("core.admin.auth_token_hash must be a hex SHA-256 digest")?;
+        hashes.push(hash);
+    }
+    if hashes.is_empty() && config.htpasswd_file.as_os_str().is_empty() {
+        bail!(
+            "admin API is enabled but no credential is configured; set core.admin.auth_token, \
+             {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, core.admin.auth_token_hash, \
+             core.admin.htpasswd_file, or insecure_no_auth = true (testing only)"
+        );
+    }
+    let mut auth = Authenticator::from_token_hashes(hashes);
+    if !config.htpasswd_file.as_os_str().is_empty() {
+        auth = auth.with_htpasswd_file(&config.htpasswd_file)?;
+    }
+    Ok(auth)
 }
 
 fn http_config() -> HttpAuthConfig {
@@ -100,6 +121,23 @@ mod tests {
             ..Default::default()
         };
         assert!(AdminAuthFairing::from_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn a_token_hash_admits_its_token() {
+        let cfg = AdminConfig {
+            enabled: true,
+            auth_token_hash: hex::encode(Sha256::digest(b"secret")),
+            ..Default::default()
+        };
+        let auth = authenticator(&cfg).unwrap();
+        assert!(auth.verify_token("secret"));
+        assert!(!auth.verify_token("other"));
+        let bad = AdminConfig {
+            auth_token_hash: "00".into(),
+            ..cfg
+        };
+        assert!(authenticator(&bad).is_err());
     }
 
     #[test]

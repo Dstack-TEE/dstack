@@ -85,8 +85,14 @@ enabled = true
 auto_bootstrap_domain = ""
 # Required by KMS 0.5.8. Current KMS ignores this retired field.
 quote_enabled = true
+# Current KMS needs a handover path to serve; this test keeps the admin
+# listener off and serves the public one. KMS 0.5.8 ignores both settings.
+public_key_handover = true
 address = "0.0.0.0"
 port = 8000
+
+[core.admin]
+enabled = false
 """
     docker_compose = f"""services:
   kms:

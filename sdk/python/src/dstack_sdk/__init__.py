@@ -34,10 +34,14 @@ from .get_compose_hash import AppCompose
 from .get_compose_hash import DockerConfig
 from .get_compose_hash import Requirements
 from .get_compose_hash import get_compose_hash
+from .seal_env import seal_env
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key
 from .verify_env_encrypt_public_key import verify_env_encrypt_public_key_legacy
+from .verify_env_encrypt_public_key import verify_sealed_env_public_key
 
 __all__ = [
+    "seal_env",
+    "verify_sealed_env_public_key",
     # The default clients: unsuffixed means dstack.guest.v1
     "DstackClient",
     "AsyncDstackClient",

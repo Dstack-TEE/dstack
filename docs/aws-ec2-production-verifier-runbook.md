@@ -18,7 +18,7 @@ and endpoint identity.
 - The dstack monorepo sources pinned at the exact release revision, for the
   reproducible rebuild.
 - A dstack verifier built from this repository.
-- The production auth policy backend: `auth-simple`, auth-eth contracts, or an
+- The production auth policy backend: `dstack-auth`, auth-eth contracts, or an
   equivalent verifier-controlled service.
 - For public services, the endpoint's RA-TLS certificate.
 
@@ -198,7 +198,7 @@ The relying party should then check `details.boot_info` against its auth policy.
 
 For AWS NitroTPM, the policy must require:
 
-- accepted `tcbStatus` (`UpToDate` by default, matching the normalized value);
+- accepted `tcbStatus` (`UpToDate`, matching the normalized value);
 - accepted `osImageHash` (unified `sha256(sha256sum.txt)`; `aws_measurement`
   is required and must bind the attested boot PCRs);
 - accepted app `composeHash` and `appId`;
@@ -208,6 +208,33 @@ For AWS NitroTPM, the policy must require:
   this is the authoritative app-identity binding (`composeHash`, `appId`,
   `instance-id`, `key-provider`);
 - a `report_data` challenge for external verifier flows that need liveness.
+
+With `dstack-auth`, the TCB status and advisories are checked only when the
+allowlist sets them, so set both explicitly:
+
+```json
+{
+  "allowedTcbStatuses": ["UpToDate"],
+  "allowedAdvisoryIds": [],
+  "osImages": ["0x<aws-os-image-hash>"],
+  "kms": {
+    "mrAggregated": ["0x<kms-early-mr-aggregated>"],
+    "devices": [],
+    "allowAnyDevice": true
+  },
+  "apps": {
+    "0x<app-id>": {
+      "composeHashes": ["0x<app-compose-hash>"],
+      "devices": [],
+      "allowAnyDevice": true
+    }
+  }
+}
+```
+
+dstack-auth authorizes the canonical `BootInfo` the KMS derives after verifying
+the NitroTPM evidence; it does not verify raw NitroTPM evidence itself. See
+[dstack-auth operations](./dstack-auth-operations.md) for the remaining fields.
 
 For GPU workloads, PCR14 also contains `gpu-policy-hash` immediately after
 `compose-hash`. Its 32-byte payload must equal

@@ -312,3 +312,26 @@ dstack logs <kms-vm-id>
 ```
 
 The KMS VM ID is printed by `dstackup install` when it creates or reuses the KMS CVM.
+
+### Upgrading the local KMS to root epochs
+
+Upgrade the bundled `dstack-auth` together with the KMS. Before normal key release,
+set `kmsContractAddr` in the host's `auth-allowlist.json` to the KMS's attested app ID
+and register the verified bootstrap CA/k256 public keys in `rootEpochs` (epoch zero).
+Use the bootstrap evidence to verify these keys; do not trust an unauthenticated
+metadata response. Set `currentRootEpoch` to the active registered epoch (initially
+zero). See [root registration and rotation](deployment.md#rotating-kms-root-keys).
+The local installer does not register these keys automatically; an older installed
+KMS can continue using the legacy boot routes while this migration is prepared.
+
+The Rust backend implements `/authorizeKms` and `/authorizeApp` with the same
+registered-root requirement as the other backends. Missing registration denies key
+release, and invalid epoch configuration returns HTTP 503. Legacy `/bootAuth/*`
+routes remain available for bootstrap. Local compose/device allowlists apply to
+all permitted historical roots; they are not the on-chain per-epoch matrices.
+
+Application entries also accept `currentAppEpoch` (default zero). Keep this value
+monotonic, restart the application after advancing it, and retain permissions for
+historical keys needed during migration. `/app/:appId` exposes the current app
+epoch; legacy app boot authorization is denied once it is nonzero. The Rust
+backend uses the same normalized app ID lookup for policy and epoch selection.

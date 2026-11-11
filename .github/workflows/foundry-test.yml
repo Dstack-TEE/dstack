@@ -57,7 +57,11 @@ jobs:
         id: build
 
       - name: Install OpenZeppelin upgrades validator
-        run: npm install --no-save --package-lock=false @openzeppelin/upgrades-core@^1.37.0
+        # The upgrade-safety tests run `npx @openzeppelin/upgrades-core@^1.37.0`;
+        # warm the npx cache with that spec once so parallel tests reuse it.
+        # `npm install` here would also resolve the webhook server's
+        # package.json, which is managed by Bun.
+        run: npx --yes @openzeppelin/upgrades-core@^1.37.0 --help > /dev/null
 
       - name: Run Forge tests
         # The upgrade-safety validator rejects a contract found in more than one

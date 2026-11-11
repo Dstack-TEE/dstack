@@ -125,6 +125,11 @@ pub struct GetKeyResponse {
     /// steps. Verifying is the relying party's job; this SDK does not do it.
     #[serde(with = "hex_vec")]
     pub signature_chain: Vec<Vec<u8>>,
+    /// KMS root key epoch the key was derived from.
+    #[serde(default)]
+    pub root_epoch: u32,
+    #[serde(default)]
+    pub app_epoch: u32,
 }
 
 /// The value an attestation binds to: bytes, and only bytes.
@@ -345,6 +350,8 @@ mod tests {
     #[test]
     fn signature_chain_round_trips_through_hex() {
         let response = GetKeyResponse {
+            root_epoch: 3,
+            app_epoch: 2,
             key: vec![0x01; 32],
             public_key: vec![0x02; 33],
             signature_chain: vec![vec![0xaa, 0xbb], vec![0xcc]],
@@ -387,7 +394,9 @@ mod tests {
 
     #[test]
     fn report_data_accepts_every_byte_shape_a_caller_holds() {
-        let owned = AttestConfig::builder().report_data(vec![0xaa, 0xbb]).build();
+        let owned = AttestConfig::builder()
+            .report_data(vec![0xaa, 0xbb])
+            .build();
         let array = AttestConfig::builder().report_data([0xaa, 0xbb]).build();
         let borrowed_array = AttestConfig::builder().report_data(b"\xaa\xbb").build();
         let slice = AttestConfig::builder()

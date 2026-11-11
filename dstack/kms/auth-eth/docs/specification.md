@@ -52,12 +52,12 @@ return-value spoofing are still possible — see §6.
 
 | Slot | Name | Type | Writable by | Notes |
 |---|---|---|---|---|
-| 0–3 | `kmsInfo` | `KmsInfo` (struct, 4 fields) | `setKmsInfo`, `setKmsQuote`, `setKmsEventlog` (owner) | |
+| 0–3 | `kmsInfo` | `KmsInfo` (struct, 4 fields) | `registerRootEpoch` (epoch 0), `activateRootEpoch` (owner) | Preserved for proxy upgrades and legacy readers; quote and event log are cleared on activation |
 | 4 | `gatewayAppId` | `string` | `setGatewayAppId` (owner) | Renamed from `tproxyAppId`; carries `@custom:oz-renamed-from` |
 | 5 | `registeredApps` | `mapping(address => bool)` | `registerApp` (anyone), `deployAndRegisterApp` (anyone) | Permissionless — see §6.1 |
-| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMr`, `removeKmsAggregatedMr` (owner) | |
-| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDevice`, `removeKmsDevice` (owner) | |
-| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHash`, `removeOsImageHash` (owner) | |
+| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMrAtEpoch(s)`, `removeKmsAggregatedMrAtEpoch(s)` at epoch 0 (owner) | |
+| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDeviceAtEpoch(s)`, `removeKmsDeviceAtEpoch(s)` at epoch 0 (owner) | |
+| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHashAtEpoch(s)`, `removeOsImageHashAtEpoch(s)` at epoch 0 (owner) | |
 | 9 | `appImplementation` | `address` | `setAppImplementation` (owner) | Used by `deployAndRegisterApp` |
 | 10 | `__gap[50]` | `uint256[50]` | (none — must always read zero) | Reserved |
 
@@ -69,9 +69,9 @@ Plus inherited storage in ERC-7201 namespaces: `OwnableUpgradeable`,
 
 | Slot | Name | Type | Writable by |
 |---|---|---|---|
-| 0 | `allowedComposeHashes` | `mapping(bytes32 => bool)` | `addComposeHash`, `removeComposeHash` (owner); 5/6-arg initializer |
-| 1 | `_upgradesDisabled` + `allowAnyDevice` (packed) | `bool` + `bool` | `disableUpgrades` (owner, monotonic); `setAllowAnyDevice` (owner); initializer |
-| 2 | `allowedDeviceIds` | `mapping(bytes32 => bool)` | `addDevice`, `removeDevice` (owner); initializer |
+| 0 | `allowedComposeHashes` | `mapping(bytes32 => bool)` | `addComposeHashAtEpoch(s)`, `removeComposeHashAtEpoch(s)` at epoch 0 (owner); 5/6-arg initializer |
+| 1 | `_upgradesDisabled` + `allowAnyDevice` (packed) | `bool` + `bool` | `disableUpgrades` (owner, monotonic); `setAllowAnyDeviceAtEpoch(s)` at epoch 0 (owner); initializer |
+| 2 | `allowedDeviceIds` | `mapping(bytes32 => bool)` | `addDeviceAtEpoch(s)`, `removeDeviceAtEpoch(s)` at epoch 0 (owner); initializer |
 | 3 | `requireTcbUpToDate` | `bool` | `setRequireTcbUpToDate` (owner); 6-arg initializer only |
 | 4 | `__gap[49]` | `uint256[49]` | (none) |
 
@@ -125,7 +125,7 @@ Signature: `deployAndRegisterApp(address initialOwner, bool disableUpgrades, boo
 - Semantics: equivalent to the 6-arg overload with `requireTcbUpToDate = false`.
 - (verified: `DstackKmsSymbolicTest.check_DeployAndRegisterApp5Arg_DefaultsTcbToFalse`)
 
-### 3.5 `DstackKms.isAppAllowed(AppBootInfo b) external view returns (bool, string)`
+### 3.5 `DstackKms.isAppAllowed(AppInfo b) external view returns (bool, string)`
 
 Decision (in order):
 
@@ -147,7 +147,7 @@ Decision (in order):
   behavior of an adversarial registered app; those propagate to the
   outer call by EVM semantics (§5.1).
 
-### 3.6 `DstackKms.isKmsAllowed(AppBootInfo b) external view returns (bool, string)`
+### 3.6 `DstackKms.isKmsAllowed(AppInfo b) external view returns (bool, string)`
 
 Decision (in order):
 
@@ -167,9 +167,15 @@ Decision (in order):
 
 ### 3.7 Owner-only KMS mutations (uniform pattern)
 
-For each of `setKmsInfo`, `setKmsQuote`, `setKmsEventlog`, `setGatewayAppId`,
-`setAppImplementation`, `addKmsAggregatedMr`, `removeKmsAggregatedMr`,
-`addKmsDevice`, `removeKmsDevice`, `addOsImageHash`, `removeOsImageHash`:
+The legacy `setKmsInfo`, `setKmsQuote`, and `setKmsEventlog` entry points are
+removed: calls always revert, including before root epoch registration. Initial
+setup uses `registerRootEpoch`. On an upgraded proxy with existing legacy roots,
+epoch 0 must match the stored `kmsInfo` keys; the upgrade preserves that storage.
+
+For each of `setGatewayAppId`,
+`setAppImplementation`, and the `*AtEpoch` and `*AtEpochs` forms of
+`addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice`, `removeKmsDevice`,
+`addOsImageHash`, `removeOsImageHash`:
 
 - **pre**: `msg.sender == owner()`.
 - **frame**: every storage cell except the one mapped to the operation.
@@ -195,7 +201,7 @@ For each of `setKmsInfo`, `setKmsQuote`, `setKmsEventlog`, `setGatewayAppId`,
 - (verified: `DstackAppSymbolicTest.check_Initialize5Arg_DefaultsTcbToFalse`,
   `check_Initialize6Arg_HonorsTcbFlag`)
 
-### 3.9 `DstackApp.isAppAllowed(AppBootInfo b) external view returns (bool, string)`
+### 3.9 `DstackApp.isAppAllowed(AppInfo b) external view returns (bool, string)`
 
 Decision (in order, all evaluated under `b.appId == address(this)` by convention):
 
@@ -231,8 +237,9 @@ byte sequence — no case variations, no trailing nulls, no whitespace.
 
 ### 3.11 Owner-only App mutations
 
-For each of `addComposeHash`, `removeComposeHash`, `addDevice`, `removeDevice`,
-`setAllowAnyDevice`, `setRequireTcbUpToDate`, `disableUpgrades`:
+For each of the `*AtEpoch` and `*AtEpochs` forms of `addComposeHash`,
+`removeComposeHash`, `addDevice`, `removeDevice` and `setAllowAnyDevice`, and
+`setRequireTcbUpToDate`, `disableUpgrades`:
 
 - **pre**: `msg.sender == owner()`.
 - **frame**: every storage cell except the one mapped to the operation.
@@ -403,7 +410,7 @@ formal audit:
    apps have been deployed via the factory, the older proxies stay on
    the older impl. Is that intended (versioning) or should the KMS
    track which impl was current at deploy time?
-3. **Removing an OS image.** `removeOsImageHash` does not retroactively
+3. **Removing an OS image.** `removeOsImageHashAtEpochs` does not retroactively
    un-authorize already-running apps that booted under that image. Is
    that intended (revocation requires explicit downstream action) or
    should the spec require it?

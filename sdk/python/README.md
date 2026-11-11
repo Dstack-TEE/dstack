@@ -107,6 +107,9 @@ characters and produce a chain that silently never verifies.
 **Returns:** `GetKeyResponseV1` with `key: bytes`, `public_key: bytes` and
 `signature_chain: list[bytes]`.
 
+Derived keys are a function of the KMS root, so they are not suitable for
+holding assets; see [Blockchain helpers](#blockchain-helpers).
+
 ### `attest()`
 
 The sole CVM attestation entry point in v1. The dstack attestation format
@@ -597,6 +600,17 @@ print(keypair.pubkey())
 SHA-256 before deriving. The legacy `to_account()` / `to_keypair()` use raw key
 bytes and are kept only for backward compatibility.
 
+> **Do not hold assets in a wallet derived from `get_key`.** Derived keys are a
+> function of the KMS root: if the root leaks, anyone holding it can compute
+> the wallet's private key. Moving funds after a root rotation, or after
+> advancing the app epoch (the new key still comes from the same root), is a
+> race against whoever holds the leaked root, not a recovery. These helpers
+> suit low-value or rotatable signing only. To hold assets, make the derived key
+> a signer of a smart account whose owner can be replaced and which enforces
+> limits or a timelock, or generate a random key and keep it sealed under the
+> derived key. Signatures stay usable for authentication as long as relying
+> parties reject signature chains from old root epochs (`root_epoch`).
+
 ## Migration from TappdClient
 
 `TappdClient` only ever spoke v0, so replace it with `DstackClientV0` —
@@ -633,6 +647,17 @@ before switching anything that holds state.
 | `verify()` | — | Verify locally, per `docs/guest-api-v1.md` |
 | `emit_event()` | — | RTMR3 is system-owned as of 0.6.0 |
 | `gpu_info()` | `attest()` with `include_boottime_gpu_evidence=True` | Same bytes, now on the attestation call, in `attest_gpu()`'s bundle shape |
+
+### Sealed environment variables
+
+`seal_env(envs, public_key_hex, root_epoch)` returns HPKE JSON for `.sealed-env`.
+First obtain `GetSealedEnvPubKey`, use `verify_sealed_env_public_key` to recover
+its timestamp-checked signer, and compare that signer with an independently
+trusted root key for the response epoch. Send the JSON's UTF-8 bytes in VMM's
+`sealed_env` field (hex for JSON RPC). The legacy encryption API is unchanged.
+
+See [the SealedEnv protocol](../../docs/sealed-env.md) for file precedence,
+automatic migration, and the old-OS rollback requirement.
 
 ## License
 

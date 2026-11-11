@@ -109,6 +109,8 @@ message VmConfiguration {
   repeated PortMapping ports = 7;
   // Encrypted environment variables
   bytes encrypted_env = 8;
+  // Sealed environment variables. Takes precedence over encrypted_env.
+  bytes sealed_env = 24;
   // App ID.
   // If not provided, it assumes the app is newly created.
   // If provided, and KMS is enabled, it assumes the app is upgraded from given app_id.
@@ -214,6 +216,8 @@ message UpdateVmRequest {
   string compose_file = 2;
   // Optional update encrypted environment variables. Leave empty to not update.
   bytes encrypted_env = 3;
+  // Optional sealed environment update. Leave empty to not update.
+  bytes sealed_env = 24;
   // Optional update user config. Leave empty to not update.
   string user_config = 4;
   // Optional update port mapping.
@@ -282,6 +286,8 @@ message ImageInfo {
   string description = 2;
   string version = 3;
   bool is_dev = 4;
+  // Whether this guest supports SealedEnv; absent means legacy encryption only.
+  bool sealed_env = 5;
 }
 
 // App identifier used for encrypting env vars and routing telemetry.
@@ -290,6 +296,14 @@ message AppId {
 }
 
 // Response with the KMS-backed public key used for env encryption plus audit signature.
+message SealedEnvPubKeyResponse {
+  bytes public_key = 1;
+  uint32 root_epoch = 2;
+  uint64 timestamp = 3;
+  bytes signature = 4;
+  uint32 app_epoch = 5;
+}
+
 message PublicKeyResponse {
   bytes public_key = 1;
   // Legacy signature without timestamp (for backward compatibility).
@@ -423,6 +437,7 @@ service Vmm {
 
   // Get Env encrypt public key
   rpc GetAppEnvEncryptPubKey(AppId) returns (PublicKeyResponse);
+  rpc GetSealedEnvPubKey(AppId) returns (SealedEnvPubKeyResponse);
 
   // Get VM info by ID
   rpc GetInfo(Id) returns (GetInfoResponse);

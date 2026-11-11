@@ -16,7 +16,8 @@ use bon::Builder;
 use dstack_kms_rpc::kms_client::KmsClient;
 use dstack_types::mr_config::MrConfigV3;
 use dstack_types::shared_filenames::{
-    APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SYS_CONFIG, TEE_SIMULATOR_CONFIG, USER_CONFIG,
+    APP_COMPOSE, ENCRYPTED_ENV, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG, TEE_SIMULATOR_CONFIG,
+    USER_CONFIG,
 };
 use dstack_types::version::Version;
 use dstack_vmm_rpc::{
@@ -530,9 +531,16 @@ impl App {
         }
         self.sync_dynamic_config(id)?;
         self.set_started(id, true)?;
+        // A guest the VMM did not launch may already run application code.
+        let env_update = if is_running {
+            None
+        } else {
+            Some(self.sha256_of_env(id)?)
+        };
         let vm_config = {
             let mut state = self.lock();
             let vm_state = state.get_mut(id).context("VM not found")?;
+            vm_state.state.env_update = env_update;
             // Older images does not support for progress reporting
             if vm_state.config.image.info.shared_ro {
                 vm_state.state.start(is_running);
@@ -1561,7 +1569,22 @@ impl App {
             vm.state.events.pop_front();
         }
         match event {
-            "boot.progress" => vm.state.boot_progress = body,
+            "boot.progress" => {
+                // Application code (init and pre-launch scripts, containers)
+                // runs from here on, so the guest OS can no longer vouch for
+                // an env update.
+                if matches!(
+                    body.as_str(),
+                    "init-script"
+                        | "pre-launch"
+                        | "starting containers"
+                        | "running main script"
+                        | "done"
+                ) {
+                    vm.state.env_update = None;
+                }
+                vm.state.boot_progress = body;
+            }
             "boot.error" => vm.state.boot_error = body,
             "shutdown.progress" => {
                 let powering_off = body == "powering off";
@@ -1582,12 +1605,78 @@ impl App {
         Ok(())
     }
 
-    pub(crate) fn compose_file_path(&self, id: &str) -> Result<PathBuf> {
-        Ok(self.shared_dir(id)?.join(APP_COMPOSE))
+    /// Close the boot's env update window and store the encrypted env the
+    /// guest re-encrypted, if any. Accepted once per boot, before application
+    /// code runs, and only over the env the VM booted with, so an update made
+    /// since then is never overwritten.
+    ///
+    /// Once the VM is found, the window is closed and the call succeeds whether
+    /// or not the env is stored: the guest starts application code only after
+    /// an answer.
+    pub(crate) async fn update_sealed_env(&self, cid: u32, env: Vec<u8>) -> Result<()> {
+        let id = self
+            .lock()
+            .vms
+            .values()
+            .find(|vm| vm.config.cid == cid)
+            .context("VM not found")?
+            .config
+            .manifest
+            .id
+            .clone();
+        let _launch = self.launch_lock(&id).await;
+        let (boot_env, supports_sealed_env) = {
+            let mut state = self.lock();
+            let vm = state.vms.get_mut(&id).context("VM not found")?;
+            if vm.config.cid != cid {
+                bail!("VM CID changed");
+            }
+            (vm.state.env_update.take(), vm.config.image.info.sealed_env)
+        };
+        let stored = (|| {
+            let Some(boot_env) = boot_env else {
+                bail!("the env can only be updated once per boot, before applications start");
+            };
+            if env.is_empty() {
+                return Ok(false);
+            }
+            if !supports_sealed_env {
+                bail!("the VM image does not support sealed_env");
+            }
+            if self.sha256_of_env(&id)? != boot_env {
+                bail!("the env changed since the VM booted; not replacing it");
+            }
+            self.work_dir(&id)?.write_env(&[], &env)?;
+            Ok(true)
+        })();
+        match stored {
+            Ok(true) => info!(id, "stored sealed env from the guest"),
+            Ok(false) => {}
+            Err(err) => warn!(id, "not storing the guest's sealed env: {err:#}"),
+        }
+        Ok(())
     }
 
-    pub(crate) fn encrypted_env_path(&self, id: &str) -> Result<PathBuf> {
-        Ok(self.shared_dir(id)?.join(ENCRYPTED_ENV))
+    fn sha256_of_env(&self, id: &str) -> Result<[u8; 32]> {
+        let shared = self.shared_dir(id)?;
+        let mut hasher = Sha256::new();
+        for name in [ENCRYPTED_ENV, SEALED_ENV] {
+            hasher.update(name.as_bytes());
+            match fs::read(shared.join(name)) {
+                Ok(data) => {
+                    hasher.update([1]);
+                    hasher.update((data.len() as u64).to_le_bytes());
+                    hasher.update(data);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => hasher.update([0]),
+                Err(err) => return Err(err).context("failed to read env"),
+            }
+        }
+        Ok(hasher.finalize().into())
+    }
+
+    pub(crate) fn compose_file_path(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.shared_dir(id)?.join(APP_COMPOSE))
     }
 
     pub(crate) fn user_config_path(&self, id: &str) -> Result<PathBuf> {
@@ -1605,15 +1694,13 @@ impl App {
         req: &VmConfiguration,
         app_id: &str,
     ) -> Result<VmWorkDir> {
+        VmWorkDir::validate_env_update(&req.encrypted_env, &req.sealed_env)?;
         let work_dir = self.work_dir(id)?;
         let shared_dir = work_dir.join("shared");
         fs::create_dir_all(&shared_dir).context("Failed to create shared directory")?;
         fs::write(shared_dir.join(APP_COMPOSE), &req.compose_file)
             .context("Failed to write compose file")?;
-        if !req.encrypted_env.is_empty() {
-            fs::write(shared_dir.join(ENCRYPTED_ENV), &req.encrypted_env)
-                .context("Failed to write encrypted env")?;
-        }
+        work_dir.write_env(&req.encrypted_env, &req.sealed_env)?;
         if !req.user_config.is_empty() {
             fs::write(shared_dir.join(USER_CONFIG), &req.user_config)
                 .context("Failed to write user config")?;
@@ -2506,6 +2593,263 @@ mod tests {
             gateway_enabled: false,
         };
         (vm, networks)
+    }
+
+    #[test]
+    fn prepare_work_dir_stores_sealed_and_rejects_both_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let mut request = VmConfiguration {
+            compose_file: "{}".into(),
+            sealed_env: b"sealed".to_vec(),
+            ..Default::default()
+        };
+        let workdir = app.prepare_work_dir("vm-1", &request, "").unwrap();
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        assert!(!workdir.encrypted_env_path().exists());
+        request.encrypted_env = b"legacy".to_vec();
+        assert!(app.prepare_work_dir("vm-2", &request, "").is_err());
+        assert!(!app.work_dir("vm-2").unwrap().path().exists());
+    }
+
+    // Only the socket boundary is substituted: the guest wrapper, generated RPC
+    // decoder, host handler and filesystem/CAS implementation are production code.
+    #[rocket::post("/UpdateSealedEnv", data = "<body>")]
+    async fn sealed_env_rpc(
+        body: Vec<u8>,
+        state: &rocket::State<(App, u32)>,
+    ) -> (rocket::http::Status, Vec<u8>) {
+        use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
+        let handler = crate::host_api_service::HostApiHandler::construct(
+            CallContext::builder()
+                .state(&state.0)
+                .remote_endpoint(RemoteEndpoint::Vsock {
+                    cid: state.1,
+                    port: 1234,
+                })
+                .build(),
+        )
+        .unwrap();
+        let (status, body) = handler
+            .call("UpdateSealedEnv".into(), body, true, false)
+            .await;
+        (rocket::http::Status::new(status), body)
+    }
+
+    #[tokio::test]
+    async fn sealed_env_rpc_keeps_injection_payloads_bound_to_the_transport_vm() {
+        use crate::guest_host_api::HostApi;
+        use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
+
+        // HostApi intentionally skips unsupported platforms; do not let that turn
+        // this regression into a passing no-op.
+        assert!(matches!(
+            dstack_types::Platform::detect_or_dstack(),
+            dstack_types::Platform::Dstack
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        for (id, cid) in [("sender", 3), ("victim", 4)] {
+            let (mut vm, _) = bridge_vm(&app, id);
+            vm.cid = cid;
+            vm.image.info.sealed_env = true;
+            app.lock().vms.insert(id.into(), VmState::new(vm));
+            let workdir = app.work_dir(id).unwrap();
+            fs::create_dir_all(workdir.shared_dir()).unwrap();
+            workdir.write_env(&[], id.as_bytes()).unwrap();
+            let hash = app.sha256_of_env(id).unwrap();
+            app.lock().vms.get_mut(id).unwrap().state.env_update = Some(hash);
+        }
+        let sender = app.work_dir("sender").unwrap();
+        let victim = app.work_dir("victim").unwrap();
+        let marker = dir.path().join("injected");
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"untouched").unwrap();
+        let mut payload = format!(
+            "\"}},\"cid\":4,\"id\":\"victim\",\"path\":\"{}\",\"sealed_env\":\"overwritten\"}}\n../../../outside\n{}\n$(touch {}) ; touch {} #\n`touch {}`\n\\u0022\\n\\x00\r\n",
+            victim.sealed_env_path().display(), outside.display(),
+            marker.display(), marker.display(), marker.display(),
+        ).into_bytes();
+        payload.extend(0u8..=255);
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let tx = Mutex::new(Some(tx));
+        let server = rocket::custom(
+            rocket::Config::figment()
+                .merge(("address", "127.0.0.1"))
+                .merge(("port", 0))
+                .merge(("log_level", "off"))
+                .merge(("shutdown.ctrlc", false)),
+        )
+        .manage((app.clone(), 3u32))
+        .mount("/", rocket::routes![sealed_env_rpc])
+        .attach(rocket::fairing::AdHoc::on_liftoff("port", move |rocket| {
+            tx.lock()
+                .unwrap()
+                .take()
+                .unwrap()
+                .send(
+                    rocket
+                        .endpoints()
+                        .find_map(|endpoint| endpoint.port())
+                        .unwrap(),
+                )
+                .unwrap();
+            Box::pin(async {})
+        }))
+        .ignite()
+        .await
+        .unwrap();
+        let shutdown = server.shutdown();
+        let server = tokio::spawn(server.launch());
+        let host = HostApi::new(
+            Some(format!("http://127.0.0.1:{}", rx.await.unwrap())),
+            None,
+        );
+        host.update_sealed_env(payload.clone()).await.unwrap();
+        assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), payload);
+        assert!(!sender.encrypted_env_path().exists());
+        assert_eq!(fs::read(victim.sealed_env_path()).unwrap(), b"victim");
+        assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+        assert!(!marker.exists());
+        assert!(app
+            .lock()
+            .vms
+            .get("victim")
+            .unwrap()
+            .state
+            .env_update
+            .is_some());
+        // A repeated call, as after a lost answer, is answered but stores nothing.
+        host.update_sealed_env(b"again".to_vec()).await.unwrap();
+        assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), payload);
+
+        // Even top-level forged JSON fields cannot select a VM or revive the CAS.
+        let forged = serde_json::to_vec(&serde_json::json!({
+            "sealed_env": hex::encode(&payload), "cid": 4, "id": "victim",
+            "path": victim.sealed_env_path(), "env_update": true,
+        }))
+        .unwrap();
+        for cid in [3, 999] {
+            let handler = crate::host_api_service::HostApiHandler::construct(
+                CallContext::builder()
+                    .state(&app)
+                    .remote_endpoint(RemoteEndpoint::Vsock { cid, port: 1234 })
+                    .build(),
+            )
+            .unwrap();
+            let (status, body) = handler
+                .call("UpdateSealedEnv".into(), forged.clone(), true, false)
+                .await;
+            if cid == 3 {
+                assert_eq!(status, 200);
+            } else {
+                assert_eq!(status, 400);
+                assert!(String::from_utf8(body).unwrap().contains("VM not found"));
+            }
+        }
+        assert!(crate::host_api_service::HostApiHandler::construct(
+            CallContext::builder().state(&app).build()
+        )
+        .is_err());
+
+        // An owner change after the boot snapshot wins over the guest payload.
+        let hash = app.sha256_of_env("sender").unwrap();
+        app.lock().vms.get_mut("sender").unwrap().state.env_update = Some(hash);
+        sender.write_env(&[], b"owner update").unwrap();
+        host.update_sealed_env(payload).await.unwrap();
+        assert_eq!(fs::read(sender.sealed_env_path()).unwrap(), b"owner update");
+        assert_eq!(fs::read(victim.sealed_env_path()).unwrap(), b"victim");
+        assert_eq!(fs::read(outside).unwrap(), b"untouched");
+        assert!(!marker.exists());
+        shutdown.notify();
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn sealed_env_cas_binds_both_files_and_serializes_owner_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = App::new(
+            test_config(&dir.path().join("absent-netd.sock"), dir.path()),
+            SupervisorClient::new("http://127.0.0.1:0"),
+        );
+        let (vm, _) = bridge_vm(&app, "vm-1");
+        let cid = vm.cid;
+        app.lock().vms.insert("vm-1".into(), VmState::new(vm));
+        let workdir = app.work_dir("vm-1").unwrap();
+        fs::create_dir_all(workdir.shared_dir()).unwrap();
+        let boot = || {
+            let hash = app.sha256_of_env("vm-1").unwrap();
+            app.lock().vms.get_mut("vm-1").unwrap().state.env_update = Some(hash);
+        };
+        let window_open = || app.lock().vms["vm-1"].state.env_update.is_some();
+        // Every answer closes the window, whether or not the env is stored.
+        let update = |env: &[u8]| app.update_sealed_env(cid, env.to_vec());
+        update(b"new").await.unwrap();
+        assert!(!workdir.sealed_env_path().exists());
+        workdir.write_env(b"legacy", &[]).unwrap();
+        boot();
+        update(b"sealed").await.unwrap();
+        assert!(!window_open());
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"legacy");
+        assert!(!workdir.sealed_env_path().exists());
+        Arc::get_mut(&mut app.lock().vms.get_mut("vm-1").unwrap().config)
+            .unwrap()
+            .image
+            .info
+            .sealed_env = true;
+        boot();
+        update(b"sealed").await.unwrap();
+        assert!(!window_open());
+        assert!(!workdir.encrypted_env_path().exists());
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+        update(b"again").await.unwrap();
+        assert_eq!(fs::read(workdir.sealed_env_path()).unwrap(), b"sealed");
+
+        for name in [ENCRYPTED_ENV, SEALED_ENV] {
+            let path = workdir.shared_dir().join(name);
+            let _ = fs::remove_file(&path);
+            boot();
+            fs::write(&path, []).unwrap();
+            update(b"stale").await.unwrap();
+            assert!(!window_open());
+            assert_eq!(fs::read(&path).unwrap(), b"");
+        }
+
+        boot();
+        let held = app.launch_lock("vm-1").await;
+        let guest = update(b"stale");
+        tokio::pin!(guest);
+        assert!(tokio::time::timeout(Duration::from_millis(20), &mut guest)
+            .await
+            .is_err());
+        workdir.write_env(b"owner", &[]).unwrap();
+        drop(held);
+        guest.await.unwrap();
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"owner");
+        assert!(!workdir.sealed_env_path().exists());
+
+        // An empty update closes the window too.
+        boot();
+        update(b"").await.unwrap();
+        assert!(!window_open());
+        update(b"again").await.unwrap();
+        assert_eq!(fs::read(workdir.encrypted_env_path()).unwrap(), b"owner");
+        // An application-stage progress report still closes it.
+        boot();
+        app.vm_event_report(cid, "boot.progress", "init-script".into())
+            .unwrap();
+        assert!(!window_open());
+        update(b"late").await.unwrap();
+        assert!(!workdir.sealed_env_path().exists());
+        // A VM the host does not know gets an error.
+        assert!(app.update_sealed_env(cid + 1000, Vec::new()).await.is_err());
     }
 
     /// A launch that never reached a netd built nothing, so it must not leave
@@ -3406,6 +3750,7 @@ mod tests {
         let tdx_measurement = supports_lite.then(dummy_tdx_measurement_document);
         Image {
             info: ImageInfo {
+                sealed_env: false,
                 cmdline: None,
                 kernel: "kernel".to_string(),
                 initrd: "initrd".to_string(),
@@ -3950,6 +4295,10 @@ struct VmStateMut {
     auto_restart: AutoRestartState,
     /// True when the VM is being removed (cleanup in progress).
     removing: bool,
+    /// SHA-256 of both env files, including presence, this boot started with, while the guest
+    /// may still replace it; taken by the first update and cleared once the
+    /// boot reaches application code.
+    env_update: Option<[u8; 32]>,
 }
 
 impl VmStateMut {

@@ -257,9 +257,16 @@ SPDX-License-Identifier: Apache-2.0
                                         placeholder="RPC URL of the existing KMS">
                                 </div>
                                 <div class="form-group">
-                                    <label for="source_token">Source admin token (optional):</label>
+                                    <label for="source_token">Source admin token:</label>
                                     <input type="password" id="source_token" v-model="sourceToken"
-                                        autocomplete="off">
+                                        autocomplete="off"
+                                        placeholder="Without it, the source needs core.onboard.public_key_handover = true">
+                                </div>
+                                <div class="form-group">
+                                    <label>
+                                        <input type="checkbox" v-model="rotate">
+                                        Rotate: import the previous epochs and generate a new root key epoch
+                                    </label>
                                 </div>
                                 <div class="form-group">
                                     <label for="domain">Domain Name:</label>
@@ -310,6 +317,7 @@ SPDX-License-Identifier: Apache-2.0
                     sourceUrl: '',
                     sourceToken: '',
                     onboardDomain: '',
+                    rotate: false,
                     error: '',
                     success: '',
                     result: '',
@@ -350,7 +358,7 @@ SPDX-License-Identifier: Apache-2.0
                         return;
                     }
                     if (data.attestation) {
-                        this.success = 'Bootstrap successful!';
+                        this.success = 'New root keys generated!';
                         this.result = JSON.stringify({
                             caPubkey: '0x' + data.ca_pubkey,
                             k256Pubkey: '0x' + data.k256_pubkey,
@@ -391,7 +399,8 @@ SPDX-License-Identifier: Apache-2.0
                         const data = await rpcCall('Onboard', {
                             source_url: this.sourceUrl + "/prpc",
                             source_token: this.sourceToken,
-                            domain: this.onboardDomain
+                            domain: this.onboardDomain,
+                            rotate: this.rotate
                         });
 
                         if (data.error) throw new Error(data.error);
