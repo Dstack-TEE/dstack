@@ -1564,8 +1564,10 @@ configs:
             }
         info_raw = run([*self.cli, "info", "--json", vm_id])
         info_value = json.loads(info_raw)
+        configuration = info_value.get("configuration") or {}
+        # A SealedEnv deployment carries its envelope in sealed_env instead.
         encrypted_env = str(
-            (info_value.get("configuration") or {}).get("encrypted_env") or ""
+            configuration.get("sealed_env") or configuration.get("encrypted_env") or ""
         )
         row = {
             "version": "client",
