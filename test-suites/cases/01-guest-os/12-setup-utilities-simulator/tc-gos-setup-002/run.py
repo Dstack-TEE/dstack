@@ -142,10 +142,13 @@ edition = "2021"
 [dependencies]
 aes-gcm = "0.10"
 anyhow = "1"
+base64 = "0.22"
 binrw = { version = "0.15.1", default-features = false, features = ["std"] }
 getrandom = { version = "0.3.1", features = ["std"] }
 hex = "0.4"
+hpke = { version = "0.15.1", default-features = false, features = ["alloc", "getrandom", "x25519", "aes"] }
 rand = "0.8"
+serde_json = "1"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 """
 
