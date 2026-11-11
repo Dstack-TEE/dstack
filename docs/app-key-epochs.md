@@ -131,8 +131,9 @@ Direct legacy app checks use the current app epoch; legacy KMS app authorization
 still rejects nonzero app epochs.
 
 These material matrices are implemented by the Solidity policies. Config-file auth
-backends such as dstack-auth retain their own policy model and may reject handover
-of pending epochs.
+backends such as dstack-auth retain their own policy model; dstack-auth applies the
+same epoch limits, accepting a registered pending root epoch for KMS handover and
+only active epochs for key-issuing operations.
 
 ## Derivation and lifetime
 
