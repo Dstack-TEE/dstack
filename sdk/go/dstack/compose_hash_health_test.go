@@ -100,4 +100,43 @@ func TestEmptyHealthStatusFileIsDistinctFromAbsent(t *testing.T) {
 	}
 }
 
+func TestKmsRequireBootStageAttestationChangesTheHash(t *testing.T) {
+	plain := AppCompose{
+		Runner:       "docker-compose",
+		Requirements: &Requirements{LaunchTokenHash: "ff00"},
+	}
+	gated := AppCompose{
+		Runner: "docker-compose",
+		Requirements: &Requirements{
+			LaunchTokenHash:                "ff00",
+			KmsRequireBootStageAttestation: true,
+		},
+	}
+	disabled := AppCompose{
+		Runner: "docker-compose",
+		Requirements: &Requirements{
+			LaunchTokenHash:                "ff00",
+			KmsRequireBootStageAttestation: false,
+		},
+	}
+	a, err := GetComposeHash(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := GetComposeHash(gated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := GetComposeHash(disabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("kms_require_boot_stage_attestation does not reach the compose hash")
+	}
+	if a != c {
+		t.Fatal("a false kms_require_boot_stage_attestation must hash as absent")
+	}
+}
+
 func strPtr(s string) *string { return &s }

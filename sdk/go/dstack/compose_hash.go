@@ -74,6 +74,11 @@ type Requirements struct {
 	// a false value must stay out of the manifest.
 	EphemeralDataDisk bool `json:"ephemeral_data_disk,omitempty"`
 
+	// KmsRequireBootStageAttestation asks KMS GetAppKey to reject quotes whose
+	// verified event log already contains system-ready. False must stay out of
+	// the manifest, matching the guest's skip_serializing_if.
+	KmsRequireBootStageAttestation bool `json:"kms_require_boot_stage_attestation,omitempty"`
+
 	GpuPolicy *GpuPolicy `json:"gpu_policy,omitempty"`
 
 	// Extra carries fields this SDK does not know; see AppCompose.Extra.

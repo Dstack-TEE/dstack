@@ -561,6 +561,18 @@ describe('Deterministic JSON Serialization', () => {
 
       expect(getComposeHash(absent)).not.toBe(getComposeHash(empty))
     })
+
+    it('should let kms_require_boot_stage_attestation reach the hash', () => {
+      const plain: AppCompose = {
+        runner: "docker-compose",
+        requirements: { launch_token_hash: "ff00" }
+      }
+      const gated: AppCompose = {
+        runner: "docker-compose",
+        requirements: { launch_token_hash: "ff00", kms_require_boot_stage_attestation: true }
+      }
+      expect(getComposeHash(plain)).not.toBe(getComposeHash(gated))
+    })
   })
 
   describe('Backward Compatibility', () => {

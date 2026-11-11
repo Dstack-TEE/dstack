@@ -73,6 +73,8 @@ export interface Requirements extends SortableObject {
   health_status_file?: string;
   /** Format the data disk on every boot. Leave it out rather than passing `false`. */
   ephemeral_data_disk?: boolean;
+  /** Ask KMS GetAppKey to reject quotes that already contain system-ready. */
+  kms_require_boot_stage_attestation?: boolean;
   gpu_policy?: GpuPolicy;
 }
 

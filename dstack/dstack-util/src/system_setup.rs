@@ -25,6 +25,7 @@ use dstack_types::{
         HOST_SHARED_DIR_NAME, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG, USER_CONFIG,
     },
     GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
+    KMS_BOOT_STAGE_ATTESTATION_EVENT,
 };
 use fs_err as fs;
 use luks::{
@@ -3159,6 +3160,9 @@ impl<'a> Stage0<'a> {
         emit_runtime_event("system-preparing", &[])?;
         emit_runtime_event("app-id", &instance_info.app_id)?;
         emit_runtime_event("compose-hash", &compose_hash)?;
+        if self.shared.app_compose.kms_require_boot_stage_attestation() {
+            emit_runtime_event(KMS_BOOT_STAGE_ATTESTATION_EVENT, &[])?;
+        }
         let init_script_hashes: Vec<Vec<u8>> = self
             .shared
             .app_compose

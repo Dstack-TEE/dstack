@@ -61,6 +61,7 @@ class Requirements:
         health_status_file: Optional[str] = None,
         gpu_policy: Optional[Dict[str, Any]] = None,
         ephemeral_data_disk: bool = False,
+        kms_require_boot_stage_attestation: bool = False,
         **kwargs: Any,
     ) -> None:
         """Initialize a new ``Requirements`` instance."""
@@ -71,6 +72,7 @@ class Requirements:
         self.health_status_file = health_status_file
         self.gpu_policy = gpu_policy
         self.ephemeral_data_disk = ephemeral_data_disk
+        self.kms_require_boot_stage_attestation = kms_require_boot_stage_attestation
         self._extra = dict(kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -93,6 +95,8 @@ class Requirements:
             result["health_status_file"] = self.health_status_file
         if self.ephemeral_data_disk:
             result["ephemeral_data_disk"] = True
+        if self.kms_require_boot_stage_attestation:
+            result["kms_require_boot_stage_attestation"] = True
         if self.gpu_policy is not None:
             result["gpu_policy"] = self.gpu_policy
         result.update(self._extra)
