@@ -638,6 +638,23 @@ fn cmd_attest_strip(args: AttestStripArgs) -> Result<()> {
     Ok(())
 }
 
+/// Verify the KMS as system setup does: with the collateral service from the
+/// guest's sys-config and any trust anchors published in the guest.
+fn get_keys_verifier() -> Result<std::sync::Arc<ra_tls::attestation::AttestationVerifier>> {
+    use dstack_types::shared_filenames::{host_shared_dir, SYS_CONFIG};
+    let path = host_shared_dir().join(SYS_CONFIG);
+    let collateral_urls = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<dstack_types::SysConfig>(&text)
+            .context("failed to parse sys-config")?
+            .collateral_urls(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Default::default(),
+        Err(err) => return Err(err).context("failed to read sys-config"),
+    };
+    Ok(std::sync::Arc::new(dstack_attest::default_verifier(
+        &collateral_urls,
+    )?))
+}
+
 async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
     let kms_url = normalize_prpc_url(&args.kms_url);
 
@@ -661,7 +678,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
             root_epoch: None,
         },
         cert_pair,
-        std::sync::Arc::new(ra_tls::attestation::AttestationVerifier::new_prod(None)?),
+        get_keys_verifier()?,
         root_ca_pem.clone(),
     )
     .await
