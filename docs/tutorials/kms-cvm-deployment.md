@@ -186,7 +186,7 @@ configs:
       url = "http://127.0.0.1:9200"
 
       # Admin listener: serves the key handover to other KMS nodes, so a
-      # serving KMS requires it. Only the token's SHA-256 goes into the compose.
+      # KMS requires it. Only the token's SHA-256 goes into the compose.
       [core.admin]
       enabled = true
       address = "0.0.0.0"

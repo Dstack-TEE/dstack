@@ -165,6 +165,10 @@ async fn main() -> Result<()> {
         );
     }
 
+    // before onboarding or bootstrap, so a misconfigured node fails before it
+    // gets or generates root keys.
+    config::check_key_handover(&config, &figment)?;
+
     if config.onboard.enabled && !config.keys_exists() {
         info!("Onboarding");
         run_onboard_service(config.clone(), figment.clone()).await?;
@@ -172,8 +176,6 @@ async fn main() -> Result<()> {
             bail!("Failed to onboard");
         }
     }
-
-    config::check_key_handover(&config, &figment)?;
 
     let keyring = main_service::Keyring::load(&config).context("Failed to load the root keys")?;
     let rpc_epoch = main_service::wait_for_servable_epoch(&config, &keyring).await;

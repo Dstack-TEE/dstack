@@ -129,8 +129,8 @@ fn default_true() -> bool {
 }
 
 /// Without the public handover, other KMS nodes can get the keys only from the
-/// admin listener over TLS. A serving KMS without either would strand them, so
-/// it refuses to start.
+/// admin listener over TLS. A KMS without either would strand them, so it
+/// refuses to start, in any mode.
 pub(crate) fn check_key_handover(config: &KmsConfig, figment: &Figment) -> Result<()> {
     if config.onboard.public_key_handover {
         return Ok(());
@@ -320,6 +320,10 @@ mod tests {
         let no_key = "[core.admin.tls]\nkey = \"\"\n";
         let no_certs = "[core.admin.tls]\ncerts = \"\"\n";
         assert!(handover_check("").is_ok());
+        // onboarding and bootstrap modes are checked alike.
+        let onboarding = "[core.onboard]\nenabled = true\nauto_bootstrap_domain = \"kms.test\"\n";
+        assert!(handover_check(onboarding).is_ok());
+        assert!(handover_check(&format!("{onboarding}{no_admin}")).is_err());
         for missing in [no_admin, no_key, no_certs] {
             assert!(handover_check(&format!("{public}{missing}")).is_ok());
         }

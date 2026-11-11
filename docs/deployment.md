@@ -510,7 +510,7 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 
 **Configure the source KMS for key handover:**
 
-Every serving KMS needs this, or `core.onboard.public_key_handover = true`: without a handover path it refuses to start, naming the missing setting.
+Every KMS needs this, or `core.onboard.public_key_handover = true`: without a handover path it refuses to start, before onboarding or bootstrap, naming the missing setting. In a public config such as an app compose, set `auth_token_hash` (the token's SHA-256) instead of `auth_token`, with a high-entropy random token (`openssl rand -hex 32`), since the hash can be brute-forced offline.
 
 `Admin.GetKmsKey` only works on an admin listener with `[core.admin.tls]`: without TLS the listener speaks plain HTTP, so the new KMS can present no RA-TLS certificate and the call fails with `No attestation provided`. The admin listener binds to `127.0.0.1` by default; bind it to an address the new KMS can reach and restrict access to the KMS nodes at the network layer.
 

@@ -241,7 +241,8 @@ Configuration changes:
   set `core.onboard.public_key_handover = true`. The built-in default enables
   the admin listener with TLS, so it needs `core.admin.auth_token`,
   `DSTACK_KMS_ADMIN_TOKEN` or `core.admin.auth_token_hash` to start. In a KMS
-  app compose, which is public, use `auth_token_hash`.
+  app compose, which is public, use `auth_token_hash` with a high-entropy random
+  token (`openssl rand -hex 32`), since its hash can be brute-forced offline.
 - Auto-bootstrap refuses to overwrite existing root keys.
 
 If you use `auth-simple`, replace it with `dstack-auth`, which reads the same

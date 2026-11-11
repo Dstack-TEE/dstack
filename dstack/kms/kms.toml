@@ -86,7 +86,7 @@ download_timeout = "2m"
 # to onboarding KMS nodes on a dedicated listener behind the shared HTTP
 # authenticator. It fails closed: the KMS does not start until auth_token (or
 # DSTACK_KMS_ADMIN_TOKEN), auth_token_hash or htpasswd_file is set. Unless
-# core.onboard.public_key_handover = true, a serving KMS also requires this
+# core.onboard.public_key_handover = true, the KMS also requires this
 # listener and its TLS below, so that other KMS nodes can onboard.
 [core.admin]
 enabled = true
@@ -98,7 +98,9 @@ port = 8001
 # `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
 # Required unless insecure_no_auth = true. Generate with: openssl rand -hex 32
 auth_token = ""
-# Or the token's hex SHA-256, for a config that is not secret (an app compose):
+# Or the token's hex SHA-256, for a config that is not secret (an app compose).
+# The hash is public there, so the token must be high-entropy random, or it can
+# be brute-forced offline: TOKEN=$(openssl rand -hex 32)
 # printf '%s' "$TOKEN" | sha256sum
 auth_token_hash = ""
 # Optional Apache bcrypt htpasswd file (create with `htpasswd -B -c file admin`).
