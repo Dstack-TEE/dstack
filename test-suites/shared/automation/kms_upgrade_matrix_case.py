@@ -34,6 +34,7 @@ SUPPORTED = {f"tc-kms-upgrade-{index:03d}" for index in range(1, 13)} | {
     "tc-int-mixed-004",
     "tc-int-mixed-006",
     "tc-int-compatibil-008",
+    "tc-int-compatibil-009",
     "tc-int-end-to-end-001",
     "tc-int-end-to-end-002",
     "tc-int-end-to-end-003",
@@ -1483,8 +1484,6 @@ configs:
             self.pin_kms_signer(signer_row)
             output = run(command, timeout=300)
         signature_v1_verified = "Verified signature_v1 (with timestamp)" in output
-        if encrypted_environment and not signature_v1_verified:
-            raise RuntimeError("VMM CLI did not verify the timestamped KMS signature")
         match = re.search(r"Created VM with ID: ([0-9a-f-]+)", output)
         if not match:
             raise RuntimeError(f"client deploy omitted VM ID: {output[-1000:]}")
@@ -1492,6 +1491,11 @@ configs:
         ids = json.loads(self.created_registry.read_text())
         ids.append(vm_id)
         self.created_registry.write_text(json.dumps(ids, indent=2) + "\n")
+        # The VMM CLI verifies a SealedEnv key's epoch signer silently and
+        # refuses to deploy when it does not match.
+        sealed_env = (self.vm_shared({"vm_id": vm_id}) / ".sealed-env").is_file()
+        if encrypted_environment and not (signature_v1_verified or sealed_env):
+            raise RuntimeError("VMM CLI did not verify the timestamped KMS signature")
         observation_path = (
             "/observation" if register_gateways_on_boot else "/identity-observation"
         )
@@ -1862,6 +1866,184 @@ configs:
             "ca_public_sha256": public_der.split()[0],
             "ca_serial": serial.removeprefix("serial="),
         }
+
+    def vm_shared(self, row: dict[str, Any]) -> pathlib.Path:
+        """Return the host side of one VM's shared directory."""
+        handle = self.manifest["resources"][0]["cleanup"]["handle"]
+        return pathlib.Path(handle["stack_handle"]["vm_root"]) / row["vm_id"] / "shared"
+
+    def app_key_releases(self, row: dict[str, Any]) -> int:
+        """Read how many app keys one KMS has released so far."""
+        code, raw = http(f"https://127.0.0.1:{row['service_port']}/metrics")
+        match = re.search(
+            rb'dstack_kms_key_releases_total\{listener="rpc",operation="app_get_key"\} (\d+)',
+            raw,
+        )
+        if code != 200 or not match:
+            raise RuntimeError(f"KMS metrics HTTP {code} omitted app key releases")
+        return int(match.group(1))
+
+    def boot_key_requests(self, row: dict[str, Any]) -> list[str]:
+        """List the root epochs the guest requested app keys for in its last boot."""
+        console = run([*self.cli, "logs", row["vm_id"], "-n", "5000"], timeout=60)
+        return [
+            "current" if epoch == "None" else epoch.removeprefix("Some(").rstrip(")")
+            for epoch in re.findall(
+                r"Requesting app keys of root epoch (None|Some\(\d+\))", console
+            )
+        ]
+
+    def restart_client(
+        self, row: dict[str, Any], *, expect_boot: bool
+    ) -> dict[str, Any]:
+        """Restart one client VM and wait for its observer or its boot error."""
+        run([*self.cli, "stop", row["vm_id"], "--force"], timeout=120)
+        run([*self.cli, "start", row["vm_id"]], timeout=180)
+        url = f"http://127.0.0.1:{row['service_port']}/observation"
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            info = json.loads(run([*self.cli, "info", "--json", row["vm_id"]]))
+            if info.get("boot_error"):
+                if expect_boot:
+                    raise RuntimeError(
+                        f"client boot failed: {info['boot_error'][-500:]}"
+                    )
+                return {"boot_error": info["boot_error"][-500:]}
+            if expect_boot:
+                code, raw = http(url, timeout=10)
+                if code == 200:
+                    return json.loads(raw)
+            time.sleep(2)
+        raise RuntimeError(
+            f"client restart reached neither boot nor boot error: {info}"
+        )
+
+
+def sealed_env_rotation(matrix: MatrixRun) -> dict[str, Any]:
+    """Unseal, reseal, and reject SealedEnv envelopes across a KMS root rotation."""
+    domain = "10-0-2-2.sslip.io"
+    source = matrix.deploy("candidate", initialized=True, domain_override=domain)
+    route, _ = matrix.configure_endpoint_proxy(
+        0, source, enabled=True, expected_domain=domain
+    )
+    secret = secrets.token_hex(16)
+    app = matrix.deploy_client(
+        [route],
+        identity="sealed-env",
+        kms_encrypt_row=source,
+        encrypted_environment={"DSTACK_TEST_SECRET_PRIMARY": secret},
+    )
+    secret_sha256 = hashlib.sha256(secret.encode()).hexdigest()
+    sealed_path = matrix.vm_shared(app) / ".sealed-env"
+
+    def envelope() -> dict[str, Any]:
+        return json.loads(sealed_path.read_text())
+
+    def delivered(observation: dict[str, Any]) -> bool:
+        environment = observation.get("delivered_environment_sha256") or {}
+        return environment.get("DSTACK_TEST_SECRET_PRIMARY") == secret_sha256
+
+    def restart(*, expect_boot: bool) -> tuple[dict[str, Any], list[str], int]:
+        before = matrix.app_key_releases(rotated)
+        outcome = matrix.restart_client(app, expect_boot=expect_boot)
+        released = matrix.app_key_releases(rotated) - before
+        return outcome, matrix.boot_key_requests(app), released
+
+    initial = envelope()
+    if (initial["root_epoch"], initial["app_epoch"]) != (0, 0):
+        raise RuntimeError(
+            f"first boot sealed at {initial['root_epoch']}/{initial['app_epoch']}"
+        )
+    if not delivered(app["observation"]):
+        raise RuntimeError("first boot did not deliver the sealed secret")
+
+    rotated = matrix.deploy("candidate", initialized=False, legacy=True)
+    matrix.onboard(
+        rotated, source, expect_success=True, target_domain=domain, rotate=True
+    )
+    route, _ = matrix.configure_endpoint_proxy(
+        0, rotated, enabled=True, expected_domain=domain
+    )
+    # The dev auth backend serves the newest epoch, whose signer differs.
+    if (
+        matrix.metadata(rotated)["k256_sha256"]
+        == matrix.metadata(source)["k256_sha256"]
+    ):
+        raise RuntimeError("rotated KMS still serves the epoch-0 signer")
+
+    # Root epoch 0 is fetched twice: once to re-key the data disk created at
+    # epoch 0, once to unseal the env.
+    migrated, migration_requests, migration_released = restart(expect_boot=True)
+    resealed = envelope()
+    if not delivered(migrated):
+        raise RuntimeError(
+            "old-epoch sealed env did not deliver the secret after rotation"
+        )
+    if (resealed["root_epoch"], resealed["app_epoch"]) != (1, 0) or resealed[
+        "ciphertext"
+    ] == initial["ciphertext"]:
+        raise RuntimeError("migration boot did not reseal the env to the current epoch")
+    if migration_requests != ["current", "0", "0"] or migration_released != 3:
+        raise RuntimeError(
+            f"migration boot requested {migration_requests}, KMS released {migration_released}"
+        )
+
+    steady, steady_requests, steady_released = restart(expect_boot=True)
+    if not delivered(steady) or envelope() != resealed:
+        raise RuntimeError("resealed boot changed the env")
+    if steady_requests != ["current"] or steady_released != 1:
+        raise RuntimeError(
+            f"resealed boot requested {steady_requests}, KMS released {steady_released}"
+        )
+
+    sealed_path.write_text(json.dumps(dict(resealed, root_epoch=2)))
+    future, future_requests, future_released = restart(expect_boot=False)
+    if "exceeds current epoch" not in future["boot_error"]:
+        raise RuntimeError(f"future epoch boot error: {future['boot_error']}")
+    if future_requests != ["current"] or future_released != 1:
+        raise RuntimeError(
+            f"future epoch boot requested {future_requests}, KMS released {future_released}"
+        )
+
+    sealed_path.write_text(json.dumps(dict(resealed, root_epoch=0)))
+    mislabeled, mislabeled_requests, mislabeled_released = restart(expect_boot=False)
+    if "exceeds current epoch" in mislabeled["boot_error"]:
+        raise RuntimeError("mislabeled envelope was rejected before fetching its key")
+    if mislabeled_requests != ["current", "0"] or mislabeled_released != 2:
+        raise RuntimeError(
+            f"mislabeled boot requested {mislabeled_requests}, KMS released {mislabeled_released}"
+        )
+
+    sealed_path.write_text(json.dumps(resealed))
+    recovered, _, _ = restart(expect_boot=True)
+    if not delivered(recovered):
+        raise RuntimeError("restored envelope did not boot")
+    return {
+        "path": [
+            "candidate-kms-epoch-0",
+            "app-sealed-at-epoch-0",
+            "rotation-onboarding-to-epoch-1",
+            "historical-unseal-and-reseal",
+            "steady-boot-without-historical-key",
+            "future-epoch-rejected-before-key-fetch",
+            "mislabeled-epoch-fails-decryption",
+            "restored-envelope-boots",
+        ],
+        "expected": "a SealedEnv sealed at a retained epoch is unsealed once with the historical key and resealed to the current epoch, while future or mislabeled epochs fail closed",
+        "sealed_epochs": {
+            "initial": [initial["root_epoch"], initial["app_epoch"]],
+            "resealed": [resealed["root_epoch"], resealed["app_epoch"]],
+        },
+        "root_epochs_requested": {
+            "migration": migration_requests,
+            "steady": steady_requests,
+            "future_label": future_requests,
+            "mislabeled": mislabeled_requests,
+        },
+        "future_epoch_error": future["boot_error"],
+        "mislabeled_epoch_error": mislabeled["boot_error"],
+        "private_material_exported": False,
+    }
 
 
 def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
@@ -3642,6 +3824,8 @@ def execute(case_id: str, matrix: MatrixRun) -> dict[str, Any]:
             },
             "private_material_exported": False,
         }
+    if case_id == "tc-int-compatibil-009":
+        return sealed_env_rotation(matrix)
     if case_id == "tc-int-compatibil-008":
         old = matrix.deploy(
             "0.6.0", initialized=True, domain_override="10-0-2-2.sslip.io"
