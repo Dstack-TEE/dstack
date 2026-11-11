@@ -386,13 +386,26 @@ fn authorize(
         },
     };
     let info = &request.boot_info;
+    // key handover may carry a registered but not yet active epoch, so the
+    // keyring can be distributed before activation; key-issuing operations
+    // stay on active epochs.
+    let handover = matches!(
+        request.operation,
+        Operation::KmsExportKeys | Operation::KmsImportKeys
+    );
     result.rejection_reason = if request.operation.is_kms() != is_kms {
         "invalid authorization operation".into()
     } else if current.is_none() && request.operation != Operation::KmsBootstrap {
         "root epoch not registered".into()
     } else if request
         .requested_root_epoch
-        .is_some_and(|epoch| epoch as usize > result.current_root_epoch)
+        .is_some_and(|epoch| epoch as usize > result.latest_root_epoch)
+    {
+        "requested root epoch is not registered".into()
+    } else if !handover
+        && request
+            .requested_root_epoch
+            .is_some_and(|epoch| epoch as usize > result.current_root_epoch)
     {
         "requested root epoch is not active".into()
     } else if request
@@ -1126,6 +1139,50 @@ mod tests {
             result.latest_root_epoch_hash,
             format!("0x{}", hex::encode(hashes[2]))
         );
+    }
+
+    #[test]
+    fn a_pending_root_epoch_is_authorized_for_kms_key_handover() {
+        // epoch 1 is registered (latest) but not current: pending
+        let al: Allowlist = serde_json::from_value(json!({
+            "kmsContractAddr": "0x1111111111111111111111111111111111111111",
+            "kms": {"mrAggregated": ["bb"], "allowAnyDevice": true},
+            "rootEpochs": [
+                {"caPubkey": "aa", "k256Pubkey": "bb"},
+                {"caPubkey": "cc", "k256Pubkey": "dd"}
+            ],
+            "currentRootEpoch": 0
+        }))
+        .unwrap();
+        let ask = |operation: &str, requested: u32| {
+            let request: AuthorizationRequest = serde_json::from_value(json!({
+                "operation": operation,
+                "appId": "11".repeat(20),
+                "mrAggregated": "bb",
+                "requestedRootEpoch": requested,
+            }))
+            .unwrap();
+            authorize(&request, true, &al).unwrap()
+        };
+
+        let current = ask("kms_export_keys", 0);
+        assert!(current.authorized, "{}", current.rejection_reason);
+        assert_eq!(current.current_root_epoch, 0);
+        assert_eq!(current.latest_root_epoch, 1);
+
+        for operation in ["kms_import_keys", "kms_export_keys"] {
+            let pending = ask(operation, 1);
+            assert!(
+                pending.authorized,
+                "{operation} at the pending epoch 1: {}",
+                pending.rejection_reason
+            );
+            assert!(!ask(operation, 2).authorized);
+        }
+
+        let serve = ask("kms_serve", 1);
+        assert!(!serve.authorized);
+        assert_eq!(serve.rejection_reason, "requested root epoch is not active");
     }
 
     #[test]

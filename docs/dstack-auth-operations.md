@@ -112,7 +112,7 @@ Hex values are compared case-insensitively, with or without a `0x` prefix.
 | `apps.<appId>.allowAnyDevice` | No | If true, skip the device ID check for this app |
 | `apps.<appId>.currentAppEpoch` | No | Current app key epoch (default `0`), served by `GET /app/<appId>`. A non-zero epoch denies the legacy `/bootAuth/app` route. |
 | `rootEpochs` | No | KMS root public keys of each root epoch, indexed by epoch, `[{"caPubkey": "0x...", "k256Pubkey": "0x..."}]`. Epoch 0 is the original roots. Append only. `GET /` reports the current epoch as `rootEpoch` with its chain hash as `rootEpochHash`; the last entry is reported as `latestRootEpoch`, and entries beyond `currentRootEpoch` are pending activation. |
-| `currentRootEpoch` | No | Root epoch KMS instances serve (default 0). Raise it only once every KMS node holds that epoch. |
+| `currentRootEpoch` | No | Root epoch KMS instances serve (default 0). Key-issuing operations (`kms_serve`, `app_get_key`, `app_get_cert`) may request up to this epoch; KMS key handover (`kms_export_keys`, `kms_import_keys`) may request any registered epoch, so the other KMS nodes can onboard from the rotated one while the new epoch is pending. Raise it only once every KMS node holds that epoch. |
 
 ### Validation Logic
 
