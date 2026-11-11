@@ -155,8 +155,8 @@ The central governance contract that manages OS image whitelisting, app registra
 
 | Function | Description |
 |----------|-------------|
-| `addOsImageHash(bytes32)` | Whitelist an OS image hash |
-| `removeOsImageHash(bytes32)` | Remove an OS image from whitelist |
+| `addOsImageHashAtEpochs(uint256,uint256,bytes32)` | Whitelist an OS image hash in a range of root epochs |
+| `removeOsImageHashAtEpochs(uint256,uint256,bytes32)` | Remove an OS image from a range of root epochs; `0` through the latest revokes it |
 | `setGatewayAppId(string)` | Set the trusted Gateway app ID(s) |
 | `registerApp(address)` | Register an app contract |
 | `deployAndRegisterApp(...)` | Deploy and register app in one transaction |

@@ -53,28 +53,35 @@ epochs. For an image handover, explicitly approve the new image in the old row s
 it can migrate old keys, approve it in the new row, and remove the old image from
 the old row after the handover. The old image never needs access to the new row.
 
-Existing `DstackKms` add/remove methods (OS images, KMS aggregated MRs, KMS
-devices) operate on every root row from the current epoch through the latest
-**registered** one, so a removal during a rotation revokes the material in both
-the serving and the pending row, and an addition allows it in both. Before any
-root epoch is registered, they operate on epoch zero. `DstackApp` add/remove
-methods, and `setAllowAnyDevice`, likewise operate on the current app epoch and
-the next one. The `*AtEpoch(epoch, material)` methods select a particular
-registered root epoch, or a historical, current or next app epoch; removal
-affects only that row. `setAllowAnyDeviceAtEpoch(epoch, allowed)` is also
-row-specific. Single-material add/remove scripts in `Manage.s.sol` accept optional
-`ROOT_EPOCH` or `APP_EPOCH` variables, respectively, as does `SetAllowAnyDevice`.
+A request may select any epoch up to the current one and is decided on that
+epoch's row, so a value is revoked only once every row allowing it is cleared.
+`DstackKms` has no epoch-less setters for OS images, KMS aggregated MRs and KMS
+devices: `*AtEpoch(epoch, material)` changes one registered root row and
+`*AtEpochs(fromEpoch, toEpoch, material)` every row in the range, so one
+transaction revokes a value from all rows with `remove*AtEpochs(0, latest, …)`.
+Before any root epoch is registered, only epoch zero can be written. `DstackApp`
+keeps its `IAppAuthBasicManagement` add/remove methods and `setAllowAnyDevice`;
+they change every app row from 0 through the next epoch, so a removal is a full
+revocation. Its `*AtEpoch` methods, and `setAllowAnyDeviceAtEpoch`, change one
+historical, current or next row. The KMS scripts in `Manage.s.sol` take
+`ROOT_EPOCH` for one row or `FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` for a range; without
+them, additions write the current through the latest row and removals every row.
+The app scripts take an optional `APP_EPOCH`, as does `SetAllowAnyDevice`.
+
+Disk and environment migration after a root rotation fetches the keys of the
+recorded epoch, so a new image migrating old data must be allowed in that old
+row too. Without it the guest stops with an error naming the root and app epoch
+it could not get keys for.
 
 The `*AtEpoch` getters read the selected row, including legacy epoch zero.
 `EpochPolicyChanged` events include the row and the resulting permission. Legacy
 bool getters and events describe **epoch zero only**; changing a nonzero row does
 not change its legacy bool or emit a misleading legacy material event.
-Root policy rows from epoch 1 belong to the epoch's keys: the contract stores
-them under its chain hash, so a row can be written only once the epoch is
-registered (register, prepare the row, then activate). A popped epoch's rows do
-not carry over: other keys registered under the same number start with empty
-rows, which must be prepared again before activation. Epoch 0 keeps the legacy
-mappings.
+Root policy rows from epoch 1 belong to the epoch's registration, so a row can
+be written only once the epoch is registered (register, prepare the row, then
+activate). A popped epoch's rows do not carry over: the next registration of the
+number starts with empty rows, even with the same keys, which must be prepared
+again before activation. Epoch 0 keeps the legacy mappings.
 
 ### KMS keyring handover
 
@@ -91,8 +98,8 @@ This permits staged key distribution without changing which epoch the KMS serves
 ### Upgrading existing proxies
 
 The original bool mappings and `allowAnyDevice` retain their storage locations and
-are used directly as row zero. New nested mappings consume three storage-gap slots
-in each contract; no entries are copied and no reinitializer is required. Existing
+are used directly as row zero. New storage consumes storage-gap slots in each
+contract (four in `DstackKms`, three in `DstackApp`); no entries are copied and no reinitializer is required. Existing
 owners, pending owners, policy flags, root registries and app epoch counters are
 preserved. Even if the pre-upgrade counter is nonzero, old global approvals grant
 only row zero after upgrading: explicitly populate the intended nonzero rows.

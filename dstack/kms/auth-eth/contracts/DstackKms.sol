@@ -58,13 +58,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         bytes caPubkey;
         bytes k256Pubkey;
         // Where to fetch the generating KMS's attestation. Its report data binds
-        // the epoch and both public keys, so the evidence proves itself: anyone
-        // can check the keys came from an approved KMS in a TEE.
+        // both public keys, so the evidence proves itself: anyone can check the
+        // keys came from an approved KMS in a TEE.
         string evidenceUrl;
         // Commits to the public keys of this epoch and every earlier one:
         // keccak256(previous chainHash || keccak256(caPubkey) ||
         // keccak256(k256Pubkey)), with a zero previous hash for epoch 0.
         bytes32 chainHash;
+        // Keys this epoch's policy rows; unique to each registration.
+        uint256 registration;
     }
 
     // Root keys of each KMS root epoch, indexed by epoch; epoch 0 is the
@@ -77,12 +79,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // later epochs take effect only when activated, one at a time.
     uint256 private _currentRootEpoch;
 
-    // Policy rows of epochs from 1, keyed by the epoch's chain hash so that they
-    // belong to its keys: a popped and re-registered epoch starts empty. Epoch
-    // zero continues to use the original fields above after an upgrade.
-    mapping(bytes32 => mapping(bytes32 => bool)) private _kmsAggregatedMrsByRoot;
-    mapping(bytes32 => mapping(bytes32 => bool)) private _kmsDeviceIdsByRoot;
-    mapping(bytes32 => mapping(bytes32 => bool)) private _osImagesByRoot;
+    // Number of root epoch registrations, popped ones included.
+    uint256 private _rootEpochRegistrations;
+
+    // Policy rows of epochs from 1, keyed by the epoch's registration so that a
+    // popped and re-registered epoch starts empty, even with the same keys.
+    // Epoch zero continues to use the original fields above after an upgrade.
+    mapping(uint256 => mapping(bytes32 => bool)) private _kmsAggregatedMrsByRoot;
+    mapping(uint256 => mapping(bytes32 => bool)) private _kmsDeviceIdsByRoot;
+    mapping(uint256 => mapping(bytes32 => bool)) private _osImagesByRoot;
 
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
@@ -187,7 +192,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         bytes32 previous = epoch == 0 ? bytes32(0) : _rootEpochs[epoch - 1].chainHash;
         bytes32 chainHash = keccak256(abi.encodePacked(previous, keccak256(caPubkey), keccak256(k256Pubkey)));
-        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, evidenceUrl, chainHash));
+        _rootEpochs.push(RootEpoch(caPubkey, k256Pubkey, evidenceUrl, chainHash, _rootEpochRegistrations++));
         emit RootEpochRegistered(epoch, chainHash, caPubkey, k256Pubkey, evidenceUrl);
         _emitPolicy("root-epoch", chainHash, true);
         if (epoch == 0) {
@@ -230,8 +235,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Drop the last registered epoch while it is still pending, for when the
     // nodes holding it are lost before enough others have onboarded it. The
     // epoch is named by number and chain hash, so a stale call cannot drop a
-    // later registration of the same number. Its policy rows stay with its chain
-    // hash: registering other keys under the same number starts with empty rows,
+    // later registration of the same number. Its policy rows go with it: the
+    // next registration of the number starts with empty rows, whatever its keys,
     // which must be prepared again before activation.
     function popRootEpoch(uint256 epoch, bytes32 chainHash) external onlyOwner {
         require(epoch + 1 == _rootEpochs.length && epoch > _currentRootEpoch, "Not the pending root epoch");
@@ -349,23 +354,30 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
 
     function kmsAllowedAggregatedMrsAtEpoch(uint256 epoch, bytes32 mrAggregated) public view returns (bool) {
         if (epoch == 0) return kmsAllowedAggregatedMrs[mrAggregated];
-        return epoch < _rootEpochs.length && _kmsAggregatedMrsByRoot[_rootEpochs[epoch].chainHash][mrAggregated];
-    }
-
-    function addKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
-        _setFromCurrentEpoch(_setKmsAggregatedMr, mrAggregated, true);
+        return epoch < _rootEpochs.length && _kmsAggregatedMrsByRoot[_rootEpochs[epoch].registration][mrAggregated];
     }
 
     function addKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
         _setKmsAggregatedMr(epoch, mrAggregated, true);
     }
 
-    function removeKmsAggregatedMr(bytes32 mrAggregated) external onlyOwner {
-        _setFromCurrentEpoch(_setKmsAggregatedMr, mrAggregated, false);
+    function addKmsAggregatedMrAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 mrAggregated) external onlyOwner {
+        _setAtEpochs(_setKmsAggregatedMr, fromEpoch, toEpoch, mrAggregated, true);
     }
 
     function removeKmsAggregatedMrAtEpoch(uint256 epoch, bytes32 mrAggregated) public onlyOwner {
         _setKmsAggregatedMr(epoch, mrAggregated, false);
+    }
+
+    function removeKmsAggregatedMrAtEpochs(
+        uint256 fromEpoch,
+        uint256 toEpoch,
+        bytes32 mrAggregated
+    )
+        external
+        onlyOwner
+    {
+        _setAtEpochs(_setKmsAggregatedMr, fromEpoch, toEpoch, mrAggregated, false);
     }
 
     function _setKmsAggregatedMr(uint256 epoch, bytes32 mrAggregated, bool allowed) private {
@@ -376,30 +388,30 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             else emit KmsAggregatedMrRemoved(mrAggregated);
             _emitPolicy("kms-aggregated-mr", mrAggregated, allowed);
         } else {
-            _kmsAggregatedMrsByRoot[_rootEpochs[epoch].chainHash][mrAggregated] = allowed;
+            _kmsAggregatedMrsByRoot[_rootEpochs[epoch].registration][mrAggregated] = allowed;
         }
         emit EpochPolicyChanged(keccak256("kms-aggregated-mr"), mrAggregated, epoch, allowed);
     }
 
     function kmsAllowedDeviceIdsAtEpoch(uint256 epoch, bytes32 deviceId) public view returns (bool) {
         if (epoch == 0) return kmsAllowedDeviceIds[deviceId];
-        return epoch < _rootEpochs.length && _kmsDeviceIdsByRoot[_rootEpochs[epoch].chainHash][deviceId];
-    }
-
-    function addKmsDevice(bytes32 deviceId) external onlyOwner {
-        _setFromCurrentEpoch(_setKmsDevice, deviceId, true);
+        return epoch < _rootEpochs.length && _kmsDeviceIdsByRoot[_rootEpochs[epoch].registration][deviceId];
     }
 
     function addKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         _setKmsDevice(epoch, deviceId, true);
     }
 
-    function removeKmsDevice(bytes32 deviceId) external onlyOwner {
-        _setFromCurrentEpoch(_setKmsDevice, deviceId, false);
+    function addKmsDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
+        _setAtEpochs(_setKmsDevice, fromEpoch, toEpoch, deviceId, true);
     }
 
     function removeKmsDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         _setKmsDevice(epoch, deviceId, false);
+    }
+
+    function removeKmsDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
+        _setAtEpochs(_setKmsDevice, fromEpoch, toEpoch, deviceId, false);
     }
 
     function _setKmsDevice(uint256 epoch, bytes32 deviceId, bool allowed) private {
@@ -410,30 +422,30 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             else emit KmsDeviceRemoved(deviceId);
             _emitPolicy("kms-device", deviceId, allowed);
         } else {
-            _kmsDeviceIdsByRoot[_rootEpochs[epoch].chainHash][deviceId] = allowed;
+            _kmsDeviceIdsByRoot[_rootEpochs[epoch].registration][deviceId] = allowed;
         }
         emit EpochPolicyChanged(keccak256("kms-device"), deviceId, epoch, allowed);
     }
 
     function allowedOsImagesAtEpoch(uint256 epoch, bytes32 osImageHash) public view returns (bool) {
         if (epoch == 0) return allowedOsImages[osImageHash];
-        return epoch < _rootEpochs.length && _osImagesByRoot[_rootEpochs[epoch].chainHash][osImageHash];
-    }
-
-    function addOsImageHash(bytes32 osImageHash) external onlyOwner {
-        _setFromCurrentEpoch(_setOsImageHash, osImageHash, true);
+        return epoch < _rootEpochs.length && _osImagesByRoot[_rootEpochs[epoch].registration][osImageHash];
     }
 
     function addOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
         _setOsImageHash(epoch, osImageHash, true);
     }
 
-    function removeOsImageHash(bytes32 osImageHash) external onlyOwner {
-        _setFromCurrentEpoch(_setOsImageHash, osImageHash, false);
+    function addOsImageHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 osImageHash) external onlyOwner {
+        _setAtEpochs(_setOsImageHash, fromEpoch, toEpoch, osImageHash, true);
     }
 
     function removeOsImageHashAtEpoch(uint256 epoch, bytes32 osImageHash) public onlyOwner {
         _setOsImageHash(epoch, osImageHash, false);
+    }
+
+    function removeOsImageHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 osImageHash) external onlyOwner {
+        _setAtEpochs(_setOsImageHash, fromEpoch, toEpoch, osImageHash, false);
     }
 
     function _setOsImageHash(uint256 epoch, bytes32 osImageHash, bool allowed) private {
@@ -444,24 +456,25 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             else emit OsImageHashRemoved(osImageHash);
             _emitPolicy("os-image", osImageHash, allowed);
         } else {
-            _osImagesByRoot[_rootEpochs[epoch].chainHash][osImageHash] = allowed;
+            _osImagesByRoot[_rootEpochs[epoch].registration][osImageHash] = allowed;
         }
         emit EpochPolicyChanged(keccak256("os-image"), osImageHash, epoch, allowed);
     }
 
-    // The epoch-less setters change every row from the current epoch through
-    // any registered pending one, so a revocation during a rotation reaches
-    // both the serving and the prepared row. Use the *AtEpoch setters to change
-    // a single row.
-    function _setFromCurrentEpoch(
+    // A request may select any epoch up to the current one and is decided on
+    // that epoch's row, so revoking a value takes every row that allows it:
+    // 0 through rootEpochCount() - 1.
+    function _setAtEpochs(
         function(uint256, bytes32, bool) internal setter,
+        uint256 fromEpoch,
+        uint256 toEpoch,
         bytes32 value,
         bool allowed
     )
         private
     {
-        uint256 latest = _latestRootEpoch();
-        for (uint256 epoch = _currentRootEpoch; epoch <= latest; ++epoch) {
+        require(fromEpoch <= toEpoch, "Invalid root epoch range");
+        for (uint256 epoch = fromEpoch; epoch <= toEpoch; ++epoch) {
             setter(epoch, value, allowed);
         }
     }
@@ -486,7 +499,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     /// Authorize an attested identity and return the root epoch from the same state.
-    /// The caller selects KMS or app policy; KMS authorization requires the proxy app ID.
+    /// The caller selects KMS or app policy.
     function authorizeKms(AuthorizationRequest calldata request) external view returns (AuthorizationResult memory) {
         return _checkKmsAuthorization(request);
     }
@@ -572,6 +585,15 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             result.rejectionReason = "Requested root epoch is not registered";
             return result;
         }
+        // Serving issues keys of the epoch, so only the current one; the key
+        // handover may move a pending epoch between instances.
+        if (
+            request.operation == AuthorizationOperation.KMS_SERVE && request.requestedRootEpoch.isSet
+                && request.requestedRootEpoch.value > _currentRootEpoch
+        ) {
+            result.rejectionReason = "Requested root epoch is not active";
+            return result;
+        }
         if (request.requestedAppEpoch.isSet && request.requestedAppEpoch.value != 0) {
             result.rejectionReason = "Requested app epoch is not active";
             return result;
@@ -638,7 +660,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[45] private __gap;
+    uint256[44] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

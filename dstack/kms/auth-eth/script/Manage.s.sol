@@ -25,6 +25,33 @@ abstract contract BaseScript is Script {
             app = DstackApp(appAddr);
         }
     }
+
+    // The root epoch rows a KMS policy change applies to: ROOT_EPOCH alone, or
+    // FROM_ROOT_EPOCH (default `defaultFrom`) through TO_ROOT_EPOCH (default the
+    // latest registered epoch).
+    function rootEpochRange(uint256 defaultFrom) internal view returns (uint256 from, uint256 to) {
+        if (vm.envExists("ROOT_EPOCH")) {
+            from = to = vm.envUint("ROOT_EPOCH");
+        } else {
+            uint256 count = kms.rootEpochCount();
+            from = vm.envOr("FROM_ROOT_EPOCH", defaultFrom);
+            to = vm.envOr("TO_ROOT_EPOCH", count == 0 ? 0 : count - 1);
+        }
+    }
+
+    // Additions default to the current epoch onwards; older rows only matter to
+    // instances still holding older keys, such as disks to migrate.
+    function addRange() internal view returns (uint256, uint256) {
+        uint256 current;
+        if (kms.rootEpochCount() != 0) (current,) = kms.currentRootEpoch();
+        return rootEpochRange(current);
+    }
+
+    // Removals default to every row, as a request may select any epoch up to the
+    // current one.
+    function removeRange() internal view returns (uint256, uint256) {
+        return rootEpochRange(0);
+    }
 }
 
 // KMS Management Scripts
@@ -32,12 +59,9 @@ contract AddKmsAggregatedMr is BaseScript {
     function run() external {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
+        (uint256 from, uint256 to) = addRange();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.addKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
-        } else {
-            kms.addKmsAggregatedMr(mrAggregated);
-        }
+        kms.addKmsAggregatedMrAtEpochs(from, to, mrAggregated);
         vm.stopBroadcast();
 
         console.log("Added KMS aggregated MR:", vm.toString(mrAggregated));
@@ -48,12 +72,9 @@ contract RemoveKmsAggregatedMr is BaseScript {
     function run() external {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
+        (uint256 from, uint256 to) = removeRange();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.removeKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
-        } else {
-            kms.removeKmsAggregatedMr(mrAggregated);
-        }
+        kms.removeKmsAggregatedMrAtEpochs(from, to, mrAggregated);
         vm.stopBroadcast();
 
         console.log("Removed KMS aggregated MR:", vm.toString(mrAggregated));
@@ -64,12 +85,9 @@ contract AddOsImage is BaseScript {
     function run() external {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
+        (uint256 from, uint256 to) = addRange();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.addOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
-        } else {
-            kms.addOsImageHash(imageHash);
-        }
+        kms.addOsImageHashAtEpochs(from, to, imageHash);
         vm.stopBroadcast();
 
         console.log("Added OS image hash:", vm.toString(imageHash));
@@ -80,12 +98,9 @@ contract AddKmsDevice is BaseScript {
     function run() external {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
+        (uint256 from, uint256 to) = addRange();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.addKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
-        } else {
-            kms.addKmsDevice(deviceId);
-        }
+        kms.addKmsDeviceAtEpochs(from, to, deviceId);
         vm.stopBroadcast();
 
         console.log("Added KMS device:", vm.toString(deviceId));
@@ -262,6 +277,7 @@ contract BatchKmsSetup is BaseScript {
         bytes32[] memory osImages = vm.envOr("OS_IMAGE_LIST", ",", new bytes32[](0));
         bytes32[] memory devices = vm.envOr("DEVICE_LIST", ",", new bytes32[](0));
 
+        (uint256 from, uint256 to) = addRange();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
 
         // Set gateway ID if provided
@@ -272,19 +288,19 @@ contract BatchKmsSetup is BaseScript {
 
         // Add aggregated MRs
         for (uint256 i = 0; i < mrAggregated.length; i++) {
-            kms.addKmsAggregatedMr(mrAggregated[i]);
+            kms.addKmsAggregatedMrAtEpochs(from, to, mrAggregated[i]);
             console.log("Added MR aggregated:", vm.toString(mrAggregated[i]));
         }
 
         // Add OS images
         for (uint256 i = 0; i < osImages.length; i++) {
-            kms.addOsImageHash(osImages[i]);
+            kms.addOsImageHashAtEpochs(from, to, osImages[i]);
             console.log("Added OS image:", vm.toString(osImages[i]));
         }
 
         // Add devices
         for (uint256 i = 0; i < devices.length; i++) {
-            kms.addKmsDevice(devices[i]);
+            kms.addKmsDeviceAtEpochs(from, to, devices[i]);
             console.log("Added device:", vm.toString(devices[i]));
         }
 
@@ -300,12 +316,9 @@ contract RemoveOsImage is BaseScript {
     function run() external {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
+        (uint256 from, uint256 to) = removeRange();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.removeOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
-        } else {
-            kms.removeOsImageHash(imageHash);
-        }
+        kms.removeOsImageHashAtEpochs(from, to, imageHash);
         vm.stopBroadcast();
 
         console.log("Removed OS image hash:", vm.toString(imageHash));
@@ -316,12 +329,9 @@ contract RemoveKmsDevice is BaseScript {
     function run() external {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
+        (uint256 from, uint256 to) = removeRange();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.removeKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
-        } else {
-            kms.removeKmsDevice(deviceId);
-        }
+        kms.removeKmsDeviceAtEpochs(from, to, deviceId);
         vm.stopBroadcast();
 
         console.log("Removed KMS device:", vm.toString(deviceId));

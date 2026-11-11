@@ -278,7 +278,7 @@ echo "OS image hash: 0x$OS_IMAGE_HASH"
 ```
 
 ```bash
-cast send "$KMS_CONTRACT_ADDR" "addOsImageHash(bytes32)" "0x$OS_IMAGE_HASH" --rpc-url "$ETH_RPC_URL" --private-key "$PRIVATE_KEY"
+cast send "$KMS_CONTRACT_ADDR" "addOsImageHashAtEpoch(uint256,bytes32)" 0 "0x$OS_IMAGE_HASH" --rpc-url "$ETH_RPC_URL" --private-key "$PRIVATE_KEY"
 ```
 
 Verify it was added:

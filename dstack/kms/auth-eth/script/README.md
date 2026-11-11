@@ -28,6 +28,11 @@ Type-safe contract management scripts. Set the environment variables and run the
 
 ### KMS Management
 
+The KMS material scripts below write root epoch rows: `ROOT_EPOCH=e` one row, or
+`FROM_ROOT_EPOCH` through `TO_ROOT_EPOCH`. By default additions write the current
+through the latest registered epoch, and removals every row, so a removal
+revokes the value at every epoch a request can select.
+
 #### Add KMS Aggregated MR
 ```bash
 KMS_CONTRACT_ADDR=0x... MR_AGGREGATED=0x1234... \

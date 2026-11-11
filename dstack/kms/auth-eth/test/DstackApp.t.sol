@@ -503,18 +503,18 @@ contract DstackAppTest is Test {
         assertFalse(allowed);
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
-        app.addComposeHash(info.composeHash);
+        app.addComposeHashAtEpoch(1, info.composeHash);
         allowed = authorizeCurrent(info);
         assertFalse(allowed, "each material must be approved in the selected row");
-        app.addDevice(info.deviceId);
+        app.addDeviceAtEpoch(1, info.deviceId);
         allowed = authorizeCurrent(info);
         assertTrue(allowed);
-        app.removeComposeHash(info.composeHash);
+        app.removeComposeHashAtEpoch(1, info.composeHash);
         assertFalse(app.allowedComposeHashesAtEpoch(1, info.composeHash));
         assertTrue(app.allowedComposeHashes(info.composeHash));
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
-        app.addComposeHash(info.composeHash);
+        app.addComposeHashAtEpoch(1, info.composeHash);
         app.removeDeviceAtEpoch(0, info.deviceId);
         assertFalse(app.allowedDeviceIds(info.deviceId));
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
@@ -534,8 +534,8 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(0, oldInfo.composeHash);
         app.addDeviceAtEpoch(0, oldInfo.deviceId);
         app.advanceAppEpoch(0);
-        app.addComposeHash(newInfo.composeHash);
-        app.addDevice(newInfo.deviceId);
+        app.addComposeHashAtEpoch(1, newInfo.composeHash);
+        app.addDeviceAtEpoch(1, newInfo.deviceId);
         (bool allowed,) = authorizeAt(newInfo, 0, keccak256("app_get_key"));
         assertFalse(allowed, "new epoch approval must not imply historical access");
         app.addComposeHashAtEpoch(0, newInfo.composeHash);
@@ -638,30 +638,33 @@ contract DstackAppTest is Test {
         vm.stopPrank();
     }
 
-    function test_EpochlessAppSettersChangeTheCurrentAndNextRows() public {
-        bytes32 composeHash = bytes32(uint256(7));
-        bytes32 deviceId = bytes32(uint256(8));
+    function test_EpochlessAppSettersChangeEveryRow() public {
+        IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
         app.advanceAppEpoch(0);
-        app.addComposeHash(composeHash);
-        app.addDevice(deviceId);
+        app.addComposeHash(info.composeHash);
+        app.addDevice(info.deviceId);
         app.setAllowAnyDevice(true);
-        for (uint256 epoch = 1; epoch <= 2; ++epoch) {
-            assertTrue(app.allowedComposeHashesAtEpoch(epoch, composeHash));
-            assertTrue(app.allowedDeviceIdsAtEpoch(epoch, deviceId));
+        for (uint256 epoch = 0; epoch <= 2; ++epoch) {
+            assertTrue(app.allowedComposeHashesAtEpoch(epoch, info.composeHash));
+            assertTrue(app.allowedDeviceIdsAtEpoch(epoch, info.deviceId));
             assertTrue(app.allowAnyDeviceAtEpoch(epoch));
         }
-        assertFalse(app.allowedComposeHashesAtEpoch(0, composeHash));
-        assertFalse(app.allowedDeviceIdsAtEpoch(0, deviceId));
-        app.removeComposeHash(composeHash);
-        app.removeDevice(deviceId);
+        (bool allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+
+        // A removal is a full revocation: no selectable epoch still allows it.
+        app.removeComposeHash(info.composeHash);
+        app.removeDevice(info.deviceId);
         app.setAllowAnyDevice(false);
-        for (uint256 epoch = 1; epoch <= 2; ++epoch) {
-            assertFalse(app.allowedComposeHashesAtEpoch(epoch, composeHash));
-            assertFalse(app.allowedDeviceIdsAtEpoch(epoch, deviceId));
+        for (uint256 epoch = 0; epoch <= 2; ++epoch) {
+            assertFalse(app.allowedComposeHashesAtEpoch(epoch, info.composeHash));
+            assertFalse(app.allowedDeviceIdsAtEpoch(epoch, info.deviceId));
             assertFalse(app.allowAnyDeviceAtEpoch(epoch));
         }
-        assertFalse(app.allowedComposeHashesAtEpoch(3, composeHash));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
+        assertFalse(allowed);
+        assertFalse(authorizeCurrent(info));
         vm.stopPrank();
     }
 

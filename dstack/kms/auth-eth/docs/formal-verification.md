@@ -84,8 +84,8 @@ reuse the existing `.t.sol` scaffolding and OZ-foundry-upgrades plugin.
 ### Setup
 
 - [x] `pipx install halmos` documented in `README.md`
-- [ ] No CI integration (intentional — see "What's intentionally not in
-      scope" below)
+- [x] Runs in CI (`.github/workflows/halmos.yml`) when `dstack/kms/auth-eth`
+      changes, with pinned Halmos and Forge versions
 
 ### What we verify
 
@@ -136,15 +136,16 @@ and admits one app per epoch, then one symbolic owner write where noted):
 - [x] `check_IsAppAllowed_EqualsEpochZeroDecisionBeforeAdvance` — at app
       epoch 0, with the next row prepared and any one owner write, the legacy
       `isAppAllowed` returns exactly the `authorizeApp` result at epoch 0.
-- [x] `check_PolicyWrite_PreservesOtherEpochDecisions` — a policy write at
-      one epoch, through the explicit or the current-epoch setters, never
-      changes an authorization decision at another epoch, including epoch
-      0's legacy fields.
+- [x] `check_PolicyWrite_PreservesOtherEpochDecisions` — an `*AtEpoch`
+      write at one epoch never changes an authorization decision at another
+      epoch, including epoch 0's legacy fields.
 - [x] `check_AuthorizeApp_MatchesPolicy` — for both app operations,
       `authorizeApp` allows exactly when the epoch is active, the TCB
       requirement holds, and that epoch admits the compose hash and device.
-- [x] `check_PolicyWrite_TakesEffect` — each `*AtEpoch` setter on an active
-      epoch either sets the value it was given or reverts on a zero ID.
+- [x] `check_PolicyWrite_TakesEffect` — each `*AtEpoch` setter on an epoch
+      up to the next one, and each epoch-less setter on every such epoch,
+      either sets the value it was given or reverts on a zero ID; so an
+      epoch-less removal leaves no selectable epoch allowing the value.
 
 Mutation-tested: requiring both the any-device flag and a listed device,
 ignoring the value of a per-epoch `allowAnyDevice` write, dropping a setter's
@@ -171,22 +172,21 @@ per epoch, and deploys an app at app epoch 1):
       succeeds exactly for a 91-byte uncompressed P-256 SPKI and a 33-byte
       compressed secp256k1 key.
 - [x] `check_Authorize_EnforcesEpochBounds` — a wrong-kind operation, an app
-      root epoch above the current one, a KMS root epoch above the latest
-      registered one, or an app epoch above the app's current one is never
+      or `kms_serve` root epoch above the current one, another KMS root epoch
+      above the latest registered one, or an app epoch above the app's current one is never
       authorized; every result reports the current root epoch and hash.
 - [x] `check_Authorize_OnlyBootstrapBeforeRegistration` — with no root epoch
       registered, only `kms_bootstrap` can be authorized.
 - [x] `check_AuthorizeKms_MatchesEpochPolicy` — after any one owner write,
       KMS authorization allows exactly when the selected root epoch is
-      registered, the TCB is up to date, and that epoch's row admits the OS
+      registered (current at most for `kms_serve`), the TCB is up to date, and that epoch's row admits the OS
       image, aggregated MR and device.
 - [x] `check_AuthorizeApp_MatchesKmsAndAppPolicy` — app authorization allows
       exactly when both epochs are active, the selected root epoch admits
       the OS image, and the app's own `authorizeApp` admits it.
 - [x] `check_KmsPolicyWrite_PreservesOtherEpochDecisions` — a KMS policy
-      write at one root epoch, or through the epoch-less setters at every
-      epoch from the current one to the latest, never changes a KMS decision
-      at an epoch it did not write.
+      write at one root epoch, or through the range setters from one epoch to
+      the latest, never changes a KMS decision at an epoch it did not write.
 - [x] `check_LegacyEntryPoints_RefuseOnceRotated` — once a later root epoch
       is current, `isKmsAllowed` and `isAppAllowed` refuse.
 - [x] `check_LegacyKmsCheck_ReadsEpochZeroBeforeRotation` — before any
@@ -319,10 +319,8 @@ If we revisit, target the same invariants as Layer 2 but add:
 
 ## What's intentionally not in scope
 
-- **CI gating of Slither / Halmos.** Symbolic execution is slow, solver-
-  version-sensitive, and produces non-actionable noise as a PR gate.
-  Run locally during development; treat these as design checks rather
-  than blocking lints.
+- **CI gating of Slither.** It produces non-actionable noise as a PR gate;
+  run it locally during development.
 - **Echidna** — overlaps with Foundry's built-in fuzzer (already runs 10k
   iterations under `FOUNDRY_PROFILE=ci` in `.github/workflows/foundry-test.yml`).
 - **Manticore / Mythril** — bytecode-level tools, slow, awkward with our

@@ -55,9 +55,9 @@ return-value spoofing are still possible — see §6.
 | 0–3 | `kmsInfo` | `KmsInfo` (struct, 4 fields) | `registerRootEpoch` (epoch 0), `activateRootEpoch` (owner) | Preserved for proxy upgrades and legacy readers; quote and event log are cleared on activation |
 | 4 | `gatewayAppId` | `string` | `setGatewayAppId` (owner) | Renamed from `tproxyAppId`; carries `@custom:oz-renamed-from` |
 | 5 | `registeredApps` | `mapping(address => bool)` | `registerApp` (anyone), `deployAndRegisterApp` (anyone) | Permissionless — see §6.1 |
-| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMr`, `removeKmsAggregatedMr` (owner) | |
-| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDevice`, `removeKmsDevice` (owner) | |
-| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHash`, `removeOsImageHash` (owner) | |
+| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMrAtEpoch(s)`, `removeKmsAggregatedMrAtEpoch(s)` at epoch 0 (owner) | |
+| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDeviceAtEpoch(s)`, `removeKmsDeviceAtEpoch(s)` at epoch 0 (owner) | |
+| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHashAtEpoch(s)`, `removeOsImageHashAtEpoch(s)` at epoch 0 (owner) | |
 | 9 | `appImplementation` | `address` | `setAppImplementation` (owner) | Used by `deployAndRegisterApp` |
 | 10 | `__gap[50]` | `uint256[50]` | (none — must always read zero) | Reserved |
 
@@ -173,8 +173,9 @@ setup uses `registerRootEpoch`. On an upgraded proxy with existing legacy roots,
 epoch 0 must match the stored `kmsInfo` keys; the upgrade preserves that storage.
 
 For each of `setGatewayAppId`,
-`setAppImplementation`, `addKmsAggregatedMr`, `removeKmsAggregatedMr`,
-`addKmsDevice`, `removeKmsDevice`, `addOsImageHash`, `removeOsImageHash`:
+`setAppImplementation`, and the `*AtEpoch` and `*AtEpochs` forms of
+`addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice`, `removeKmsDevice`,
+`addOsImageHash`, `removeOsImageHash`:
 
 - **pre**: `msg.sender == owner()`.
 - **frame**: every storage cell except the one mapped to the operation.
@@ -408,7 +409,7 @@ formal audit:
    apps have been deployed via the factory, the older proxies stay on
    the older impl. Is that intended (versioning) or should the KMS
    track which impl was current at deploy time?
-3. **Removing an OS image.** `removeOsImageHash` does not retroactively
+3. **Removing an OS image.** `removeOsImageHashAtEpochs` does not retroactively
    un-authorize already-running apps that booted under that image. Is
    that intended (revocation requires explicit downstream action) or
    should the spec require it?

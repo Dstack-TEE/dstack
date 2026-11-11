@@ -141,8 +141,8 @@ echo "OS image hash: 0x$OS_IMAGE_HASH"
 # Whitelist it on the KMS contract
 export KMS_CONTRACT_ADDR=$(cat ~/.dstack/secrets/kms-contract-address)
 cast send "$KMS_CONTRACT_ADDR" \
-  "addOsImageHash(bytes32)" \
-  "0x$OS_IMAGE_HASH" \
+  "addOsImageHashAtEpoch(uint256,bytes32)" \
+  0 "0x$OS_IMAGE_HASH" \
   --rpc-url "https://ethereum-sepolia-rpc.publicnode.com" \
   --private-key "$(cat ~/.dstack/secrets/sepolia-private-key)"
 ```

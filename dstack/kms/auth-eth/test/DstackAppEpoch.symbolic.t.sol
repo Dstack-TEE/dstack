@@ -49,18 +49,19 @@ contract DstackAppEpochSymbolicTest is Test {
         // per-epoch maps. Each epoch admits some app so that decisions can be
         // allowed as well as denied.
         vm.startPrank(OWNER);
-        app.addComposeHash(bytes32(uint256(0xc0)));
-        app.addDevice(bytes32(uint256(0xd0)));
+        app.addComposeHashAtEpoch(0, bytes32(uint256(0xc0)));
+        app.addDeviceAtEpoch(0, bytes32(uint256(0xd0)));
         app.advanceAppEpoch(0);
-        app.addComposeHash(bytes32(uint256(0xc1)));
-        app.setAllowAnyDevice(true);
+        app.addComposeHashAtEpoch(1, bytes32(uint256(0xc1)));
+        app.setAllowAnyDeviceAtEpoch(1, true);
         app.advanceAppEpoch(1);
-        app.addComposeHash(bytes32(uint256(0xc2)));
-        app.addDevice(bytes32(uint256(0xd2)));
+        app.addComposeHashAtEpoch(2, bytes32(uint256(0xc2)));
+        app.addDeviceAtEpoch(2, bytes32(uint256(0xd2)));
         vm.stopPrank();
     }
 
-    /// Calldata of one policy setter and the epoch it writes.
+    /// Calldata of one policy setter: 0-4 write the row of `epoch`, 5-9 are
+    /// their epoch-less forms, which write every row.
     function _policyCall(
         uint256 which,
         uint256 epoch,
@@ -69,10 +70,8 @@ contract DstackAppEpochSymbolicTest is Test {
     )
         internal
         view
-        returns (bytes memory data, uint256 target)
+        returns (bytes memory data)
     {
-        uint256 current = app.currentAppEpoch();
-        target = which < 5 ? epoch : current;
         if (which == 0) data = abi.encodeCall(DstackApp.addComposeHashAtEpoch, (epoch, word));
         else if (which == 1) data = abi.encodeCall(DstackApp.removeComposeHashAtEpoch, (epoch, word));
         else if (which == 2) data = abi.encodeCall(DstackApp.addDeviceAtEpoch, (epoch, word));
@@ -87,7 +86,7 @@ contract DstackAppEpochSymbolicTest is Test {
 
     function _ownerPolicyWrite(uint256 which, uint256 epoch, bytes32 word, bool flag) internal {
         if (which >= POLICY_SETTERS) return;
-        (bytes memory data,) = _policyCall(which, epoch, word, flag);
+        bytes memory data = _policyCall(which, epoch, word, flag);
         vm.prank(OWNER);
         (bool ok,) = address(app).call(data);
         ok; // a reverted write leaves the setUp state, which is also a valid pre-state
@@ -130,7 +129,7 @@ contract DstackAppEpochSymbolicTest is Test {
         uint256 before = app.currentAppEpoch();
 
         bytes memory data;
-        if (which < POLICY_SETTERS) (data,) = _policyCall(which, epoch, word, flag);
+        if (which < POLICY_SETTERS) data = _policyCall(which, epoch, word, flag);
         else if (which == 10) data = abi.encodeCall(DstackApp.advanceAppEpoch, (epoch));
         else if (which == 11) data = abi.encodeCall(DstackApp.setRequireTcbUpToDate, (flag));
         else if (which == 12) data = abi.encodeCall(DstackApp.disableUpgrades, ());
@@ -165,7 +164,7 @@ contract DstackAppEpochSymbolicTest is Test {
         external
     {
         vm.assume(which < 5 && epoch > app.currentAppEpoch() + 1);
-        (bytes memory data,) = _policyCall(which, epoch, word, flag);
+        bytes memory data = _policyCall(which, epoch, word, flag);
         vm.prank(caller);
         (bool ok,) = address(app).call(data);
         assert(!ok);
@@ -248,9 +247,8 @@ contract DstackAppEpochSymbolicTest is Test {
     }
 
     // ---------------------------------------------------------------
-    // Epoch isolation: a policy write at one epoch never changes an
-    // authorization decision at another epoch, including epoch 0's
-    // legacy fields. Covers both the explicit and current-epoch setters.
+    // Epoch isolation: an *AtEpoch write never changes an authorization
+    // decision at another epoch, including epoch 0's legacy fields.
     // ---------------------------------------------------------------
 
     function check_PolicyWrite_PreservesOtherEpochDecisions(
@@ -265,9 +263,8 @@ contract DstackAppEpochSymbolicTest is Test {
     )
         external
     {
-        vm.assume(which < POLICY_SETTERS);
-        (bytes memory data, uint256 target) = _policyCall(which, writeEpoch, word, flag);
-        vm.assume(target != epoch);
+        vm.assume(which < 5 && writeEpoch != epoch);
+        bytes memory data = _policyCall(which, writeEpoch, word, flag);
 
         IAppAuth.AppInfo memory info = _info(composeHash, deviceId, upToDate);
         (bool allowedBefore, bytes32 reasonBefore) = _decision(info, epoch);
@@ -305,19 +302,23 @@ contract DstackAppEpochSymbolicTest is Test {
         assert(allowed == expected);
     }
 
+    // A write takes effect on its row; an epoch-less one on every row up to
+    // the next epoch, so an epoch-less removal leaves no selectable epoch
+    // allowing the value.
     function check_PolicyWrite_TakesEffect(uint256 which, uint256 epoch, bytes32 word, bool flag) external {
-        vm.assume(which < 5 && epoch <= app.currentAppEpoch());
-        (bytes memory data,) = _policyCall(which, epoch, word, flag);
+        vm.assume(which < POLICY_SETTERS && epoch <= app.currentAppEpoch() + 1);
+        bytes memory data = _policyCall(which, epoch, word, flag);
         vm.prank(OWNER);
         (bool ok,) = address(app).call(data);
+        uint256 kind = which % 5;
         if (!ok) {
-            assert(word == bytes32(0) && (which == 0 || which == 2));
+            assert(word == bytes32(0) && (kind == 0 || kind == 2));
             return;
         }
-        if (which == 0) assert(app.allowedComposeHashesAtEpoch(epoch, word));
-        if (which == 1) assert(!app.allowedComposeHashesAtEpoch(epoch, word));
-        if (which == 2) assert(app.allowedDeviceIdsAtEpoch(epoch, word));
-        if (which == 3) assert(!app.allowedDeviceIdsAtEpoch(epoch, word));
-        if (which == 4) assert(app.allowAnyDeviceAtEpoch(epoch) == flag);
+        if (kind == 0) assert(app.allowedComposeHashesAtEpoch(epoch, word));
+        if (kind == 1) assert(!app.allowedComposeHashesAtEpoch(epoch, word));
+        if (kind == 2) assert(app.allowedDeviceIdsAtEpoch(epoch, word));
+        if (kind == 3) assert(!app.allowedDeviceIdsAtEpoch(epoch, word));
+        if (kind == 4) assert(app.allowAnyDeviceAtEpoch(epoch) == flag);
     }
 }
