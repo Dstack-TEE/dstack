@@ -100,6 +100,9 @@ pub struct HostConfig {
     pub image_download_url: String,
     /// confidential-computing platform (selects SNP-specific KMS settings).
     pub platform: Platform,
+    /// hex SHA-256 of the KMS admin token; the KMS refuses to start without
+    /// an admin credential.
+    pub kms_admin_token_hash: String,
 }
 
 impl Default for HostConfig {
@@ -110,6 +113,7 @@ impl Default for HostConfig {
             os_image_hash: String::new(),
             image_download_url: DEFAULT_IMAGE_DOWNLOAD_URL.to_string(),
             platform: Platform::Tdx,
+            kms_admin_token_hash: String::new(),
         }
     }
 }
@@ -148,6 +152,17 @@ type = "webhook"
 [core.auth_api.webhook]
 url = "{webhook_url}"
 
+# the key handover path a serving KMS requires; the token stays on the host.
+[core.admin]
+enabled = true
+address = "127.0.0.1"
+port = 8001
+auth_token_hash = "{admin_token_hash}"
+
+[core.admin.tls]
+key = "/kms/certs/rpc.key"
+certs = "/kms/certs/rpc.crt"
+
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = "{bootstrap_domain}"
@@ -164,6 +179,7 @@ port = 8000
         download_url = cfg.image_download_url,
         webhook_url = cfg.auth_webhook_url,
         bootstrap_domain = cfg.kms_bootstrap_domain,
+        admin_token_hash = cfg.kms_admin_token_hash,
     )
 }
 
@@ -478,10 +494,20 @@ mod tests {
         let cfg = HostConfig {
             auth_webhook_url: "http://10.0.2.2:8001".into(),
             kms_bootstrap_domain: "10.0.2.2".into(),
+            kms_admin_token_hash: "ab".repeat(32),
             ..Default::default()
         };
         let toml = kms_toml(&cfg);
         assert!(toml.contains("enforce_self_authorization = false"));
+        let v: toml::Value = toml::from_str(&toml).unwrap();
+        let admin = &v["core"]["admin"];
+        assert_eq!(admin["enabled"].as_bool(), Some(true));
+        assert_eq!(
+            admin["auth_token_hash"].as_str(),
+            Some("ab".repeat(32).as_str())
+        );
+        assert_eq!(admin["tls"]["key"].as_str(), Some("/kms/certs/rpc.key"));
+        assert_eq!(admin["tls"]["certs"].as_str(), Some("/kms/certs/rpc.crt"));
         assert!(toml.contains(r#"auto_bootstrap_domain = "10.0.2.2""#));
         assert!(toml.contains(r#"type = "webhook""#));
         assert!(toml.contains(r#"url = "http://10.0.2.2:8001""#));

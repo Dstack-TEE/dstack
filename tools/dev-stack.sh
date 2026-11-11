@@ -158,7 +158,10 @@ build_cfg() {
     fi
 
     GATEWAY_WG_PUBKEY=$(echo $GATEWAY_WG_KEY | wg pubkey)
-    # kms
+    # kms: other KMS nodes onboard through the admin listener
+    if [ ! -f kms-admin-token ]; then
+        (umask 077 && openssl rand -hex 32 >kms-admin-token)
+    fi
     cat <<EOF >kms.toml
 log_level = "info"
 
@@ -180,6 +183,16 @@ enabled = $VMM_ENABLE_GPU
 
 [core.auth_api]
 type = "dev"
+
+[core.admin]
+enabled = true
+address = "127.0.0.1"
+port = $(($BASE_PORT + 5))
+auth_token = "$(cat kms-admin-token)"
+
+[core.admin.tls]
+key = "$CERTS_DIR/rpc.key"
+certs = "$CERTS_DIR/rpc.crt"
 
 [core.onboard]
 address = "127.0.0.1"

@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- KMS: a KMS requires a key handover path and otherwise refuses to start,
+  before onboarding or bootstrap, naming the missing setting: unless
+  `core.onboard.public_key_handover = true`, set `[core.admin] enabled = true`
+  and `[core.admin.tls]` with `key` and `certs`. There is no opt-out, dev auth
+  included. The built-in config now enables the admin listener with TLS on the
+  RPC key and certificate, so a KMS on it needs an admin token to start:
+  `core.admin.auth_token`, `DSTACK_KMS_ADMIN_TOKEN`, or the new
+  `core.admin.auth_token_hash` (hex SHA-256), which keeps the token out of a
+  public app compose; the hash is then public, so use a high-entropy random
+  token such as `openssl rand -hex 32`. When upgrading, add the admin TLS and a token, or enable
+  the public handover. The `dstack-app` composes and `dstackup` generate the
+  token and configure its hash; the deploy scripts publish the admin listener
+  when `KMS_ADMIN_ADDR` is set.
 - KMS: `core.onboard.public_key_handover` defaults to `false`, so
   `KMS.GetKmsKey` is no longer served on the public port. Onboard through the
   source's admin listener with `source_token`; a source that still onboards

@@ -14,6 +14,7 @@ services:
       - /var/run/dstack.sock:/var/run/dstack.sock
     ports:
       - 8000:8000
+      - 8002:8001
     restart: unless-stopped
     configs:
       - source: kms_config
@@ -47,6 +48,18 @@ configs:
 
       [core.auth_api.webhook]
       url = "${AUTH_WEBHOOK_URL}"
+
+      [core.admin]
+      enabled = true
+      # The onboarding KMS reaches it through the CVM port 8002.
+      address = "0.0.0.0"
+      port = 8001
+      # SHA-256 of the admin token, which stays with the operator.
+      auth_token_hash = "${ADMIN_TOKEN_HASH}"
+
+      [core.admin.tls]
+      key = "/kms/certs/rpc.key"
+      certs = "/kms/certs/rpc.crt"
 
       [core.onboard]
       enabled = true

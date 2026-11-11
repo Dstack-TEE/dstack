@@ -204,6 +204,19 @@ type = "webhook"
 [core.auth_api.webhook]
 url = "http://127.0.0.1:9200"
 
+# Admin listener, which serves the key handover to other KMS nodes; a serving
+# KMS requires it. ADMIN_TOKEN_HASH is the token's SHA-256, filled in by the
+# KMS CVM deployment tutorial.
+[core.admin]
+enabled = true
+address = "0.0.0.0"
+port = 9101
+auth_token_hash = "ADMIN_TOKEN_HASH"
+
+[core.admin.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+
 # Onboarding Configuration
 [core.onboard]
 enabled = true
@@ -224,6 +237,7 @@ EOF
 | `[core]` | `cert_dir` | Directory for certificates |
 | `[core]` | `pccs_url` | PCCS endpoint for quote verification |
 | `[core.auth_api]` | `url` | auth-eth webhook service URL |
+| `[core.admin]` | `auth_token_hash` | SHA-256 of the admin token; the admin listener with `[core.admin.tls]` is required to serve |
 | `[core.onboard]` | `enabled` | Enable bootstrap/onboard mode |
 
 ## Step 5: Prepare the auth-eth Service

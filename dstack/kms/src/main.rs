@@ -165,6 +165,23 @@ async fn main() -> Result<()> {
         );
     }
 
+    // before onboarding or bootstrap, so a misconfigured node fails before it
+    // gets or generates root keys: the handover path, and the admin listener
+    // serving it (enabled with no credential fails here).
+    config::check_key_handover(&config, &figment)?;
+    let admin_config = config.admin.clone();
+    let admin_setup = if admin_config.enabled {
+        let admin_value = figment
+            .find_value("core.admin")
+            .context("core.admin section not found")?;
+        let admin_figment =
+            Figment::from(rocket::Config::default()).merge(Serialized::defaults(admin_value));
+        let admin_fairing = admin_auth::AdminAuthFairing::from_config(&admin_config)?;
+        Some((admin_figment, admin_fairing))
+    } else {
+        None
+    };
+
     if config.onboard.enabled && !config.keys_exists() {
         info!("Onboarding");
         run_onboard_service(config.clone(), figment.clone()).await?;
@@ -195,21 +212,6 @@ async fn main() -> Result<()> {
     }
 
     let metrics_enabled = config.metrics.enabled;
-    let admin_config = config.admin.clone();
-    // build the admin listener figment from `[core.admin]` before `config` is
-    // moved into the state; the fairing is built now so a misconfigured admin
-    // (enabled but no credential) fails fast before we start serving.
-    let admin_setup = if admin_config.enabled {
-        let admin_value = figment
-            .find_value("core.admin")
-            .context("core.admin section not found")?;
-        let admin_figment =
-            Figment::from(rocket::Config::default()).merge(Serialized::defaults(admin_value));
-        let admin_fairing = admin_auth::AdminAuthFairing::from_config(&admin_config)?;
-        Some((admin_figment, admin_fairing))
-    } else {
-        None
-    };
     // Reload certificates after renewal before exposing them through RPCs.
     let rpc_ca_cert =
         fs_err::read_to_string(config.root_key_paths(rpc_epoch, keyring.latest()).ca_cert)?;

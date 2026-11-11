@@ -154,7 +154,10 @@ KMS first, then gateway, then the app. Each needs the previous one's identity.
    simplest authorization that releases keys without a chain is
    `[core.auth_api] type = "dev"` with `gateway_app_id = "any"` — no extra
    containers, unlike the on-chain compose, which runs auth-eth next to the KMS
-   and needs an Ethereum RPC endpoint.
+   and needs an Ethereum RPC endpoint. The KMS refuses to start without a
+   key handover path, dev auth included: give it `[core.admin]` with
+   `[core.admin.tls]` (`key`, `certs`) and an `auth_token_hash`, or set
+   `core.onboard.public_key_handover = true`.
 
 3. **Gateway as a CVM** with `--kms`. Internal ports are RPC 8000, admin 8001,
    WireGuard 51820/udp, proxy 443.
