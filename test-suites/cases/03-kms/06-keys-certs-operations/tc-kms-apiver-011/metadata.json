@@ -1,0 +1,35 @@
+{
+  "id": "tc-kms-apiver-011",
+  "title": "GetAppKey and SignCert API-version compatibility",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-apiver-011"
+  ],
+  "risks": [
+    "risk-kms-apiver-011"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "GetAppKey and SignCert API-version compatibility"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-api-version-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

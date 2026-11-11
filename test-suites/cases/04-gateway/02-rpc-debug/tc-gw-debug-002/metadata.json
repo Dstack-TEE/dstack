@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-debug-002",
+  "title": "Debug.Info",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-debug-002"
+  ],
+  "risks": [
+    "risk-gw-debug-002"
+  ],
+  "tags": [
+    "gateway",
+    "debug-rpc"
+  ],
+  "fixture": {
+    "profile": "gateway-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Debug.Info"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-gateway-empty-rpc-case.py",
+    "args": [],
+    "timeout_seconds": 180
+  }
+}

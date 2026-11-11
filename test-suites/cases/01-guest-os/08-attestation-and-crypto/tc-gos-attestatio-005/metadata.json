@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-attestatio-005",
+  "title": "Signing verification and negative inputs",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-attestatio-005"
+  ],
+  "risks": [
+    "risk-gos-attestatio-005"
+  ],
+  "tags": [
+    "guest",
+    "attestation-and-crypto"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "profile": "guest-readonly",
+    "simulation_allowed": false,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Signing verification and negative inputs"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-hardware-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

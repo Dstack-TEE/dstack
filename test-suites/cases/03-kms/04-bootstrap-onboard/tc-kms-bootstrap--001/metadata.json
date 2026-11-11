@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-bootstrap--001",
+  "title": "Fresh bootstrap key hierarchy",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-bootstrap--001"
+  ],
+  "risks": [
+    "risk-kms-bootstrap--001"
+  ],
+  "tags": [
+    "kms",
+    "bootstrap-onboard"
+  ],
+  "fixture": {
+    "profile": "kms-onboard",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Fresh bootstrap key hierarchy"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/passed-kms-bootstrap-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

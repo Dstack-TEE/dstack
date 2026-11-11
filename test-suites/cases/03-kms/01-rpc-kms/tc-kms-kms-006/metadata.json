@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-kms-006",
+  "title": "KMS.SignCert",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-kms-006"
+  ],
+  "risks": [
+    "risk-kms-kms-006"
+  ],
+  "tags": [
+    "kms",
+    "kms-rpc"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "KMS.SignCert"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

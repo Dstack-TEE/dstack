@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certbot-005",
+  "title": "Certbot certificate discovery and workdir ordering",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-certbot-005"
+  ],
+  "risks": [
+    "risk-gw-certbot-005"
+  ],
+  "tags": [
+    "gw",
+    "certbot-acme-and-dns-engine"
+  ],
+  "fixture": {
+    "profile": "component-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Certbot certificate discovery and workdir ordering"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "id": "tc-int-mixed-005",
+  "title": "Verifier evidence compatibility for pinned releases",
+  "priority": "P0",
+  "requirements": [
+    "req-int-mixed-005"
+  ],
+  "risks": [
+    "risk-int-mixed-005"
+  ],
+  "tags": [
+    "kms",
+    "upgrade",
+    "compatibility"
+  ],
+  "fixture": {
+    "profile": "compatibility-matrix",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Verifier evidence compatibility for pinned releases"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/integration-mixed-005-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

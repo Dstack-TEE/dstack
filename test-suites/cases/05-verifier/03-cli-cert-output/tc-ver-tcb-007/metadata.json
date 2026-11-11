@@ -1,0 +1,35 @@
+{
+  "id": "tc-ver-tcb-007",
+  "title": "Canonical TCB status advisory and auth-policy projection",
+  "priority": "P0",
+  "requirements": [
+    "req-ver-tcb-007"
+  ],
+  "risks": [
+    "risk-ver-tcb-007"
+  ],
+  "tags": [
+    "semantic-review"
+  ],
+  "fixture": {
+    "profile": "verifier-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": true
+  },
+  "actions_under_test": [
+    "Canonical TCB status advisory and auth-policy projection"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 900
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-keys-certs-002",
+  "title": "Environment public-key freshness signatures",
+  "priority": "P1",
+  "requirements": [
+    "req-kms-keys-certs-002"
+  ],
+  "risks": [
+    "risk-kms-keys-certs-002"
+  ],
+  "tags": [
+    "kms",
+    "keys-certs-operations"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Environment public-key freshness signatures"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/kms-env-pubkey-freshness-capability-case.py",
+    "args": [],
+    "timeout_seconds": 120
+  }
+}

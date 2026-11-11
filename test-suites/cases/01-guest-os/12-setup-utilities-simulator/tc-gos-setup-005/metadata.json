@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-setup-005",
+  "title": "MR config ID verification before provisioning",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-setup-005"
+  ],
+  "risks": [
+    "risk-gos-setup-005"
+  ],
+  "tags": [
+    "gos",
+    "system-setup-utilities-and-tee-simulator"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "profile": "guest-readonly",
+    "simulation_allowed": true,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "MR config ID verification before provisioning"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 420
+  }
+}

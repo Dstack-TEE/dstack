@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-internal-003",
+  "title": "Gateway authorization client allow deny and outage",
+  "priority": "P0",
+  "requirements": [
+    "req-gw-internal-003"
+  ],
+  "risks": [
+    "risk-gw-internal-003"
+  ],
+  "tags": [
+    "gw",
+    "startup-authorization-and-routing-internals"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Gateway authorization client allow deny and outage"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

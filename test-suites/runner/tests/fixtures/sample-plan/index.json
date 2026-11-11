@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "id": "plan-sample",
+  "title": "Sample Gateway Test Plan",
+  "guide": {"path": "README.md", "anchor": "sample-test-guide"},
+  "chapters": [
+    {
+      "id": "chapter-gateway",
+      "order": 1,
+      "title": "Gateway",
+      "path": "01-gateway",
+      "sections": [
+        {
+          "id": "section-proxy-protocol",
+          "order": 1,
+          "title": "Proxy Protocol",
+          "path": "01-gateway/01-proxy-protocol",
+          "cases": [
+            {
+              "id": "tc-gw-pp-001",
+              "order": 1,
+              "title": "Forward a Proxy v1 address",
+              "priority": "P0",
+              "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001",
+              "spec": {
+                "path": "01-gateway/01-proxy-protocol/tc-gw-pp-001/case.md",
+                "anchor": "tc-gw-pp-001"
+              },
+              "requirements": ["req-gw-pp-v1"],
+              "risks": ["risk-client-address-loss"],
+              "tags": ["gateway", "e2e"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

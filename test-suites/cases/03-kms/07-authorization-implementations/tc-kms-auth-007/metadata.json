@@ -1,0 +1,36 @@
+{
+  "id": "tc-kms-auth-007",
+  "title": "Ethereum finalized snapshot and reorg refresh",
+  "priority": "P0",
+  "requirements": [
+    "req-kms-auth-007"
+  ],
+  "risks": [
+    "risk-kms-auth-007"
+  ],
+  "tags": [
+    "kms",
+    "authorization-implementations-and-contract"
+  ],
+  "fixture": {
+    "profile": "kms-ready",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Ethereum finalized snapshot and reorg refresh"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

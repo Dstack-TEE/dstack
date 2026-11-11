@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-storage-an-001",
+  "title": "Encrypted root/data volume provisioning",
+  "priority": "P0",
+  "requirements": [
+    "req-gos-storage-an-001"
+  ],
+  "risks": [
+    "risk-gos-storage-an-001"
+  ],
+  "tags": [
+    "guest",
+    "storage-and-containers"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": true,
+    "profile": "storage-lifecycle",
+    "simulation_allowed": false,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Encrypted root/data volume provisioning"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 420
+  }
+}

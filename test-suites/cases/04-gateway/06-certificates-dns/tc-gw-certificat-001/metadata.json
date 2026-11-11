@@ -1,0 +1,36 @@
+{
+  "id": "tc-gw-certificat-001",
+  "title": "ACME account bootstrap and persistence",
+  "priority": "P1",
+  "requirements": [
+    "req-gw-certificat-001"
+  ],
+  "risks": [
+    "risk-gw-certificat-001"
+  ],
+  "tags": [
+    "gateway",
+    "certificates-dns"
+  ],
+  "fixture": {
+    "profile": "gateway-cluster",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "ACME account bootstrap and persistence"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/gateway-renew-zt-domain-case.py",
+    "args": [],
+    "timeout_seconds": 420
+  }
+}

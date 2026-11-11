@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-vm-lifecyc-001",
+  "title": "Create/start/stop/remove idempotency",
+  "priority": "P1",
+  "requirements": [
+    "req-vmm-vm-lifecyc-001"
+  ],
+  "risks": [
+    "risk-vmm-vm-lifecyc-001"
+  ],
+  "tags": [
+    "vmm",
+    "vm-lifecycle"
+  ],
+  "fixture": {
+    "profile": "vmm-empty-control-plane",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Create/start/stop/remove idempotency"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 600
+  }
+}

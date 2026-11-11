@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-entry-004",
+  "title": "Guest-agent library initialization reuse",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-entry-004"
+  ],
+  "risks": [
+    "risk-gos-entry-004"
+  ],
+  "tags": [
+    "gos",
+    "configuration-entry-points-and-presentation-models"
+  ],
+  "fixture": {
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "profile": "component-raw-substrate",
+    "simulation_allowed": false,
+    "versions": {
+      "gateway": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "verifier": "candidate",
+      "vmm": "candidate"
+    }
+  },
+  "actions_under_test": [
+    "Guest-agent library initialization reuse"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 1200
+  }
+}

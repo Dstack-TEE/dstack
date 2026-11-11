@@ -1,0 +1,36 @@
+{
+  "id": "tc-gos-platform-007",
+  "title": "Journal persistence rotation and redaction",
+  "priority": "P1",
+  "requirements": [
+    "req-gos-platform-007"
+  ],
+  "risks": [
+    "risk-gos-platform-007"
+  ],
+  "tags": [
+    "gos",
+    "platform-services-and-image-integrity"
+  ],
+  "fixture": {
+    "profile": "guest-readonly",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Journal persistence rotation and redaction"
+  ],
+  "execution": {
+    "entrypoint": "run.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}

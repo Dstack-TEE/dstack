@@ -1,0 +1,36 @@
+{
+  "id": "tc-vmm-manifest-002",
+  "title": "Manifest persistence and QEMU/vm_config agreement",
+  "priority": "P0",
+  "requirements": [
+    "req-vmm-manifest-002"
+  ],
+  "risks": [
+    "risk-vmm-manifest-002"
+  ],
+  "tags": [
+    "vmm",
+    "guest-proxy-and-manifest-fidelity"
+  ],
+  "fixture": {
+    "profile": "vmm-raw-substrate",
+    "versions": {
+      "vmm": "candidate",
+      "guest": "candidate",
+      "kms": "candidate",
+      "gateway": "candidate",
+      "verifier": "candidate"
+    },
+    "destructive_scope": "lease-only",
+    "hardware_required": false,
+    "simulation_allowed": false
+  },
+  "actions_under_test": [
+    "Manifest persistence and QEMU/vm_config agreement"
+  ],
+  "execution": {
+    "entrypoint": "shared/automation/vmm-one-shot-lifecycle-case.py",
+    "args": [],
+    "timeout_seconds": 300
+  }
+}
