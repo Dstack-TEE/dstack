@@ -74,6 +74,13 @@ def main():
                 "provisional": False,
                 "status": status,
                 "summary": f"{passed} contract rotation tests passed",
+                "steps": [
+                    {
+                        "id": f"{CASE}-step-01",
+                        "status": status,
+                        "observed": f"{passed} contract rotation tests passed",
+                    }
+                ],
             },
             indent=2,
         )

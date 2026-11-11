@@ -31,7 +31,14 @@ def main():
             stderr=subprocess.STDOUT,
             timeout=900,
         )
-        rows.append({"path": path, "command": cmd, "returncode": r.returncode})
+        rows.append(
+            {
+                "path": path,
+                "command": cmd,
+                "returncode": r.returncode,
+                "output_tail": r.stdout[-4000:] if r.returncode else "",
+            }
+        )
     status = "PASS" if all(x["returncode"] == 0 for x in rows) else "FAIL"
     rd = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     (rd / "artifacts").mkdir(parents=True, exist_ok=True)
@@ -45,7 +52,17 @@ def main():
                 "case_id": CASE,
                 "provisional": False,
                 "status": status,
-                "summary": "all epoch authorization backend suites passed",
+                "summary": f"{sum(not x['returncode'] for x in rows)}/{len(rows)} "
+                "epoch authorization backend suites passed",
+                "steps": [
+                    {
+                        "id": f"{CASE}-step-01",
+                        "status": status,
+                        "observed": ", ".join(
+                            f"{x['path']}: rc={x['returncode']}" for x in rows
+                        ),
+                    }
+                ],
             },
             indent=2,
         )

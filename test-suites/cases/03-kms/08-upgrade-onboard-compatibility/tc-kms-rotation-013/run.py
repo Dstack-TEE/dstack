@@ -26,11 +26,9 @@ TESTS = {
     ],
     "dstack-util": [
         "system_setup::luks::test_validate_luks2_header_root_epoch_token",
-        "system_setup::luks::test_disk_key_migration_with_cryptsetup",
+        "system_setup::luks::test_luks_epoch_migration",
         "crypto::sealed_env_tests::sealed_env_round_trips_and_binds_info",
-        "system_setup::sealed_env_file_tests::sealed_env_binds_both_epochs_and_rejects_mislabeled_versions",
-        "system_setup::sealed_env_file_tests::legacy_env_migration_skips_denied_intermediate_epochs",
-        "system_setup::sealed_env_file_tests::sealed_env_binds_both_epochs_and_rejects_mislabeled_versions",
+        "system_setup::sealed_env_file_tests::sealed_env_at_the_current_epochs_opens_and_binds_both_epochs",
         "system_setup::sealed_env_file_tests::legacy_env_migration_skips_denied_intermediate_epochs",
     ],
 }
@@ -49,7 +47,7 @@ def main() -> int:
     for package, filters in TESTS.items():
         for test_filter in filters:
             started = time.monotonic()
-            command = ["cargo", "test", "-p", package, test_filter, "--", "--nocapture"]
+            command = ["cargo", "test", "-p", package, test_filter, "--", "--exact"]
             result = subprocess.run(
                 command,
                 cwd=repo / "dstack",
@@ -113,6 +111,13 @@ def main() -> int:
                 "provisional": False,
                 "status": status,
                 "summary": f"{passed}/{len(rows)} focused rotation rows passed",
+                "steps": [
+                    {
+                        "id": f"{CASE}-step-01",
+                        "status": status,
+                        "observed": f"{passed}/{len(rows)} focused rotation rows passed",
+                    }
+                ],
                 "artifacts": [{"path": "artifacts/key-rotation-matrix.json"}],
             },
             indent=2,
