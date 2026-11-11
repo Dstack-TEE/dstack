@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Deployment order for key epochs:** upgrade the `DstackKms` and `DstackApp`
+  proxies and the auth backend, register the existing roots as root epoch 0
+  (`registerRootEpoch`), then roll out the KMS nodes, then guests. Keep root and
+  app epochs at 0 until every KMS and guest is upgraded. See
+  `dstack/kms/README.md` and `docs/deployment.md`.
+- **Auth backends must serve `GET /app/:appId`**, which reports an app's current
+  app epoch. The KMS reads it for `GetAppEnvEncryptPubKey` and
+  `GetSealedEnvPubKey`. `auth-eth` and `dstack-auth` serve it; custom webhook
+  backends must add it.
+
 ### Added
 
 - KMS root and application key epochs, epoch-scoped authorization, SealedEnv
@@ -36,12 +48,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   denies a KMS that reports no root epoch, as `/bootAuth/app` already did, so
   KMS binaries predating root epochs stop serving at activation. Upgrade every
   KMS before activating a new root epoch.
-- auth-eth, auth-eth-bun: policy is read at the `finalized` block by default
-  instead of `latest`, so on-chain changes, including revocations, take effect
-  only once finalized. Set `ETH_BLOCK_TAG=latest` (or `safe`) to override; an
-  OP-stack chain read through the Helios light client requires `latest`. The
-  server refuses to start if the RPC cannot serve the configured tag. In
-  auth-eth-bun, `ETH_FINALITY_CONFIRMATIONS` now counts back from that block.
+- auth-eth: policy is read at the `finalized` block by default instead of
+  `latest`, so on-chain changes, including revocations, take effect only once
+  finalized. Set `ETH_BLOCK_TAG=latest` (or `safe`) to override; an OP-stack
+  chain read through the Helios light client requires `latest`. Only
+  `finalized` protects policy from reorgs: with `latest` or `safe`, a reorg can
+  roll back an activation or a revocation the KMS has already acted on. The
+  server refuses to start if the RPC cannot serve the configured tag.
+  `ETH_FINALITY_CONFIRMATIONS` now counts back from that block.
+- DstackKms, DstackApp: material approvals are per epoch. A request is decided
+  on the row of the epoch it selects, so a value is revoked only once every row
+  allowing it is cleared. Material setters name their rows:
+  `*AtEpoch(epoch, value)` writes one epoch, `*AtEpochs(from, to, value)` a
+  range; `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
+  `remove*AtEpochs(0, currentAppEpoch, value)` in `DstackApp` revoke a value
+  everywhere. `DstackApp` reports its setters as the new ERC-165 interface
+  `IAppEpochManagement` (`0x853d2b79`). The `Manage.s.sol` scripts require
+  `ROOT_EPOCH` or `APP_EPOCH`, or a `FROM_*`/`TO_*` range.
+- App contracts deployed before app epochs (v0.5.x, v0.6.0) keep working with
+  the upgraded `DstackKms` and KMS, which authorize them for app epoch 0 only.
+  `Manage.s.sol` detects them by interface ID and calls their epoch-less
+  setters. Upgrading one to the current `DstackApp` keeps its compose hashes,
+  devices and `allowAnyDevice` as app epoch 0.
+- DstackKms, DstackApp: ownership transfers take two steps for proxies upgraded
+  from v0.5.9: `transferOwnership` nominates, and the new owner must call
+  `acceptOwnership`.
+- dstack-auth: `kms_export_keys` and `kms_import_keys` accept a registered
+  pending root epoch, so KMS nodes can onboard a new epoch before
+  `currentRootEpoch` is raised, as with the contract backend. Key-issuing
+  operations stay limited to the current epoch.
 - KMS: retain `GetTempCaCert`, temporary CA files and legacy handover fields so
   KMS nodes can be upgraded before existing OS images.
 
@@ -65,6 +100,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- DstackKms: the epoch-less `addOsImageHash`, `removeOsImageHash`,
+  `addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice` and
+  `removeKmsDevice`. Use the `*AtEpoch` or `*AtEpochs` forms; before any
+  rotation, `addOsImageHashAtEpoch(0, hash)` is the old call.
+- **Breaking:** DstackApp: the epoch-less `addComposeHash`, `removeComposeHash`,
+  `addDevice`, `removeDevice` and `setAllowAnyDevice`, and with them
+  `IAppAuthBasicManagement`: an upgraded app no longer reports interface ID
+  `0x8fd37527`, and calls to those functions revert. Use the `*AtEpoch` or
+  `*AtEpochs` forms (`IAppEpochManagement`); at app epoch 0,
+  `addComposeHashAtEpoch(0, hash)` is the old call.
+- DstackKms: `setKmsInfo`, `setKmsQuote` and `setKmsEventlog`. Root keys are
+  set with `registerRootEpoch`, and each epoch's attestation lives at its
+  `evidenceUrl`.
 - KMS: the `auth-mock` webhook backend. For development, use the built-in
   `[core.auth_api] type = "dev"`, which allows everything.
 - `auth-simple` (`dstack/kms/auth-simple`). Use `dstack-auth`, which reads the

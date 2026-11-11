@@ -153,7 +153,8 @@ KMS first, then gateway, then the app. Each needs the previous one's identity.
    gramine-sealing-key-provider on the host, default `127.0.0.1:3443`). The
    simplest authorization that releases keys without a chain is
    `[core.auth_api] type = "dev"` with `gateway_app_id = "any"` — no extra
-   containers, unlike the on-chain compose which needs a Helios light client.
+   containers, unlike the on-chain compose, which runs auth-eth next to the KMS
+   and needs an Ethereum RPC endpoint.
 
 3. **Gateway as a CVM** with `--kms`. Internal ports are RPC 8000, admin 8001,
    WireGuard 51820/udp, proxy 443.

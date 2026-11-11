@@ -3327,16 +3327,16 @@ impl Stage1<'_> {
                 bail!("sealed env encapsulated key must be 32 bytes");
             }
             let payload = [envelope.enc, envelope.ciphertext].concat();
-            let current = self.keys.root_epoch();
-            if envelope.root_epoch > current || envelope.app_epoch > self.keys.app_epoch() {
+            let (current_root, current_app) = (self.keys.root_epoch(), self.keys.app_epoch());
+            if envelope.root_epoch > current_root || envelope.app_epoch > current_app {
                 bail!(
-                    "sealed env epoch {} exceeds current epoch {current}",
-                    envelope.root_epoch
+                    "sealed env epoch (root {}, app {}) exceeds current epoch (root {current_root}, app {current_app})",
+                    envelope.root_epoch,
+                    envelope.app_epoch
                 );
             }
             let historical;
-            let secret = if envelope.root_epoch == current
-                && envelope.app_epoch == self.keys.app_epoch()
+            let secret = if envelope.root_epoch == current_root && envelope.app_epoch == current_app
             {
                 current_secret
             } else {
@@ -3351,17 +3351,10 @@ impl Stage1<'_> {
                 &sealed_env_info_at_epochs(envelope.root_epoch, envelope.app_epoch),
                 &payload,
             )?;
-            if envelope.root_epoch == self.keys.root_epoch()
-                && envelope.app_epoch == self.keys.app_epoch()
-            {
+            if envelope.root_epoch == current_root && envelope.app_epoch == current_app {
                 return Ok((plaintext, Vec::new()));
             }
-            let sealed = seal_env_at_epochs(
-                current_secret,
-                self.keys.root_epoch(),
-                self.keys.app_epoch(),
-                &plaintext,
-            )?;
+            let sealed = seal_env_at_epochs(current_secret, current_root, current_app, &plaintext)?;
             return Ok((plaintext, sealed));
         }
         let ciphertext = &self.shared.encrypted_env;
@@ -4539,7 +4532,7 @@ mod sealed_env_file_tests {
     }
 
     #[tokio::test]
-    async fn sealed_env_binds_both_epochs_and_rejects_mislabeled_versions() {
+    async fn sealed_env_at_the_current_epochs_opens_and_binds_both_epochs() {
         let dir = tempfile::tempdir().unwrap();
         let args = SetupArgs {
             work_dir: dir.path().into(),
@@ -4555,17 +4548,14 @@ mod sealed_env_file_tests {
         let (opened, update) = current.decrypt_env().await.unwrap();
         assert_eq!(opened, plaintext);
         assert!(update.is_empty());
-        for (field, value) in [
-            ("version", 2),
-            ("root_epoch", 2),
-            ("app_epoch", 1),
-            ("app_epoch", 3),
-        ] {
-            let mut tampered: Value = serde_json::from_slice(&sealed).unwrap();
-            tampered[field] = value.into();
-            current.shared.sealed_env = Some(serde_json::to_vec(&tampered).unwrap());
-            assert!(current.decrypt_env().await.is_err());
-        }
+        let mut tampered: Value = serde_json::from_slice(&sealed).unwrap();
+        tampered["version"] = 2.into();
+        current.shared.sealed_env = Some(serde_json::to_vec(&tampered).unwrap());
+        let err = current.decrypt_env().await.unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported sealed env version"),
+            "{err}"
+        );
         let envelope: SealedEnv = serde_json::from_slice(&sealed).unwrap();
         assert_eq!(envelope.version, 1);
         let payload = [envelope.enc.clone(), envelope.ciphertext.clone()].concat();

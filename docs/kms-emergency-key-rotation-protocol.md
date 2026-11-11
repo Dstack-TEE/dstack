@@ -1,6 +1,6 @@
 # KMS emergency key rotation protocol
 
-**Status:** Design draft; not implemented. Proposed fields require protobuf definitions.
+**Status:** Implemented.
 
 ## 1. Scope and assumptions
 
@@ -60,7 +60,7 @@ new `n`, whose OS image, KMS MR and device rows start empty because policy rows
 are keyed by the epoch's chain hash. Prepare them again before activating. A
 current epoch is never popped. `kmsInfo` follows the current epoch:
 registering epoch 0 and each activation copy its keys there and clear the legacy
-quote and event log, and `setKmsInfo` is refused once epochs exist. Epoch 0 must be the `kmsInfo` keys
+quote and event log; the legacy `setKmsInfo`, `setKmsQuote` and `setKmsEventlog` setters are removed. Epoch 0 must be the `kmsInfo` keys
 when those are set; a legacy `kmsInfo` quote and event log are converted off
 chain into the standard attestation encoding (`Attestation::from_tdx_quote`)
 before publishing. The KMS sends the epoch it serves and its chain hash (`rootEpoch`,
@@ -261,11 +261,11 @@ between the current epoch and L is refused, since its tail cannot be checked. Wi
 
 Every handover requires the recipient's KMS attestation: the source checks the
 attested RA-TLS client certificate on both `Admin.GetKmsKey` and the public
-`KMS.GetKmsKey`. Admin authorization (`source_token`) is recommended for joins
-and rotations alike, but not required: a rotation only produces a pending epoch
-N+1, which no node accepts until governance registers and activates it. Where
-possible, disable public legacy handover and reject incompatible legacy
-receivers without reducing the payload. The source's certificate must carry its
+`KMS.GetKmsKey`. Admin authorization (`source_token`) is required for joins
+and rotations alike, because the public `KMS.GetKmsKey` is off by default
+(`core.onboard.public_key_handover = false`). Enable it on a source only for
+receivers that cannot use the admin listener, such as 0.5.x KMS nodes, and
+reject incompatible legacy receivers without reducing the payload. The source's certificate must carry its
 OS image hash.
 Deployments that never registered epochs can still join at epoch 0.
 

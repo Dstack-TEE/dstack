@@ -190,6 +190,15 @@ For adding Gateway, apps, and other config fields, see [dstack-auth Operations G
 
 For decentralized governance via smart contracts, see [On-Chain Governance](./onchain-governance.md).
 
+auth-eth reads policy at the block `ETH_BLOCK_TAG` names, `finalized` by
+default. Only `finalized` protects policy from reorgs. With `latest` (required
+for an OP-stack chain read through Helios) or `safe`, a reorg can revert both
+activations and revocations: a removed image or compose hash is authorized
+again, and a rolled-back root epoch activation makes every KMS restart onto the
+previous epoch. `ETH_FINALITY_CONFIRMATIONS=N` hides reorgs shallower than N
+blocks but delays every policy change, emergency revocations included, by N
+blocks. See [reorgs and the block tag](../dstack/kms/auth-eth/README.md#reorgs-and-the-block-tag).
+
 #### Getting OS Image Hash
 
 The OS image hash is in the `digest.txt` file inside the guest image tarball:
@@ -550,7 +559,7 @@ curl http://<new-kms>:9203/finish
 
 > **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 >
-> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request. The legacy public `KMS.GetKmsKey` is off by default; set `core.onboard.public_key_handover = true` on the source only when an onboarding KMS cannot use the admin listener, such as a 0.5.x KMS or an onboarding request without `source_token`.
+> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request; the token is required unless the source enables the public handover. The legacy public `KMS.GetKmsKey` is off by default; set `core.onboard.public_key_handover = true` on the source only when an onboarding KMS cannot use the admin listener, such as a 0.5.x KMS or an onboarding request without `source_token`.
 
 #### Rotating KMS Root Keys
 

@@ -465,7 +465,6 @@ app.get('/', async (c) => {
       ethereum.getAppImplementation(block),
       ethereum.getRootEpoch(block),
     ]);
-    console.log('batch', batch);
 
     return c.json({
       status: 'ok',
