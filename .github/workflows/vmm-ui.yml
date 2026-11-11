@@ -69,12 +69,8 @@ jobs:
       with:
         python-version: '3.12'
 
-    # Not on every branch yet; the tests there import its packages.
     - name: Install vmm-cli dependencies
-      run: |
-        if [ -f requirements.txt ]; then
-          pip install -r requirements.txt
-        fi
+      run: pip install -r requirements.txt
       working-directory: dstack/vmm
 
     - name: Test vmm-cli
