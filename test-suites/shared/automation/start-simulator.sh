@@ -24,6 +24,17 @@ for file in appkeys.json app-compose.json attestation.bin sys-config.json dstack
   install -m 600 "$fixtures/$file" "$runtime/$file"
 done
 
+# Grant anonymous callers what the candidate's sample vmm.toml grants, as a
+# host deployed from that sample does.
+python3 - "$runtime/sys-config.json" "$(jq -er '.repository' "$manifest")/dstack/vmm/vmm.toml" <<'PY'
+from pathlib import Path
+import json, sys, tomllib
+path, vmm = Path(sys.argv[1]), Path(sys.argv[2])
+config = json.loads(path.read_text())
+config["guest_agent_api"] = tomllib.loads(vmm.read_text())["cvm"]["guest_agent_api"]
+path.write_text(json.dumps(config))
+PY
+
 if [[ -n ${DSTACK_TEST_MOCK_ATTESTATION_SEED:-} ]]; then
   python3 - "$runtime/dstack.toml" "$DSTACK_TEST_MOCK_ATTESTATION_SEED" <<'PY'
 from pathlib import Path

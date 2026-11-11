@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import base64
 import datetime
 import hashlib
 import json
@@ -16,7 +15,8 @@ import sys
 import tempfile
 from typing import Any
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import guest_api_token  # noqa: E402
 
 CASES = {
     "tc-gos-tappd-001": (
@@ -242,33 +242,6 @@ def call(socket: str, route: str, content_type: str, body: bytes) -> tuple[int, 
         raise RuntimeError(process.stderr.decode(errors="replace")[-1000:])
     response, code = process.stdout.rsplit(marker, 1)
     return int(code), response
-
-
-def b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-
-def mint_guest_api_token(guest: dict[str, Any], scopes: str) -> str:
-    """Sign a guest API token with the app's internal issuer key, as an app may."""
-    socket = guest["socket"]
-    route = v1_route(guest["route"].replace("<Method>", "Info"), "GetKey")
-    request = {"domain": "dstack:guest-api:issuer:v1", "algorithm": "ed25519"}
-    code, body = call(socket, route, "application/json", json.dumps(request).encode())
-    if code != 200:
-        raise RuntimeError(f"issuer key request returned HTTP {code}")
-    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(json.loads(body)["key"]))
-    app_id = json_call(socket, guest["route"].replace("<Method>", "Info"))["app_id"]
-    now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
-    claims = {
-        "iss": f"dstack:guest-api:{app_id}",
-        "aud": app_id,
-        "iat": now,
-        "exp": now + 600,
-        "scope": scopes,
-    }
-    header = b64url(b'{"alg":"EdDSA","typ":"JWT"}')
-    signing_input = f"{header}.{b64url(json.dumps(claims).encode())}"
-    return f"{signing_input}.{b64url(key.sign(signing_input.encode()))}"
 
 
 def msgpack_decode(data: bytes, offset: int = 0) -> tuple[Any, int]:
@@ -805,11 +778,14 @@ def main() -> int:
         if not pathlib.Path(socket).is_socket():
             raise RuntimeError(f"fixture socket is not available: {socket}")
         if service == "Worker":
-            # The external listener grants nothing anonymously by default.
-            anonymous, _ = call(socket, route, "application/json", b"{}")
-            if anonymous != 401:
-                raise AssertionError(f"anonymous {method} returned HTTP {anonymous}")
-            TOKENS[socket] = mint_guest_api_token(
+            # The sample host grant leaves GetAttestationForAppKey to tokens.
+            if method == "GetAttestationForAppKey":
+                anonymous, _ = call(socket, route, "application/json", b"{}")
+                if anonymous != 401:
+                    raise AssertionError(
+                        f"anonymous {method} returned HTTP {anonymous}"
+                    )
+            TOKENS[socket] = guest_api_token.mint(
                 fixture["services"]["DstackGuest"],
                 "guest:version guest:info guest:attest-app-key",
             )

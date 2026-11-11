@@ -31,6 +31,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import guest_api_token  # noqa: E402
+
 # `workers` in dstack/guest-agent/dstack.toml. The runtime is built before the
 # config is read, so the real width is one worker per vCPU, which is smaller.
 AGENT_WORKERS = 8
@@ -86,6 +89,7 @@ class Target:
     route_template: str
     socket_path: str | None = None
     base_url: str | None = None
+    token: str = ""
 
     def route(self, method: str) -> str:
         """Resolve the route for one method (isolated and physical-TDX templates)."""
@@ -151,6 +155,7 @@ def post(target: Target, method: str, payload: dict[str, Any]) -> Reply:
             headers={
                 "Content-Type": "application/json",
                 "Content-Length": str(len(body)),
+                **({"Authorization": f"Bearer {target.token}"} if target.token else {}),
             },
         )
         response = connection.getresponse()
@@ -706,9 +711,10 @@ def open_log_stream(target: Target, container: str) -> tuple[socket.socket, byte
     stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     stream.settimeout(30)
     stream.connect(target.socket_path)
+    auth = f"Authorization: Bearer {target.token}\r\n" if target.token else ""
     stream.sendall(
         f"GET /logs/{container}?text=true&tail=all&follow=true HTTP/1.1\r\nHost: localhost\r\n"
-        "Connection: close\r\n\r\n".encode()
+        f"{auth}Connection: close\r\n\r\n".encode()
     )
     head = b""
     while b"\r\n\r\n" not in head:
@@ -1002,7 +1008,16 @@ def resolve_targets(values: dict[str, Any], services: list[str]) -> dict[str, Ta
         if path:
             if not pathlib.Path(path).is_socket():
                 raise Blocked(f"the fixture {service} socket is not available: {path}")
-            targets[service] = Target(str(fixture["route"]), socket_path=str(path))
+            token = ""
+            if service == "Worker" and "DstackGuest" in published:
+                # The external listener serves logs and the like only to a token.
+                token = guest_api_token.mint(
+                    published["DstackGuest"],
+                    "guest:version guest:health guest:info guest:logs guest:containers",
+                )
+            targets[service] = Target(
+                str(fixture["route"]), socket_path=str(path), token=token
+            )
             continue
         url = fixture.get("url")
         if not url:

@@ -29,6 +29,7 @@ from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import guest_api_token  # noqa: E402
 from api_contract_matrix import (  # noqa: E402
     Call,
     Target,
@@ -271,17 +272,20 @@ def sweep_framing(target: Target, method: str) -> list[Call]:
                 target, method, content_type, body, f"framing|{label}", representation
             )
         )
-    calls.append(
-        invoke(
-            target,
-            method,
-            "application/json",
-            b"{}",
-            "framing|unknown-method",
-            "json",
-            route_override=target.route(method) + "NoSuchSuffix",
-        )
+    unknown = invoke(
+        target,
+        method,
+        "application/json",
+        b"{}",
+        "framing|unknown-method",
+        "json",
+        route_override=target.route(method) + "NoSuchSuffix",
     )
+    if "Authorization" not in target.headers:
+        calls.append(unknown)
+    # A scope-gated listener refuses a route no scope names before dispatch.
+    elif unknown.http != 401:
+        raise AssertionError(f"unknown method returned HTTP {unknown.http}")
     return calls
 
 
@@ -578,7 +582,15 @@ def resolve_target(manifest: dict[str, Any], selector: str, service: str) -> Tar
         socket = fixture["socket"]
         if not pathlib.Path(socket).is_socket():
             raise RuntimeError(f"fixture socket is not available: {socket}")
-        return Target(route_template=fixture["route"], socket=socket)
+        headers = {}
+        if service == "Worker":
+            # The external listener serves token-gated methods only to a token.
+            token = guest_api_token.mint(
+                values["services"]["DstackGuest"],
+                "guest:version guest:health guest:info guest:attest-app-key",
+            )
+            headers["Authorization"] = f"Bearer {token}"
+        return Target(route_template=fixture["route"], socket=socket, headers=headers)
 
     gateway = values.get("gateway") or {}
     services = values.get("services") or {}
