@@ -115,7 +115,12 @@ class Handler(SimpleHTTPRequestHandler):
                 {"isAllowed": not reason, "gatewayAppId": "any", "reason": reason},
             )
             return
-        root_hash = policy.get("rootEpochHash", "0x" + "00" * 32)
+        # Root epochs the case registered for each context, kept apart from the
+        # policy that cases replace wholesale.
+        registered = self.policy_path.with_name("root-epochs.json")
+        root_hash = (
+            load_json(registered).get(context) if registered.exists() else None
+        ) or "0x" + "00" * 32
         self.send_json(
             200,
             {

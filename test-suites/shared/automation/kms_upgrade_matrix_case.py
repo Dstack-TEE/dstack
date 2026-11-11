@@ -18,12 +18,16 @@ import shlex
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from kms_root_epoch import epoch0_chain_hash  # noqa: E402
 
 SUPPORTED = {f"tc-kms-upgrade-{index:03d}" for index in range(1, 13)} | {
     "tc-int-compatibil-001",
@@ -499,9 +503,26 @@ class MatrixRun:
             "log_port": log_port,
             "initialized": initialized,
             "legacy_required": legacy if family == "candidate" else None,
+            "auth_context": auth_context,
         }
+        if initialized and auth_context and family == "candidate":
+            self.register_root_epoch(row)
         self.rows.append(row)
         return row
+
+    def register_root_epoch(self, row: dict[str, Any]) -> None:
+        """Register a webhook-backed KMS's keys as its context's root epoch 0."""
+        code, raw = http(
+            f"https://127.0.0.1:{row['service_port']}/prpc/KMS.GetMeta?json"
+        )
+        if code != 200:
+            raise RuntimeError(f"GetMeta HTTP {code} while registering root epoch")
+        path = pathlib.Path(
+            self.values["live_vmm"]["kms_upgrade_policy_path"]
+        ).with_name("root-epochs.json")
+        registered = json.loads(path.read_text()) if path.exists() else {}
+        registered[row["auth_context"]] = epoch0_chain_hash(json.loads(raw))
+        atomic_json(path, registered)
 
     def tcb_info(self, row: dict[str, Any]) -> dict[str, Any]:
         """Read public TCB data, including legacy vm_config from the VM share."""
@@ -628,6 +649,8 @@ class MatrixRun:
             )
             target["initialized"] = True
             target["domain"] = target_domain or f"{self.case_id}.target.test"
+            if target.get("auth_context") and target["version"] == "candidate":
+                self.register_root_epoch(target)
         elif code < 400:
             raise RuntimeError(
                 f"incompatible onboard unexpectedly succeeded with HTTP {code}"
