@@ -236,9 +236,11 @@ COMPOSE_HASH="<paste-hash-from-step-4-without-0x-prefix>"
 
 HELLO_APP_ID=$(cat ~/.dstack/secrets/hello-world-app-id)
 
+# App contracts deployed before app epochs (0.6.x or earlier) take "addComposeHash(bytes32)" "0x$COMPOSE_HASH";
+# see onchain-governance.md#apps-deployed-before-app-epochs.
 cast send "$HELLO_APP_ID" \
-  "addComposeHash(bytes32)" \
-  "0x$COMPOSE_HASH" \
+  "addComposeHashAtEpoch(uint256,bytes32)" \
+  0 "0x$COMPOSE_HASH" \
   --rpc-url "$ETH_RPC_URL" \
   --private-key "$PRIVATE_KEY"
 ```

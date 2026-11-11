@@ -83,11 +83,11 @@ contract EventAuditTest is Test {
 
         vm.recordLogs();
         vm.startPrank(owner);
-        app.addComposeHash(composeHash);
-        app.addDevice(device);
-        app.setAllowAnyDevice(true);
+        app.addComposeHashAtEpoch(0, composeHash);
+        app.addDeviceAtEpoch(0, device);
+        app.setAllowAnyDeviceAtEpoch(0, true);
         app.setRequireTcbUpToDate(true);
-        app.removeDevice(device);
+        app.removeDeviceAtEpoch(0, device);
         app.disableUpgrades();
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
@@ -123,7 +123,7 @@ contract EventAuditTest is Test {
 
         vm.recordLogs();
         vm.prank(owner);
-        app.addComposeHash(orphaned);
+        app.addComposeHashAtEpoch(0, orphaned);
         Vm.Log[] memory orphanLogs = vm.getRecordedLogs();
         _assertAudit(orphanLogs, owner, "compose-hash", orphaned, true);
         assertTrue(app.allowedComposeHashes(orphaned));
@@ -133,7 +133,7 @@ contract EventAuditTest is Test {
 
         vm.recordLogs();
         vm.prank(owner);
-        app.addComposeHash(canonical);
+        app.addComposeHashAtEpoch(0, canonical);
         Vm.Log[] memory canonicalLogs = vm.getRecordedLogs();
         _assertAudit(canonicalLogs, owner, "compose-hash", canonical, true);
         assertEq(_auditCount(canonicalLogs), 1);

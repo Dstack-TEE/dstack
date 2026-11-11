@@ -55,18 +55,27 @@ the old row after the handover. The old image never needs access to the new row.
 
 A request may select any epoch up to the current one and is decided on that
 epoch's row, so a value is revoked only once every row allowing it is cleared.
-`DstackKms` has no epoch-less setters for OS images, KMS aggregated MRs and KMS
-devices: `*AtEpoch(epoch, material)` changes one registered root row and
-`*AtEpochs(fromEpoch, toEpoch, material)` every row in the range, so one
-transaction revokes a value from all rows with `remove*AtEpochs(0, latest, …)`.
-Before any root epoch is registered, only epoch zero can be written. `DstackApp`
-keeps its `IAppAuthBasicManagement` add/remove methods and `setAllowAnyDevice`;
-they change every app row from 0 through the next epoch, so a removal is a full
-revocation. Its `*AtEpoch` methods, and `setAllowAnyDeviceAtEpoch`, change one
-historical, current or next row. The KMS scripts in `Manage.s.sol` take
-`ROOT_EPOCH` for one row or `FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` for a range; without
-them, additions write the current through the latest row and removals every row.
-The app scripts take an optional `APP_EPOCH`, as does `SetAllowAnyDevice`.
+Neither contract has epoch-less material setters: `*AtEpoch(epoch, material)`
+changes one row and `*AtEpochs(fromEpoch, toEpoch, material)` every row in the
+range, so one transaction revokes a value from all rows, with
+`remove*AtEpochs(0, latest, …)` in `DstackKms` and
+`remove*AtEpochs(0, currentAppEpoch, …)` in `DstackApp`. `DstackKms` writes
+registered root epochs (before any is registered, only epoch zero); `DstackApp`
+writes app epochs up to the next one, as do `setAllowAnyDeviceAtEpoch(s)`.
+`DstackApp` reports these setters as the ERC-165 interface
+`IAppEpochManagement` and no longer reports `IAppAuthBasicManagement`
+(`0x8fd37527`), whose epoch-less setters it removed. The scripts in
+`Manage.s.sol` take `ROOT_EPOCH` or `APP_EPOCH` for one row, or
+`FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` and `FROM_APP_EPOCH`/`TO_APP_EPOCH` for a range,
+and fail without them.
+
+App policies deployed before app epochs (v0.5.x, v0.6.0) keep working with an
+upgraded `DstackKms` and KMS: they report no `IAppEpochAuth`, so `authorizeApp`
+asks their `isAppAllowed` and only for app epoch zero, and `currentAppEpoch`
+reports zero for them. Their owners keep the epoch-less setters until they
+upgrade, which `Manage.s.sol` detects and uses with no epoch or `APP_EPOCH=0`.
+Upgrading keeps their allowlists as app epoch zero. See
+[onchain-governance.md](./onchain-governance.md#apps-deployed-before-app-epochs).
 
 Disk and environment migration after a root rotation fetches the keys of the
 recorded epoch, so a new image migrating old data must be allowed in that old

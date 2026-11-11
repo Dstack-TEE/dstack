@@ -196,9 +196,11 @@ cast call "$(cat ~/.dstack/secrets/gateway-app-id)" \
   --rpc-url "https://ethereum-sepolia-rpc.publicnode.com"
 
 # If false, add it
+# App contracts deployed before app epochs (0.6.x or earlier) take "addComposeHash(bytes32)" "0x$COMPOSE_HASH";
+# see onchain-governance.md#apps-deployed-before-app-epochs.
 cast send "$(cat ~/.dstack/secrets/gateway-app-id)" \
-  "addComposeHash(bytes32)" \
-  "0x$COMPOSE_HASH" \
+  "addComposeHashAtEpoch(uint256,bytes32)" \
+  0 "0x$COMPOSE_HASH" \
   --rpc-url "https://ethereum-sepolia-rpc.publicnode.com" \
   --private-key "$(cat ~/.dstack/secrets/sepolia-private-key)"
 ```

@@ -1022,8 +1022,8 @@ contract DstackKmsTest is Test {
         assertFalse(kms.authorizeApp(epochRequest(info, 1, 0)).authorized);
         assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).authorized);
         vm.startPrank(user);
-        policy.addComposeHash(info.composeHash);
-        policy.addDevice(info.deviceId);
+        policy.addComposeHashAtEpoch(1, info.composeHash);
+        policy.addDeviceAtEpoch(1, info.deviceId);
         vm.stopPrank();
         assertTrue(kms.authorizeApp(epochRequest(info, 0, 1)).authorized);
         assertFalse(authorize(info, false).authorized);

@@ -307,12 +307,11 @@ See `script/README.md` for complete documentation of all available scripts.
 #### Epoch-scoped material approvals
 
 Material approvals use exact root/app epoch rows; neither older nor newer rows
-are implicitly authorized. `DstackKms` material setters name their rows:
-`*AtEpoch` one root row, `*AtEpochs` a range. `DstackApp` add/remove methods and
-`setAllowAnyDevice` change every app row through the next epoch, so a removal is
-a full revocation; its `*AtEpoch` methods change one row. The management scripts
-take `ROOT_EPOCH`, `FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` or `APP_EPOCH` to select
-rows. Original bool mappings and events remain epoch-zero views after
+are implicitly authorized. Material setters name their rows: `*AtEpoch` one
+row, `*AtEpochs` a range; `DstackApp` reports them as `IAppEpochManagement`.
+The management scripts take `ROOT_EPOCH`/`APP_EPOCH`, or
+`FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` and `FROM_APP_EPOCH`/`TO_APP_EPOCH`, and use
+the epoch-less setters of app policies predating app epochs. Original bool mappings and events remain epoch-zero views after
 upgrading; epoch-specific getters/events describe the new rows. KMS keyring
 handover separately checks its highest exported root epoch, which authorizes the
 whole keyring. See [epoch-scoped allowlists](../../../docs/app-key-epochs.md#epoch-scoped-allowlists)

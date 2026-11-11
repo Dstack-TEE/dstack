@@ -63,7 +63,7 @@ The auth-api validates boot requests against the smart contract. See [Deployment
 ## Whitelist OS Image
 
 ```bash
-OS_IMAGE_HASH=0x<os-image-hash> \
+OS_IMAGE_HASH=0x<os-image-hash> ROOT_EPOCH=0 \
   forge script script/Manage.s.sol:AddOsImage --broadcast --rpc-url $RPC_URL
 ```
 
@@ -109,7 +109,7 @@ sha256sum /path/to/gateway-compose.json | awk '{print "0x"$1}'
 Then add it:
 
 ```bash
-APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> \
+APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> APP_EPOCH=0 \
   forge script script/Manage.s.sol:AddComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
@@ -139,7 +139,7 @@ sha256sum /path/to/your-app-compose.json | awk '{print "0x"$1}'
 Then add it:
 
 ```bash
-APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> \
+APP_CONTRACT_ADDR=<app-id> COMPOSE_HASH=<compose-hash> APP_EPOCH=0 \
   forge script script/Manage.s.sol:AddComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
@@ -165,17 +165,39 @@ The central governance contract that manages OS image whitelisting, app registra
 
 ### DstackApp (Per-App Contract)
 
-Each app has its own contract controlling which compose hashes and devices are allowed.
+Each app has its own contract controlling which compose hashes and devices are allowed,
+per app epoch. Every setter names the app epoch rows it writes: one epoch, or a range up
+to the next epoch. Removing a value from rows `0` through the current epoch revokes it.
 
 | Function | Description |
 |----------|-------------|
-| `addComposeHash(bytes32)` | Whitelist a compose hash |
-| `removeComposeHash(bytes32)` | Remove a compose hash from whitelist |
-| `addDevice(bytes32)` | Whitelist a device ID |
-| `removeDevice(bytes32)` | Remove a device from whitelist |
-| `setAllowAnyDevice(bool)` | Allow any device to run this app |
-| `isAppAllowed(AppBootInfo)` | Check if app can boot with given config |
+| `addComposeHashAtEpoch(uint256,bytes32)` / `addComposeHashAtEpochs(uint256,uint256,bytes32)` | Whitelist a compose hash in one app epoch or a range |
+| `removeComposeHashAtEpoch(uint256,bytes32)` / `removeComposeHashAtEpochs(uint256,uint256,bytes32)` | Remove a compose hash from one app epoch or a range |
+| `addDeviceAtEpoch(uint256,bytes32)` / `addDeviceAtEpochs(uint256,uint256,bytes32)` | Whitelist a device ID |
+| `removeDeviceAtEpoch(uint256,bytes32)` / `removeDeviceAtEpochs(uint256,uint256,bytes32)` | Remove a device |
+| `setAllowAnyDeviceAtEpoch(uint256,bool)` / `setAllowAnyDeviceAtEpochs(uint256,uint256,bool)` | Allow any device to run this app |
+| `currentAppEpoch()` | The app epoch new keys are derived for |
+| `isAppAllowed(AppBootInfo)` | Check if app can boot with given config (app epoch 0 only) |
 | `disableUpgrades()` | Permanently disable contract upgrades |
+
+#### Apps deployed before app epochs
+
+App contracts deployed from dstack 0.6.x or earlier, and not upgraded since, have only
+app epoch 0 and the epoch-less setters `addComposeHash(bytes32)`,
+`removeComposeHash(bytes32)`, `addDevice(bytes32)`, `removeDevice(bytes32)` and
+`setAllowAnyDevice(bool)`. They keep working with an upgraded `DstackKms` and KMS,
+which authorize them for app epoch 0. Tell the two kinds apart by ERC-165 interface ID:
+
+```bash
+cast call <app-id> "supportsInterface(bytes4)(bool)" 0x853d2b79 --rpc-url $RPC_URL  # IAppEpochManagement: epoch setters
+cast call <app-id> "supportsInterface(bytes4)(bool)" 0x8fd37527 --rpc-url $RPC_URL  # IAppAuthBasicManagement: epoch-less setters
+```
+
+The `Manage.s.sol` app scripts check this themselves: on an older app they call the
+epoch-less setter and accept only `APP_EPOCH=0` or no epoch; on a current app they
+require `APP_EPOCH`, or `FROM_APP_EPOCH` and `TO_APP_EPOCH`. Upgrading an older app to
+the current `DstackApp` keeps its compose hashes, devices and `allowAnyDevice` as app
+epoch 0.
 
 ### AppBootInfo Structure
 

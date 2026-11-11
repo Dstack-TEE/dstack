@@ -111,18 +111,31 @@ contract DstackAppSymbolicTest is Test {
         assert(_upgradesDisabledFlag(address(app))); // base: flag is set
 
         bytes memory data;
-        if (which == 0) data = abi.encodeWithSelector(DstackApp.addComposeHash.selector, word);
-        else if (which == 1) data = abi.encodeWithSelector(DstackApp.removeComposeHash.selector, word);
-        else if (which == 2) data = abi.encodeWithSelector(DstackApp.addDevice.selector, word);
-        else if (which == 3) data = abi.encodeWithSelector(DstackApp.removeDevice.selector, word);
-        else if (which == 4) data = abi.encodeWithSelector(DstackApp.setAllowAnyDevice.selector, flag);
-        else if (which == 5) data = abi.encodeWithSelector(DstackApp.setRequireTcbUpToDate.selector, flag);
-        else if (which == 6) data = abi.encodeWithSelector(DstackApp.disableUpgrades.selector);
-        else if (which == 7) data = abi.encodeWithSelector(UUPSUpgradeable.upgradeToAndCall.selector, addr, "");
-        else if (which == 8) data = abi.encodeWithSelector(Ownable2StepUpgradeable.transferOwnership.selector, addr);
-        else if (which == 9) data = abi.encodeWithSelector(Ownable2StepUpgradeable.acceptOwnership.selector);
-        else if (which == 10) data = abi.encodeWithSelector(OwnableUpgradeable.renounceOwnership.selector);
-        else return; // outside the enumerated mutating surface
+        if (which == 0) {
+            data = abi.encodeWithSelector(DstackApp.addComposeHashAtEpoch.selector, uint256(0), word);
+        } else if (which == 1) {
+            data = abi.encodeWithSelector(DstackApp.removeComposeHashAtEpoch.selector, uint256(0), word);
+        } else if (which == 2) {
+            data = abi.encodeWithSelector(DstackApp.addDeviceAtEpoch.selector, uint256(0), word);
+        } else if (which == 3) {
+            data = abi.encodeWithSelector(DstackApp.removeDeviceAtEpoch.selector, uint256(0), word);
+        } else if (which == 4) {
+            data = abi.encodeWithSelector(DstackApp.setAllowAnyDeviceAtEpoch.selector, uint256(0), flag);
+        } else if (which == 5) {
+            data = abi.encodeWithSelector(DstackApp.setRequireTcbUpToDate.selector, flag);
+        } else if (which == 6) {
+            data = abi.encodeWithSelector(DstackApp.disableUpgrades.selector);
+        } else if (which == 7) {
+            data = abi.encodeWithSelector(UUPSUpgradeable.upgradeToAndCall.selector, addr, "");
+        } else if (which == 8) {
+            data = abi.encodeWithSelector(Ownable2StepUpgradeable.transferOwnership.selector, addr);
+        } else if (which == 9) {
+            data = abi.encodeWithSelector(Ownable2StepUpgradeable.acceptOwnership.selector);
+        } else if (which == 10) {
+            data = abi.encodeWithSelector(OwnableUpgradeable.renounceOwnership.selector);
+        } else {
+            return; // outside the enumerated mutating surface
+        }
 
         vm.prank(caller);
         (bool ok,) = address(app).call(data);

@@ -29,25 +29,25 @@ Type-safe contract management scripts. Set the environment variables and run the
 ### KMS Management
 
 The KMS material scripts below write root epoch rows: `ROOT_EPOCH=e` one row, or
-`FROM_ROOT_EPOCH` through `TO_ROOT_EPOCH`. By default additions write the current
-through the latest registered epoch, and removals every row, so a removal
-revokes the value at every epoch a request can select.
+`FROM_ROOT_EPOCH` through `TO_ROOT_EPOCH`. One of them is required. A request
+may select any epoch up to the current one, so revoke a value with
+`FROM_ROOT_EPOCH=0` and `TO_ROOT_EPOCH` the latest registered epoch.
 
 #### Add KMS Aggregated MR
 ```bash
-KMS_CONTRACT_ADDR=0x... MR_AGGREGATED=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 MR_AGGREGATED=0x1234... \
 forge script script/Manage.s.sol:AddKmsAggregatedMr --broadcast --rpc-url $RPC_URL
 ```
 
 #### Add OS Image
 ```bash
-KMS_CONTRACT_ADDR=0x... OS_IMAGE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 OS_IMAGE_HASH=0x1234... \
 forge script script/Manage.s.sol:AddOsImage --broadcast --rpc-url $RPC_URL
 ```
 
 #### Add KMS Device
 ```bash
-KMS_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:AddKmsDevice --broadcast --rpc-url $RPC_URL
 ```
 
@@ -105,19 +105,19 @@ forge script script/Manage.s.sol:PopRootEpoch --broadcast --rpc-url $RPC_URL
 
 #### Remove KMS Aggregated MR
 ```bash
-KMS_CONTRACT_ADDR=0x... MR_AGGREGATED=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 MR_AGGREGATED=0x1234... \
 forge script script/Manage.s.sol:RemoveKmsAggregatedMr --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove OS Image
 ```bash
-KMS_CONTRACT_ADDR=0x... OS_IMAGE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 OS_IMAGE_HASH=0x1234... \
 forge script script/Manage.s.sol:RemoveOsImage --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove KMS Device
 ```bash
-KMS_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:RemoveKmsDevice --broadcast --rpc-url $RPC_URL
 ```
 
@@ -136,7 +136,7 @@ forge script script/Manage.s.sol:RegisterApp --broadcast --rpc-url $RPC_URL
 #### Batch KMS Setup
 Configure multiple settings at once:
 ```bash
-KMS_CONTRACT_ADDR=0x... \
+KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 \
 GATEWAY_APP_ID="my-gateway" \
 MR_AGGREGATED_LIST=0x1111...,0x2222...,0x3333... \
 OS_IMAGE_LIST=0xaaaa...,0xbbbb... \
@@ -146,33 +146,39 @@ forge script script/Manage.s.sol:BatchKmsSetup --broadcast --rpc-url $RPC_URL
 
 ### App Management
 
+The app scripts write app epoch rows: `APP_EPOCH=e`, or `FROM_APP_EPOCH` through
+`TO_APP_EPOCH` (at most the next epoch); one of them is required. Revoke a value
+with `FROM_APP_EPOCH=0` and `TO_APP_EPOCH` the current app epoch. App contracts
+deployed before app epochs (no `IAppEpochManagement`) have only app epoch 0: the
+scripts call their epoch-less setters and accept only `APP_EPOCH=0` or no epoch.
+
 #### Add Compose Hash
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... COMPOSE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 COMPOSE_HASH=0x1234... \
 forge script script/Manage.s.sol:AddComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
 #### Add Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:AddDevice --broadcast --rpc-url $RPC_URL
 ```
 
 #### Set Allow Any Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... ALLOW_ANY_DEVICE=true \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 ALLOW_ANY_DEVICE=true \
 forge script script/Manage.s.sol:SetAllowAnyDevice --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove Compose Hash
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... COMPOSE_HASH=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 COMPOSE_HASH=0x1234... \
 forge script script/Manage.s.sol:RemoveComposeHash --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... DEVICE_ID=0x1234... \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:RemoveDevice --broadcast --rpc-url $RPC_URL
 ```
 
