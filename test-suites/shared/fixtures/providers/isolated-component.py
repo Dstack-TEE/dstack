@@ -1384,6 +1384,23 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         start_simulator = plan_root / "shared/automation/start-simulator.sh"
         stop_simulator = plan_root / "shared/automation/stop-simulator.sh"
         mock_seed = secrets.token_hex(32)
+        # Key release verifies the caller's OS image; the lite fixtures carry
+        # their measurement document, so no image has to be downloadable.
+        simulator_fixture_dir = workspace / "data/lite-simulator-fixtures"
+        lite = subprocess.run(
+            [
+                str(plan_root / "shared/automation/make-lite-simulator-fixtures.sh"),
+                str(runtime_path),
+                str(simulator_fixture_dir),
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        if lite.returncode:
+            shutil.rmtree(workspace, ignore_errors=True)
+            fail(f"lite simulator fixtures failed: {lite.stderr[-1000:]}")
         process = subprocess.run(
             [
                 str(start_simulator),
@@ -1399,6 +1416,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             env={
                 **os.environ,
                 "DSTACK_TEST_MOCK_ATTESTATION_SEED": mock_seed,
+                "DSTACK_TEST_SIMULATOR_FIXTURES": str(simulator_fixture_dir),
             },
         )
         if process.returncode:
@@ -1512,7 +1530,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "admin_auth_token_file": str(source_admin_token_path),
             "registration_client": kms_client_identity,
         }
-        simulator_fixture_dir = Path(str(runtime.get("simulator_fixtures", "")))
         simulator_sys_config = json.loads(
             (simulator_fixture_dir / "sys-config.json").read_text(encoding="utf-8")
         )

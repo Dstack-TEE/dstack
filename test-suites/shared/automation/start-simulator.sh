@@ -18,7 +18,7 @@ test ! -L "$runtime"
 install -d -m 700 "$runtime"
 
 simulator=$(jq -er '.prepared_binaries.dstack_simulator.path' "$manifest")
-fixtures=$(jq -er '.simulator_fixtures' "$manifest")
+fixtures=${DSTACK_TEST_SIMULATOR_FIXTURES:-$(jq -er '.simulator_fixtures' "$manifest")}
 test -x "$simulator"
 for file in appkeys.json app-compose.json attestation.bin sys-config.json dstack.toml; do
   install -m 600 "$fixtures/$file" "$runtime/$file"
