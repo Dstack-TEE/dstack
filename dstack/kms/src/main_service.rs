@@ -199,10 +199,18 @@ pub(crate) enum KeyRelease {
     RpcHandover,
     AdminHandover,
     AppKey,
+    AppCert,
+    TempCa,
 }
 
 impl KeyRelease {
-    const ALL: [Self; 3] = [Self::RpcHandover, Self::AdminHandover, Self::AppKey];
+    const ALL: [Self; 5] = [
+        Self::RpcHandover,
+        Self::AdminHandover,
+        Self::AppKey,
+        Self::AppCert,
+        Self::TempCa,
+    ];
 
     /// The listener and operation labels.
     fn labels(self) -> (&'static str, &'static str) {
@@ -210,6 +218,8 @@ impl KeyRelease {
             Self::RpcHandover => ("rpc", "kms_export_keys"),
             Self::AdminHandover => ("admin", "kms_export_keys"),
             Self::AppKey => ("rpc", "app_get_key"),
+            Self::AppCert => ("rpc", "app_get_cert"),
+            Self::TempCa => ("rpc", "temp_ca"),
         }
     }
 }
@@ -362,6 +372,9 @@ impl KmsState {
         result: &AuthorizationResult,
         requested: Option<u32>,
     ) -> Result<u32> {
+        if !result.authorized {
+            bail!("Authorization denied: {}", result.rejection_reason);
+        }
         let current = if self.config.auth_api.is_dev() {
             self.keyring.latest()
         } else {
@@ -371,9 +384,6 @@ impl KmsState {
             self.keyring
                 .servable_epoch(RootEpochRegistry::Current(current))?
         };
-        if !result.authorized {
-            bail!("Authorization denied: {}", result.rejection_reason);
-        }
         let epoch = requested.unwrap_or(current);
         if epoch > current {
             bail!("root epoch {epoch} is not active; the current one is {current}");
@@ -496,25 +506,28 @@ impl RpcHandler {
     }
 
     /// Count a key release and log it, regardless of the metrics setting.
+    /// `boot_info` is the authorized caller, if the operation identifies one.
     fn audit_key_release(
         &self,
         release: KeyRelease,
-        boot_info: &BootInfo,
+        boot_info: Option<&BootInfo>,
         requested: &str,
         returned: &str,
         cached: bool,
     ) {
         self.state.metrics().record_key_release(release);
-        let instance_id = match &boot_info.instance_id[..] {
+        let hex_or_unknown = |bytes: &[u8]| match bytes {
             [] => "UNKNOWN".to_string(),
-            id => hex::encode(id),
+            bytes => hex::encode(bytes),
         };
+        let app_id = hex_or_unknown(boot_info.map_or(&[], |info| &info.app_id[..]));
+        let instance_id = hex_or_unknown(boot_info.map_or(&[], |info| &info.instance_id[..]));
         let (listener, operation) = release.labels();
         info!(
             target: "dstack_kms::audit",
             listener,
             operation,
-            app_id = %hex::encode(&boot_info.app_id),
+            app_id = %app_id,
             instance_id = %instance_id,
             remote = ?self.remote_endpoint,
             requested_epoch = requested,
@@ -533,6 +546,8 @@ impl RpcHandler {
         release: KeyRelease,
         request: GetKmsKeyRequest,
     ) -> Result<KmsKeyResponse> {
+        // reject anonymous callers before the self check reaches the backend
+        self.ensure_attested()?;
         let cached = self.self_allowed_cached(Operation::KmsExportKeys);
         self.ensure_self_allowed(Operation::KmsExportKeys)
             .await
@@ -540,7 +555,7 @@ impl RpcHandler {
         let info = self.ensure_kms_allowed(&request.vm_config).await?;
         ensure_key_release_allowed(&info, (&self.state.config).into())?;
         let returned = format!("root 0..={}", self.state.keyring.latest());
-        self.audit_key_release(release, &info, "all", &returned, cached);
+        self.audit_key_release(release, Some(&info), "all", &returned, cached);
         Ok(KmsKeyResponse {
             temp_ca_key: self.state.temp_ca.key.serialize_pem(),
             keys: self
@@ -774,6 +789,8 @@ impl KmsRpc for RpcHandler {
         if request.api_version > 1 {
             bail!("Unsupported API version: {}", request.api_version);
         }
+        // reject anonymous callers before the self check reaches the backend
+        self.ensure_attested()?;
         let cached = self.self_allowed_cached(Operation::KmsServe);
         self.ensure_self_allowed(Operation::KmsServe)
             .await
@@ -799,7 +816,7 @@ impl KmsRpc for RpcHandler {
         let epoch = |epoch: Option<u32>| epoch.map_or("current".into(), |e| e.to_string());
         self.audit_key_release(
             KeyRelease::AppKey,
-            &boot_info,
+            Some(&boot_info),
             &format!(
                 "root {} app {}",
                 epoch(request.root_epoch),
@@ -943,6 +960,7 @@ impl KmsRpc for RpcHandler {
     }
 
     async fn get_temp_ca_cert(self) -> Result<GetTempCaCertResponse> {
+        let cached = self.self_allowed_cached(Operation::KmsServe);
         let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
         if self.state.config.enforce_self_authorization {
             let boot_info = self
@@ -953,14 +971,23 @@ impl KmsRpc for RpcHandler {
                 .context("missing authorized KMS boot info")?;
             ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
         }
+        let ca_cert = self.state.epoch_root(epoch)?.ca.pem_cert.clone();
+        self.audit_key_release(
+            KeyRelease::TempCa,
+            None,
+            "current",
+            &format!("root {epoch}"),
+            cached,
+        );
         Ok(GetTempCaCertResponse {
             temp_ca_cert: self.state.temp_ca.pem_cert.clone(),
             temp_ca_key: self.state.temp_ca.key.serialize_pem(),
-            ca_cert: self.state.epoch_root(epoch)?.ca.pem_cert.clone(),
+            ca_cert,
         })
     }
 
     async fn sign_cert(self, request: SignCertRequest) -> Result<SignCertResponse> {
+        let cached = self.self_allowed_cached(Operation::KmsServe);
         self.ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
@@ -1009,6 +1036,13 @@ impl KmsRpc for RpcHandler {
         let cert = app_ca
             .sign_csr(&csr, Some(&cert_app_info), "app:custom")
             .context("Failed to sign certificate")?;
+        self.audit_key_release(
+            KeyRelease::AppCert,
+            Some(&app_info.boot_info),
+            "current",
+            &format!("root {} app {}", app_info.root_epoch, app_info.app_epoch),
+            cached,
+        );
         Ok(SignCertResponse {
             certificate_chain: vec![
                 cert.pem(),
