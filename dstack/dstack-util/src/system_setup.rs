@@ -2469,7 +2469,13 @@ impl HostShared {
                 Some(app_epoch),
                 Some(keys.ca_cert.clone()),
             )
-            .await?
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to get the keys of root epoch {epoch}, app epoch {app_epoch}; \
+                     the policy rows of those epochs must still allow this instance"
+                )
+            })?
             .0)
     }
 }
