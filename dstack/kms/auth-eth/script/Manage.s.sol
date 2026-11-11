@@ -9,6 +9,17 @@ pragma solidity ^0.8.24;
 import "forge-std/Script.sol";
 import "../contracts/DstackKms.sol";
 import "../contracts/DstackApp.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
+
+// The epoch-less setters of app policies predating app epochs (v0.5.x,
+// v0.6.0), which report IAppAuthBasicManagement instead of IAppEpochManagement.
+interface ILegacyAppManagement {
+    function addComposeHash(bytes32 composeHash) external;
+    function removeComposeHash(bytes32 composeHash) external;
+    function addDevice(bytes32 deviceId) external;
+    function removeDevice(bytes32 deviceId) external;
+    function setAllowAnyDevice(bool allowed) external;
+}
 
 // Base contract with common functionality
 abstract contract BaseScript is Script {
@@ -25,6 +36,48 @@ abstract contract BaseScript is Script {
             app = DstackApp(appAddr);
         }
     }
+
+    // The rows a policy change applies to: `single` names one epoch, `from` and
+    // `to` a range. There is no default, so a change never misses a row
+    // silently.
+    function epochRange(
+        string memory single,
+        string memory from,
+        string memory to
+    )
+        internal
+        view
+        returns (uint256, uint256)
+    {
+        if (vm.envExists(single)) {
+            uint256 epoch = vm.envUint(single);
+            return (epoch, epoch);
+        }
+        require(vm.envExists(from) && vm.envExists(to), string.concat("set ", single, ", or ", from, " and ", to));
+        return (vm.envUint(from), vm.envUint(to));
+    }
+
+    function rootEpochs() internal view returns (uint256, uint256) {
+        return epochRange("ROOT_EPOCH", "FROM_ROOT_EPOCH", "TO_ROOT_EPOCH");
+    }
+
+    function appEpochs() internal view returns (uint256, uint256) {
+        return epochRange("APP_EPOCH", "FROM_APP_EPOCH", "TO_APP_EPOCH");
+    }
+
+    // The legacy setters of an app without IAppEpochManagement, or none. Such
+    // an app has only app epoch 0, so only APP_EPOCH=0, or no epoch, applies.
+    function legacyApp() internal view returns (ILegacyAppManagement legacy) {
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        if (ERC165Checker.supportsInterface(address(app), type(IAppEpochManagement).interfaceId)) {
+            return ILegacyAppManagement(address(0));
+        }
+        require(
+            !vm.envExists("FROM_APP_EPOCH") && !vm.envExists("TO_APP_EPOCH") && vm.envOr("APP_EPOCH", uint256(0)) == 0,
+            "this app predates app epochs: only APP_EPOCH=0 applies"
+        );
+        return ILegacyAppManagement(address(app));
+    }
 }
 
 // KMS Management Scripts
@@ -32,12 +85,9 @@ contract AddKmsAggregatedMr is BaseScript {
     function run() external {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
+        (uint256 from, uint256 to) = rootEpochs();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.addKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
-        } else {
-            kms.addKmsAggregatedMr(mrAggregated);
-        }
+        kms.addKmsAggregatedMrAtEpochs(from, to, mrAggregated);
         vm.stopBroadcast();
 
         console.log("Added KMS aggregated MR:", vm.toString(mrAggregated));
@@ -48,12 +98,9 @@ contract RemoveKmsAggregatedMr is BaseScript {
     function run() external {
         bytes32 mrAggregated = vm.envBytes32("MR_AGGREGATED");
 
+        (uint256 from, uint256 to) = rootEpochs();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.removeKmsAggregatedMrAtEpoch(vm.envUint("ROOT_EPOCH"), mrAggregated);
-        } else {
-            kms.removeKmsAggregatedMr(mrAggregated);
-        }
+        kms.removeKmsAggregatedMrAtEpochs(from, to, mrAggregated);
         vm.stopBroadcast();
 
         console.log("Removed KMS aggregated MR:", vm.toString(mrAggregated));
@@ -64,12 +111,9 @@ contract AddOsImage is BaseScript {
     function run() external {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
+        (uint256 from, uint256 to) = rootEpochs();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.addOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
-        } else {
-            kms.addOsImageHash(imageHash);
-        }
+        kms.addOsImageHashAtEpochs(from, to, imageHash);
         vm.stopBroadcast();
 
         console.log("Added OS image hash:", vm.toString(imageHash));
@@ -80,12 +124,9 @@ contract AddKmsDevice is BaseScript {
     function run() external {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
+        (uint256 from, uint256 to) = rootEpochs();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.addKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
-        } else {
-            kms.addKmsDevice(deviceId);
-        }
+        kms.addKmsDeviceAtEpochs(from, to, deviceId);
         vm.stopBroadcast();
 
         console.log("Added KMS device:", vm.toString(deviceId));
@@ -160,16 +201,17 @@ contract PopRootEpoch is BaseScript {
 // App Management Scripts
 contract AddComposeHash is BaseScript {
     function run() external {
-        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("APP_EPOCH")) {
-            app.addComposeHashAtEpoch(vm.envUint("APP_EPOCH"), composeHash);
+        ILegacyAppManagement legacy = legacyApp();
+        if (address(legacy) != address(0)) {
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            legacy.addComposeHash(composeHash);
         } else {
-            app.addComposeHash(composeHash);
+            (uint256 from, uint256 to) = appEpochs();
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            app.addComposeHashAtEpochs(from, to, composeHash);
         }
-        vm.stopBroadcast();
 
         console.log("Added compose hash:", vm.toString(composeHash));
     }
@@ -177,16 +219,17 @@ contract AddComposeHash is BaseScript {
 
 contract AddDevice is BaseScript {
     function run() external {
-        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("APP_EPOCH")) {
-            app.addDeviceAtEpoch(vm.envUint("APP_EPOCH"), deviceId);
+        ILegacyAppManagement legacy = legacyApp();
+        if (address(legacy) != address(0)) {
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            legacy.addDevice(deviceId);
         } else {
-            app.addDevice(deviceId);
+            (uint256 from, uint256 to) = appEpochs();
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            app.addDeviceAtEpochs(from, to, deviceId);
         }
-        vm.stopBroadcast();
 
         console.log("Added device:", vm.toString(deviceId));
     }
@@ -194,16 +237,17 @@ contract AddDevice is BaseScript {
 
 contract SetAllowAnyDevice is BaseScript {
     function run() external {
-        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bool allow = vm.envBool("ALLOW_ANY_DEVICE");
 
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("APP_EPOCH")) {
-            app.setAllowAnyDeviceAtEpoch(vm.envUint("APP_EPOCH"), allow);
+        ILegacyAppManagement legacy = legacyApp();
+        if (address(legacy) != address(0)) {
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            legacy.setAllowAnyDevice(allow);
         } else {
-            app.setAllowAnyDevice(allow);
+            (uint256 from, uint256 to) = appEpochs();
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            app.setAllowAnyDeviceAtEpochs(from, to, allow);
         }
-        vm.stopBroadcast();
 
         console.log("Set allowAnyDevice to:", allow);
     }
@@ -262,6 +306,7 @@ contract BatchKmsSetup is BaseScript {
         bytes32[] memory osImages = vm.envOr("OS_IMAGE_LIST", ",", new bytes32[](0));
         bytes32[] memory devices = vm.envOr("DEVICE_LIST", ",", new bytes32[](0));
 
+        (uint256 from, uint256 to) = rootEpochs();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
 
         // Set gateway ID if provided
@@ -272,19 +317,19 @@ contract BatchKmsSetup is BaseScript {
 
         // Add aggregated MRs
         for (uint256 i = 0; i < mrAggregated.length; i++) {
-            kms.addKmsAggregatedMr(mrAggregated[i]);
+            kms.addKmsAggregatedMrAtEpochs(from, to, mrAggregated[i]);
             console.log("Added MR aggregated:", vm.toString(mrAggregated[i]));
         }
 
         // Add OS images
         for (uint256 i = 0; i < osImages.length; i++) {
-            kms.addOsImageHash(osImages[i]);
+            kms.addOsImageHashAtEpochs(from, to, osImages[i]);
             console.log("Added OS image:", vm.toString(osImages[i]));
         }
 
         // Add devices
         for (uint256 i = 0; i < devices.length; i++) {
-            kms.addKmsDevice(devices[i]);
+            kms.addKmsDeviceAtEpochs(from, to, devices[i]);
             console.log("Added device:", vm.toString(devices[i]));
         }
 
@@ -300,12 +345,9 @@ contract RemoveOsImage is BaseScript {
     function run() external {
         bytes32 imageHash = vm.envBytes32("OS_IMAGE_HASH");
 
+        (uint256 from, uint256 to) = rootEpochs();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.removeOsImageHashAtEpoch(vm.envUint("ROOT_EPOCH"), imageHash);
-        } else {
-            kms.removeOsImageHash(imageHash);
-        }
+        kms.removeOsImageHashAtEpochs(from, to, imageHash);
         vm.stopBroadcast();
 
         console.log("Removed OS image hash:", vm.toString(imageHash));
@@ -316,12 +358,9 @@ contract RemoveKmsDevice is BaseScript {
     function run() external {
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
+        (uint256 from, uint256 to) = rootEpochs();
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("ROOT_EPOCH")) {
-            kms.removeKmsDeviceAtEpoch(vm.envUint("ROOT_EPOCH"), deviceId);
-        } else {
-            kms.removeKmsDevice(deviceId);
-        }
+        kms.removeKmsDeviceAtEpochs(from, to, deviceId);
         vm.stopBroadcast();
 
         console.log("Removed KMS device:", vm.toString(deviceId));
@@ -331,16 +370,17 @@ contract RemoveKmsDevice is BaseScript {
 // Remove operations for App management
 contract RemoveComposeHash is BaseScript {
     function run() external {
-        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 composeHash = vm.envBytes32("COMPOSE_HASH");
 
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("APP_EPOCH")) {
-            app.removeComposeHashAtEpoch(vm.envUint("APP_EPOCH"), composeHash);
+        ILegacyAppManagement legacy = legacyApp();
+        if (address(legacy) != address(0)) {
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            legacy.removeComposeHash(composeHash);
         } else {
-            app.removeComposeHash(composeHash);
+            (uint256 from, uint256 to) = appEpochs();
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            app.removeComposeHashAtEpochs(from, to, composeHash);
         }
-        vm.stopBroadcast();
 
         console.log("Removed compose hash:", vm.toString(composeHash));
     }
@@ -348,16 +388,17 @@ contract RemoveComposeHash is BaseScript {
 
 contract RemoveDevice is BaseScript {
     function run() external {
-        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
         bytes32 deviceId = vm.envBytes32("DEVICE_ID");
 
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        if (vm.envExists("APP_EPOCH")) {
-            app.removeDeviceAtEpoch(vm.envUint("APP_EPOCH"), deviceId);
+        ILegacyAppManagement legacy = legacyApp();
+        if (address(legacy) != address(0)) {
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            legacy.removeDevice(deviceId);
         } else {
-            app.removeDevice(deviceId);
+            (uint256 from, uint256 to) = appEpochs();
+            vm.broadcast(vm.envUint("PRIVATE_KEY"));
+            app.removeDeviceAtEpochs(from, to, deviceId);
         }
-        vm.stopBroadcast();
 
         console.log("Removed device:", vm.toString(deviceId));
     }

@@ -76,7 +76,7 @@ contract DstackAppTest is Test {
         vm.expectEmit(true, true, true, true);
         emit ComposeHashAdded(hash);
 
-        app.addComposeHash(hash);
+        app.addComposeHashAtEpoch(0, hash);
         assertTrue(app.allowedComposeHashes(hash));
     }
 
@@ -84,13 +84,13 @@ contract DstackAppTest is Test {
         bytes32 hash = bytes32(uint256(123));
 
         vm.startPrank(owner);
-        app.addComposeHash(hash);
+        app.addComposeHashAtEpoch(0, hash);
         assertTrue(app.allowedComposeHashes(hash));
 
         vm.expectEmit(true, true, true, true);
         emit ComposeHashRemoved(hash);
 
-        app.removeComposeHash(hash);
+        app.removeComposeHashAtEpoch(0, hash);
         assertFalse(app.allowedComposeHashes(hash));
         vm.stopPrank();
     }
@@ -102,7 +102,7 @@ contract DstackAppTest is Test {
         vm.expectEmit(true, true, true, true);
         emit DeviceAdded(deviceId);
 
-        app.addDevice(deviceId);
+        app.addDeviceAtEpoch(0, deviceId);
         assertTrue(app.allowedDeviceIds(deviceId));
     }
 
@@ -110,13 +110,13 @@ contract DstackAppTest is Test {
         bytes32 deviceId = bytes32(uint256(456));
 
         vm.startPrank(owner);
-        app.addDevice(deviceId);
+        app.addDeviceAtEpoch(0, deviceId);
         assertTrue(app.allowedDeviceIds(deviceId));
 
         vm.expectEmit(true, true, true, true);
         emit DeviceRemoved(deviceId);
 
-        app.removeDevice(deviceId);
+        app.removeDeviceAtEpoch(0, deviceId);
         assertFalse(app.allowedDeviceIds(deviceId));
         vm.stopPrank();
     }
@@ -126,14 +126,14 @@ contract DstackAppTest is Test {
         vm.expectEmit(true, true, true, true);
         emit AllowAnyDeviceSet(true);
 
-        app.setAllowAnyDevice(true);
+        app.setAllowAnyDeviceAtEpoch(0, true);
         assertTrue(app.allowAnyDevice());
 
         vm.prank(owner);
         vm.expectEmit(true, true, true, true);
         emit AllowAnyDeviceSet(false);
 
-        app.setAllowAnyDevice(false);
+        app.setAllowAnyDeviceAtEpoch(0, false);
         assertFalse(app.allowAnyDevice());
     }
 
@@ -144,19 +144,19 @@ contract DstackAppTest is Test {
         vm.startPrank(user);
 
         vm.expectRevert();
-        app.addComposeHash(hash);
+        app.addComposeHashAtEpoch(0, hash);
 
         vm.expectRevert();
-        app.removeComposeHash(hash);
+        app.removeComposeHashAtEpoch(0, hash);
 
         vm.expectRevert();
-        app.addDevice(deviceId);
+        app.addDeviceAtEpoch(0, deviceId);
 
         vm.expectRevert();
-        app.removeDevice(deviceId);
+        app.removeDeviceAtEpoch(0, deviceId);
 
         vm.expectRevert();
-        app.setAllowAnyDevice(true);
+        app.setAllowAnyDeviceAtEpoch(0, true);
 
         vm.stopPrank();
     }
@@ -166,8 +166,8 @@ contract DstackAppTest is Test {
         bytes32 composeHash = bytes32(uint256(456));
 
         vm.startPrank(owner);
-        app.addDevice(deviceId);
-        app.addComposeHash(composeHash);
+        app.addDeviceAtEpoch(0, deviceId);
+        app.addComposeHashAtEpoch(0, composeHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
@@ -195,7 +195,7 @@ contract DstackAppTest is Test {
 
         // Test with allowAnyDevice = true
         vm.prank(owner);
-        app.setAllowAnyDevice(true);
+        app.setAllowAnyDeviceAtEpoch(0, true);
 
         (allowed, reason) = app.isAppAllowed(bootInfo);
         assertTrue(allowed);
@@ -208,8 +208,8 @@ contract DstackAppTest is Test {
         bytes32 unallowedHash = bytes32(uint256(789));
 
         vm.startPrank(owner);
-        app.addDevice(deviceId);
-        app.addComposeHash(allowedHash);
+        app.addDeviceAtEpoch(0, deviceId);
+        app.addComposeHashAtEpoch(0, allowedHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
@@ -263,8 +263,8 @@ contract DstackAppTest is Test {
         bytes32 composeHash = bytes32(uint256(456));
 
         vm.startPrank(owner);
-        app.addDevice(deviceId);
-        app.addComposeHash(composeHash);
+        app.addDeviceAtEpoch(0, deviceId);
+        app.addComposeHashAtEpoch(0, composeHash);
         vm.stopPrank();
 
         string[] memory advisoryIds = new string[](1);
@@ -352,8 +352,8 @@ contract DstackAppTest is Test {
         // Test IAppAuth interface
         assertTrue(app.supportsInterface(0x1e079198));
 
-        // Test IAppAuthBasicManagement interface
-        assertTrue(app.supportsInterface(0x8fd37527));
+        // IAppAuthBasicManagement, whose epoch-less setters are gone
+        assertFalse(app.supportsInterface(0x8fd37527));
 
         // Test IERC165 interface
         assertTrue(app.supportsInterface(0x01ffc9a7));
@@ -394,19 +394,19 @@ contract DstackAppTest is Test {
         // owner-only authority follows the new owner
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", owner));
-        app.addComposeHash(bytes32(uint256(1)));
+        app.addComposeHashAtEpoch(0, bytes32(uint256(1)));
 
         vm.prank(newOwner);
-        app.addComposeHash(bytes32(uint256(1)));
+        app.addComposeHashAtEpoch(0, bytes32(uint256(1)));
         assertTrue(app.allowedComposeHashes(bytes32(uint256(1))));
     }
 
     function test_AddZeroValuedPolicyEntriesIsRejected() public {
         vm.startPrank(owner);
         vm.expectRevert("invalid compose hash");
-        app.addComposeHash(bytes32(0));
+        app.addComposeHashAtEpoch(0, bytes32(0));
         vm.expectRevert("invalid device ID");
-        app.addDevice(bytes32(0));
+        app.addDeviceAtEpoch(0, bytes32(0));
         vm.stopPrank();
     }
 
@@ -480,8 +480,8 @@ contract DstackAppTest is Test {
     function test_AppOperationsSharePolicyButRejectUnknownOrKmsOperations() public {
         IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
-        app.addComposeHash(info.composeHash);
-        app.addDevice(info.deviceId);
+        app.addComposeHashAtEpoch(0, info.composeHash);
+        app.addDeviceAtEpoch(0, info.deviceId);
         vm.stopPrank();
         (bool allowed,) = authorizeAt(info, 0, keccak256("app_get_cert"));
         assertTrue(allowed);
@@ -503,18 +503,18 @@ contract DstackAppTest is Test {
         assertFalse(allowed);
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
-        app.addComposeHash(info.composeHash);
+        app.addComposeHashAtEpoch(1, info.composeHash);
         allowed = authorizeCurrent(info);
         assertFalse(allowed, "each material must be approved in the selected row");
-        app.addDevice(info.deviceId);
+        app.addDeviceAtEpoch(1, info.deviceId);
         allowed = authorizeCurrent(info);
         assertTrue(allowed);
-        app.removeComposeHash(info.composeHash);
+        app.removeComposeHashAtEpoch(1, info.composeHash);
         assertFalse(app.allowedComposeHashesAtEpoch(1, info.composeHash));
         assertTrue(app.allowedComposeHashes(info.composeHash));
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
         assertTrue(allowed);
-        app.addComposeHash(info.composeHash);
+        app.addComposeHashAtEpoch(1, info.composeHash);
         app.removeDeviceAtEpoch(0, info.deviceId);
         assertFalse(app.allowedDeviceIds(info.deviceId));
         (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
@@ -534,8 +534,8 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(0, oldInfo.composeHash);
         app.addDeviceAtEpoch(0, oldInfo.deviceId);
         app.advanceAppEpoch(0);
-        app.addComposeHash(newInfo.composeHash);
-        app.addDevice(newInfo.deviceId);
+        app.addComposeHashAtEpoch(1, newInfo.composeHash);
+        app.addDeviceAtEpoch(1, newInfo.deviceId);
         (bool allowed,) = authorizeAt(newInfo, 0, keccak256("app_get_key"));
         assertFalse(allowed, "new epoch approval must not imply historical access");
         app.addComposeHashAtEpoch(0, newInfo.composeHash);
@@ -557,14 +557,14 @@ contract DstackAppTest is Test {
         app.addComposeHashAtEpoch(0, info.composeHash);
         app.setAllowAnyDeviceAtEpoch(0, true);
         app.advanceAppEpoch(0);
-        app.addComposeHash(info.composeHash);
+        app.addComposeHashAtEpoch(1, info.composeHash);
         bool allowed = authorizeCurrent(info);
         assertFalse(allowed);
-        app.addDevice(info.deviceId);
+        app.addDeviceAtEpoch(1, info.deviceId);
         allowed = authorizeCurrent(info);
         assertTrue(allowed, "explicit device can replace wildcard in a newer row");
-        app.removeDevice(info.deviceId);
-        app.setAllowAnyDevice(true);
+        app.removeDeviceAtEpoch(1, info.deviceId);
+        app.setAllowAnyDeviceAtEpoch(1, true);
         app.setAllowAnyDeviceAtEpoch(0, false);
         assertFalse(app.allowAnyDevice());
         assertTrue(app.allowAnyDeviceAtEpoch(1));
@@ -572,7 +572,7 @@ contract DstackAppTest is Test {
         assertFalse(allowed);
         allowed = authorizeCurrent(info);
         assertTrue(allowed);
-        app.setAllowAnyDevice(false);
+        app.setAllowAnyDeviceAtEpoch(1, false);
         allowed = authorizeCurrent(info);
         assertFalse(allowed);
         vm.stopPrank();
@@ -585,8 +585,8 @@ contract DstackAppTest is Test {
     function test_LegacyAppCheckRefusesOnceTheAppEpochAdvances() public {
         IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
-        app.addComposeHash(info.composeHash);
-        app.addDevice(info.deviceId);
+        app.addComposeHashAtEpochs(0, 1, info.composeHash);
+        app.addDeviceAtEpochs(0, 1, info.deviceId);
         // At epoch 0 the legacy check reads row 0, as in v0.6.0.
         (bool allowed, string memory reason) = app.isAppAllowed(info);
         assertTrue(allowed, reason);
@@ -638,30 +638,40 @@ contract DstackAppTest is Test {
         vm.stopPrank();
     }
 
-    function test_EpochlessAppSettersChangeTheCurrentAndNextRows() public {
-        bytes32 composeHash = bytes32(uint256(7));
-        bytes32 deviceId = bytes32(uint256(8));
+    function test_RangeAppSettersChangeEveryRowInRange() public {
+        IAppAuth.AppInfo memory info = epochInfo();
         vm.startPrank(owner);
         app.advanceAppEpoch(0);
-        app.addComposeHash(composeHash);
-        app.addDevice(deviceId);
-        app.setAllowAnyDevice(true);
-        for (uint256 epoch = 1; epoch <= 2; ++epoch) {
-            assertTrue(app.allowedComposeHashesAtEpoch(epoch, composeHash));
-            assertTrue(app.allowedDeviceIdsAtEpoch(epoch, deviceId));
+        app.addComposeHashAtEpochs(0, 2, info.composeHash);
+        app.addDeviceAtEpochs(0, 2, info.deviceId);
+        app.setAllowAnyDeviceAtEpochs(0, 2, true);
+        for (uint256 epoch = 0; epoch <= 2; ++epoch) {
+            assertTrue(app.allowedComposeHashesAtEpoch(epoch, info.composeHash));
+            assertTrue(app.allowedDeviceIdsAtEpoch(epoch, info.deviceId));
             assertTrue(app.allowAnyDeviceAtEpoch(epoch));
         }
-        assertFalse(app.allowedComposeHashesAtEpoch(0, composeHash));
-        assertFalse(app.allowedDeviceIdsAtEpoch(0, deviceId));
-        app.removeComposeHash(composeHash);
-        app.removeDevice(deviceId);
-        app.setAllowAnyDevice(false);
-        for (uint256 epoch = 1; epoch <= 2; ++epoch) {
-            assertFalse(app.allowedComposeHashesAtEpoch(epoch, composeHash));
-            assertFalse(app.allowedDeviceIdsAtEpoch(epoch, deviceId));
+        (bool allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
+        assertTrue(allowed);
+
+        // Removing from every row revokes at every selectable epoch.
+        app.removeComposeHashAtEpochs(0, 2, info.composeHash);
+        app.removeDeviceAtEpochs(0, 2, info.deviceId);
+        app.setAllowAnyDeviceAtEpochs(0, 2, false);
+        for (uint256 epoch = 0; epoch <= 2; ++epoch) {
+            assertFalse(app.allowedComposeHashesAtEpoch(epoch, info.composeHash));
+            assertFalse(app.allowedDeviceIdsAtEpoch(epoch, info.deviceId));
             assertFalse(app.allowAnyDeviceAtEpoch(epoch));
         }
-        assertFalse(app.allowedComposeHashesAtEpoch(3, composeHash));
+        (allowed,) = authorizeAt(info, 0, keccak256("app_get_key"));
+        assertFalse(allowed);
+        assertFalse(authorizeCurrent(info));
+
+        vm.expectRevert("Invalid app epoch range");
+        app.removeComposeHashAtEpochs(1, 0, info.composeHash);
+        vm.expectRevert("Unknown app epoch");
+        app.removeComposeHashAtEpochs(0, 3, info.composeHash);
+        vm.expectRevert("invalid compose hash");
+        app.addComposeHashAtEpochs(0, 1, bytes32(0));
         vm.stopPrank();
     }
 

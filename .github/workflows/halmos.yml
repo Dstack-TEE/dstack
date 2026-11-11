@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: © 2025 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: KMS Auth-ETH Halmos
+
+on:
+  push:
+    paths:
+      - 'dstack/kms/auth-eth/**'
+      - '.github/workflows/halmos.yml'
+  pull_request:
+    paths:
+      - 'dstack/kms/auth-eth/**'
+      - '.github/workflows/halmos.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  halmos:
+    name: ${{ matrix.contract }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        contract:
+          - DstackAppSymbolicTest
+          - DstackAppEpochSymbolicTest
+          - DstackKmsSymbolicTest
+          - DstackKmsEpochSymbolicTest
+    defaults:
+      run:
+        working-directory: dstack/kms/auth-eth
+    env:
+      # Halmos does not support the vm.deployCode that dynamic test linking emits.
+      FOUNDRY_DYNAMIC_TEST_LINKING: 'false'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Checkout contract dependencies
+        working-directory: .
+        run: |
+          git submodule update --init --recursive --depth 1 -- \
+            dstack/kms/auth-eth/lib/forge-std \
+            dstack/kms/auth-eth/lib/openzeppelin-contracts-upgradeable \
+            dstack/kms/auth-eth/lib/openzeppelin-foundry-upgrades
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.4
+
+      - name: Install Halmos
+        run: pipx install halmos==0.3.3
+
+      - name: Run Halmos
+        run: halmos --contract ${{ matrix.contract }}

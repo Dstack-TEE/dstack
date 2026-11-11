@@ -125,7 +125,7 @@ contract DstackKmsSymbolicTest is Test {
 
         vm.startPrank(OWNER);
         kms.registerApp(address(mock));
-        kms.addOsImageHash(osImageHash);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
@@ -155,7 +155,7 @@ contract DstackKmsSymbolicTest is Test {
 
         vm.startPrank(OWNER);
         kms.registerApp(address(mock));
-        kms.addOsImageHash(osImageHash);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
@@ -190,7 +190,7 @@ contract DstackKmsSymbolicTest is Test {
         // Allow the OS image so the second gate passes; leave
         // kmsAllowedAggregatedMrs empty.
         vm.prank(OWNER);
-        kms.addOsImageHash(osImageHash);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
 
         IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(0),
@@ -217,8 +217,8 @@ contract DstackKmsSymbolicTest is Test {
         external
     {
         vm.startPrank(OWNER);
-        kms.addOsImageHash(osImageHash);
-        kms.addKmsAggregatedMr(mrAggregated);
+        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
         vm.stopPrank();
         // kmsAllowedDeviceIds is left empty.
 
@@ -338,17 +338,18 @@ contract DstackKmsSymbolicTest is Test {
         } else if (which == 2) {
             data = abi.encodeWithSelector(DstackKms.registerApp.selector, addr);
         } else if (which == 3) {
-            data = abi.encodeWithSelector(DstackKms.addKmsAggregatedMr.selector, word);
+            data = abi.encodeWithSelector(DstackKms.addKmsAggregatedMrAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 4) {
-            data = abi.encodeWithSelector(DstackKms.removeKmsAggregatedMr.selector, word);
+            data =
+                abi.encodeWithSelector(DstackKms.removeKmsAggregatedMrAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 5) {
-            data = abi.encodeWithSelector(DstackKms.addKmsDevice.selector, word);
+            data = abi.encodeWithSelector(DstackKms.addKmsDeviceAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 6) {
-            data = abi.encodeWithSelector(DstackKms.removeKmsDevice.selector, word);
+            data = abi.encodeWithSelector(DstackKms.removeKmsDeviceAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 7) {
-            data = abi.encodeWithSelector(DstackKms.addOsImageHash.selector, word);
+            data = abi.encodeWithSelector(DstackKms.addOsImageHashAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 8) {
-            data = abi.encodeWithSelector(DstackKms.removeOsImageHash.selector, word);
+            data = abi.encodeWithSelector(DstackKms.removeOsImageHashAtEpochs.selector, uint256(0), uint256(0), word);
         } else if (which == 9) {
             data = abi.encodeWithSelector(
                 bytes4(keccak256("deployAndRegisterApp(address,bool,bool,bool,bytes32,bytes32)")),

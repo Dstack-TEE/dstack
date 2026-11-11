@@ -307,23 +307,22 @@ See `script/README.md` for complete documentation of all available scripts.
 #### Epoch-scoped material approvals
 
 Material approvals use exact root/app epoch rows; neither older nor newer rows
-are implicitly authorized. Existing add/remove methods change every root row from
-the current epoch through the latest registered one, and the current and next
-app rows. The `*AtEpoch` methods and optional
-`ROOT_EPOCH` / `APP_EPOCH` variables on single-material management scripts select
-an explicit row. Original bool mappings and events remain epoch-zero views after
+are implicitly authorized. Material setters name their rows: `*AtEpoch` one
+row, `*AtEpochs` a range; `DstackApp` reports them as `IAppEpochManagement`.
+The management scripts take `ROOT_EPOCH`/`APP_EPOCH`, or
+`FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` and `FROM_APP_EPOCH`/`TO_APP_EPOCH`, and use
+the epoch-less setters of app policies predating app epochs. Original bool mappings and events remain epoch-zero views after
 upgrading; epoch-specific getters/events describe the new rows. KMS keyring
 handover separately checks its highest exported root epoch, which authorizes the
 whole keyring. See [epoch-scoped allowlists](../../../docs/app-key-epochs.md#epoch-scoped-allowlists)
 for migration, upgrade order and compatibility.
 
-### Static Analysis & Symbolic Verification (local only)
+### Static Analysis & Symbolic Verification
 
-We run [Slither](https://github.com/crytic/slither) and
-[Halmos](https://github.com/a16z/halmos) locally during development. They
-are intentionally not part of CI — symbolic proofs are slow, sensitive to
-solver versions, and most valuable as an interactive design check rather
-than a gate.
+We run [Slither](https://github.com/crytic/slither) locally during
+development. [Halmos](https://github.com/a16z/halmos) also runs in CI
+(`.github/workflows/halmos.yml`, pinned Halmos and Forge versions) whenever
+this directory changes.
 
 ```bash
 pipx install slither-analyzer halmos

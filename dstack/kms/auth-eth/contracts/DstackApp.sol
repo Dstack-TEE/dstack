@@ -9,7 +9,7 @@ pragma solidity ^0.8.24;
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
-import "./IAppAuthBasicManagement.sol";
+import "./IAppEpochManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -21,8 +21,8 @@ contract DstackApp is
     UUPSUpgradeable,
     ERC165Upgradeable,
     IAppAuth,
-    IAppAuthBasicManagement,
-    IAppEpochAuth
+    IAppEpochAuth,
+    IAppEpochManagement
 {
     /// @notice Allowed compose hashes for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
     /// EpochPolicyChanged.
@@ -52,7 +52,11 @@ contract DstackApp is
 
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
-    // Additional events specific to DstackApp
+    /// @notice Legacy material events. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
+    event ComposeHashAdded(bytes32 composeHash);
+    event ComposeHashRemoved(bytes32 composeHash);
+    event DeviceAdded(bytes32 deviceId);
+    event DeviceRemoved(bytes32 deviceId);
     event UpgradesDisabled();
     /// @notice Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
     event AllowAnyDeviceSet(bool allowAny);
@@ -145,8 +149,8 @@ contract DstackApp is
         override(ERC165Upgradeable, IERC165)
         returns (bool)
     {
-        return interfaceId == type(IAppEpochAuth).interfaceId || interfaceId == 0x1e079198 // IAppAuth
-            || interfaceId == 0x8fd37527 // IAppAuthBasicManagement
+        return interfaceId == type(IAppEpochAuth).interfaceId || interfaceId == type(IAppEpochManagement).interfaceId
+            || interfaceId == 0x1e079198 // IAppAuth
             || super.supportsInterface(interfaceId);
     }
 
@@ -172,11 +176,22 @@ contract DstackApp is
         return epoch == 0 ? allowAnyDevice : _allowAnyDeviceByEpoch[epoch];
     }
 
-    // The epoch-less setters change the current row and the next one, which the
-    // owner prepares with the *AtEpoch setters before calling advanceAppEpoch.
-    function addComposeHash(bytes32 composeHash) external {
-        addComposeHashAtEpoch(currentAppEpoch, composeHash);
-        addComposeHashAtEpoch(currentAppEpoch + 1, composeHash);
+    // A request may select any app epoch up to the current one and is decided
+    // on that epoch's row, so revoking a value takes every row that allows it:
+    // 0 through currentAppEpoch.
+    function _setAtEpochs(
+        function(uint256, bytes32, bool) internal setter,
+        uint256 fromEpoch,
+        uint256 toEpoch,
+        bytes32 value,
+        bool allowed
+    )
+        private
+    {
+        require(fromEpoch <= toEpoch, "Invalid app epoch range");
+        for (uint256 epoch = fromEpoch; epoch <= toEpoch; ++epoch) {
+            setter(epoch, value, allowed);
+        }
     }
 
     function addComposeHashAtEpoch(uint256 epoch, bytes32 composeHash) public onlyOwner {
@@ -184,13 +199,17 @@ contract DstackApp is
         _setComposeHash(epoch, composeHash, true);
     }
 
-    function removeComposeHash(bytes32 composeHash) external {
-        removeComposeHashAtEpoch(currentAppEpoch, composeHash);
-        removeComposeHashAtEpoch(currentAppEpoch + 1, composeHash);
+    function addComposeHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 composeHash) external onlyOwner {
+        require(composeHash != bytes32(0), "invalid compose hash");
+        _setAtEpochs(_setComposeHash, fromEpoch, toEpoch, composeHash, true);
     }
 
     function removeComposeHashAtEpoch(uint256 epoch, bytes32 composeHash) public onlyOwner {
         _setComposeHash(epoch, composeHash, false);
+    }
+
+    function removeComposeHashAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 composeHash) external onlyOwner {
+        _setAtEpochs(_setComposeHash, fromEpoch, toEpoch, composeHash, false);
     }
 
     function _requireWritableEpoch(uint256 epoch) private view {
@@ -210,12 +229,15 @@ contract DstackApp is
         emit EpochPolicyChanged(keccak256("compose-hash"), composeHash, epoch, allowed);
     }
 
-    function setAllowAnyDevice(bool allowed) external {
-        setAllowAnyDeviceAtEpoch(currentAppEpoch, allowed);
-        setAllowAnyDeviceAtEpoch(currentAppEpoch + 1, allowed);
+    function setAllowAnyDeviceAtEpoch(uint256 epoch, bool allowed) public onlyOwner {
+        _setAllowAnyDevice(epoch, bytes32(0), allowed);
     }
 
-    function setAllowAnyDeviceAtEpoch(uint256 epoch, bool allowed) public onlyOwner {
+    function setAllowAnyDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bool allowed) external onlyOwner {
+        _setAtEpochs(_setAllowAnyDevice, fromEpoch, toEpoch, bytes32(0), allowed);
+    }
+
+    function _setAllowAnyDevice(uint256 epoch, bytes32, bool allowed) private {
         _requireWritableEpoch(epoch);
         if (epoch == 0) {
             allowAnyDevice = allowed;
@@ -234,23 +256,22 @@ contract DstackApp is
         _emitPolicy("require-tcb-up-to-date", bytes32(0), _requireUpToDate);
     }
 
-    function addDevice(bytes32 deviceId) external {
-        addDeviceAtEpoch(currentAppEpoch, deviceId);
-        addDeviceAtEpoch(currentAppEpoch + 1, deviceId);
-    }
-
     function addDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         require(deviceId != bytes32(0), "invalid device ID");
         _setDevice(epoch, deviceId, true);
     }
 
-    function removeDevice(bytes32 deviceId) external {
-        removeDeviceAtEpoch(currentAppEpoch, deviceId);
-        removeDeviceAtEpoch(currentAppEpoch + 1, deviceId);
+    function addDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
+        require(deviceId != bytes32(0), "invalid device ID");
+        _setAtEpochs(_setDevice, fromEpoch, toEpoch, deviceId, true);
     }
 
     function removeDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         _setDevice(epoch, deviceId, false);
+    }
+
+    function removeDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external onlyOwner {
+        _setAtEpochs(_setDevice, fromEpoch, toEpoch, deviceId, false);
     }
 
     function _setDevice(uint256 epoch, bytes32 deviceId, bool allowed) private {

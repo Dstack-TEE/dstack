@@ -27,6 +27,23 @@ function _appAuth(
     return (result.authorized, result.rejectionReason);
 }
 
+/// An app policy predating app epochs: IAppAuth only, one allowed compose hash.
+contract LegacyAppPolicy is IAppAuth {
+    bytes32 internal immutable allowed;
+
+    constructor(bytes32 composeHash) {
+        allowed = composeHash;
+    }
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == 0x01ffc9a7 || interfaceId == 0x1e079198;
+    }
+
+    function isAppAllowed(AppInfo calldata info) external view returns (bool, string memory) {
+        return info.composeHash == allowed ? (true, "") : (false, "Compose hash not allowed");
+    }
+}
+
 /// @notice Halmos symbolic tests for DstackKms root epochs and epoch-scoped
 /// authorization.
 ///
@@ -70,8 +87,8 @@ contract DstackKmsEpochSymbolicTest is Test {
 
         app = DstackApp(kms.deployAndRegisterApp(OWNER, false, false, true, bytes32(0), _id(0xc0, 0)));
         app.advanceAppEpoch(0);
-        app.addComposeHash(_id(0xc0, 1));
-        app.setAllowAnyDevice(true);
+        app.addComposeHashAtEpoch(1, _id(0xc0, 1));
+        app.setAllowAnyDeviceAtEpoch(1, true);
         vm.stopPrank();
     }
 
@@ -121,32 +138,31 @@ contract DstackKmsEpochSymbolicTest is Test {
         return AuthorizationRequest(info, operation, OptionalUint256(appSet, appEpoch), OptionalUint256(rootSet, root));
     }
 
-    /// Calldata of one KMS policy setter and the root epoch it writes.
+    /// Calldata of one KMS policy setter: 0-5 write the row of `epoch`, 6-11
+    /// every row from `epoch` through `to`.
     function _kmsPolicyCall(
         uint256 which,
         uint256 epoch,
+        uint256 to,
         bytes32 word
     )
         internal
-        view
-        returns (bytes memory data, uint256 target)
+        pure
+        returns (bytes memory data)
     {
-        // Setters without an epoch write every row from the current epoch to the
-        // latest registered one; `target` is the lowest row written.
-        (target,) = kms.currentRootEpoch();
-        if (which < 6) target = epoch;
+        uint256 latest = to;
         if (which == 0) data = abi.encodeCall(DstackKms.addKmsAggregatedMrAtEpoch, (epoch, word));
         else if (which == 1) data = abi.encodeCall(DstackKms.removeKmsAggregatedMrAtEpoch, (epoch, word));
         else if (which == 2) data = abi.encodeCall(DstackKms.addKmsDeviceAtEpoch, (epoch, word));
         else if (which == 3) data = abi.encodeCall(DstackKms.removeKmsDeviceAtEpoch, (epoch, word));
         else if (which == 4) data = abi.encodeCall(DstackKms.addOsImageHashAtEpoch, (epoch, word));
         else if (which == 5) data = abi.encodeCall(DstackKms.removeOsImageHashAtEpoch, (epoch, word));
-        else if (which == 6) data = abi.encodeCall(DstackKms.addKmsAggregatedMr, (word));
-        else if (which == 7) data = abi.encodeCall(DstackKms.removeKmsAggregatedMr, (word));
-        else if (which == 8) data = abi.encodeCall(DstackKms.addKmsDevice, (word));
-        else if (which == 9) data = abi.encodeCall(DstackKms.removeKmsDevice, (word));
-        else if (which == 10) data = abi.encodeCall(DstackKms.addOsImageHash, (word));
-        else data = abi.encodeCall(DstackKms.removeOsImageHash, (word));
+        else if (which == 6) data = abi.encodeCall(DstackKms.addKmsAggregatedMrAtEpochs, (epoch, latest, word));
+        else if (which == 7) data = abi.encodeCall(DstackKms.removeKmsAggregatedMrAtEpochs, (epoch, latest, word));
+        else if (which == 8) data = abi.encodeCall(DstackKms.addKmsDeviceAtEpochs, (epoch, latest, word));
+        else if (which == 9) data = abi.encodeCall(DstackKms.removeKmsDeviceAtEpochs, (epoch, latest, word));
+        else if (which == 10) data = abi.encodeCall(DstackKms.addOsImageHashAtEpochs, (epoch, latest, word));
+        else data = abi.encodeCall(DstackKms.removeOsImageHashAtEpochs, (epoch, latest, word));
     }
 
     // ---------------------------------------------------------------
@@ -177,7 +193,7 @@ contract DstackKmsEpochSymbolicTest is Test {
         returns (bytes memory data)
     {
         if (which < KMS_POLICY_SETTERS) {
-            (data,) = _kmsPolicyCall(which, epoch, word);
+            data = _kmsPolicyCall(which, epoch, kms.rootEpochCount() - 1, word);
         } else if (which == 12) {
             data = abi.encodeCall(DstackKms.registerRootEpoch, (_ca(word, hash), _k256(flag, word), "url"));
         } else if (which == 13) {
@@ -334,7 +350,8 @@ contract DstackKmsEpochSymbolicTest is Test {
         assert(result.currentRootEpoch == current && result.currentRootEpochHash == currentHash);
 
         bool kindMatches = isKms ? AuthorizationOperation.isKms(operation) : AuthorizationOperation.isApp(operation);
-        uint256 rootBound = isKms ? kms.rootEpochCount() - 1 : current;
+        bool issuesKeys = !isKms || operation == AuthorizationOperation.KMS_SERVE;
+        uint256 rootBound = issuesKeys ? current : kms.rootEpochCount() - 1;
         uint256 appBound = isKms ? 0 : app.currentAppEpoch();
         if (!kindMatches || (rootSet && root > rootBound) || (appSet && appEpoch > appBound)) {
             assert(!result.authorized);
@@ -357,9 +374,9 @@ contract DstackKmsEpochSymbolicTest is Test {
         bytes memory initData = abi.encodeCall(DstackKms.initialize, (OWNER, address(new DstackApp())));
         DstackKms fresh = DstackKms(address(new ERC1967Proxy(address(impl), initData)));
         vm.startPrank(OWNER);
-        fresh.addOsImageHash(id.osImageHash);
-        fresh.addKmsAggregatedMr(id.mrAggregated);
-        fresh.addKmsDevice(id.deviceId);
+        fresh.addOsImageHashAtEpoch(0, id.osImageHash);
+        fresh.addKmsAggregatedMrAtEpoch(0, id.mrAggregated);
+        fresh.addKmsDeviceAtEpoch(0, id.deviceId);
         vm.stopPrank();
 
         AuthorizationRequest memory request = _request(_info(id), operation, false, 0, false, 0);
@@ -372,9 +389,11 @@ contract DstackKmsEpochSymbolicTest is Test {
     // (requested, or current when unset), after any one owner write.
     // ---------------------------------------------------------------
 
+    /// @custom:halmos --loop 4
     function check_AuthorizeKms_MatchesEpochPolicy(
         uint256 which,
         uint256 writeEpoch,
+        uint256 writeTo,
         bytes32 word,
         bytes32 operation,
         bool rootSet,
@@ -384,7 +403,7 @@ contract DstackKmsEpochSymbolicTest is Test {
         external
     {
         if (which < KMS_POLICY_SETTERS) {
-            (bytes memory data,) = _kmsPolicyCall(which, writeEpoch, word);
+            bytes memory data = _kmsPolicyCall(which, writeEpoch, writeTo, word);
             vm.prank(OWNER);
             (bool ok,) = address(kms).call(data);
             ok;
@@ -393,7 +412,8 @@ contract DstackKmsEpochSymbolicTest is Test {
         AuthorizationResult memory result = kms.authorizeKms(_request(_info(id), operation, rootSet, root, false, 0));
 
         uint256 epoch = rootSet ? root : _current();
-        bool expected = AuthorizationOperation.isKms(operation) && epoch < kms.rootEpochCount() && id.upToDate
+        uint256 bound = operation == AuthorizationOperation.KMS_SERVE ? _current() : kms.rootEpochCount() - 1;
+        bool expected = AuthorizationOperation.isKms(operation) && epoch <= bound && id.upToDate
             && kms.allowedOsImagesAtEpoch(epoch, id.osImageHash)
             && kms.kmsAllowedAggregatedMrsAtEpoch(epoch, id.mrAggregated)
             && kms.kmsAllowedDeviceIdsAtEpoch(epoch, id.deviceId);
@@ -430,13 +450,15 @@ contract DstackKmsEpochSymbolicTest is Test {
     }
 
     // ---------------------------------------------------------------
-    // Epoch isolation: a KMS policy write at one root epoch never
-    // changes a KMS authorization decision at another.
+    // Epoch isolation: a KMS policy write never changes a KMS
+    // authorization decision at a root epoch outside the rows it names.
     // ---------------------------------------------------------------
 
+    /// @custom:halmos --loop 4
     function check_KmsPolicyWrite_PreservesOtherEpochDecisions(
         uint256 which,
         uint256 writeEpoch,
+        uint256 writeTo,
         bytes32 word,
         bytes32 operation,
         uint256 root,
@@ -445,9 +467,8 @@ contract DstackKmsEpochSymbolicTest is Test {
         external
     {
         vm.assume(which < KMS_POLICY_SETTERS);
-        (bytes memory data, uint256 target) = _kmsPolicyCall(which, writeEpoch, word);
-        // Epoch-less setters write every row from `target` on.
-        vm.assume(which < 6 ? target != root : root < target);
+        bytes memory data = _kmsPolicyCall(which, writeEpoch, writeTo, word);
+        vm.assume(which < 6 ? writeEpoch != root : root < writeEpoch || root > writeTo);
 
         AuthorizationRequest memory request = _request(_info(id), operation, true, root, false, 0);
         AuthorizationResult memory before = kms.authorizeKms(request);
@@ -458,6 +479,123 @@ contract DstackKmsEpochSymbolicTest is Test {
 
         assert(before.authorized == afterWrite.authorized);
         assert(keccak256(bytes(before.rejectionReason)) == keccak256(bytes(afterWrite.rejectionReason)));
+    }
+
+    // ---------------------------------------------------------------
+    // Revocation: removing a material from every registered row, 0
+    // through the latest, leaves no selectable root epoch at which an
+    // identity carrying it is authorized, for any KMS or app operation.
+    // ---------------------------------------------------------------
+
+    /// @custom:halmos --loop 4
+    function check_FullRangeRemoval_RevokesAtEveryEpoch(
+        uint256 kind,
+        bytes32 operation,
+        bool rootSet,
+        uint256 root,
+        bool appSet,
+        uint256 appEpoch,
+        Identity calldata id
+    )
+        external
+    {
+        vm.assume(kind < 3);
+        uint256 latest = kms.rootEpochCount() - 1;
+        vm.startPrank(OWNER);
+        if (kind == 0) kms.removeOsImageHashAtEpochs(0, latest, id.osImageHash);
+        else if (kind == 1) kms.removeKmsAggregatedMrAtEpochs(0, latest, id.mrAggregated);
+        else kms.removeKmsDeviceAtEpochs(0, latest, id.deviceId);
+        vm.stopPrank();
+
+        AuthorizationRequest memory request = _request(_info(id), operation, rootSet, root, appSet, appEpoch);
+        assert(!kms.authorizeKms(request).authorized);
+        if (kind == 0) assert(!kms.authorizeApp(request).authorized);
+    }
+
+    // ---------------------------------------------------------------
+    // Policy rows belong to a registration: popping the pending epoch
+    // and registering the number again, with the same keys or others,
+    // starts with empty rows.
+    // ---------------------------------------------------------------
+
+    function check_PopThenRegister_StartsWithEmptyRows(
+        bool sameKeys,
+        bytes32 x,
+        bytes32 y,
+        bool even,
+        bytes32 word
+    )
+        external
+    {
+        (bytes memory ca, bytes memory k256,, bytes32 hash) = kms.rootEpoch(2);
+        if (!sameKeys) {
+            ca = _ca(x, y);
+            k256 = _k256(even, x);
+        }
+        vm.startPrank(OWNER);
+        kms.popRootEpoch(2, hash);
+        kms.registerRootEpoch(ca, k256, "evidence");
+        vm.stopPrank();
+
+        assert(!kms.allowedOsImagesAtEpoch(2, word));
+        assert(!kms.kmsAllowedAggregatedMrsAtEpoch(2, word));
+        assert(!kms.kmsAllowedDeviceIdsAtEpoch(2, word));
+    }
+
+    // ---------------------------------------------------------------
+    // Root epoch 0's rows are the v0.5.x mappings: after any one owner
+    // write, the legacy getters and the epoch 0 getters agree.
+    // ---------------------------------------------------------------
+
+    /// @custom:halmos --loop 4
+    function check_EpochZeroRows_AreTheLegacyMappings(
+        uint256 which,
+        uint256 writeEpoch,
+        uint256 writeTo,
+        bytes32 word,
+        bytes32 probe
+    )
+        external
+    {
+        vm.assume(which < KMS_POLICY_SETTERS);
+        vm.prank(OWNER);
+        (bool ok,) = address(kms).call(_kmsPolicyCall(which, writeEpoch, writeTo, word));
+        ok;
+        assert(kms.allowedOsImages(probe) == kms.allowedOsImagesAtEpoch(0, probe));
+        assert(kms.kmsAllowedAggregatedMrs(probe) == kms.kmsAllowedAggregatedMrsAtEpoch(0, probe));
+        assert(kms.kmsAllowedDeviceIds(probe) == kms.kmsAllowedDeviceIdsAtEpoch(0, probe));
+    }
+
+    // ---------------------------------------------------------------
+    // An app policy predating app epochs (no IAppEpochAuth) is decided by
+    // its isAppAllowed and only for app epoch 0: an explicit nonzero app
+    // epoch is refused, and otherwise the decision is the KMS checks at
+    // the selected root epoch and the policy's own answer.
+    // ---------------------------------------------------------------
+
+    function check_AuthorizeApp_LegacyPolicyOnlyAtAppEpochZero(
+        bool getCert,
+        bool rootSet,
+        uint256 root,
+        bool appSet,
+        uint256 appEpoch,
+        Identity calldata id
+    )
+        external
+    {
+        LegacyAppPolicy legacy = new LegacyAppPolicy(_id(0xc0, 0));
+        kms.registerApp(address(legacy));
+        IAppAuth.AppInfo memory info = _info(id);
+        info.appId = address(legacy);
+        bytes32 operation = getCert ? AuthorizationOperation.APP_GET_CERT : AuthorizationOperation.APP_GET_KEY;
+        AuthorizationResult memory result = kms.authorizeApp(_request(info, operation, rootSet, root, appSet, appEpoch));
+
+        uint256 rootEpoch = rootSet ? root : _current();
+        bool expected = rootEpoch <= _current() && (!appSet || appEpoch == 0)
+            && kms.allowedOsImagesAtEpoch(rootEpoch, id.osImageHash) && id.composeHash == _id(0xc0, 0);
+        assert(result.authorized == expected);
+        assert(result.currentAppEpoch == 0);
+        assert(kms.currentAppEpoch(address(legacy)) == 0);
     }
 
     // ---------------------------------------------------------------
