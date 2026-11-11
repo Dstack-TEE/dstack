@@ -37,6 +37,10 @@ else
 # Required: The address of the KMS service listening on Host machine
 # KMS_RPC_ADDR=0.0.0.0:9201
 
+# Optional: the address of the KMS admin listener on the Host machine, which
+# other KMS nodes onboard from with ADMIN_TOKEN; firewall it to KMS nodes only
+# KMS_ADMIN_ADDR=127.0.0.1:9203
+
 # Required: The address of the guest agent service listening on Host machine
 # GUEST_AGENT_ADDR=127.0.0.1:9205
 
@@ -130,6 +134,7 @@ echo "Deploying KMS to dstack-vmm..."
   --compose .app-compose.json \
   --image "$OS_IMAGE" \
   --port "tcp:$KMS_RPC_ADDR:8000" \
+  ${KMS_ADMIN_ADDR:+--port "tcp:$KMS_ADMIN_ADDR:8002"} \
   --port "tcp:$GUEST_AGENT_ADDR:8090" \
   --vcpu 8 \
   --memory 8G \

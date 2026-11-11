@@ -55,7 +55,9 @@ certs = "/etc/kms/certs/rpc.crt"
 ```
 
 The token can also be supplied via the `DSTACK_KMS_ADMIN_TOKEN` or
-`ADMIN_API_TOKEN` environment variables instead of the config file. The admin
+`ADMIN_API_TOKEN` environment variables instead of the config file, or as its
+hex SHA-256 in `auth_token_hash` (`printf '%s' "$TOKEN" | sha256sum`) for a
+config that is not secret, such as a KMS app compose. The admin
 listener fails closed: enabled with neither `auth_token` nor `htpasswd_file`
 (and `insecure_no_auth = false`) refuses to start. With `[core.admin.tls]` the
 listener serves HTTPS (use `http://` without it). Call it with, for example:
@@ -76,6 +78,16 @@ certificate plus the source's admin bearer token, so it requires
 need no client certificate. `core.onboard.public_key_handover` is off by default; set it to
 `true` only to also serve `KMS.GetKmsKey` on the public listener for older
 clients.
+
+A KMS refuses to start serving without a handover path, so that other nodes can
+always onboard from it: unless `public_key_handover = true`, it requires
+`[core.admin] enabled = true` and `[core.admin.tls]` with `key` and `certs`, and
+the error names the missing setting. There is no opt-out, `auth_api = "dev"`
+included; the onboarding phase itself is not checked. The default `kms.toml`
+enables the admin listener with TLS on the RPC key and certificate, so it
+starts only once an admin token is set (`auth_token`,
+`DSTACK_KMS_ADMIN_TOKEN` or `auth_token_hash`). The `dstack-app` composes and
+`dstackup` set `auth_token_hash` from a token they generate.
 
 Three settings relax authorization, each over a different scope:
 

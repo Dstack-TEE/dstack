@@ -173,6 +173,8 @@ async fn main() -> Result<()> {
         }
     }
 
+    config::check_key_handover(&config, &figment)?;
+
     let keyring = main_service::Keyring::load(&config).context("Failed to load the root keys")?;
     let rpc_epoch = main_service::wait_for_servable_epoch(&config, &keyring).await;
     info!("Issuing RPC certificate under root epoch {rpc_epoch}");

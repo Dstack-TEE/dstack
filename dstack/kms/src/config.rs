@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::{bail, Result};
 use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
 use rocket::figment::Figment;
@@ -110,6 +111,10 @@ pub(crate) struct AdminConfig {
     /// `insecure_no_auth = true`.
     #[serde(default)]
     pub auth_token: String,
+    /// Hex SHA-256 of the admin token, for configs that are not secret, such
+    /// as an app compose, so the token itself stays out of them.
+    #[serde(default)]
+    pub auth_token_hash: String,
     /// Optional Apache bcrypt htpasswd file, accepted in addition to the token.
     #[serde(default)]
     pub htpasswd_file: PathBuf,
@@ -121,6 +126,37 @@ pub(crate) struct AdminConfig {
 
 fn default_true() -> bool {
     true
+}
+
+/// Without the public handover, other KMS nodes can get the keys only from the
+/// admin listener over TLS. A serving KMS without either would strand them, so
+/// it refuses to start.
+pub(crate) fn check_key_handover(config: &KmsConfig, figment: &Figment) -> Result<()> {
+    if config.onboard.public_key_handover {
+        return Ok(());
+    }
+    let set = |key: &str| {
+        figment
+            .find_value(key)
+            .ok()
+            .and_then(|value| value.into_string())
+            .is_some_and(|value| !value.is_empty())
+    };
+    let missing = if !config.admin.enabled {
+        "[core.admin] enabled = true"
+    } else if !set("core.admin.tls.key") {
+        "[core.admin.tls] key"
+    } else if !set("core.admin.tls.certs") {
+        "[core.admin.tls] certs"
+    } else {
+        return Ok(());
+    };
+    bail!(
+        "no key handover path for onboarding other KMS nodes: {missing} is not set. \
+         Configure the admin listener with TLS ([core.admin] enabled = true, an auth_token \
+         or DSTACK_KMS_ADMIN_TOKEN, and [core.admin.tls] key and certs), or set \
+         core.onboard.public_key_handover = true"
+    )
 }
 
 impl KmsConfig {
@@ -252,13 +288,14 @@ mod tests {
     use rocket::figment::providers::{Format, Toml};
 
     #[test]
-    fn default_config_parses_with_admin_disabled_and_no_hash() {
+    fn default_config_serves_the_handover_on_the_admin_listener() {
         let figment = load_config_figment(None);
         let config: KmsConfig = figment
             .focus("core")
             .extract()
             .expect("kms.toml must parse into KmsConfig");
-        assert!(!config.admin.enabled, "admin must be off by default");
+        assert!(config.admin.enabled);
+        check_key_handover(&config, &figment).expect("the default config has a handover path");
         assert!(
             config.admin.auth_token.is_empty(),
             "default admin token must be empty (fail-closed)"
@@ -268,6 +305,33 @@ mod tests {
             !config.onboard.public_key_handover,
             "public key handover must be off by default"
         );
+    }
+
+    fn handover_check(toml: &str) -> Result<()> {
+        let figment = load_config_figment(None).merge(Toml::string(toml));
+        let config: KmsConfig = figment.focus("core").extract().unwrap();
+        check_key_handover(&config, &figment)
+    }
+
+    #[test]
+    fn a_serving_kms_needs_a_key_handover_path() {
+        let public = "[core.onboard]\npublic_key_handover = true\n";
+        let no_admin = "[core.admin]\nenabled = false\n";
+        let no_key = "[core.admin.tls]\nkey = \"\"\n";
+        let no_certs = "[core.admin.tls]\ncerts = \"\"\n";
+        assert!(handover_check("").is_ok());
+        for missing in [no_admin, no_key, no_certs] {
+            assert!(handover_check(&format!("{public}{missing}")).is_ok());
+        }
+        for (toml, setting) in [
+            (no_admin, "[core.admin] enabled = true"),
+            (no_key, "[core.admin.tls] key"),
+            (no_certs, "[core.admin.tls] certs"),
+        ] {
+            let err = handover_check(toml).unwrap_err().to_string();
+            assert!(err.contains(setting), "{err}");
+            assert!(err.contains("public_key_handover = true"), "{err}");
+        }
     }
 
     #[test]

@@ -14,6 +14,7 @@ use dstack_cli_core::host::Platform;
 use dstack_cli_core::layout::{path_string, InstallLayout};
 use dstack_cli_core::vmm::Vmm;
 use dstack_cli_core::{host, ports, rpc};
+use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -137,9 +138,16 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
     // install state, so it authenticates automatically.
     let vmm_token = match existing_token {
         Some(t) => t,
-        None => generate_vmm_token()?,
+        None => generate_token()?,
     };
     write_token_file(&token_path, &vmm_token)?;
+    // the KMS admin token, which the KMS config holds only as a hash.
+    let kms_admin_token_path = layout.config_dir.join("kms-admin-token");
+    let kms_admin_token = match read_token_file(&kms_admin_token_path) {
+        Some(t) => t,
+        None => generate_token()?,
+    };
+    write_token_file(&kms_admin_token_path, &kms_admin_token)?;
 
     // 8. resolve the key provider - run our own unless told to use an existing
     //    one (TDX only; SNP has no SGX local provider).
@@ -183,6 +191,7 @@ pub(crate) async fn cmd_install(mut o: InstallOpts, release_api_base_url: &str) 
         auth_webhook_url: format!("http://10.0.2.2:{}", o.auth_port),
         os_image_hash: os_image_hash.unwrap_or_default(),
         platform,
+        kms_admin_token_hash: hex::encode(Sha256::digest(kms_admin_token.as_bytes())),
         ..Default::default()
     };
     let kms = config::kms_toml(&host_cfg);
@@ -1216,8 +1225,8 @@ async fn wait_ready(client_url: &str, token: Option<&str>, timeout: Duration) ->
     }
 }
 
-/// mint a 256-bit management-API token, hex-encoded, from the OS RNG.
-fn generate_vmm_token() -> Result<String> {
+/// mint a 256-bit API token, hex-encoded, from the OS RNG.
+fn generate_token() -> Result<String> {
     let mut buf = [0u8; 32];
     let mut f = fs::File::open("/dev/urandom").context("opening /dev/urandom")?;
     std::io::Read::read_exact(&mut f, &mut buf).context("reading /dev/urandom")?;

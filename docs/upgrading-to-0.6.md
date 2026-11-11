@@ -236,6 +236,12 @@ Configuration changes:
   `KMS.GetKmsKey` from the public port. While a 0.5.x KMS still onboards from
   this cluster, it can only use that public entry, so set the option to `true`
   on the source node, and remove it once every node is upgraded.
+- A KMS without a key handover path does not start. Configure the admin
+  listener with `[core.admin.tls]` (`key` and `certs`) and an admin token, or
+  set `core.onboard.public_key_handover = true`. The built-in default enables
+  the admin listener with TLS, so it needs `core.admin.auth_token`,
+  `DSTACK_KMS_ADMIN_TOKEN` or `core.admin.auth_token_hash` to start. In a KMS
+  app compose, which is public, use `auth_token_hash`.
 - Auto-bootstrap refuses to overwrite existing root keys.
 
 If you use `auth-simple`, replace it with `dstack-auth`, which reads the same
