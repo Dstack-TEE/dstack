@@ -54,7 +54,7 @@ Restart the source without the `public_key_handover` key, so the default `false`
 
 **Expected results:**
 
-- Public `KMS.GetKmsKey` fails with `public KMS key handover is disabled; use the admin listener`.
+- Public `KMS.GetKmsKey` fails with `public KMS key handover is disabled; onboard through the admin listener ...`.
 - `Admin.GetKmsKey` with token and certificate returns HTTP 200 and the same root-key fingerprint as Step 1.
 - Without a client certificate it fails; without the token it returns HTTP 401.
 - `Admin.ClearImageCache` succeeds without a client certificate.

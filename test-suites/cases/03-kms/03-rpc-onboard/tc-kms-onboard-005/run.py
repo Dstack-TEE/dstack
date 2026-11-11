@@ -28,7 +28,7 @@ import urllib.request
 from typing import Any
 
 CASE_ID = "tc-kms-onboard-005"
-PUBLIC_DISABLED = "public KMS key handover is disabled; use the admin listener"
+PUBLIC_DISABLED = "public KMS key handover is disabled; onboard through the admin listener"
 ROOT_FILES = ("root-ca.key", "root-k256.key")
 
 
