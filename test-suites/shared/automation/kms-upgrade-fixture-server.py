@@ -34,6 +34,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         """Return webhook metadata or an immutable verifier archive."""
+        parts = self.path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] in ("source", "target") and parts[1] == "app":
+            # Current KMS reads an app's epoch before serving its keys.
+            self.send_json(200, {"currentAppEpoch": 0})
+            return
         if self.path.rstrip("/") in ("/source", "/target"):
             self.send_json(
                 200,
