@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
@@ -49,6 +50,38 @@ def verify_physical_attestation_config(
         }
     )
     return observed
+
+
+def image_archive(source: pathlib.Path) -> pathlib.Path:
+    """Return the shared verifier archive of one image, creating it once."""
+    digest = (source / "digest.txt").read_text().strip()
+    cache = (
+        pathlib.Path(
+            os.environ.get(
+                "DSTACK_TEST_STATE_ROOT",
+                str(pathlib.Path.home() / ".cache/dstack-test/runtime-state"),
+            )
+        )
+        / "image-archives"
+    )
+    cache.mkdir(parents=True, exist_ok=True)
+    archive = cache / f"{digest}.tar.gz"
+    with (cache / f"{digest}.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not archive.exists():
+            checksum = source / "sha256sum.txt"
+            members = ["sha256sum.txt"]
+            members.extend(
+                line.split()[1].lstrip("*")
+                for line in checksum.read_text().splitlines()
+                if line.split()
+            )
+            partial = archive.with_suffix(".partial")
+            with tarfile.open(partial, "w:gz") as output:
+                for member in members:
+                    output.add(source / member, arcname=member)
+            partial.replace(archive)
+    return archive
 
 
 def load_provider(name: str) -> ModuleType:
@@ -214,21 +247,15 @@ def start(
                 )
             },
         )
-        archive_source = image_store / images[-1]
-        checksum = archive_source / "sha256sum.txt"
-        digest = (archive_source / "digest.txt").read_text().strip()
+        # The KMS verifies every guest it serves, old ones included, so it
+        # must be able to download each image the matrix boots.
         archive_root = workspace / "image-archives"
         archive_root.mkdir()
+        for image in images:
+            cached = image_archive(image_store / image)
+            (archive_root / cached.name).symlink_to(cached)
+        digest = (image_store / images[-1] / "digest.txt").read_text().strip()
         archive_path = archive_root / f"{digest}.tar.gz"
-        members = ["sha256sum.txt"]
-        members.extend(
-            line.split()[1].lstrip("*")
-            for line in checksum.read_text().splitlines()
-            if line.split()
-        )
-        with tarfile.open(archive_path, "w:gz") as archive:
-            for member in members:
-                archive.add(archive_source / member, arcname=member)
         archive_port = tdx.reserve_ports(1)[0]
         policy_path = workspace / "kms-upgrade-policy.json"
         policy_path.write_text(
