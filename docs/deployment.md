@@ -477,6 +477,23 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 6. New KMS verifies the source's attestation on that same connection and checks it against its own policy before using the keys
 7. Both KMS instances now derive identical keys
 
+**Configure the source KMS for key handover:**
+
+`Admin.GetKmsKey` only works on an admin listener with `[core.admin.tls]`: without TLS the listener speaks plain HTTP, so the new KMS can present no RA-TLS certificate and the call fails with `No attestation provided`. The admin listener binds to `127.0.0.1` by default; bind it to an address the new KMS can reach and restrict access to the KMS nodes at the network layer.
+
+```toml
+[core.admin]
+enabled = true
+address = "0.0.0.0"          # reachable by the new KMS; firewall it to KMS nodes only
+port = 8001
+auth_token = "<source-admin-token>"
+
+[core.admin.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+# No [core.admin.tls.mutual]: client certificates are verified by their attestation.
+```
+
 **Configure new KMS for onboarding:**
 
 ```toml
@@ -492,7 +509,7 @@ port = 9203                  # HTTP port for onboard UI
 ```bash
 curl -X POST http://<new-kms>:9203/prpc/Onboard.Onboard?json \
   -H "Content-Type: application/json" \
-  -d '{"source_url": "https://<existing-kms-admin>:9202/prpc", "source_token": "<optional-admin-token>", "domain": "kms2.example.com"}'
+  -d '{"source_url": "https://<source-kms>:8001/prpc", "source_token": "<source-admin-token>", "domain": "kms2.example.com"}'
 ```
 
 **Finish and restart:**
@@ -511,7 +528,7 @@ curl http://<new-kms>:9203/finish
 
 > **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 >
-> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`.
+> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request. `core.onboard.public_key_handover = true` keeps the legacy public `KMS.GetKmsKey`: omit `source_token` and pass the source's public RPC URL instead.
 
 ---
 
