@@ -164,10 +164,10 @@ fn system_info(hostile: &str) -> SystemInfo {
     }
 }
 fn dashboard(hostile: &str, info: SystemInfo, gpu_info: GpuInfoResponse) -> Dashboard {
-    Dashboard { app_name: hostile.into(), app_id: vec![0, 255], instance_id: vec![1, 2], device_id: vec![3, 4], key_provider_info: hostile.into(), tcb_info: hostile.into(), containers: vec![Container { id: "id".into(), names: vec![format!("/{hostile}")], image: String::new(), image_id: String::new(), created: 0, state: String::new(), status: hostile.into() }, Container { names: vec![], ..Default::default() }], system_info: info, public_sysinfo: true, public_logs: true, public_tcbinfo: true, cloud_vendor: hostile.into(), cloud_product: hostile.into(), gpu_info }
+    Dashboard { app_name: hostile.into(), app_id: vec![0, 255], instance_id: vec![1, 2], device_id: vec![3, 4], key_provider_info: hostile.into(), tcb_info: hostile.into(), containers: vec![Container { id: "id".into(), names: vec![format!("/{hostile}")], image: String::new(), image_id: String::new(), created: 0, state: String::new(), status: hostile.into() }, Container { names: vec![], ..Default::default() }], system_info: info, show_sysinfo: true, show_tcb: true, show_identity: true, show_containers: true, show_logs: true, cloud_vendor: hostile.into(), cloud_product: hostile.into(), gpu_info }
 }
 fn quiet(hostile: String) -> Dashboard {
-    Dashboard { app_name: hostile, app_id: vec![0,255], instance_id: vec![1,2], device_id: vec![3,4], key_provider_info: String::new(), tcb_info: String::new(), containers: vec![], system_info: SystemInfo::default(), public_sysinfo: false, public_logs: false, public_tcbinfo: false, cloud_vendor: String::new(), cloud_product: String::new(), gpu_info: GpuInfoResponse::default() }
+    Dashboard { app_name: hostile, app_id: vec![0,255], instance_id: vec![1,2], device_id: vec![3,4], key_provider_info: String::new(), tcb_info: String::new(), containers: vec![], system_info: SystemInfo::default(), show_sysinfo: false, show_tcb: false, show_identity: false, show_containers: false, show_logs: false, cloud_vendor: String::new(), cloud_product: String::new(), gpu_info: GpuInfoResponse::default() }
 }
 fn main() -> anyhow::Result<()> {
     let hostile = "<script>alert(\"x\")</script>&'";
