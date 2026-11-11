@@ -1103,6 +1103,24 @@ contract DstackKmsTest is Test {
         assertEq(reason, "Root epoch requires epoch-aware authorization");
     }
 
+    function test_LegacyAppCheckRefusesOnceTheAppEpochAdvances() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(0));
+        vm.startPrank(owner);
+        registerNextRootEpoch();
+        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
+        vm.stopPrank();
+        (bool allowed,) = kms.isAppAllowed(info);
+        assertTrue(allowed);
+
+        vm.prank(user);
+        DstackApp(info.appId).advanceAppEpoch(0);
+        string memory reason;
+        (allowed, reason) = kms.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "App epoch requires epoch-aware authorization");
+    }
+
     function test_AuthorizeAppForwardsRequestAndFillsKmsFields() public {
         IAppAuth.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
