@@ -13,6 +13,7 @@ import re
 import secrets
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -203,6 +204,20 @@ def start_bootstrap_server(state: Path) -> tuple[subprocess.Popen[str], str]:
         port,
     )
     return process, f"http://10.0.2.2:{port}"
+
+
+def pin_kms_signer(cli: list[str], kms_url: str) -> None:
+    """Trust the root signer the KMS currently serves for SealedEnv keys."""
+    request = urllib.request.Request(
+        f"{kms_url.rstrip('/')}/prpc/KMS.GetMeta?json", data=b"{}"
+    )
+    with urllib.request.urlopen(
+        request,
+        timeout=30,
+        context=ssl._create_unverified_context(),  # noqa: SLF001
+    ) as response:
+        pubkey = json.loads(response.read())["k256_pubkey"]
+    run([*cli, "kms", "add", pubkey])
 
 
 def run(
@@ -1090,14 +1105,15 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             *deploy_inputs,
         ]
         if case_kms:
-            deploy_inputs.extend(["--kms-encrypt-url", str(case_kms["controller_url"])])
+            encrypt_url = str(case_kms["controller_url"])
+            deploy_inputs.extend(["--kms-encrypt-url", encrypt_url])
         else:
-            kms_url = os.environ.get("DSTACK_TEST_KMS_URL", "").strip()
-            if not kms_url:
+            encrypt_url = os.environ.get("DSTACK_TEST_KMS_URL", "").strip()
+            if not encrypt_url:
                 fail(
                     "DSTACK_TEST_KMS_URL is required for KMS-backed physical TDX guests"
                 )
-            deploy_inputs.extend(["--kms-url", kms_url])
+            deploy_inputs.extend(["--kms-url", encrypt_url])
     try:
         vmm = start_vmm(
             state,
@@ -1140,7 +1156,16 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
         shutil.rmtree(state, ignore_errors=True)
 
     vm_id: str | None = None
+    vmm_log_path = state / "logs/vmm.log"
+    vm_root_path = Path(str(vmm["vm_root"])) if vmm.get("vm_root") else None
     try:
+        if configuration_materialization:
+            # The VMM CLI seals the env only to a pinned KMS epoch signer;
+            # pins stay lease-scoped instead of in the operator's whitelist.
+            os.environ["DSTACK_VMM_KMS_WHITELIST_PATH"] = str(
+                state / "kms-whitelist.json"
+            )
+            pin_kms_signer(cli, encrypt_url)
         deploy = run(
             [
                 *cli,
@@ -1188,8 +1213,6 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     event for event in events_value if isinstance(event, dict)
                 ]
         observe_boot = profile == "no-tee-guest-lifecycle"
-        vmm_log_path = state / "logs/vmm.log"
-        vm_root_path = Path(str(vmm["vm_root"])) if vmm.get("vm_root") else None
         ready = (
             wait_running(cli, vm_id, vmm_log=vmm_log_path, vm_root=vm_root_path)
             if observe_boot

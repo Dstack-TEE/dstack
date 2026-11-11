@@ -115,6 +115,22 @@ def write_kms(
     )
 
 
+def seed_image_cache(images: pathlib.Path, runtime: dict) -> None:
+    """Let key release verify the candidate guests without an image download."""
+    store = os.environ.get("DSTACK_TEST_IMAGE_STORE") or runtime.get(
+        "environment", {}
+    ).get("DSTACK_TEST_IMAGE_STORE", "")
+    if not store:
+        return
+    images.mkdir(parents=True)
+    for image in pathlib.Path(store).iterdir():
+        digest = image / "digest.txt"
+        if (image / "metadata.json").is_file() and digest.is_file():
+            link = images / digest.read_text().strip()
+            if not link.exists():
+                link.symlink_to(image.resolve(), target_is_directory=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runtime-manifest", type=pathlib.Path, required=True)
@@ -218,6 +234,7 @@ def main() -> int:
                 a.collateral_port, state / "roots/tdx-root-ca.pem"
             )
         kms_cfg = state / "config/kms.toml"
+        seed_image_cache(state / "image-cache/images", runtime)
         agent = f"unix:{sim['services']['DstackGuest']['socket']}"
         env = {"DSTACK_AGENT_ADDRESS": agent}
         kms_bin = bins["dstack_kms"]["path"]
