@@ -279,6 +279,20 @@ range = [
             f"range = [\n{allowed}\n]",
             1,
         )
+    # Lease guests serve the case that owns them, so their dashboards publish
+    # the metrics, logs and containers the cases read without a token.
+    anonymous = (
+        'anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health", '
+        '"guest:info"]'
+    )
+    if anonymous not in text:
+        fail("candidate VMM config is missing the sample anonymous guest API scopes")
+    text = text.replace(
+        anonymous,
+        'anonymous_scopes = ["guest:dashboard", "guest:version", "guest:health", '
+        '"guest:info", "guest:metrics", "guest:logs", "guest:containers"]',
+        1,
+    )
     if simulator_seed:
         text += (
             "\n[cvm.tee_simulator]\n"
