@@ -491,6 +491,7 @@ auth_token = "<source-admin-token>"
 [core.admin.tls]
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
+# No [core.admin.tls.mutual]: client certificates are verified by their attestation.
 ```
 
 **Configure new KMS for onboarding:**
