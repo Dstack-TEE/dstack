@@ -186,7 +186,7 @@ jobs:
   browser:
     needs: [changes, build]
     if: needs.changes.outputs.relevant == 'true' && needs.changes.outputs.runtimes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -203,6 +203,6 @@ jobs:
       - name: Install Playwright and run cases
         working-directory: sdk/verifier-wasm
         run: |
-          npm install --no-save --no-package-lock playwright
+          npm install --no-save --no-package-lock playwright@1.65.0
           npx playwright install --with-deps ${{ matrix.browser }}
           node test/browser/playwright.mjs ${{ matrix.browser }}
