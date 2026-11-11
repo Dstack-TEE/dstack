@@ -155,17 +155,26 @@ def main() -> int:
             adjacent_image_hash = "12" * 32
             config_hash = "21" * 32
             adjacent_config_hash = "22" * 32
+            # An image is a directory; a measurement is one `<config>.json` file.
             selected = [
                 cache_root / "images" / image_hash,
-                cache_root / "measurements" / config_hash,
+                cache_root / "measurements" / f"{config_hash}.json",
             ]
             adjacent = [
                 cache_root / "images" / adjacent_image_hash,
-                cache_root / "measurements" / adjacent_config_hash,
+                cache_root / "measurements" / f"{adjacent_config_hash}.json",
             ]
+
+            def plant(entry: pathlib.Path, name: str) -> None:
+                if entry.suffix == ".json":
+                    entry.parent.mkdir(parents=True, exist_ok=True)
+                    entry.write_text("{}")
+                else:
+                    entry.mkdir(parents=True, exist_ok=True)
+                    (entry / name).write_text("case-owned")
+
             for entry in [*selected, *adjacent]:
-                entry.mkdir(parents=True, exist_ok=True)
-                (entry / "sentinel").write_text("case-owned")
+                plant(entry, "sentinel")
             targeted_body = json.dumps(
                 {"image_hash": image_hash, "config_hash": config_hash}
             ).encode()
@@ -182,8 +191,7 @@ def main() -> int:
             # Refill the selected entries as verification does after a miss, then
             # prove the all-selector remains confined to the two cache namespaces.
             for entry in selected:
-                entry.mkdir(parents=True, exist_ok=True)
-                (entry / "refilled").write_text("case-owned")
+                plant(entry, "refilled")
             all_body = json.dumps({"image_hash": "all", "config_hash": "all"}).encode()
             repeat = call(route, all_body, token)
             if (cache_root / "images").exists() or (
