@@ -57,10 +57,11 @@ certs = "/etc/kms/certs/rpc.crt"
 The token can also be supplied via the `DSTACK_KMS_ADMIN_TOKEN` or
 `ADMIN_API_TOKEN` environment variables instead of the config file. The admin
 listener fails closed: enabled with neither `auth_token` nor `htpasswd_file`
-(and `insecure_no_auth = false`) refuses to start. Call it with, for example:
+(and `insecure_no_auth = false`) refuses to start. With `[core.admin.tls]` the
+listener serves HTTPS (use `http://` without it). Call it with, for example:
 
 ```bash
-curl -X POST "http://127.0.0.1:8001/prpc/Admin.ClearImageCache?json" \
+curl -k -X POST "https://127.0.0.1:8001/prpc/Admin.ClearImageCache?json" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"image_hash": "<hash>", "config_hash": "<hash>"}'
@@ -70,8 +71,9 @@ This admin authentication is separate from the on-chain / webhook authorization
 below, which decides whether a CVM may boot and receive keys.
 
 KMS-to-KMS onboarding calls `Admin.GetKmsKey` with a self-issued RA-TLS client
-certificate plus the source's admin bearer token; other admin RPCs need no client
-certificate. `core.onboard.public_key_handover` is off by default; set it to
+certificate plus the source's admin bearer token, so it requires
+`[core.admin.tls]` and an admin address the new KMS can reach; other admin RPCs
+need no client certificate. `core.onboard.public_key_handover` is off by default; set it to
 `true` only to also serve `KMS.GetKmsKey` on the public listener for older
 clients.
 
