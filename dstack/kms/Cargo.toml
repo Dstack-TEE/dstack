@@ -53,6 +53,7 @@ moka = { workspace = true, features = ["future"] }
 
 [dev-dependencies]
 cc-eventlog.workspace = true
+mock-attestation = { path = "../crates/mock-attestation" }
 
 [features]
 default = []
