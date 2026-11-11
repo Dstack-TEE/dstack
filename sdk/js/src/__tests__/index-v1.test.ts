@@ -8,6 +8,21 @@ import type { AddressInfo } from 'net'
 import { DstackClient, DstackClientV0, DstackClientV1 } from '../index'
 import type { GpuEvidenceBundleV1 } from '../index'
 
+/** Run `fn` against a stub agent that answers every request with `body`. */
+async function withAgentAnswering(body: unknown, fn: (client: DstackClientV1) => Promise<void>) {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(body))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
+  try {
+    const { port } = server.address() as AddressInfo
+    await fn(new DstackClientV1(`http://127.0.0.1:${port}`))
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+}
+
 describe('DstackClientV1', () => {
   it('should be what the unsuffixed DstackClient names, as value and as type', () => {
     expect(DstackClient).toBe(DstackClientV1)
@@ -137,6 +152,18 @@ describe('DstackClientV1', () => {
       const client = new DstackClientV1()
       const result = await client.getKey('', 'secp256k1')
       expect(result.key.length).toBe(32)
+    })
+
+    it('should reject a key from other epochs than the requested ones', async () => {
+      const key = { key: 'aa'.repeat(32), public_key: 'bb'.repeat(33), signature_chain: [], root_epoch: 1, app_epoch: 2 }
+      await withAgentAnswering(key, async client => {
+        for (const [rootEpoch, appEpoch] of [[0, undefined], [undefined, 1], [1, 3]]) {
+          await expect(client.getKey('d', 'secp256k1', rootEpoch, appEpoch))
+            .rejects.toThrow(/different epochs than requested/)
+        }
+        const response = await client.getKey('d', 'secp256k1', 1, 2)
+        expect([response.root_epoch, response.app_epoch]).toEqual([1, 2])
+      })
     })
 
     it('should reject an empty algorithm without a round trip', async () => {
@@ -296,20 +323,6 @@ describe('DstackClientV1', () => {
   // signature chain quietly one link short is a verification failure nobody can
   // trace back to its cause.
   describe('malformed hex from the agent', () => {
-    async function withAgentAnswering(body: unknown, fn: (client: DstackClientV1) => Promise<void>) {
-      const server = http.createServer((_req, res) => {
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(body))
-      })
-      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', () => resolve()))
-      try {
-        const { port } = server.address() as AddressInfo
-        await fn(new DstackClientV1(`http://127.0.0.1:${port}`))
-      } finally {
-        await new Promise<void>(resolve => server.close(() => resolve()))
-      }
-    }
-
     const identity = {
       app_id: 'aa'.repeat(20),
       compose_hash: 'bb'.repeat(32),

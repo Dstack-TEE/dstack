@@ -68,6 +68,41 @@ func TestV1GetKey(t *testing.T) {
 	}
 }
 
+// A key from another epoch than the one asked for must not pass as the requested one.
+func TestV1GetKeyRejectsUnrequestedEpochs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"key":             strings.Repeat("aa", 32),
+			"public_key":      strings.Repeat("bb", 33),
+			"signature_chain": []string{},
+			"root_epoch":      1,
+			"app_epoch":       2,
+		})
+	}))
+	defer server.Close()
+	client := dstack.NewDstackClientV1(dstack.WithEndpoint(server.URL))
+	epoch := func(e uint32) *uint32 { return &e }
+
+	for _, tc := range []struct{ root, app *uint32 }{
+		{epoch(0), nil},
+		{nil, epoch(1)},
+		{epoch(1), epoch(3)},
+	} {
+		_, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", tc.root, tc.app)
+		if err == nil || !strings.Contains(err.Error(), "different epochs than requested") {
+			t.Errorf("root %v app %v: expected an epoch mismatch error, got %v", tc.root, tc.app, err)
+		}
+	}
+	resp, err := client.GetKeyAtEpochs(context.Background(), "d", "secp256k1", epoch(1), epoch(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.RootEpoch != 1 || resp.AppEpoch != 2 {
+		t.Errorf("unexpected epochs: root %d app %d", resp.RootEpoch, resp.AppEpoch)
+	}
+}
+
 // v1 binds the algorithm into the derivation, so the two curves no longer share
 // one 32-byte secret the way they did on the frozen surface.
 func TestV1GetKeyIsDomainSeparated(t *testing.T) {

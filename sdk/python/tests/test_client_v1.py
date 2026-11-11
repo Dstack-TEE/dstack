@@ -158,6 +158,29 @@ async def test_async_v1_get_key_rejects_the_v0_k256_alias():
     assert "k256" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_async_v1_get_key_rejects_epochs_other_than_requested(monkeypatch):
+    """A key from another epoch must not pass as the requested one."""
+
+    async def fake_send(self, method, payload):
+        return {
+            "key": "aa" * 32,
+            "public_key": "bb" * 33,
+            "signature_chain": [],
+            "root_epoch": 1,
+            "app_epoch": 2,
+        }
+
+    monkeypatch.setenv("DSTACK_SIMULATOR_ENDPOINT", "http://localhost:0")
+    monkeypatch.setattr(AsyncDstackClientV1, "_send_rpc_request", fake_send)
+    client = AsyncDstackClientV1()
+    for root_epoch, app_epoch in [(0, None), (None, 1), (1, 3)]:
+        with pytest.raises(ValueError, match="different epochs than requested"):
+            await client.get_key("d", "secp256k1", root_epoch, app_epoch)
+    key = await client.get_key("d", "secp256k1", 1, 2)
+    assert (key.root_epoch, key.app_epoch) == (1, 2)
+
+
 def test_v1_keys_differ_from_v0_keys():
     """No compatibility mode: the same name yields different key material."""
     v0 = DstackClientV0().get_key("storage-encryption", "")
