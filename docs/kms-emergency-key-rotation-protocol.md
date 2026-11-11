@@ -1,6 +1,6 @@
 # KMS emergency key rotation protocol
 
-**Status:** Design draft; not implemented. Proposed fields require protobuf definitions.
+**Status:** Implemented.
 
 ## 1. Scope and assumptions
 
@@ -60,7 +60,7 @@ new `n`, whose OS image, KMS MR and device rows start empty because policy rows
 are keyed by the epoch's chain hash. Prepare them again before activating. A
 current epoch is never popped. `kmsInfo` follows the current epoch:
 registering epoch 0 and each activation copy its keys there and clear the legacy
-quote and event log, and `setKmsInfo` is refused once epochs exist. Epoch 0 must be the `kmsInfo` keys
+quote and event log; the legacy `setKmsInfo`, `setKmsQuote` and `setKmsEventlog` setters are removed. Epoch 0 must be the `kmsInfo` keys
 when those are set; a legacy `kmsInfo` quote and event log are converted off
 chain into the standard attestation encoding (`Attestation::from_tdx_quote`)
 before publishing. The KMS sends the epoch it serves and its chain hash (`rootEpoch`,
