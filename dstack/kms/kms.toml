@@ -102,7 +102,9 @@ htpasswd_file = ""
 insecure_no_auth = false
 
 # Optional TLS for the admin listener. When configured, clients may present an
-# RA-TLS certificate. GetKmsKey requires it; other admin RPCs do not.
+# RA-TLS certificate. GetKmsKey requires it; other admin RPCs do not. To serve
+# KMS onboarding, enable this and bind `address` to one the new KMS can reach.
+# No `[core.admin.tls.mutual]` is needed, as for `[rpc.tls]` above.
 # [core.admin.tls]
 # key = "/etc/kms/certs/rpc.key"
 # certs = "/etc/kms/certs/rpc.crt"

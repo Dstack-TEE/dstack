@@ -26,7 +26,7 @@ on:
       - 'dstack/kms/auth-eth/*'
       - '.github/workflows/kms-auth-eth.yml'
   pull_request:
-    branches: [ next, 'release/**' ]
+    branches: [ next, 'release/**', 'feat/**' ]
     paths:
       - 'dstack/kms/auth-eth/*'
       - '.github/workflows/kms-auth-eth.yml'

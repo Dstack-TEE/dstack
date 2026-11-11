@@ -8,7 +8,7 @@ on:
   push:
     branches: [ next, 'release/**' ]
   pull_request:
-    branches: [ next, 'release/**' ]
+    branches: [ next, 'release/**', 'feat/**' ]
 
 jobs:
   reuse-lint:
