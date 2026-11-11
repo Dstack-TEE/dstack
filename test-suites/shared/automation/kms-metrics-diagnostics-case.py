@@ -18,7 +18,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import tomllib
 
 SUPPORTED_CASES = {"tc-kms-keys-certs-008", "tc-kms-release-010", "tc-kms-apiver-011"}
 
@@ -181,26 +180,21 @@ def main() -> int:
         required_meta = ("ca_cert", "allow_any_upgrade", "k256_pubkey", "is_dev")
         if meta_code != 200 or any(name not in meta for name in required_meta):
             raise AssertionError("GetMeta omitted documented public fields")
-        image_verify = tomllib.loads(original_config)["core"]["image"]["verify"]
-        if meta.get("os_image_verification") is not image_verify:
+        # The KMS always verifies OS images; there is no switch to report.
+        if meta.get("os_image_verification") is not True:
             raise AssertionError(
-                f"GetMeta os_image_verification {meta.get('os_image_verification')!r} "
-                f"does not match [core.image] verify = {image_verify}"
+                f"GetMeta os_image_verification is {meta.get('os_image_verification')!r}"
             )
-        disabled_warning = "os image verification is disabled" in Path(
-            kms["log"]
-        ).read_text(errors="replace")
-        if disabled_warning is image_verify:
-            raise AssertionError(
-                "the startup warning for disabled os image verification does not match the config"
-            )
+        if "os image verification is disabled" in Path(kms["log"]).read_text(
+            errors="replace"
+        ):
+            raise AssertionError("the KMS warned that OS image verification is off")
         rows.append(
             {
                 "name": "metadata",
                 "status": "PASS",
                 "field_count": len(meta),
-                "os_image_verification": image_verify,
-                "disabled_verification_warned": disabled_warning,
+                "os_image_verification": True,
             }
         )
 

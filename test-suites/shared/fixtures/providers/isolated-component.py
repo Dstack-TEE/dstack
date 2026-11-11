@@ -147,7 +147,6 @@ mandatory = false
 cert_dir = "{cert_dir}"
 {historical}enforce_self_authorization = false
 [core.image]
-verify = false
 cache_dir = "{cert_dir.parent / "image-cache"}"
 download_url = "http://127.0.0.1:1/{{OS_IMAGE_HASH}}.tar.gz"
 download_timeout = "2s"
