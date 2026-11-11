@@ -159,6 +159,8 @@ def main() -> int:
             KMS_CONTRACT_ADDR=kms,
             OS_IMAGE_HASH=image,
             MR_AGGREGATED=mr,
+            # Manage.s.sol names the root epoch rows a policy write targets.
+            ROOT_EPOCH="0",
         )
         base = [str(foundry / "forge"), "script"]
         tail = ["--rpc-url", rpc, "--broadcast", "-vv"]
