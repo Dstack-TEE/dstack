@@ -8,7 +8,7 @@ on:
   push:
     branches: [ next, 'release/**' ]
   pull_request:
-    branches: [ next, 'release/**' ]
+    branches: [ next, 'release/**', 'feat/**' ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -77,6 +77,12 @@ jobs:
     - name: Cargo fmt check
       if: steps.changes.outputs.relevant == 'true'
       run: cargo fmt --check --all
+
+    # The LUKS tests in dstack-util skip and pass when cryptsetup is missing.
+    # Fail here instead, so a runner without it cannot hide them.
+    - name: Require cryptsetup
+      if: steps.changes.outputs.relevant == 'true'
+      run: cryptsetup --version
 
     - name: Run tests
       if: steps.changes.outputs.relevant == 'true'
