@@ -68,7 +68,8 @@ def main():
         )
         if r.returncode or passed != 1:
             break
-    status = "PASS" if len(rows) == len(TESTS) else "FAIL"
+    passed_rows = sum(row["returncode"] == 0 and row["passed"] == 1 for row in rows)
+    status = "PASS" if passed_rows == len(TESTS) else "FAIL"
     rd = pathlib.Path(os.environ["DSTACK_TEST_RESULT_DIR"])
     (rd / "artifacts").mkdir(parents=True, exist_ok=True)
     (rd / "artifacts/forward-interval-matrix.json").write_text(
@@ -81,7 +82,14 @@ def main():
                 "case_id": CASE,
                 "provisional": False,
                 "status": status,
-                "summary": f"{len(rows)}/{len(TESTS)} forward interval rows passed",
+                "summary": f"{passed_rows}/{len(TESTS)} forward interval rows passed",
+                "steps": [
+                    {
+                        "id": f"{CASE}-step-01",
+                        "status": status,
+                        "observed": f"{passed_rows}/{len(TESTS)} forward interval rows passed",
+                    }
+                ],
             },
             indent=2,
         )
