@@ -99,6 +99,15 @@ def write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def varint(value: int) -> bytes:
+    """Encode a protobuf length prefix."""
+    out = bytearray()
+    while value > 0x7F:
+        out.append(value & 0x7F | 0x80)
+        value >>= 7
+    return bytes(out + bytes((value,)))
+
+
 def emit(step: str, status: str, observed: str) -> dict[str, str]:
     """Emit one runner-protocol step."""
     print(f"STEP {step} START", flush=True)
@@ -200,17 +209,12 @@ def main() -> int:
             or safe_shape(json.loads(unknown_raw), spec["fields"]) != shape
         ):
             raise AssertionError("unknown JSON field changed known response semantics")
-        vm_config_bytes = request_value["vm_config"].encode()
-        if len(vm_config_bytes) > 127:
-            raise AssertionError(
-                "fixture vm_config exceeds the single-byte protobuf boundary"
-            )
+        vm_config = request_value["vm_config"].encode()
+        vm_config_field = varint(len(vm_config)) + vm_config
         if case_id == "tc-kms-kms-001":
-            protobuf_body = (
-                bytes((0x08, 0x01, 0x12, len(vm_config_bytes))) + vm_config_bytes
-            )
+            protobuf_body = bytes((0x08, 0x01, 0x12)) + vm_config_field
         else:
-            protobuf_body = bytes((0x0A, len(vm_config_bytes))) + vm_config_bytes
+            protobuf_body = bytes((0x0A,)) + vm_config_field
         protobuf_code, protobuf_raw = call(
             url, method, protobuf_body, "application/octet-stream", identity
         )
