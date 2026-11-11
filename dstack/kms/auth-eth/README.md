@@ -53,8 +53,32 @@ The Bun server sets `idleTimeout` to 255s (Bun's maximum). Bun's default of 10s 
 - `KMS_CONTRACT_ADDR` - KMS contract address (default: 0x0000000000000000000000000000000000000000)
 - `PORT` - server port (default: 3000)
 - `ETH_CHAIN_ID` - reject every decision if the RPC reports a different chain ID (default: unset, no check)
-- `ETH_BLOCK_TAG` - block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). each request resolves the tag to one block and reads all state there. the server resolves the tag once at startup and refuses to start if the RPC cannot serve it. a later tag survives reorgs but delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet). use `finalized` on L1. set `latest` explicitly for an OP-stack chain read through the Helios light client, which tracks only the sequencer-signed unsafe head and serves neither `safe` nor `finalized`, and for local development chains such as Anvil, which finalizes 64 blocks behind its head
+- `ETH_BLOCK_TAG` - block policy is read at: `latest`, `safe` or `finalized` (default: `finalized`). each request resolves the tag to one block and reads all state there. the server resolves the tag once at startup and refuses to start if the RPC cannot serve it. a later tag delays every policy change, including emergency revocations, until that block is reached (about 13 minutes for `finalized` on Ethereum mainnet). use `finalized` on L1. set `latest` explicitly for an OP-stack chain read through the Helios light client, which tracks only the sequencer-signed unsafe head and serves neither `safe` nor `finalized`, and for local development chains such as Anvil, which finalizes 64 blocks behind its head. see [reorgs and the block tag](#reorgs-and-the-block-tag) before using `latest` or `safe`
 - `ETH_FINALITY_CONFIRMATIONS` - read this many blocks further behind the block `ETH_BLOCK_TAG` resolves to (default: 0)
+
+### Reorgs and the block tag
+
+Only `finalized` protects policy from reorgs. With `latest` or `safe`, a reorg
+can revert any policy transaction the server has already acted on, in both
+directions:
+
+- **Revocations roll back.** A removed OS image, compose hash or device, or a
+  revoked KMS measurement, is authorized again until the revocation is
+  re-included and the read block reaches it.
+- **Activations roll back.** A root epoch activation or an app epoch increase
+  can disappear. Neither this server nor the KMS keeps a high-water mark: the
+  KMS only checks the reported epoch against its keyring's chain hash, so after
+  a root epoch rollback it restarts once and serves the previous epoch as
+  current, and apps again receive keys of their previous app epoch.
+
+Keys released in that window stay released. `ETH_FINALITY_CONFIRMATIONS=N`
+reads N blocks behind the tagged block, so a reorg shallower than N blocks is
+never observed, at the cost of delaying every policy change, revocations
+included, by N more blocks. A reorg deeper than N still rolls back, so this
+narrows the risk with `latest` or `safe` but does not remove it. Through Helios
+on an OP-stack chain, `latest` is the sequencer's unsafe head: choose N from
+how deep a reorg of that head you are willing to accept, and send emergency
+revocations with that delay in mind.
 
 ### Container image
 

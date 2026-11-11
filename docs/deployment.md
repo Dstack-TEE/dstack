@@ -190,6 +190,15 @@ For adding Gateway, apps, and other config fields, see [dstack-auth Operations G
 
 For decentralized governance via smart contracts, see [On-Chain Governance](./onchain-governance.md).
 
+auth-eth reads policy at the block `ETH_BLOCK_TAG` names, `finalized` by
+default. Only `finalized` protects policy from reorgs. With `latest` (required
+for an OP-stack chain read through Helios) or `safe`, a reorg can revert both
+activations and revocations: a removed image or compose hash is authorized
+again, and a rolled-back root epoch activation makes every KMS restart onto the
+previous epoch. `ETH_FINALITY_CONFIRMATIONS=N` hides reorgs shallower than N
+blocks but delays every policy change, emergency revocations included, by N
+blocks. See [reorgs and the block tag](../dstack/kms/auth-eth/README.md#reorgs-and-the-block-tag).
+
 #### Getting OS Image Hash
 
 The OS image hash is in the `digest.txt` file inside the guest image tarball:
