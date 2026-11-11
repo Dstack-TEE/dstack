@@ -251,7 +251,7 @@ def main() -> int:
         )
         metrics_code, metrics_body = request(f"https://127.0.0.1:{target_rpc}/metrics")
         admin_missing, _ = request(
-            f"http://127.0.0.1:{admin_port}/prpc/Admin.ClearImageCache?json",
+            f"https://127.0.0.1:{admin_port}/prpc/Admin.ClearImageCache?json",
             b"{}",
             "application/json",
         )

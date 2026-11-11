@@ -50,7 +50,7 @@ With the fixture configuration (`public_key_handover = true`), call `KMS.GetKmsK
 <a id="tc-kms-onboard-005-step-02"></a>
 ### Step 2: Move handover to the admin listener
 
-Restart the source without the `public_key_handover` key, so the default `false` applies, and with `[core.admin.tls]` using its own RPC key and certificate. Call `KMS.GetKmsKey` on the public listener, then `Admin.GetKmsKey` over HTTPS with the token and client certificate, with the token only, and with the certificate only. Call `Admin.ClearImageCache` with the token and no client certificate.
+Restart the source without the `public_key_handover` key, so the default `false` applies. The fixture already serves admin TLS with its own RPC key and certificate. Call `KMS.GetKmsKey` on the public listener, then `Admin.GetKmsKey` over HTTPS with the token and client certificate, with the token only, and with the certificate only. Call `Admin.ClearImageCache` with the token and no client certificate.
 
 **Expected results:**
 

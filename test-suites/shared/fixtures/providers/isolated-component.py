@@ -158,6 +158,9 @@ enabled = true
 address = "127.0.0.1"
 port = {admin_port}
 auth_token = "{admin_token}"
+[core.admin.tls]
+key = "{cert_dir / "rpc.key"}"
+certs = "{cert_dir / "rpc.crt"}"
 [core.auth_api]
 type = "dev"
 [core.auth_api.dev]
@@ -1526,7 +1529,7 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
             "pid": source.pid,
             "tls_verify": False,
             "development_auth": True,
-            "admin_url": f"http://127.0.0.1:{port_map['admin']}/prpc",
+            "admin_url": f"https://127.0.0.1:{port_map['admin']}/prpc",
             "admin_auth_token_file": str(source_admin_token_path),
             "registration_client": kms_client_identity,
         }
@@ -1565,7 +1568,8 @@ def prepare(value: dict[str, Any]) -> dict[str, Any]:
                     "tls_verify": False,
                 },
                 "admin": {
-                    "url": f"http://127.0.0.1:{port_map['admin']}/prpc",
+                    "url": f"https://127.0.0.1:{port_map['admin']}/prpc",
+                    "tls_verify": False,
                     "auth_token_file": str(source_admin_token_path),
                 },
             }

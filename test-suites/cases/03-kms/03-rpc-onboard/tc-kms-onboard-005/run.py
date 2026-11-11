@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Exercise KMS root-key handover on the admin listener (PR #1307).
 
-The source KMS is restarted with `[core.admin.tls]` and without
+The source KMS, which serves admin TLS, is restarted without
 `core.onboard.public_key_handover`, which defaults to `false`. `Admin.GetKmsKey` must then need
 both the admin bearer token and an attested RA-TLS client certificate, the
 public `KMS.GetKmsKey` must refuse, and a fresh target must onboard through the
@@ -28,7 +28,9 @@ import urllib.request
 from typing import Any
 
 CASE_ID = "tc-kms-onboard-005"
-PUBLIC_DISABLED = "public KMS key handover is disabled; onboard through the admin listener"
+PUBLIC_DISABLED = (
+    "public KMS key handover is disabled; onboard through the admin listener"
+)
 ROOT_FILES = ("root-ca.key", "root-k256.key")
 
 
@@ -178,9 +180,8 @@ def main() -> int:
         values["kms_guest_simulator"]["services"]["DstackGuest"]["socket"]
     )
     source_config = pathlib.Path(kms["config"])
-    source_cert_dir = pathlib.Path(kms["cert_dir"])
     public_url = str(kms["rpc_prpc_url"])
-    admin_url = str(kms["admin_url"]).replace("http://", "https://", 1)
+    admin_url = str(kms["admin_url"])
     token = pathlib.Path(kms["admin_auth_token_file"]).read_text().strip()
     request = {"vm_config": str(identity["vm_config"])}
     workspace = pathlib.Path(values["component_substrate"]["workspace"])
@@ -217,10 +218,6 @@ def main() -> int:
         if "public_key_handover = true\n" not in original_config:
             raise RuntimeError("source fixture does not enable public_key_handover")
         hardened = original_config.replace("public_key_handover = true\n", "", 1)
-        hardened += (
-            f'\n[core.admin.tls]\nkey = "{source_cert_dir / "rpc.key"}"\n'
-            f'certs = "{source_cert_dir / "rpc.crt"}"\n'
-        )
         source_config.write_text(hardened)
         source = start(
             binary, source_config, agent_socket, artifacts / "source-kms-hardened.log"
