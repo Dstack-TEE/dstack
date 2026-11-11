@@ -58,14 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ETH_FINALITY_CONFIRMATIONS` now counts back from that block.
 - DstackKms, DstackApp: material approvals are per epoch. A request is decided
   on the row of the epoch it selects, so a value is revoked only once every row
-  allowing it is cleared. `DstackKms` material setters name their rows:
-  `*AtEpoch(epoch, value)` writes one root epoch, `*AtEpochs(from, to, value)` a
-  range, and `remove*AtEpochs(0, latest, value)` revokes a value everywhere.
-  `DstackApp`'s `addComposeHash`, `removeComposeHash`, `addDevice`,
-  `removeDevice` and `setAllowAnyDevice` keep their ABI but write every app epoch
-  row from 0 through the next one, so a removal is a full revocation. The
-  `Manage.s.sol` KMS scripts take `ROOT_EPOCH`, or `FROM_ROOT_EPOCH` and
-  `TO_ROOT_EPOCH`.
+  allowing it is cleared. Material setters name their rows:
+  `*AtEpoch(epoch, value)` writes one epoch, `*AtEpochs(from, to, value)` a
+  range; `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
+  `remove*AtEpochs(0, currentAppEpoch, value)` in `DstackApp` revoke a value
+  everywhere. `DstackApp` reports its setters as the new ERC-165 interface
+  `IAppEpochManagement` (`0x853d2b79`). The `Manage.s.sol` scripts require
+  `ROOT_EPOCH` or `APP_EPOCH`, or a `FROM_*`/`TO_*` range.
+- App contracts deployed before app epochs (v0.5.x, v0.6.0) keep working with
+  the upgraded `DstackKms` and KMS, which authorize them for app epoch 0 only.
+  `Manage.s.sol` detects them by interface ID and calls their epoch-less
+  setters. Upgrading one to the current `DstackApp` keeps its compose hashes,
+  devices and `allowAnyDevice` as app epoch 0.
 - DstackKms, DstackApp: ownership transfers take two steps for proxies upgraded
   from v0.5.9: `transferOwnership` nominates, and the new owner must call
   `acceptOwnership`.
@@ -100,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice` and
   `removeKmsDevice`. Use the `*AtEpoch` or `*AtEpochs` forms; before any
   rotation, `addOsImageHashAtEpoch(0, hash)` is the old call.
+- **Breaking:** DstackApp: the epoch-less `addComposeHash`, `removeComposeHash`,
+  `addDevice`, `removeDevice` and `setAllowAnyDevice`, and with them
+  `IAppAuthBasicManagement`: an upgraded app no longer reports interface ID
+  `0x8fd37527`, and calls to those functions revert. Use the `*AtEpoch` or
+  `*AtEpochs` forms (`IAppEpochManagement`); at app epoch 0,
+  `addComposeHashAtEpoch(0, hash)` is the old call.
 - DstackKms: `setKmsInfo`, `setKmsQuote` and `setKmsEventlog`. Root keys are
   set with `registerRootEpoch`, and each epoch's attestation lives at its
   `evidenceUrl`.
