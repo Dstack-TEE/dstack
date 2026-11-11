@@ -15,7 +15,9 @@ import time
 from typing import Any
 
 CASE_ID = "tc-kms-auth-010"
-EXACT_TESTS = 8
+# The freshness and scope tests this case was written against; the suite
+# may grow, but must never run fewer.
+MIN_TESTS = 8
 FILTER = "main_service::upgrade_authority::tests"
 
 
@@ -113,7 +115,7 @@ def main() -> int:
         rows.append(row)
         if (
             row["returncode"] != 0
-            or row["passed"] != EXACT_TESTS
+            or row["passed"] < MIN_TESTS
             or row["failed"] != 0
             or row["ignored"] != 0
             or row["measured"] != 0
