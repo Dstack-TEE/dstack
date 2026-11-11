@@ -52,7 +52,14 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         """Authorize one observed KMS boot identity against current policy."""
         parts = self.path.strip("/").split("/")
-        if len(parts) != 3 or parts[1] != "bootAuth" or parts[2] not in ("kms", "app"):
+        # Current KMS asks /authorizeKms|App; KMS 0.5.x asks /bootAuth/kms|app.
+        epoch_aware = len(parts) == 2 and parts[1] in ("authorizeKms", "authorizeApp")
+        if epoch_aware:
+            parts = [parts[0], "authorize", parts[1].removeprefix("authorize").lower()]
+        if len(parts) != 3 or parts[1] not in ("bootAuth", "authorize"):
+            self.send_error(404)
+            return
+        if parts[2] not in ("kms", "app"):
             self.send_error(404)
             return
         context = parts[0]
@@ -102,9 +109,25 @@ class Handler(SimpleHTTPRequestHandler):
                 "reason": reason,
             },
         )
+        if not epoch_aware:
+            self.send_json(
+                200,
+                {"isAllowed": not reason, "gatewayAppId": "any", "reason": reason},
+            )
+            return
+        root_hash = policy.get("rootEpochHash", "0x" + "00" * 32)
         self.send_json(
             200,
-            {"isAllowed": not reason, "gatewayAppId": "any", "reason": reason},
+            {
+                "authorized": not reason,
+                "rejectionReason": reason,
+                "gatewayAppId": "any",
+                "currentRootEpoch": 0,
+                "currentRootEpochHash": root_hash,
+                "currentAppEpoch": 0,
+                "latestRootEpoch": 0,
+                "latestRootEpochHash": root_hash,
+            },
         )
 
     def send_json(self, status: int, value: dict[str, Any]) -> None:
