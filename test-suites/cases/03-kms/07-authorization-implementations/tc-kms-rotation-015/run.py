@@ -4,9 +4,29 @@
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 
 CASE = "tc-kms-rotation-015"
+
+
+def newest_node() -> pathlib.Path:
+    """Directory of the newest Node >= 20 on PATH or installed by fnm."""
+    found = [shutil.which("node")] + [
+        str(path)
+        for path in pathlib.Path.home().glob(
+            ".local/share/fnm/node-versions/v*/installation/bin/node"
+        )
+    ]
+    versions = []
+    for node in filter(None, found):
+        out = subprocess.run([node, "--version"], capture_output=True, text=True)
+        version = tuple(int(x) for x in out.stdout.strip().lstrip("v").split("."))
+        versions.append((version, pathlib.Path(node).parent))
+    version, directory = max(versions)
+    if version < (20,):
+        raise SystemExit("Node 20 or newer is unavailable")
+    return directory
 
 
 def main():
@@ -16,7 +36,12 @@ def main():
         pathlib.Path(os.environ["DSTACK_TEST_RUNTIME_MANIFEST"]).read_text()
     )
     repo = pathlib.Path(runtime["repository"])
-    env = dict(os.environ, CARGO_TARGET_DIR=str(runtime["cargo_target_dir"]))
+    env = dict(
+        os.environ,
+        CARGO_TARGET_DIR=str(runtime["cargo_target_dir"]),
+        # vitest needs a Node newer than many hosts' default.
+        PATH=os.pathsep.join([str(newest_node()), os.environ.get("PATH", "")]),
+    )
     rows = []
     for path, cmd in [
         ("dstack", ["cargo", "test", "--locked", "-p", "dstack-auth"]),
