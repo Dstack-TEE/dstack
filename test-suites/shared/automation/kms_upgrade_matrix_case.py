@@ -1039,6 +1039,7 @@ class MatrixRun:
                 command.extend(
                     ["--kms-url", f"https://{row['domain']}:{row['service_port']}"]
                 )
+            self.pin_kms_signer(self.encryption_row(kms_rows, version))
             output = run(command, timeout=300)
         match = re.search(r"Created VM with ID: ([0-9a-f-]+)", output)
         if not match:
