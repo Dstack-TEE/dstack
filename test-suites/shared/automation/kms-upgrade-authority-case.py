@@ -17,6 +17,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from Crypto.Hash import keccak
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+
 CASE_ID = "tc-kms-attestatio-004"
 
 
@@ -95,6 +99,24 @@ class Authority:
         """Initialize an allowing authority with an empty request log."""
         self.allowed = True
         self.requests: list[dict[str, Any]] = []
+        self.root_epoch_hash = "0x" + "00" * 32
+
+
+def epoch0_chain_hash(meta: dict[str, Any]) -> str:
+    """The root epoch 0 chain hash of the keys a KMS's GetMeta publishes."""
+    cert = x509.load_pem_x509_certificate(str(meta["ca_cert"]).encode())
+    ca = cert.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    k256 = bytes.fromhex(str(meta["k256_pubkey"]))
+    digest = keccak.new(digest_bits=256)
+    for part in (bytes(32), keccak256(ca), keccak256(k256)):
+        digest.update(part)
+    return "0x" + digest.hexdigest()
+
+
+def keccak256(data: bytes) -> bytes:
+    return keccak.new(digest_bits=256, data=data).digest()
 
 
 def start_authority(state: Authority) -> tuple[ThreadingHTTPServer, threading.Thread]:
@@ -121,6 +143,8 @@ def start_authority(state: Authority) -> tuple[ThreadingHTTPServer, threading.Th
                     "gatewayAppId": "gateway-authority-test",
                     "chainId": 31337,
                     "appImplementation": "0x" + "22" * 20,
+                    "rootEpoch": 0,
+                    "rootEpochHash": state.root_epoch_hash,
                 }
             )
 
@@ -128,10 +152,25 @@ def start_authority(state: Authority) -> tuple[ThreadingHTTPServer, threading.Th
             length = int(self.headers.get("content-length", "0"))
             request = json.loads(self.rfile.read(length))
             state.requests.append(request)
+            reason = "" if state.allowed else "authority policy denied"
+            if self.path in ("/authorizeApp", "/authorizeKms"):
+                self.send_json(
+                    {
+                        "authorized": state.allowed,
+                        "rejectionReason": reason,
+                        "gatewayAppId": "gateway-authority-test",
+                        "currentRootEpoch": 0,
+                        "currentRootEpochHash": state.root_epoch_hash,
+                        "currentAppEpoch": 0,
+                        "latestRootEpoch": 0,
+                        "latestRootEpochHash": state.root_epoch_hash,
+                    }
+                )
+                return
             self.send_json(
                 {
                     "isAllowed": state.allowed,
-                    "reason": "" if state.allowed else "authority policy denied",
+                    "reason": reason,
                     "gatewayAppId": "gateway-authority-test",
                 }
             )
@@ -175,6 +214,8 @@ def main() -> int:
                 "development mode did not explicitly advertise unrestricted upgrade"
             )
         rows.append({"name": "dev_selector", "status": "PASS"})
+        # A webhook backend registers the keys the KMS serves as root epoch 0.
+        authority.root_epoch_hash = epoch0_chain_hash(dev)
 
         stop(int(kms["pid"]))
         webhook = original_config.replace('type = "dev"', 'type = "webhook"', 1)
