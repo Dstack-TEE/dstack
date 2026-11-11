@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import base64
 import datetime
 import hashlib
 import json
@@ -14,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 from typing import Any
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 CASES = {
     "tc-gos-tappd-001": (
@@ -202,9 +205,15 @@ def decode_wire(data: bytes) -> dict[int, list[tuple[int, bytes | int]]]:
     return values
 
 
+# Bearer tokens presented to scope-enforcing listeners, keyed by socket.
+TOKENS: dict[str, str] = {}
+
+
 def call(socket: str, route: str, content_type: str, body: bytes) -> tuple[int, bytes]:
     """Call a unix-socket HTTP endpoint."""
     marker = b"\nDSTACK_HTTP_STATUS:"
+    token = TOKENS.get(socket)
+    auth = ["--header", f"Authorization: Bearer {token}"] if token else []
     process = subprocess.run(
         [
             "curl",
@@ -216,6 +225,7 @@ def call(socket: str, route: str, content_type: str, body: bytes) -> tuple[int, 
             "POST",
             "--header",
             f"Content-Type: {content_type}",
+            *auth,
             "--data-binary",
             "@-",
             "--write-out",
@@ -232,6 +242,33 @@ def call(socket: str, route: str, content_type: str, body: bytes) -> tuple[int, 
         raise RuntimeError(process.stderr.decode(errors="replace")[-1000:])
     response, code = process.stdout.rsplit(marker, 1)
     return int(code), response
+
+
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def mint_guest_api_token(guest: dict[str, Any], scopes: str) -> str:
+    """Sign a guest API token with the app's internal issuer key, as an app may."""
+    socket = guest["socket"]
+    route = v1_route(guest["route"].replace("<Method>", "Info"), "GetKey")
+    request = {"domain": "dstack:guest-api:issuer:v1", "algorithm": "ed25519"}
+    code, body = call(socket, route, "application/json", json.dumps(request).encode())
+    if code != 200:
+        raise RuntimeError(f"issuer key request returned HTTP {code}")
+    key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(json.loads(body)["key"]))
+    app_id = json_call(socket, guest["route"].replace("<Method>", "Info"))["app_id"]
+    now = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+    claims = {
+        "iss": f"dstack:guest-api:{app_id}",
+        "aud": app_id,
+        "iat": now,
+        "exp": now + 600,
+        "scope": scopes,
+    }
+    header = b64url(b'{"alg":"EdDSA","typ":"JWT"}')
+    signing_input = f"{header}.{b64url(json.dumps(claims).encode())}"
+    return f"{signing_input}.{b64url(key.sign(signing_input.encode()))}"
 
 
 def msgpack_decode(data: bytes, offset: int = 0) -> tuple[Any, int]:
@@ -573,6 +610,8 @@ def check_private_tcbinfo_info(
             private_socket = json.loads(fixture.read_text())["services"]["Worker"][
                 "socket"
             ]
+            # Same app keys, so the same internal issuer token is valid.
+            TOKENS[private_socket] = TOKENS[socket]
             frozen = [json_call(private_socket, route) for _ in range(3)]
             v1 = json_call(private_socket, "/prpc/v1/Info")
         finally:
@@ -765,6 +804,15 @@ def main() -> int:
         route = service_fixture["route"].replace("<Method>", method)
         if not pathlib.Path(socket).is_socket():
             raise RuntimeError(f"fixture socket is not available: {socket}")
+        if service == "Worker":
+            # The external listener grants nothing anonymously by default.
+            anonymous, _ = call(socket, route, "application/json", b"{}")
+            if anonymous != 401:
+                raise AssertionError(f"anonymous {method} returned HTTP {anonymous}")
+            TOKENS[socket] = mint_guest_api_token(
+                fixture["services"]["DstackGuest"],
+                "guest:version guest:info guest:attest-app-key",
+            )
         entry = inventory_entry(plan_root, service, method)
         matrix["fixture"] = {
             "profile": manifest["profile"],
@@ -835,14 +883,19 @@ def main() -> int:
         )
         if bad_route_code < 400:
             raise AssertionError("invalid route was accepted")
-        try:
-            bad_route_value = json.loads(bad_route_body)
-        except json.JSONDecodeError as error:
-            raise AssertionError(
-                "invalid route did not return structured JSON"
-            ) from error
-        if not isinstance(bad_route_value.get("error"), str):
-            raise AssertionError("invalid route response omitted error")
+        # The external listener refuses a route no scope names before dispatch.
+        if service == "Worker":
+            if bad_route_code != 401:
+                raise AssertionError(f"invalid route returned HTTP {bad_route_code}")
+        else:
+            try:
+                bad_route_value = json.loads(bad_route_body)
+            except json.JSONDecodeError as error:
+                raise AssertionError(
+                    "invalid route did not return structured JSON"
+                ) from error
+            if not isinstance(bad_route_value.get("error"), str):
+                raise AssertionError("invalid route response omitted error")
         invalid_code = None
         if entry["request_fields"]:
             first = entry["request_fields"][0]
