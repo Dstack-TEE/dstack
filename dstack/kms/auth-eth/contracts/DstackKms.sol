@@ -9,6 +9,7 @@ pragma solidity ^0.8.24;
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
+import "./TeeVariantPolicy.sol";
 import "@openzeppelin/contracts/utils/introspection/ERC165Checker.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
@@ -89,6 +90,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     mapping(uint256 => mapping(bytes32 => bool)) private _kmsDeviceIdsByRoot;
     mapping(uint256 => mapping(bytes32 => bool)) private _osImagesByRoot;
 
+    // The TEE platforms KMS instances and apps may run on.
+    TeeVariantPolicy.Policy private _teeVariants;
+
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     // Events
@@ -104,6 +108,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event OsImageHashAdded(bytes32 osImageHash);
     event OsImageHashRemoved(bytes32 osImageHash);
     event GatewayAppIdSet(string gatewayAppId);
+    event AllowAnyTeeVariantSet(bool allowAny);
+    event AllowedTeeVariantsSet(string[] teeVariants);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
     event RootEpochRegistered(
@@ -265,6 +271,30 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         require(epoch < _rootEpochs.length, "Unknown root epoch");
         RootEpoch storage keys = _rootEpochs[epoch];
         return (keys.caPubkey, keys.k256Pubkey, keys.evidenceUrl, keys.chainHash);
+    }
+
+    /// @notice Whether KMS instances and apps may run on any TEE platform, rather than only on
+    /// {allowedTeeVariants}. Covers every root epoch.
+    function allowAnyTeeVariant() public view returns (bool) {
+        return !_teeVariants.restricted;
+    }
+
+    /// @notice The TEE platforms, named as the KMS reports them, KMS instances and apps may run on
+    /// unless {allowAnyTeeVariant}.
+    function allowedTeeVariants() external view returns (string[] memory) {
+        return TeeVariantPolicy.allowedNames(_teeVariants);
+    }
+
+    function setAllowAnyTeeVariant(bool allowed) external onlyOwner {
+        _teeVariants.restricted = !allowed;
+        emit AllowAnyTeeVariantSet(allowed);
+        _emitPolicy("allow-any-tee-variant", bytes32(0), allowed);
+    }
+
+    function setAllowedTeeVariants(string[] calldata teeVariants) external onlyOwner {
+        uint64 mask = TeeVariantPolicy.setAllowed(_teeVariants, teeVariants);
+        emit AllowedTeeVariantsSet(teeVariants);
+        _emitPolicy("allowed-tee-variants", bytes32(uint256(mask)), true);
     }
 
     // Function to set trusted Gateway App ID
@@ -550,11 +580,14 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
-        return _checkAppDeployment(request.appInfo, selectedRootEpoch);
+        return _checkAppDeployment(
+            request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), selectedRootEpoch
+        );
     }
 
     function _checkAppDeployment(
         AppInfo calldata bootInfo,
+        bool teeVariantAllowed,
         uint256 selectedRootEpoch
     )
         private
@@ -564,6 +597,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (!registeredApps[bootInfo.appId]) return "App not registered";
         if (!allowedOsImagesAtEpoch(selectedRootEpoch, bootInfo.osImageHash)) return "OS image is not allowed";
         if (!isContract(bootInfo.appId)) return "App not deployed or invalid address";
+        if (!teeVariantAllowed) return "TEE variant not allowed";
         return "";
     }
 
@@ -600,7 +634,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         }
         uint256 selectedRootEpoch =
             request.requestedRootEpoch.isSet ? request.requestedRootEpoch.value : _currentRootEpoch;
-        (result.authorized, result.rejectionReason) = _kmsPolicy(request.appInfo, selectedRootEpoch);
+        (result.authorized, result.rejectionReason) =
+            _kmsPolicy(request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), selectedRootEpoch);
     }
 
     // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
@@ -609,10 +644,19 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (_currentRootEpoch != 0) {
             return (false, "Root epoch requires epoch-aware authorization");
         }
-        return _kmsPolicy(bootInfo, 0);
+        // Legacy callers report no platform, so only an unrestricted policy admits them.
+        return _kmsPolicy(bootInfo, allowAnyTeeVariant(), 0);
     }
 
-    function _kmsPolicy(AppInfo memory bootInfo, uint256 selectedRootEpoch) private view returns (bool, string memory) {
+    function _kmsPolicy(
+        AppInfo memory bootInfo,
+        bool teeVariantAllowed,
+        uint256 selectedRootEpoch
+    )
+        private
+        view
+        returns (bool, string memory)
+    {
         // Check if the TCB status is up to date
         if (keccak256(abi.encodePacked(bootInfo.tcbStatus)) != keccak256(abi.encodePacked("UpToDate"))) {
             return (false, "TCB status is not up to date");
@@ -633,6 +677,10 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             return (false, "KMS is not allowed to boot on this device");
         }
 
+        if (!teeVariantAllowed) {
+            return (false, "TEE variant not allowed");
+        }
+
         return (true, "");
     }
 
@@ -650,7 +698,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         if (_appEpoch(bootInfo.appId) != 0) {
             return (false, "App epoch requires epoch-aware authorization");
         }
-        string memory rejection = _checkAppDeployment(bootInfo, 0);
+        // Legacy callers report no platform, so only an unrestricted policy admits them.
+        string memory rejection = _checkAppDeployment(bootInfo, allowAnyTeeVariant(), 0);
         if (bytes(rejection).length != 0) return (false, rejection);
         // Call the app's isAppAllowed function. The tuple is forwarded as the
         // function's return value; the slither detector trips on the named
@@ -660,7 +709,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[44] private __gap;
+    uint256[43] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

@@ -478,6 +478,12 @@
             "maximum": 4294967295,
             "description": "Omit to use the current application epoch. Explicit zero selects epoch 0; future epochs are denied."
           },
+          "teeVariant": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "TEE platform of the attested identity, as the KMS names it, e.g. dstack-tdx; passed to the contract unchanged."
+          },
           "operation": {
             "type": "string",
             "enum": [
@@ -491,6 +497,7 @@
           }
         },
         "required": [
+          "teeVariant",
           "operation"
         ]
       }

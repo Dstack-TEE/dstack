@@ -140,6 +140,9 @@ and admits one app per epoch, then one symbolic owner write where noted):
 - [x] `check_PolicyWrite_PreservesOtherEpochDecisions` — a write never
       changes an authorization decision at an epoch outside the rows it names
       (one epoch, or a symbolic range), including epoch 0's legacy fields.
+- [x] `check_TeeVariantPolicy_NarrowsDecision` — once the TEE platform
+      policy is restricted, `authorizeApp` allows exactly when it would
+      unrestricted and the request names a listed platform.
 - [x] `check_AuthorizeApp_MatchesPolicy` — for both app operations,
       `authorizeApp` allows exactly when the epoch is active, the TCB
       requirement holds, that epoch admits the compose hash, and the device

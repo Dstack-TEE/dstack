@@ -879,7 +879,7 @@ describe('GET /app/:appId', () => {
 
 describe('POST /authorizeApp', () => {
   const appInfo = {
-    appId: '0x' + '11'.repeat(20), composeHash: '0x' + '22'.repeat(32),
+    teeVariant: 'dstack-amd-sev-snp', appId: '0x' + '11'.repeat(20), composeHash: '0x' + '22'.repeat(32),
     instanceId: '', deviceId: '0x' + '33'.repeat(32),
     mrAggregated: '0x' + '44'.repeat(32), mrSystem: '0x' + '55'.repeat(32),
     osImageHash: '0x' + '66'.repeat(32), tcbStatus: 'UpToDate', advisoryIds: [],
@@ -901,7 +901,7 @@ describe('POST /authorizeApp', () => {
     expect(mockReadContract).toHaveBeenCalledTimes(1);
     expect(mockReadContract).toHaveBeenCalledWith(expect.objectContaining({
       functionName: 'authorizeApp', blockNumber: 98n,
-      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: false, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n } })],
+      args: [expect.objectContaining({ appInfo: expect.objectContaining({ appId: appInfo.appId }), requestedAppEpoch: { isSet: false, value: 0n }, requestedRootEpoch: { isSet: false, value: 0n }, teeVariant: appInfo.teeVariant })],
     }));
   });
 
@@ -954,6 +954,8 @@ describe('POST /authorizeApp', () => {
     const requests = [
       { status: 400, body: JSON.stringify({ ...appInfo, operation: 'unknown' }) },
       { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', mrAggregated: 'not-hex' }) },
+      { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', teeVariant: undefined }) },
+      { status: 400, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', teeVariant: '' }) },
       { status: 400, body: '{"appId":' },
       { status: 413, body: JSON.stringify({ ...appInfo, operation: 'app_get_key', padding: 'a'.repeat(256 * 1024) }) },
     ];

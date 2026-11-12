@@ -51,6 +51,17 @@ KMS_CONTRACT_ADDR=0x... ROOT_EPOCH=0 DEVICE_ID=0x1234... \
 forge script script/Manage.s.sol:AddKmsDevice --broadcast --rpc-url $RPC_URL
 ```
 
+#### Set KMS TEE Variants
+`TEE_VARIANTS` is `any`, or the comma-separated platform names, as the KMS reports
+them, that alone are allowed: `dstack-tdx`, `dstack-gcp-tdx`, `dstack-nitro-enclave`,
+`dstack-amd-sev-snp` or `dstack-aws-nitro-tpm` (see `contracts/TeeVariantPolicy.sol`).
+It applies to KMS instances and every app at every root epoch. A restricted policy
+refuses the legacy `isKmsAllowed`/`isAppAllowed`, whose callers report no platform.
+```bash
+KMS_CONTRACT_ADDR=0x... TEE_VARIANTS=dstack-tdx \
+forge script script/Manage.s.sol:SetKmsTeeVariants --broadcast --rpc-url $RPC_URL
+```
+
 #### Set Gateway App ID
 ```bash
 KMS_CONTRACT_ADDR=0x... GATEWAY_APP_ID="my-gateway" \
@@ -168,6 +179,13 @@ forge script script/Manage.s.sol:AddDevice --broadcast --rpc-url $RPC_URL
 ```bash
 KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... ALLOW_ANY_DEVICE=true \
 forge script script/Manage.s.sol:SetAllowAnyDevice --broadcast --rpc-url $RPC_URL
+```
+
+#### Set TEE Variants
+Same `TEE_VARIANTS` values as for the KMS; applies to every app epoch.
+```bash
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... TEE_VARIANTS=dstack-tdx,dstack-gcp-tdx \
+forge script script/Manage.s.sol:SetTeeVariants --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove Compose Hash

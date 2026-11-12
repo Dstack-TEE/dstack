@@ -76,7 +76,7 @@ contract LegacyAppCompatTest is Test {
         info.tcbStatus = "UpToDate";
         info.advisoryIds = new string[](0);
         return AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(appSet, appEpoch), OptionalUint256(false, 0)
+            info, keccak256("app_get_key"), OptionalUint256(appSet, appEpoch), OptionalUint256(false, 0), "dstack-tdx"
         );
     }
 
@@ -115,6 +115,22 @@ contract LegacyAppCompatTest is Test {
             assertEq(result.currentRootEpoch, 1);
             assertEq(result.currentAppEpoch, 0);
             assertFalse(kms.authorizeApp(request(app, true, 1)).authorized);
+        }
+    }
+
+    function test_RestrictedKmsGatesLegacyAppsByTeeVariant() public {
+        string[] memory tdx = new string[](1);
+        tdx[0] = "dstack-tdx";
+        vm.startPrank(owner);
+        kms.setAllowedTeeVariants(tdx);
+        kms.setAllowAnyTeeVariant(false);
+        vm.stopPrank();
+        for (uint256 release; release < appReleases.length; ++release) {
+            address app = deployLegacyApp(release);
+            assertTrue(kms.authorizeApp(request(app, false, 0)).authorized);
+            AuthorizationRequest memory snp = request(app, false, 0);
+            snp.teeVariant = "dstack-amd-sev-snp";
+            assertEq(kms.authorizeApp(snp).rejectionReason, "TEE variant not allowed");
         }
     }
 
@@ -172,6 +188,12 @@ contract LegacyAppCompatTest is Test {
         assertTrue(upgraded.allowedComposeHashesAtEpoch(0, COMPOSE));
         assertTrue(upgraded.allowedDeviceIdsAtEpoch(0, DEVICE));
         assertEq(upgraded.allowAnyDevice(), anyDevice);
+        // Upgraded policies allow any TEE platform.
+        assertTrue(upgraded.allowAnyTeeVariant());
+        assertEq(upgraded.allowedTeeVariants().length, 0);
+        AuthorizationRequest memory snp = request(app, true, 0);
+        snp.teeVariant = "dstack-amd-sev-snp";
+        assertTrue(kms.authorizeApp(snp).authorized);
         assertFalse(upgraded.allowedComposeHashesAtEpoch(1, COMPOSE));
         assertTrue(kms.authorizeApp(request(app, true, 0)).authorized);
 

@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- DstackKms, DstackApp: TEE platform allowlists. `AuthorizationRequest` of
+  `IAppEpochAuth` (the epoch-aware policy interface) carries `teeVariant`, the
+  platform name the KMS reports (`dstack-tdx`, `dstack-amd-sev-snp`, ...),
+  passed through unchanged by auth-eth. Each contract allows any platform until
+  its owner calls `setAllowAnyTeeVariant(false)`; it then allows only the names
+  set by `setAllowedTeeVariants`, from the platforms `TeeVariantPolicy` knows
+  (setting an unknown one reverts). The policy covers every epoch, and a
+  restricted one refuses unknown platforms and the legacy `isAppAllowed` and
+  `isKmsAllowed`, whose callers report no platform. auth-eth requires
+  `teeVariant` on `/authorizeKms` and `/authorizeApp`.
 - KMS root and application key epochs, epoch-scoped authorization, SealedEnv
   HPKE encryption, automatic environment migration, and epoch-aware SDK key
   selection.
@@ -76,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   range; `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
   `remove*AtEpochs(0, currentAppEpoch, value)` in `DstackApp` revoke a value
   everywhere. `DstackApp` reports its setters as the new ERC-165 interface
-  `IAppEpochManagement` (`0xc65f31b6`). The `Manage.s.sol` scripts require
+  `IAppEpochManagement` (`0x8c0524c4`). The `Manage.s.sol` scripts require
   `ROOT_EPOCH` or `APP_EPOCH`, or a `FROM_*`/`TO_*` range. `DstackApp`'s
   `allowAnyDevice` stays a single switch: `setAllowAnyDevice(bool)` covers every
   app epoch, so dropping the device restriction cannot leave an older epoch

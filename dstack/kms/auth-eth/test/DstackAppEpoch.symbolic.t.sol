@@ -21,7 +21,7 @@ function _appAuth(
     returns (bool, string memory)
 {
     AuthorizationResult memory result = target.authorizeApp(
-        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0))
+        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0), "dstack-tdx")
     );
     return (result.authorized, result.rejectionReason);
 }
@@ -279,6 +279,38 @@ contract DstackAppEpochSymbolicTest is Test {
         (bool allowedAfter, bytes32 reasonAfter) = _decision(info, epoch);
 
         assert(allowedBefore == allowedAfter && reasonBefore == reasonAfter);
+    }
+
+    // A TEE platform policy only ever narrows a decision: once restricted, a
+    // request passes exactly when it passes unrestricted and names a listed platform.
+    function check_TeeVariantPolicy_NarrowsDecision(
+        bool restrict,
+        bool listed,
+        bytes32 composeHash,
+        bytes32 deviceId,
+        bool upToDate,
+        uint256 epoch
+    )
+        external
+    {
+        IAppAuth.AppInfo memory info = _info(composeHash, deviceId, upToDate);
+        (bool unrestricted,) = _appAuth(app, info, epoch, AuthorizationOperation.APP_GET_KEY);
+        string[] memory tdx = new string[](1);
+        tdx[0] = "dstack-tdx";
+        vm.startPrank(OWNER);
+        app.setAllowedTeeVariants(tdx);
+        app.setAllowAnyTeeVariant(!restrict);
+        vm.stopPrank();
+        AuthorizationResult memory result = app.authorizeApp(
+            AuthorizationRequest(
+                info,
+                AuthorizationOperation.APP_GET_KEY,
+                OptionalUint256(true, epoch),
+                OptionalUint256(false, 0),
+                listed ? "dstack-tdx" : "dstack-amd-sev-snp"
+            )
+        );
+        assert(result.authorized == (unrestricted && (!restrict || listed)));
     }
 
     function check_AuthorizeApp_MatchesPolicy(

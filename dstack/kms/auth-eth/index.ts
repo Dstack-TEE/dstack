@@ -38,6 +38,7 @@ const BootInfoSchema = z.object({
 });
 
 const AuthorizationRequestSchema = BootInfoSchema.omit({ rootEpoch: true, rootEpochHash: true }).extend({
+  teeVariant: z.string().min(1).max(64),
   operation: z.enum(['kms_bootstrap', 'kms_serve', 'kms_export_keys', 'kms_import_keys', 'app_get_key', 'app_get_cert']),
   requestedAppEpoch: z.number().int().min(0).max(0xffffffff).optional(),
   requestedRootEpoch: z.number().int().min(0).max(0xffffffff).optional(),
@@ -103,6 +104,7 @@ const AUTHORIZATION_ABI = {
     { name: 'requestedRootEpoch', type: 'tuple', components: [
       { name: 'isSet', type: 'bool' }, { name: 'value', type: 'uint256' },
     ] },
+    { name: 'teeVariant', type: 'string' },
   ] }],
   outputs: [{
     name: 'result',
@@ -288,6 +290,7 @@ export class EthereumBackend {
         operation: keccak256(toBytes(appInfo.operation)),
         requestedAppEpoch: { isSet: appInfo.requestedAppEpoch !== undefined, value: BigInt(appInfo.requestedAppEpoch ?? 0) },
         requestedRootEpoch: { isSet: appInfo.requestedRootEpoch !== undefined, value: BigInt(appInfo.requestedRootEpoch ?? 0) },
+        teeVariant: appInfo.teeVariant,
       }],
       blockNumber,
     });

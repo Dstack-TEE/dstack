@@ -26,7 +26,13 @@ before using nonzero epochs. Once the app epoch is nonzero, the legacy
 derive epoch-zero keys, so the KMS contract calling the app policy must support
 epochs before the app epoch advances. The ERC-165 `IAppEpochAuth` capability combines
 `currentAppEpoch()` and `authorizeApp(AuthorizationRequest)` in one interface; the
-policy returns the same `AuthorizationResult` struct as `DstackKms`. Legacy policies
+policy returns the same `AuthorizationResult` struct as `DstackKms`. The request
+also carries `teeVariant`, the platform name the KMS reports, which
+`allowAnyTeeVariant` and `allowedTeeVariants` in `DstackApp` and `DstackKms`
+restrict to the platforms listed in `TeeVariantPolicy.sol`; listing a new
+platform takes a contract upgrade. Like `allowAnyDevice`, the policy covers every
+epoch: which platforms may hold an app's keys is a trust decision, not a property
+of a key generation. Legacy policies
 without this capability remain at zero; failures of an advertised getter propagate.
 
 The Ethereum auth backends query the policy through the KMS contract. The simple
@@ -113,7 +119,7 @@ This permits staged key distribution without changing which epoch the KMS serves
 
 The original bool mappings and `allowAnyDevice` retain their storage locations and
 are used directly as row zero. New storage consumes storage-gap slots in each
-contract (four in `DstackKms`, three in `DstackApp`); no entries are copied and no reinitializer is required. Existing
+contract (seven in `DstackKms`, four in `DstackApp`); no entries are copied and no reinitializer is required. Existing
 owners, pending owners, policy flags, root registries and app epoch counters are
 preserved. Even if the pre-upgrade counter is nonzero, old global material
 approvals grant only row zero after upgrading: explicitly populate the intended

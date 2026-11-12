@@ -56,6 +56,14 @@ abstract contract BaseScript is Script {
         return (vm.envUint(from), vm.envUint(to));
     }
 
+    // TEE_VARIANTS: `any`, or the comma-separated platform names, as the KMS
+    // reports them, that alone are allowed.
+    function teeVariants() internal view returns (bool any, string[] memory names) {
+        names = vm.envString("TEE_VARIANTS", ",");
+        require(names.length > 0 && bytes(names[0]).length > 0, "set TEE_VARIANTS to any or platform names");
+        any = names.length == 1 && keccak256(bytes(names[0])) == keccak256("any");
+    }
+
     function rootEpochs() internal view returns (uint256, uint256) {
         return epochRange("ROOT_EPOCH", "FROM_ROOT_EPOCH", "TO_ROOT_EPOCH");
     }
@@ -129,6 +137,20 @@ contract AddKmsDevice is BaseScript {
         vm.stopBroadcast();
 
         console.log("Added KMS device:", vm.toString(deviceId));
+    }
+}
+
+contract SetKmsTeeVariants is BaseScript {
+    function run() external {
+        (bool any, string[] memory names) = teeVariants();
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        // Write the list before restricting, so the restriction never applies to a stale one.
+        if (!any) kms.setAllowedTeeVariants(names);
+        kms.setAllowAnyTeeVariant(any);
+        vm.stopBroadcast();
+
+        console.log("Set KMS TEE variants to:", vm.envString("TEE_VARIANTS"));
     }
 }
 
@@ -248,6 +270,21 @@ contract SetAllowAnyDevice is BaseScript {
         app.setAllowAnyDevice(allow);
 
         console.log("Set allowAnyDevice to:", allow);
+    }
+}
+
+contract SetTeeVariants is BaseScript {
+    function run() external {
+        (bool any, string[] memory names) = teeVariants();
+        require(address(legacyApp()) == address(0), "this app predates TEE variant policies");
+
+        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
+        // Write the list before restricting, so the restriction never applies to a stale one.
+        if (!any) app.setAllowedTeeVariants(names);
+        app.setAllowAnyTeeVariant(any);
+        vm.stopBroadcast();
+
+        console.log("Set TEE variants to:", vm.envString("TEE_VARIANTS"));
     }
 }
 
