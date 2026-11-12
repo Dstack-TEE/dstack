@@ -168,6 +168,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- guest OS: disable automatic GPT partition discovery and host-supplied system
+  credentials on the measured kernel command line. Remove production systemd
+  generators that act on host-controlled, unmeasured input; pin the allowed
+  generator set and assert the hardening configuration during builds. Includes
+  the unreleased 0.6.2 fixes for GHSA-c79w-3x5w-gmm5.
 - guest-agent: gate every external API route by scopes granted through signed
   Ed25519 JWTs or `[cvm.guest_agent_api].anonymous_scopes`. No scopes are
   anonymous by default; app SDKs keep using the internal Unix socket. The
