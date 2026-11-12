@@ -55,9 +55,9 @@ return-value spoofing are still possible — see §6.
 | 0–3 | `kmsInfo` | `KmsInfo` (struct, 4 fields) | `registerRootEpoch` (epoch 0), `activateRootEpoch` (owner) | Preserved for proxy upgrades and legacy readers; quote and event log are cleared on activation |
 | 4 | `gatewayAppId` | `string` | `setGatewayAppId` (owner) | Renamed from `tproxyAppId`; carries `@custom:oz-renamed-from` |
 | 5 | `registeredApps` | `mapping(address => bool)` | `registerApp` (anyone), `deployAndRegisterApp` (anyone) | Permissionless — see §6.1 |
-| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMrAtEpoch(s)`, `removeKmsAggregatedMrAtEpoch(s)` at epoch 0 (owner) | |
-| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDeviceAtEpoch(s)`, `removeKmsDeviceAtEpoch(s)` at epoch 0 (owner) | |
-| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHashAtEpoch(s)`, `removeOsImageHashAtEpoch(s)` at epoch 0 (owner) | |
+| 6 | `kmsAllowedAggregatedMrs` | `mapping(bytes32 => bool)` | `addKmsAggregatedMrAtEpochs`, `removeKmsAggregatedMrAtEpochs` at epoch 0 (owner) | |
+| 7 | `kmsAllowedDeviceIds` | `mapping(bytes32 => bool)` | `addKmsDeviceAtEpochs`, `removeKmsDeviceAtEpochs` at epoch 0 (owner) | |
+| 8 | `allowedOsImages` | `mapping(bytes32 => bool)` | `addOsImageHashAtEpochs`, `removeOsImageHashAtEpochs` at epoch 0 (owner) | |
 | 9 | `appImplementation` | `address` | `setAppImplementation` (owner) | Used by `deployAndRegisterApp` |
 | 10 | `__gap[50]` | `uint256[50]` | (none — must always read zero) | Reserved |
 
@@ -173,7 +173,7 @@ setup uses `registerRootEpoch`. On an upgraded proxy with existing legacy roots,
 epoch 0 must match the stored `kmsInfo` keys; the upgrade preserves that storage.
 
 For each of `setGatewayAppId`,
-`setAppImplementation`, and the `*AtEpoch` and `*AtEpochs` forms of
+`setAppImplementation`, and the `*AtEpochs` forms of
 `addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice`, `removeKmsDevice`,
 `addOsImageHash`, `removeOsImageHash`:
 

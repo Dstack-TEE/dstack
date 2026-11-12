@@ -82,8 +82,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DstackKms, DstackApp: material approvals are per epoch. A request is decided
   on the row of the epoch it selects, so a value is revoked only once every row
   allowing it is cleared. Material setters name their rows:
-  `*AtEpoch(epoch, value)` writes one epoch, `*AtEpochs(from, to, value)` a
-  range; `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
+  `*AtEpochs(from, to, value)` writes a range, and in `DstackApp`
+  `*AtEpoch(epoch, value)` one epoch (in `DstackKms`, pass the epoch twice);
+  `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
   `remove*AtEpochs(0, currentAppEpoch, value)` in `DstackApp` revoke a value
   everywhere. `DstackApp` reports its setters as the new ERC-165 interface
   `IAppEpochManagement` (`0x8c0524c4`). The `Manage.s.sol` scripts require
@@ -124,12 +125,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ghcr.io/dstack-tee/dstack-kms-auth-eth-bun` remain available. Update image
   references and source paths in deployments.
 
+- **Breaking:** DstackKms: reverts with custom errors such as
+  `UnknownRootEpoch()` instead of revert strings, to stay under the EIP-170
+  size limit. This includes `registerApp`, `setAppImplementation` and
+  `deployAndRegisterApp`, whose v0.6.0 strings (`Invalid app ID`, `Invalid
+  implementation address`, `DstackApp implementation not set`, `Invalid owner
+  address`) become `InvalidAppId()`, `InvalidImplementationAddress()`,
+  `AppImplementationNotSet()` and `InvalidOwnerAddress()`; tooling that
+  matches the strings must decode the errors. Authorization rejection reasons
+  are unchanged.
+
 ### Removed
 
 - DstackKms: the epoch-less `addOsImageHash`, `removeOsImageHash`,
   `addKmsAggregatedMr`, `removeKmsAggregatedMr`, `addKmsDevice` and
-  `removeKmsDevice`. Use the `*AtEpoch` or `*AtEpochs` forms; before any
-  rotation, `addOsImageHashAtEpoch(0, hash)` is the old call.
+  `removeKmsDevice`. Use the `*AtEpochs` forms; before any rotation,
+  `addOsImageHashAtEpochs(0, 0, hash)` is the old call.
 - **Breaking:** DstackApp: the epoch-less `addComposeHash`, `removeComposeHash`,
   `addDevice` and `removeDevice`, and with them
   `IAppAuthBasicManagement`: an upgraded app no longer reports interface ID

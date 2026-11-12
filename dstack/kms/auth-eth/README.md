@@ -332,8 +332,9 @@ See `script/README.md` for complete documentation of all available scripts.
 #### Epoch-scoped material approvals
 
 Material approvals use exact root/app epoch rows; neither older nor newer rows
-are implicitly authorized. Material setters name their rows: `*AtEpoch` one
-row, `*AtEpochs` a range; `DstackApp` reports them as `IAppEpochManagement`.
+are implicitly authorized. Material setters name their rows: `*AtEpochs` a
+range, and in `DstackApp` `*AtEpoch` one row; `DstackApp` reports them as
+`IAppEpochManagement`.
 The management scripts take `ROOT_EPOCH`/`APP_EPOCH`, or
 `FROM_ROOT_EPOCH`/`TO_ROOT_EPOCH` and `FROM_APP_EPOCH`/`TO_APP_EPOCH`, and use
 the epoch-less setters of app policies predating app epochs. Original bool mappings and events remain epoch-zero views after

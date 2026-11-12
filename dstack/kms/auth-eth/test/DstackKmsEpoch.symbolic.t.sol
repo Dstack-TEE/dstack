@@ -78,9 +78,9 @@ contract DstackKmsEpochSymbolicTest is Test {
         vm.startPrank(OWNER);
         for (uint256 epoch = 0; epoch < 3; epoch++) {
             kms.registerRootEpoch(_ca(bytes32(epoch + 1), bytes32(0)), _k256(true, bytes32(epoch + 1)), "evidence");
-            kms.addOsImageHashAtEpoch(epoch, _id(0x05, epoch));
-            kms.addKmsAggregatedMrAtEpoch(epoch, _id(0x0a, epoch));
-            kms.addKmsDeviceAtEpoch(epoch, _id(0x0d, epoch));
+            kms.addOsImageHashAtEpochs(epoch, epoch, _id(0x05, epoch));
+            kms.addKmsAggregatedMrAtEpochs(epoch, epoch, _id(0x0a, epoch));
+            kms.addKmsDeviceAtEpochs(epoch, epoch, _id(0x0d, epoch));
         }
         (, bytes32 hash1) = _entry(1);
         kms.activateRootEpoch(1, hash1);
@@ -152,12 +152,12 @@ contract DstackKmsEpochSymbolicTest is Test {
         returns (bytes memory data)
     {
         uint256 latest = to;
-        if (which == 0) data = abi.encodeCall(DstackKms.addKmsAggregatedMrAtEpoch, (epoch, word));
-        else if (which == 1) data = abi.encodeCall(DstackKms.removeKmsAggregatedMrAtEpoch, (epoch, word));
-        else if (which == 2) data = abi.encodeCall(DstackKms.addKmsDeviceAtEpoch, (epoch, word));
-        else if (which == 3) data = abi.encodeCall(DstackKms.removeKmsDeviceAtEpoch, (epoch, word));
-        else if (which == 4) data = abi.encodeCall(DstackKms.addOsImageHashAtEpoch, (epoch, word));
-        else if (which == 5) data = abi.encodeCall(DstackKms.removeOsImageHashAtEpoch, (epoch, word));
+        if (which == 0) data = abi.encodeCall(DstackKms.addKmsAggregatedMrAtEpochs, (epoch, epoch, word));
+        else if (which == 1) data = abi.encodeCall(DstackKms.removeKmsAggregatedMrAtEpochs, (epoch, epoch, word));
+        else if (which == 2) data = abi.encodeCall(DstackKms.addKmsDeviceAtEpochs, (epoch, epoch, word));
+        else if (which == 3) data = abi.encodeCall(DstackKms.removeKmsDeviceAtEpochs, (epoch, epoch, word));
+        else if (which == 4) data = abi.encodeCall(DstackKms.addOsImageHashAtEpochs, (epoch, epoch, word));
+        else if (which == 5) data = abi.encodeCall(DstackKms.removeOsImageHashAtEpochs, (epoch, epoch, word));
         else if (which == 6) data = abi.encodeCall(DstackKms.addKmsAggregatedMrAtEpochs, (epoch, latest, word));
         else if (which == 7) data = abi.encodeCall(DstackKms.removeKmsAggregatedMrAtEpochs, (epoch, latest, word));
         else if (which == 8) data = abi.encodeCall(DstackKms.addKmsDeviceAtEpochs, (epoch, latest, word));
@@ -375,9 +375,9 @@ contract DstackKmsEpochSymbolicTest is Test {
         bytes memory initData = abi.encodeCall(DstackKms.initialize, (OWNER, address(new DstackApp())));
         DstackKms fresh = DstackKms(address(new ERC1967Proxy(address(impl), initData)));
         vm.startPrank(OWNER);
-        fresh.addOsImageHashAtEpoch(0, id.osImageHash);
-        fresh.addKmsAggregatedMrAtEpoch(0, id.mrAggregated);
-        fresh.addKmsDeviceAtEpoch(0, id.deviceId);
+        fresh.addOsImageHashAtEpochs(0, 0, id.osImageHash);
+        fresh.addKmsAggregatedMrAtEpochs(0, 0, id.mrAggregated);
+        fresh.addKmsDeviceAtEpochs(0, 0, id.deviceId);
         vm.stopPrank();
 
         AuthorizationRequest memory request = _request(_info(id), operation, false, 0, false, 0);
@@ -621,9 +621,9 @@ contract DstackKmsEpochSymbolicTest is Test {
         vm.startPrank(OWNER);
         for (uint256 epoch = 0; epoch < 2; epoch++) {
             kms.registerRootEpoch(_ca(bytes32(epoch + 1), bytes32(0)), _k256(true, bytes32(epoch + 1)), "evidence");
-            kms.addOsImageHashAtEpoch(epoch, _id(0x05, epoch));
-            kms.addKmsAggregatedMrAtEpoch(epoch, _id(0x0a, epoch));
-            kms.addKmsDeviceAtEpoch(epoch, _id(0x0d, epoch));
+            kms.addOsImageHashAtEpochs(epoch, epoch, _id(0x05, epoch));
+            kms.addKmsAggregatedMrAtEpochs(epoch, epoch, _id(0x0a, epoch));
+            kms.addKmsDeviceAtEpochs(epoch, epoch, _id(0x0d, epoch));
         }
         vm.stopPrank();
         // Epoch 1 is registered and prepared but pending.

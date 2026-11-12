@@ -868,7 +868,7 @@ describe('request hardening', () => {
 describe('GET /app/:appId', () => {
   it('reports an app epoch only when the contract can vouch for it', async () => {
     const url = `http://localhost/app/0x${'11'.repeat(20)}`;
-    mockReadContract.mockRejectedValueOnce(new Error('execution reverted: App not registered'));
+    mockReadContract.mockRejectedValueOnce(new Error('execution reverted: AppNotRegistered()'));
     expect((await appFetch(new Request(url))).status).toBe(503);
     mockReadContract.mockResolvedValueOnce(0n);
     const legacy = await appFetch(new Request(url));

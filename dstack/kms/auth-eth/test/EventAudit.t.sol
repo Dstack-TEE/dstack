@@ -54,12 +54,12 @@ contract EventAuditTest is Test {
 
         vm.recordLogs();
         vm.startPrank(owner);
-        kms.addKmsAggregatedMrAtEpoch(0, mr);
-        kms.addKmsDeviceAtEpoch(0, device);
-        kms.addOsImageHashAtEpoch(0, image);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mr);
+        kms.addKmsDeviceAtEpochs(0, 0, device);
+        kms.addOsImageHashAtEpochs(0, 0, image);
         kms.setGatewayAppId(gateway);
         kms.registerApp(address(app));
-        kms.removeKmsAggregatedMrAtEpoch(0, mr);
+        kms.removeKmsAggregatedMrAtEpochs(0, 0, mr);
         vm.stopPrank();
         Vm.Log[] memory logs = vm.getRecordedLogs();
 
@@ -110,7 +110,7 @@ contract EventAuditTest is Test {
         vm.recordLogs();
         vm.prank(outsider);
         vm.expectRevert();
-        kms.addOsImageHashAtEpoch(0, image);
+        kms.addOsImageHashAtEpochs(0, 0, image);
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertEq(_auditCount(logs), 0);
         assertFalse(kms.allowedOsImages(image));
