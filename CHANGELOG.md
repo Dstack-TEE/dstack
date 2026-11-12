@@ -24,13 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with TLS and an admin token, or set `core.onboard.public_key_handover = true`
   (see Changed).
 
-### Security
-
-- ra-rpc: verify that an attested server proves possession of its TLS private
-  key. The client previously skipped TLS handshake signatures, so a copied
-  certificate could pass the later attestation check. `tls_no_check` is
-  renamed to `tls_skip_ca_verification` (#1522).
-
 ### Added
 
 - DstackKms, DstackApp: TEE platform allowlists. `AuthorizationRequest` of
@@ -187,6 +180,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attestation on the connection that returns the root keys and checks local
   policy before using them. Legacy sources requiring temp-CA-issued clients
   must be upgraded.
+- ra-rpc: check the TLS handshake signature when CA verification is skipped;
+  `tls_no_check` is renamed to `tls_skip_ca_verification` (#1522).
 - vmm: write `.instance_info` atomically, so a failed write or power loss can no
   longer drop the instance ID seed and lose the VM's disk key (#1553).
 - KMS, Gateway, Verifier, auth-eth images: set explicit file modes and
