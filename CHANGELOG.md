@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.4] - 2026-11-12
 
 ### Upgrade notes
 
@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app epoch. The KMS reads it for `GetAppEnvEncryptPubKey` and
   `GetSealedEnvPubKey`. `auth-eth` and `dstack-auth` serve it; custom webhook
   backends must add it.
+- **Upgrade KMS before guests.** 0.6.4 guests mint self-issued RA-TLS client
+  certificates for KMS calls and need a 0.6.4 KMS that accepts them.
+- **KMS needs a key handover path to start:** configure the admin listener
+  with TLS and an admin token, or set `core.onboard.public_key_handover = true`
+  (see Changed).
 
 ### Added
 
@@ -40,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when absent, neither is checked. `GET /` reports the configured `chainId` and
   `appImplementation`, and each decision is logged with the device ID,
   measurements and TCB status.
+- guest: `key_provider: sev-snp` derives a hardware-bound seed inside an AMD
+  SEV-SNP guest, so a KMS CVM on an AMD host can recover its disk and stored
+  root keys after restart without SGX (#1526).
 
 ### Changed
 
@@ -106,7 +114,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operations stay limited to the current epoch.
 - KMS: retain `GetTempCaCert`, temporary CA files and legacy handover fields so
   KMS nodes can be upgraded before existing OS images.
-
 - dstack-util, cert-client: guests mint self-issued RA-TLS client
   certificates for KMS calls instead of fetching the temp CA and minting from
   it; the KMS authenticates the quote inside the certificate, not its issuer.
@@ -116,15 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The new flow requires an attested KMS that accepts self-issued certificates.
 - dstack-types: `KeyProvider::Kms` drops `tmp_ca_key` and `tmp_ca_cert`, so
   `.appkeys.json` no longer carries them. Files written by older images still
-  parse, but out-of-tree readers that require those fields fail on new files
-
+  parse, but out-of-tree readers that require those fields fail on new files.
 - KMS: `auth-eth-bun` is renamed to `auth-eth`. The Bun webhook server moves
   from `dstack/kms/auth-eth-bun` into `dstack/kms/auth-eth`, next to the
   contracts. New releases are tagged `kms-auth-eth-v*` and published as
   `ghcr.io/dstack-tee/dstack-kms-auth-eth`; images already published as
   `ghcr.io/dstack-tee/dstack-kms-auth-eth-bun` remain available. Update image
   references and source paths in deployments.
-
 - **Breaking:** DstackKms: reverts with custom errors such as
   `UnknownRootEpoch()` instead of revert strings, to stay under the EIP-170
   size limit. This includes `registerApp`, `setAppImplementation` and
@@ -175,6 +180,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attestation on the connection that returns the root keys and checks local
   policy before using them. Legacy sources requiring temp-CA-issued clients
   must be upgraded.
+- ra-rpc: check the TLS handshake signature when CA verification is skipped;
+  `tls_no_check` is renamed to `tls_skip_ca_verification` (#1522).
+- vmm: write `.instance_info` atomically, so a failed write or power loss can no
+  longer drop the instance ID seed and lose the VM's disk key (#1553).
+- KMS, Gateway, Verifier, auth-eth images: set explicit file modes and
+  normalize timestamps so image digests no longer depend on the clone-time
+  umask (#1512).
 
 ## [0.6.3] - 2026-11-01
 
