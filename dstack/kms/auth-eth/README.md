@@ -188,9 +188,10 @@ this implementation keeps the API of the removed fastify + ethers server that us
 #### dstack-kms 0.6
 
 dstack-kms 0.6 posts `dstack_verifier::PolicyBootInfo`: bytes as unprefixed
-hex, plus `teeVariant` and `keyProviderInfo`, which the contract does not take
-and this backend drops. the KMS checks `appId`, `composeHash` and `instanceId`
-widths itself before calling the webhook. the `dstack-kms 0.6 bootAuth payload`
+hex, plus `teeVariant` and `keyProviderInfo`. the legacy `/bootAuth/*` routes
+drop both; `/authorizeKms` and `/authorizeApp` require `teeVariant` and pass it
+to the contract unchanged, and always drop `keyProviderInfo`. the KMS checks
+`appId`, `composeHash` and `instanceId` widths itself before calling the webhook. the `dstack-kms 0.6 bootAuth payload`
 tests pin this contract.
 
 #### OpenAPI specification

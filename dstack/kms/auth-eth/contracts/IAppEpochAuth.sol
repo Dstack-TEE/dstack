@@ -19,6 +19,10 @@ struct AuthorizationRequest {
     bytes32 operation;
     OptionalUint256 requestedAppEpoch;
     OptionalUint256 requestedRootEpoch;
+    /// The TEE platform the KMS attested, e.g. "dstack-tdx" or "dstack-amd-sev-snp".
+    /// Measurements, device IDs and TCB status are only meaningful per platform,
+    /// and one OS image may boot on several.
+    string teeVariant;
 }
 
 struct AuthorizationResult {

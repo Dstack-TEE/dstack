@@ -22,7 +22,7 @@ function _appAuth(
     returns (bool, string memory)
 {
     AuthorizationResult memory result = target.authorizeApp(
-        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0))
+        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0), "dstack-tdx")
     );
     return (result.authorized, result.rejectionReason);
 }
@@ -134,7 +134,9 @@ contract DstackKmsEpochSymbolicTest is Test {
         pure
         returns (AuthorizationRequest memory)
     {
-        return AuthorizationRequest(info, operation, OptionalUint256(appSet, appEpoch), OptionalUint256(rootSet, root));
+        return AuthorizationRequest(
+            info, operation, OptionalUint256(appSet, appEpoch), OptionalUint256(rootSet, root), "dstack-tdx"
+        );
     }
 
     /// Calldata of one KMS policy setter: 0-5 write the row of `epoch`, 6-11

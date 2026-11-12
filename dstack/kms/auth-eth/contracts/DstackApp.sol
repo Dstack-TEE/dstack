@@ -9,6 +9,7 @@ pragma solidity ^0.8.24;
 import "./IAppAuth.sol";
 import "./AuthorizationOperation.sol";
 import "./IAppEpochAuth.sol";
+import "./TeeVariantPolicy.sol";
 import "./IAppEpochManagement.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
@@ -48,6 +49,9 @@ contract DstackApp is
     mapping(uint256 => mapping(bytes32 => bool)) private _composeHashesByEpoch;
     mapping(uint256 => mapping(bytes32 => bool)) private _deviceIdsByEpoch;
 
+    // The TEE platforms this app may run on.
+    TeeVariantPolicy.Policy private _teeVariants;
+
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     /// @notice Legacy material events. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
@@ -58,6 +62,8 @@ contract DstackApp is
     event UpgradesDisabled();
     /// @notice Covers every app epoch; there is no EpochPolicyChanged counterpart.
     event AllowAnyDeviceSet(bool allowAny);
+    event AllowAnyTeeVariantSet(bool allowAny);
+    event AllowedTeeVariantsSet(string[] teeVariants);
     event RequireTcbUpToDateSet(bool requireUpToDate);
     /// @notice Additive audit event for reconstructing authorization policy.
     event PolicyChanged(address indexed actor, bytes32 indexed policy, bytes32 indexed value, bool enabled);
@@ -231,6 +237,30 @@ contract DstackApp is
         _emitPolicy("allow-any-device", bytes32(0), allowed);
     }
 
+    /// @notice Whether this app may run on any TEE platform, rather than only on
+    /// {allowedTeeVariants}. Covers every app epoch.
+    function allowAnyTeeVariant() public view returns (bool) {
+        return !_teeVariants.restricted;
+    }
+
+    /// @notice The TEE platforms, named as the KMS reports them, this app may run on
+    /// unless {allowAnyTeeVariant}.
+    function allowedTeeVariants() external view returns (string[] memory) {
+        return TeeVariantPolicy.allowedNames(_teeVariants);
+    }
+
+    function setAllowAnyTeeVariant(bool allowed) external onlyOwner {
+        _teeVariants.restricted = !allowed;
+        emit AllowAnyTeeVariantSet(allowed);
+        _emitPolicy("allow-any-tee-variant", bytes32(0), allowed);
+    }
+
+    function setAllowedTeeVariants(string[] calldata teeVariants) external onlyOwner {
+        uint64 mask = TeeVariantPolicy.setAllowed(_teeVariants, teeVariants);
+        emit AllowedTeeVariantsSet(teeVariants);
+        _emitPolicy("allowed-tee-variants", bytes32(uint256(mask)), true);
+    }
+
     // Set whether TCB status must be UpToDate to boot this app
     function setRequireTcbUpToDate(bool _requireUpToDate) external onlyOwner {
         requireTcbUpToDate = _requireUpToDate;
@@ -278,7 +308,8 @@ contract DstackApp is
         returns (bool isAllowed, string memory reason)
     {
         if (currentAppEpoch != 0) return (false, "App epoch requires epoch-aware authorization");
-        return _authorizeApp(bootInfo, 0);
+        // Legacy callers report no platform, so only an unrestricted policy admits them.
+        return _authorizeApp(bootInfo, allowAnyTeeVariant(), 0);
     }
 
     /// Decide the request at the selected app epoch; the KMS fills gateway and root fields.
@@ -294,11 +325,13 @@ contract DstackApp is
             return result;
         }
         uint256 appEpoch = request.requestedAppEpoch.isSet ? request.requestedAppEpoch.value : currentAppEpoch;
-        (result.authorized, result.rejectionReason) = _authorizeApp(request.appInfo, appEpoch);
+        (result.authorized, result.rejectionReason) =
+            _authorizeApp(request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), appEpoch);
     }
 
     function _authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
+        bool teeVariantAllowed,
         uint256 appEpoch
     )
         private
@@ -324,6 +357,10 @@ contract DstackApp is
             return (false, "Device not allowed");
         }
 
+        if (!teeVariantAllowed) {
+            return (false, "TEE variant not allowed");
+        }
+
         return (true, "");
     }
 
@@ -344,5 +381,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[46] private __gap;
+    uint256[45] private __gap;
 }

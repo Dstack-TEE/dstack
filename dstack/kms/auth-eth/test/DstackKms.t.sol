@@ -497,9 +497,76 @@ contract DstackKmsTest is Test {
             info,
             isKms ? keccak256("kms_serve") : keccak256("app_get_key"),
             OptionalUint256(false, 0),
-            OptionalUint256(false, 0)
+            OptionalUint256(false, 0),
+            "dstack-tdx"
         );
         return isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
+    }
+
+    function test_TeeVariantsRestrictKmsAndApps() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        assertTrue(kms.allowAnyTeeVariant());
+        string[] memory tdx = new string[](2);
+        tdx[0] = "dstack-tdx";
+        tdx[1] = "dstack-gcp-tdx";
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addKmsDeviceAtEpoch(0, info.deviceId);
+        kms.addKmsAggregatedMrAtEpoch(0, info.mrAggregated);
+        address appId = kms.deployAndRegisterApp(user, false, true, info.deviceId, info.composeHash);
+        kms.setAllowedTeeVariants(tdx);
+        kms.setAllowAnyTeeVariant(false);
+        vm.stopPrank();
+
+        assertTrue(authorize(info, true).authorized);
+        (bool allowed, string memory reason) = kms.isKmsAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "TEE variant not allowed");
+        AuthorizationRequest memory request = AuthorizationRequest(
+            info, keccak256("kms_serve"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
+        );
+        request.teeVariant = "dstack-gcp-tdx";
+        assertTrue(kms.authorizeKms(request).authorized);
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertEq(kms.authorizeKms(request).rejectionReason, "TEE variant not allowed");
+        // A platform the contract does not know is refused once restricted.
+        request.teeVariant = "dstack-new-platform";
+        assertEq(kms.authorizeKms(request).rejectionReason, "TEE variant not allowed");
+
+        info.appId = appId;
+        assertTrue(authorize(info, false).authorized);
+        (allowed, reason) = kms.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "TEE variant not allowed");
+        request = AuthorizationRequest(
+            info, keccak256("app_get_key"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
+        );
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertEq(kms.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+
+        // Allowing any platform lifts the restriction, including for legacy callers.
+        vm.prank(owner);
+        kms.setAllowAnyTeeVariant(true);
+        assertTrue(kms.authorizeApp(request).authorized);
+        (allowed,) = kms.isAppAllowed(info);
+        assertTrue(allowed);
+
+        // With the KMS unrestricted, the app's own policy still applies.
+        vm.startPrank(user);
+        DstackApp(appId).setAllowedTeeVariants(tdx);
+        DstackApp(appId).setAllowAnyTeeVariant(false);
+        vm.stopPrank();
+        assertEq(kms.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+        (allowed, reason) = kms.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "TEE variant not allowed");
+        request.teeVariant = "dstack-gcp-tdx";
+        assertTrue(kms.authorizeApp(request).authorized);
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        kms.setAllowAnyTeeVariant(false);
     }
 
     function test_AuthorizationOperationsFailClosedAndBootstrapBeforeRegistration() public {
@@ -510,7 +577,7 @@ contract DstackKmsTest is Test {
         kms.addKmsAggregatedMrAtEpoch(0, info.mrAggregated);
         vm.stopPrank();
         AuthorizationRequest memory request = AuthorizationRequest(
-            info, keccak256("kms_bootstrap"), OptionalUint256(false, 0), OptionalUint256(false, 0)
+            info, keccak256("kms_bootstrap"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
         );
         assertTrue(kms.authorizeKms(request).authorized);
         assertEq(kms.authorizeKms(request).currentRootEpochHash, bytes32(0));
@@ -592,8 +659,9 @@ contract DstackKmsTest is Test {
         result = authorize(info, true);
         assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
-        AuthorizationRequest memory appRequest =
-            AuthorizationRequest(info, keccak256("app_get_key"), OptionalUint256(true, 1), OptionalUint256(false, 0));
+        AuthorizationRequest memory appRequest = AuthorizationRequest(
+            info, keccak256("app_get_key"), OptionalUint256(true, 1), OptionalUint256(false, 0), "dstack-tdx"
+        );
         result = kms.authorizeApp(appRequest);
         assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Requested app epoch is not active");
@@ -678,7 +746,7 @@ contract DstackKmsTest is Test {
         (uint256 rootEpoch,) = kms.currentRootEpoch();
         assertEq(rootEpoch, 0);
         AuthorizationRequest memory request = AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(false, 0), OptionalUint256(false, 0)
+            info, keccak256("app_get_key"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
         );
         AuthorizationResult memory result = kms.authorizeApp(request);
         assertFalse(result.authorized);
@@ -716,7 +784,11 @@ contract DstackKmsTest is Test {
         assertEq(result.currentRootEpochHash, hash1);
 
         AuthorizationRequest memory request = AuthorizationRequest(
-            authorizationInfo(user), keccak256("kms_serve"), OptionalUint256(false, 0), OptionalUint256(false, 0)
+            authorizationInfo(user),
+            keccak256("kms_serve"),
+            OptionalUint256(false, 0),
+            OptionalUint256(false, 0),
+            "dstack-tdx"
         );
         result = kms.authorizeApp(request);
         assertEq(result.rejectionReason, "Invalid authorization operation");
@@ -950,7 +1022,7 @@ contract DstackKmsTest is Test {
         returns (AuthorizationRequest memory)
     {
         return AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(true, appEpoch), OptionalUint256(true, root)
+            info, keccak256("app_get_key"), OptionalUint256(true, appEpoch), OptionalUint256(true, root), "dstack-tdx"
         );
     }
 

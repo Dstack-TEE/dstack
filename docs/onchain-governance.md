@@ -158,6 +158,7 @@ The central governance contract that manages OS image whitelisting, app registra
 | `addOsImageHashAtEpochs(uint256,uint256,bytes32)` | Whitelist an OS image hash in a range of root epochs |
 | `removeOsImageHashAtEpochs(uint256,uint256,bytes32)` | Remove an OS image from a range of root epochs; `0` through the latest revokes it |
 | `setGatewayAppId(string)` | Set the trusted Gateway app ID(s) |
+| `setAllowAnyTeeVariant(bool)` / `setAllowedTeeVariants(string[])` | Allow KMS instances and apps on any TEE platform, or only the listed ones, at every root epoch |
 | `registerApp(address)` | Register an app contract |
 | `deployAndRegisterApp(...)` | Deploy and register app in one transaction |
 | `isAppAllowed(AppBootInfo)` | Check if an app is allowed to boot |
@@ -176,6 +177,7 @@ to the next epoch. Removing a value from rows `0` through the current epoch revo
 | `addDeviceAtEpoch(uint256,bytes32)` / `addDeviceAtEpochs(uint256,uint256,bytes32)` | Whitelist a device ID |
 | `removeDeviceAtEpoch(uint256,bytes32)` / `removeDeviceAtEpochs(uint256,uint256,bytes32)` | Remove a device |
 | `setAllowAnyDevice(bool)` | Allow any device to run this app, at every app epoch |
+| `setAllowAnyTeeVariant(bool)` / `setAllowedTeeVariants(string[])` | Allow any TEE platform, or only the listed ones (e.g. `dstack-tdx`), at every app epoch. Set the list before restricting: a restricted empty list refuses every platform |
 | `currentAppEpoch()` | The app epoch new keys are derived for |
 | `isAppAllowed(AppBootInfo)` | Check if app can boot with given config (app epoch 0 only) |
 | `disableUpgrades()` | Permanently disable contract upgrades |
@@ -189,7 +191,7 @@ app epoch 0 and the epoch-less setters `addComposeHash(bytes32)`,
 which authorize them for app epoch 0. Tell the two kinds apart by ERC-165 interface ID:
 
 ```bash
-cast call <app-id> "supportsInterface(bytes4)(bool)" 0xc65f31b6 --rpc-url $RPC_URL  # IAppEpochManagement: epoch setters
+cast call <app-id> "supportsInterface(bytes4)(bool)" 0x8c0524c4 --rpc-url $RPC_URL  # IAppEpochManagement: epoch setters
 cast call <app-id> "supportsInterface(bytes4)(bool)" 0x8fd37527 --rpc-url $RPC_URL  # IAppAuthBasicManagement: epoch-less setters
 ```
 

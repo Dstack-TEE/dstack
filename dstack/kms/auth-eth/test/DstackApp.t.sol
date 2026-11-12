@@ -426,7 +426,7 @@ contract DstackAppTest is Test {
         pure
         returns (AuthorizationRequest memory)
     {
-        return AuthorizationRequest(info, operation, appEpoch, OptionalUint256(false, 0));
+        return AuthorizationRequest(info, operation, appEpoch, OptionalUint256(false, 0), "dstack-tdx");
     }
 
     function authorizeAt(
@@ -440,6 +440,62 @@ contract DstackAppTest is Test {
     {
         AuthorizationResult memory result = app.authorizeApp(appRequest(info, OptionalUint256(true, epoch), operation));
         return (result.authorized, result.rejectionReason);
+    }
+
+    function test_TeeVariantsAreUnrestrictedUntilRestrictedAndCoverEveryEpoch() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        vm.startPrank(owner);
+        app.addComposeHashAtEpochs(0, 1, info.composeHash);
+        app.addDeviceAtEpochs(0, 1, info.deviceId);
+        vm.stopPrank();
+        AuthorizationRequest memory request = appRequest(info, OptionalUint256(true, 0), keccak256("app_get_key"));
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertTrue(app.allowAnyTeeVariant());
+        assertTrue(app.authorizeApp(request).authorized);
+
+        string[] memory tdx = new string[](1);
+        tdx[0] = "dstack-tdx";
+        vm.startPrank(owner);
+        app.setAllowedTeeVariants(tdx);
+        // The list applies only once the policy is restricted.
+        assertTrue(app.authorizeApp(request).authorized);
+        app.setAllowAnyTeeVariant(false);
+        vm.stopPrank();
+        assertEq(app.allowedTeeVariants()[0], "dstack-tdx");
+        assertEq(app.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+        (bool allowed, string memory reason) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "TEE variant not allowed");
+        request.teeVariant = "dstack-tdx";
+        assertTrue(app.authorizeApp(request).authorized);
+
+        // The policy covers every app epoch.
+        vm.prank(owner);
+        app.advanceAppEpoch(0);
+        request.requestedAppEpoch = OptionalUint256(true, 1);
+        assertTrue(app.authorizeApp(request).authorized);
+        request.teeVariant = "dstack-amd-sev-snp";
+        assertEq(app.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+
+        // Only known platforms can be listed, and an empty list admits none.
+        string[] memory unknown = new string[](1);
+        unknown[0] = "dstack-unknown";
+        vm.startPrank(owner);
+        vm.expectRevert("unknown TEE variant");
+        app.setAllowedTeeVariants(unknown);
+        app.setAllowedTeeVariants(new string[](0));
+        vm.stopPrank();
+        assertEq(app.allowedTeeVariants().length, 0);
+        request.teeVariant = "dstack-tdx";
+        assertEq(app.authorizeApp(request).rejectionReason, "TEE variant not allowed");
+
+        vm.startPrank(user);
+        bytes memory unauthorized = abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user);
+        vm.expectRevert(unauthorized);
+        app.setAllowAnyTeeVariant(true);
+        vm.expectRevert(unauthorized);
+        app.setAllowedTeeVariants(tdx);
+        vm.stopPrank();
     }
 
     function test_AuthorizeAppOwnsOperationScopeAndAppEpoch() public {
