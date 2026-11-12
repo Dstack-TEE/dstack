@@ -35,7 +35,7 @@ function sortObject(obj: SortableValue): SortableValue {
   return obj;
 }
 
-export type KeyProviderKind = "none" | "kms" | "local" | "tpm";
+export type KeyProviderKind = "none" | "kms" | "local" | "tpm" | "sev-snp";
 export type RequirementPlatform =
   | "dstack-tdx"
   | "dstack-gcp-tdx"

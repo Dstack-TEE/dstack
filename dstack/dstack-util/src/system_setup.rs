@@ -24,7 +24,7 @@ use dstack_types::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
         HOST_SHARED_DIR_NAME, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG, USER_CONFIG,
     },
-    GpuPolicy, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
+    GpuPolicy, InstanceInfo, KeyProvider, KeyProviderInfo, GPU_ATTESTATION_OUTPUT,
 };
 use fs_err as fs;
 use luks::{
@@ -43,6 +43,7 @@ use safe_write::{safe_write, safe_write_with_mode};
 use scopeguard::defer;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+use zeroize::Zeroizing;
 
 use crate::{
     cmd_show_mrs,
@@ -62,7 +63,6 @@ use dstack_gateway_rpc::{
     RegisterCvmRequest, RegisterCvmResponse, WireGuardPeer,
 };
 use ra_tls::rcgen::{KeyPair, PKCS_ECDSA_P256_SHA256};
-use serde_human_bytes as hex_bytes;
 use serde_json::Value;
 use tpm_attest::{self as tpm, TpmContext};
 
@@ -96,6 +96,7 @@ async fn sign_cert_request(
 mod config_id_verifier;
 mod luks;
 mod sealed_env;
+mod snp;
 
 #[cfg(test)]
 use sealed_env::seal_env;
@@ -124,16 +125,6 @@ pub struct GatewayRefreshArgs {
     /// Force reconfiguration even if config unchanged
     #[arg(long)]
     force: bool,
-}
-
-#[derive(Deserialize, Serialize, Clone, Default)]
-struct InstanceInfo {
-    #[serde(with = "hex_bytes", default)]
-    instance_id_seed: Vec<u8>,
-    #[serde(with = "hex_bytes", default)]
-    instance_id: Vec<u8>,
-    #[serde(with = "hex_bytes", default)]
-    app_id: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -2584,24 +2575,7 @@ impl<'a> Stage0<'a> {
         }
         Ok(())
     }
-    async fn get_keys_from_local_key_provider(&self) -> Result<AppKeys> {
-        info!("Getting keys from local key provider");
-        let provision = self
-            .vmm
-            .get_sealing_key()
-            .await
-            .context("Failed to get sealing key")?;
-        // write to fs
-        let app_keys = gen_app_keys_from_seed(
-            &provision.sk,
-            KeyProviderKind::Local,
-            Some(provision.mr.to_vec()),
-        )
-        .context("Failed to generate app keys")?;
-        Ok(app_keys)
-    }
-
-    fn generate_tpm_app_keys(&self) -> Result<AppKeys> {
+    fn get_tpm_seed(&self) -> Result<Zeroizing<[u8; 32]>> {
         let tpm = TpmContext::detect().context("failed to detect TPM context")?;
 
         // PCR policy: platform-specific (AWS: sha384 PCR4/7/8/12/14)
@@ -2618,43 +2592,46 @@ impl<'a> Stage0<'a> {
                 "unsealed root key seed from TPM (PCR policy: {})",
                 pcr_policy.to_arg()
             );
-            return gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None)
-                .context("failed to generate TPM app keys");
+            return Ok(Zeroizing::new(seed));
         }
 
         // No sealed seed exists, generate new one
         info!("no sealed seed found, generating new seed...");
-        let seed: [u8; 32] = tpm.get_random().context("TPM RNG unavailable")?;
+        let seed = Zeroizing::new(tpm.get_random::<32>().context("TPM RNG unavailable")?);
         // Seal the new seed under the platform PCR policy
         tpm.seal(
-            &seed,
+            seed.as_ref(),
             tpm::SEALED_NV_INDEX,
             tpm::PRIMARY_KEY_HANDLE,
             &pcr_policy,
         )
         .context("failed to seal seed to TPM")?;
 
-        gen_app_keys_from_seed(&seed, KeyProviderKind::Tpm, None)
-            .context("failed to generate TPM app keys")
+        Ok(seed)
     }
 
-    async fn request_app_keys(&self) -> Result<AppKeys> {
+    async fn request_app_keys(&self, app_info: &mut AppInfo) -> Result<AppKeys> {
         let key_provider = self.shared.app_compose.key_provider();
         validate_key_provider_inputs(key_provider, &self.shared.sys_config.kms_urls)?;
-        match key_provider {
-            KeyProviderKind::Kms => self.request_app_keys_from_kms().await,
-            KeyProviderKind::Local => self.get_keys_from_local_key_provider().await,
+        let (seed, provider_id) = match key_provider {
+            KeyProviderKind::Kms => return self.request_app_keys_from_kms().await,
+            KeyProviderKind::Local => {
+                let provision = self
+                    .vmm
+                    .get_sealing_key()
+                    .await
+                    .context("failed to get SGX sealing key")?;
+                (Zeroizing::new(provision.sk), Some(provision.mr.to_vec()))
+            }
+            KeyProviderKind::SevSnp => (self.get_snp_seed(app_info).await?, None),
+            KeyProviderKind::Tpm => (self.get_tpm_seed()?, None),
             KeyProviderKind::None => {
-                info!("No key provider is enabled, generating temporary app keys");
-                let seed: [u8; 32] = rand::thread_rng().gen();
-                gen_app_keys_from_seed(&seed, KeyProviderKind::None, None)
-                    .context("Failed to generate app keys")
+                info!("no key provider is enabled, generating temporary app keys");
+                (Zeroizing::new(rand::thread_rng().gen::<[u8; 32]>()), None)
             }
-            KeyProviderKind::Tpm => {
-                info!("Generating app keys from TPM");
-                self.generate_tpm_app_keys()
-            }
-        }
+        };
+        gen_app_keys_from_seed(seed.as_ref(), key_provider, provider_id)
+            .context("failed to generate app keys")
     }
 
     async fn setup_swap(&self, swap_size: u64, opts: &DstackOptions) -> Result<()> {
@@ -3207,7 +3184,12 @@ impl<'a> Stage0<'a> {
         })
     }
 
-    fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
+    fn verify_app_config(
+        &self,
+        app_info: &AppInfo,
+        provider: KeyProviderKind,
+        provider_id: &[u8],
+    ) -> Result<()> {
         config_id_verifier::verify_mr_config_id(
             &app_info.compose_hash,
             &app_info.gpu_policy_hash,
@@ -3220,28 +3202,24 @@ impl<'a> Stage0<'a> {
                 .ok()
                 .context("Invalid app id")?,
             &app_info.instance_info.instance_id,
-            keys.key_provider.kind(),
-            keys.key_provider.id(),
+            provider,
+            provider_id,
         )?;
-        self.verify_key_provider_id(keys.key_provider.id())?;
-        // TPM uses an empty id: the instance app-root pubkey is not a stable
-        // provider identity and must not enter the launch measurement chain.
-        let kp_info = match &keys.key_provider {
-            KeyProvider::None { .. } => KeyProviderInfo::new("none".into(), "".into()),
-            KeyProvider::Local { .. } => {
-                KeyProviderInfo::new("local-sgx".into(), hex::encode(keys.key_provider.id()))
-            }
-            KeyProvider::Tpm { .. } => KeyProviderInfo::new("tpm".into(), "".into()),
-            KeyProvider::Kms { .. } => {
-                KeyProviderInfo::new("kms".into(), hex::encode(keys.key_provider.id()))
-            }
-        };
+        self.verify_key_provider_id(provider_id)
+    }
+
+    fn verify_app(&self, app_info: &AppInfo, keys: &AppKeys) -> Result<()> {
+        self.verify_app_config(app_info, keys.key_provider.kind(), keys.key_provider.id())?;
+        let kp_info = KeyProviderInfo::new(
+            keys.key_provider.kind().measurement_name().into(),
+            hex::encode(keys.key_provider.id()),
+        );
         emit_key_provider_info(&kp_info)?;
         Ok(())
     }
 
     async fn setup_fs(self) -> Result<Stage1<'a>> {
-        let app_info = self
+        let mut app_info = self
             .measure_app_info()
             .await
             .context("Failed to measure app info")?;
@@ -3252,7 +3230,7 @@ impl<'a> Stage0<'a> {
             .notify_q("boot.progress", "requesting app keys")
             .await;
         let app_keys = self
-            .request_app_keys()
+            .request_app_keys(&mut app_info)
             .await
             .context("Failed to request app keys")?;
         if app_keys.disk_crypt_key.is_empty() {

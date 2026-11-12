@@ -213,6 +213,7 @@ impl CertRequestClient {
         match &keys.key_provider {
             KeyProvider::None { key }
             | KeyProvider::Local { key, .. }
+            | KeyProvider::SevSnp { key }
             | KeyProvider::Tpm { key, .. } => {
                 let ca = CaCert::new(keys.ca_cert.clone(), key.clone())
                     .context("Failed to create CA")?;
