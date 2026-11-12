@@ -30,6 +30,11 @@ jobs:
           # This additional target is needed for wasm32 compatibility check.
           targets: wasm32-unknown-unknown, thumbv6m-none-eabi
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: SDK tests
         run: cd sdk && ./run-tests.sh
 

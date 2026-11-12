@@ -57,6 +57,7 @@ ez-hash.workspace = true
 cc-eventlog.workspace = true
 safe-write.workspace = true
 errify.workspace = true
+base64.workspace = true
 
 [dev-dependencies]
 rand.workspace = true

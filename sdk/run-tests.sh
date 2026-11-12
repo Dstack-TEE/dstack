@@ -87,7 +87,7 @@ pushd python/
 # Ensure PDM is installed
 if ! command -v pdm &> /dev/null; then
     echo "Installing PDM..."
-    pip install pdm
+    pip install pdm 'hishel<2'
 fi
 # Install dependencies and setup environment using PDM
 pdm install --dev
