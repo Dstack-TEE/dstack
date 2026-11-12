@@ -56,10 +56,10 @@ fn verify_input(input: Input) -> Result<Output> {
     };
     let events: Vec<TdxEvent> =
         serde_json::from_str(&input.event_log).context("event_log is not valid JSON")?;
-    let check = verify_tdx_lite_os(&mrs, &events, &vm)?;
+    verify_tdx_lite_os(&mrs, &events, &vm)?;
     Ok(Output {
         ok: true,
-        os_image_hash: Some(hex::encode(&check.os_image_hash)),
+        os_image_hash: Some(hex::encode(&vm.os_image_hash)),
         reason: None,
     })
 }
@@ -122,39 +122,31 @@ mod tests {
         vm_config: String,
     }
 
-    fn mrs_from_quote_hex(quote_hex: &str) -> (String, String, String, String) {
-        let quote = hex::decode(quote_hex).expect("quote is hex");
-        let version = u16::from_le_bytes(quote[..2].try_into().expect("quote header"));
-        let header = if version == 5 { 54 } else { 48 };
-        let field = |offset: usize| hex::encode(&quote[header + offset..header + offset + 48]);
-        (field(136), field(328), field(376), field(424))
-    }
-
-    fn fixture_payload(uppercase_mrtd: bool) -> Vec<u8> {
+    /// Builds the ABI input from the captured GetQuote fixture, letting each
+    /// test edit it before serialization.
+    fn fixture_payload(edit: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
         let fixture: GetQuoteFixture = serde_json::from_str(include_str!(
             "../../../verifier/fixtures/tdx-lite-getquote.json"
         ))
         .expect("fixture parses");
-        let (mrtd, rtmr0, rtmr1, rtmr2) = mrs_from_quote_hex(&fixture.quote);
-        let mrtd = if uppercase_mrtd {
-            mrtd.to_uppercase()
-        } else {
-            mrtd
-        };
-        serde_json::to_vec(&serde_json::json!({
-            "mrtd": mrtd,
-            "rtmr0": rtmr0,
-            "rtmr1": rtmr1,
-            "rtmr2": rtmr2,
+        let quote = hex::decode(&fixture.quote).expect("quote is hex");
+        let quote = dcap_qvl::quote::Quote::parse(&quote).expect("fixture quote parses");
+        let report = quote.report.as_td10().expect("TDX 1.0 report");
+        let mut payload = serde_json::json!({
+            "mrtd": hex::encode(report.mr_td),
+            "rtmr0": hex::encode(report.rt_mr0),
+            "rtmr1": hex::encode(report.rt_mr1),
+            "rtmr2": hex::encode(report.rt_mr2),
             "event_log": fixture.event_log,
             "vm_config": fixture.vm_config,
-        }))
-        .expect("payload serializes")
+        });
+        edit(&mut payload);
+        serde_json::to_vec(&payload).expect("payload serializes")
     }
 
     #[test]
     fn fixture_is_accepted() {
-        let out = run(&fixture_payload(false));
+        let out = run(&fixture_payload(|_| {}));
         assert!(out.ok, "{:?}", out.reason);
         assert!(out.os_image_hash.is_some());
         assert!(out.reason.is_none());
@@ -162,31 +154,26 @@ mod tests {
 
     #[test]
     fn stuffed_os_image_hash_is_not_returned_on_failure() {
-        let fixture: GetQuoteFixture = serde_json::from_str(include_str!(
-            "../../../verifier/fixtures/tdx-lite-getquote.json"
-        ))
-        .expect("fixture parses");
-        let (mrtd, rtmr0, rtmr1, rtmr2) = mrs_from_quote_hex(&fixture.quote);
-        let mut vm: serde_json::Value =
-            serde_json::from_str(&fixture.vm_config).expect("vm_config parses");
-        vm["os_image_hash"] = serde_json::Value::String("ab".repeat(32));
-        let payload = serde_json::to_vec(&serde_json::json!({
-            "mrtd": mrtd,
-            "rtmr0": rtmr0,
-            "rtmr1": rtmr1,
-            "rtmr2": rtmr2,
-            "event_log": fixture.event_log,
-            "vm_config": vm.to_string(),
-        }))
-        .expect("payload serializes");
-        let out = run(&payload);
+        let out = run(&fixture_payload(|payload| {
+            let mut vm: serde_json::Value =
+                serde_json::from_str(payload["vm_config"].as_str().expect("vm_config string"))
+                    .expect("vm_config parses");
+            vm["os_image_hash"] = "ab".repeat(32).into();
+            payload["vm_config"] = vm.to_string().into();
+        }));
         assert!(!out.ok);
         assert_eq!(out.os_image_hash, None);
     }
 
     #[test]
     fn mixed_case_hex_is_accepted() {
-        let out = run(&fixture_payload(true));
+        let out = run(&fixture_payload(|payload| {
+            let mrtd = payload["mrtd"]
+                .as_str()
+                .expect("mrtd string")
+                .to_uppercase();
+            payload["mrtd"] = mrtd.into();
+        }));
         assert!(out.ok, "{:?}", out.reason);
     }
 

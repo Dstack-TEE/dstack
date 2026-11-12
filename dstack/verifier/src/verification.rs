@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use dstack_mr::TdxMeasurements;
+use dstack_mr::{tdx::assert_tdx_mrs_eq, TdxMeasurements};
 use dstack_types::{sha256sum, TdxAttestationVariant, VmConfig};
 use hex_literal::hex;
 use ra_tls::attestation::{
@@ -862,9 +862,8 @@ impl CvmVerifier {
         let Some(tdx_quote) = attestation.tdx_quote() else {
             bail!("No TDX quote");
         };
-        let check =
-            dstack_mr::tdx::verify_tdx_lite_os(&verified_mrs, &tdx_quote.event_log, vm_config)?;
-        details.acpi_tables_verified = check.acpi_tables_verified;
+        dstack_mr::tdx::verify_tdx_lite_os(&verified_mrs, &tdx_quote.event_log, vm_config)?;
+        details.acpi_tables_verified = true;
         Ok(())
     }
 
@@ -1096,24 +1095,6 @@ fn verified_tdx_mrs(attestation: &VerifiedAttestation) -> Result<TdxMeasurements
         rtmr1: report.rt_mr1.to_vec(),
         rtmr2: report.rt_mr2.to_vec(),
     })
-}
-
-fn assert_tdx_mrs_eq(expected: &TdxMeasurements, actual: &TdxMeasurements) -> Result<()> {
-    for (name, expected, actual) in [
-        ("MRTD", &expected.mrtd, &actual.mrtd),
-        ("RTMR0", &expected.rtmr0, &actual.rtmr0),
-        ("RTMR1", &expected.rtmr1, &actual.rtmr1),
-        ("RTMR2", &expected.rtmr2, &actual.rtmr2),
-    ] {
-        if expected != actual {
-            bail!(
-                "{name} mismatch: expected={}, actual={}",
-                hex::encode(expected),
-                hex::encode(actual)
-            );
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

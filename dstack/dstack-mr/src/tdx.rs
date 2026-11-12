@@ -51,18 +51,11 @@ struct ImageMetadata {
     kernel_header_normalized: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct TdxRtmr0AcpiHashes {
     pub loader: Vec<u8>,
     pub rsdp: Vec<u8>,
     pub tables: Vec<u8>,
-}
-
-/// Outcome of [`verify_tdx_lite_os`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TdxLiteOsCheck {
-    pub os_image_hash: Vec<u8>,
-    pub acpi_tables_verified: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -573,7 +566,7 @@ fn assert_tdx_acpi_hashes_match(
     Ok(())
 }
 
-fn assert_tdx_mrs_eq(
+pub fn assert_tdx_mrs_eq(
     expected: &crate::TdxMeasurements,
     actual: &crate::TdxMeasurements,
 ) -> Result<()> {
@@ -609,7 +602,7 @@ pub fn verify_tdx_lite_os(
     verified_mrs: &crate::TdxMeasurements,
     event_log: &[TdxEvent],
     vm_config: &VmConfig,
-) -> Result<TdxLiteOsCheck> {
+) -> Result<()> {
     if vm_config.tdx_attestation_variant != TdxAttestationVariant::Lite {
         bail!("vm_config is not a TDX lite attestation");
     }
@@ -655,12 +648,8 @@ pub fn verify_tdx_lite_os(
     // value depends on nothing the host reported about the tables.
     let expected_mrs =
         tdx_measurements_from_measurement_document(document, vm_config, &acpi_hashes)
-            .context("Failed to compute TDX expected measurements without image download")?;
-    assert_tdx_mrs_eq(&expected_mrs, verified_mrs).context("MRs do not match")?;
-    Ok(TdxLiteOsCheck {
-        os_image_hash: vm_config.os_image_hash.clone(),
-        acpi_tables_verified: true,
-    })
+            .context("failed to compute TDX expected measurements without image download")?;
+    assert_tdx_mrs_eq(&expected_mrs, verified_mrs).context("MRs do not match")
 }
 
 /// Compute image-critical TDX measurements without RTMR[0].
@@ -1110,14 +1099,13 @@ mod tests {
 
     fn mrs_from_quote_hex(quote_hex: &str) -> crate::TdxMeasurements {
         let quote = hex::decode(quote_hex).expect("quote is hex");
-        let version = u16::from_le_bytes(quote[..2].try_into().expect("quote header"));
-        let header = if version == 5 { 54 } else { 48 };
-        let field = |offset: usize| quote[header + offset..header + offset + 48].to_vec();
+        let quote = dcap_qvl::quote::Quote::parse(&quote).expect("fixture quote parses");
+        let report = quote.report.as_td10().expect("TDX 1.0 report");
         crate::TdxMeasurements {
-            mrtd: field(136),
-            rtmr0: field(328),
-            rtmr1: field(376),
-            rtmr2: field(424),
+            mrtd: report.mr_td.to_vec(),
+            rtmr0: report.rt_mr0.to_vec(),
+            rtmr1: report.rt_mr1.to_vec(),
+            rtmr2: report.rt_mr2.to_vec(),
         }
     }
 
@@ -1135,10 +1123,7 @@ mod tests {
     fn tdx_lite_getquote_fixture_is_accepted() {
         let fixture = tdx_lite_getquote_fixture();
         let (mrs, events, vm_config) = parse_fixture(&fixture);
-        let check =
-            verify_tdx_lite_os(&mrs, &events, &vm_config).expect("captured TDX lite CVM verifies");
-        assert!(check.acpi_tables_verified);
-        assert_eq!(check.os_image_hash, vm_config.os_image_hash);
+        verify_tdx_lite_os(&mrs, &events, &vm_config).expect("captured TDX lite CVM verifies");
     }
 
     #[test]
