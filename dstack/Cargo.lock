@@ -2262,6 +2262,8 @@ dependencies = [
  "anyhow",
  "binrw",
  "bon",
+ "cc-eventlog",
+ "dcap-qvl",
  "dstack-types",
  "flate2",
  "fs-err",
@@ -2463,7 +2465,6 @@ name = "dstack-verifier"
 version = "0.6.4"
 dependencies = [
  "anyhow",
- "cc-eventlog",
  "clap",
  "dcap-qvl",
  "dstack-attest",
@@ -2493,6 +2494,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "x509-parser 0.16.0",
+]
+
+[[package]]
+name = "dstack-verifier-wasm"
+version = "0.6.4"
+dependencies = [
+ "anyhow",
+ "cc-eventlog",
+ "dcap-qvl",
+ "dstack-mr",
+ "dstack-types",
+ "hex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

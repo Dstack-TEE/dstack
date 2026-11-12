@@ -20,9 +20,16 @@ use crate::tdvf::{
 };
 use crate::util::{measure_log, measure_sha384};
 use anyhow::{bail, Context, Result};
+use cc_eventlog::{
+    tdx::{
+        TDX_ACPI_DATA_EVENT_PAYLOAD, TDX_ACPI_DATA_EVENT_TYPE, TDX_ACPI_LOADER_EVENT,
+        TDX_ACPI_RSDP_EVENT, TDX_ACPI_TABLES_EVENT,
+    },
+    TdxEvent,
+};
 use dstack_types::{
-    OvmfVariant, TdxImageMeasurement, TdxMrtdCandidates, TdxOsImageMeasurement,
-    TdxOsImageMeasurementDocument, TdxTdvfMeasurement, VmConfig,
+    OvmfVariant, TdxAttestationVariant, TdxImageMeasurement, TdxMrtdCandidates,
+    TdxOsImageMeasurement, TdxOsImageMeasurementDocument, TdxTdvfMeasurement, VmConfig,
 };
 use fs_err as fs;
 use serde::Deserialize;
@@ -485,6 +492,166 @@ pub fn tdx_measurements_from_measurement_document(
     })
 }
 
+fn rtmr0_acpi_hashes_from_event_log(event_log: &[TdxEvent]) -> Result<TdxRtmr0AcpiHashes> {
+    let rtmr0_events = event_log
+        .iter()
+        .filter(|event| event.imr == 0)
+        .collect::<Vec<_>>();
+    let acpi_events = rtmr0_events
+        .iter()
+        .filter(|event| {
+            event.event_type == TDX_ACPI_DATA_EVENT_TYPE
+                && event.event_payload == TDX_ACPI_DATA_EVENT_PAYLOAD
+        })
+        .collect::<Vec<_>>();
+    if acpi_events.len() != 3 {
+        bail!(
+            "TDX lite attestation requires exactly 3 RTMR0 ACPI DATA events; found {} candidates and {} RTMR0 events",
+            acpi_events.len(),
+            rtmr0_events.len()
+        );
+    }
+
+    let digest_for = |name: &str| -> Result<Vec<u8>> {
+        let matches = acpi_events
+            .iter()
+            .copied()
+            .filter(|event| event.event == name)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            bail!(
+                "TDX lite attestation requires exactly one RTMR0 ACPI DATA event named {name}; found {}",
+                matches.len()
+            );
+        }
+        let digest = matches[0].digest();
+        if digest.len() != 48 {
+            bail!(
+                "TDX RTMR0 ACPI DATA event {name} has invalid digest length {}, expected 48",
+                digest.len()
+            );
+        }
+        Ok(digest)
+    };
+
+    Ok(TdxRtmr0AcpiHashes {
+        loader: digest_for(TDX_ACPI_LOADER_EVENT)?,
+        rsdp: digest_for(TDX_ACPI_RSDP_EVENT)?,
+        tables: digest_for(TDX_ACPI_TABLES_EVENT)?,
+    })
+}
+
+/// Compare recomputed ACPI digests against the ones the guest reported.
+///
+/// RTMR0 alone would already fail on a mismatch, but only with an opaque
+/// "MRs do not match": name the offending table here so an operator can
+/// tell a tampered table apart from an unexpected VM shape.
+fn assert_tdx_acpi_hashes_match(
+    expected: &TdxRtmr0AcpiHashes,
+    reported: &TdxRtmr0AcpiHashes,
+) -> Result<()> {
+    for (name, expected, reported) in [
+        (TDX_ACPI_LOADER_EVENT, &expected.loader, &reported.loader),
+        (TDX_ACPI_RSDP_EVENT, &expected.rsdp, &reported.rsdp),
+        (TDX_ACPI_TABLES_EVENT, &expected.tables, &reported.tables),
+    ] {
+        if expected != reported {
+            bail!(
+                "TDX lite {name} digest mismatch: expected {}, reported {}",
+                hex::encode(expected),
+                hex::encode(reported)
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn assert_tdx_mrs_eq(
+    expected: &crate::TdxMeasurements,
+    actual: &crate::TdxMeasurements,
+) -> Result<()> {
+    for (name, expected, actual) in [
+        ("MRTD", &expected.mrtd, &actual.mrtd),
+        ("RTMR0", &expected.rtmr0, &actual.rtmr0),
+        ("RTMR1", &expected.rtmr1, &actual.rtmr1),
+        ("RTMR2", &expected.rtmr2, &actual.rtmr2),
+    ] {
+        if expected != actual {
+            bail!(
+                "{name} mismatch: expected={}, actual={}",
+                hex::encode(expected),
+                hex::encode(actual)
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Verify a dstack TDX lite CVM's OS against already-verified MRTD/RTMR0-2.
+///
+/// Regenerates the three RTMR0 ACPI digests from `vm_config` with qemu-acpi,
+/// checks them against the named events in `event_log`, recomputes MRTD and
+/// RTMR0-2 from `vm_config.tdx_measurement`, and compares them with
+/// `verified_mrs`. Does not judge os_image_hash approval, DCAP quote validity,
+/// or RTMR3: those stay the caller's job.
+///
+/// This is the single source of truth used by `dstack-verifier` and the wasm
+/// package. It takes only primitive, already-verified values so it can build
+/// for wasm32 without tokio/reqwest/tempfile.
+pub fn verify_tdx_lite_os(
+    verified_mrs: &crate::TdxMeasurements,
+    event_log: &[TdxEvent],
+    vm_config: &VmConfig,
+) -> Result<()> {
+    if vm_config.tdx_attestation_variant != TdxAttestationVariant::Lite {
+        bail!("vm_config is not a TDX lite attestation");
+    }
+    let document = vm_config
+        .tdx_measurement
+        .as_ref()
+        .context("tdx lite attestation requires vm_config.tdx_measurement")?;
+    document
+        .verify(&vm_config.os_image_hash)
+        .map_err(anyhow::Error::msg)
+        .context("tdx lite measurement material does not match os_image_hash")?;
+    let measurement = document
+        .decode_measurement()
+        .map_err(anyhow::Error::msg)
+        .context("failed to decode vm_config.tdx_measurement CBOR")?;
+    if let Some(config_ovmf_variant) = vm_config.ovmf_variant {
+        if config_ovmf_variant != measurement.tdvf.ovmf_variant {
+            bail!(
+                "tdx measurement ovmf_variant mismatch: vm_config={:?}, document={:?}",
+                config_ovmf_variant,
+                measurement.tdvf.ovmf_variant
+            );
+        }
+    }
+
+    // The guest labels the three RTMR0 ACPI DATA events as acpi-loader,
+    // acpi-rsdp, and acpi-tables before exposing the event log, so this does
+    // not guess based on event order.
+    let reported_acpi_hashes = rtmr0_acpi_hashes_from_event_log(event_log)
+        .context("TDX lite attestation is missing named RTMR0 ACPI DATA digests")?;
+    // Recompute the digests from the declared VM shape instead of trusting
+    // the reported ones, and treat both failure modes as fatal: a mismatch
+    // means the tables are not the ones this shape produces, and a shape
+    // the generator cannot model (`swtpm`, a QEMU older than any profile)
+    // leaves nothing to compare against. Downgrading either case to "pass,
+    // but unverified" would make the check optional at the host's
+    // discretion, because `swtpm` and `qemu_version` are host-declared
+    // fields that no other measurement independently constrains.
+    let acpi_hashes = expected_rtmr0_acpi_hashes(vm_config, measurement.tdvf.ovmf_variant)
+        .context("failed to recompute expected TDX lite ACPI table digests")?;
+    assert_tdx_acpi_hashes_match(&acpi_hashes, &reported_acpi_hashes)?;
+    // RTMR0 below is rebuilt from the recomputed digests, so the expected
+    // value depends on nothing the host reported about the tables.
+    let expected_mrs =
+        tdx_measurements_from_measurement_document(document, vm_config, &acpi_hashes)
+            .context("failed to compute TDX expected measurements without image download")?;
+    assert_tdx_mrs_eq(&expected_mrs, verified_mrs).context("MRs do not match")
+}
+
 /// Compute image-critical TDX measurements without RTMR[0].
 ///
 /// RTMR[0] contains QEMU-generated ACPI blobs and other launch-environment
@@ -861,5 +1028,191 @@ mod tests {
         )
         .expect_err("a wrapping range end must be rejected");
         assert!(err.contains("overflow"), "unexpected error: {err}");
+    }
+
+    fn acpi_event(name: &str, digest_byte: u8) -> TdxEvent {
+        TdxEvent {
+            imr: 0,
+            event_type: TDX_ACPI_DATA_EVENT_TYPE,
+            digest: vec![digest_byte; 48],
+            event: name.to_string(),
+            event_payload: TDX_ACPI_DATA_EVENT_PAYLOAD.to_vec(),
+            version: Default::default(),
+            preimage: None,
+        }
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hashes_are_selected_by_event_name() {
+        let event_log = vec![
+            acpi_event(TDX_ACPI_RSDP_EVENT, 2),
+            acpi_event(TDX_ACPI_TABLES_EVENT, 3),
+            acpi_event(TDX_ACPI_LOADER_EVENT, 1),
+        ];
+
+        let hashes = rtmr0_acpi_hashes_from_event_log(&event_log).expect("named ACPI hashes");
+
+        assert_eq!(hashes.loader, vec![1u8; 48]);
+        assert_eq!(hashes.rsdp, vec![2u8; 48]);
+        assert_eq!(hashes.tables, vec![3u8; 48]);
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hashes_reject_unlabeled_events() {
+        let event_log = vec![
+            acpi_event("", 1),
+            acpi_event(TDX_ACPI_RSDP_EVENT, 2),
+            acpi_event(TDX_ACPI_TABLES_EVENT, 3),
+        ];
+
+        assert!(rtmr0_acpi_hashes_from_event_log(&event_log).is_err());
+    }
+
+    #[test]
+    fn tdx_lite_acpi_hash_mismatch_names_the_table() {
+        let expected = TdxRtmr0AcpiHashes {
+            loader: vec![1; 48],
+            rsdp: vec![2; 48],
+            tables: vec![3; 48],
+        };
+        let mut reported = expected.clone();
+        reported.tables = vec![4; 48];
+        let err = assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect_err("mismatched tables digest is rejected");
+        assert!(err.to_string().contains(TDX_ACPI_TABLES_EVENT), "{err:#}");
+        assert!(assert_tdx_acpi_hashes_match(&expected, &expected).is_ok());
+    }
+
+    #[derive(serde::Deserialize)]
+    struct GetQuoteFixture {
+        quote: String,
+        event_log: String,
+        vm_config: String,
+    }
+
+    fn tdx_lite_getquote_fixture() -> GetQuoteFixture {
+        serde_json::from_str(include_str!(
+            "../../verifier/fixtures/tdx-lite-getquote.json"
+        ))
+        .expect("TDX lite getquote fixture parses")
+    }
+
+    fn mrs_from_quote_hex(quote_hex: &str) -> crate::TdxMeasurements {
+        let quote = hex::decode(quote_hex).expect("quote is hex");
+        let quote = dcap_qvl::quote::Quote::parse(&quote).expect("fixture quote parses");
+        let report = quote.report.as_td10().expect("TDX 1.0 report");
+        crate::TdxMeasurements {
+            mrtd: report.mr_td.to_vec(),
+            rtmr0: report.rt_mr0.to_vec(),
+            rtmr1: report.rt_mr1.to_vec(),
+            rtmr2: report.rt_mr2.to_vec(),
+        }
+    }
+
+    fn parse_fixture(
+        fixture: &GetQuoteFixture,
+    ) -> (crate::TdxMeasurements, Vec<TdxEvent>, VmConfig) {
+        let events: Vec<TdxEvent> =
+            serde_json::from_str(&fixture.event_log).expect("fixture event log parses");
+        let vm_config: VmConfig =
+            serde_json::from_str(&fixture.vm_config).expect("fixture vm_config parses");
+        (mrs_from_quote_hex(&fixture.quote), events, vm_config)
+    }
+
+    #[test]
+    fn tdx_lite_getquote_fixture_is_accepted() {
+        let fixture = tdx_lite_getquote_fixture();
+        let (mrs, events, vm_config) = parse_fixture(&fixture);
+        verify_tdx_lite_os(&mrs, &events, &vm_config).expect("captured TDX lite CVM verifies");
+    }
+
+    #[test]
+    fn tdx_lite_rejects_tampered_vm_shape() {
+        let fixture = tdx_lite_getquote_fixture();
+        let (mrs, events, vm_config) = parse_fixture(&fixture);
+        let mut cases = Vec::new();
+
+        let mut tampered = vm_config.clone();
+        tampered.memory_size = 4 * 1024 * 1024 * 1024;
+        cases.push(("memory_size", tampered));
+
+        let mut tampered = vm_config.clone();
+        tampered.pci_hole64_size = if vm_config.pci_hole64_size == 0 {
+            1 << 50
+        } else {
+            0
+        };
+        cases.push(("pci_hole64_size", tampered));
+
+        let mut tampered = vm_config.clone();
+        tampered.hotplug_off = !vm_config.hotplug_off;
+        cases.push(("hotplug_off", tampered));
+
+        let mut tampered = vm_config.clone();
+        tampered.num_nics = 2;
+        cases.push(("num_nics", tampered));
+
+        let mut tampered = vm_config.clone();
+        tampered.cpu_count += 1;
+        cases.push(("cpu_count", tampered));
+
+        let mut tampered = vm_config.clone();
+        tampered.qemu_version = Some("9.2.1".into());
+        cases.push(("qemu_version", tampered));
+
+        for (name, tampered) in cases {
+            verify_tdx_lite_os(&mrs, &events, &tampered)
+                .expect_err(&format!("{name} tamper must be rejected"));
+        }
+    }
+
+    #[test]
+    fn tdx_lite_rejects_tampered_acpi_event_and_rtmr2() {
+        let fixture = tdx_lite_getquote_fixture();
+        let (mrs, mut events, vm_config) = parse_fixture(&fixture);
+        let index = events
+            .iter()
+            .position(|event| event.event == TDX_ACPI_TABLES_EVENT)
+            .expect("acpi-tables event");
+        events[index].digest[0] ^= 0x01;
+        let err = verify_tdx_lite_os(&mrs, &events, &vm_config)
+            .expect_err("edited acpi-tables digest must be rejected");
+        assert!(
+            format!("{err:#}").contains(TDX_ACPI_TABLES_EVENT),
+            "unexpected error: {err:#}"
+        );
+
+        let (mrs, events, vm_config) = parse_fixture(&fixture);
+        let mut mrs = mrs;
+        mrs.rtmr2 = vec![0; 48];
+        let err = verify_tdx_lite_os(&mrs, &events, &vm_config)
+            .expect_err("zeroed RTMR2 must be rejected");
+        assert!(
+            format!("{err:#}").contains("RTMR2"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// The captured VM ran 2 vCPUs; a VM shape that disagrees with the quote
+    /// must not reproduce its ACPI digests, which is what makes the recomputed
+    /// digests worth comparing in the first place.
+    #[test]
+    fn tdx_lite_acpi_hashes_depend_on_the_reported_vm_shape() {
+        let fixture = tdx_lite_getquote_fixture();
+        let (_, events, mut vm_config) = parse_fixture(&fixture);
+        let ovmf_variant = vm_config.ovmf_variant.unwrap_or_default();
+
+        let reported =
+            rtmr0_acpi_hashes_from_event_log(&events).expect("fixture carries named ACPI digests");
+        let expected = expected_rtmr0_acpi_hashes(&vm_config, ovmf_variant)
+            .expect("ACPI tables are generated for the fixture VM shape");
+        assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect("recomputed digests match the captured CVM");
+
+        vm_config.cpu_count += 1;
+        let expected = expected_rtmr0_acpi_hashes(&vm_config, ovmf_variant)
+            .expect("ACPI tables are generated for the altered VM shape");
+        assert_tdx_acpi_hashes_match(&expected, &reported)
+            .expect_err("an extra vCPU must change the ACPI tables");
     }
 }
