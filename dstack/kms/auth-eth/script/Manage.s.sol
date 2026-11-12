@@ -238,8 +238,12 @@ contract SetAllowAnyDevice is BaseScript {
     function run() external {
         bool allow = vm.envBool("ALLOW_ANY_DEVICE");
         require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        require(
+            !vm.envExists("APP_EPOCH") && !vm.envExists("FROM_APP_EPOCH") && !vm.envExists("TO_APP_EPOCH"),
+            "allowAnyDevice covers every app epoch: unset APP_EPOCH, FROM_APP_EPOCH and TO_APP_EPOCH"
+        );
 
-        // Apps with and without app epochs share this setter; it covers every epoch.
+        // Apps with and without app epochs share this setter.
         vm.broadcast(vm.envUint("PRIVATE_KEY"));
         app.setAllowAnyDevice(allow);
 

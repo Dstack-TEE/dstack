@@ -154,8 +154,7 @@ and admits one app per epoch, then one symbolic owner write where noted):
       either app operation.
 
 Mutation-tested: requiring both the any-device flag and a listed device,
-dropping a setter's
-epoch bound or widening it past the next epoch, aliasing epoch 1 onto the
+dropping a setter's epoch bound or widening it past the next epoch, aliasing epoch 1 onto the
 legacy fields, letting `isAppAllowed` decide at a nonzero epoch or read the
 prepared next row, a permissionless
 `advanceAppEpoch` and dropping its stale-transaction guard each produce a

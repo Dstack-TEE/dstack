@@ -56,7 +56,7 @@ contract DstackApp is
     event DeviceAdded(bytes32 deviceId);
     event DeviceRemoved(bytes32 deviceId);
     event UpgradesDisabled();
-    /// @notice Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
+    /// @notice Covers every app epoch; there is no EpochPolicyChanged counterpart.
     event AllowAnyDeviceSet(bool allowAny);
     event RequireTcbUpToDateSet(bool requireUpToDate);
     /// @notice Additive audit event for reconstructing authorization policy.

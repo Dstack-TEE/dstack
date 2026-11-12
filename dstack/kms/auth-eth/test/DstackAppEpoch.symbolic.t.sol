@@ -224,6 +224,7 @@ contract DstackAppEpochSymbolicTest is Test {
         uint256 which,
         uint256 writeEpoch,
         bytes32 word,
+        bool anyDevice,
         bytes32 composeHash,
         bytes32 deviceId,
         bool upToDate
@@ -240,6 +241,7 @@ contract DstackAppEpochSymbolicTest is Test {
         // A prepared next row must not leak into the legacy decision.
         app.addComposeHashAtEpoch(1, bytes32(uint256(0xc1)));
         app.addDeviceAtEpoch(1, bytes32(uint256(0xd1)));
+        app.setAllowAnyDevice(anyDevice);
         vm.stopPrank();
         _ownerPolicyWrite(which, writeEpoch, word);
         IAppAuth.AppInfo memory info = _info(composeHash, deviceId, upToDate);

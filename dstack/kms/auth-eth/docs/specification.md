@@ -238,8 +238,8 @@ byte sequence — no case variations, no trailing nulls, no whitespace.
 ### 3.11 Owner-only App mutations
 
 For each of the `*AtEpoch` and `*AtEpochs` forms of `addComposeHash`,
-`removeComposeHash`, `addDevice` and `removeDevice`, and `setAllowAnyDevice`,
-`setRequireTcbUpToDate`, `disableUpgrades`:
+`removeComposeHash`, `addDevice` and `removeDevice`, and for `setAllowAnyDevice`,
+`setRequireTcbUpToDate` and `disableUpgrades`:
 
 - **pre**: `msg.sender == owner()`.
 - **frame**: every storage cell except the one mapped to the operation.
