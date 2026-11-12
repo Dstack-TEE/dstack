@@ -88,7 +88,6 @@ contract DstackKmsEpochSymbolicTest is Test {
         app = DstackApp(kms.deployAndRegisterApp(OWNER, false, false, true, bytes32(0), _id(0xc0, 0)));
         app.advanceAppEpoch(0);
         app.addComposeHashAtEpoch(1, _id(0xc0, 1));
-        app.setAllowAnyDeviceAtEpoch(1, true);
         vm.stopPrank();
     }
 

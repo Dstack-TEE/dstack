@@ -175,7 +175,7 @@ to the next epoch. Removing a value from rows `0` through the current epoch revo
 | `removeComposeHashAtEpoch(uint256,bytes32)` / `removeComposeHashAtEpochs(uint256,uint256,bytes32)` | Remove a compose hash from one app epoch or a range |
 | `addDeviceAtEpoch(uint256,bytes32)` / `addDeviceAtEpochs(uint256,uint256,bytes32)` | Whitelist a device ID |
 | `removeDeviceAtEpoch(uint256,bytes32)` / `removeDeviceAtEpochs(uint256,uint256,bytes32)` | Remove a device |
-| `setAllowAnyDeviceAtEpoch(uint256,bool)` / `setAllowAnyDeviceAtEpochs(uint256,uint256,bool)` | Allow any device to run this app |
+| `setAllowAnyDevice(bool)` | Allow any device to run this app, at every app epoch |
 | `currentAppEpoch()` | The app epoch new keys are derived for |
 | `isAppAllowed(AppBootInfo)` | Check if app can boot with given config (app epoch 0 only) |
 | `disableUpgrades()` | Permanently disable contract upgrades |
@@ -189,15 +189,15 @@ app epoch 0 and the epoch-less setters `addComposeHash(bytes32)`,
 which authorize them for app epoch 0. Tell the two kinds apart by ERC-165 interface ID:
 
 ```bash
-cast call <app-id> "supportsInterface(bytes4)(bool)" 0x853d2b79 --rpc-url $RPC_URL  # IAppEpochManagement: epoch setters
+cast call <app-id> "supportsInterface(bytes4)(bool)" 0xc65f31b6 --rpc-url $RPC_URL  # IAppEpochManagement: epoch setters
 cast call <app-id> "supportsInterface(bytes4)(bool)" 0x8fd37527 --rpc-url $RPC_URL  # IAppAuthBasicManagement: epoch-less setters
 ```
 
 The `Manage.s.sol` app scripts check this themselves: on an older app they call the
 epoch-less setter and accept only `APP_EPOCH=0` or no epoch; on a current app they
-require `APP_EPOCH`, or `FROM_APP_EPOCH` and `TO_APP_EPOCH`. Upgrading an older app to
-the current `DstackApp` keeps its compose hashes, devices and `allowAnyDevice` as app
-epoch 0.
+require `APP_EPOCH`, or `FROM_APP_EPOCH` and `TO_APP_EPOCH`. `SetAllowAnyDevice` takes
+no epoch on either kind. Upgrading an older app to the current `DstackApp` keeps its
+compose hashes and devices as app epoch 0, and its `allowAnyDevice` for every epoch.
 
 ### AppBootInfo Structure
 

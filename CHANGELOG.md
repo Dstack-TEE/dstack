@@ -76,13 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   range; `remove*AtEpochs(0, latest root epoch, value)` in `DstackKms` and
   `remove*AtEpochs(0, currentAppEpoch, value)` in `DstackApp` revoke a value
   everywhere. `DstackApp` reports its setters as the new ERC-165 interface
-  `IAppEpochManagement` (`0x853d2b79`). The `Manage.s.sol` scripts require
-  `ROOT_EPOCH` or `APP_EPOCH`, or a `FROM_*`/`TO_*` range.
+  `IAppEpochManagement` (`0xc65f31b6`). The `Manage.s.sol` scripts require
+  `ROOT_EPOCH` or `APP_EPOCH`, or a `FROM_*`/`TO_*` range. `DstackApp`'s
+  `allowAnyDevice` stays a single switch: `setAllowAnyDevice(bool)` covers every
+  app epoch, so dropping the device restriction cannot leave an older epoch
+  open to any host.
 - App contracts deployed before app epochs (v0.5.x, v0.6.0) keep working with
   the upgraded `DstackKms` and KMS, which authorize them for app epoch 0 only.
   `Manage.s.sol` detects them by interface ID and calls their epoch-less
-  setters. Upgrading one to the current `DstackApp` keeps its compose hashes,
-  devices and `allowAnyDevice` as app epoch 0.
+  setters. Upgrading one to the current `DstackApp` keeps its compose hashes and
+  devices as app epoch 0, and its `allowAnyDevice` for every app epoch.
 - DstackKms, DstackApp: ownership transfers take two steps for proxies upgraded
   from v0.5.9: `transferOwnership` nominates, and the new owner must call
   `acceptOwnership`.
@@ -118,7 +121,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `removeKmsDevice`. Use the `*AtEpoch` or `*AtEpochs` forms; before any
   rotation, `addOsImageHashAtEpoch(0, hash)` is the old call.
 - **Breaking:** DstackApp: the epoch-less `addComposeHash`, `removeComposeHash`,
-  `addDevice`, `removeDevice` and `setAllowAnyDevice`, and with them
+  `addDevice` and `removeDevice`, and with them
   `IAppAuthBasicManagement`: an upgraded app no longer reports interface ID
   `0x8fd37527`, and calls to those functions revert. Use the `*AtEpoch` or
   `*AtEpochs` forms (`IAppEpochManagement`); at app epoch 0,

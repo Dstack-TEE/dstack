@@ -171,7 +171,7 @@ contract LegacyAppCompatTest is Test {
         assertEq(upgraded.currentAppEpoch(), 0);
         assertTrue(upgraded.allowedComposeHashesAtEpoch(0, COMPOSE));
         assertTrue(upgraded.allowedDeviceIdsAtEpoch(0, DEVICE));
-        assertEq(upgraded.allowAnyDeviceAtEpoch(0), anyDevice);
+        assertEq(upgraded.allowAnyDevice(), anyDevice);
         assertFalse(upgraded.allowedComposeHashesAtEpoch(1, COMPOSE));
         assertTrue(kms.authorizeApp(request(app, true, 0)).authorized);
 
@@ -179,6 +179,13 @@ contract LegacyAppCompatTest is Test {
         vm.prank(appOwner);
         vm.expectRevert();
         ILegacyApp(app).addComposeHash(bytes32(uint256(0xc1)));
+        // The upgraded allowAnyDevice covers later epochs too: row 1 lists no device.
+        vm.startPrank(appOwner);
+        upgraded.advanceAppEpoch(0);
+        upgraded.addComposeHashAtEpoch(1, COMPOSE);
+        vm.stopPrank();
+        assertEq(kms.authorizeApp(request(app, true, 1)).authorized, anyDevice);
+
         vm.prank(appOwner);
         upgraded.removeComposeHashAtEpochs(0, 1, COMPOSE);
         assertFalse(kms.authorizeApp(request(app, true, 0)).authorized);

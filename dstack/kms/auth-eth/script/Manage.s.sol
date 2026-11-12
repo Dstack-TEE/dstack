@@ -18,7 +18,6 @@ interface ILegacyAppManagement {
     function removeComposeHash(bytes32 composeHash) external;
     function addDevice(bytes32 deviceId) external;
     function removeDevice(bytes32 deviceId) external;
-    function setAllowAnyDevice(bool allowed) external;
 }
 
 // Base contract with common functionality
@@ -238,16 +237,15 @@ contract AddDevice is BaseScript {
 contract SetAllowAnyDevice is BaseScript {
     function run() external {
         bool allow = vm.envBool("ALLOW_ANY_DEVICE");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        require(
+            !vm.envExists("APP_EPOCH") && !vm.envExists("FROM_APP_EPOCH") && !vm.envExists("TO_APP_EPOCH"),
+            "allowAnyDevice covers every app epoch: unset APP_EPOCH, FROM_APP_EPOCH and TO_APP_EPOCH"
+        );
 
-        ILegacyAppManagement legacy = legacyApp();
-        if (address(legacy) != address(0)) {
-            vm.broadcast(vm.envUint("PRIVATE_KEY"));
-            legacy.setAllowAnyDevice(allow);
-        } else {
-            (uint256 from, uint256 to) = appEpochs();
-            vm.broadcast(vm.envUint("PRIVATE_KEY"));
-            app.setAllowAnyDeviceAtEpochs(from, to, allow);
-        }
+        // Apps with and without app epochs share this setter.
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.setAllowAnyDevice(allow);
 
         console.log("Set allowAnyDevice to:", allow);
     }

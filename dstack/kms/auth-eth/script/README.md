@@ -166,7 +166,7 @@ forge script script/Manage.s.sol:AddDevice --broadcast --rpc-url $RPC_URL
 
 #### Set Allow Any Device
 ```bash
-KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... APP_EPOCH=0 ALLOW_ANY_DEVICE=true \
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... ALLOW_ANY_DEVICE=true \
 forge script script/Manage.s.sol:SetAllowAnyDevice --broadcast --rpc-url $RPC_URL
 ```
 

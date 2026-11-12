@@ -85,7 +85,7 @@ contract EventAuditTest is Test {
         vm.startPrank(owner);
         app.addComposeHashAtEpoch(0, composeHash);
         app.addDeviceAtEpoch(0, device);
-        app.setAllowAnyDeviceAtEpoch(0, true);
+        app.setAllowAnyDevice(true);
         app.setRequireTcbUpToDate(true);
         app.removeDeviceAtEpoch(0, device);
         app.disableUpgrades();

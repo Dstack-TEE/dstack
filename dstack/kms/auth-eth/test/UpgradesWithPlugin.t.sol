@@ -155,7 +155,7 @@ contract UpgradesWithPluginTest is Test {
         bytes32 composeHash = bytes32(uint256(789));
         app.addDeviceAtEpoch(0, deviceId);
         app.addComposeHashAtEpoch(0, composeHash);
-        app.setAllowAnyDeviceAtEpoch(0, true);
+        app.setAllowAnyDevice(true);
 
         // Upgrade to new implementation using plugin
         Upgrades.upgradeProxy(appProxy, "DstackAppV2.sol", "");

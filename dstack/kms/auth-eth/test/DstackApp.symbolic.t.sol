@@ -120,7 +120,7 @@ contract DstackAppSymbolicTest is Test {
         } else if (which == 3) {
             data = abi.encodeWithSelector(DstackApp.removeDeviceAtEpoch.selector, uint256(0), word);
         } else if (which == 4) {
-            data = abi.encodeWithSelector(DstackApp.setAllowAnyDeviceAtEpoch.selector, uint256(0), flag);
+            data = abi.encodeWithSelector(DstackApp.setAllowAnyDevice.selector, flag);
         } else if (which == 5) {
             data = abi.encodeWithSelector(DstackApp.setRequireTcbUpToDate.selector, flag);
         } else if (which == 6) {

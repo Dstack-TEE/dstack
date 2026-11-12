@@ -31,8 +31,7 @@ contract DstackApp is
     // State variable to track if upgrades are disabled
     bool private _upgradesDisabled;
 
-    /// @notice Whether any device may boot this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
-    /// EpochPolicyChanged.
+    /// @notice Whether any device may boot this app, at every app epoch.
     bool public allowAnyDevice;
 
     /// @notice Allowed device IDs for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
@@ -48,7 +47,6 @@ contract DstackApp is
     // Epoch zero continues to use the original fields above after an upgrade.
     mapping(uint256 => mapping(bytes32 => bool)) private _composeHashesByEpoch;
     mapping(uint256 => mapping(bytes32 => bool)) private _deviceIdsByEpoch;
-    mapping(uint256 => bool) private _allowAnyDeviceByEpoch;
 
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
@@ -58,7 +56,7 @@ contract DstackApp is
     event DeviceAdded(bytes32 deviceId);
     event DeviceRemoved(bytes32 deviceId);
     event UpgradesDisabled();
-    /// @notice Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
+    /// @notice Covers every app epoch; there is no EpochPolicyChanged counterpart.
     event AllowAnyDeviceSet(bool allowAny);
     event RequireTcbUpToDateSet(bool requireUpToDate);
     /// @notice Additive audit event for reconstructing authorization policy.
@@ -172,10 +170,6 @@ contract DstackApp is
         return epoch == 0 ? allowedDeviceIds[deviceId] : _deviceIdsByEpoch[epoch][deviceId];
     }
 
-    function allowAnyDeviceAtEpoch(uint256 epoch) public view returns (bool) {
-        return epoch == 0 ? allowAnyDevice : _allowAnyDeviceByEpoch[epoch];
-    }
-
     // A request may select any app epoch up to the current one and is decided
     // on that epoch's row, so revoking a value takes every row that allows it:
     // 0 through currentAppEpoch.
@@ -229,24 +223,12 @@ contract DstackApp is
         emit EpochPolicyChanged(keccak256("compose-hash"), composeHash, epoch, allowed);
     }
 
-    function setAllowAnyDeviceAtEpoch(uint256 epoch, bool allowed) public onlyOwner {
-        _setAllowAnyDevice(epoch, bytes32(0), allowed);
-    }
-
-    function setAllowAnyDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bool allowed) external onlyOwner {
-        _setAtEpochs(_setAllowAnyDevice, fromEpoch, toEpoch, bytes32(0), allowed);
-    }
-
-    function _setAllowAnyDevice(uint256 epoch, bytes32, bool allowed) private {
-        _requireWritableEpoch(epoch);
-        if (epoch == 0) {
-            allowAnyDevice = allowed;
-            emit AllowAnyDeviceSet(allowed);
-            _emitPolicy("allow-any-device", bytes32(0), allowed);
-        } else {
-            _allowAnyDeviceByEpoch[epoch] = allowed;
-        }
-        emit EpochPolicyChanged(keccak256("allow-any-device"), bytes32(0), epoch, allowed);
+    // Covers every app epoch: restricting devices is a decision about hosts, not
+    // key generations, and must not leave an older epoch open to any host.
+    function setAllowAnyDevice(bool allowed) external onlyOwner {
+        allowAnyDevice = allowed;
+        emit AllowAnyDeviceSet(allowed);
+        _emitPolicy("allow-any-device", bytes32(0), allowed);
     }
 
     // Set whether TCB status must be UpToDate to boot this app
@@ -338,7 +320,7 @@ contract DstackApp is
         }
 
         // Check if device is allowed (when device restriction is enabled)
-        if (!allowAnyDeviceAtEpoch(appEpoch) && !allowedDeviceIdsAtEpoch(appEpoch, bootInfo.deviceId)) {
+        if (!allowAnyDevice && !allowedDeviceIdsAtEpoch(appEpoch, bootInfo.deviceId)) {
             return (false, "Device not allowed");
         }
 
@@ -362,5 +344,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[45] private __gap;
+    uint256[46] private __gap;
 }
