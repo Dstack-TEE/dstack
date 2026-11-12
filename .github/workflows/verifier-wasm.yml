@@ -55,7 +55,9 @@ jobs:
               changed=$(git diff --name-only HEAD~1...HEAD)
             fi
             echo "$changed"
-            if echo "$changed" | grep -qE '^(sdk/verifier-wasm/|dstack/crates/dstack-verifier-wasm/|dstack/dstack-mr/|dstack/crates/qemu-acpi/|dstack/dstack-types/|dstack/cc-eventlog/|dstack/Cargo.lock|\.github/workflows/verifier-wasm\.yml)'; then
+            # Keep in sync with the workspace crates dstack-verifier-wasm depends on
+            # (`cargo metadata --filter-platform wasm32-unknown-unknown`).
+            if echo "$changed" | grep -qE '^(sdk/verifier-wasm/|dstack/crates/dstack-verifier-wasm/|dstack/dstack-mr/|dstack/crates/qemu-acpi/|dstack/dstack-types/|dstack/cc-eventlog/|dstack/size-parser/|dstack/verifier/fixtures/|dstack/Cargo\.(toml|lock)|\.github/workflows/verifier-wasm\.yml)'; then
               relevant=true
             else
               echo "nothing this job covers changed"
@@ -86,24 +88,9 @@ jobs:
 
       - name: Build wasm in pinned container
         env:
-          REPRO_CHECK: '1'
+          # The release workflow always checks reproducibility; PRs build once.
+          REPRO_CHECK: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: bash sdk/verifier-wasm/scripts/build-in-container.sh
-
-      - name: Check wasm imports
-        run: |
-          node -e "
-            const { readFileSync } = require('node:fs');
-            const js = readFileSync('sdk/verifier-wasm/src/wasm-bytes.js', 'utf8');
-            const m = js.match(/wasmBase64 = '([^']+)'/);
-            if (!m) { console.error('no wasmBase64'); process.exit(1); }
-            const wasm = Buffer.from(m[1], 'base64');
-            const imports = WebAssembly.Module.imports(new WebAssembly.Module(wasm));
-            if (imports.length !== 0) {
-              console.error(imports);
-              process.exit(1);
-            }
-            console.log('imports: none raw=' + wasm.length);
-          "
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -130,7 +117,7 @@ jobs:
           node-version: ${{ matrix.node }}
       - name: Run cases
         working-directory: sdk/verifier-wasm
-        run: node test/run-cases.mjs
+        run: npm test
 
   bun:
     needs: [changes, build]

@@ -8,7 +8,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { verifyTdxLiteOs } from '../src/index.js'
+import { wasmBase64 } from '../src/wasm-bytes.js'
 import { buildCases, formatReport, runCases } from './cases.mjs'
+
+const imports = WebAssembly.Module.imports(new WebAssembly.Module(Buffer.from(wasmBase64, 'base64')))
+if (imports.length !== 0) {
+  console.error('wasm module must not import anything:', imports)
+  process.exit(1)
+}
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const fixturePath = join(root, 'dstack/verifier/fixtures/tdx-lite-getquote.json')
