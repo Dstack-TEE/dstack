@@ -25,7 +25,7 @@ Lite without `tdx_measurement` returns
 ## Install
 
 ```bash
-npm install @phala/dstack-verifier-wasm@0.1.0-beta.0
+npm install @phala/dstack-verifier-wasm@0.1.0
 ```
 
 Requires Node `>=20.19.0`. The wasm bytes are embedded in the JS module: no

@@ -1,6 +1,6 @@
 {
   "name": "@phala/dstack-verifier-wasm",
-  "version": "0.1.0-beta.0",
+  "version": "0.1.0",
   "description": "Local TDX lite OS verification for dstack 0.6.x CVMs",
   "type": "module",
   "main": "./src/index.js",
