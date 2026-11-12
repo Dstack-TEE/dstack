@@ -171,7 +171,7 @@ contract LegacyAppCompatTest is Test {
         assertEq(upgraded.currentAppEpoch(), 0);
         assertTrue(upgraded.allowedComposeHashesAtEpoch(0, COMPOSE));
         assertTrue(upgraded.allowedDeviceIdsAtEpoch(0, DEVICE));
-        assertEq(upgraded.allowAnyDeviceAtEpoch(0), anyDevice);
+        assertEq(upgraded.allowAnyDevice(), anyDevice);
         assertFalse(upgraded.allowedComposeHashesAtEpoch(1, COMPOSE));
         assertTrue(kms.authorizeApp(request(app, true, 0)).authorized);
 

@@ -6,8 +6,9 @@
 
 pragma solidity ^0.8.24;
 
-/// Epoch-scoped allowlist management. Each setter names the app epoch rows it
+/// Allowlist management. Each allowlist setter names the app epoch rows it
 /// writes: one epoch, or `fromEpoch` through `toEpoch`, at most the next epoch.
+/// `setAllowAnyDevice` covers every app epoch.
 /// Replaces the epoch-less IAppAuthBasicManagement (0x8fd37527), which policies
 /// predating app epochs still report; tools tell the two apart by interface ID.
 interface IAppEpochManagement {
@@ -19,6 +20,5 @@ interface IAppEpochManagement {
     function addDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external;
     function removeDeviceAtEpoch(uint256 epoch, bytes32 deviceId) external;
     function removeDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bytes32 deviceId) external;
-    function setAllowAnyDeviceAtEpoch(uint256 epoch, bool allowed) external;
-    function setAllowAnyDeviceAtEpochs(uint256 fromEpoch, uint256 toEpoch, bool allowed) external;
+    function setAllowAnyDevice(bool allowed) external;
 }

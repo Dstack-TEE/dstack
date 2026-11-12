@@ -70,7 +70,7 @@ Plus inherited storage in ERC-7201 namespaces: `OwnableUpgradeable`,
 | Slot | Name | Type | Writable by |
 |---|---|---|---|
 | 0 | `allowedComposeHashes` | `mapping(bytes32 => bool)` | `addComposeHashAtEpoch(s)`, `removeComposeHashAtEpoch(s)` at epoch 0 (owner); 5/6-arg initializer |
-| 1 | `_upgradesDisabled` + `allowAnyDevice` (packed) | `bool` + `bool` | `disableUpgrades` (owner, monotonic); `setAllowAnyDeviceAtEpoch(s)` at epoch 0 (owner); initializer |
+| 1 | `_upgradesDisabled` + `allowAnyDevice` (packed) | `bool` + `bool` | `disableUpgrades` (owner, monotonic); `setAllowAnyDevice` (owner, every app epoch); initializer |
 | 2 | `allowedDeviceIds` | `mapping(bytes32 => bool)` | `addDeviceAtEpoch(s)`, `removeDeviceAtEpoch(s)` at epoch 0 (owner); initializer |
 | 3 | `requireTcbUpToDate` | `bool` | `setRequireTcbUpToDate` (owner); 6-arg initializer only |
 | 4 | `__gap[49]` | `uint256[49]` | (none) |
@@ -238,7 +238,7 @@ byte sequence — no case variations, no trailing nulls, no whitespace.
 ### 3.11 Owner-only App mutations
 
 For each of the `*AtEpoch` and `*AtEpochs` forms of `addComposeHash`,
-`removeComposeHash`, `addDevice`, `removeDevice` and `setAllowAnyDevice`, and
+`removeComposeHash`, `addDevice` and `removeDevice`, and `setAllowAnyDevice`,
 `setRequireTcbUpToDate`, `disableUpgrades`:
 
 - **pre**: `msg.sender == owner()`.
