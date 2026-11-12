@@ -37,7 +37,7 @@ contract LegacyAppCompatTest is Test {
             Upgrades.deployUUPSProxy("DstackKms.sol", abi.encodeCall(DstackKms.initialize, (owner, address(0))))
         );
         kms.registerRootEpoch(key(91, 0xa0), key(33, 0xb0), "ipfs://0");
-        kms.addOsImageHashAtEpoch(0, IMAGE);
+        kms.addOsImageHashAtEpochs(0, 0, IMAGE);
         vm.stopPrank();
     }
 
@@ -83,7 +83,7 @@ contract LegacyAppCompatTest is Test {
     function rotateRoot() internal {
         vm.startPrank(owner);
         kms.registerRootEpoch(key(91, 0xa1), key(33, 0xb1), "ipfs://1");
-        kms.addOsImageHashAtEpoch(1, IMAGE);
+        kms.addOsImageHashAtEpochs(1, 1, IMAGE);
         (,,, bytes32 hash) = kms.rootEpoch(1);
         kms.activateRootEpoch(1, hash);
         vm.stopPrank();

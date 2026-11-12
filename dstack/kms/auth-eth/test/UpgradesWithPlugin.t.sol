@@ -124,7 +124,7 @@ contract UpgradesWithPluginTest is Test {
         // Set some state to verify it's preserved
         kms.setGatewayAppId("original-gateway");
         bytes32 mrAggregated = bytes32(uint256(123));
-        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mrAggregated);
 
         // Upgrade to new implementation using plugin
         Upgrades.upgradeProxy(kmsProxy, "DstackKmsV2.sol", "");
@@ -305,8 +305,8 @@ contract UpgradesWithPluginTest is Test {
         bytes32 osImageHash = bytes32(uint256(0xA1));
         bytes32 composeHash = bytes32(uint256(0xA2));
         bytes32 mrAggregated = bytes32(uint256(0xA3));
-        kms.addOsImageHashAtEpoch(0, osImageHash);
-        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mrAggregated);
 
         address appId = kms.deployAndRegisterApp(
             owner,
@@ -359,8 +359,8 @@ contract UpgradesWithPluginTest is Test {
         bytes32 osImageHash = bytes32(uint256(0xB1));
         bytes32 composeHash = bytes32(uint256(0xB2));
         bytes32 mrAggregated = bytes32(uint256(0xB3));
-        kms.addOsImageHashAtEpoch(0, osImageHash);
-        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mrAggregated);
 
         address appId = kms.deployAndRegisterApp(
             owner,
@@ -419,8 +419,8 @@ contract UpgradesWithPluginTest is Test {
         bytes32 osImageHash = bytes32(uint256(789));
         bytes32 mrAggregated = bytes32(uint256(101_112));
 
-        kms.addOsImageHashAtEpoch(0, osImageHash);
-        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mrAggregated);
         kms.setGatewayAppId("complex-test-gateway");
 
         // Upgrade both contracts

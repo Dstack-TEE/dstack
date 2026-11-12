@@ -64,9 +64,10 @@ the old row after the handover. The old image never needs access to the new row.
 
 A request may select any epoch up to the current one and is decided on that
 epoch's row, so a value is revoked only once every row allowing it is cleared.
-Neither contract has epoch-less material setters: `*AtEpoch(epoch, material)`
-changes one row and `*AtEpochs(fromEpoch, toEpoch, material)` every row in the
-range, so one transaction revokes a value from all rows, with
+Neither contract has epoch-less material setters:
+`*AtEpochs(fromEpoch, toEpoch, material)` changes every row in the range, and in
+`DstackApp` `*AtEpoch(epoch, material)` one row (in `DstackKms`, pass the epoch
+twice). One transaction revokes a value from all rows, with
 `remove*AtEpochs(0, latest, …)` in `DstackKms` and
 `remove*AtEpochs(0, currentAppEpoch, …)` in `DstackApp`. `DstackKms` writes
 registered root epochs (before any is registered, only epoch zero); `DstackApp`

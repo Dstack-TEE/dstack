@@ -134,7 +134,7 @@ contract DstackKmsTest is Test {
 
     function test_RegisterRootEpochAppendsAndChains() public {
         assertEq(kms.rootEpochCount(), 0);
-        vm.expectRevert("No root epoch registered");
+        vm.expectRevert(DstackKms.NoRootEpochRegistered.selector);
         kms.currentRootEpoch();
 
         bytes32 h0 = chainHash(bytes32(0), ca(0xa0), k256(0xb0));
@@ -157,7 +157,7 @@ contract DstackKmsTest is Test {
         assertEq(k256Key, k256(0xb1));
         assertEq(evidenceUrl, "ipfs://c1");
         assertEq(h, h1);
-        vm.expectRevert("Unknown root epoch");
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
         kms.rootEpoch(2);
 
         // Epoch 1 is registered but epoch 0 is still served.
@@ -172,18 +172,18 @@ contract DstackKmsTest is Test {
         bytes32 h2 = chainHash(h1, ca(0xa2), k256(0xb2));
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Invalid root epoch activation");
+        vm.expectRevert(DstackKms.InvalidRootEpochActivation.selector);
         kms.activateRootEpoch(1, h1);
         kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
         kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2");
-        vm.expectRevert("Invalid root epoch activation");
+        vm.expectRevert(DstackKms.InvalidRootEpochActivation.selector);
         kms.activateRootEpoch(2, h2);
         vm.expectEmit(true, true, true, true);
         emit RootEpochActivated(1);
         kms.activateRootEpoch(1, h1);
-        vm.expectRevert("Invalid root epoch activation");
+        vm.expectRevert(DstackKms.InvalidRootEpochActivation.selector);
         kms.activateRootEpoch(1, h1);
-        vm.expectRevert("Invalid root epoch activation");
+        vm.expectRevert(DstackKms.InvalidRootEpochActivation.selector);
         kms.activateRootEpoch(0, h0);
         vm.stopPrank();
 
@@ -205,7 +205,7 @@ contract DstackKmsTest is Test {
         kms.popRootEpoch(1, h1);
         kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://replacement");
 
-        vm.expectRevert("root epoch chain hash mismatch");
+        vm.expectRevert(DstackKms.RootEpochChainHashMismatch.selector);
         kms.activateRootEpoch(1, h1);
         (uint256 current, bytes32 currentHash) = kms.currentRootEpoch();
         assertEq(current, 0);
@@ -227,9 +227,9 @@ contract DstackKmsTest is Test {
     function test_RegisterRootEpochZeroMustMatchKmsInfo() public {
         upgradeLegacyKms();
         vm.startPrank(owner);
-        vm.expectRevert("Epoch 0 keys differ from kmsInfo");
+        vm.expectRevert(DstackKms.Epoch0KeysDifferFromKmsInfo.selector);
         kms.registerRootEpoch(ca(0xa1), k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Epoch 0 keys differ from kmsInfo");
+        vm.expectRevert(DstackKms.Epoch0KeysDifferFromKmsInfo.selector);
         kms.registerRootEpoch(ca(0xa0), k256(0xb1), "ipfs://c0");
         assertEq(kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0"), 0);
         // Later epochs are new keys by definition.
@@ -242,15 +242,15 @@ contract DstackKmsTest is Test {
         bytes32 h1 = chainHash(h0, ca(0xa1), k256(0xb1));
         bytes32 h1b = chainHash(h0, ca(0xa2), k256(0xb2));
         vm.startPrank(owner);
-        vm.expectRevert("Not the pending root epoch");
+        vm.expectRevert(DstackKms.NotPendingRootEpoch.selector);
         kms.popRootEpoch(0, h0);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Not the pending root epoch");
+        vm.expectRevert(DstackKms.NotPendingRootEpoch.selector);
         kms.popRootEpoch(0, h0);
         kms.registerRootEpoch(ca(0xa1), k256(0xb1), "ipfs://c1");
-        vm.expectRevert("Not the pending root epoch");
+        vm.expectRevert(DstackKms.NotPendingRootEpoch.selector);
         kms.popRootEpoch(2, h1);
-        vm.expectRevert("Root epoch chain hash mismatch");
+        vm.expectRevert(DstackKms.RootEpochChainHashMismatch.selector);
         kms.popRootEpoch(1, h1b);
 
         vm.expectEmit(true, true, true, true);
@@ -261,10 +261,10 @@ contract DstackKmsTest is Test {
         // A new epoch 1 replaces the dropped one; a stale pop of the old one
         // cannot drop it.
         assertEq(kms.registerRootEpoch(ca(0xa2), k256(0xb2), "ipfs://c2"), 1);
-        vm.expectRevert("Root epoch chain hash mismatch");
+        vm.expectRevert(DstackKms.RootEpochChainHashMismatch.selector);
         kms.popRootEpoch(1, h1);
         kms.activateRootEpoch(1, h1b);
-        vm.expectRevert("Not the pending root epoch");
+        vm.expectRevert(DstackKms.NotPendingRootEpoch.selector);
         kms.popRootEpoch(1, h1b);
         vm.stopPrank();
 
@@ -286,12 +286,12 @@ contract DstackKmsTest is Test {
         assertTrue(kms.kmsAllowedAggregatedMrs(info.mrAggregated));
         assertTrue(kms.kmsAllowedDeviceIds(info.deviceId));
         // Rows of an unregistered epoch can be neither written nor read.
-        vm.expectRevert("Unknown root epoch");
-        kms.addOsImageHashAtEpoch(1, info.osImageHash);
-        vm.expectRevert("Unknown root epoch");
-        kms.addKmsAggregatedMrAtEpoch(1, info.mrAggregated);
-        vm.expectRevert("Unknown root epoch");
-        kms.addKmsDeviceAtEpoch(1, info.deviceId);
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.addOsImageHashAtEpochs(1, 1, info.osImageHash);
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.addKmsAggregatedMrAtEpochs(1, 1, info.mrAggregated);
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.addKmsDeviceAtEpochs(1, 1, info.deviceId);
         registerNextRootEpoch();
         registerNextRootEpoch();
         approveKmsAtEpoch(info, 1);
@@ -315,10 +315,10 @@ contract DstackKmsTest is Test {
 
     function test_SetRootEpochEvidenceUrl() public {
         vm.startPrank(owner);
-        vm.expectRevert("Unknown root epoch");
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
         kms.setRootEpochEvidenceUrl(0, "ipfs://moved");
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Empty epoch evidence URL");
+        vm.expectRevert(DstackKms.EmptyEpochEvidenceUrl.selector);
         kms.setRootEpochEvidenceUrl(0, "");
         vm.expectEmit(true, true, true, true);
         emit RootEpochEvidenceUrlSet(0, "https://mirror/c0");
@@ -371,21 +371,21 @@ contract DstackKmsTest is Test {
         otherCurve[25] = 0x0a;
         bytes memory uncompressedK256 = bytes.concat(hex"04", new bytes(64));
         vm.startPrank(owner);
-        vm.expectRevert("Invalid epoch CA public key");
+        vm.expectRevert(DstackKms.InvalidEpochCaPubkey.selector);
         kms.registerRootEpoch("", k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Invalid epoch CA public key");
+        vm.expectRevert(DstackKms.InvalidEpochCaPubkey.selector);
         kms.registerRootEpoch(bytes.concat(ca(0xa0), hex"00"), k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Invalid epoch CA public key");
+        vm.expectRevert(DstackKms.InvalidEpochCaPubkey.selector);
         kms.registerRootEpoch(compressedCa, k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Invalid epoch CA public key");
+        vm.expectRevert(DstackKms.InvalidEpochCaPubkey.selector);
         kms.registerRootEpoch(otherCurve, k256(0xb0), "ipfs://c0");
-        vm.expectRevert("Invalid epoch k256 public key");
+        vm.expectRevert(DstackKms.InvalidEpochK256Pubkey.selector);
         kms.registerRootEpoch(ca(0xa0), "", "ipfs://c0");
-        vm.expectRevert("Invalid epoch k256 public key");
+        vm.expectRevert(DstackKms.InvalidEpochK256Pubkey.selector);
         kms.registerRootEpoch(ca(0xa0), uncompressedK256, "ipfs://c0");
-        vm.expectRevert("Invalid epoch k256 public key");
+        vm.expectRevert(DstackKms.InvalidEpochK256Pubkey.selector);
         kms.registerRootEpoch(ca(0xa0), bytes.concat(hex"04", new bytes(32)), "ipfs://c0");
-        vm.expectRevert("Empty epoch evidence URL");
+        vm.expectRevert(DstackKms.EmptyEpochEvidenceUrl.selector);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "");
         vm.stopPrank();
     }
@@ -394,7 +394,7 @@ contract DstackKmsTest is Test {
         bytes32 mr = bytes32(uint256(123));
 
         vm.prank(owner);
-        kms.addKmsAggregatedMrAtEpoch(0, mr);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mr);
 
         assertTrue(kms.kmsAllowedAggregatedMrs(mr));
     }
@@ -403,10 +403,10 @@ contract DstackKmsTest is Test {
         bytes32 mr = bytes32(uint256(123));
 
         vm.startPrank(owner);
-        kms.addKmsAggregatedMrAtEpoch(0, mr);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mr);
         assertTrue(kms.kmsAllowedAggregatedMrs(mr));
 
-        kms.removeKmsAggregatedMrAtEpoch(0, mr);
+        kms.removeKmsAggregatedMrAtEpochs(0, 0, mr);
         assertFalse(kms.kmsAllowedAggregatedMrs(mr));
         vm.stopPrank();
     }
@@ -458,10 +458,10 @@ contract DstackKmsTest is Test {
         bytes32 deviceId = bytes32(uint256(999));
 
         vm.startPrank(owner);
-        kms.addKmsDeviceAtEpoch(0, deviceId);
+        kms.addKmsDeviceAtEpochs(0, 0, deviceId);
         assertTrue(kms.kmsAllowedDeviceIds(deviceId));
 
-        kms.removeKmsDeviceAtEpoch(0, deviceId);
+        kms.removeKmsDeviceAtEpochs(0, 0, deviceId);
         assertFalse(kms.kmsAllowedDeviceIds(deviceId));
         vm.stopPrank();
     }
@@ -470,10 +470,10 @@ contract DstackKmsTest is Test {
         bytes32 imageHash = bytes32(uint256(888));
 
         vm.startPrank(owner);
-        kms.addOsImageHashAtEpoch(0, imageHash);
+        kms.addOsImageHashAtEpochs(0, 0, imageHash);
         assertTrue(kms.allowedOsImages(imageHash));
 
-        kms.removeOsImageHashAtEpoch(0, imageHash);
+        kms.removeOsImageHashAtEpochs(0, 0, imageHash);
         assertFalse(kms.allowedOsImages(imageHash));
         vm.stopPrank();
     }
@@ -511,9 +511,9 @@ contract DstackKmsTest is Test {
         tdx[1] = "dstack-gcp-tdx";
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
-        kms.addKmsDeviceAtEpoch(0, info.deviceId);
-        kms.addKmsAggregatedMrAtEpoch(0, info.mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
+        kms.addKmsDeviceAtEpochs(0, 0, info.deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
         address appId = kms.deployAndRegisterApp(user, false, true, info.deviceId, info.composeHash);
         kms.setAllowedTeeVariants(tdx);
         kms.setAllowAnyTeeVariant(false);
@@ -572,9 +572,9 @@ contract DstackKmsTest is Test {
     function test_AuthorizationOperationsFailClosedAndBootstrapBeforeRegistration() public {
         IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
         vm.startPrank(owner);
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
-        kms.addKmsDeviceAtEpoch(0, info.deviceId);
-        kms.addKmsAggregatedMrAtEpoch(0, info.mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
+        kms.addKmsDeviceAtEpochs(0, 0, info.deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
         vm.stopPrank();
         AuthorizationRequest memory request = AuthorizationRequest(
             info, keccak256("kms_bootstrap"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
@@ -635,9 +635,9 @@ contract DstackKmsTest is Test {
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
         kms.setGatewayAppId("gateway");
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
-        kms.addKmsDeviceAtEpoch(0, info.deviceId);
-        kms.addKmsAggregatedMrAtEpoch(0, info.mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
+        kms.addKmsDeviceAtEpochs(0, 0, info.deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
         address appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         vm.stopPrank();
 
@@ -701,11 +701,11 @@ contract DstackKmsTest is Test {
 
     function test_AppEpochQueryRevertsForUnregisteredOrUndeployedApps() public {
         address policy = address(new DstackApp());
-        vm.expectRevert("App not registered");
+        vm.expectRevert(DstackKms.AppNotRegistered.selector);
         kms.currentAppEpoch(policy);
         address eoa = address(0xbeef);
         kms.registerApp(eoa);
-        vm.expectRevert("App not deployed or invalid address");
+        vm.expectRevert(DstackKms.AppNotDeployed.selector);
         kms.currentAppEpoch(eoa);
         // A registered legacy policy without the capability is epoch zero.
         kms.registerApp(policy);
@@ -727,7 +727,7 @@ contract DstackKmsTest is Test {
         DstackKms.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         address appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         address otherApp = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         vm.stopPrank();
@@ -803,9 +803,9 @@ contract DstackKmsTest is Test {
 
         // Setup allowed values
         vm.startPrank(owner);
-        kms.addKmsDeviceAtEpoch(0, deviceId);
-        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
-        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addKmsDeviceAtEpochs(0, 0, deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
@@ -832,9 +832,9 @@ contract DstackKmsTest is Test {
 
         // Setup allowed values
         vm.startPrank(owner);
-        kms.addKmsDeviceAtEpoch(0, deviceId);
-        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
-        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addKmsDeviceAtEpochs(0, 0, deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory bootInfo = IAppAuth.AppInfo({
@@ -861,7 +861,7 @@ contract DstackKmsTest is Test {
         bytes32 osImageHash = bytes32(uint256(111));
 
         vm.startPrank(owner);
-        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
         address appId = kms.deployAndRegisterApp(user, false, false, deviceId, composeHash);
         vm.stopPrank();
 
@@ -993,11 +993,11 @@ contract DstackKmsTest is Test {
         // Old owner has lost authority.
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", owner));
-        kms.addKmsAggregatedMrAtEpoch(0, mr);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mr);
 
         // New owner has it.
         vm.prank(newOwner);
-        kms.addKmsAggregatedMrAtEpoch(0, mr);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mr);
         assertTrue(kms.kmsAllowedAggregatedMrs(mr));
     }
 
@@ -1040,9 +1040,9 @@ contract DstackKmsTest is Test {
     }
 
     function approveKmsAtEpoch(IAppAuth.AppInfo memory info, uint256 epoch) internal {
-        kms.addOsImageHashAtEpoch(epoch, info.osImageHash);
-        kms.addKmsAggregatedMrAtEpoch(epoch, info.mrAggregated);
-        kms.addKmsDeviceAtEpoch(epoch, info.deviceId);
+        kms.addOsImageHashAtEpochs(epoch, epoch, info.osImageHash);
+        kms.addKmsAggregatedMrAtEpochs(epoch, epoch, info.mrAggregated);
+        kms.addKmsDeviceAtEpochs(epoch, epoch, info.deviceId);
     }
 
     function test_KmsEpochRowsDoNotInheritAndCanBeRevokedIndependently() public {
@@ -1057,22 +1057,22 @@ contract DstackKmsTest is Test {
         (bool allowed, string memory reason) = kms.isKmsAllowed(info);
         assertFalse(allowed, "legacy KMS check ends at rotation");
         assertEq(reason, "Root epoch requires epoch-aware authorization");
-        kms.addOsImageHashAtEpoch(1, info.osImageHash);
+        kms.addOsImageHashAtEpochs(1, 1, info.osImageHash);
         assertFalse(authorize(info, true).authorized);
-        kms.addKmsAggregatedMrAtEpoch(1, info.mrAggregated);
+        kms.addKmsAggregatedMrAtEpochs(1, 1, info.mrAggregated);
         assertFalse(authorize(info, true).authorized);
-        kms.addKmsDeviceAtEpoch(1, info.deviceId);
+        kms.addKmsDeviceAtEpochs(1, 1, info.deviceId);
         assertTrue(authorize(info, true).authorized);
-        kms.removeOsImageHashAtEpoch(1, info.osImageHash);
+        kms.removeOsImageHashAtEpochs(1, 1, info.osImageHash);
         assertFalse(authorize(info, true).authorized);
         assertTrue(kms.allowedOsImages(info.osImageHash));
         assertTrue(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
-        kms.addOsImageHashAtEpoch(1, info.osImageHash);
-        kms.removeKmsAggregatedMrAtEpoch(0, info.mrAggregated);
+        kms.addOsImageHashAtEpochs(1, 1, info.osImageHash);
+        kms.removeKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
         assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
         assertTrue(authorize(info, true).authorized);
-        kms.addKmsAggregatedMrAtEpoch(0, info.mrAggregated);
-        kms.removeKmsDeviceAtEpoch(0, info.deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
+        kms.removeKmsDeviceAtEpochs(0, 0, info.deviceId);
         assertFalse(kms.authorizeKms(kmsEpochRequest(info, 0, 0)).authorized);
         assertTrue(authorize(info, true).authorized);
         vm.stopPrank();
@@ -1082,7 +1082,7 @@ contract DstackKmsTest is Test {
         IAppAuth.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
         registerNextRootEpoch();
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         registerNextRootEpoch();
         activateNextRootEpoch();
@@ -1100,44 +1100,44 @@ contract DstackKmsTest is Test {
         assertTrue(kms.authorizeApp(epochRequest(info, 0, 1)).authorized);
         assertFalse(authorize(info, false).authorized);
         vm.prank(owner);
-        kms.addOsImageHashAtEpoch(1, info.osImageHash);
+        kms.addOsImageHashAtEpochs(1, 1, info.osImageHash);
         assertTrue(authorize(info, false).authorized);
         assertTrue(kms.authorizeApp(epochRequest(info, 1, 0)).authorized);
         vm.prank(owner);
-        kms.removeOsImageHashAtEpoch(0, info.osImageHash);
+        kms.removeOsImageHashAtEpochs(0, 0, info.osImageHash);
         assertFalse(kms.authorizeApp(epochRequest(info, 0, 0)).authorized);
         assertTrue(authorize(info, false).authorized);
     }
 
     function test_ExplicitRootEpochSettersRequireOwnerAndRegisteredEpoch() public {
         vm.startPrank(owner);
-        vm.expectRevert("Unknown root epoch");
-        kms.addOsImageHashAtEpoch(1, bytes32(uint256(1)));
-        vm.expectRevert("Unknown root epoch");
-        kms.removeOsImageHashAtEpoch(1, bytes32(uint256(1)));
-        vm.expectRevert("Unknown root epoch");
-        kms.addKmsAggregatedMrAtEpoch(1, bytes32(uint256(1)));
-        vm.expectRevert("Unknown root epoch");
-        kms.removeKmsAggregatedMrAtEpoch(1, bytes32(uint256(1)));
-        vm.expectRevert("Unknown root epoch");
-        kms.addKmsDeviceAtEpoch(1, bytes32(uint256(1)));
-        vm.expectRevert("Unknown root epoch");
-        kms.removeKmsDeviceAtEpoch(1, bytes32(uint256(1)));
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.addOsImageHashAtEpochs(1, 1, bytes32(uint256(1)));
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.removeOsImageHashAtEpochs(1, 1, bytes32(uint256(1)));
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.addKmsAggregatedMrAtEpochs(1, 1, bytes32(uint256(1)));
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.removeKmsAggregatedMrAtEpochs(1, 1, bytes32(uint256(1)));
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.addKmsDeviceAtEpochs(1, 1, bytes32(uint256(1)));
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.removeKmsDeviceAtEpochs(1, 1, bytes32(uint256(1)));
         vm.stopPrank();
         bytes memory unauthorized = abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user);
         vm.startPrank(user);
         vm.expectRevert(unauthorized);
-        kms.addOsImageHashAtEpoch(0, bytes32(uint256(1)));
+        kms.addOsImageHashAtEpochs(0, 0, bytes32(uint256(1)));
         vm.expectRevert(unauthorized);
-        kms.removeOsImageHashAtEpoch(0, bytes32(uint256(1)));
+        kms.removeOsImageHashAtEpochs(0, 0, bytes32(uint256(1)));
         vm.expectRevert(unauthorized);
-        kms.addKmsAggregatedMrAtEpoch(0, bytes32(uint256(1)));
+        kms.addKmsAggregatedMrAtEpochs(0, 0, bytes32(uint256(1)));
         vm.expectRevert(unauthorized);
-        kms.removeKmsAggregatedMrAtEpoch(0, bytes32(uint256(1)));
+        kms.removeKmsAggregatedMrAtEpochs(0, 0, bytes32(uint256(1)));
         vm.expectRevert(unauthorized);
-        kms.addKmsDeviceAtEpoch(0, bytes32(uint256(1)));
+        kms.addKmsDeviceAtEpochs(0, 0, bytes32(uint256(1)));
         vm.expectRevert(unauthorized);
-        kms.removeKmsDeviceAtEpoch(0, bytes32(uint256(1)));
+        kms.removeKmsDeviceAtEpochs(0, 0, bytes32(uint256(1)));
         vm.stopPrank();
     }
 
@@ -1145,7 +1145,7 @@ contract DstackKmsTest is Test {
         IAppAuth.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
         registerNextRootEpoch();
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         vm.stopPrank();
         AuthorizationRequest memory request = epochRequest(info, 0, 0);
@@ -1179,7 +1179,7 @@ contract DstackKmsTest is Test {
         IAppAuth.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
         registerNextRootEpoch();
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         vm.stopPrank();
         (bool allowed,) = kms.isAppAllowed(info);
@@ -1198,7 +1198,7 @@ contract DstackKmsTest is Test {
         vm.startPrank(owner);
         registerNextRootEpoch();
         kms.setGatewayAppId("gateway");
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         vm.stopPrank();
         (, bytes32 rootHash) = kms.currentRootEpoch();
@@ -1232,7 +1232,7 @@ contract DstackKmsTest is Test {
         assertEq(result.latestRootEpochHash, bytes32(0));
         vm.startPrank(owner);
         registerNextRootEpoch();
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         registerNextRootEpoch();
         vm.stopPrank();
@@ -1277,7 +1277,7 @@ contract DstackKmsTest is Test {
         IAppAuth.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
         registerNextRootEpoch();
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         vm.stopPrank();
         vm.prank(user);
@@ -1328,9 +1328,9 @@ contract DstackKmsTest is Test {
         assertFalse(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
         kms.addKmsDeviceAtEpochs(0, 1, info.deviceId);
 
-        vm.expectRevert("Invalid root epoch range");
+        vm.expectRevert(DstackKms.InvalidRootEpochRange.selector);
         kms.removeOsImageHashAtEpochs(1, 0, info.osImageHash);
-        vm.expectRevert("Unknown root epoch");
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
         kms.removeOsImageHashAtEpochs(0, 2, info.osImageHash);
         vm.stopPrank();
     }
@@ -1339,11 +1339,11 @@ contract DstackKmsTest is Test {
         IAppAuth.AppInfo memory info = authorizationInfo(address(0));
         vm.startPrank(owner);
         registerNextRootEpoch();
-        kms.addOsImageHashAtEpoch(0, info.osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
         info.appId = kms.deployAndRegisterApp(user, false, false, info.deviceId, info.composeHash);
         registerNextRootEpoch();
         activateNextRootEpoch();
-        kms.addOsImageHashAtEpoch(1, info.osImageHash);
+        kms.addOsImageHashAtEpochs(1, 1, info.osImageHash);
         assertTrue(authorize(info, false).authorized);
         assertTrue(kms.authorizeApp(epochRequest(info, 0, 0)).authorized);
 
@@ -1368,8 +1368,8 @@ contract DstackKmsTest is Test {
 
         kms.popRootEpoch(1, popped);
         assertFalse(kms.allowedOsImagesAtEpoch(1, info.osImageHash));
-        vm.expectRevert("Unknown root epoch");
-        kms.removeOsImageHashAtEpoch(1, info.osImageHash);
+        vm.expectRevert(DstackKms.UnknownRootEpoch.selector);
+        kms.removeOsImageHashAtEpochs(1, 1, info.osImageHash);
 
         registerNextRootEpoch();
         (,,, bytes32 again) = kms.rootEpoch(1);
@@ -1414,9 +1414,9 @@ contract DstackKmsTest is Test {
         assertTrue(kms.authorizeKms(kmsEpochRequest(info, 1, 0)).authorized);
 
         approveKmsAtEpoch(info, 0);
-        kms.removeOsImageHashAtEpoch(1, info.osImageHash);
-        kms.removeKmsAggregatedMrAtEpoch(1, info.mrAggregated);
-        kms.removeKmsDeviceAtEpoch(1, info.deviceId);
+        kms.removeOsImageHashAtEpochs(1, 1, info.osImageHash);
+        kms.removeKmsAggregatedMrAtEpochs(1, 1, info.mrAggregated);
+        kms.removeKmsDeviceAtEpochs(1, 1, info.deviceId);
         assertTrue(kms.allowedOsImagesAtEpoch(0, info.osImageHash));
         assertTrue(kms.kmsAllowedAggregatedMrsAtEpoch(0, info.mrAggregated));
         assertTrue(kms.kmsAllowedDeviceIdsAtEpoch(0, info.deviceId));

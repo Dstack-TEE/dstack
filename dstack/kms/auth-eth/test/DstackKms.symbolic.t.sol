@@ -125,7 +125,7 @@ contract DstackKmsSymbolicTest is Test {
 
         vm.startPrank(OWNER);
         kms.registerApp(address(mock));
-        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
@@ -155,7 +155,7 @@ contract DstackKmsSymbolicTest is Test {
 
         vm.startPrank(OWNER);
         kms.registerApp(address(mock));
-        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
         vm.stopPrank();
 
         IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
@@ -190,7 +190,7 @@ contract DstackKmsSymbolicTest is Test {
         // Allow the OS image so the second gate passes; leave
         // kmsAllowedAggregatedMrs empty.
         vm.prank(OWNER);
-        kms.addOsImageHashAtEpoch(0, osImageHash);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
 
         IAppAuth.AppInfo memory b = IAppAuth.AppInfo({
             appId: address(0),
@@ -217,8 +217,8 @@ contract DstackKmsSymbolicTest is Test {
         external
     {
         vm.startPrank(OWNER);
-        kms.addOsImageHashAtEpoch(0, osImageHash);
-        kms.addKmsAggregatedMrAtEpoch(0, mrAggregated);
+        kms.addOsImageHashAtEpochs(0, 0, osImageHash);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, mrAggregated);
         vm.stopPrank();
         // kmsAllowedDeviceIds is left empty.
 
