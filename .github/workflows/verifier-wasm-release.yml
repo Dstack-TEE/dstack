@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: © 2026 Phala Network <dstack@phala.network>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: Publish TDX lite verifier wasm to npm
+on:
+  push:
+    tags: ['verifier-wasm-v*']
+  workflow_dispatch:
+    inputs:
+      npm_tag:
+        description: 'npm dist-tag (beta, latest)'
+        required: true
+        default: 'beta'
+        type: choice
+        options:
+          - beta
+          - latest
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/verifier-wasm
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm for trusted publishers support
+        run: |
+          npm install -g npm@11.21.1
+          echo "npm: $(npm --version)"
+
+      - name: Verify OIDC token availability
+        run: |
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" ]; then
+            echo "OIDC token available"
+          else
+            echo "OIDC token NOT available"
+            echo "Check workflow permissions include 'id-token: write'"
+            exit 1
+          fi
+
+      - name: Verify repository configuration
+        run: |
+          echo "Checking repository consistency..."
+          GIT_REPO=$(git remote get-url origin | sed 's/.*github.com[/:]//; s/.git$//')
+          PKG_REPO=$(node -e "console.log(require('./package.json').repository?.url || '')" | sed 's|https://github.com/||; s|git+||; s|.git$||')
+          echo "Git remote:   $GIT_REPO"
+          echo "package.json: $PKG_REPO"
+          if [ "$GIT_REPO" != "$PKG_REPO" ]; then
+            echo "Repository mismatch!"
+            echo "This will cause 422 error during publish"
+            exit 1
+          fi
+          echo "Repositories match"
+
+      - name: Build wasm package
+        working-directory: .
+        env:
+          REPRO_CHECK: '1'
+        run: bash sdk/verifier-wasm/scripts/build-in-container.sh
+
+      - name: Run Node tests
+        run: npm test
+
+      - name: Determine version and npm dist-tag
+        id: tag
+        run: |
+          PKG_VERSION=$(node -e "console.log(require('./package.json').version)")
+          PRERELEASE=false
+          if echo "$PKG_VERSION" | grep -qiE '(beta|alpha|rc|preview)'; then
+            PRERELEASE=true
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="$PKG_VERSION"
+            REQUESTED="${{ github.event.inputs.npm_tag }}"
+            if [ "$PRERELEASE" = true ] && [ "$REQUESTED" = "latest" ]; then
+              echo "::error::prerelease $PKG_VERSION cannot be published with dist-tag latest"
+              exit 1
+            fi
+            echo "tag=$REQUESTED" >> "$GITHUB_OUTPUT"
+          else
+            TAG_VERSION="${GITHUB_REF_NAME#verifier-wasm-v}"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "::error::tag version ($TAG_VERSION) does not match package.json version ($PKG_VERSION)"
+              exit 1
+            fi
+            VERSION="$TAG_VERSION"
+            if [ "$PRERELEASE" = true ]; then
+              echo "tag=beta" >> "$GITHUB_OUTPUT"
+            else
+              echo "tag=latest" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        run: |
+          NPM_TAG="${{ steps.tag.outputs.tag }}"
+          echo "Publishing with dist-tag: $NPM_TAG"
+          npm publish --access public --provenance --tag "$NPM_TAG"
+
+      - name: GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: "verifier-wasm v${{ steps.tag.outputs.version }}"
+          body: |
+            ## npm Package
+
+            **Package**: `@phala/dstack-verifier-wasm@${{ steps.tag.outputs.version }}`
+
+            **Install**: `npm install @phala/dstack-verifier-wasm@${{ steps.tag.outputs.version }}`
+
+            **Dist-tag**: `${{ steps.tag.outputs.tag }}`
+
+            **Registry**: https://www.npmjs.com/package/@phala/dstack-verifier-wasm/v/${{ steps.tag.outputs.version }}
