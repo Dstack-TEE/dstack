@@ -5,10 +5,11 @@
 use anyhow::{bail, Context, Result};
 use host_api::{
     host_api_server::{HostApiRpc, HostApiServer},
-    GetSealingKeyRequest, GetSealingKeyResponse, HostInfo, Notification,
+    GetSealingKeyRequest, GetSealingKeyResponse, HostInfo, Notification, SealedEnv,
 };
 use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 use rocket_vsock_listener::VsockEndpoint;
+use tracing::warn;
 
 use crate::app::App;
 use key_provider_client::host::get_key;
@@ -59,5 +60,17 @@ impl HostApiRpc for HostApiHandler {
             encrypted_key: response.encrypted_key,
             provider_quote: response.provider_quote,
         })
+    }
+
+    async fn update_sealed_env(self, request: SealedEnv) -> Result<()> {
+        // This VMM has no env update window to close, and its images take no
+        // sealed env, so there is nothing to store.
+        if !request.sealed_env.is_empty() {
+            warn!(
+                cid = self.endpoint.cid,
+                "ignoring a sealed env update from the guest"
+            );
+        }
+        Ok(())
     }
 }

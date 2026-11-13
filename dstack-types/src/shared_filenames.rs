@@ -7,6 +7,7 @@ pub const APP_KEYS: &str = ".appkeys.json";
 pub const SYS_CONFIG: &str = ".sys-config.json";
 pub const USER_CONFIG: &str = ".user-config";
 pub const ENCRYPTED_ENV: &str = ".encrypted-env";
+pub const SEALED_ENV: &str = ".sealed-env";
 pub const DECRYPTED_ENV: &str = ".decrypted-env";
 pub const DECRYPTED_ENV_JSON: &str = ".decrypted-env.json";
 pub const INSTANCE_INFO: &str = ".instance_info";

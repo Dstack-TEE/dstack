@@ -11,6 +11,10 @@ package kms;
 message GetAppKeyRequest {
   uint32 api_version = 1;
   string vm_config = 2;
+  // Root key epoch to derive from; unset means the current epoch. Epoch 0 is
+  // the original root keys. Older epochs remain available so CVMs can migrate.
+  optional uint32 root_epoch = 3;
+  optional uint32 app_epoch = 4;
 }
 
 message AppId {
@@ -46,6 +50,11 @@ message AppKeyResponse {
   string gateway_app_id = 7;
   // OS Image hash
   bytes os_image_hash = 8;
+  // Root key epoch all epoch-dependent fields above were derived from.
+  uint32 root_epoch = 9;
+  // X25519 private key for the SealedEnv HPKE receiver, derived for this epoch.
+  bytes sealed_env_key = 10;
+  uint32 app_epoch = 11;
 }
 
 message GetMetaResponse {

@@ -234,6 +234,8 @@ pub struct AppKeys {
     pub disk_crypt_key: Vec<u8>,
     #[serde(with = "hex_bytes", default)]
     pub env_crypt_key: Vec<u8>,
+    #[serde(with = "hex_bytes", default)]
+    pub sealed_env_key: Vec<u8>,
     #[serde(with = "hex_bytes")]
     pub k256_key: Vec<u8>,
     #[serde(with = "hex_bytes")]
@@ -264,7 +266,28 @@ pub enum KeyProvider {
         pubkey: Vec<u8>,
         tmp_ca_key: String,
         tmp_ca_cert: String,
+        /// KMS root key epoch the keys were derived from.
+        #[serde(default)]
+        root_epoch: u32,
+        #[serde(default)]
+        app_epoch: u32,
     },
+}
+
+impl AppKeys {
+    pub fn app_epoch(&self) -> u32 {
+        match self.key_provider {
+            KeyProvider::Kms { app_epoch, .. } => app_epoch,
+            _ => 0,
+        }
+    }
+
+    pub fn root_epoch(&self) -> u32 {
+        match self.key_provider {
+            KeyProvider::Kms { root_epoch, .. } => root_epoch,
+            _ => 0,
+        }
+    }
 }
 
 impl KeyProvider {

@@ -335,6 +335,9 @@ impl KmsRpc for RpcHandler {
             tproxy_app_id: gateway_app_id.clone(),
             gateway_app_id,
             os_image_hash: boot_info.os_image_hash,
+            root_epoch: 0,
+            sealed_env_key: vec![],
+            app_epoch: 0,
         })
     }
 

@@ -4,6 +4,7 @@
 
 use crate::host_api_client::HostApiClient;
 use http_client::prpc::PrpcClient;
+pub use http_client::prpc::StatusError;
 
 pub type DefaultClient = HostApiClient<PrpcClient>;
 
