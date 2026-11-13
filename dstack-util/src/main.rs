@@ -431,6 +431,7 @@ fn make_app_keys(
     Ok(AppKeys {
         disk_crypt_key: sha256(&disk_key.serialize_der()).to_vec(),
         env_crypt_key: vec![],
+        sealed_env_key: vec![],
         k256_key: k256_key.to_bytes().to_vec(),
         k256_signature: vec![],
         gateway_app_id: "".to_string(),

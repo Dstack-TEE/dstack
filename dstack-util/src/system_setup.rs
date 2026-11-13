@@ -19,15 +19,12 @@ use dstack_kms_rpc as rpc;
 use dstack_types::{
     shared_filenames::{
         APP_COMPOSE, APP_KEYS, DECRYPTED_ENV, DECRYPTED_ENV_JSON, ENCRYPTED_ENV,
-        HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SYS_CONFIG, USER_CONFIG,
+        HOST_SHARED_DIR_NAME, HOST_SHARED_DISK_LABEL, INSTANCE_INFO, SEALED_ENV, SYS_CONFIG,
+        USER_CONFIG,
     },
     KeyProvider, KeyProviderInfo,
 };
 use fs_err as fs;
-use luks2::{
-    LuksAf, LuksConfig, LuksDigest, LuksHeader, LuksJson, LuksKdf, LuksKeyslot, LuksSegment,
-    LuksSegmentSize,
-};
 use ra_rpc::{
     client::{CertInfo, RaClient, RaClientConfig},
     Attestation,
@@ -85,6 +82,12 @@ async fn sign_cert_request(
 }
 
 mod config_id_verifier;
+mod luks;
+use luks::{load_luks_header, sync_luks_epochs, write_luks_epochs, PAYLOAD_OFFSET};
+mod sealed_env;
+#[cfg(test)]
+use sealed_env::seal_env;
+use sealed_env::{env_crypt_key, seal_env_at_epochs, sealed_env_info_at_epochs, SealedEnv};
 
 #[derive(clap::Parser)]
 /// Prepare full disk encryption
@@ -215,6 +218,10 @@ impl HostShareDir {
         self.base_dir.join(ENCRYPTED_ENV)
     }
 
+    fn sealed_env_file(&self) -> PathBuf {
+        self.base_dir.join(SEALED_ENV)
+    }
+
     fn sys_config_file(&self) -> PathBuf {
         self.base_dir.join(SYS_CONFIG)
     }
@@ -224,11 +231,34 @@ impl HostShareDir {
     }
 }
 
+fn env_file_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => bail!("env {} is not a regular file", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to inspect env {}", path.display()))
+        }
+    }
+}
+
+fn read_optional_env(path: &Path) -> Result<Option<Vec<u8>>> {
+    if !env_file_exists(path)? {
+        return Ok(None);
+    }
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to read env {}", path.display())),
+    }
+}
+
 struct HostShared {
     dir: HostShareDir,
     sys_config: SysConfig,
     app_compose: AppCompose,
     encrypted_env: Vec<u8>,
+    sealed_env: Option<Vec<u8>>,
     instance_info: InstanceInfo,
 }
 
@@ -279,12 +309,18 @@ impl HostShared {
         } else {
             InstanceInfo::default()
         };
-        let encrypted_env = fs::read(host_shared_dir.encrypted_env_file()).unwrap_or_default();
+        let sealed_env = read_optional_env(&host_shared_dir.sealed_env_file())?;
+        let encrypted_env = if sealed_env.is_some() {
+            Vec::new()
+        } else {
+            read_optional_env(&host_shared_dir.encrypted_env_file())?.unwrap_or_default()
+        };
         Ok(Self {
             dir: host_shared_dir.clone(),
             sys_config,
             app_compose,
             encrypted_env,
+            sealed_env,
             instance_info,
         })
     }
@@ -361,13 +397,151 @@ impl HostShared {
         copy(APP_COMPOSE, SZ_1KB * 256, false)?;
         copy(SYS_CONFIG, SZ_1KB * 32, false)?;
         copy(INSTANCE_INFO, SZ_1KB * 10, true)?;
-        copy(ENCRYPTED_ENV, SZ_1KB * 256, true)?;
+        if env_file_exists(&host_shared_dir.join(SEALED_ENV))? {
+            copy(SEALED_ENV, SZ_1KB * 384, false)?;
+        } else {
+            match fs::remove_file(host_shared_copy_dir.join(SEALED_ENV)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("failed to remove stale sealed env copy"),
+            }
+            copy(ENCRYPTED_ENV, SZ_1KB * 256, true)?;
+        }
         copy(USER_CONFIG, SZ_1MB, true)?;
         cmd! {
             info "Unmounting host-shared";
             umount $host_shared_dir;
         }?;
         HostShared::load(host_shared_copy_dir)
+    }
+
+    /// Request app keys from one KMS, of the given (root, app) epochs or the
+    /// current ones when `epochs` is `None`.
+    ///
+    /// Only the request for the current keys extends RTMR3 and takes the KMS
+    /// root CA from the KMS; a request for older epochs pins `trusted_ca`, the
+    /// CA this boot already established, and the CA of those epochs that the
+    /// KMS returns is not trusted for anything.
+    async fn request_app_keys_from_kms_url(
+        &self,
+        kms_url: String,
+        epochs: Option<(u32, u32)>,
+        trusted_ca: Option<String>,
+    ) -> Result<AppKeys> {
+        info!("Requesting app keys of epochs {epochs:?} from KMS: {kms_url}");
+        let measure = trusted_ca.is_none();
+        let tmp_ca = {
+            info!("Getting temp ca cert");
+            let client = RaClient::new(kms_url.clone(), true)?;
+            let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(client);
+            kms_client
+                .get_temp_ca_cert()
+                .await
+                .context("Failed to get temp ca cert")?
+        };
+        let root_ca = trusted_ca.unwrap_or(tmp_ca.ca_cert);
+        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
+        let ra_client = RaClientConfig::builder()
+            .tls_no_check(false)
+            .tls_built_in_root_certs(false)
+            .remote_uri(kms_url.clone())
+            .tls_client_cert(cert_pair.cert_pem)
+            .tls_client_key(cert_pair.key_pem)
+            .tls_ca_cert(root_ca.clone())
+            .maybe_pccs_url(self.sys_config.pccs_url.clone())
+            .cert_validator(Box::new(move |cert| {
+                let Some(cert) = cert else {
+                    bail!("Missing server cert");
+                };
+                let Some(usage) = cert.special_usage else {
+                    bail!("Missing server cert usage");
+                };
+                if usage != "kms:rpc" {
+                    bail!("Invalid server cert usage: {usage}");
+                }
+                if let Some(att) = cert.attestation.as_ref().filter(|_| measure) {
+                    let kms_info = att
+                        .decode_app_info(false)
+                        .context("Failed to decode app_info")?;
+                    emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
+                        .context("Failed to extend mr-kms to RTMR3")?;
+                }
+                Ok(())
+            }))
+            .build()
+            .into_client()
+            .context("Failed to create client")?;
+        let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(ra_client);
+        let response = kms_client
+            .get_app_key(rpc::GetAppKeyRequest {
+                api_version: 1,
+                vm_config: self.sys_config.vm_config.clone(),
+                root_epoch: epochs.map(|(root, _)| root),
+                app_epoch: epochs.map(|(_, app)| app),
+            })
+            .await
+            .context("Failed to get app key")?;
+        if let Some((root, app)) = epochs {
+            if (response.root_epoch, response.app_epoch) != (root, app) {
+                bail!(
+                    "KMS returned epochs ({}, {}) instead of the requested ({root}, {app})",
+                    response.root_epoch,
+                    response.app_epoch
+                );
+            }
+        }
+
+        if measure {
+            emit_runtime_event("os-image-hash", &response.os_image_hash)
+                .context("Failed to extend os-image-hash to RTMR3")?;
+        }
+
+        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(root_ca.as_bytes())
+            .context("Failed to parse ca cert")?;
+        let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
+        let root_pubkey = x509.public_key().raw.to_vec();
+
+        Ok(AppKeys {
+            ca_cert: root_ca,
+            disk_crypt_key: response.disk_crypt_key,
+            env_crypt_key: response.env_crypt_key,
+            sealed_env_key: response.sealed_env_key,
+            k256_key: response.k256_key,
+            k256_signature: response.k256_signature,
+            gateway_app_id: response.gateway_app_id,
+            key_provider: KeyProvider::Kms {
+                url: kms_url,
+                pubkey: root_pubkey,
+                tmp_ca_key: tmp_ca.temp_ca_key,
+                tmp_ca_cert: tmp_ca.temp_ca_cert,
+                root_epoch: response.root_epoch,
+                app_epoch: response.app_epoch,
+            },
+        })
+    }
+
+    /// Request the app keys of older epochs from the KMS that served `keys`.
+    async fn request_historical_keys(
+        &self,
+        keys: &AppKeys,
+        root: u32,
+        app: u32,
+    ) -> Result<AppKeys> {
+        let KeyProvider::Kms { url, .. } = &keys.key_provider else {
+            bail!("only KMS-provided keys have older epochs");
+        };
+        self.request_app_keys_from_kms_url(
+            url.clone(),
+            Some((root, app)),
+            Some(keys.ca_cert.clone()),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "failed to get the keys of root epoch {root}, app epoch {app}; \
+                     the policy of those epochs must still allow this instance"
+            )
+        })
     }
 }
 
@@ -869,82 +1043,6 @@ impl<'a> Stage0<'a> {
         self.shared.dir.join(APP_KEYS)
     }
 
-    async fn request_app_keys_from_kms_url(&self, kms_url: String) -> Result<AppKeys> {
-        info!("Requesting app keys from KMS: {kms_url}");
-        let tmp_ca = {
-            info!("Getting temp ca cert");
-            let client = RaClient::new(kms_url.clone(), true)?;
-            let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(client);
-            kms_client
-                .get_temp_ca_cert()
-                .await
-                .context("Failed to get temp ca cert")?
-        };
-        let cert_pair = generate_ra_cert(tmp_ca.temp_ca_cert.clone(), tmp_ca.temp_ca_key.clone())?;
-        let ra_client = RaClientConfig::builder()
-            .tls_no_check(false)
-            .tls_built_in_root_certs(false)
-            .remote_uri(kms_url.clone())
-            .tls_client_cert(cert_pair.cert_pem)
-            .tls_client_key(cert_pair.key_pem)
-            .tls_ca_cert(tmp_ca.ca_cert.clone())
-            .maybe_pccs_url(self.shared.sys_config.pccs_url.clone())
-            .cert_validator(Box::new(|cert| {
-                let Some(cert) = cert else {
-                    bail!("Missing server cert");
-                };
-                let Some(usage) = cert.special_usage else {
-                    bail!("Missing server cert usage");
-                };
-                if usage != "kms:rpc" {
-                    bail!("Invalid server cert usage: {usage}");
-                }
-                if let Some(att) = &cert.attestation {
-                    let kms_info = att
-                        .decode_app_info(false)
-                        .context("Failed to decode app_info")?;
-                    emit_runtime_event("mr-kms", &kms_info.mr_aggregated)
-                        .context("Failed to extend mr-kms to RTMR3")?;
-                }
-                Ok(())
-            }))
-            .build()
-            .into_client()
-            .context("Failed to create client")?;
-        let kms_client = dstack_kms_rpc::kms_client::KmsClient::new(ra_client);
-        let response = kms_client
-            .get_app_key(rpc::GetAppKeyRequest {
-                api_version: 1,
-                vm_config: self.shared.sys_config.vm_config.clone(),
-            })
-            .await
-            .context("Failed to get app key")?;
-
-        emit_runtime_event("os-image-hash", &response.os_image_hash)
-            .context("Failed to extend os-image-hash to RTMR3")?;
-
-        let (_, ca_pem) = x509_parser::pem::parse_x509_pem(tmp_ca.ca_cert.as_bytes())
-            .context("Failed to parse ca cert")?;
-        let x509 = ca_pem.parse_x509().context("Failed to parse ca cert")?;
-        let root_pubkey = x509.public_key().raw.to_vec();
-
-        let keys = AppKeys {
-            ca_cert: tmp_ca.ca_cert,
-            disk_crypt_key: response.disk_crypt_key,
-            env_crypt_key: response.env_crypt_key,
-            k256_key: response.k256_key,
-            k256_signature: response.k256_signature,
-            gateway_app_id: response.gateway_app_id,
-            key_provider: KeyProvider::Kms {
-                url: kms_url,
-                pubkey: root_pubkey,
-                tmp_ca_key: tmp_ca.temp_ca_key,
-                tmp_ca_cert: tmp_ca.temp_ca_cert,
-            },
-        };
-        Ok(keys)
-    }
-
     async fn request_app_keys_from_kms(&self) -> Result<AppKeys> {
         if self.shared.sys_config.kms_urls.is_empty() {
             bail!("No KMS URLs are set");
@@ -953,7 +1051,10 @@ impl<'a> Stage0<'a> {
             let mut error = anyhow!("unknown error");
             for (i, kms_url) in self.shared.sys_config.kms_urls.iter().enumerate() {
                 let kms_url = format!("{kms_url}/prpc");
-                let response = self.request_app_keys_from_kms_url(kms_url.clone()).await;
+                let response = self
+                    .shared
+                    .request_app_keys_from_kms_url(kms_url.clone(), None, None)
+                    .await;
                 match response {
                     Ok(response) => {
                         break 'out response;
@@ -1159,7 +1260,7 @@ impl<'a> Stage0<'a> {
         initialized
     }
 
-    async fn mount_data_disk(&self, disk_crypt_key: &str, opts: &DstackOptions) -> Result<()> {
+    async fn mount_data_disk(&self, keys: &AppKeys, opts: &DstackOptions) -> Result<()> {
         let name = "dstack_data_disk";
         let mount_point = &self.args.mount_point;
 
@@ -1181,7 +1282,7 @@ impl<'a> Stage0<'a> {
 
             if opts.storage_encrypted {
                 info!("Setting up disk encryption");
-                self.luks_setup(disk_crypt_key, name)?;
+                self.luks_setup(keys, name).await?;
             } else {
                 info!("Skipping disk encryption as requested by kernel cmdline");
             }
@@ -1211,7 +1312,7 @@ impl<'a> Stage0<'a> {
 
             if opts.storage_encrypted {
                 info!("Mounting encrypted data disk");
-                self.open_encrypted_volume(disk_crypt_key, name)?;
+                self.open_encrypted_volume(keys, name).await?;
             } else {
                 info!("Mounting unencrypted data disk");
             }
@@ -1275,8 +1376,9 @@ impl<'a> Stage0<'a> {
         Ok(())
     }
 
-    fn luks_setup(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
+    async fn luks_setup(&self, keys: &AppKeys, name: &str) -> Result<()> {
         let root_hd = &self.args.device;
+        let disk_crypt_key = hex::encode(&keys.disk_crypt_key);
         let sector_offset = PAYLOAD_OFFSET / 512;
         cmd! {
             info "Formatting encrypted disk";
@@ -1291,12 +1393,17 @@ impl<'a> Stage0<'a> {
                     $name;
         }
         .or(Err(anyhow!("Failed to setup luks volume")))?;
-        self.open_encrypted_volume(disk_crypt_key, name)
+        // An epoch-0 disk carries no token, so older OS images still accept it.
+        if let Some(root) = kms_root_epoch(keys).filter(|root| *root > 0 || keys.app_epoch() > 0) {
+            write_luks_epochs(root_hd, 0, root, keys.app_epoch())?;
+        }
+        self.open_encrypted_volume(keys, name).await
     }
 
-    fn open_encrypted_volume(&self, disk_crypt_key: &str, name: &str) -> Result<()> {
+    /// Open the data disk after bringing it to the current key epochs.
+    async fn open_encrypted_volume(&self, keys: &AppKeys, name: &str) -> Result<()> {
         let root_hd = &self.args.device;
-        let disk_crypt_key = disk_crypt_key.trim();
+        let disk_crypt_key = hex::encode(&keys.disk_crypt_key);
         // Create a private tmpfs mount to ensure the header stays in-memory.
         let tmp_hdr_dir = "/tmp/dstack-luks-header";
         let in_mem_hdr = format!("{tmp_hdr_dir}/luks-header");
@@ -1313,13 +1420,21 @@ impl<'a> Stage0<'a> {
             info "Mounting tmpfs for in-memory LUKS header";
             mkdir -p $tmp_hdr_dir;
             mount -t tmpfs -o size=64M,mode=0700,nosuid,nodev,noexec tmpfs $tmp_hdr_dir;
-            info "Loading the LUKS2 header";
-            cryptsetup luksHeaderBackup --header-backup-file=$in_mem_hdr $root_hd;
         }
-        .context("Failed to load LUKS2 header")?;
+        .context("Failed to mount tmpfs for the LUKS2 header")?;
 
-        let hdr_file = fs::File::open(&in_mem_hdr).context("Failed to open LUKS2 header")?;
-        validate_luks2_headers(hdr_file).context("Failed to validate LUKS2 header")?;
+        let hdr = Path::new(&in_mem_hdr);
+        let header = load_luks_header(root_hd, hdr)?;
+        if let Some(current) = kms_root_epoch(keys) {
+            let old_key = async |root, app| {
+                let old = self.shared.request_historical_keys(keys, root, app).await?;
+                Ok(hex::encode(&old.disk_crypt_key))
+            };
+            let target = (current, keys.app_epoch());
+            sync_luks_epochs(root_hd, hdr, header, &disk_crypt_key, target, old_key)
+                .await
+                .context("failed to migrate the data disk key")?;
+        }
 
         cmd! {
             info "Opening the device";
@@ -1457,8 +1572,7 @@ impl<'a> Stage0<'a> {
             opts.storage_encrypted, opts.storage_fs
         );
 
-        self.mount_data_disk(&hex::encode(&app_keys.disk_crypt_key), &opts)
-            .await?;
+        self.mount_data_disk(&app_keys, &opts).await?;
         self.setup_swap(self.shared.app_compose.swap_size, &opts)
             .await?;
         self.vmm
@@ -1483,25 +1597,80 @@ impl<'a> Stage0<'a> {
 }
 
 impl Stage1<'_> {
-    fn decrypt_env_vars(
-        &self,
-        key: &[u8],
-        ciphertext: &[u8],
-        allowed: &BTreeSet<String>,
-    ) -> Result<BTreeMap<String, String>> {
-        let vars = if !ciphertext.is_empty() {
-            info!("Processing encrypted env");
-            let env_crypt_key: [u8; 32] = key.try_into().ok().context(
-                "encrypted env is present but the key provider gave no valid env crypt key",
+    /// Decrypt the host-supplied env, preferring the sealed format.
+    ///
+    /// Also returns the env re-sealed to the current epochs when it was
+    /// encrypted to older ones, or an empty one when it needs no change.
+    async fn decrypt_env(&self) -> Result<(Vec<u8>, Vec<u8>)> {
+        let current_secret = self.keys.sealed_env_key.as_slice();
+        if let Some(sealed_env) = &self.shared.sealed_env {
+            let envelope: SealedEnv =
+                serde_json::from_slice(sealed_env).context("failed to parse sealed env")?;
+            if envelope.version != 1 {
+                bail!("unsupported sealed env version: {}", envelope.version);
+            }
+            if envelope.enc.len() != 32 {
+                bail!("sealed env encapsulated key must be 32 bytes");
+            }
+            let payload = [envelope.enc, envelope.ciphertext].concat();
+            let (current_root, current_app) = (self.keys.root_epoch(), self.keys.app_epoch());
+            if envelope.root_epoch > current_root || envelope.app_epoch > current_app {
+                bail!(
+                    "sealed env epoch (root {}, app {}) exceeds current epoch (root {current_root}, app {current_app})",
+                    envelope.root_epoch,
+                    envelope.app_epoch
+                );
+            }
+            let is_current =
+                (envelope.root_epoch, envelope.app_epoch) == (current_root, current_app);
+            let historical;
+            let secret = if is_current {
+                current_secret
+            } else {
+                historical = self
+                    .shared
+                    .request_historical_keys(&self.keys, envelope.root_epoch, envelope.app_epoch)
+                    .await?;
+                historical.sealed_env_key.as_slice()
+            };
+            let plaintext = crate::crypto::sealed_env_decrypt(
+                secret,
+                &sealed_env_info_at_epochs(envelope.root_epoch, envelope.app_epoch),
+                &payload,
             )?;
-            let decrypted_json =
-                dh_decrypt(env_crypt_key, ciphertext).context("Failed to decrypt env file")?;
-            crate::parse_env_file::parse_env(&decrypted_json, allowed)?
-        } else {
-            info!("No encrypted env, using default");
-            Default::default()
+            if is_current {
+                return Ok((plaintext, Vec::new()));
+            }
+            let sealed = seal_env_at_epochs(current_secret, current_root, current_app, &plaintext)?;
+            return Ok((plaintext, sealed));
+        }
+        let ciphertext = &self.shared.encrypted_env;
+        let current_key = env_crypt_key(&self.keys.env_crypt_key)?;
+        let plaintext = match dh_decrypt(current_key, ciphertext) {
+            Ok(plaintext) => return Ok((plaintext, Vec::new())),
+            Err(_) => {
+                let current = self.keys.root_epoch();
+                // Legacy encryption is only issued at app epoch zero.
+                let epochs = (0..=current)
+                    .rev()
+                    .filter(|root| *root != current || self.keys.app_epoch() != 0);
+                decrypt_historical_env(ciphertext, epochs, async |root| {
+                    Ok(self
+                        .shared
+                        .request_historical_keys(&self.keys, root, 0)
+                        .await?
+                        .env_crypt_key)
+                })
+                .await?
+            }
         };
-        Ok(vars)
+        let sealed = seal_env_at_epochs(
+            current_secret,
+            self.keys.root_epoch(),
+            self.keys.app_epoch(),
+            &plaintext,
+        )?;
+        Ok((plaintext, sealed))
     }
 
     fn write_env_file(&self, env_vars: &BTreeMap<String, String>) -> Result<()> {
@@ -1518,7 +1687,7 @@ impl Stage1<'_> {
         Ok(())
     }
 
-    fn unseal_env_vars(&self) -> Result<BTreeMap<String, String>> {
+    async fn unseal_env_vars(&self) -> Result<BTreeMap<String, String>> {
         let allowed_envs: BTreeSet<String> = self
             .shared
             .app_compose
@@ -1526,18 +1695,32 @@ impl Stage1<'_> {
             .iter()
             .cloned()
             .collect();
-        // Decrypt env file
-        let decrypted_env = self.decrypt_env_vars(
-            &self.keys.env_crypt_key,
-            &self.shared.encrypted_env,
-            &allowed_envs,
-        )?;
+        let (decrypted_env, sealed) =
+            if self.shared.sealed_env.is_none() && self.shared.encrypted_env.is_empty() {
+                info!("No encrypted env, using default");
+                (Default::default(), Vec::new())
+            } else {
+                info!("Processing encrypted env");
+                let (plaintext, sealed) = self.decrypt_env().await?;
+                (
+                    crate::parse_env_file::parse_env(&plaintext, &allowed_envs)?,
+                    sealed,
+                )
+            };
         self.write_env_file(&decrypted_env)?;
+        // Sent on every boot, empty when nothing changed: it closes the host's
+        // env update window, which must be shut before any application code
+        // runs, or that code could replace the env the next boot reads.
+        close_env_window(
+            || self.vmm.update_sealed_env(sealed.clone()),
+            &ENV_WINDOW_RETRY_DELAYS,
+        )
+        .await?;
         Ok(decrypted_env)
     }
 
     async fn setup(&self) -> Result<()> {
-        let _envs = self.unseal_env_vars()?;
+        let _envs = self.unseal_env_vars().await?;
         self.link_files()?;
         self.setup_socket_dir()?;
         self.setup_guest_agent_config()?;
@@ -1617,299 +1800,60 @@ impl Stage1<'_> {
     }
 }
 
-macro_rules! const_pad {
-    ($s:expr, $len:expr) => {
-        const {
-            assert!($s.len() <= $len, "The s is too long");
-            let mut padded: [u8; $len] = [0; $len];
-            let mut i = 0;
-            while i < $s.len() {
-                padded[i] = $s[i];
-                i += 1;
-            }
-            padded
+/// Waits between attempts to close the env update window.
+const ENV_WINDOW_RETRY_DELAYS: [Duration; 4] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+];
+
+/// Close the host's env update window, retrying `update` after each delay
+/// while the host gives no answer. Fails if the window may still be open.
+async fn close_env_window<F, Fut>(mut update: F, delays: &[Duration]) -> Result<()>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    for delay in delays {
+        match update().await {
+            Ok(()) => return Ok(()),
+            Err(err) => warn!("failed to close the env update window, retrying: {err:#}"),
         }
-    };
+        tokio::time::sleep(*delay).await;
+    }
+    update().await.context(
+        "the host did not confirm that the env update window is closed; refusing to start applications",
+    )
 }
 
-const PAYLOAD_OFFSET: u64 = 16777216;
-
-fn validate_luks2_headers(mut reader: impl std::io::Read) -> Result<()> {
-    validate_single_luks2_header(&mut reader, 0)?;
-    validate_single_luks2_header(&mut reader, 1)?;
-    Ok(())
+async fn decrypt_historical_env<I, F, Fut>(
+    ciphertext: &[u8],
+    epochs: I,
+    mut key_at: F,
+) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = u32>,
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>>>,
+{
+    for epoch in epochs {
+        let decrypted = key_at(epoch)
+            .await
+            .and_then(|key| dh_decrypt(env_crypt_key(&key)?, ciphertext));
+        match decrypted {
+            Ok(plaintext) => return Ok(plaintext),
+            Err(err) => warn!("failed to open legacy env at root epoch {epoch}: {err:#}"),
+        }
+    }
+    bail!("failed to decrypt legacy env with accessible historical keys")
 }
 
-fn validate_single_luks2_header(mut reader: impl std::io::Read, hdr_ind: u64) -> Result<()> {
-    let mut hdr_data = vec![0u8; 4096];
-    reader
-        .read_exact(&mut hdr_data)
-        .context("Failed to read LUKS header")?;
-    let header =
-        LuksHeader::read_from(&mut &hdr_data[..]).context("Failed to decode LUKS header")?;
-    let LuksHeader {
-        magic,
-        version,
-        hdr_size,
-        seqid: _,
-        label,
-        csum_alg,
-        salt: _,
-        uuid: _,
-        subsystem,
-        hdr_offset,
-        csum: _,
-        ..
-    } = header;
-
-    let expected_magic = match hdr_ind {
-        0 => [76, 85, 75, 83, 186, 190],
-        1 => [83, 75, 85, 76, 186, 190],
-        _ => bail!("Invalid LUKS header index: {hdr_ind}"),
-    };
-    if magic != expected_magic {
-        bail!("Invalid LUKS magic: {magic:?}");
+fn kms_root_epoch(keys: &AppKeys) -> Option<u32> {
+    match keys.key_provider {
+        KeyProvider::Kms { root_epoch, .. } => Some(root_epoch),
+        _ => None,
     }
-    if version != 2 {
-        bail!("Invalid LUKS version: {version}");
-    }
-    if label != [0; 48] {
-        bail!("Invalid LUKS label: {:?}", label);
-    }
-    if csum_alg != const_pad!(b"sha256", 32) {
-        bail!("Invalid LUKS checksum algorithm");
-    }
-    if subsystem != [0; 48] {
-        bail!("Invalid LUKS subsystem");
-    }
-    if hdr_offset != hdr_ind * hdr_size {
-        bail!("Invalid LUKS header offset: {hdr_offset}");
-    }
-    if !(4096..=1024 * 1024 * 16).contains(&hdr_size) {
-        bail!("Invalid LUKS header size: {hdr_size}");
-    }
-
-    // Check JSON
-    let json_size = hdr_size - 4096;
-    let mut jsn_data = vec![0u8; json_size as usize];
-    reader
-        .read_exact(&mut jsn_data)
-        .context("Failed to read LUKS JSON")?;
-    let json_end = jsn_data
-        .iter()
-        .position(|&b| b == 0)
-        .unwrap_or(jsn_data.len());
-    jsn_data.truncate(json_end);
-
-    let json = LuksJson::read_from(&mut &jsn_data[..]).context("Failed to decode LUKS JSON")?;
-    let LuksJson {
-        keyslots,
-        tokens,
-        segments,
-        digests,
-        config:
-            LuksConfig {
-                json_size: _,
-                keyslots_size: _,
-                flags,
-                requirements,
-            },
-    } = json;
-
-    if keyslots.len() != 1 {
-        bail!("Invalid LUKS keyslots");
-    }
-    if !tokens.is_empty() {
-        bail!("Invalid LUKS tokens");
-    }
-    if segments.len() != 1 {
-        bail!("Invalid LUKS segments");
-    }
-    if digests.len() != 1 {
-        bail!("Invalid LUKS digests");
-    }
-    if flags.is_some() {
-        bail!("Invalid LUKS flags");
-    }
-    if requirements.is_some() {
-        bail!("Invalid LUKS requirements");
-    }
-
-    {
-        let first_keyslot = keyslots.get(&0).context("no LUKS keyslot")?;
-        let LuksKeyslot::luks2 {
-            key_size,
-            area,
-            kdf,
-            af,
-            priority,
-        } = first_keyslot;
-        if area.encryption() != "aes-xts-plain64" {
-            bail!("Invalid LUKS keyslot encryption: {}", area.encryption());
-        }
-        // Pin where the encrypted key material is read from. The binary area
-        // must sit between the two header copies and the encrypted payload;
-        // otherwise a host with raw disk access could redirect it elsewhere.
-        let area_end = area.offset().checked_add(area.size());
-        if area.offset() < 2 * hdr_size || area_end.is_none_or(|end| end > PAYLOAD_OFFSET) {
-            bail!(
-                "Invalid LUKS keyslot area: offset={} size={}",
-                area.offset(),
-                area.size()
-            );
-        }
-        if *key_size != 64 {
-            bail!("Invalid LUKS keyslot key size: {key_size}");
-        }
-        if area.key_size() != 64 {
-            bail!("Invalid LUKS keyslot key size: {}", area.key_size());
-        }
-        {
-            let LuksKdf::pbkdf2 {
-                hash,
-                iterations: _,
-                salt: _,
-            } = kdf
-            else {
-                bail!("Invalid LUKS keyslot KDF");
-            };
-            if hash != "sha256" {
-                bail!("Invalid LUKS keyslot hash: {hash}");
-            }
-        }
-        {
-            let LuksAf::luks1 { hash, stripes } = af;
-            if hash != "sha256" {
-                bail!("Invalid LUKS keyslot hash: {hash}");
-            }
-            if *stripes != 4000 {
-                bail!("Invalid LUKS keyslot stripes: {stripes}");
-            }
-        }
-        if priority.is_some() {
-            bail!("Invalid LUKS keyslot priority");
-        }
-    }
-
-    {
-        let first_segment = segments.get(&0).context("no LUKS segment")?;
-        let LuksSegment::crypt {
-            offset,
-            size,
-            iv_tweak,
-            encryption,
-            sector_size,
-            integrity,
-            flags,
-        } = first_segment;
-        if *offset != PAYLOAD_OFFSET {
-            bail!("Invalid LUKS segment offset");
-        }
-        if *size != LuksSegmentSize::dynamic {
-            bail!("Invalid LUKS segment size");
-        }
-        if *iv_tweak != 0 {
-            bail!("Invalid LUKS segment IV tweak");
-        }
-        if encryption != "aes-xts-plain64" {
-            bail!("Invalid LUKS segment encryption");
-        }
-        if *sector_size != 512 {
-            bail!("Invalid LUKS segment sector size");
-        }
-        if integrity.is_some() {
-            bail!("Invalid LUKS segment integrity");
-        }
-        if flags.is_some() {
-            bail!("Invalid LUKS segment flags");
-        }
-    }
-    {
-        let first_digest = digests.get(&0).context("no LUKS digest")?;
-        let LuksDigest::pbkdf2 {
-            keyslots,
-            segments,
-            hash,
-            digest: _,
-            iterations: _,
-            salt: _,
-        } = first_digest;
-        if hash != "sha256" {
-            bail!("Invalid LUKS digest hash: {hash}");
-        }
-        if keyslots != &[0] {
-            bail!("Invalid LUKS digest keyslots: {keyslots:?}");
-        }
-        if segments != &[0] {
-            bail!("Invalid LUKS digest segments: {segments:?}");
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn test_validate_luks2_header() {
-    let header_data = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    validate_luks2_headers(&mut &header_data[..]).expect("Failed to validate LUKS2 header");
-    let header_data = include_bytes!("../tests/fixtures/luks_header_cipher_null").to_vec();
-    let error = validate_luks2_headers(&mut &header_data[..]).unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("Invalid LUKS keyslot encryption"));
-}
-
-#[test]
-fn test_validate_luks2_header_rejects_out_of_range_keyslot_area() {
-    // Redirect the keyslot binary area below the header region. Same length
-    // so the surrounding header stays intact; "00768" parses to 768, which is
-    // inside the header copies (< 2 * hdr_size) rather than the metadata gap.
-    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    let patched = patch_luks_json(&mut header, br#""offset":"32768""#, br#""offset":"00768""#);
-    assert_eq!(patched, 2, "expected to patch both header copies");
-    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
-    assert!(error.to_string().contains("Invalid LUKS keyslot area"));
-}
-
-/// Replace `needle` with `replacement` inside every LUKS JSON region, keeping
-/// each region the same length by giving back trailing NUL padding.
-#[cfg(test)]
-fn patch_luks_json(header: &mut [u8], needle: &[u8], replacement: &[u8]) -> usize {
-    assert!(replacement.len() >= needle.len());
-    let grow = replacement.len() - needle.len();
-    let mut patched = 0;
-    let mut i = 0;
-    while i + needle.len() <= header.len() {
-        if &header[i..i + needle.len()] != needle {
-            i += 1;
-            continue;
-        }
-        let tail = &mut header[i..];
-        let end = tail.iter().position(|b| *b == 0).expect("NUL padding");
-        assert!(end + grow < tail.len(), "not enough NUL padding");
-        tail.copy_within(needle.len()..end, replacement.len());
-        tail[..replacement.len()].copy_from_slice(replacement);
-        patched += 1;
-        i += replacement.len();
-    }
-    patched
-}
-
-#[test]
-fn test_validate_luks2_header_rejects_keyslot_area_that_overflows() {
-    let mut header = include_bytes!("../tests/fixtures/luks_header_good").to_vec();
-    // 2**64 - 32768 + 1000: added to the accepted offset 32768 it wraps to
-    // 1000, which is below PAYLOAD_OFFSET.
-    let patched = patch_luks_json(
-        &mut header,
-        br#""size":"258048""#,
-        br#""size":"18446744073709519848""#,
-    );
-    assert_eq!(patched, 2, "expected to patch both header copies");
-    let error = validate_luks2_headers(&mut &header[..]).unwrap_err();
-    assert!(
-        error.to_string().contains("Invalid LUKS keyslot area"),
-        "{error:#}"
-    );
 }
 
 #[test]
@@ -1939,4 +1883,236 @@ fn wireguard_fields_reject_config_syntax() {
 
     assert!(parse_wg_ip("10.0.0.2").is_ok());
     assert!(parse_wg_ip("10.0.0.2/32\n[Interface]").is_err());
+}
+
+#[cfg(test)]
+mod sealed_env_file_tests {
+    use super::*;
+
+    fn stage(args: &SetupArgs, sealed_env: Option<Vec<u8>>, encrypted_env: Vec<u8>) -> Stage1<'_> {
+        Stage1 {
+            args,
+            vmm: HostApi::default(),
+            shared: HostShared {
+                dir: HostShareDir::new(&args.work_dir),
+                sys_config: serde_json::from_value(serde_json::json!({"vm_config": ""})).unwrap(),
+                app_compose: serde_json::from_value(serde_json::json!({
+                    "manifest_version": 2, "name": "sealed-test", "runner": "docker-compose"
+                }))
+                .unwrap(),
+                instance_info: InstanceInfo::default(),
+                sealed_env,
+                encrypted_env,
+            },
+            keys: AppKeys {
+                disk_crypt_key: vec![],
+                env_crypt_key: vec![9; 32],
+                sealed_env_key: vec![7; 32],
+                k256_key: vec![],
+                k256_signature: vec![],
+                gateway_app_id: String::new(),
+                ca_cert: String::new(),
+                key_provider: KeyProvider::Kms {
+                    url: "http://127.0.0.1:1".into(),
+                    pubkey: vec![],
+                    tmp_ca_key: String::new(),
+                    tmp_ca_cert: String::new(),
+                    root_epoch: 3,
+                    app_epoch: 0,
+                },
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn guest_preserves_env_at_the_current_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        };
+        let plaintext = br#"{"env":[{"key":"MESSAGE","value":"test"}]}"#;
+        let sealed = seal_env(&[7; 32], 3, plaintext).unwrap();
+        let current = stage(&args, Some(sealed), b"invalid legacy".to_vec());
+        let (opened, update) = current.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+
+        let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from([9; 32]));
+        let legacy = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let old = stage(&args, None, legacy.clone());
+        let (opened, update) = old.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+        let mut without_sealed_key = stage(&args, None, legacy.clone());
+        without_sealed_key.keys.sealed_env_key.clear();
+        let (opened, update) = without_sealed_key.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+
+        for invalid in [
+            Vec::new(),
+            b"invalid JSON".to_vec(),
+            br#"{"version":2,"root_epoch":3,"enc":"","ciphertext":""}"#.to_vec(),
+        ] {
+            assert!(stage(&args, Some(invalid), legacy.clone())
+                .decrypt_env()
+                .await
+                .is_err());
+        }
+        let future = seal_env(&[7; 32], 4, plaintext).unwrap();
+        assert!(stage(&args, Some(future), legacy)
+            .decrypt_env()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds current"));
+    }
+
+    /// Run `close_env_window` against `answers`, returning its result and how
+    /// often the host was asked.
+    async fn close_with(answers: Vec<Result<()>>) -> (Result<()>, usize) {
+        let mut answers = answers.into_iter();
+        let mut calls = 0;
+        let result = close_env_window(
+            || {
+                calls += 1;
+                std::future::ready(answers.next().unwrap())
+            },
+            &[Duration::ZERO; 2],
+        )
+        .await;
+        (result, calls)
+    }
+
+    #[tokio::test]
+    async fn applications_start_only_once_the_env_window_is_closed() {
+        let (result, calls) = close_with(vec![Ok(())]).await;
+        result.unwrap();
+        assert_eq!(calls, 1);
+        // A lost answer is retried.
+        let (result, calls) = close_with(vec![Err(anyhow!("connection reset")), Ok(())]).await;
+        result.unwrap();
+        assert_eq!(calls, 2);
+        // No answer within the retries fails the boot.
+        let (result, calls) = close_with(vec![
+            Err(anyhow!("timed out")),
+            Err(anyhow!("timed out")),
+            Err(anyhow!("connection refused")),
+        ])
+        .await;
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(err.contains("refusing to start applications"), "{err}");
+        assert!(err.contains("connection refused"), "{err}");
+        assert_eq!(calls, 3);
+    }
+
+    #[tokio::test]
+    async fn legacy_env_migration_skips_denied_intermediate_epochs() {
+        let secret = x25519_dalek::StaticSecret::from([8; 32]);
+        let public = x25519_dalek::PublicKey::from(&secret);
+        let plaintext = br#"{"env":[{"key":"SECRET","value":"synthetic"}]}"#;
+        let encrypted = crate::crypto::dh_encrypt(public.to_bytes(), plaintext).unwrap();
+        let mut requested = Vec::new();
+        let decrypted = decrypt_historical_env(&encrypted, (0..2).rev(), |epoch| {
+            requested.push(epoch);
+            std::future::ready(if epoch == 0 {
+                Ok(secret.to_bytes().to_vec())
+            } else {
+                Err(anyhow::anyhow!("authorization denied"))
+            })
+        })
+        .await
+        .unwrap();
+        assert_eq!(requested, [1, 0]);
+        assert_eq!(decrypted, plaintext);
+        assert!(
+            decrypt_historical_env(&encrypted, (0..2).rev(), |_| async { bail!("denied") })
+                .await
+                .is_err()
+        );
+        assert!(
+            decrypt_historical_env(&encrypted, (0..2).rev(), |_| async { Ok(vec![3; 32]) })
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn sealed_env_at_the_current_epochs_opens_and_binds_both_epochs() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = SetupArgs {
+            work_dir: dir.path().into(),
+            device: "unused".into(),
+            mount_point: "unused".into(),
+        };
+        let plaintext = br#"{"env":[{"key":"VALUE","value":"epoch-test"}]}"#;
+        let sealed = seal_env_at_epochs(&[7; 32], 3, 2, plaintext).unwrap();
+        let mut current = stage(&args, Some(sealed.clone()), vec![]);
+        if let KeyProvider::Kms { app_epoch, .. } = &mut current.keys.key_provider {
+            *app_epoch = 2;
+        }
+        let (opened, update) = current.decrypt_env().await.unwrap();
+        assert_eq!(opened, plaintext);
+        assert!(update.is_empty());
+        let mut tampered: Value = serde_json::from_slice(&sealed).unwrap();
+        tampered["version"] = 2.into();
+        current.shared.sealed_env = Some(serde_json::to_vec(&tampered).unwrap());
+        let err = current.decrypt_env().await.unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported sealed env version"),
+            "{err}"
+        );
+        let envelope: SealedEnv = serde_json::from_slice(&sealed).unwrap();
+        assert_eq!(envelope.version, 1);
+        let payload = [envelope.enc.clone(), envelope.ciphertext.clone()].concat();
+        assert!(crate::crypto::sealed_env_decrypt(
+            &[7; 32],
+            &sealed_env_info_at_epochs(3, 1),
+            &payload
+        )
+        .is_err());
+        assert!(crate::crypto::sealed_env_decrypt(
+            &[7; 32],
+            &sealed_env_info_at_epochs(2, 2),
+            &payload
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn sealed_file_selection_ignores_legacy_but_rejects_links() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(SYS_CONFIG), br#"{"vm_config":""}"#).unwrap();
+        fs::write(
+            dir.path().join(APP_COMPOSE),
+            br#"{"manifest_version":2,"name":"test","runner":"docker-compose"}"#,
+        )
+        .unwrap();
+        let sealed_path = dir.path().join(SEALED_ENV);
+        fs::write(&sealed_path, b"sealed bytes").unwrap();
+        fs::create_dir(dir.path().join(ENCRYPTED_ENV)).unwrap();
+        let shared = HostShared::load(dir.path()).unwrap();
+        assert_eq!(shared.sealed_env.unwrap(), b"sealed bytes");
+        assert!(shared.encrypted_env.is_empty());
+        fs::remove_file(&sealed_path).unwrap();
+        std::os::unix::fs::symlink("missing-target", &sealed_path).unwrap();
+        assert!(env_file_exists(&sealed_path).is_err());
+        assert!(HostShared::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn missing_empty_and_unreadable_env_are_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SEALED_ENV);
+        assert_eq!(read_optional_env(&path).unwrap(), None);
+        fs::write(&path, []).unwrap();
+        assert_eq!(read_optional_env(&path).unwrap(), Some(Vec::new()));
+        assert!(
+            serde_json::from_slice::<SealedEnv>(&read_optional_env(&path).unwrap().unwrap())
+                .is_err()
+        );
+        assert!(read_optional_env(dir.path()).is_err());
+    }
 }

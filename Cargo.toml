@@ -128,6 +128,7 @@ scale = { version = "3.7.4", package = "parity-scale-codec", features = [
 ] }
 serde = { version = "1.0.228", features = ["derive"], default-features = false }
 serde-human-bytes = "0.1.2"
+serde_with = "3.14.0"
 rmp-serde = "1.3.1"
 serde_json = { version = "1.0.140", default-features = false }
 serde_ini = "0.2.0"
@@ -195,6 +196,7 @@ sha3 = "0.10.8"
 blake2 = "0.10.6"
 tokio-rustls = { version = "0.26.2", features = ["ring"] }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+hpke = { version = "0.15.1", default-features = false, features = ["alloc", "getrandom", "x25519", "aes"] }
 k256 = "0.13.4"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 # Additional RustCrypto dependencies for sealed box
@@ -244,7 +246,6 @@ smallvec = "1.14.0"
 cmd_lib = "1.9.5"
 yaml-rust2 = "0.10.4"
 
-luks2 = "0.5.0"
 scopeguard = "1.2.0"
 tar = "0.4"
 proxy-protocol = "0.5.0"

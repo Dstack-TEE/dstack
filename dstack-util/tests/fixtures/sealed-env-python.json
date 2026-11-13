@@ -1,0 +1,18 @@
+{
+  "description": "Synthetic public test fixture produced by pyhpke 0.6.5; never use its key in a deployment.",
+  "private_key": "0707070707070707070707070707070707070707070707070707070707070707",
+  "public_key": "13be4feaeaf204c7fd3358fc9c00721881d174278128227ec674f37f7fe97b6d",
+  "env": [
+    {
+      "key": "MESSAGE",
+      "value": "Hello 世界"
+    }
+  ],
+  "sealed_env": {
+    "version": 1,
+    "root_epoch": 3,
+    "app_epoch": 0,
+    "enc": "8PU8Zzkd7dsVGa48MjwyOEchWjKTI1s1lbDcm03Wj2I=",
+    "ciphertext": "V4xHwrD3JYdRHJNMRCT10xSoEpMEOO8KXNuI8SQz49u1CraXsBSoIpDUAgajkIRqPSgwMfNL5ONyRtx8kQ10gDe6XGRsugFOMRxHTQ=="
+  }
+}
