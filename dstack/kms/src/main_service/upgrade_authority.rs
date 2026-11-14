@@ -434,6 +434,27 @@ impl AuthApi {
         }
     }
 
+    /// The root CA public key (SPKI DER) of the current root epoch, which
+    /// signs the RPC certificate of every KMS serving it; `None` in dev mode,
+    /// which registers none.
+    pub async fn root_ca_pubkey(&self) -> Result<Option<Vec<u8>>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Info {
+            root_ca_pubkey: Option<String>,
+        }
+        let AuthApi::Webhook { webhook } = self else {
+            return Ok(None);
+        };
+        let info: Info = http_get(&webhook.url, webhook.timeout).await?;
+        let key = info.root_ca_pubkey.context(
+            "the auth API reports no root CA key: register a root epoch, or upgrade the auth API",
+        )?;
+        let key =
+            hex::decode(key.trim_start_matches("0x")).context("invalid root CA public key")?;
+        Ok(Some(key))
+    }
+
     pub async fn get_info(&self) -> Result<GetInfoResponse> {
         match self {
             AuthApi::Dev { dev } => Ok(GetInfoResponse {
@@ -866,6 +887,23 @@ pub(crate) mod tests {
             );
         }
         assert!(serde_json::from_str::<Operation>(r#""unknown""#).is_err());
+    }
+
+    #[rocket::async_test]
+    async fn onboarding_pins_the_registered_root_ca_keys() {
+        let (url, server) = serve(vec![r#"{"rootCaPubkey":"0x3059"}"#, r#"{"status":"ok"}"#]);
+        let auth = webhook(url);
+        assert_eq!(auth.root_ca_pubkey().await.unwrap(), Some(vec![0x30, 0x59]));
+        // Nothing to pin fails closed: a registry without roots and an auth
+        // API that predates the field both omit it.
+        assert!(auth.root_ca_pubkey().await.is_err());
+        server.join().unwrap();
+        let dev = AuthApi::Dev {
+            dev: crate::config::Dev {
+                gateway_app_id: String::new(),
+            },
+        };
+        assert_eq!(dev.root_ca_pubkey().await.unwrap(), None);
     }
 
     #[rocket::async_test]
