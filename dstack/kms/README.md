@@ -357,8 +357,9 @@ turn the check on; `addLaunchTicket` and `addKmsLaunchTicket` allow a hash,
 listed by `launchTickets()` and `kmsLaunchTickets()`, with a public label only
 logged in the added event. The allowlists cover every app and root epoch.
 
-Tickets need the VMM, the guest OS, the KMS and the auth backend at 0.6.4 or
-later: an older one drops the ticket, and the request fails as
+Tickets need the VMM, the KMS and the auth backend at 0.6.4 or later, and a
+guest OS at 0.6.4 or later or a 0.5.x release with the launch ticket backport:
+an older one drops the ticket, and the request fails as
 `Invalid launch ticket`. A required ticket refuses the legacy `isAppAllowed` and
 `isKmsAllowed`, whose callers cannot present one. Older KMS instances authorize
 serving through `isKmsAllowed`, so upgrade every KMS instance before turning on

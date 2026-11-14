@@ -766,7 +766,7 @@ impl RpcHandler {
         ensure_ticket_presented(
             &response,
             launch_ticket,
-            "check that the VMM and the guest OS are 0.6.4 or later",
+            "check that the VMM and the guest OS support launch tickets",
         )?;
         let root_epoch = self.state.authorized_epoch(&response, epochs.root)?;
         let app_epoch = epochs.app.unwrap_or(response.current_app_epoch);
