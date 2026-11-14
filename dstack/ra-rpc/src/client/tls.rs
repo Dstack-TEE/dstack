@@ -19,7 +19,7 @@ use rustls::{
 /// With `pinned`, the server certificate must also match it, so that nothing
 /// is sent to a server that fails the pin.
 #[derive(Debug)]
-struct SkipCaVerification {
+struct AttestedCertVerifier {
     algorithms: WebPkiSupportedAlgorithms,
     pinned: Option<PinnedIssuer>,
 }
@@ -39,7 +39,7 @@ fn matches_pin(pin: &PinnedIssuer, end_entity: &[u8]) -> bool {
         && cert.verify_signature(Some(&pubkey)).is_ok()
 }
 
-impl ServerCertVerifier for SkipCaVerification {
+impl ServerCertVerifier for AttestedCertVerifier {
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -90,7 +90,7 @@ pub(super) fn config_without_ca_verification(
     let provider = rustls::crypto::CryptoProvider::get_default()
         .cloned()
         .unwrap_or_else(|| Arc::new(rustls::crypto::aws_lc_rs::default_provider()));
-    let verifier = SkipCaVerification {
+    let verifier = AttestedCertVerifier {
         algorithms: provider.signature_verification_algorithms,
         pinned,
     };
