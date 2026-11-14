@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@hono/zod-validator": "0.9.1",
-    "hono": "4.13.13",
+    "hono": "4.13.16",
     "viem": "2.57.5",
     "zod": "4.6.7"
   },
