@@ -392,7 +392,18 @@ pub fn create_manifest_from_vm_config(
         volumes,
         disk_prealloc,
         annotations: annotations_from_proto(&request.annotations)?,
+        launch_ticket: launch_ticket_from_proto(&request.launch_ticket)?,
     })
+}
+
+/// Refuse a ticket the KMS would refuse, so the mistake surfaces here rather
+/// than at boot. Empty means none.
+fn launch_ticket_from_proto(ticket: &str) -> Result<Option<String>> {
+    if ticket.is_empty() {
+        return Ok(None);
+    }
+    dstack_types::authorization::check_launch_ticket(ticket).map_err(anyhow::Error::msg)?;
+    Ok(Some(ticket.to_string()))
 }
 
 fn annotations_from_proto(
@@ -1185,6 +1196,9 @@ impl VmmRpc for RpcHandler {
         if request.update_gateway_urls {
             manifest.gateway_urls = request.gateway_urls.clone();
         }
+        if let Some(ticket) = &request.launch_ticket {
+            manifest.launch_ticket = launch_ticket_from_proto(ticket)?;
+        }
         if request.update_annotations {
             manifest.annotations = annotations_from_proto(&request.annotations)?;
         }
@@ -1572,6 +1586,7 @@ mod tests {
             networks: vec![],
             disk_prealloc: None,
             annotations: Default::default(),
+            launch_ticket: String::new(),
         }
     }
 

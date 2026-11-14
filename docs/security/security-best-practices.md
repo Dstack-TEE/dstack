@@ -52,6 +52,8 @@ Because `launch_token_hash` is public, a guessable token can be recovered offlin
 
 Also understand the protection boundary of this mechanism: the guest verifies the token before any keys are provisioned, which means the token must reach the guest through `user_config` — a channel the host can read. The requirement therefore stops parties who only know the public app-compose.json from launching the app, but once a host has hosted a deployment it learns the token and can later relaunch instances of that compose with substituted encrypted envs. Mitigations: generate a fresh token per deployment and remove stale compose hashes from the on-chain whitelist; if the token must stay secret from the host, use the app-layer `APP_LAUNCH_TOKEN` encrypted-env pattern above instead (its check necessarily runs after key provisioning).
 
+A KMS-level launch ticket closes that gap for apps governed by `DstackApp`: the contract owner requires a ticket (`setRequireLaunchTicket`) and allows the hashes of the tickets they issue (`addLaunchTicket`), and the KMS refuses keys and certificates to a CVM without an allowed ticket. The check runs in the KMS, so it does not depend on the guest OS, and a ticket is revoked on chain without changing the compose hash. It is orthogonal to `requirements.launch_token_hash`. The host still holds the ticket, so issue one per deployment and remove it when the host stops serving the app. See [launch tickets](../../dstack/kms/README.md#launch-tickets) and [vmm-cli](../vmm-cli-user-guide.md#launch-tickets).
+
 If you use dstack-vmm's built-in UI, the prelaunch script has already been automatically filled in for you:
 
 ![Prelaunch Script](../assets/prelaunch-script.png)

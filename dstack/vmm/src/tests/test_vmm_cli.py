@@ -62,6 +62,31 @@ class UpdateVmTests(unittest.TestCase):
             ],
         )
 
+    def test_launch_ticket_is_sent_and_removed(self) -> None:
+        """Send a replacement ticket, and an empty one to remove it."""
+        cli = VMM_CLI.VmmCLI("http://127.0.0.1:8080")
+        calls: list[tuple[str, dict]] = []
+        cli.rpc_call = lambda method, params=None: calls.append((method, params)) or {}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.update_vm("vm-id", launch_ticket="t" * 32)
+            cli.update_vm("vm-id", launch_ticket="")
+
+        self.assertEqual(
+            [params["launch_ticket"] for _, params in calls], ["t" * 32, ""]
+        )
+
+
+class LaunchTicketTests(unittest.TestCase):
+    """Pin the hash the contracts allow; the KMS computes the same."""
+
+    def test_hash_is_domain_separated(self) -> None:
+        """Hash under the dstack-launch-ticket/v1 domain."""
+        self.assertEqual(
+            VMM_CLI.launch_ticket_hash("t" * 32),
+            "0x8185a84114cfd5c0fb70e2233dee133cfa6467b58537ece8b27137828baabecc",
+        )
+
 
 class SealedEnvTests(unittest.TestCase):
     """Exercise signed recipient selection and SealedEnv compatibility."""
@@ -382,6 +407,7 @@ class SealedEnvTests(unittest.TestCase):
             stopped=False,
             no_tee=False,
             annotation=None,
+            launch_ticket_file=None,
             disk_prealloc=None,
             simulated_tee=None,
             swap=None,

@@ -1484,6 +1484,7 @@ mod tests {
                 }],
                 disk_prealloc: DiskPrealloc::Off,
                 annotations: Default::default(),
+                launch_ticket: None,
             },
             image: Image {
                 info: ImageInfo {

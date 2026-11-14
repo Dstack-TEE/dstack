@@ -16,8 +16,11 @@ import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, ERC165Upgradeable, IAppAuth {
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
     // Struct for KMS information
     struct KmsInfo {
         bytes k256Pubkey;
@@ -93,6 +96,12 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // The TEE platforms KMS instances and apps may run on.
     TeeVariantPolicy.Policy private _teeVariants;
 
+    /// @notice Whether a KMS instance must present an allowed launch ticket to
+    /// receive the root keys, at every root epoch.
+    bool public requireKmsLaunchTicket;
+    // Allowed KMS launch tickets, by sha256("dstack-launch-ticket/v1:" || ticket).
+    EnumerableSet.Bytes32Set private _kmsLaunchTickets;
+
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     error InvalidEpochCaPubkey();
@@ -111,6 +120,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     error InvalidRootEpochRange();
     error AppNotRegistered();
     error AppNotDeployed();
+    error InvalidLaunchTicketHash();
 
     // Events
     // appId is unindexed for backward compatibility with deployed log indexers.
@@ -127,6 +137,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     event GatewayAppIdSet(string gatewayAppId);
     event AllowAnyTeeVariantSet(bool allowAny);
     event AllowedTeeVariantsSet(string[] teeVariants);
+    event RequireKmsLaunchTicketSet(bool required);
+    event KmsLaunchTicketAdded(bytes32 indexed ticketHash, string label);
+    event KmsLaunchTicketRemoved(bytes32 indexed ticketHash);
     // slither-disable-next-line unindexed-event-address
     event AppImplementationSet(address implementation);
     event RootEpochRegistered(
@@ -311,6 +324,31 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
         uint64 mask = TeeVariantPolicy.setAllowed(_teeVariants, teeVariants);
         emit AllowedTeeVariantsSet(teeVariants);
         _emitPolicy(keccak256("allowed-tee-variants"), bytes32(uint256(mask)), true);
+    }
+
+    function setRequireKmsLaunchTicket(bool required) external onlyOwner {
+        requireKmsLaunchTicket = required;
+        emit RequireKmsLaunchTicketSet(required);
+        _emitPolicy(keccak256("require-kms-launch-ticket"), bytes32(0), required);
+    }
+
+    /// @notice Allow a KMS launch ticket. The label is public and only logged.
+    function addKmsLaunchTicket(bytes32 ticketHash, string calldata label) external onlyOwner {
+        if (ticketHash == bytes32(0)) revert InvalidLaunchTicketHash();
+        _kmsLaunchTickets.add(ticketHash);
+        emit KmsLaunchTicketAdded(ticketHash, label);
+        _emitPolicy(keccak256("kms-launch-ticket"), ticketHash, true);
+    }
+
+    function removeKmsLaunchTicket(bytes32 ticketHash) external onlyOwner {
+        _kmsLaunchTickets.remove(ticketHash);
+        emit KmsLaunchTicketRemoved(ticketHash);
+        _emitPolicy(keccak256("kms-launch-ticket"), ticketHash, false);
+    }
+
+    /// @notice The allowed KMS launch tickets; their labels are in {KmsLaunchTicketAdded}.
+    function kmsLaunchTickets() external view returns (bytes32[] memory) {
+        return _kmsLaunchTickets.values();
     }
 
     // Function to set trusted Gateway App ID
@@ -603,6 +641,16 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             result.rejectionReason = "Invalid authorization operation";
             return result;
         }
+        // The source KMS checks the joining instance's ticket before handing it
+        // the root keys. Only this import hands them out; an instance that
+        // bootstraps or serves without them holds no registered root.
+        if (
+            request.operation == AuthorizationOperation.KMS_IMPORT_KEYS && requireKmsLaunchTicket
+                && !_kmsLaunchTickets.contains(request.launchTicketHash)
+        ) {
+            result.rejectionReason = "Invalid launch ticket";
+            return result;
+        }
         if (_rootEpochs.length == 0 && request.operation != AuthorizationOperation.KMS_BOOTSTRAP) {
             result.rejectionReason = "Root epoch not registered";
             return result;
@@ -633,6 +681,8 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     // Legacy entry point for pre-epoch KMS binaries: reads epoch 0, and refuses
     // once a later root epoch is current.
     function isKmsAllowed(AppInfo calldata bootInfo) external view returns (bool isAllowed, string memory reason) {
+        // Legacy callers present no launch ticket and cannot say which operation they authorize.
+        if (requireKmsLaunchTicket) return (false, "Invalid launch ticket");
         if (_currentRootEpoch != 0) {
             return (false, "Root epoch requires epoch-aware authorization");
         }
@@ -701,7 +751,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[43] private __gap;
+    uint256[40] private __gap;
 }
 
 function isContract(address addr) view returns (bool) {

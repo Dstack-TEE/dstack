@@ -36,6 +36,9 @@ pub struct RaClientConfig {
     /// TLS handshake signatures remain verified; attestation is checked separately.
     #[builder(default = false)]
     tls_skip_ca_verification: bool,
+    /// Instead of a CA chain, require at the handshake a server certificate
+    /// issued as `PinnedIssuer` says.
+    tls_pinned_issuer: Option<PinnedIssuer>,
     #[builder(default = true)]
     verify_server_attestation: bool,
     #[builder(default = false)]
@@ -50,6 +53,14 @@ pub struct RaClientConfig {
     cert_validator: Option<CertValidator>,
 }
 
+/// A server certificate a client accepts: a valid leaf with special usage
+/// `usage`, signed by `pubkey` (SPKI DER).
+#[derive(Debug, Clone)]
+pub struct PinnedIssuer {
+    pub pubkey: Vec<u8>,
+    pub usage: String,
+}
+
 impl RaClientConfig {
     pub fn into_client(self) -> Result<RaClient> {
         let mut builder = Client::builder()
@@ -60,10 +71,18 @@ impl RaClientConfig {
         if self.cert_validator.is_some() {
             builder = builder.tls_info(true);
         }
-        if self.tls_skip_ca_verification {
+        if self.tls_pinned_issuer.is_some() {
+            // Without TLS, or past a redirect, the request skips the pin.
+            if !self.remote_uri.starts_with("https://") {
+                bail!("a pinned issuer requires an https URL");
+            }
+            builder = builder.redirect(reqwest::redirect::Policy::none());
+        }
+        if self.tls_skip_ca_verification || self.tls_pinned_issuer.is_some() {
             builder = builder.use_preconfigured_tls(tls::config_without_ca_verification(
                 self.tls_client_cert.as_deref(),
                 self.tls_client_key.as_deref(),
+                self.tls_pinned_issuer,
             )?);
         } else if let (Some(cert_pem), Some(key_pem)) = (self.tls_client_cert, self.tls_client_key)
         {

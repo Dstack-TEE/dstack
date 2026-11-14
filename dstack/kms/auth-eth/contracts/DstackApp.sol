@@ -15,6 +15,7 @@ import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/introspection/ERC165Upgradeable.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract DstackApp is
     Initializable,
@@ -25,6 +26,8 @@ contract DstackApp is
     IAppEpochAuth,
     IAppEpochManagement
 {
+    using EnumerableSet for EnumerableSet.Bytes32Set;
+
     /// @notice Allowed compose hashes for this app. Epoch 0 only; for other epochs use the *AtEpoch getters and
     /// EpochPolicyChanged.
     mapping(bytes32 => bool) public allowedComposeHashes;
@@ -52,6 +55,11 @@ contract DstackApp is
     // The TEE platforms this app may run on.
     TeeVariantPolicy.Policy private _teeVariants;
 
+    /// @notice Whether a boot must present an allowed launch ticket, at every app epoch.
+    bool public requireLaunchTicket;
+    // Allowed launch tickets, by sha256("dstack-launch-ticket/v1:" || ticket), at every app epoch.
+    EnumerableSet.Bytes32Set private _launchTickets;
+
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
 
     /// @notice Legacy material events. Epoch 0 only; for other epochs use the *AtEpoch getters and EpochPolicyChanged.
@@ -65,6 +73,9 @@ contract DstackApp is
     event AllowAnyTeeVariantSet(bool allowAny);
     event AllowedTeeVariantsSet(string[] teeVariants);
     event RequireTcbUpToDateSet(bool requireUpToDate);
+    event RequireLaunchTicketSet(bool required);
+    event LaunchTicketAdded(bytes32 indexed ticketHash, string label);
+    event LaunchTicketRemoved(bytes32 indexed ticketHash);
     /// @notice Additive audit event for reconstructing authorization policy.
     event PolicyChanged(address indexed actor, bytes32 indexed policy, bytes32 indexed value, bool enabled);
 
@@ -268,6 +279,31 @@ contract DstackApp is
         _emitPolicy("require-tcb-up-to-date", bytes32(0), _requireUpToDate);
     }
 
+    function setRequireLaunchTicket(bool required) external onlyOwner {
+        requireLaunchTicket = required;
+        emit RequireLaunchTicketSet(required);
+        _emitPolicy("require-launch-ticket", bytes32(0), required);
+    }
+
+    /// @notice Allow a launch ticket. The label is public and only logged.
+    function addLaunchTicket(bytes32 ticketHash, string calldata label) external onlyOwner {
+        require(ticketHash != bytes32(0), "invalid launch ticket hash");
+        _launchTickets.add(ticketHash);
+        emit LaunchTicketAdded(ticketHash, label);
+        _emitPolicy("launch-ticket", ticketHash, true);
+    }
+
+    function removeLaunchTicket(bytes32 ticketHash) external onlyOwner {
+        _launchTickets.remove(ticketHash);
+        emit LaunchTicketRemoved(ticketHash);
+        _emitPolicy("launch-ticket", ticketHash, false);
+    }
+
+    /// @notice The allowed launch tickets; their labels are in {LaunchTicketAdded}.
+    function launchTickets() external view returns (bytes32[] memory) {
+        return _launchTickets.values();
+    }
+
     function addDeviceAtEpoch(uint256 epoch, bytes32 deviceId) public onlyOwner {
         require(deviceId != bytes32(0), "invalid device ID");
         _setDevice(epoch, deviceId, true);
@@ -308,8 +344,9 @@ contract DstackApp is
         returns (bool isAllowed, string memory reason)
     {
         if (currentAppEpoch != 0) return (false, "App epoch requires epoch-aware authorization");
-        // Legacy callers report no platform, so only an unrestricted policy admits them.
-        return _authorizeApp(bootInfo, allowAnyTeeVariant(), 0);
+        // Legacy callers report no platform and no launch ticket, so only a policy
+        // restricting neither admits them.
+        return _authorizeApp(bootInfo, allowAnyTeeVariant(), 0, bytes32(0));
     }
 
     /// Decide the request at the selected app epoch; the KMS fills gateway and root fields.
@@ -325,19 +362,27 @@ contract DstackApp is
             return result;
         }
         uint256 appEpoch = request.requestedAppEpoch.isSet ? request.requestedAppEpoch.value : currentAppEpoch;
-        (result.authorized, result.rejectionReason) =
-            _authorizeApp(request.appInfo, TeeVariantPolicy.admits(_teeVariants, request.teeVariant), appEpoch);
+        (result.authorized, result.rejectionReason) = _authorizeApp(
+            request.appInfo,
+            TeeVariantPolicy.admits(_teeVariants, request.teeVariant),
+            appEpoch,
+            request.launchTicketHash
+        );
     }
 
     function _authorizeApp(
         IAppAuth.AppInfo calldata bootInfo,
         bool teeVariantAllowed,
-        uint256 appEpoch
+        uint256 appEpoch,
+        bytes32 launchTicketHash
     )
         private
         view
         returns (bool, string memory)
     {
+        if (requireLaunchTicket && !_launchTickets.contains(launchTicketHash)) {
+            return (false, "Invalid launch ticket");
+        }
         if (appEpoch > currentAppEpoch) return (false, "Requested app epoch is not active");
         // Optionally require TCB status to be up to date
         if (
@@ -381,5 +426,5 @@ contract DstackApp is
     }
 
     // Add storage gap for upgradeable contracts
-    uint256[45] private __gap;
+    uint256[42] private __gap;
 }

@@ -18,7 +18,7 @@ use dstack_kms_rpc::{
 use fs_err as fs;
 use k256::ecdsa::SigningKey;
 use ra_rpc::{
-    client::{CertInfo, RaClient, RaClientConfig},
+    client::{CertInfo, PinnedIssuer, RaClientConfig},
     CallContext, RpcCall,
 };
 use ra_tls::{
@@ -171,6 +171,7 @@ impl OnboardRpc for OnboardHandler {
             cfg,
             &source_url,
             &request.source_token,
+            &request.launch_ticket,
             &request.domain,
             request.rotate,
             self.state.attestation_verifier.clone(),
@@ -1068,6 +1069,7 @@ impl Keys {
         cfg: &KmsConfig,
         other_kms_url: &str,
         source_token: &str,
+        launch_ticket: &str,
         domain: &str,
         rotate: bool,
         attestation_verifier: Arc<AttestationVerifier>,
@@ -1095,18 +1097,37 @@ impl Keys {
                 .context("Missing source KMS attestation")
         };
 
+        // Send the launch ticket and the admin token only to a KMS serving the
+        // registered roots: at the handshake, its RPC certificate must be
+        // signed by the current root CA registered with our own auth API.
+        let pin = cfg
+            .auth_api
+            .root_ca_pubkey()
+            .await
+            .context("failed to get the registered root CA key")?
+            .map(|pubkey| PinnedIssuer {
+                pubkey,
+                usage: "kms:rpc".into(),
+            });
+        let pinned_client = || {
+            RaClientConfig::builder()
+                .tls_skip_ca_verification(true)
+                .maybe_tls_pinned_issuer(pin.clone())
+                .remote_uri(other_kms_url.to_string())
+        };
         let temp_ca = if source_token.is_empty() {
-            let client = RaClient::new(other_kms_url.to_string(), true)?;
-            let ca = KmsClient::new(client).get_temp_ca_cert().await?;
+            let client = pinned_client().build().into_client()?;
+            let ca = KmsClient::new(client)
+                .get_temp_ca_cert()
+                .await
+                .context("failed to get the temporary CA from the source KMS")?;
             Some((ca.temp_ca_cert, ca.temp_ca_key))
         } else {
             None
         };
         let (ra_cert, ra_key) = gen_ra_cert(temp_ca).await?;
-        let client = RaClientConfig::builder()
-            .tls_skip_ca_verification(true)
+        let client = pinned_client()
             .tls_built_in_root_certs(false)
-            .remote_uri(other_kms_url.to_string())
             .tls_client_cert(ra_cert)
             .tls_client_key(ra_key)
             .cert_validator(capture_source_attestation)
@@ -1117,12 +1138,14 @@ impl Keys {
         let info = dstack_client().info().await.context("Failed to get info")?;
         let request = GetKmsKeyRequest {
             vm_config: info.vm_config,
+            launch_ticket: launch_ticket.to_string(),
         };
         let keys_res = if source_token.is_empty() {
-            KmsClient::new(client).get_kms_key(request).await?
+            KmsClient::new(client).get_kms_key(request).await
         } else {
-            AdminClient::new(client).get_kms_key(request).await?
-        };
+            AdminClient::new(client).get_kms_key(request).await
+        }
+        .context("failed to get the keys from the source KMS")?;
         // The attestation is captured only on the connection that returned the keys;
         // nothing received is used before the source passes this check.
         let highest = keys_res

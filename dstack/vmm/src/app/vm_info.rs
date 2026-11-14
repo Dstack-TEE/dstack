@@ -179,6 +179,17 @@ impl VmInfo {
             // a VM being removed with QEMU still up is not "running" by that
             // string, yet its NICs are real.
             running: self.running,
+            launch_ticket_hash: self
+                .manifest
+                .launch_ticket
+                .as_deref()
+                .map(|ticket| {
+                    format!(
+                        "0x{}",
+                        hex::encode(dstack_types::authorization::launch_ticket_hash(ticket))
+                    )
+                })
+                .unwrap_or_default(),
             uptime: self.uptime.clone(),
             boot_progress: self.boot_progress.clone(),
             boot_error: self.boot_error.clone(),
@@ -245,6 +256,8 @@ impl VmInfo {
                     networking: configured_networking,
                     networks: configured_networks,
                     annotations: self.manifest.annotations.clone().into_iter().collect(),
+                    // A secret the VMM passes to the guest and never returns.
+                    launch_ticket: String::new(),
                 })
             },
             app_url: self

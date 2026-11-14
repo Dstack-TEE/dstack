@@ -67,7 +67,11 @@ impl VmWorkDir {
     }
 
     pub fn put_manifest(&self, manifest: &Manifest) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         fs::create_dir_all(&self.workdir).context("failed to create workdir")?;
+        // The manifest, sys-config and shared disk image hold the launch ticket.
+        fs::set_permissions(&self.workdir, std::fs::Permissions::from_mode(0o700))
+            .context("failed to restrict workdir permissions")?;
         let manifest_path = self.manifest_path();
         let mut value = serde_json::to_value(manifest)?;
         if let Some(networking) = manifest.networks.first() {
@@ -410,6 +414,22 @@ mod tests {
         assert!(persisted[0].device.is_empty());
         assert!(!fs::read_to_string(workdir.runtime_networks_path())?.contains("/dev/tap42"));
         fs::remove_dir_all(temp)?;
+        Ok(())
+    }
+
+    #[test]
+    fn put_manifest_restricts_the_workdir_to_its_owner() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir()?;
+        let workdir = VmWorkDir::new(dir.path().join("vm"));
+        let manifest = crate::app::Manifest::from_json(serde_json::json!({
+            "id": "vm", "name": "vm", "app_id": "app", "vcpu": 1, "memory": 1024,
+            "disk_size": 1, "image": "img", "port_map": [], "created_at_ms": 0,
+            "launch_ticket": "t".repeat(32),
+        }))?;
+        workdir.put_manifest(&manifest)?;
+        let mode = fs::metadata(workdir.path())?.permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
         Ok(())
     }
 

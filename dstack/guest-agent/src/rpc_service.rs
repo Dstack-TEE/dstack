@@ -294,7 +294,7 @@ impl AppState {
         // Same trust anchor decision as dstack-util: never host-supplied, and
         // development roots only when this guest published them itself.
         let verifier = Arc::new(default_verifier(&collateral_urls)?);
-        let cert_client = CertRequestClient::create(&keys, verifier, vm_config.clone())
+        let cert_client = CertRequestClient::create(&keys, verifier, &sys_config)
             .await
             .context("Failed to create cert signer")?;
         // Only run the refresh loop when the app asked the gateway to gate on
@@ -1503,7 +1503,8 @@ pNs85uhOZE8z2jr8Pg==
         };
 
         let verifier = Arc::new(AttestationVerifier::new_prod(None).unwrap());
-        let dummy_cert_client = CertRequestClient::create(&dummy_keys, verifier, String::new())
+        let sys_config = serde_json::from_value(serde_json::json!({ "vm_config": "" })).unwrap();
+        let dummy_cert_client = CertRequestClient::create(&dummy_keys, verifier, &sys_config)
             .await
             .expect("Failed to create CertRequestClient");
 

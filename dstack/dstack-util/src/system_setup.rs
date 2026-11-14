@@ -726,13 +726,9 @@ impl<'a> GatewayContext<'a> {
             .unwrap_or(0);
         let cert_not_after = now + CERT_VALIDITY_SECS;
         let verifier = attestation_verifier(&self.shared.sys_config)?;
-        let cert_client = CertRequestClient::create(
-            self.keys,
-            verifier,
-            self.shared.sys_config.vm_config.clone(),
-        )
-        .await
-        .context("Failed to create cert client")?;
+        let cert_client = CertRequestClient::create(self.keys, verifier, &self.shared.sys_config)
+            .await
+            .context("Failed to create cert client")?;
         let key =
             KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context("Failed to generate key")?;
 
@@ -2409,6 +2405,7 @@ impl HostShared {
                 vm_config: self.sys_config.vm_config.clone(),
                 root_epoch,
                 app_epoch,
+                launch_ticket: self.sys_config.launch_ticket.clone().unwrap_or_default(),
             },
             cert_pair,
             attestation_verifier(&self.sys_config)?,

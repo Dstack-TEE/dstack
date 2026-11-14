@@ -76,7 +76,12 @@ contract LegacyAppCompatTest is Test {
         info.tcbStatus = "UpToDate";
         info.advisoryIds = new string[](0);
         return AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(appSet, appEpoch), OptionalUint256(false, 0), "dstack-tdx"
+            info,
+            keccak256("app_get_key"),
+            OptionalUint256(appSet, appEpoch),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
         );
     }
 
