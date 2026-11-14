@@ -15,6 +15,9 @@ message GetAppKeyRequest {
   // the original root keys. Older epochs remain available so CVMs can migrate.
   optional uint32 root_epoch = 3;
   optional uint32 app_epoch = 4;
+  // The launch ticket from the CVM's sys-config; empty when it has none. Its
+  // hash is checked against the app's allowlist.
+  string launch_ticket = 5;
 }
 
 message AppId {
@@ -94,6 +97,8 @@ message SignCertRequest {
   bytes csr = 2;
   bytes signature = 3;
   string vm_config = 4;
+  // As in GetAppKeyRequest.
+  string launch_ticket = 5;
 }
 
 message SignCertResponse {

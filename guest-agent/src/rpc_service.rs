@@ -227,11 +227,10 @@ impl AppState {
         let sys_config: SysConfig =
             serde_json::from_str(&fs::read_to_string(&config.sys_config_file)?)
                 .context("Failed to parse VM config")?;
+        let cert_client = CertRequestClient::create(&keys, config.pccs_url.as_deref(), &sys_config)
+            .await
+            .context("Failed to create cert signer")?;
         let vm_config = sys_config.vm_config;
-        let cert_client =
-            CertRequestClient::create(&keys, config.pccs_url.as_deref(), vm_config.clone())
-                .await
-                .context("Failed to create cert signer")?;
         let me = Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -922,7 +921,8 @@ pNs85uhOZE8z2jr8Pg==
             },
         };
 
-        let dummy_cert_client = CertRequestClient::create(&dummy_keys, None, String::new())
+        let sys_config = serde_json::from_value(serde_json::json!({ "vm_config": "" })).unwrap();
+        let dummy_cert_client = CertRequestClient::create(&dummy_keys, None, &sys_config)
             .await
             .expect("Failed to create CertRequestClient");
 

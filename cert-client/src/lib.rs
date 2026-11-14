@@ -4,7 +4,7 @@
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, SignCertRequest};
-use dstack_types::{AppKeys, KeyProvider};
+use dstack_types::{AppKeys, KeyProvider, SysConfig};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::cert::{generate_ra_cert, CaCert, CertSigningRequestV2};
 
@@ -41,6 +41,7 @@ pub enum CertRequestClient {
     Kms {
         client: KmsClient<RaClient>,
         vm_config: String,
+        launch_ticket: String,
     },
 }
 
@@ -57,13 +58,18 @@ impl CertRequestClient {
                     .context("Failed to sign certificate")?;
                 Ok(vec![cert.pem(), ca.pem_cert.clone()])
             }
-            CertRequestClient::Kms { client, vm_config } => {
+            CertRequestClient::Kms {
+                client,
+                vm_config,
+                launch_ticket,
+            } => {
                 let response = client
                     .sign_cert(SignCertRequest {
                         api_version: 2,
                         csr: csr.to_vec(),
                         signature: signature.to_vec(),
                         vm_config: vm_config.clone(),
+                        launch_ticket: launch_ticket.clone(),
                     })
                     .await?;
                 Ok(response.certificate_chain)
@@ -81,7 +87,7 @@ impl CertRequestClient {
     pub async fn create(
         keys: &AppKeys,
         pccs_url: Option<&str>,
-        vm_config: String,
+        sys_config: &SysConfig,
     ) -> Result<CertRequestClient> {
         match &keys.key_provider {
             KeyProvider::None { key }
@@ -114,7 +120,11 @@ impl CertRequestClient {
                     .into_client()
                     .context("Failed to create RA client")?;
                 let client = KmsClient::new(ra_client);
-                Ok(CertRequestClient::Kms { client, vm_config })
+                Ok(CertRequestClient::Kms {
+                    client,
+                    vm_config: sys_config.vm_config.clone(),
+                    launch_ticket: sys_config.launch_ticket.clone().unwrap_or_default(),
+                })
             }
         }
     }
