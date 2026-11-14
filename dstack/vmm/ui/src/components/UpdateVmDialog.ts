@@ -259,6 +259,11 @@ const UpdateVmDialogComponent = {
           <textarea id="upgradeUserConfig" v-model="dialog.user_config" placeholder="Optional: User config to be put at /dstack/.user-config in the CVM"></textarea>
         </div>
 
+        <div class="form-group">
+          <label for="upgradeLaunchTicket">Launch Ticket</label>
+          <input id="upgradeLaunchTicket" type="password" autocomplete="off" v-model="dialog.launch_ticket" placeholder="Optional: replace the launch ticket; leave empty to keep it">
+        </div>
+
         <div class="dialog-footer">
           <button class="action-btn primary" @click="$emit('submit')">Update</button>
           <button class="action-btn" @click="$emit('close')">Cancel</button>

@@ -192,6 +192,7 @@ type VmFormState = {
   networks: NetworkFormEntry[];
   user_config: string;
   annotations: string;
+  launch_ticket: string;
   kms_urls: string[];
   gateway_urls: string[];
   stopped: boolean;
@@ -223,6 +224,7 @@ type UpdateDialogState = {
   updateNetworking: boolean;
   networks: NetworkFormEntry[];
   user_config: string;
+  launch_ticket: string;
 };
 
 type CloneConfigDialogState = {
@@ -285,6 +287,7 @@ function createVmFormState(preLaunchScript: string): VmFormState {
     networks: [],
     user_config: '',
     annotations: '',
+    launch_ticket: '',
     kms_urls: [],
     gateway_urls: [],
     stopped: false,
@@ -318,6 +321,7 @@ function createUpdateDialogState(): UpdateDialogState {
     updateNetworking: false,
     networks: [],
     user_config: '',
+    launch_ticket: '',
   };
 }
 
@@ -658,6 +662,7 @@ type CreateVmPayloadSource = {
     gateway_urls?: string[];
     stopped?: boolean;
     annotations?: Record<string, string>;
+    launch_ticket?: string;
   };
 
   function buildCreateVmPayload(source: CreateVmPayloadSource): VmmTypes.IVmConfiguration {
@@ -687,6 +692,7 @@ type CreateVmPayloadSource = {
       gateway_urls: source.gateway_urls?.filter((url) => url && url.trim().length) ?? [],
       stopped: !!source.stopped,
       annotations: source.annotations ?? {},
+      launch_ticket: source.launch_ticket?.trim() || undefined,
     };
   }
 
@@ -1202,6 +1208,7 @@ type CreateVmPayloadSource = {
       updateNetworking: false,
       networks: cloneNetworks(config),
       user_config: config.user_config || '',
+      launch_ticket: '',
     };
   }
 
@@ -1300,6 +1307,7 @@ type CreateVmPayloadSource = {
         gateway_urls: vmForm.value.gateway_urls,
         stopped: vmForm.value.stopped,
         annotations: parseAnnotations(vmForm.value.annotations),
+        launch_ticket: vmForm.value.launch_ticket,
       });
 
       await vmmRpc.createVm(payload);
@@ -1378,6 +1386,10 @@ type CreateVmPayloadSource = {
       body.compose_file = composeNeedsUpdate ? await makeUpdateComposeFile() : undefined;
       Object.assign(body, encryptedEnvPayload);
       body.user_config = updated.user_config;
+      // The VMM never returns the ticket, so only a new one is sent.
+      if (updated.launch_ticket.trim()) {
+        body.launch_ticket = updated.launch_ticket.trim();
+      }
       body.update_ports = true;
       body.ports = normalizePorts(updated.ports);
       body.gpus = updateDialog.value.updateGpuConfig ? configGpu(updated, true) : undefined;
@@ -1458,6 +1470,8 @@ type CreateVmPayloadSource = {
       simulated_tee: config.simulated_tee || '',
       user_config: config.user_config || '',
       annotations: annotationsText(config.annotations),
+      // A clone is a new deployment and needs its own ticket.
+      launch_ticket: '',
       stopped: !!config.stopped,
       event_log_version: theVm.appCompose?.event_log_version || 1,
     };

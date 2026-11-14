@@ -245,6 +245,8 @@ impl VmInfo {
                     networking: configured_networking,
                     networks: configured_networks,
                     annotations: self.manifest.annotations.clone().into_iter().collect(),
+                    // A secret the VMM passes to the guest and never returns.
+                    launch_ticket: String::new(),
                 })
             },
             app_url: self

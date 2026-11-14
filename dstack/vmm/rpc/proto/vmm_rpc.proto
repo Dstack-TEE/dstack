@@ -151,6 +151,10 @@ message VmConfiguration {
   // it with the VM and returns it here; it never interprets it, passes it to
   // the guest, or measures it.
   map<string, string> annotations = 23;
+  // Launch ticket the guest presents to the KMS, whose hash the app's
+  // contract must allow (see dstack/kms/README.md#launch-tickets). The VMM
+  // passes it to the guest's sys-config and never returns it.
+  string launch_ticket = 25;
 }
 
 // Per-VM networking configuration.
@@ -246,6 +250,8 @@ message UpdateVmRequest {
   // Optional update annotations, replacing them all.
   bool update_annotations = 21;
   map<string, string> annotations = 22;
+  // Optional update launch ticket; an empty one removes it.
+  optional string launch_ticket = 25;
 }
 
 // Parameters for listing CVMs with pagination and filtering.
