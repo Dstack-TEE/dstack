@@ -45,9 +45,10 @@ pub(crate) fn build_boot_info(
 }
 
 /// The hex `launchTicketHash` of a presented ticket.
-fn launch_ticket_hash(operation: Operation, ticket: &str) -> Result<String> {
-    dstack_types::authorization::check_launch_ticket(ticket).map_err(anyhow::Error::msg)?;
-    Ok(hex::encode(operation.launch_ticket_hash(ticket)))
+fn launch_ticket_hash(ticket: &str) -> Result<String> {
+    use dstack_types::authorization::{check_launch_ticket, launch_ticket_hash};
+    check_launch_ticket(ticket).map_err(anyhow::Error::msg)?;
+    Ok(hex::encode(launch_ticket_hash(ticket)))
 }
 
 pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
@@ -348,7 +349,7 @@ impl AuthApi {
         ensure_identity_widths(app_info)?;
         // An empty ticket is none.
         let launch_ticket_hash = (!launch_ticket.is_empty())
-            .then(|| launch_ticket_hash(operation, launch_ticket))
+            .then(|| launch_ticket_hash(launch_ticket))
             .transpose()?;
         match self {
             AuthApi::Dev { dev } => Ok(AuthorizationResult {
@@ -907,7 +908,7 @@ pub(crate) mod tests {
     }
 
     #[rocket::async_test]
-    async fn launch_tickets_are_sent_as_domain_separated_hashes() {
+    async fn launch_tickets_are_sent_as_hashes() {
         let response = r#"{"authorized":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000","latestRootEpoch":0,"latestRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
         let (url, server) = serve(vec![response; 3]);
         let auth = webhook(url);
@@ -932,9 +933,9 @@ pub(crate) mod tests {
         let requests = server.join().unwrap();
         let sent = |i: usize| requests[i].1.get("launchTicketHash").cloned();
         let expected =
-            |domain: &str| Some(hex::encode(Sha256::digest(format!("{domain}{ticket}"))).into());
-        assert_eq!(sent(0), expected("dstack-launch-ticket/v1:"));
-        assert_eq!(sent(1), expected("dstack-kms-launch-ticket/v1:"));
+            Some(hex::encode(Sha256::digest(format!("dstack-launch-ticket/v1:{ticket}"))).into());
+        assert_eq!(sent(0), expected);
+        assert_eq!(sent(1), expected);
         assert_eq!(sent(2), None);
     }
 

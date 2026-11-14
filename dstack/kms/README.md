@@ -337,13 +337,10 @@ policies cannot protect calls still served by those old binaries.
 
 A launch ticket stops a party without it from launching an app, or onboarding a
 KMS instance, even on an allowed OS image and device. The CVM presents the
-ticket to the KMS, and the KMS sends its hash as `launchTicketHash`, zero when
-none was presented:
-
-| Endpoint | Hash | Checked for |
-| --- | --- | --- |
-| `authorizeApp` | `sha256("dstack-launch-ticket/v1:" \|\| ticket)` | `app_get_key`, `app_get_cert` |
-| `authorizeKms` | `sha256("dstack-kms-launch-ticket/v1:" \|\| ticket)` | `kms_import_keys` |
+ticket to the KMS, and the KMS sends `sha256("dstack-launch-ticket/v1:" || ticket)`
+as `launchTicketHash`, zero when none was presented. `authorizeApp` checks it for
+`app_get_key` and `app_get_cert`; `authorizeKms` checks it for `kms_import_keys`,
+which the source KMS authorizes for the joining instance.
 
 A CVM reads its ticket from `launch_ticket` in its sys-config and sends it in
 `GetAppKey` and `SignCert`; a joining KMS takes it in the `Onboard` request and

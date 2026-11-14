@@ -99,7 +99,7 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
     /// @notice Whether a KMS instance must present an allowed launch ticket to
     /// receive the root keys, at every root epoch.
     bool public requireKmsLaunchTicket;
-    // Allowed KMS launch tickets, by sha256("dstack-kms-launch-ticket/v1:" || ticket).
+    // Allowed KMS launch tickets, by sha256("dstack-launch-ticket/v1:" || ticket).
     EnumerableSet.Bytes32Set private _kmsLaunchTickets;
 
     event EpochPolicyChanged(bytes32 indexed policy, bytes32 indexed value, uint256 indexed epoch, bool enabled);
@@ -641,8 +641,9 @@ contract DstackKms is Initializable, Ownable2StepUpgradeable, UUPSUpgradeable, E
             result.rejectionReason = "Invalid authorization operation";
             return result;
         }
-        // Only the key import hands a joining instance the root keys; an
-        // instance that bootstraps or serves without them holds no registered root.
+        // The source KMS checks the joining instance's ticket before handing it
+        // the root keys. Only this import hands them out; an instance that
+        // bootstraps or serves without them holds no registered root.
         if (
             request.operation == AuthorizationOperation.KMS_IMPORT_KEYS && requireKmsLaunchTicket
                 && !_kmsLaunchTickets.contains(request.launchTicketHash)

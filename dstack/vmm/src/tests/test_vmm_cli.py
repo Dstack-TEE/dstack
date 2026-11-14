@@ -81,15 +81,10 @@ class LaunchTicketTests(unittest.TestCase):
     """Pin the hash the contracts allow; the KMS computes the same."""
 
     def test_hash_is_domain_separated(self) -> None:
-        """Hash app and KMS tickets under different domains."""
-        ticket = "t" * 32
+        """Hash under the dstack-launch-ticket/v1 domain."""
         self.assertEqual(
-            VMM_CLI.launch_ticket_hash(ticket, kms=False),
+            VMM_CLI.launch_ticket_hash("t" * 32),
             "0x8185a84114cfd5c0fb70e2233dee133cfa6467b58537ece8b27137828baabecc",
-        )
-        self.assertEqual(
-            VMM_CLI.launch_ticket_hash(ticket, kms=True),
-            "0xa78c8aebf7e3ba7ead22d3e9e20827a53c89af8e61115a0e8c333b9e27f632ad",
         )
 
 

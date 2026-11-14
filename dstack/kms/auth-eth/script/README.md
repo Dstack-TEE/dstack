@@ -70,10 +70,10 @@ forge script script/Manage.s.sol:RequireKmsLaunchTicket --broadcast --rpc-url $R
 ```
 
 #### Add or Remove a KMS Launch Ticket
-`LAUNCH_TICKET_HASH` is `sha256("dstack-kms-launch-ticket/v1:" || ticket)`; the
+`LAUNCH_TICKET_HASH` is `sha256("dstack-launch-ticket/v1:" || ticket)`; the
 label is public. Remove the ticket once the instance has joined.
 ```bash
-LAUNCH_TICKET_HASH=0x$(printf 'dstack-kms-launch-ticket/v1:%s' "$TICKET" | sha256sum | cut -d' ' -f1)
+LAUNCH_TICKET_HASH=0x$(printf 'dstack-launch-ticket/v1:%s' "$TICKET" | sha256sum | cut -d' ' -f1)
 KMS_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH LAUNCH_TICKET_LABEL=kms-node-2 \
 forge script script/Manage.s.sol:AddKmsLaunchTicket --broadcast --rpc-url $RPC_URL
 KMS_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH \

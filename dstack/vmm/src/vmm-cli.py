@@ -510,10 +510,11 @@ def read_launch_ticket(filepath: str) -> str:
     return ticket
 
 
-def launch_ticket_hash(ticket: str, kms: bool) -> str:
-    """Return the hash to allow on chain: sha256(domain || ticket)."""
-    domain = "dstack-kms-launch-ticket/v1:" if kms else "dstack-launch-ticket/v1:"
-    return "0x" + hashlib.sha256((domain + ticket).encode()).hexdigest()
+def launch_ticket_hash(ticket: str) -> str:
+    """Return the hash to allow on chain: sha256("dstack-launch-ticket/v1:" || ticket)."""
+    return (
+        "0x" + hashlib.sha256(f"dstack-launch-ticket/v1:{ticket}".encode()).hexdigest()
+    )
 
 
 def cmd_launch_ticket(args) -> None:
@@ -525,7 +526,7 @@ def cmd_launch_ticket(args) -> None:
             f.write(ticket + "\n")
     else:
         ticket = read_launch_ticket(args.file)
-    print(launch_ticket_hash(ticket, args.kms))
+    print(launch_ticket_hash(ticket))
 
 
 class UnixSocketHTTPConnection(http.client.HTTPConnection):
@@ -2536,11 +2537,6 @@ def main():
     ]:
         sub = launch_ticket_subparsers.add_parser(name, help=help_text)
         sub.add_argument("file", metavar="FILE")
-        sub.add_argument(
-            "--kms",
-            action="store_true",
-            help="A KMS onboarding ticket (addKmsLaunchTicket) rather than an app one",
-        )
 
     args = parser.parse_args()
 

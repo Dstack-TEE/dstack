@@ -609,7 +609,7 @@ contract DstackKmsTest is Test {
 
     function test_KmsLaunchTicketGatesOnlyTheKeyImport() public {
         IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
-        bytes32 ticket = sha256("dstack-kms-launch-ticket/v1:replica");
+        bytes32 ticket = sha256("dstack-launch-ticket/v1:replica");
         vm.startPrank(owner);
         kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
         kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);

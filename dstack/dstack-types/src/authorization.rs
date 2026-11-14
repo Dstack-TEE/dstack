@@ -24,20 +24,13 @@ impl AuthorizationOperation {
             Self::KmsBootstrap | Self::KmsServe | Self::KmsExportKeys | Self::KmsImportKeys
         )
     }
+}
 
-    /// The `launchTicketHash` of `ticket`: `sha256(domain || ticket)`, with a
-    /// domain per endpoint so that one ticket never admits both an app and a
-    /// KMS instance.
-    ///
-    /// Shell equivalent: `printf 'dstack-launch-ticket/v1:%s' "$TICKET" | sha256sum`.
-    pub fn launch_ticket_hash(self, ticket: &str) -> [u8; 32] {
-        let domain = if self.is_kms() {
-            "dstack-kms-launch-ticket/v1:"
-        } else {
-            "dstack-launch-ticket/v1:"
-        };
-        crate::sha256(format!("{domain}{ticket}").as_bytes())
-    }
+/// The `launchTicketHash` of `ticket`: `sha256("dstack-launch-ticket/v1:" || ticket)`.
+///
+/// Shell equivalent: `printf 'dstack-launch-ticket/v1:%s' "$TICKET" | sha256sum`.
+pub fn launch_ticket_hash(ticket: &str) -> [u8; 32] {
+    crate::sha256(format!("dstack-launch-ticket/v1:{ticket}").as_bytes())
 }
 
 /// Shortest launch ticket a KMS accepts. Its hash is public, so a short ticket
@@ -69,15 +62,10 @@ mod tests {
 
     /// Shared with vmm-cli's tests, which compute the hash the contracts allow.
     #[test]
-    fn launch_ticket_hashes_are_domain_separated() {
-        let ticket = "t".repeat(32);
+    fn launch_ticket_hash_is_domain_separated() {
         assert_eq!(
-            hex::encode(AuthorizationOperation::AppGetCert.launch_ticket_hash(&ticket)),
+            hex::encode(launch_ticket_hash(&"t".repeat(32))),
             "8185a84114cfd5c0fb70e2233dee133cfa6467b58537ece8b27137828baabecc"
-        );
-        assert_eq!(
-            hex::encode(AuthorizationOperation::KmsImportKeys.launch_ticket_hash(&ticket)),
-            "a78c8aebf7e3ba7ead22d3e9e20827a53c89af8e61115a0e8c333b9e27f632ad"
         );
     }
 }

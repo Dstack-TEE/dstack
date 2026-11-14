@@ -307,8 +307,8 @@ fresh ticket per deployment, allow its hash on chain, and deploy with it:
 ./vmm-cli.py deploy ... --launch-ticket-file ./prod.ticket
 ```
 
-`launch-ticket hash FILE` prints the hash of an existing ticket; `--kms` gives the
-hash for a KMS onboarding ticket (`addKmsLaunchTicket`) instead. `update
+`launch-ticket hash FILE` prints the hash of an existing ticket, for
+`addLaunchTicket` or, for a KMS onboarding ticket, `addKmsLaunchTicket`. `update
 --launch-ticket-file FILE` replaces the ticket of a VM and `update
 --no-launch-ticket` removes it. The VMM keeps the ticket and writes it to the
 guest's sys-config at every boot, but never returns it. The host holds the
