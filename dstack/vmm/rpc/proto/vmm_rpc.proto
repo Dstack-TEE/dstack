@@ -43,6 +43,9 @@ message VmInfo {
   // are what it built only while this is true; otherwise they are what the next
   // launch would build.
   bool running = 16;
+  // Hash of the VM's launch ticket, as the app contract allows it; empty when
+  // the VM has none. The ticket itself is never returned.
+  string launch_ticket_hash = 17;
 }
 
 // Runtime status of a resolved VM network interface.

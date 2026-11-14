@@ -261,7 +261,8 @@ const UpdateVmDialogComponent = {
 
         <div class="form-group">
           <label for="upgradeLaunchTicket">Launch Ticket</label>
-          <input id="upgradeLaunchTicket" type="password" autocomplete="off" v-model="dialog.launch_ticket" placeholder="Optional: replace the launch ticket; leave empty to keep it">
+          <input id="upgradeLaunchTicket" type="password" autocomplete="off" v-model="dialog.launch_ticket"
+            :placeholder="dialog.vm?.launch_ticket_hash ? 'Current: ' + dialog.vm.launch_ticket_hash + '; leave empty to keep it' : 'Optional: set a launch ticket'">
         </div>
 
         <div class="dialog-footer">

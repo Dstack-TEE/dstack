@@ -1600,6 +1600,7 @@ class VmmCLI:
         print(f"Uptime:        {info.get('uptime', '-')}")
         print(f"App ID:        {info.get('app_id', '-')}")
         print(f"Instance ID:   {info.get('instance_id', '-') or '-'}")
+        print(f"Launch Ticket: {info.get('launch_ticket_hash') or '-'}")
         print(f"App URL:       {info.get('app_url', '-') or '-'}")
         print(f"Image:         {config.get('image', '-')}")
         print(f"Image Version: {info.get('image_version', '-')}")
@@ -2235,7 +2236,8 @@ def main():
     )
     deploy_parser.add_argument(
         "--launch-ticket-file",
-        help="File holding the launch ticket the guest presents to the KMS",
+        help="File holding the launch ticket the guest presents to the KMS "
+        "(requires dstack-vmm >= 0.6.4)",
     )
     deploy_parser.add_argument(
         "--disk-prealloc",
@@ -2519,7 +2521,8 @@ def main():
     )
     launch_ticket_group = update_parser.add_mutually_exclusive_group()
     launch_ticket_group.add_argument(
-        "--launch-ticket-file", help="Replace the launch ticket with this file's"
+        "--launch-ticket-file",
+        help="Replace the launch ticket with this file's (requires dstack-vmm >= 0.6.4)",
     )
     launch_ticket_group.add_argument(
         "--no-launch-ticket", action="store_true", help="Remove the launch ticket"
