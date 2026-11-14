@@ -23,6 +23,11 @@ struct AuthorizationRequest {
     /// Measurements, device IDs and TCB status are only meaningful per platform,
     /// and one OS image may boot on several.
     string teeVariant;
+    /// The launch ticket the attested subject presented, as
+    /// sha256("dstack-launch-ticket/v1:" || ticket) for app operations and
+    /// sha256("dstack-kms-launch-ticket/v1:" || ticket) for KMS ones; zero when
+    /// it presented none.
+    bytes32 launchTicketHash;
 }
 
 struct AuthorizationResult {

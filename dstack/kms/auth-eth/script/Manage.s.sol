@@ -154,6 +154,33 @@ contract SetKmsTeeVariants is BaseScript {
     }
 }
 
+contract RequireKmsLaunchTicket is BaseScript {
+    function run() external {
+        bool required = vm.envBool("REQUIRE_LAUNCH_TICKET");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        kms.setRequireKmsLaunchTicket(required);
+        console.log("Set requireKmsLaunchTicket to:", required);
+    }
+}
+
+contract AddKmsLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        kms.addKmsLaunchTicket(ticketHash, vm.envString("LAUNCH_TICKET_LABEL"));
+        console.log("Added KMS launch ticket:", vm.toString(ticketHash));
+    }
+}
+
+contract RemoveKmsLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        kms.removeKmsLaunchTicket(ticketHash);
+        console.log("Removed KMS launch ticket:", vm.toString(ticketHash));
+    }
+}
+
 contract SetGatewayAppId is BaseScript {
     function run() external {
         string memory gatewayId = vm.envString("GATEWAY_APP_ID");
@@ -285,6 +312,36 @@ contract SetTeeVariants is BaseScript {
         vm.stopBroadcast();
 
         console.log("Set TEE variants to:", vm.envString("TEE_VARIANTS"));
+    }
+}
+
+contract RequireLaunchTicket is BaseScript {
+    function run() external {
+        bool required = vm.envBool("REQUIRE_LAUNCH_TICKET");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.setRequireLaunchTicket(required);
+        console.log("Set requireLaunchTicket to:", required);
+    }
+}
+
+contract AddLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.addLaunchTicket(ticketHash, vm.envString("LAUNCH_TICKET_LABEL"));
+        console.log("Added launch ticket:", vm.toString(ticketHash));
+    }
+}
+
+contract RemoveLaunchTicket is BaseScript {
+    function run() external {
+        bytes32 ticketHash = vm.envBytes32("LAUNCH_TICKET_HASH");
+        require(address(app) != address(0), "APP_CONTRACT_ADDR not set");
+        vm.broadcast(vm.envUint("PRIVATE_KEY"));
+        app.removeLaunchTicket(ticketHash);
+        console.log("Removed launch ticket:", vm.toString(ticketHash));
     }
 }
 

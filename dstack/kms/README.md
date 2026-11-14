@@ -333,6 +333,38 @@ Self-authorization caches are keyed by operation. Legacy authorization endpoints
 retain their existing semantics for old KMS binaries; fine-grained operation
 policies cannot protect calls still served by those old binaries.
 
+### Launch tickets
+
+A launch ticket stops a party without it from launching an app, or onboarding a
+KMS instance, even on an allowed OS image and device. The CVM presents the
+ticket to the KMS, and the KMS sends its hash as `launchTicketHash`, zero when
+none was presented:
+
+| Endpoint | Hash | Checked for |
+| --- | --- | --- |
+| `authorizeApp` | `sha256("dstack-launch-ticket/v1:" \|\| ticket)` | `app_get_key`, `app_get_cert` |
+| `authorizeKms` | `sha256("dstack-kms-launch-ticket/v1:" \|\| ticket)` | `kms_import_keys` |
+
+Only the key import hands a joining KMS the root keys, so the other KMS
+operations take no ticket. `DstackApp.setRequireLaunchTicket` and
+`DstackKms.setRequireKmsLaunchTicket` turn the check on; `addLaunchTicket` and
+`addKmsLaunchTicket` allow a hash, listed by `launchTickets()` and
+`kmsLaunchTickets()`; their public label is only logged in the added event. The allowlists cover every app and
+root epoch. A required ticket refuses the legacy `isAppAllowed` and
+`isKmsAllowed`, whose callers cannot present one.
+
+The ticket is a bearer secret: the host launching the CVM holds it. Use a fresh
+random ticket per deployment, and remove it once the host stops serving it; a
+KMS ticket is needed only while onboarding, so remove it once the instance has
+joined. A guest sends its ticket before it has authenticated the KMS, so its
+secrecy also rests on the network path between the CVM and the KMS.
+
+App keys are deterministic, so a release before the requirement is set cannot
+be taken back. Deploy the app contract without a compose hash, call
+`setRequireLaunchTicket(true)` and `addLaunchTicket`, and only then add the
+compose hash. Turning the requirement on for a running app leaves its CVMs
+running, but their certificate requests fail until they restart with a ticket.
+
 The response is an `AuthorizationResult`:
 
 ```json

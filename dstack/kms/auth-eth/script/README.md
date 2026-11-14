@@ -62,6 +62,24 @@ KMS_CONTRACT_ADDR=0x... TEE_VARIANTS=dstack-tdx \
 forge script script/Manage.s.sol:SetKmsTeeVariants --broadcast --rpc-url $RPC_URL
 ```
 
+#### Require KMS Launch Tickets
+A KMS instance must then present an allowed launch ticket to import the root keys.
+```bash
+KMS_CONTRACT_ADDR=0x... REQUIRE_LAUNCH_TICKET=true \
+forge script script/Manage.s.sol:RequireKmsLaunchTicket --broadcast --rpc-url $RPC_URL
+```
+
+#### Add or Remove a KMS Launch Ticket
+`LAUNCH_TICKET_HASH` is `sha256("dstack-kms-launch-ticket/v1:" || ticket)`; the
+label is public. Remove the ticket once the instance has joined.
+```bash
+LAUNCH_TICKET_HASH=0x$(printf 'dstack-kms-launch-ticket/v1:%s' "$TICKET" | sha256sum | cut -d' ' -f1)
+KMS_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH LAUNCH_TICKET_LABEL=kms-node-2 \
+forge script script/Manage.s.sol:AddKmsLaunchTicket --broadcast --rpc-url $RPC_URL
+KMS_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH \
+forge script script/Manage.s.sol:RemoveKmsLaunchTicket --broadcast --rpc-url $RPC_URL
+```
+
 #### Set Gateway App ID
 ```bash
 KMS_CONTRACT_ADDR=0x... GATEWAY_APP_ID="my-gateway" \
@@ -186,6 +204,26 @@ Same `TEE_VARIANTS` values as for the KMS; applies to every app epoch.
 ```bash
 KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... TEE_VARIANTS=dstack-tdx,dstack-gcp-tdx \
 forge script script/Manage.s.sol:SetTeeVariants --broadcast --rpc-url $RPC_URL
+```
+
+#### Require Launch Tickets
+The app must then present an allowed launch ticket, at every app epoch. For a new
+app, require the ticket and add it before adding the compose hash: a key released
+in between cannot be taken back.
+```bash
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... REQUIRE_LAUNCH_TICKET=true \
+forge script script/Manage.s.sol:RequireLaunchTicket --broadcast --rpc-url $RPC_URL
+```
+
+#### Add or Remove a Launch Ticket
+`LAUNCH_TICKET_HASH` is `sha256("dstack-launch-ticket/v1:" || ticket)`; the label
+is public.
+```bash
+LAUNCH_TICKET_HASH=0x$(printf 'dstack-launch-ticket/v1:%s' "$TICKET" | sha256sum | cut -d' ' -f1)
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH LAUNCH_TICKET_LABEL=prod \
+forge script script/Manage.s.sol:AddLaunchTicket --broadcast --rpc-url $RPC_URL
+KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... LAUNCH_TICKET_HASH=$LAUNCH_TICKET_HASH \
+forge script script/Manage.s.sol:RemoveLaunchTicket --broadcast --rpc-url $RPC_URL
 ```
 
 #### Remove Compose Hash
