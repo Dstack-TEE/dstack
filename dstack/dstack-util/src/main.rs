@@ -659,6 +659,7 @@ async fn cmd_get_keys(args: GetKeysArgs) -> Result<()> {
             api_version: 1,
             vm_config: String::new(),
             root_epoch: None,
+            launch_ticket: String::new(),
         },
         cert_pair,
         std::sync::Arc::new(ra_tls::attestation::AttestationVerifier::new_prod(None)?),

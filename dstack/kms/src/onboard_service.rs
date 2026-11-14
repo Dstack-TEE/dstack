@@ -171,6 +171,7 @@ impl OnboardRpc for OnboardHandler {
             cfg,
             &source_url,
             &request.source_token,
+            &request.launch_ticket,
             &request.domain,
             request.rotate,
             self.state.attestation_verifier.clone(),
@@ -1068,6 +1069,7 @@ impl Keys {
         cfg: &KmsConfig,
         other_kms_url: &str,
         source_token: &str,
+        launch_ticket: &str,
         domain: &str,
         rotate: bool,
         attestation_verifier: Arc<AttestationVerifier>,
@@ -1117,6 +1119,7 @@ impl Keys {
         let info = dstack_client().info().await.context("Failed to get info")?;
         let request = GetKmsKeyRequest {
             vm_config: info.vm_config,
+            launch_ticket: launch_ticket.to_string(),
         };
         let keys_res = if source_token.is_empty() {
             KmsClient::new(client).get_kms_key(request).await?

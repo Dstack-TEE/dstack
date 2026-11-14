@@ -263,6 +263,12 @@ SPDX-License-Identifier: Apache-2.0
                                         placeholder="Without it, the source needs core.onboard.public_key_handover = true">
                                 </div>
                                 <div class="form-group">
+                                    <label for="launch_ticket">Launch ticket:</label>
+                                    <input type="password" id="launch_ticket" v-model="launchTicket"
+                                        autocomplete="off"
+                                        placeholder="Required when the KMS contract requires a launch ticket">
+                                </div>
+                                <div class="form-group">
                                     <label>
                                         <input type="checkbox" v-model="rotate">
                                         Rotate: import the previous epochs and generate a new root key epoch
@@ -316,6 +322,7 @@ SPDX-License-Identifier: Apache-2.0
                     bootstrapDomain: '',
                     sourceUrl: '',
                     sourceToken: '',
+                    launchTicket: '',
                     onboardDomain: '',
                     rotate: false,
                     error: '',
@@ -399,6 +406,7 @@ SPDX-License-Identifier: Apache-2.0
                         const data = await rpcCall('Onboard', {
                             source_url: this.sourceUrl + "/prpc",
                             source_token: this.sourceToken,
+                            launch_ticket: this.launchTicket.trim(),
                             domain: this.onboardDomain,
                             rotate: this.rotate
                         });

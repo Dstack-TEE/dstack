@@ -44,6 +44,12 @@ pub(crate) fn build_boot_info(
     })
 }
 
+/// The hex `launchTicketHash` of a presented ticket.
+fn launch_ticket_hash(operation: Operation, ticket: &str) -> Result<String> {
+    dstack_types::authorization::check_launch_ticket(ticket).map_err(anyhow::Error::msg)?;
+    Ok(hex::encode(operation.launch_ticket_hash(ticket)))
+}
+
 pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
     if app_id.len() != 20 {
         bail!("app_id must be 20 bytes");
@@ -279,6 +285,7 @@ impl AuthApi {
         app_info: &BootInfo,
         operation: Operation,
         requested_root_epoch: Option<u32>,
+        launch_ticket: &str,
     ) -> Result<AuthorizationResult> {
         if !operation.is_kms() {
             bail!("invalid KMS authorization operation");
@@ -289,6 +296,7 @@ impl AuthApi {
             operation,
             requested_root_epoch,
             None,
+            launch_ticket,
         )
         .await
     }
@@ -299,6 +307,7 @@ impl AuthApi {
         operation: Operation,
         requested_root_epoch: Option<u32>,
         requested_app_epoch: Option<u32>,
+        launch_ticket: &str,
     ) -> Result<AuthorizationResult> {
         if operation.is_kms() {
             bail!("invalid app authorization operation");
@@ -309,6 +318,7 @@ impl AuthApi {
             operation,
             requested_root_epoch,
             requested_app_epoch,
+            launch_ticket,
         )
         .await
     }
@@ -320,6 +330,7 @@ impl AuthApi {
         operation: Operation,
         requested_root_epoch: Option<u32>,
         requested_app_epoch: Option<u32>,
+        launch_ticket: &str,
     ) -> Result<AuthorizationResult> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -331,8 +342,14 @@ impl AuthApi {
             requested_app_epoch: Option<u32>,
             #[serde(skip_serializing_if = "Option::is_none")]
             requested_root_epoch: Option<u32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            launch_ticket_hash: Option<String>,
         }
         ensure_identity_widths(app_info)?;
+        // An empty ticket is none.
+        let launch_ticket_hash = (!launch_ticket.is_empty())
+            .then(|| launch_ticket_hash(operation, launch_ticket))
+            .transpose()?;
         match self {
             AuthApi::Dev { dev } => Ok(AuthorizationResult {
                 authorized: true,
@@ -353,6 +370,7 @@ impl AuthApi {
                         operation,
                         requested_app_epoch,
                         requested_root_epoch,
+                        launch_ticket_hash,
                     },
                     webhook.timeout,
                 )
@@ -486,7 +504,7 @@ pub(crate) async fn ensure_self_kms_allowed(
         .context("failed to build local KMS boot info")?;
     let response = cfg
         .auth_api
-        .authorize_kms(&boot_info, Operation::KmsBootstrap, None)
+        .authorize_kms(&boot_info, Operation::KmsBootstrap, None, "")
         .await
         .context("failed to call KMS bootstrap authorization")?;
     if !response.authorized {
@@ -515,7 +533,7 @@ pub(crate) async fn ensure_kms_allowed(
     ensure_source_os_image(&boot_info)?;
     let response = cfg
         .auth_api
-        .authorize_kms(&boot_info, Operation::KmsExportKeys, Some(root_epoch))
+        .authorize_kms(&boot_info, Operation::KmsExportKeys, Some(root_epoch), "")
         .await
         .context("failed to authorize source KMS key export")?;
     if !response.authorized {
@@ -546,6 +564,7 @@ pub(crate) mod tests {
     use crate::config::Webhook;
     use ra_tls::attestation::TeeVariant;
     use serde_json::Value;
+    use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::thread;
@@ -808,11 +827,11 @@ pub(crate) mod tests {
         let auth = webhook(url);
         for operation in operations {
             if operation.is_kms() {
-                auth.authorize_kms(&boot_info(1), operation, Some(0))
+                auth.authorize_kms(&boot_info(1), operation, Some(0), "")
                     .await
                     .unwrap();
             } else {
-                auth.authorize_app(&boot_info(1), operation, None, None)
+                auth.authorize_app(&boot_info(1), operation, None, None, "")
                     .await
                     .unwrap();
             }
@@ -850,6 +869,38 @@ pub(crate) mod tests {
     }
 
     #[rocket::async_test]
+    async fn launch_tickets_are_sent_as_domain_separated_hashes() {
+        let response = r#"{"authorized":true,"rejectionReason":"","gatewayAppId":"","currentRootEpoch":0,"currentAppEpoch":0,"currentRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000","latestRootEpoch":0,"latestRootEpochHash":"0000000000000000000000000000000000000000000000000000000000000000"}"#;
+        let (url, server) = serve(vec![response; 3]);
+        let auth = webhook(url);
+        let ticket = "t".repeat(32);
+        let info = boot_info(1);
+        auth.authorize_app(&info, Operation::AppGetKey, None, None, &ticket)
+            .await
+            .unwrap();
+        auth.authorize_kms(&info, Operation::KmsImportKeys, Some(0), &ticket)
+            .await
+            .unwrap();
+        auth.authorize_app(&info, Operation::AppGetCert, None, None, "")
+            .await
+            .unwrap();
+        // A short ticket is refused before it reaches the backend.
+        let err = auth
+            .authorize_app(&info, Operation::AppGetKey, None, None, "short")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("32 to 1024 bytes"), "{err:#}");
+
+        let requests = server.join().unwrap();
+        let sent = |i: usize| requests[i].1.get("launchTicketHash").cloned();
+        let expected =
+            |domain: &str| Some(hex::encode(Sha256::digest(format!("{domain}{ticket}"))).into());
+        assert_eq!(sent(0), expected("dstack-launch-ticket/v1:"));
+        assert_eq!(sent(1), expected("dstack-kms-launch-ticket/v1:"));
+        assert_eq!(sent(2), None);
+    }
+
+    #[rocket::async_test]
     async fn authorization_returns_the_epoch_with_each_decision() {
         let response = |allowed: bool, epoch: u32| {
             format!(
@@ -869,11 +920,11 @@ pub(crate) mod tests {
         let auth = webhook(url);
         let info = boot_info(50);
         let first = auth
-            .authorize_app(&info, Operation::AppGetKey, None, None)
+            .authorize_app(&info, Operation::AppGetKey, None, None, "")
             .await
             .unwrap();
         let second = auth
-            .authorize_app(&info, Operation::AppGetKey, None, None)
+            .authorize_app(&info, Operation::AppGetKey, None, None, "")
             .await
             .unwrap();
         assert!(first.authorized);
@@ -882,15 +933,15 @@ pub(crate) mod tests {
         assert_eq!(second.current_root().unwrap().unwrap().epoch, 1);
         let latest = second.latest_root().unwrap().unwrap();
         assert_eq!((latest.epoch, latest.chain_hash), (2, [0x22; 32]));
-        auth.authorize_app(&info, Operation::AppGetKey, Some(0), Some(0))
+        auth.authorize_app(&info, Operation::AppGetKey, Some(0), Some(0), "")
             .await
             .unwrap();
-        auth.authorize_kms(&info, Operation::KmsServe, None)
+        auth.authorize_kms(&info, Operation::KmsServe, None, "")
             .await
             .unwrap();
         assert!(
             !auth
-                .authorize_kms(&info, Operation::KmsImportKeys, Some(2))
+                .authorize_kms(&info, Operation::KmsImportKeys, Some(2), "")
                 .await
                 .unwrap()
                 .authorized
@@ -938,7 +989,7 @@ pub(crate) mod tests {
             r#"{"isAllowed":true,"reason":"","gatewayAppId":"gw"}"#,
         ]);
         assert!(webhook(url)
-            .authorize_app(&boot_info(50), Operation::AppGetKey, None, None)
+            .authorize_app(&boot_info(50), Operation::AppGetKey, None, None, "")
             .await
             .is_err());
         assert_eq!(server.join().unwrap().len(), 1);

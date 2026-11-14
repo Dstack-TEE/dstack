@@ -24,4 +24,42 @@ impl AuthorizationOperation {
             Self::KmsBootstrap | Self::KmsServe | Self::KmsExportKeys | Self::KmsImportKeys
         )
     }
+
+    /// The `launchTicketHash` of `ticket`: `sha256(domain || ticket)`, with a
+    /// domain per endpoint so that one ticket never admits both an app and a
+    /// KMS instance.
+    ///
+    /// Shell equivalent: `printf 'dstack-launch-ticket/v1:%s' "$TICKET" | sha256sum`.
+    pub fn launch_ticket_hash(self, ticket: &str) -> [u8; 32] {
+        let domain = if self.is_kms() {
+            "dstack-kms-launch-ticket/v1:"
+        } else {
+            "dstack-launch-ticket/v1:"
+        };
+        crate::sha256(format!("{domain}{ticket}").as_bytes())
+    }
 }
+
+/// Shortest launch ticket a KMS accepts. Its hash is public, so a short ticket
+/// can be recovered offline; length alone cannot prove entropy, so generate
+/// tickets randomly.
+pub const LAUNCH_TICKET_MIN_LEN: usize = 32;
+/// Longest launch ticket a KMS accepts; sys-config must stay small.
+pub const LAUNCH_TICKET_MAX_LEN: usize = 1024;
+
+/// Refuse a ticket the KMS would refuse. Surrounding whitespace is refused
+/// rather than trimmed: it changes the hash, so a pasted newline would
+/// otherwise fail as an unknown ticket.
+pub fn check_launch_ticket(ticket: &str) -> Result<(), String> {
+    if !(LAUNCH_TICKET_MIN_LEN..=LAUNCH_TICKET_MAX_LEN).contains(&ticket.len()) {
+        return Err(format!(
+            "launch ticket must be {LAUNCH_TICKET_MIN_LEN} to {LAUNCH_TICKET_MAX_LEN} bytes, got {}",
+            ticket.len()
+        ));
+    }
+    if ticket.trim() != ticket {
+        return Err("launch ticket has surrounding whitespace".into());
+    }
+    Ok(())
+}
+

@@ -345,6 +345,10 @@ none was presented:
 | `authorizeApp` | `sha256("dstack-launch-ticket/v1:" \|\| ticket)` | `app_get_key`, `app_get_cert` |
 | `authorizeKms` | `sha256("dstack-kms-launch-ticket/v1:" \|\| ticket)` | `kms_import_keys` |
 
+A CVM reads its ticket from `launch_ticket` in its sys-config and sends it in
+`GetAppKey` and `SignCert`; a joining KMS takes it in the `Onboard` request and
+sends it in `GetKmsKey`. The ticket never enters `vm_config`, which attestations
+embed. Tickets shorter than 32 bytes are refused, since their hash is public.
 Only the key import hands a joining KMS the root keys, so the other KMS
 operations take no ticket. `DstackApp.setRequireLaunchTicket` and
 `DstackKms.setRequireKmsLaunchTicket` turn the check on; `addLaunchTicket` and
