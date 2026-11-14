@@ -2,6 +2,11 @@
 
 > **This guide is for self-hosted deployments** on your own TDX hardware. For cloud deployments, see [Quickstart](./quickstart.md).
 
+> [!WARNING]
+> `dstack-auth` is intended for development, testing and evaluation only. Do not
+> use it to protect production keys; use [auth-eth](../dstack/kms/auth-eth/) or
+> an equivalent production-grade authorization service instead.
+
 `dstack-auth` is the file-based KMS authorization webhook. It allowlists OS
 images, KMS instances and apps in one JSON file. For on-chain governance, use
 [auth-eth](../dstack/kms/auth-eth/) instead
