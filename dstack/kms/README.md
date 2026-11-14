@@ -336,35 +336,57 @@ policies cannot protect calls still served by those old binaries.
 ### Launch tickets
 
 A launch ticket stops a party without it from launching an app, or onboarding a
-KMS instance, even on an allowed OS image and device. The CVM presents the
-ticket to the KMS, and the KMS sends `sha256("dstack-launch-ticket/v1:" || ticket)`
-as `launchTicketHash`, zero when none was presented. `authorizeApp` checks it for
-`app_get_key` and `app_get_cert`; `authorizeKms` checks it for `kms_import_keys`,
-which the source KMS authorizes for the joining instance.
+KMS instance, even on an allowed OS image and device. The KMS sends
+`sha256("dstack-launch-ticket/v1:" || ticket)` as `launchTicketHash`, zero when
+none was presented. `authorizeApp` checks it for `app_get_key` and
+`app_get_cert`; `authorizeKms` checks it for `kms_import_keys`, which the source
+KMS authorizes for the joining instance. Only that import hands a KMS the root
+keys, so the other KMS operations take no ticket.
 
-A CVM reads its ticket from `launch_ticket` in its sys-config and sends it in
-`GetAppKey` and `SignCert`; a joining KMS takes it in the `Onboard` request and
-sends it in `GetKmsKey`. The ticket never enters `vm_config`, which attestations
-embed. Tickets shorter than 32 bytes are refused, since their hash is public.
-Only the key import hands a joining KMS the root keys, so the other KMS
-operations take no ticket. `DstackApp.setRequireLaunchTicket` and
-`DstackKms.setRequireKmsLaunchTicket` turn the check on; `addLaunchTicket` and
-`addKmsLaunchTicket` allow a hash, listed by `launchTickets()` and
-`kmsLaunchTickets()`; their public label is only logged in the added event. The allowlists cover every app and
-root epoch. A required ticket refuses the legacy `isAppAllowed` and
-`isKmsAllowed`, whose callers cannot present one.
+An app CVM reads its ticket from `launch_ticket` in its sys-config, which the
+VMM writes from `--launch-ticket-file`, and sends it in `GetAppKey` and
+`SignCert`. A joining KMS does not read its sys-config: it takes the ticket in
+the `Onboard` request and sends it in `GetKmsKey`, so deploy a KMS CVM without
+`--launch-ticket-file`. The ticket never enters `vm_config`, which attestations
+embed, and the VMM returns only its hash. A ticket must be 32 to 1024 bytes
+without surrounding whitespace, since its hash is public; the CLI and web UIs
+trim it.
+
+`DstackApp.setRequireLaunchTicket` and `DstackKms.setRequireKmsLaunchTicket`
+turn the check on; `addLaunchTicket` and `addKmsLaunchTicket` allow a hash,
+listed by `launchTickets()` and `kmsLaunchTickets()`, with a public label only
+logged in the added event. The allowlists cover every app and root epoch.
+
+Tickets need the VMM, the guest OS, the KMS and the auth backend at 0.6.4 or
+later: an older one drops the ticket, and the request fails as
+`Invalid launch ticket`. A required ticket refuses the legacy `isAppAllowed` and
+`isKmsAllowed`, whose callers cannot present one. Older KMS instances authorize
+serving through `isKmsAllowed`, so upgrade every KMS instance before turning on
+`requireKmsLaunchTicket`, or they stop serving every app.
 
 The ticket is a bearer secret: the host launching the CVM holds it. Use a fresh
-random ticket per deployment, and remove it once the host stops serving it; a
-KMS ticket is needed only while onboarding, so remove it once the instance has
-joined. A guest sends its ticket before it has authenticated the KMS, so its
-secrecy also rests on the network path between the CVM and the KMS.
+random ticket per deployment, and remove its hash, shown by `vmm-cli info`, once
+the host stops serving it; a KMS ticket is needed only while onboarding, so
+remove it once the instance has joined. A guest sends its ticket before it has
+authenticated the KMS, so its secrecy also rests on the network path between
+the CVM and the KMS.
 
 App keys are deterministic, so a release before the requirement is set cannot
-be taken back. Deploy the app contract without a compose hash, call
-`setRequireLaunchTicket(true)` and `addLaunchTicket`, and only then add the
-compose hash. Turning the requirement on for a running app leaves its CVMs
-running, but their certificate requests fail until they restart with a ticket.
+be taken back. Deploy the app contract without a compose hash
+(`INITIAL_COMPOSE_HASH` unset), call `setRequireLaunchTicket(true)` and
+`addLaunchTicket`, and only then add the compose hash. Turning the requirement
+on for a running app leaves its CVMs running, but their certificate requests
+fail until they restart with a ticket.
+
+### Onboarding source pin
+
+Before a joining KMS sends its launch ticket or admin token, it requires the
+source's RPC certificate, at the TLS handshake, to be a `kms:rpc` leaf signed by
+the current root CA. It reads that CA from `rootCaPubkey` in the auth API's
+`GET /` response: the P-256 SubjectPublicKeyInfo DER of the current root epoch's
+CA, hex, optionally `0x`-prefixed. Onboarding therefore needs an auth backend
+reporting it, and an `https://` source URL; upgrade the auth backend before the
+KMS. The `dev` auth API registers no roots and pins nothing.
 
 The response is an `AuthorizationResult`:
 

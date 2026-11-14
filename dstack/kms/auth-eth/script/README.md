@@ -64,6 +64,8 @@ forge script script/Manage.s.sol:SetKmsTeeVariants --broadcast --rpc-url $RPC_UR
 
 #### Require KMS Launch Tickets
 A KMS instance must then present an allowed launch ticket to import the root keys.
+Upgrade every KMS instance to 0.6.4 first: older ones authorize serving through
+`isKmsAllowed`, which then refuses, so they stop serving every app.
 ```bash
 KMS_CONTRACT_ADDR=0x... REQUIRE_LAUNCH_TICKET=true \
 forge script script/Manage.s.sol:RequireKmsLaunchTicket --broadcast --rpc-url $RPC_URL
@@ -208,8 +210,8 @@ forge script script/Manage.s.sol:SetTeeVariants --broadcast --rpc-url $RPC_URL
 
 #### Require Launch Tickets
 The app must then present an allowed launch ticket, at every app epoch. For a new
-app, require the ticket and add it before adding the compose hash: a key released
-in between cannot be taken back.
+app, deploy it without `INITIAL_COMPOSE_HASH`, require the ticket and add it, then
+add the compose hash: a key released in between cannot be taken back.
 ```bash
 KMS_CONTRACT_ADDR=0x... APP_CONTRACT_ADDR=0x... REQUIRE_LAUNCH_TICKET=true \
 forge script script/Manage.s.sol:RequireLaunchTicket --broadcast --rpc-url $RPC_URL

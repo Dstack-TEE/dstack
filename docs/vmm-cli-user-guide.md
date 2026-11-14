@@ -308,12 +308,16 @@ fresh ticket per deployment, allow its hash on chain, and deploy with it:
 ```
 
 `launch-ticket hash FILE` prints the hash of an existing ticket, for
-`addLaunchTicket` or, for a KMS onboarding ticket, `addKmsLaunchTicket`. `update
+`addLaunchTicket` or, for a KMS onboarding ticket, `addKmsLaunchTicket`. A KMS
+takes its ticket in the `Onboard` request rather than from
+`--launch-ticket-file`, so deploy a KMS CVM without it. `update
 --launch-ticket-file FILE` replaces the ticket of a VM and `update
 --no-launch-ticket` removes it. The VMM keeps the ticket and writes it to the
-guest's sys-config at every boot, but never returns it. The host holds the
-ticket, so remove its hash from the contract once that host stops serving the
-app. See [launch tickets](../dstack/kms/README.md#launch-tickets).
+guest's sys-config at every boot; it returns only its hash, which `info` shows.
+The host holds the ticket, so remove that hash from the contract once the host
+stops serving the app. Tickets need dstack-vmm, the guest OS, the KMS and the
+auth backend at 0.6.4 or later. See
+[launch tickets](../dstack/kms/README.md#launch-tickets).
 
 #### Port Mapping
 
