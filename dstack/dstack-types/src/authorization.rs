@@ -63,3 +63,21 @@ pub fn check_launch_ticket(ticket: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shared with vmm-cli's tests, which compute the hash the contracts allow.
+    #[test]
+    fn launch_ticket_hashes_are_domain_separated() {
+        let ticket = "t".repeat(32);
+        assert_eq!(
+            hex::encode(AuthorizationOperation::AppGetCert.launch_ticket_hash(&ticket)),
+            "8185a84114cfd5c0fb70e2233dee133cfa6467b58537ece8b27137828baabecc"
+        );
+        assert_eq!(
+            hex::encode(AuthorizationOperation::KmsImportKeys.launch_ticket_hash(&ticket)),
+            "a78c8aebf7e3ba7ead22d3e9e20827a53c89af8e61115a0e8c333b9e27f632ad"
+        );
+    }
+}

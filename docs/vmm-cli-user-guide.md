@@ -293,6 +293,27 @@ Deploy your application with the compose file:
 - `--kms-url`: KMS server URL
 - `--gateway-url`: Gateway server URL
 - `--stopped`: Create VM in stopped state (requires dstack-vmm >= 0.5.4)
+- `--launch-ticket-file`: File holding the launch ticket the guest presents to the KMS (see below)
+
+#### Launch Tickets
+
+When the app's `DstackApp` contract requires a launch ticket, the KMS releases
+keys only to a CVM presenting a ticket whose hash the contract allows. Create a
+fresh ticket per deployment, allow its hash on chain, and deploy with it:
+
+```bash
+./vmm-cli.py launch-ticket new ./prod.ticket   # writes the ticket (mode 0600), prints its hash
+# addLaunchTicket(<hash>, "prod") on the DstackApp contract, then:
+./vmm-cli.py deploy ... --launch-ticket-file ./prod.ticket
+```
+
+`launch-ticket hash FILE` prints the hash of an existing ticket; `--kms` gives the
+hash for a KMS onboarding ticket (`addKmsLaunchTicket`) instead. `update
+--launch-ticket-file FILE` replaces the ticket of a VM and `update
+--no-launch-ticket` removes it. The VMM keeps the ticket and writes it to the
+guest's sys-config at every boot, but never returns it. The host holds the
+ticket, so remove its hash from the contract once that host stops serving the
+app. See [launch tickets](../dstack/kms/README.md#launch-tickets).
 
 #### Port Mapping
 
