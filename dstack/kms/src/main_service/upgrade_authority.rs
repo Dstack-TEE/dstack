@@ -8,6 +8,7 @@ use anyhow::{bail, Context, Result};
 use dstack_guest_agent_rpc::v0::{
     dstack_guest_client::DstackGuestClient, AttestResponse, RawQuoteArgs,
 };
+use dstack_types::authorization;
 pub(crate) use dstack_types::authorization::AuthorizationOperation as Operation;
 use http_client::prpc::PrpcClient;
 use ra_tls::attestation::{AttestationVerifier, VerifiedAttestation, VersionedAttestation};
@@ -42,13 +43,6 @@ pub(crate) fn build_boot_info(
         tcb_status,
         advisory_ids,
     })
-}
-
-/// The hex `launchTicketHash` of a presented ticket.
-fn launch_ticket_hash(ticket: &str) -> Result<String> {
-    use dstack_types::authorization::{check_launch_ticket, launch_ticket_hash};
-    check_launch_ticket(ticket).map_err(anyhow::Error::msg)?;
-    Ok(hex::encode(launch_ticket_hash(ticket)))
 }
 
 pub(crate) fn ensure_app_id_len(app_id: &[u8]) -> Result<()> {
@@ -348,9 +342,14 @@ impl AuthApi {
         }
         ensure_identity_widths(app_info)?;
         // An empty ticket is none.
-        let launch_ticket_hash = (!launch_ticket.is_empty())
-            .then(|| launch_ticket_hash(launch_ticket))
-            .transpose()?;
+        let launch_ticket_hash = if launch_ticket.is_empty() {
+            None
+        } else {
+            authorization::check_launch_ticket(launch_ticket).map_err(anyhow::Error::msg)?;
+            Some(hex::encode(authorization::launch_ticket_hash(
+                launch_ticket,
+            )))
+        };
         match self {
             AuthApi::Dev { dev } => Ok(AuthorizationResult {
                 authorized: true,

@@ -619,6 +619,27 @@ impl From<&KmsConfig> for KeyReleasePolicy {
     }
 }
 
+/// A missing ticket is denied like an unknown one; say which, since an older
+/// VMM or guest drops the ticket silently.
+fn ensure_ticket_presented(
+    response: &AuthorizationResult,
+    launch_ticket: &str,
+    hint: &str,
+) -> Result<()> {
+    if !response.authorized
+        && launch_ticket.is_empty()
+        && response
+            .rejection_reason
+            .eq_ignore_ascii_case("invalid launch ticket")
+    {
+        bail!(
+            "Authorization denied: {}: no launch ticket was presented; {hint}",
+            response.rejection_reason
+        );
+    }
+    Ok(())
+}
+
 fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) -> Result<()> {
     match boot_info.tee_variant {
         TeeVariant::DstackAmdSevSnp if !policy.snp => {
@@ -691,6 +712,11 @@ impl RpcHandler {
                 launch_ticket,
             )
             .await?;
+        ensure_ticket_presented(
+            &response,
+            launch_ticket,
+            "pass this instance's ticket in the Onboard request",
+        )?;
         self.state.authorized_epoch(&response, None)?;
         self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
             .await?;
@@ -737,6 +763,11 @@ impl RpcHandler {
                 launch_ticket,
             )
             .await?;
+        ensure_ticket_presented(
+            &response,
+            launch_ticket,
+            "check that the VMM and the guest OS are 0.6.4 or later",
+        )?;
         let root_epoch = self.state.authorized_epoch(&response, epochs.root)?;
         let app_epoch = epochs.app.unwrap_or(response.current_app_epoch);
         if app_epoch > response.current_app_epoch {
@@ -1351,6 +1382,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_denial_for_a_missing_ticket_says_none_was_presented() {
+        let denied = |reason: &str| AuthorizationResult {
+            authorized: false,
+            rejection_reason: reason.into(),
+            gateway_app_id: String::new(),
+            current_root_epoch: 0,
+            current_app_epoch: 0,
+            current_root_epoch_hash: String::new(),
+            latest_root_epoch: 0,
+            latest_root_epoch_hash: String::new(),
+        };
+        let err = ensure_ticket_presented(&denied("Invalid launch ticket"), "", "hint")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no launch ticket was presented; hint"),
+            "{err}"
+        );
+        // A presented ticket, or another denial, keeps the backend's reason alone.
+        assert!(ensure_ticket_presented(&denied("invalid launch ticket"), "t", "hint").is_ok());
+        assert!(ensure_ticket_presented(&denied("Compose hash not allowed"), "", "hint").is_ok());
+    }
     #[test]
     fn build_boot_info_for_attestation_binds_aws_nitro_tpm_app_measurement() {
         let (attestation, vm_config, os_image_hash, key_provider_info) =
