@@ -126,7 +126,7 @@ Production KMS requires:
 
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
-| [dstack-auth](./dstack-auth-operations.md) | Config-file-based whitelisting | JSON config file |
+| [dstack-auth](./dstack-auth-operations.md) | Config-file-based whitelisting for development, testing and evaluation only | JSON config file |
 | [auth-eth](../dstack/kms/auth-eth/) | On-chain governance via the `DstackKms`/`DstackApp` contracts in the same directory | Ethereum RPC + contract |
 | Custom | Your own authorization logic | Implement webhook interface |
 

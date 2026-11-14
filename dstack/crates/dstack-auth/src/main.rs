@@ -4,6 +4,8 @@
 
 //! `dstack-auth` — the file-based KMS auth webhook.
 //!
+//! Intended for development, testing and evaluation only; not for production.
+//!
 //! Runs on the host as `dstack-auth.service`; the KMS-in-CVM reaches it at
 //! `http://10.0.2.2:<port>` under user-mode networking and POSTs `BootInfo` to
 //! `/authorizeApp` (compose-hash allowlist) and `/authorizeKms` (mrAggregated
@@ -40,7 +42,7 @@ use std::path::PathBuf;
 #[command(
     name = "dstack-auth",
     version,
-    about = "single-operator KMS auth webhook"
+    about = "single-operator KMS auth webhook (development, testing and evaluation only)"
 )]
 struct Cli {
     /// path to the allowlist JSON (re-read on every request).

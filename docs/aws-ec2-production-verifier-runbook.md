@@ -18,8 +18,9 @@ and endpoint identity.
 - The dstack monorepo sources pinned at the exact release revision, for the
   reproducible rebuild.
 - A dstack verifier built from this repository.
-- The production auth policy backend: `dstack-auth`, auth-eth contracts, or an
-  equivalent verifier-controlled service.
+- The production auth policy backend: auth-eth contracts or an equivalent
+  verifier-controlled service. `dstack-auth` is for development, testing and
+  evaluation only.
 - For public services, the endpoint's RA-TLS certificate.
 
 ## 1. Verify Release Evidence
@@ -209,8 +210,8 @@ For AWS NitroTPM, the policy must require:
   `instance-id`, `key-provider`);
 - a `report_data` challenge for external verifier flows that need liveness.
 
-With `dstack-auth`, the TCB status and advisories are checked only when the
-allowlist sets them, so set both explicitly:
+When evaluating with `dstack-auth`, note that the TCB status and advisories are
+checked only when the allowlist sets them, so set both explicitly:
 
 ```json
 {
