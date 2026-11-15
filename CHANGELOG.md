@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **KMS refuses its old listener settings.** Move `[rpc]`, `[core.admin]`,
   `[core.onboard]` `address`/`port`/`tls`, `[default]` and top-level Rocket
   settings to `[listeners.*]` (see Changed) when upgrading the KMS image.
+- **Gateway refuses its old listener settings.** A hand-written `gateway.toml`
+  must move its top-level listener settings, `[tls]`, `[core.admin]` and
+  `[core.debug]` (see Changed) when upgrading the gateway.
 
 ### Added
 
@@ -33,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses a config that still sets an old location, naming the new one. The
   old `[default]` section was never read; only `ident` moves, so responses now
   carry `Server: DStack KMS` (#1585).
+- **Breaking:** gateway: listener settings move to `[listeners.*]`:
+  `[listeners.default]` (Rocket settings and `proxy_protocol`, was the top
+  level, now inherited by the admin and debug listeners too),
+  `[listeners.guest]` (`address`, `tls`, was the top level), `[listeners.admin]`
+  (was `[core.admin]`) and `[listeners.debug]` (`enabled`, was `[core.debug]
+  insecure_enable_debug_rpc`). `insecure_localhost_backend` moves to
+  `[core.proxy]`. The gateway refuses a config that still sets an old location,
+  naming the new one; the gateway image's entrypoint writes the new one (#1587).
 
 ## [0.6.4] - 2026-11-12
 

@@ -32,7 +32,7 @@ The base domain is not set here: it is the ZT domain you add in Step 3.
 Two more sections matter for certificates:
 
 ```toml
-[core.admin]
+[listeners.admin]
 enabled = true
 address = "127.0.0.1:9016"
 auth_token = "<paste output of: openssl rand -hex 32>"
@@ -55,7 +55,7 @@ Start the gateway.
 
 ## Step 3: Give the gateway its ACME configuration
 
-Open the admin dashboard at `http://<core.admin.address>` and fill in **Certbot
+Open the admin dashboard at `http://<listeners.admin.address>` and fill in **Certbot
 Configuration**, **DNS Credentials** and **ZT-Domains**, or do the same over the
 admin API:
 
@@ -150,10 +150,10 @@ Note: The `s` and `g` suffixes cannot be used together
 
 ## Admin API authentication
 
-The gateway exposes a separate admin API (used for sync, WireGuard peer management, and other operator RPCs). Configure it in the `core.admin` section of `gateway.toml`:
+The gateway exposes a separate admin API (used for sync, WireGuard peer management, and other operator RPCs). Configure it in the `listeners.admin` section of `gateway.toml`:
 
 ```toml
-[core.admin]
+[listeners.admin]
 enabled = true
 address = "0.0.0.0:9016"
 # generate with: openssl rand -hex 32
@@ -176,20 +176,22 @@ Clients authenticate by sending `Authorization: Bearer <token>` or the `X-Admin-
 ## PROXY protocol on the gateway's own listeners
 
 Behind a TCP proxy such as HAProxy, the gateway's RPC and admin listeners see
-the proxy's address. Set `proxy_protocol = true` at the top level of
-`gateway.toml` (RPC listener), in `[core.admin]` or in `[core.debug]` to read
-the client address from a PROXY protocol (v1 or v2) header; the RPC request logs
-then carry it as `remote`. With it on, the listener drops connections that send
+the proxy's address. Set `proxy_protocol = true` in `[listeners.default]`, or in
+one listener's section (`[listeners.guest]`, `[listeners.admin]`,
+`[listeners.debug]`), to read the client address from a PROXY protocol (v1 or
+v2) header; the RPC request logs then carry it as `remote`. With it on, the listener drops connections that send
 no header within five seconds, and trusts the header as sent, so make it
 reachable only through the proxy (HAProxy `send-proxy-v2`, plus
 `check-send-proxy` for health checks). This is separate from
 `[core.proxy] inbound_pp_enabled`, which covers the app traffic the gateway
-proxies.
+proxies. It works on TCP listeners only: a listener bound to a Unix socket
+(`address = "unix:..."`) fails to start with it, so set `proxy_protocol = false`
+in that listener's section when `[listeners.default]` turns it on.
 
 ## Metrics
 
 The admin server exposes Prometheus metrics at `GET /metrics`. It is part of the
-admin API, so it is only reachable when `core.admin.enabled` is true and it
+admin API, so it is only reachable when `listeners.admin.enabled` is true and it
 requires the same credentials — unless `insecure_no_auth` is set, which exposes
 it along with the rest of the admin API. The series name domains, node ids and
 instance counts, which is topology that should not be readable without
@@ -199,7 +201,7 @@ authentication.
 scrape_configs:
   - job_name: dstack-gateway
     static_configs:
-      - targets: ["<core.admin.address>"]
+      - targets: ["<listeners.admin.address>"]
     authorization:
       credentials: "<the admin token>"
 ```

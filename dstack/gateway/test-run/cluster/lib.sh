@@ -69,14 +69,17 @@ generate_config() {
     local dir="$CONFIG_DIR/${CURRENT_TEST:-suite}/node${node_id}"
     mkdir -p "$dir"
     cat >"$dir/gateway.toml" <<EOF
+[listeners.default]
 log_level = "info"
+
+[listeners.guest]
 address = "0.0.0.0:9012"
 
-[tls]
+[listeners.guest.tls]
 key = "/var/lib/gateway/certs/gateway-rpc.key"
 certs = "/var/lib/gateway/certs/gateway-rpc.cert"
 
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "/var/lib/gateway/certs/gateway-ca.cert"
 mandatory = false
 
@@ -87,12 +90,12 @@ mandatory = false
 # with attestation on rather than switched off.
 rpc_domain = "gateway-${node_id}"
 
-[core.debug]
+[listeners.debug]
 # TEST ONLY - do not use in production; enables debug RPC
-insecure_enable_debug_rpc = true
+enabled = true
 address = "0.0.0.0:9015"
 
-[core.admin]
+[listeners.admin]
 enabled = true
 address = "0.0.0.0:9016"
 # TEST ONLY - do not use in production; disables admin API authentication

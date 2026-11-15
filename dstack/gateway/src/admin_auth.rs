@@ -35,8 +35,8 @@ impl AdminAuthFairing {
         if token.is_empty() && config.htpasswd_file.as_os_str().is_empty() {
             bail!(
                 "admin API is enabled but neither auth_token nor htpasswd_file is configured; \
-                 set core.admin.auth_token, {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, \
-                 core.admin.htpasswd_file, or insecure_no_auth = true (testing only)"
+                 set listeners.admin.auth_token, {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, \
+                 listeners.admin.htpasswd_file, or insecure_no_auth = true (testing only)"
             );
         }
         let mut auth = Authenticator::from_tokens([token]);

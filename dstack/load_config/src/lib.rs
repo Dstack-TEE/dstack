@@ -8,6 +8,9 @@ use figment::{
 };
 use tracing::info;
 
+mod listeners;
+pub use listeners::{listener_figment, reject_moved_settings};
+
 trait MaybeNested {
     fn maybe_nested(self, nested: bool) -> Self;
 }
