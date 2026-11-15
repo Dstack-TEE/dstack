@@ -512,23 +512,63 @@ impl RpcHandler {
         cached: bool,
     ) {
         self.state.metrics().record_key_release(release);
-        let instance_id = match &boot_info.instance_id[..] {
-            [] => "UNKNOWN".to_string(),
-            id => hex::encode(id),
-        };
         let (listener, operation) = release.labels();
         info!(
             target: "dstack_kms::audit",
             listener,
             operation,
             app_id = %hex::encode(&boot_info.app_id),
-            instance_id = %instance_id,
+            instance_id = %instance_id_text(boot_info),
             remote = ?self.remote_endpoint,
             requested_epoch = requested,
             returned_epoch = returned,
             cached,
             "key release"
         );
+    }
+
+    /// Log a key request refused after the caller was identified.
+    fn audit_denial<T>(
+        &self,
+        release: KeyRelease,
+        boot_info: &BootInfo,
+        result: Result<T>,
+    ) -> Result<T> {
+        if let Err(err) = &result {
+            let (listener, operation) = release.labels();
+            warn!(
+                target: "dstack_kms::audit",
+                listener,
+                operation,
+                app_id = %hex::encode(&boot_info.app_id),
+                instance_id = %instance_id_text(boot_info),
+                remote = ?self.remote_endpoint,
+                error = %ra_rpc::log_text(&format_args!("{err:#}")),
+                "key release denied"
+            );
+        }
+        result
+    }
+
+    fn audit_env_pubkey<T>(&self, operation: &str, app_id: &[u8], result: &Result<T>) {
+        let app_id = tracing::field::display(hex::encode(app_id));
+        match result {
+            Ok(_) => info!(
+                target: "dstack_kms::audit",
+                operation,
+                app_id,
+                remote = ?self.remote_endpoint,
+                "env public key served"
+            ),
+            Err(err) => warn!(
+                target: "dstack_kms::audit",
+                operation,
+                app_id,
+                remote = ?self.remote_endpoint,
+                error = %ra_rpc::log_text(&format_args!("{err:#}")),
+                "env public key refused"
+            ),
+        }
     }
 
     fn self_allowed_cached(&self, operation: Operation) -> bool {
@@ -541,15 +581,19 @@ impl RpcHandler {
         request: GetKmsKeyRequest,
     ) -> Result<KmsKeyResponse> {
         // reject anonymous callers before the self check reaches the backend
-        self.ensure_attested()?;
+        let att = self.ensure_attested()?;
         let cached = self.self_allowed_cached(Operation::KmsExportKeys);
         self.ensure_self_allowed(Operation::KmsExportKeys)
             .await
             .context("KMS self authorization failed")?;
-        let info = self
-            .ensure_kms_allowed(&request.vm_config, &request.launch_ticket)
-            .await?;
-        ensure_key_release_allowed(&info, (&self.state.config).into())?;
+        let info = build_boot_info_for_attestation(att, false, &request.vm_config)?;
+        let result = async {
+            self.ensure_kms_allowed(att, &info, &request.vm_config, &request.launch_ticket)
+                .await?;
+            ensure_key_release_allowed(&info, (&self.state.config).into())
+        }
+        .await;
+        self.audit_denial(release, &info, result)?;
         let returned = format!("root 0..={}", self.state.keyring.latest());
         self.audit_key_release(release, &info, "all", &returned, cached);
         Ok(KmsKeyResponse {
@@ -596,6 +640,13 @@ pub(crate) fn build_boot_info_for_attestation(
     };
     ensure_app_id_len(&boot_info.app_id)?;
     Ok(boot_info)
+}
+
+fn instance_id_text(boot_info: &BootInfo) -> String {
+    match &boot_info.instance_id[..] {
+        [] => "UNKNOWN".to_string(),
+        id => hex::encode(id),
+    }
 }
 
 /// The per-platform local key-release opt-ins, read from `KmsConfig`.
@@ -697,16 +748,20 @@ impl RpcHandler {
         Ok(attestation)
     }
 
-    async fn ensure_kms_allowed(&self, vm_config: &str, launch_ticket: &str) -> Result<BootInfo> {
-        let att = self.ensure_attested()?;
-        let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
+    async fn ensure_kms_allowed(
+        &self,
+        att: &VerifiedAttestation,
+        boot_info: &BootInfo,
+        vm_config: &str,
+        launch_ticket: &str,
+    ) -> Result<()> {
         // Handover approval covers the highest exported epoch and all older roots.
         let response = self
             .state
             .config
             .auth_api
             .authorize_kms(
-                &boot_info,
+                boot_info,
                 Operation::KmsImportKeys,
                 Some(self.state.keyring.latest()),
                 launch_ticket,
@@ -718,28 +773,8 @@ impl RpcHandler {
             "pass this instance's ticket in the Onboard request",
         )?;
         self.state.authorized_epoch(&response, None)?;
-        self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
-            .await?;
-        Ok(boot_info)
-    }
-
-    async fn ensure_app_boot_allowed(
-        &self,
-        vm_config: &str,
-        launch_ticket: &str,
-        epochs: RequestedAppEpochs,
-    ) -> Result<BootConfig> {
-        let att = self.ensure_attested()?;
-        let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
-        self.ensure_app_attestation_allowed(
-            att,
-            boot_info,
-            vm_config,
-            launch_ticket,
-            Operation::AppGetKey,
-            epochs,
-        )
-        .await
+        self.ensure_attestation_policy(att, vm_config, boot_info, &response)
+            .await
     }
 
     async fn ensure_app_attestation_allowed(
@@ -833,138 +868,156 @@ impl KmsRpc for RpcHandler {
             bail!("Unsupported API version: {}", request.api_version);
         }
         // reject anonymous callers before the self check reaches the backend
-        self.ensure_attested()?;
+        let att = self.ensure_attested()?;
         let cached = self.self_allowed_cached(Operation::KmsServe);
         self.ensure_self_allowed(Operation::KmsServe)
             .await
             .context("KMS self authorization failed")?;
-        let BootConfig {
-            boot_info,
-            gateway_app_id,
-            root_epoch,
-            app_epoch,
-        } = self
-            .ensure_app_boot_allowed(
-                &request.vm_config,
-                &request.launch_ticket,
-                RequestedAppEpochs {
-                    root: request.root_epoch,
-                    app: request.app_epoch,
-                },
-            )
-            .await
-            .context("App not allowed")?;
-        ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
-        let root = self.state.epoch_root(root_epoch)?;
-        let keys = derive_app_keys(root, &boot_info.app_id, &boot_info.instance_id, app_epoch)?;
-        let epoch = |epoch: Option<u32>| epoch.map_or("current".into(), |e| e.to_string());
-        self.audit_key_release(
-            KeyRelease::AppKey,
-            &boot_info,
-            &format!(
-                "root {} app {}",
-                epoch(request.root_epoch),
-                epoch(request.app_epoch)
-            ),
-            &format!("root {root_epoch} app {app_epoch}"),
-            cached,
-        );
+        let boot_info = build_boot_info_for_attestation(att, false, &request.vm_config)?;
+        let result = async {
+            let BootConfig {
+                boot_info,
+                gateway_app_id,
+                root_epoch,
+                app_epoch,
+            } = self
+                .ensure_app_attestation_allowed(
+                    att,
+                    boot_info.clone(),
+                    &request.vm_config,
+                    &request.launch_ticket,
+                    Operation::AppGetKey,
+                    RequestedAppEpochs {
+                        root: request.root_epoch,
+                        app: request.app_epoch,
+                    },
+                )
+                .await
+                .context("App not allowed")?;
+            ensure_key_release_allowed(&boot_info, (&self.state.config).into())?;
+            let root = self.state.epoch_root(root_epoch)?;
+            let keys = derive_app_keys(root, &boot_info.app_id, &boot_info.instance_id, app_epoch)?;
+            let epoch = |epoch: Option<u32>| epoch.map_or("current".into(), |e| e.to_string());
+            self.audit_key_release(
+                KeyRelease::AppKey,
+                &boot_info,
+                &format!(
+                    "root {} app {}",
+                    epoch(request.root_epoch),
+                    epoch(request.app_epoch)
+                ),
+                &format!("root {root_epoch} app {app_epoch}"),
+                cached,
+            );
 
-        Ok(AppKeyResponse {
-            ca_cert: root.ca.pem_cert.clone(),
-            disk_crypt_key: keys.disk_crypt_key,
-            env_crypt_key: keys.env_crypt_key,
-            k256_key: keys.k256_key,
-            k256_signature: keys.k256_signature,
-            tproxy_app_id: gateway_app_id.clone(),
-            gateway_app_id,
-            os_image_hash: boot_info.os_image_hash,
-            root_epoch,
-            sealed_env_key: keys.sealed_env_key,
-            app_epoch,
-        })
+            Ok(AppKeyResponse {
+                ca_cert: root.ca.pem_cert.clone(),
+                disk_crypt_key: keys.disk_crypt_key,
+                env_crypt_key: keys.env_crypt_key,
+                k256_key: keys.k256_key,
+                k256_signature: keys.k256_signature,
+                tproxy_app_id: gateway_app_id.clone(),
+                gateway_app_id,
+                os_image_hash: boot_info.os_image_hash,
+                root_epoch,
+                sealed_env_key: keys.sealed_env_key,
+                app_epoch,
+            })
+        }
+        .await;
+        self.audit_denial(KeyRelease::AppKey, &boot_info, result)
     }
 
     async fn get_app_env_encrypt_pub_key(self, request: AppId) -> Result<PublicKeyResponse> {
-        let epoch = self
-            .ensure_self_allowed(Operation::KmsServe)
-            .await
-            .context("KMS self authorization failed")?;
-        let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let app_epoch = self.state.app_epoch(&request.app_id).await?;
-        if app_epoch != 0 {
-            bail!("epoch-aware applications must use GetSealedEnvPubKey");
+        let result = async {
+            let epoch = self
+                .ensure_self_allowed(Operation::KmsServe)
+                .await
+                .context("KMS self authorization failed")?;
+            let root = self.state.epoch_root(epoch)?;
+            let app_epoch = self.state.app_epoch(&request.app_id).await?;
+            if app_epoch != 0 {
+                bail!("epoch-aware applications must use GetSealedEnvPubKey");
+            }
+            let secret =
+                kdf::derive_dh_secret(&root.ca.key, &[&request.app_id[..], b"env-encrypt-key"])
+                    .context("Failed to derive env encrypt key")?;
+            let secret = x25519_dalek::StaticSecret::from(secret);
+            let pubkey = x25519_dalek::PublicKey::from(&secret);
+
+            let public_key = pubkey.to_bytes().to_vec();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .context("System time before UNIX epoch")?
+                .as_secs();
+
+            // Legacy signature (without timestamp) for backward compatibility
+            let signature = sign_message(
+                &root.k256,
+                b"dstack-env-encrypt-pubkey",
+                &request.app_id,
+                &public_key,
+            )
+            .context("Failed to sign the public key")?;
+
+            // New signature with timestamp to prevent replay attacks
+            let signature_v1 = sign_message_with_timestamp(
+                &root.k256,
+                b"dstack-env-encrypt-pubkey",
+                &request.app_id,
+                timestamp,
+                &public_key,
+            )
+            .context("Failed to sign the public key with timestamp")?;
+
+            Ok(PublicKeyResponse {
+                public_key,
+                signature,
+                timestamp,
+                signature_v1,
+            })
         }
-        let secret =
-            kdf::derive_dh_secret(&root.ca.key, &[&request.app_id[..], b"env-encrypt-key"])
-                .context("Failed to derive env encrypt key")?;
-        let secret = x25519_dalek::StaticSecret::from(secret);
-        let pubkey = x25519_dalek::PublicKey::from(&secret);
-
-        let public_key = pubkey.to_bytes().to_vec();
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .context("System time before UNIX epoch")?
-            .as_secs();
-
-        // Legacy signature (without timestamp) for backward compatibility
-        let signature = sign_message(
-            &root.k256,
-            b"dstack-env-encrypt-pubkey",
-            &request.app_id,
-            &public_key,
-        )
-        .context("Failed to sign the public key")?;
-
-        // New signature with timestamp to prevent replay attacks
-        let signature_v1 = sign_message_with_timestamp(
-            &root.k256,
-            b"dstack-env-encrypt-pubkey",
-            &request.app_id,
-            timestamp,
-            &public_key,
-        )
-        .context("Failed to sign the public key with timestamp")?;
-
-        Ok(PublicKeyResponse {
-            public_key,
-            signature,
-            timestamp,
-            signature_v1,
-        })
+        .await;
+        self.audit_env_pubkey("app_env_encrypt_pubkey", &request.app_id, &result);
+        result
     }
 
     async fn get_sealed_env_pub_key(self, request: AppId) -> Result<SealedEnvPubKeyResponse> {
-        let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
-        let root = self.state.epoch_root(epoch)?;
         ensure_app_id_len(&request.app_id)?;
-        let app_epoch = self.state.app_epoch(&request.app_id).await?;
-        let secret = derive_sealed_env_key(root, &request.app_id, app_epoch)?;
-        let public_key =
-            x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .context("system time before UNIX epoch")?
-            .as_secs();
-        let mut message = Vec::with_capacity(8 + 32 + 8);
-        message.extend_from_slice(&epoch.to_be_bytes());
-        message.extend_from_slice(&app_epoch.to_be_bytes());
-        message.extend_from_slice(&public_key);
-        message.extend_from_slice(&timestamp.to_be_bytes());
-        let signature = sign_message(
-            &root.k256,
-            b"dstack-sealed-env-pubkey-v1",
-            &request.app_id,
-            &message,
-        )?;
-        Ok(SealedEnvPubKeyResponse {
-            public_key: public_key.to_vec(),
-            root_epoch: epoch,
-            app_epoch,
-            timestamp,
-            signature,
-        })
+        let result = async {
+            let epoch = self.ensure_self_allowed(Operation::KmsServe).await?;
+            let root = self.state.epoch_root(epoch)?;
+            let app_epoch = self.state.app_epoch(&request.app_id).await?;
+            let secret = derive_sealed_env_key(root, &request.app_id, app_epoch)?;
+            let public_key =
+                x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(secret)).to_bytes();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .context("system time before UNIX epoch")?
+                .as_secs();
+            let mut message = Vec::with_capacity(8 + 32 + 8);
+            message.extend_from_slice(&epoch.to_be_bytes());
+            message.extend_from_slice(&app_epoch.to_be_bytes());
+            message.extend_from_slice(&public_key);
+            message.extend_from_slice(&timestamp.to_be_bytes());
+            let signature = sign_message(
+                &root.k256,
+                b"dstack-sealed-env-pubkey-v1",
+                &request.app_id,
+                &message,
+            )?;
+            Ok(SealedEnvPubKeyResponse {
+                public_key: public_key.to_vec(),
+                root_epoch: epoch,
+                app_epoch,
+                timestamp,
+                signature,
+            })
+        }
+        .await;
+        self.audit_env_pubkey("app_sealed_env_pubkey", &request.app_id, &result);
+        result
     }
 
     async fn get_meta(self) -> Result<GetMetaResponse> {
@@ -1051,41 +1104,46 @@ impl KmsRpc for RpcHandler {
             .await
             .context("Quote verification failed")?;
         let boot_info = build_boot_info_for_attestation(&attestation, true, &request.vm_config)?;
-        let app_info = self
-            .ensure_app_attestation_allowed(
-                &attestation,
-                boot_info,
-                &request.vm_config,
-                &request.launch_ticket,
-                Operation::AppGetCert,
-                RequestedAppEpochs::default(),
-            )
-            .await?;
-        ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
-        let root = self.state.epoch_root(app_info.root_epoch)?;
-        let app_ca = self.derive_app_ca(&app_info.boot_info.app_id, root, app_info.app_epoch)?;
-        // Stamp the identity verified above, not the requester's own claims.
-        // Runtime measurements (`false`) are what certificates have always carried.
-        let cert_app_info = attestation
-            .decode_app_info_ex(false, &request.vm_config)
-            .context("Failed to decode the verified app info")?;
-        let cert = app_ca
-            .sign_csr(&csr, Some(&cert_app_info), "app:custom")
-            .context("Failed to sign certificate")?;
-        self.audit_key_release(
-            KeyRelease::AppCert,
-            &app_info.boot_info,
-            "current",
-            &format!("root {} app {}", app_info.root_epoch, app_info.app_epoch),
-            cached,
-        );
-        Ok(SignCertResponse {
-            certificate_chain: vec![
-                cert.pem(),
-                app_ca.pem_cert.clone(),
-                root.ca.pem_cert.clone(),
-            ],
-        })
+        let result = async {
+            let app_info = self
+                .ensure_app_attestation_allowed(
+                    &attestation,
+                    boot_info.clone(),
+                    &request.vm_config,
+                    &request.launch_ticket,
+                    Operation::AppGetCert,
+                    RequestedAppEpochs::default(),
+                )
+                .await?;
+            ensure_key_release_allowed(&app_info.boot_info, (&self.state.config).into())?;
+            let root = self.state.epoch_root(app_info.root_epoch)?;
+            let app_ca =
+                self.derive_app_ca(&app_info.boot_info.app_id, root, app_info.app_epoch)?;
+            // Stamp the identity verified above, not the requester's own claims.
+            // Runtime measurements (`false`) are what certificates have always carried.
+            let cert_app_info = attestation
+                .decode_app_info_ex(false, &request.vm_config)
+                .context("Failed to decode the verified app info")?;
+            let cert = app_ca
+                .sign_csr(&csr, Some(&cert_app_info), "app:custom")
+                .context("Failed to sign certificate")?;
+            self.audit_key_release(
+                KeyRelease::AppCert,
+                &app_info.boot_info,
+                "current",
+                &format!("root {} app {}", app_info.root_epoch, app_info.app_epoch),
+                cached,
+            );
+            Ok(SignCertResponse {
+                certificate_chain: vec![
+                    cert.pem(),
+                    app_ca.pem_cert.clone(),
+                    root.ca.pem_cert.clone(),
+                ],
+            })
+        }
+        .await;
+        self.audit_denial(KeyRelease::AppCert, &boot_info, result)
     }
 }
 
