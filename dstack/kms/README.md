@@ -49,7 +49,8 @@ default `tls`, nor support `proxy_protocol`.
 
 KMS 0.6.4 and earlier read these settings from `[rpc]` (now `guest`),
 `[core.admin]` (now `admin`, credentials included), `[core.onboard]`
-(`address`, `port`, `tls`) and the top-level `[default]`. The KMS refuses to
+(`address`, `port`, `tls`), and Rocket settings at the top level of the file
+(now in `[listeners.default]`). The KMS refuses to
 start on a config that still sets any of them, naming where each moved, so
 update the config together with the KMS image.
 

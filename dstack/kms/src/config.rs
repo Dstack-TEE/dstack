@@ -5,7 +5,7 @@
 use anyhow::{bail, Result};
 use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
-use rocket::figment::{providers::Serialized, Figment};
+use rocket::figment::{providers::Serialized, Figment, Profile, Provider, Source};
 use serde::Deserialize;
 use std::{path::PathBuf, time::Duration};
 pub const DEFAULT_CONFIG: &str = include_str!("../kms.toml");
@@ -17,22 +17,39 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
 /// Settings that moved to `[listeners.*]`. The defaults (`kms.toml`) have none
 /// of them, so one present was set by the operator and would otherwise be
 /// silently ignored.
-const MOVED_SETTINGS: [(&str, &str); 6] = [
+const MOVED_SETTINGS: [(&str, &str); 7] = [
     ("rpc", "listeners.guest"),
     ("core.admin", "listeners.admin"),
+    ("core.readonly", "listeners.public"),
     ("core.onboard.address", "listeners.onboard.address"),
     ("core.onboard.port", "listeners.onboard.port"),
     ("core.onboard.tls", "listeners.onboard.tls"),
     ("default", "listeners.default"),
 ];
 
-/// Refuse a config that sets a moved setting.
+/// Refuse a config that sets a moved setting, including a Rocket setting at the
+/// top level of a config file, which the old guest and onboard listeners read.
 pub(crate) fn reject_moved_settings(figment: &Figment) -> Result<()> {
-    let moved: Vec<String> = MOVED_SETTINGS
+    let mut moved: Vec<String> = MOVED_SETTINGS
         .iter()
         .filter(|(old, _)| figment.find_value(old).is_ok())
         .map(|(old, new)| format!("{old} -> {new}"))
         .collect();
+    let top_level = figment
+        .data()?
+        .remove(&Profile::Default)
+        .unwrap_or_default();
+    moved.extend(
+        top_level
+            .keys()
+            .filter(|key| !["core", "listeners", "rpc", "default"].contains(&key.as_str()))
+            .filter(|key| {
+                figment
+                    .find_metadata(key)
+                    .is_some_and(|meta| matches!(meta.source, Some(Source::File(_))))
+            })
+            .map(|key| format!("{key} -> listeners.default.{key}")),
+    );
     if !moved.is_empty() {
         bail!(
             "the config sets listener settings at their old locations; move them: {}",
@@ -399,11 +416,29 @@ mod tests {
             ),
             ("[core.onboard]\nport = 9102\n", "core.onboard.port -> "),
             ("[default]\nworkers = 8\n", "default -> listeners.default"),
+            (
+                "[core.readonly]\nenabled = true\n",
+                "core.readonly -> listeners.public",
+            ),
         ] {
             let figment = load_config_figment(None).merge(Toml::string(toml));
             let err = reject_moved_settings(&figment).unwrap_err().to_string();
             assert!(err.contains(old), "{err}");
         }
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("kms.toml");
+        fs_err::write(
+            &file,
+            "log_level = \"debug\"\n[core.onboard]\nenabled = false\n",
+        )
+        .unwrap();
+        let err = reject_moved_settings(&load_config_figment(file.to_str()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("log_level -> listeners.default.log_level"),
+            "{err}"
+        );
         let onboarding = "[core.onboard]\nenabled = false\n";
         reject_moved_settings(&load_config_figment(None).merge(Toml::string(onboarding)))
             .expect("onboarding options stay in core");
