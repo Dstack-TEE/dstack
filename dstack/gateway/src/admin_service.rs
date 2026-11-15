@@ -776,7 +776,7 @@ impl AdminRpc for AdminRpcHandler {
     async fn force_release_cert_lock(self, request: ForceReleaseCertLockRequest) -> Result<()> {
         let subject = format!("domain {}", request.domain);
         let result = async {
-            let domain = force_release_zt_domain_cert_lock(self.state.kv_store(), &request.domain)?;
+            force_release_zt_domain_cert_lock(self.state.kv_store(), &request.domain)?;
             Ok(())
         }
         .await;
