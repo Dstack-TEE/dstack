@@ -130,6 +130,10 @@ impl AdminRpcHandler {
 impl AdminRpc for AdminRpcHandler {
     async fn exit(self, request: ExitRequest) -> Result<()> {
         let subject = format!("force={}", request.force);
+        if request.force {
+            // A forced exit never returns, so record it before it happens.
+            self.audit("exit", &subject, Ok(()))?;
+        }
         let result = async { self.state.lock().exit(request.force) }.await;
         self.audit("exit", &subject, result)
     }
@@ -487,7 +491,11 @@ impl AdminRpc for AdminRpcHandler {
         self,
         request: CreateDnsCredentialRequest,
     ) -> Result<DnsCredentialInfo> {
-        let subject = format!("name {} provider {}", request.name, request.provider_type);
+        let id = generate_cred_id();
+        let subject = format!(
+            "id {id} name {} provider {}",
+            request.name, request.provider_type
+        );
         let result = async {
             let kv_store = self.state.kv_store();
 
@@ -501,7 +509,6 @@ impl AdminRpc for AdminRpcHandler {
             };
 
             let now = now_secs();
-            let id = generate_cred_id();
             let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
             let max_dns_wait_secs = request.max_dns_wait.unwrap_or(60 * 5);
             if dns_txt_ttl == 0 {
@@ -525,7 +532,9 @@ impl AdminRpc for AdminRpcHandler {
 
             // Set as default if requested
             if request.set_as_default {
-                kv_store.set_default_dns_credential_id(&id)?;
+                kv_store
+                    .set_default_dns_credential_id(&id)
+                    .context("created the credential but failed to set it as default")?;
                 info!("Set DNS credential {} as default", id);
             }
 
@@ -673,7 +682,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn add_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
-        let subject = format!("domain {}", request.domain);
+        let subject = domain_subject(&request.domain);
         let result = async {
             let kv_store = self.state.kv_store();
             let cert_resolver = &self.state.cert_resolver;
@@ -697,7 +706,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn update_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
-        let subject = format!("domain {}", request.domain);
+        let subject = domain_subject(&request.domain);
         let result = async {
             let kv_store = self.state.kv_store();
             let cert_resolver = &self.state.cert_resolver;
@@ -722,7 +731,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
-        let subject = format!("domain {}", request.domain);
+        let subject = domain_subject(&request.domain);
         let result = async {
             let kv_store = self.state.kv_store();
 
@@ -747,7 +756,11 @@ impl AdminRpc for AdminRpcHandler {
         self,
         request: RenewZtDomainCertRequest,
     ) -> Result<RenewZtDomainCertResponse> {
-        let subject = format!("domain {} force {}", request.domain, request.force);
+        let subject = format!(
+            "{} force {}",
+            domain_subject(&request.domain),
+            request.force
+        );
         let result = async {
             let domain = normalize_zt_domain(&request.domain)?;
             let certbot = &self.state.certbot;
@@ -774,7 +787,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn force_release_cert_lock(self, request: ForceReleaseCertLockRequest) -> Result<()> {
-        let subject = format!("domain {}", request.domain);
+        let subject = domain_subject(&request.domain);
         let result = async {
             force_release_zt_domain_cert_lock(self.state.kv_store(), &request.domain)?;
             Ok(())
@@ -821,7 +834,7 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn import_cert(self, request: ImportCertRequest) -> Result<()> {
-        let subject = format!("domain {}", request.domain);
+        let subject = domain_subject(&request.domain);
         let result = async {
             let domain = normalize_zt_domain(&request.domain)?;
             let not_after = get_cert_expiry(&request.cert_pem)
@@ -834,7 +847,10 @@ impl AdminRpc for AdminRpcHandler {
                 issued_at: now_secs(),
             };
             self.state.cert_resolver.update_cert(&domain, &data)?;
-            self.state.kv_store().save_cert_data(&domain, &data)?;
+            self.state
+                .kv_store()
+                .save_cert_data(&domain, &data)
+                .context("serving the certificate but failed to persist it")?;
             Ok(())
         }
         .await;
@@ -1101,6 +1117,11 @@ fn force_release_zt_domain_cert_lock(
     let domain = normalize_zt_domain(domain)?;
     kv_store.force_release_cert_lock(&domain)?;
     Ok(domain)
+}
+
+fn domain_subject(domain: &str) -> String {
+    let normalized = normalize_zt_domain(domain);
+    format!("domain {}", normalized.as_deref().unwrap_or(domain))
 }
 
 fn normalize_zt_domain(domain: &str) -> Result<String> {
