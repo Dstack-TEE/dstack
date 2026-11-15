@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import re
+import secrets
 import socket
 import ssl
 import sys
@@ -499,6 +500,33 @@ def read_utf8(filepath: str) -> str:
     """Read a file and return its contents as a UTF-8 string."""
     with open(filepath, "rb") as f:
         return f.read().decode("utf-8")
+
+
+def read_launch_ticket(filepath: str) -> str:
+    """Read a launch ticket file, ignoring surrounding whitespace."""
+    ticket = read_utf8(filepath).strip()
+    if not 32 <= len(ticket.encode()) <= 1024:
+        raise Exception("launch ticket must be 32 to 1024 bytes")
+    return ticket
+
+
+def launch_ticket_hash(ticket: str) -> str:
+    """Return the hash to allow on chain: sha256("dstack-launch-ticket/v1:" || ticket)."""
+    return (
+        "0x" + hashlib.sha256(f"dstack-launch-ticket/v1:{ticket}".encode()).hexdigest()
+    )
+
+
+def cmd_launch_ticket(args) -> None:
+    """Create a launch ticket file, or print the hash of one."""
+    if args.launch_ticket_command == "new":
+        ticket = secrets.token_urlsafe(32)
+        fd = os.open(args.file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(ticket + "\n")
+    else:
+        ticket = read_launch_ticket(args.file)
+    print(launch_ticket_hash(ticket))
 
 
 class UnixSocketHTTPConnection(http.client.HTTPConnection):
@@ -1128,6 +1156,8 @@ class VmmCLI:
             "no_tee": args.no_tee,
             "annotations": args.annotation or {},
         }
+        if args.launch_ticket_file:
+            params["launch_ticket"] = read_launch_ticket(args.launch_ticket_file)
         if args.disk_prealloc:
             params["disk_prealloc"] = args.disk_prealloc
         if args.simulated_tee:
@@ -1277,6 +1307,7 @@ class VmmCLI:
         net_vhost_inherit: bool = False,
         net_queues: Optional[Union[int, str]] = None,
         annotations: Optional[Dict[str, str]] = None,
+        launch_ticket: Optional[str] = None,
     ) -> None:
         """Update multiple aspects of a VM in one command."""
         # Validate: --env-file requires --kms-url
@@ -1529,6 +1560,12 @@ class VmmCLI:
             upgrade_params["annotations"] = annotations
             updates.append(f"annotations ({len(annotations)})")
 
+        if launch_ticket is not None:
+            upgrade_params["launch_ticket"] = launch_ticket
+            updates.append(
+                "launch ticket" if launch_ticket else "launch ticket removed"
+            )
+
         if no_tee is not None:
             upgrade_params["no_tee"] = no_tee
             updates.append("TEE disabled" if no_tee else "TEE enabled")
@@ -1563,6 +1600,7 @@ class VmmCLI:
         print(f"Uptime:        {info.get('uptime', '-')}")
         print(f"App ID:        {info.get('app_id', '-')}")
         print(f"Instance ID:   {info.get('instance_id', '-') or '-'}")
+        print(f"Launch Ticket: {info.get('launch_ticket_hash') or '-'}")
         print(f"App URL:       {info.get('app_url', '-') or '-'}")
         print(f"Image:         {config.get('image', '-')}")
         print(f"Image Version: {info.get('image_version', '-')}")
@@ -2197,6 +2235,11 @@ def main():
         help="Annotation for host-side tooling (can be repeated)",
     )
     deploy_parser.add_argument(
+        "--launch-ticket-file",
+        help="File holding the launch ticket the guest presents to the KMS "
+        "(requires dstack-vmm >= 0.6.4)",
+    )
+    deploy_parser.add_argument(
         "--disk-prealloc",
         choices=["off", "metadata", "falloc", "full"],
         default=None,
@@ -2476,6 +2519,27 @@ def main():
     annotations_group.add_argument(
         "--no-annotations", action="store_true", help="Remove all annotations"
     )
+    launch_ticket_group = update_parser.add_mutually_exclusive_group()
+    launch_ticket_group.add_argument(
+        "--launch-ticket-file",
+        help="Replace the launch ticket with this file's (requires dstack-vmm >= 0.6.4)",
+    )
+    launch_ticket_group.add_argument(
+        "--no-launch-ticket", action="store_true", help="Remove the launch ticket"
+    )
+
+    launch_ticket_parser = subparsers.add_parser(
+        "launch-ticket", help="Create launch tickets and print their on-chain hash"
+    )
+    launch_ticket_subparsers = launch_ticket_parser.add_subparsers(
+        dest="launch_ticket_command", required=True
+    )
+    for name, help_text in [
+        ("new", "Write a new random ticket to FILE"),
+        ("hash", "Print the hash of the ticket in FILE"),
+    ]:
+        sub = launch_ticket_subparsers.add_parser(name, help=help_text)
+        sub.add_argument("file", metavar="FILE")
 
     args = parser.parse_args()
 
@@ -2487,6 +2551,9 @@ def main():
             cmd_switch_vmm(args)
         else:
             vmm_parser.print_help()
+        return
+    if args.command == "launch-ticket":
+        cmd_launch_ticket(args)
         return
 
     # Resolve the URL with auto-discovery
@@ -2574,6 +2641,12 @@ def main():
             net_vhost_inherit=getattr(args, "net_vhost_inherit", False),
             net_queues=args.net_queues,
             annotations={} if args.no_annotations else args.annotation,
+            launch_ticket=(
+                ""
+                if args.no_launch_ticket
+                else args.launch_ticket_file
+                and read_launch_ticket(args.launch_ticket_file)
+            ),
         )
     elif args.command == "kms":
         if not args.kms_action:

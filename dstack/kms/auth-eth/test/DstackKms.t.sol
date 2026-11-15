@@ -498,7 +498,8 @@ contract DstackKmsTest is Test {
             isKms ? keccak256("kms_serve") : keccak256("app_get_key"),
             OptionalUint256(false, 0),
             OptionalUint256(false, 0),
-            "dstack-tdx"
+            "dstack-tdx",
+            bytes32(0)
         );
         return isKms ? kms.authorizeKms(request) : kms.authorizeApp(request);
     }
@@ -524,7 +525,7 @@ contract DstackKmsTest is Test {
         assertFalse(allowed);
         assertEq(reason, "TEE variant not allowed");
         AuthorizationRequest memory request = AuthorizationRequest(
-            info, keccak256("kms_serve"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
+            info, keccak256("kms_serve"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx", bytes32(0)
         );
         request.teeVariant = "dstack-gcp-tdx";
         assertTrue(kms.authorizeKms(request).authorized);
@@ -540,7 +541,12 @@ contract DstackKmsTest is Test {
         assertFalse(allowed);
         assertEq(reason, "TEE variant not allowed");
         request = AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
+            info,
+            keccak256("app_get_key"),
+            OptionalUint256(false, 0),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
         );
         request.teeVariant = "dstack-amd-sev-snp";
         assertEq(kms.authorizeApp(request).rejectionReason, "TEE variant not allowed");
@@ -577,7 +583,12 @@ contract DstackKmsTest is Test {
         kms.addKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
         vm.stopPrank();
         AuthorizationRequest memory request = AuthorizationRequest(
-            info, keccak256("kms_bootstrap"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
+            info,
+            keccak256("kms_bootstrap"),
+            OptionalUint256(false, 0),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
         );
         assertTrue(kms.authorizeKms(request).authorized);
         assertEq(kms.authorizeKms(request).currentRootEpochHash, bytes32(0));
@@ -594,6 +605,63 @@ contract DstackKmsTest is Test {
         request.operation = bytes32(0);
         assertEq(kms.authorizeKms(request).rejectionReason, "Invalid authorization operation");
         assertEq(kms.authorizeApp(request).rejectionReason, "Invalid authorization operation");
+    }
+
+    function test_KmsLaunchTicketGatesOnlyTheKeyImport() public {
+        IAppAuth.AppInfo memory info = authorizationInfo(address(kms));
+        bytes32 ticket = sha256("dstack-launch-ticket/v1:replica");
+        vm.startPrank(owner);
+        kms.registerRootEpoch(ca(0xa0), k256(0xb0), "https://example.com/epoch-0");
+        kms.addOsImageHashAtEpochs(0, 0, info.osImageHash);
+        kms.addKmsDeviceAtEpochs(0, 0, info.deviceId);
+        kms.addKmsAggregatedMrAtEpochs(0, 0, info.mrAggregated);
+        kms.setRequireKmsLaunchTicket(true);
+        vm.expectRevert(DstackKms.InvalidLaunchTicketHash.selector);
+        kms.addKmsLaunchTicket(bytes32(0), "zero");
+        kms.addKmsLaunchTicket(ticket, "replica");
+        vm.stopPrank();
+        assertEq(kms.kmsLaunchTickets()[0], ticket);
+
+        AuthorizationRequest memory request = AuthorizationRequest(
+            info,
+            keccak256("kms_import_keys"),
+            OptionalUint256(false, 0),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
+        );
+        assertEq(kms.authorizeKms(request).rejectionReason, "Invalid launch ticket");
+        request.launchTicketHash = ticket;
+        assertTrue(kms.authorizeKms(request).authorized);
+        // The other operations hand out no root keys and need no ticket.
+        request.launchTicketHash = bytes32(0);
+        request.operation = keccak256("kms_export_keys");
+        assertTrue(kms.authorizeKms(request).authorized);
+        request.operation = keccak256("kms_serve");
+        assertTrue(kms.authorizeKms(request).authorized);
+        request.operation = keccak256("kms_bootstrap");
+        assertTrue(kms.authorizeKms(request).authorized);
+        // Legacy callers cannot present one.
+        (bool allowed, string memory reason) = kms.isKmsAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "Invalid launch ticket");
+
+        vm.prank(owner);
+        kms.removeKmsLaunchTicket(ticket);
+        assertEq(kms.kmsLaunchTickets().length, 0);
+        request.operation = keccak256("kms_import_keys");
+        request.launchTicketHash = ticket;
+        assertEq(kms.authorizeKms(request).rejectionReason, "Invalid launch ticket");
+
+        vm.startPrank(user);
+        bytes memory unauthorized = abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", user);
+        vm.expectRevert(unauthorized);
+        kms.setRequireKmsLaunchTicket(false);
+        vm.expectRevert(unauthorized);
+        kms.addKmsLaunchTicket(ticket, "replica");
+        vm.expectRevert(unauthorized);
+        kms.removeKmsLaunchTicket(ticket);
+        vm.stopPrank();
     }
 
     function test_CheckAuthorization_OptionalUint256DistinguishesZeroFromDefault() public {
@@ -660,7 +728,12 @@ contract DstackKmsTest is Test {
         assertFalse(result.authorized);
         assertEq(result.rejectionReason, "Aggregated MR not allowed");
         AuthorizationRequest memory appRequest = AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(true, 1), OptionalUint256(false, 0), "dstack-tdx"
+            info,
+            keccak256("app_get_key"),
+            OptionalUint256(true, 1),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
         );
         result = kms.authorizeApp(appRequest);
         assertFalse(result.authorized);
@@ -746,7 +819,12 @@ contract DstackKmsTest is Test {
         (uint256 rootEpoch,) = kms.currentRootEpoch();
         assertEq(rootEpoch, 0);
         AuthorizationRequest memory request = AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(false, 0), OptionalUint256(false, 0), "dstack-tdx"
+            info,
+            keccak256("app_get_key"),
+            OptionalUint256(false, 0),
+            OptionalUint256(false, 0),
+            "dstack-tdx",
+            bytes32(0)
         );
         AuthorizationResult memory result = kms.authorizeApp(request);
         assertFalse(result.authorized);
@@ -788,7 +866,8 @@ contract DstackKmsTest is Test {
             keccak256("kms_serve"),
             OptionalUint256(false, 0),
             OptionalUint256(false, 0),
-            "dstack-tdx"
+            "dstack-tdx",
+            bytes32(0)
         );
         result = kms.authorizeApp(request);
         assertEq(result.rejectionReason, "Invalid authorization operation");
@@ -1022,7 +1101,12 @@ contract DstackKmsTest is Test {
         returns (AuthorizationRequest memory)
     {
         return AuthorizationRequest(
-            info, keccak256("app_get_key"), OptionalUint256(true, appEpoch), OptionalUint256(true, root), "dstack-tdx"
+            info,
+            keccak256("app_get_key"),
+            OptionalUint256(true, appEpoch),
+            OptionalUint256(true, root),
+            "dstack-tdx",
+            bytes32(0)
         );
     }
 

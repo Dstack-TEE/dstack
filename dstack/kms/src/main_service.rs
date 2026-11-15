@@ -546,7 +546,9 @@ impl RpcHandler {
         self.ensure_self_allowed(Operation::KmsExportKeys)
             .await
             .context("KMS self authorization failed")?;
-        let info = self.ensure_kms_allowed(&request.vm_config).await?;
+        let info = self
+            .ensure_kms_allowed(&request.vm_config, &request.launch_ticket)
+            .await?;
         ensure_key_release_allowed(&info, (&self.state.config).into())?;
         let returned = format!("root 0..={}", self.state.keyring.latest());
         self.audit_key_release(release, &info, "all", &returned, cached);
@@ -617,6 +619,27 @@ impl From<&KmsConfig> for KeyReleasePolicy {
     }
 }
 
+/// A missing ticket is denied like an unknown one; say which, since an older
+/// VMM or guest drops the ticket silently.
+fn ensure_ticket_presented(
+    response: &AuthorizationResult,
+    launch_ticket: &str,
+    hint: &str,
+) -> Result<()> {
+    if !response.authorized
+        && launch_ticket.is_empty()
+        && response
+            .rejection_reason
+            .eq_ignore_ascii_case("invalid launch ticket")
+    {
+        bail!(
+            "Authorization denied: {}: no launch ticket was presented; {hint}",
+            response.rejection_reason
+        );
+    }
+    Ok(())
+}
+
 fn ensure_key_release_allowed(boot_info: &BootInfo, policy: KeyReleasePolicy) -> Result<()> {
     match boot_info.tee_variant {
         TeeVariant::DstackAmdSevSnp if !policy.snp => {
@@ -654,7 +677,7 @@ impl RpcHandler {
                     .state
                     .config
                     .auth_api
-                    .authorize_kms(&boot_info, operation, None)
+                    .authorize_kms(&boot_info, operation, None, "")
                     .await
                     .context("Failed to call self KMS auth check")?;
                 let epoch = self.state.authorized_epoch(&response, None)?;
@@ -674,7 +697,7 @@ impl RpcHandler {
         Ok(attestation)
     }
 
-    async fn ensure_kms_allowed(&self, vm_config: &str) -> Result<BootInfo> {
+    async fn ensure_kms_allowed(&self, vm_config: &str, launch_ticket: &str) -> Result<BootInfo> {
         let att = self.ensure_attested()?;
         let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
         // Handover approval covers the highest exported epoch and all older roots.
@@ -686,8 +709,14 @@ impl RpcHandler {
                 &boot_info,
                 Operation::KmsImportKeys,
                 Some(self.state.keyring.latest()),
+                launch_ticket,
             )
             .await?;
+        ensure_ticket_presented(
+            &response,
+            launch_ticket,
+            "pass this instance's ticket in the Onboard request",
+        )?;
         self.state.authorized_epoch(&response, None)?;
         self.ensure_attestation_policy(att, vm_config, &boot_info, &response)
             .await?;
@@ -697,12 +726,20 @@ impl RpcHandler {
     async fn ensure_app_boot_allowed(
         &self,
         vm_config: &str,
+        launch_ticket: &str,
         epochs: RequestedAppEpochs,
     ) -> Result<BootConfig> {
         let att = self.ensure_attested()?;
         let boot_info = build_boot_info_for_attestation(att, false, vm_config)?;
-        self.ensure_app_attestation_allowed(att, boot_info, vm_config, Operation::AppGetKey, epochs)
-            .await
+        self.ensure_app_attestation_allowed(
+            att,
+            boot_info,
+            vm_config,
+            launch_ticket,
+            Operation::AppGetKey,
+            epochs,
+        )
+        .await
     }
 
     async fn ensure_app_attestation_allowed(
@@ -710,6 +747,7 @@ impl RpcHandler {
         att: &VerifiedAttestation,
         boot_info: BootInfo,
         vm_config: &str,
+        launch_ticket: &str,
         operation: Operation,
         epochs: RequestedAppEpochs,
     ) -> Result<BootConfig> {
@@ -717,8 +755,19 @@ impl RpcHandler {
             .state
             .config
             .auth_api
-            .authorize_app(&boot_info, operation, epochs.root, epochs.app)
+            .authorize_app(
+                &boot_info,
+                operation,
+                epochs.root,
+                epochs.app,
+                launch_ticket,
+            )
             .await?;
+        ensure_ticket_presented(
+            &response,
+            launch_ticket,
+            "check that the VMM and the guest OS support launch tickets",
+        )?;
         let root_epoch = self.state.authorized_epoch(&response, epochs.root)?;
         let app_epoch = epochs.app.unwrap_or(response.current_app_epoch);
         if app_epoch > response.current_app_epoch {
@@ -797,6 +846,7 @@ impl KmsRpc for RpcHandler {
         } = self
             .ensure_app_boot_allowed(
                 &request.vm_config,
+                &request.launch_ticket,
                 RequestedAppEpochs {
                     root: request.root_epoch,
                     app: request.app_epoch,
@@ -1006,6 +1056,7 @@ impl KmsRpc for RpcHandler {
                 &attestation,
                 boot_info,
                 &request.vm_config,
+                &request.launch_ticket,
                 Operation::AppGetCert,
                 RequestedAppEpochs::default(),
             )
@@ -1331,6 +1382,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_denial_for_a_missing_ticket_says_none_was_presented() {
+        let denied = |reason: &str| AuthorizationResult {
+            authorized: false,
+            rejection_reason: reason.into(),
+            gateway_app_id: String::new(),
+            current_root_epoch: 0,
+            current_app_epoch: 0,
+            current_root_epoch_hash: String::new(),
+            latest_root_epoch: 0,
+            latest_root_epoch_hash: String::new(),
+        };
+        let err = ensure_ticket_presented(&denied("Invalid launch ticket"), "", "hint")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no launch ticket was presented; hint"),
+            "{err}"
+        );
+        // A presented ticket, or another denial, keeps the backend's reason alone.
+        assert!(ensure_ticket_presented(&denied("invalid launch ticket"), "t", "hint").is_ok());
+        assert!(ensure_ticket_presented(&denied("Compose hash not allowed"), "", "hint").is_ok());
+    }
     #[test]
     fn build_boot_info_for_attestation_binds_aws_nitro_tpm_app_measurement() {
         let (attestation, vm_config, os_image_hash, key_provider_info) =
@@ -2025,7 +2099,10 @@ mod tests {
             attestation: Some(attestation),
             remote_endpoint: None,
         };
-        let request = GetKmsKeyRequest { vm_config };
+        let request = GetKmsKeyRequest {
+            vm_config,
+            ..Default::default()
+        };
         let result = if case.admin {
             handler
                 .handover_keys(KeyRelease::AdminHandover, request)
@@ -2201,6 +2278,7 @@ mod tests {
                 vm_config,
                 root_epoch,
                 app_epoch,
+                ..Default::default()
             })
             .await;
         (result, auth_requests(server), state, boot_info)
@@ -2352,6 +2430,7 @@ mod tests {
             csr: csr.to_vec(),
             vm_config: serde_json::json!({ "os_image_hash": hex::encode(os_image_hash) })
                 .to_string(),
+            ..Default::default()
         };
         let result = RpcHandler {
             state: state.clone(),

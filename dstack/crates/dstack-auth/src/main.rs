@@ -77,6 +77,9 @@ struct BootInfo {
     /// KMS that predates root epochs, and from KMS checks made while onboarding.
     root_epoch: Option<usize>,
     root_epoch_hash: Option<String>,
+    /// hash of the launch ticket the attested subject presented; empty when it
+    /// presented none, and from the legacy routes.
+    launch_ticket_hash: String,
 }
 
 #[derive(Serialize)]
@@ -203,6 +206,10 @@ struct KmsRules {
     mr_aggregated: Vec<String>,
     devices: Vec<String>,
     allow_any_device: bool,
+    /// when set, a KMS importing the root keys must present one of these
+    /// launch ticket hashes; an empty list denies every import. Absent: the
+    /// import needs no ticket.
+    launch_tickets: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -212,6 +219,9 @@ struct AppRules {
     compose_hashes: Vec<String>,
     devices: Vec<String>,
     allow_any_device: bool,
+    /// when set, the app must present one of these launch ticket hashes; an
+    /// empty list denies everything. Absent: no ticket is needed.
+    launch_tickets: Option<Vec<String>>,
 }
 
 /// normalize a hex string for comparison: trim, drop a `0x`/`0X` prefix,
@@ -230,6 +240,13 @@ fn norm(s: &str) -> String {
 fn contains(list: &[String], value: &str) -> bool {
     let v = norm(value);
     list.iter().any(|x| norm(x) == v)
+}
+
+/// No allowlist admits any ticket; an empty one admits none.
+fn launch_ticket_ok(tickets: &Option<Vec<String>>, ticket_hash: &str) -> bool {
+    tickets
+        .as_ref()
+        .is_none_or(|tickets| !ticket_hash.is_empty() && contains(tickets, ticket_hash))
 }
 
 /// An empty `devices` list allows no device; any device needs `allowAnyDevice`.
@@ -297,6 +314,12 @@ fn tcb_denial(info: &BootInfo, al: &Allowlist) -> Option<&'static str> {
 }
 
 fn app_policy(info: &BootInfo, al: &Allowlist) -> BootResponse {
+    if al
+        .app(&info.app_id)
+        .is_some_and(|app| !launch_ticket_ok(&app.launch_tickets, &info.launch_ticket_hash))
+    {
+        return deny(al, "invalid launch ticket");
+    }
     if let Some(reason) = tcb_denial(info, al) {
         return deny(al, reason);
     }
@@ -355,6 +378,10 @@ fn check_app(info: &BootInfo, al: &Allowlist) -> BootResponse {
 }
 
 fn check_kms(info: &BootInfo, al: &Allowlist) -> BootResponse {
+    // legacy callers present no ticket and cannot say which operation they authorize
+    if al.kms.launch_tickets.is_some() {
+        return deny(al, "invalid launch ticket");
+    }
     let result = kms_policy(info, al);
     if result.is_allowed {
         allow(info, al)
@@ -397,6 +424,11 @@ fn authorize(
     );
     result.rejection_reason = if request.operation.is_kms() != is_kms {
         "invalid authorization operation".into()
+    } else if request.operation == Operation::KmsImportKeys
+        && !launch_ticket_ok(&al.kms.launch_tickets, &info.launch_ticket_hash)
+    {
+        // only the import hands a joining KMS the root keys
+        "invalid launch ticket".into()
     } else if current.is_none() && request.operation != Operation::KmsBootstrap {
         "root epoch not registered".into()
     } else if request
@@ -508,6 +540,8 @@ fn load(path: &PathBuf) -> Allowlist {
 
 #[post("/bootAuth/app", data = "<info>")]
 fn boot_app(info: Json<BootInfo>, cli: &State<Cli>) -> Json<BootResponse> {
+    let mut info = info.into_inner();
+    info.launch_ticket_hash.clear();
     let r = check_app(&info, &load(&cli.config));
     rocket::info!(
         "bootAuth/app app={} compose={} os={} device={} tcb={} -> allowed={} ({})",
@@ -557,6 +591,10 @@ fn info_json(al: &Allowlist) -> Result<serde_json::Value> {
         "appImplementation": al.app_implementation,
     });
     if let Some(epoch) = al.current_root_epoch()? {
+        // the root CA key of the current epoch signs every serving KMS's RPC
+        // certificate
+        info["rootCaPubkey"] =
+            format!("0x{}", norm(&al.root_epochs[epoch.number].ca_pubkey)).into();
         info["rootEpoch"] = epoch.number.into();
         info["rootEpochHash"] = epoch.hash.into();
     }
@@ -1185,6 +1223,74 @@ mod tests {
         let serve = ask("kms_serve", 1);
         assert!(!serve.authorized);
         assert_eq!(serve.rejection_reason, "requested root epoch is not active");
+    }
+
+    #[test]
+    fn launch_tickets_are_required_only_when_configured() {
+        let mut al: Allowlist = serde_json::from_value(json!({
+            "kmsContractAddr": "0x1111111111111111111111111111111111111111",
+            "rootEpochs": [{"caPubkey": "aa", "k256Pubkey": "bb"}, {"caPubkey": "cc", "k256Pubkey": "dd"}],
+            "osImages": ["aa"],
+            "kms": {"mrAggregated": ["bb"], "allowAnyDevice": true, "launchTickets": ["0xEE"]},
+            "apps": {"0x2222222222222222222222222222222222222222": {
+                "composeHashes": ["cc"], "allowAnyDevice": true, "launchTickets": ["0xFF"]
+            }}
+        }))
+        .unwrap();
+        let ask = |al: &Allowlist, is_kms: bool, operation: &str, ticket: Option<&str>| {
+            let mut request = if is_kms {
+                json!({"operation": operation, "appId": "11".repeat(20), "mrAggregated": "bb"})
+            } else {
+                json!({"operation": operation, "appId": "22".repeat(20), "composeHash": "cc", "osImageHash": "aa"})
+            };
+            if let Some(ticket) = ticket {
+                request["launchTicketHash"] = ticket.into();
+            }
+            let request: AuthorizationRequest = serde_json::from_value(request).unwrap();
+            authorize(&request, is_kms, al).unwrap()
+        };
+        for operation in ["app_get_key", "app_get_cert"] {
+            assert!(ask(&al, false, operation, Some("ff")).authorized);
+            assert_eq!(
+                ask(&al, false, operation, Some("ee")).rejection_reason,
+                "invalid launch ticket"
+            );
+            assert!(!ask(&al, false, operation, None).authorized);
+        }
+        assert!(ask(&al, true, "kms_import_keys", Some("0xee")).authorized);
+        assert_eq!(
+            ask(&al, true, "kms_import_keys", None).rejection_reason,
+            "invalid launch ticket"
+        );
+        // Only the import hands out the root keys.
+        assert!(ask(&al, true, "kms_serve", None).authorized);
+        // Legacy callers cannot present a ticket.
+        let legacy = boot("0x2222222222222222222222222222222222222222", "cc", "aa");
+        assert!(!check_app(&legacy, &al).is_allowed);
+        assert!(
+            !check_kms(
+                &BootInfo {
+                    mr_aggregated: "bb".into(),
+                    ..Default::default()
+                },
+                &al
+            )
+            .is_allowed
+        );
+
+        // An empty allowlist admits no ticket; none configured admits any.
+        al.kms.launch_tickets = Some(vec![]);
+        assert!(!ask(&al, true, "kms_import_keys", Some("ee")).authorized);
+        al.kms.launch_tickets = None;
+        assert!(ask(&al, true, "kms_import_keys", None).authorized);
+
+        assert_eq!(info_json(&al).unwrap()["rootCaPubkey"], "0xaa");
+        al.current_root_epoch = 1;
+        assert_eq!(info_json(&al).unwrap()["rootCaPubkey"], "0xcc");
+        assert!(info_json(&Allowlist::default())
+            .unwrap()
+            .get("rootCaPubkey")
+            .is_none());
     }
 
     #[test]

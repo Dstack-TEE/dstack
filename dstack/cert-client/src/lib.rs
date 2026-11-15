@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Context, Result};
 use dstack_kms_rpc::{kms_client::KmsClient, AppKeyResponse, GetAppKeyRequest, SignCertRequest};
-use dstack_types::{AppKeys, KeyProvider};
+use dstack_types::{AppKeys, KeyProvider, SysConfig};
 use ra_rpc::client::{CertInfo, RaClient, RaClientConfig};
 use ra_tls::{
     attestation::{AppInfo, AttestationVerifier, VersionedAttestation},
@@ -20,6 +20,7 @@ pub enum CertRequestClient {
     Kms {
         client: KmsClient<RaClient>,
         vm_config: String,
+        launch_ticket: String,
     },
 }
 
@@ -158,13 +159,18 @@ impl CertRequestClient {
                     .context("Failed to sign certificate")?;
                 Ok(vec![cert.pem(), ca.pem_cert.clone()])
             }
-            CertRequestClient::Kms { client, vm_config } => {
+            CertRequestClient::Kms {
+                client,
+                vm_config,
+                launch_ticket,
+            } => {
                 let response = client
                     .sign_cert(SignCertRequest {
                         api_version: 2,
                         csr: csr.to_vec(),
                         signature: signature.to_vec(),
                         vm_config: vm_config.clone(),
+                        launch_ticket: launch_ticket.clone(),
                     })
                     .await?;
                 Ok(response.certificate_chain)
@@ -178,7 +184,12 @@ impl CertRequestClient {
         root_epoch: Option<u32>,
         app_epoch: Option<u32>,
     ) -> Result<AppKeyResponse> {
-        let CertRequestClient::Kms { client, vm_config } = self else {
+        let CertRequestClient::Kms {
+            client,
+            vm_config,
+            launch_ticket,
+        } = self
+        else {
             bail!("only KMS-provided keys have older root epochs");
         };
         let response = client
@@ -187,6 +198,7 @@ impl CertRequestClient {
                 vm_config: vm_config.clone(),
                 root_epoch,
                 app_epoch,
+                launch_ticket: launch_ticket.clone(),
             })
             .await?;
         if root_epoch.is_some_and(|epoch| epoch != response.root_epoch) {
@@ -208,7 +220,7 @@ impl CertRequestClient {
     pub async fn create(
         keys: &AppKeys,
         attestation_verifier: Arc<AttestationVerifier>,
-        vm_config: String,
+        sys_config: &SysConfig,
     ) -> Result<CertRequestClient> {
         match &keys.key_provider {
             KeyProvider::None { key }
@@ -231,7 +243,11 @@ impl CertRequestClient {
                     client_cert.key_pem,
                     attestation_verifier,
                 )?;
-                Ok(CertRequestClient::Kms { client, vm_config })
+                Ok(CertRequestClient::Kms {
+                    client,
+                    vm_config: sys_config.vm_config.clone(),
+                    launch_ticket: sys_config.launch_ticket.clone().unwrap_or_default(),
+                })
             }
         }
     }
@@ -643,9 +659,7 @@ mod tests {
         };
         let request = || GetAppKeyRequest {
             api_version: 1,
-            vm_config: String::new(),
-            root_epoch: None,
-            app_epoch: None,
+            ..Default::default()
         };
         let result = request_app_keys(
             url.clone(),
@@ -665,9 +679,8 @@ mod tests {
         for requested_root_epoch in [None, Some(0), Some(1)] {
             let request = || GetAppKeyRequest {
                 api_version: 1,
-                vm_config: String::new(),
                 root_epoch: requested_root_epoch,
-                app_epoch: None,
+                ..Default::default()
             };
             let selected = AppKeyResponse {
                 root_epoch: requested_root_epoch.unwrap_or(1),
@@ -735,6 +748,7 @@ mod tests {
             )
             .unwrap(),
             vm_config: "selector-test".into(),
+            launch_ticket: String::new(),
         };
         for root_epoch in [None, Some(0), Some(1)] {
             for app_epoch in [None, Some(0), Some(2)] {

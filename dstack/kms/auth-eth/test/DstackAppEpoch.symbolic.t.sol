@@ -21,7 +21,9 @@ function _appAuth(
     returns (bool, string memory)
 {
     AuthorizationResult memory result = target.authorizeApp(
-        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0), "dstack-tdx")
+        AuthorizationRequest(
+            info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0), "dstack-tdx", bytes32(0)
+        )
     );
     return (result.authorized, result.rejectionReason);
 }
@@ -142,6 +144,9 @@ contract DstackAppEpochSymbolicTest is Test {
         else if (which == 13) data = abi.encodeCall(Ownable2StepUpgradeable.transferOwnership, (addr));
         else if (which == 14) data = abi.encodeCall(Ownable2StepUpgradeable.acceptOwnership, ());
         else if (which == 15) data = abi.encodeCall(OwnableUpgradeable.renounceOwnership, ());
+        else if (which == 16) data = abi.encodeCall(DstackApp.setRequireLaunchTicket, (flag));
+        else if (which == 17) data = abi.encodeCall(DstackApp.addLaunchTicket, (word, ""));
+        else if (which == 18) data = abi.encodeCall(DstackApp.removeLaunchTicket, (word));
         else return;
 
         vm.prank(caller);
@@ -307,7 +312,8 @@ contract DstackAppEpochSymbolicTest is Test {
                 AuthorizationOperation.APP_GET_KEY,
                 OptionalUint256(true, epoch),
                 OptionalUint256(false, 0),
-                listed ? "dstack-tdx" : "dstack-amd-sev-snp"
+                listed ? "dstack-tdx" : "dstack-amd-sev-snp",
+                bytes32(0)
             )
         );
         assert(result.authorized == (unrestricted && (!restrict || listed)));

@@ -220,7 +220,9 @@ The selected endpoint determines the policy; the backend checks that the verifie
 omission uses the current app epoch, explicit zero selects epoch zero, and future
 values are denied. The optional
 `requestedRootEpoch` selects historical keys; omission uses the returned current
-epoch, and an explicit `0` selects epoch 0. See the
+epoch, and an explicit `0` selects epoch 0. The optional `launchTicketHash` is the
+hash of the launch ticket the CVM presented and is passed to the contract as
+`bytes32`, zero when absent. See the
 [KMS authorization protocol](../README.md#authorization-protocol) for registration,
 bootstrap, and compatibility requirements. The legacy `/bootAuth/*` endpoints
 remain available.

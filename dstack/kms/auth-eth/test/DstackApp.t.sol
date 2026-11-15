@@ -426,7 +426,7 @@ contract DstackAppTest is Test {
         pure
         returns (AuthorizationRequest memory)
     {
-        return AuthorizationRequest(info, operation, appEpoch, OptionalUint256(false, 0), "dstack-tdx");
+        return AuthorizationRequest(info, operation, appEpoch, OptionalUint256(false, 0), "dstack-tdx", bytes32(0));
     }
 
     function authorizeAt(
@@ -495,6 +495,56 @@ contract DstackAppTest is Test {
         app.setAllowAnyTeeVariant(true);
         vm.expectRevert(unauthorized);
         app.setAllowedTeeVariants(tdx);
+        vm.stopPrank();
+    }
+
+    function test_LaunchTicketGatesEveryEpochOnceRequired() public {
+        IAppAuth.AppInfo memory info = epochInfo();
+        bytes32 ticket = sha256("dstack-launch-ticket/v1:prod");
+        vm.startPrank(owner);
+        app.addComposeHashAtEpochs(0, 1, info.composeHash);
+        app.addDeviceAtEpochs(0, 1, info.deviceId);
+        vm.stopPrank();
+        AuthorizationRequest memory request = appRequest(info, OptionalUint256(true, 0), keccak256("app_get_key"));
+        // Not required: any ticket, or none, is admitted.
+        assertTrue(app.authorizeApp(request).authorized);
+
+        vm.startPrank(owner);
+        app.setRequireLaunchTicket(true);
+        vm.expectRevert("invalid launch ticket hash");
+        app.addLaunchTicket(bytes32(0), "zero");
+        app.addLaunchTicket(ticket, "prod");
+        vm.stopPrank();
+        assertEq(app.launchTickets().length, 1);
+        assertEq(app.launchTickets()[0], ticket);
+        assertEq(app.authorizeApp(request).rejectionReason, "Invalid launch ticket");
+        (bool allowed, string memory reason) = app.isAppAllowed(info);
+        assertFalse(allowed);
+        assertEq(reason, "Invalid launch ticket");
+
+        request.launchTicketHash = ticket;
+        assertTrue(app.authorizeApp(request).authorized);
+        request.operation = keccak256("app_get_cert");
+        assertTrue(app.authorizeApp(request).authorized);
+        // The allowlist covers every app epoch.
+        vm.prank(owner);
+        app.advanceAppEpoch(0);
+        request.requestedAppEpoch = OptionalUint256(true, 1);
+        assertTrue(app.authorizeApp(request).authorized);
+
+        vm.prank(owner);
+        app.removeLaunchTicket(ticket);
+        assertEq(app.launchTickets().length, 0);
+        assertEq(app.authorizeApp(request).rejectionReason, "Invalid launch ticket");
+
+        vm.startPrank(user);
+        bytes memory unauthorized = abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user);
+        vm.expectRevert(unauthorized);
+        app.setRequireLaunchTicket(false);
+        vm.expectRevert(unauthorized);
+        app.addLaunchTicket(ticket, "prod");
+        vm.expectRevert(unauthorized);
+        app.removeLaunchTicket(ticket);
         vm.stopPrank();
     }
 

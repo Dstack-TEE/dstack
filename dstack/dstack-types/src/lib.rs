@@ -1303,6 +1303,12 @@ pub struct SysConfig {
     /// switches in app-compose, which a token here cannot widen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guest_agent_api: Option<GuestAgentApiConfig>,
+    /// Launch ticket the guest presents to the KMS, which checks its hash
+    /// against the app's on-chain allowlist before releasing keys. A secret
+    /// the host holds: unlike `vm_config`, it is never embedded in an
+    /// attestation or returned by the guest agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_ticket: Option<String>,
     // JSON serialized VmConfig
     pub vm_config: String,
 }

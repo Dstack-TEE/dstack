@@ -22,7 +22,9 @@ function _appAuth(
     returns (bool, string memory)
 {
     AuthorizationResult memory result = target.authorizeApp(
-        AuthorizationRequest(info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0), "dstack-tdx")
+        AuthorizationRequest(
+            info, operation, OptionalUint256(true, epoch), OptionalUint256(false, 0), "dstack-tdx", bytes32(0)
+        )
     );
     return (result.authorized, result.rejectionReason);
 }
@@ -135,7 +137,7 @@ contract DstackKmsEpochSymbolicTest is Test {
         returns (AuthorizationRequest memory)
     {
         return AuthorizationRequest(
-            info, operation, OptionalUint256(appSet, appEpoch), OptionalUint256(rootSet, root), "dstack-tdx"
+            info, operation, OptionalUint256(appSet, appEpoch), OptionalUint256(rootSet, root), "dstack-tdx", bytes32(0)
         );
     }
 
