@@ -12,7 +12,7 @@ use ra_rpc::rocket_helper::QuoteVerifier;
 use ra_tls::attestation::AttestationVerifier;
 use rocket::{
     fairing::AdHoc,
-    figment::{providers::Serialized, Figment},
+    figment::Figment,
     response::content::{RawHtml, RawText},
     tls::Resolver as _,
     Shutdown, State,
@@ -95,11 +95,7 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
     }
 
     let state = OnboardState::new(kms_config)?;
-    let figment = figment
-        .clone()
-        .merge(Serialized::defaults(figment.find_value("core.onboard")?));
-
-    // Remove section tls
+    let figment = config::listener_figment(&figment, "onboard")?;
 
     let rocket = rocket::custom(figment)
         .mount("/", rocket::routes![index, finish, health])
@@ -166,6 +162,7 @@ async fn main() -> Result<()> {
     }
 
     let figment = config::load_config_figment(args.config.as_deref());
+    config::reject_moved_settings(&figment)?;
     let config: KmsConfig = figment.focus("core").extract()?;
 
     if !config.attest_rpc_cert {
@@ -179,24 +176,17 @@ async fn main() -> Result<()> {
     // before onboarding or bootstrap, so a misconfigured node fails before it
     // gets or generates root keys: the handover path, and the admin listener
     // serving it (enabled with no credential fails here).
-    config::check_key_handover(&config, &figment)?;
-    let admin_config = config.admin.clone();
-    let admin_setup = if admin_config.enabled {
-        let admin_value = figment
-            .find_value("core.admin")
-            .context("core.admin section not found")?;
-        let admin_figment =
-            Figment::from(rocket::Config::default()).merge(Serialized::defaults(admin_value));
+    let listeners = config::ListenersConfig::load(&figment)?;
+    config::check_key_handover(&config, &listeners, &figment)?;
+    let admin_config = listeners.admin.clone();
+    let admin_setup = if listeners.admin.enabled {
         let admin_fairing = admin_auth::AdminAuthFairing::from_config(&admin_config)?;
-        Some((admin_figment, admin_fairing))
+        Some((config::listener_figment(&figment, "admin")?, admin_fairing))
     } else {
         None
     };
-    let readonly_figment = if config.readonly.enabled {
-        let value = figment
-            .find_value("core.readonly")
-            .context("core.readonly section not found")?;
-        Some(Figment::from(rocket::Config::default()).merge(Serialized::defaults(value)))
+    let public_figment = if listeners.public.enabled {
+        Some(config::listener_figment(&figment, "public")?)
     } else {
         None
     };
@@ -239,10 +229,7 @@ async fn main() -> Result<()> {
         .context("Failed to initialize KMS state")?;
     let quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let admin_quote_verifier = QuoteVerifier::new(state.attestation_verifier());
-    let figment = figment
-        .clone()
-        .merge(Serialized::defaults(figment.find_value("rpc")?));
-    let mut rocket = rocket::custom(figment)
+    let mut rocket = rocket::custom(config::listener_figment(&figment, "guest")?)
         // Verify client certificates by their attestation rather than by issuer. The
         // certificates guests and onboarding mint from the temp CA today keep working
         // unchanged - they are now accepted for the attestation they carry rather than
@@ -269,9 +256,9 @@ async fn main() -> Result<()> {
     rocket = rocket.manage(quote_verifier);
 
     let mut servers = vec![launch(rocket).boxed()];
-    if let Some(readonly_figment) = readonly_figment {
-        info!("serving the read-only RPCs on the readonly listener");
-        let readonly = rocket::custom(readonly_figment)
+    if let Some(public_figment) = public_figment {
+        info!("serving the read-only RPCs on the public listener");
+        let public = rocket::custom(public_figment)
             .attach(app_version_header())
             .mount("/", rocket::routes![health])
             .mount(
@@ -283,7 +270,7 @@ async fn main() -> Result<()> {
                 ),
             )
             .manage(state.clone());
-        servers.push(launch(readonly).boxed());
+        servers.push(launch(public).boxed());
     }
     if let Some((admin_figment, admin_fairing)) = admin_setup {
         if admin_config.insecure_no_auth {

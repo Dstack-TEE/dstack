@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Upgrade notes
+
+- **KMS refuses its old listener settings.** Move `[rpc]`, `[core.admin]`,
+  `[core.onboard]` `address`/`port`/`tls`, `[default]` and top-level Rocket
+  settings to `[listeners.*]` (see Changed) when upgrading the KMS image.
+
+### Added
+
+- KMS: an optional `[listeners.public]` listener, off by default, serving only
+  `GetMeta`, `GetAppEnvEncryptPubKey` and `GetSealedEnvPubKey`, so the guest
+  listener, which releases keys, can be restricted to CVMs (#1580).
+- KMS, gateway: `proxy_protocol = true` on a listener requires a PROXY v1/v2
+  header on every connection and logs its source address as the client. The
+  header is trusted as sent, so the listener must be reachable only through the
+  proxy. prpc request logs now carry the client address as `remote` (#1582).
+
+### Changed
+
+- **Breaking:** KMS: listener settings move to `[listeners.*]`:
+  `[listeners.default]` (`tls`, `proxy_protocol`, Rocket settings, inherited
+  by every listener), `[listeners.guest]` (was `[rpc]`), `[listeners.admin]`
+  (was `[core.admin]`, credentials included), `[listeners.public]` and
+  `[listeners.onboard]` (`address`/`port`, was in `[core.onboard]`). The KMS
+  refuses a config that still sets an old location, naming the new one. The
+  old `[default]` section was never read; only `ident` moves, so responses now
+  carry `Server: DStack KMS` (#1585).
+
 ## [0.6.4] - 2026-11-12
 
 ### Upgrade notes

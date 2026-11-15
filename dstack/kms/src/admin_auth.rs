@@ -7,9 +7,9 @@
 //! Unlike the KMS public RPC surface (which authenticates callers by RA-TLS
 //! attestation), the admin API is reached by operators/tooling, so it uses the
 //! same shared-token/htpasswd HTTP mechanism as the VMM and gateway. The token
-//! is configured via `core.admin.auth_token`, or the `DSTACK_KMS_ADMIN_TOKEN` /
+//! is configured via `listeners.admin.auth_token`, or the `DSTACK_KMS_ADMIN_TOKEN` /
 //! `ADMIN_API_TOKEN` environment variables, or as its SHA-256 in
-//! `core.admin.auth_token_hash`.
+//! `listeners.admin.auth_token_hash`.
 
 use anyhow::{bail, Context, Result};
 use dstack_api_auth::{Authenticator, HttpAuthConfig, HttpAuthFairing};
@@ -57,14 +57,14 @@ fn authenticator(config: &AdminConfig) -> Result<Authenticator> {
         let hash = hex::decode(hash)
             .ok()
             .and_then(|hash| <[u8; 32]>::try_from(hash).ok())
-            .context("core.admin.auth_token_hash must be a hex SHA-256 digest")?;
+            .context("listeners.admin.auth_token_hash must be a hex SHA-256 digest")?;
         hashes.push(hash);
     }
     if hashes.is_empty() && config.htpasswd_file.as_os_str().is_empty() {
         bail!(
-            "admin API is enabled but no credential is configured; set core.admin.auth_token, \
-             {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, core.admin.auth_token_hash, \
-             core.admin.htpasswd_file, or insecure_no_auth = true (testing only)"
+            "admin API is enabled but no credential is configured; set listeners.admin.auth_token, \
+             {ENV_ADMIN_TOKEN}, {ENV_ADMIN_TOKEN_COMPAT}, listeners.admin.auth_token_hash, \
+             listeners.admin.htpasswd_file, or insecure_no_auth = true (testing only)"
         );
     }
     let mut auth = Authenticator::from_token_hashes(hashes);
@@ -107,7 +107,6 @@ mod tests {
         std::env::remove_var(ENV_ADMIN_TOKEN);
         std::env::remove_var(ENV_ADMIN_TOKEN_COMPAT);
         let cfg = AdminConfig {
-            enabled: true,
             ..Default::default()
         };
         assert!(AdminAuthFairing::from_config(&cfg).is_err());
@@ -116,7 +115,6 @@ mod tests {
     #[test]
     fn insecure_no_auth_is_allowed() {
         let cfg = AdminConfig {
-            enabled: true,
             insecure_no_auth: true,
             ..Default::default()
         };
@@ -126,7 +124,6 @@ mod tests {
     #[test]
     fn a_token_hash_admits_its_token() {
         let cfg = AdminConfig {
-            enabled: true,
             auth_token_hash: hex::encode(Sha256::digest(b"secret")),
             ..Default::default()
         };
@@ -143,7 +140,6 @@ mod tests {
     #[test]
     fn configured_token_builds() {
         let cfg = AdminConfig {
-            enabled: true,
             auth_token: "secret".into(),
             ..Default::default()
         };

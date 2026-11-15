@@ -139,7 +139,7 @@ service KMS {
 }
 
 // The read-only subset of the KMS service, served on the optional
-// `[core.readonly]` listener. None of these release secrets or need a client
+// `[listeners.public]` listener. None of these release secrets or need a client
 // certificate.
 service ReadOnly {
   rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
@@ -148,7 +148,7 @@ service ReadOnly {
 }
 
 // The KMS admin RPC service. Served on a separate admin listener
-// (`[core.admin]`) behind the shared HTTP authenticator, so the credential
+// (`[listeners.admin]`) behind the shared HTTP authenticator, so the credential
 // travels in the `Authorization`/`X-Admin-Token` header rather than the
 // request body.
 service Admin {
