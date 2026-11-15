@@ -131,6 +131,16 @@ key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
 ```
 
+## PROXY protocol
+
+A proxy in front of the KMS must pass TLS through, since the KMS verifies the
+client's RA-TLS certificate itself, so the KMS sees the proxy's address rather
+than the client's. Set `proxy_protocol = true` in `[rpc]`, `[core.admin]` or
+`[core.readonly]` to read the client address from a PROXY protocol (v1 or v2)
+header instead. The request logs then carry it as `remote`. A listener with
+`proxy_protocol = true` drops connections that send no header within five
+seconds, so only enable it behind a proxy that sends one, such as HAProxy with
+`send-proxy-v2` (and `check-send-proxy` for health checks).
 
 ## KMS Implementation
 

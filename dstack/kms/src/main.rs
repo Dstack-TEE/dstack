@@ -17,6 +17,7 @@ use rocket::{
     tls::Resolver as _,
     Shutdown, State,
 };
+use rocket_proxy_listener::launch;
 use tracing::{info, warn};
 
 mod admin_auth;
@@ -267,25 +268,22 @@ async fn main() -> Result<()> {
 
     rocket = rocket.manage(quote_verifier);
 
-    let mut servers = vec![rocket.launch().boxed()];
+    let mut servers = vec![launch(rocket).boxed()];
     if let Some(readonly_figment) = readonly_figment {
         info!("serving the read-only RPCs on the readonly listener");
-        servers.push(
-            rocket::custom(readonly_figment)
-                .attach(app_version_header())
-                .mount("/", rocket::routes![health])
-                .mount(
-                    "/prpc",
-                    ra_rpc::prpc_routes!(
-                        KmsState,
-                        readonly_service::ReadOnlyRpcHandler,
-                        trim: "ReadOnly."
-                    ),
-                )
-                .manage(state.clone())
-                .launch()
-                .boxed(),
-        );
+        let readonly = rocket::custom(readonly_figment)
+            .attach(app_version_header())
+            .mount("/", rocket::routes![health])
+            .mount(
+                "/prpc",
+                ra_rpc::prpc_routes!(
+                    KmsState,
+                    readonly_service::ReadOnlyRpcHandler,
+                    trim: "ReadOnly."
+                ),
+            )
+            .manage(state.clone());
+        servers.push(launch(readonly).boxed());
     }
     if let Some((admin_figment, admin_fairing)) = admin_setup {
         if admin_config.insecure_no_auth {
@@ -295,20 +293,17 @@ async fn main() -> Result<()> {
         } else {
             info!("admin API authentication enabled");
         }
-        servers.push(
-            rocket::custom(admin_figment)
-                .attach(admin_fairing)
-                .attach(RaTlsClientAuth::fairing())
-                .mount("/", admin_auth::routes())
-                .mount(
-                    "/prpc",
-                    ra_rpc::prpc_routes!(KmsState, admin_service::AdminRpcHandler, trim: "Admin."),
-                )
-                .manage(state.clone())
-                .manage(admin_quote_verifier)
-                .launch()
-                .boxed(),
-        );
+        let admin = rocket::custom(admin_figment)
+            .attach(admin_fairing)
+            .attach(RaTlsClientAuth::fairing())
+            .mount("/", admin_auth::routes())
+            .mount(
+                "/prpc",
+                ra_rpc::prpc_routes!(KmsState, admin_service::AdminRpcHandler, trim: "Admin."),
+            )
+            .manage(state.clone())
+            .manage(admin_quote_verifier);
+        servers.push(launch(admin).boxed());
     }
     // Refresh the TLS listeners when the authorized root CA changes.
     tokio::select! {

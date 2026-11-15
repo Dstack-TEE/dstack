@@ -2065,6 +2065,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "rocket",
+ "rocket-proxy-listener",
  "rustls",
  "safe-write",
  "serde",
@@ -2226,6 +2227,7 @@ dependencies = [
  "reqwest",
  "ring",
  "rocket",
+ "rocket-proxy-listener",
  "safe-write",
  "serde",
  "serde-duration",
@@ -6585,6 +6587,19 @@ dependencies = [
  "version_check",
  "x509-parser 0.16.0",
  "yansi",
+]
+
+[[package]]
+name = "rocket-proxy-listener"
+version = "0.6.4"
+dependencies = [
+ "anyhow",
+ "pin-project",
+ "proxy-protocol",
+ "rocket",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
