@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! KMS admin RPC service, served on the `[core.admin]` listener behind the
+//! KMS admin RPC service, served on the `[listeners.admin]` listener behind the
 //! shared HTTP authenticator. Callers are authenticated by the admin token /
 //! htpasswd via `Authorization`/`X-Admin-Token`, so the handlers do no token
 //! checks of their own.

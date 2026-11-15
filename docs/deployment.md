@@ -512,19 +512,21 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 
 Every KMS needs this, or `core.onboard.public_key_handover = true`: without a handover path it refuses to start, before onboarding or bootstrap, naming the missing setting. In a public config such as an app compose, set `auth_token_hash` (the token's SHA-256) instead of `auth_token`, with a high-entropy random token (`openssl rand -hex 32`), since the hash can be brute-forced offline.
 
-`Admin.GetKmsKey` only works on an admin listener with `[core.admin.tls]`: without TLS the listener speaks plain HTTP, so the new KMS can present no RA-TLS certificate and the call fails with `No attestation provided`. The admin listener binds to `127.0.0.1` by default; bind it to an address the new KMS can reach and restrict access to the KMS nodes at the network layer.
+`Admin.GetKmsKey` only works on an admin listener with `[listeners.admin.tls]`: without TLS the listener speaks plain HTTP, so the new KMS can present no RA-TLS certificate and the call fails with `No attestation provided`. The admin listener binds to `127.0.0.1` by default; bind it to an address the new KMS can reach and restrict access to the KMS nodes at the network layer.
 
 ```toml
-[core.admin]
+[listeners.admin]
 enabled = true
 address = "0.0.0.0"          # reachable by the new KMS; firewall it to KMS nodes only
 port = 8001
-auth_token = "<source-admin-token>"
 
-[core.admin.tls]
+[listeners.admin.tls]
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
-# No [core.admin.tls.mutual]: client certificates are verified by their attestation.
+# No [listeners.admin.tls.mutual]: client certificates are verified by their attestation.
+
+[core.admin]
+auth_token = "<source-admin-token>"
 ```
 
 **Configure new KMS for onboarding:**
@@ -533,6 +535,8 @@ certs = "/etc/kms/certs/rpc.crt"
 [core.onboard]
 enabled = true
 auto_bootstrap_domain = ""   # Empty = onboard mode
+
+[listeners.onboard]
 address = "0.0.0.0"
 port = 9203                  # HTTP port for onboard UI
 ```
@@ -559,13 +563,13 @@ curl http://<new-kms>:9203/finish
 >
 > If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
 
-> **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[core.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[core.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[listeners.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[listeners.admin] enabled = true` and a `[core.admin]` `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 >
 > **Source pinning.** Before sending anything secret, the new KMS requires the source's RPC certificate, at the TLS handshake, to be a `kms:rpc` leaf signed by the current root CA its own auth API reports (`rootCaPubkey` in `GET /`), so `source_url` must be `https://`. A source without the registered roots never sees the launch ticket or `source_token`; onboarding fails if the auth API reports no root CA key. Right after a root epoch is activated, a source still serving the RPC certificate of the previous one fails the handshake until it restarts; onboarding attempts do not trigger that restart, so restart the source. Upgrade the auth backend before the KMS: a custom webhook must report `rootCaPubkey`. A KMS with `auth_api.type = "dev"` registers no roots and pins nothing.
 >
 > **Launch ticket.** When the KMS contract requires one (`setRequireKmsLaunchTicket`), pass this instance's ticket as `launch_ticket` in the onboarding request; the source checks its hash against `kmsLaunchTickets()` before handing over the keys. Remove the ticket from the contract once the instance has joined. See [launch tickets](../dstack/kms/README.md#launch-tickets).
 >
-> **Key handover.** It is served as `Admin.GetKmsKey` on the `[core.admin]` listener, which needs `[core.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request; the token is required unless the source enables the public handover. The legacy public `KMS.GetKmsKey` is off by default; set `core.onboard.public_key_handover = true` on the source only when an onboarding KMS cannot use the admin listener, such as a 0.5.x KMS or an onboarding request without `source_token`.
+> **Key handover.** It is served as `Admin.GetKmsKey` on the `[listeners.admin]` listener, which needs `[listeners.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request; the token is required unless the source enables the public handover. The legacy public `KMS.GetKmsKey` is off by default; set `core.onboard.public_key_handover = true` on the source only when an onboarding KMS cannot use the admin listener, such as a 0.5.x KMS or an onboarding request without `source_token`.
 
 #### Rotating KMS Root Keys
 

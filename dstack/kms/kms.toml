@@ -10,21 +10,62 @@ temp_dir = "/tmp"
 keep_alive = 10
 log_level = "info"
 
-[rpc]
+# Listeners. Each takes `address`, `port` and an optional `tls` section; `rpc`,
+# `admin` and `readonly` also take `proxy_protocol`. Older configs put these in
+# `[rpc]`, `[core.admin]` and `[core.onboard]`, which are still read.
+#
+# `proxy_protocol = true` requires a PROXY protocol (v1 or v2) header on every
+# connection and logs its source address as the client. Enable it only behind
+# a proxy that sends one, such as HAProxy with `send-proxy-v2`; connections
+# without it are dropped.
+
+# The KMS RPCs, including those that release keys.
+[listeners.rpc]
 address = "0.0.0.0"
 port = 8000
-# Require a PROXY protocol (v1 or v2) header on every connection and log its
-# source address as the client. Enable only behind a proxy that sends one, such
-# as HAProxy with `send-proxy-v2`; connections without it are dropped.
 proxy_protocol = false
 
-[rpc.tls]
+[listeners.rpc.tls]
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
 
-# No `[rpc.tls.mutual]`: client certificates are verified by the attestation they
-# carry, not by an issuer CA (see ra-rpc's ratls_client_verifier). Leaving a
-# `mutual` section here is harmless — it is no longer the trust anchor.
+# No `[listeners.rpc.tls.mutual]`: client certificates are verified by the
+# attestation they carry, not by an issuer CA (see ra-rpc's
+# ratls_client_verifier). A `mutual` section is harmless but not the trust anchor.
+
+# Operator RPCs (e.g. ClearImageCache) and the key handover to onboarding KMS
+# nodes, behind the admin credential in [core.admin]. Unless
+# core.onboard.public_key_handover = true, the KMS requires this listener and
+# its TLS, so that other KMS nodes can onboard.
+[listeners.admin]
+enabled = true
+# Keep it off the public network; to serve KMS onboarding, bind to an address
+# the new KMS can reach.
+address = "127.0.0.1"
+port = 8001
+proxy_protocol = false
+
+# Lets clients present an RA-TLS certificate; GetKmsKey requires it.
+[listeners.admin.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+
+# Only the read-only RPCs (GetMeta, GetAppEnvEncryptPubKey, GetSealedEnvPubKey)
+# at the same paths, so the rpc listener can be restricted to the CVMs.
+[listeners.readonly]
+enabled = false
+address = "0.0.0.0"
+port = 8002
+proxy_protocol = false
+
+[listeners.readonly.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+
+# The setup page, while [core.onboard] enabled = true and the KMS has no keys.
+[listeners.onboard]
+address = "0.0.0.0"
+port = 8000
 
 [core]
 cert_dir = "/etc/kms/certs"
@@ -86,19 +127,10 @@ cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
 download_timeout = "2m"
 
-# Admin API: serves operator RPCs (e.g. ClearImageCache) and the key handover
-# to onboarding KMS nodes on a dedicated listener behind the shared HTTP
-# authenticator. It fails closed: the KMS does not start until auth_token (or
-# DSTACK_KMS_ADMIN_TOKEN), auth_token_hash or htpasswd_file is set. Unless
-# core.onboard.public_key_handover = true, the KMS also requires this
-# listener and its TLS below, so that other KMS nodes can onboard.
+# Admin API authentication, for [listeners.admin]. It fails closed: the KMS
+# does not start until auth_token (or DSTACK_KMS_ADMIN_TOKEN), auth_token_hash
+# or htpasswd_file is set.
 [core.admin]
-enabled = true
-# Bind address/port for the admin listener (keep it off the public network).
-address = "127.0.0.1"
-port = 8001
-# As in [rpc].
-proxy_protocol = false
 # Shared admin token required by every admin RPC. Can also be supplied via the
 # `DSTACK_KMS_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env vars. Clients send it as
 # `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
@@ -115,31 +147,9 @@ htpasswd_file = ""
 # interface that is reachable from the network.
 insecure_no_auth = false
 
-# TLS for the admin listener, so that clients may present an RA-TLS
-# certificate. GetKmsKey requires it; other admin RPCs do not. To serve KMS
-# onboarding, also bind `address` to one the new KMS can reach.
-# No `[core.admin.tls.mutual]` is needed, as for `[rpc.tls]` above.
-[core.admin.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
-
-# Optional listener serving only the read-only RPCs (GetMeta,
-# GetAppEnvEncryptPubKey, GetSealedEnvPubKey) at the same paths, so the RPC
-# listener, which releases keys, can be restricted to the CVMs on its own.
-[core.readonly]
-enabled = false
-address = "0.0.0.0"
-port = 8002
-# As in [rpc].
-proxy_protocol = false
-
-[core.readonly.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
-
 [core.metrics]
 # Expose unauthenticated Prometheus metrics on /metrics.
-# Disable this if the KMS RPC listener is not protected by network policy
+# Disable this if the rpc listener is not protected by network policy
 # or another access-control layer.
 enabled = true
 
@@ -160,5 +170,3 @@ auto_bootstrap_domain = ""
 # Also serve KMS.GetKmsKey on the public RPC listener, for onboarding clients
 # that cannot reach the admin listener (KMS 0.5.x, or no source admin token).
 public_key_handover = false
-address = "0.0.0.0"
-port = 8000

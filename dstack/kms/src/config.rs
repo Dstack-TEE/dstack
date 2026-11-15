@@ -5,13 +5,69 @@
 use anyhow::{bail, Result};
 use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
-use rocket::figment::Figment;
+use rocket::figment::{providers::Serialized, Figment};
 use serde::Deserialize;
 use std::{path::PathBuf, time::Duration};
 pub const DEFAULT_CONFIG: &str = include_str!("../kms.toml");
 
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
-    load_config("kms", DEFAULT_CONFIG, config_file, false)
+    with_legacy_listeners(load_config("kms", DEFAULT_CONFIG, config_file, false))
+}
+
+/// Where older configs, and generators that must stay compatible with older
+/// KMS versions, put the settings now under `[listeners.*]`: all of `[rpc]`, and
+/// the listener keys of `[core.admin]` and `[core.onboard]`.
+const LEGACY_LISTENERS: [(&str, &str, Option<&[&str]>); 3] = [
+    ("rpc", "listeners.rpc", None),
+    (
+        "core.admin",
+        "listeners.admin",
+        Some(&["enabled", "address", "port", "tls", "proxy_protocol"]),
+    ),
+    (
+        "core.onboard",
+        "listeners.onboard",
+        Some(&["address", "port", "tls"]),
+    ),
+];
+
+/// Copy legacy listener keys to `[listeners.*]`. The defaults (`kms.toml`) use
+/// only the new names, so a legacy key comes from the operator and wins.
+fn with_legacy_listeners(mut figment: Figment) -> Figment {
+    for (legacy, listener, keys) in LEGACY_LISTENERS {
+        let Some(section) = figment.find_value(legacy).ok().and_then(|v| v.into_dict()) else {
+            continue;
+        };
+        for (key, value) in section {
+            if keys.is_none_or(|keys| keys.contains(&key.as_str())) {
+                figment = figment.merge(Serialized::default(&format!("{listener}.{key}"), value));
+            }
+        }
+    }
+    figment
+}
+
+/// The `enabled` switches of the optional listeners. Their bind settings
+/// (`address`, `port`, `tls`, `proxy_protocol`) are read by Rocket from the same
+/// `[listeners.<name>]` section.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ListenersConfig {
+    #[serde(default)]
+    pub admin: ListenerSwitch,
+    #[serde(default)]
+    pub readonly: ListenerSwitch,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ListenerSwitch {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl ListenersConfig {
+    pub fn load(figment: &Figment) -> Result<Self> {
+        Ok(figment.extract_inner("listeners")?)
+    }
 }
 
 const TEMP_CA_CERT: &str = "tmp-ca.crt";
@@ -85,22 +141,10 @@ pub(crate) struct KmsConfig {
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
     pub metrics: MetricsConfig,
-    /// Admin API listener + authentication. The admin RPCs (e.g.
-    /// `ClearImageCache`) are served here, behind the shared HTTP authenticator.
+    /// Admin API authentication. The admin RPCs (e.g. `ClearImageCache`) are
+    /// served on `[listeners.admin]`, behind the shared HTTP authenticator.
     #[serde(default)]
     pub admin: AdminConfig,
-    /// Optional listener serving only the read-only RPCs (`GetMeta` and the env
-    /// public keys), so the key-releasing listener can be restricted on its own.
-    #[serde(default)]
-    pub readonly: ReadOnlyConfig,
-}
-
-/// The listen `address`/`port`/`tls` are read from the same `[core.readonly]`
-/// section by Rocket.
-#[derive(Debug, Clone, Default, Deserialize)]
-pub(crate) struct ReadOnlyConfig {
-    #[serde(default)]
-    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,15 +153,10 @@ pub(crate) struct MetricsConfig {
     pub enabled: bool,
 }
 
-/// Admin API listener + authentication, mirroring the gateway `[core.admin]`
-/// section. The listen `address`/`port` are read from the same `[core.admin]`
-/// section by Rocket. The token travels in the `Authorization`/`X-Admin-Token`
-/// header.
+/// Admin API authentication, mirroring the gateway `[core.admin]` section. The
+/// token travels in the `Authorization`/`X-Admin-Token` header.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct AdminConfig {
-    /// Whether to serve the admin API at all.
-    #[serde(default)]
-    pub enabled: bool,
     /// Shared admin token required to call any admin RPC. Can also be supplied
     /// via `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN`. Required unless
     /// `insecure_no_auth = true`.
@@ -143,7 +182,11 @@ fn default_true() -> bool {
 /// Without the public handover, other KMS nodes can get the keys only from the
 /// admin listener over TLS. A KMS without either would strand them, so it
 /// refuses to start, in any mode.
-pub(crate) fn check_key_handover(config: &KmsConfig, figment: &Figment) -> Result<()> {
+pub(crate) fn check_key_handover(
+    config: &KmsConfig,
+    listeners: &ListenersConfig,
+    figment: &Figment,
+) -> Result<()> {
     if config.onboard.public_key_handover {
         return Ok(());
     }
@@ -154,20 +197,20 @@ pub(crate) fn check_key_handover(config: &KmsConfig, figment: &Figment) -> Resul
             .and_then(|value| value.into_string())
             .is_some_and(|value| !value.is_empty())
     };
-    let missing = if !config.admin.enabled {
-        "[core.admin] enabled = true"
-    } else if !set("core.admin.tls.key") {
-        "[core.admin.tls] key"
-    } else if !set("core.admin.tls.certs") {
-        "[core.admin.tls] certs"
+    let missing = if !listeners.admin.enabled {
+        "[listeners.admin] enabled = true"
+    } else if !set("listeners.admin.tls.key") {
+        "[listeners.admin.tls] key"
+    } else if !set("listeners.admin.tls.certs") {
+        "[listeners.admin.tls] certs"
     } else {
         return Ok(());
     };
     bail!(
         "no key handover path for onboarding other KMS nodes: {missing} is not set. \
-         Configure the admin listener with TLS ([core.admin] enabled = true, an auth_token \
-         or DSTACK_KMS_ADMIN_TOKEN, and [core.admin.tls] key and certs), or set \
-         core.onboard.public_key_handover = true"
+         Configure the admin listener with TLS ([listeners.admin] enabled = true and \
+         [listeners.admin.tls] key and certs, with an admin credential in [core.admin]), \
+         or set core.onboard.public_key_handover = true"
     )
 }
 
@@ -306,8 +349,11 @@ mod tests {
             .focus("core")
             .extract()
             .expect("kms.toml must parse into KmsConfig");
-        assert!(config.admin.enabled);
-        check_key_handover(&config, &figment).expect("the default config has a handover path");
+        let listeners = ListenersConfig::load(&figment).unwrap();
+        assert!(listeners.admin.enabled);
+        assert!(!listeners.readonly.enabled);
+        check_key_handover(&config, &listeners, &figment)
+            .expect("the default config has a handover path");
         assert!(
             config.admin.auth_token.is_empty(),
             "default admin token must be empty (fail-closed)"
@@ -322,15 +368,44 @@ mod tests {
     fn handover_check(toml: &str) -> Result<()> {
         let figment = load_config_figment(None).merge(Toml::string(toml));
         let config: KmsConfig = figment.focus("core").extract().unwrap();
-        check_key_handover(&config, &figment)
+        check_key_handover(&config, &ListenersConfig::load(&figment).unwrap(), &figment)
+    }
+
+    #[test]
+    fn legacy_listener_sections_are_still_read() {
+        let legacy = r#"
+            [rpc]
+            port = 9100
+            [rpc.tls]
+            key = "/legacy/rpc.key"
+            [core.admin]
+            enabled = false
+            port = 9101
+            auth_token = "token"
+            [core.onboard]
+            port = 9102
+        "#;
+        let figment = with_legacy_listeners(
+            Figment::from(Toml::string(DEFAULT_CONFIG)).merge(Toml::string(legacy)),
+        );
+        let get = |key: &str| figment.extract_inner::<String>(key).unwrap();
+        let port = |key: &str| figment.extract_inner::<u16>(key).unwrap();
+        assert_eq!(port("listeners.rpc.port"), 9100);
+        assert_eq!(get("listeners.rpc.tls.key"), "/legacy/rpc.key");
+        assert_eq!(get("listeners.rpc.tls.certs"), "/etc/kms/certs/rpc.crt");
+        assert_eq!(port("listeners.admin.port"), 9101);
+        assert_eq!(get("listeners.admin.address"), "127.0.0.1");
+        assert_eq!(port("listeners.onboard.port"), 9102);
+        assert!(!ListenersConfig::load(&figment).unwrap().admin.enabled);
+        assert!(figment.find_value("listeners.admin.auth_token").is_err());
     }
 
     #[test]
     fn a_serving_kms_needs_a_key_handover_path() {
         let public = "[core.onboard]\npublic_key_handover = true\n";
-        let no_admin = "[core.admin]\nenabled = false\n";
-        let no_key = "[core.admin.tls]\nkey = \"\"\n";
-        let no_certs = "[core.admin.tls]\ncerts = \"\"\n";
+        let no_admin = "[listeners.admin]\nenabled = false\n";
+        let no_key = "[listeners.admin.tls]\nkey = \"\"\n";
+        let no_certs = "[listeners.admin.tls]\ncerts = \"\"\n";
         assert!(handover_check("").is_ok());
         // onboarding and bootstrap modes are checked alike.
         let onboarding = "[core.onboard]\nenabled = true\nauto_bootstrap_domain = \"kms.test\"\n";
@@ -340,9 +415,9 @@ mod tests {
             assert!(handover_check(&format!("{public}{missing}")).is_ok());
         }
         for (toml, setting) in [
-            (no_admin, "[core.admin] enabled = true"),
-            (no_key, "[core.admin.tls] key"),
-            (no_certs, "[core.admin.tls] certs"),
+            (no_admin, "[listeners.admin] enabled = true"),
+            (no_key, "[listeners.admin.tls] key"),
+            (no_certs, "[listeners.admin.tls] certs"),
         ] {
             let err = handover_check(toml).unwrap_err().to_string();
             assert!(err.contains(setting), "{err}");

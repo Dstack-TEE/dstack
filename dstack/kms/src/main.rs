@@ -95,11 +95,9 @@ async fn run_onboard_service(kms_config: KmsConfig, figment: Figment) -> Result<
     }
 
     let state = OnboardState::new(kms_config)?;
-    let figment = figment
-        .clone()
-        .merge(Serialized::defaults(figment.find_value("core.onboard")?));
-
-    // Remove section tls
+    let figment = figment.clone().merge(Serialized::defaults(
+        figment.find_value("listeners.onboard")?,
+    ));
 
     let rocket = rocket::custom(figment)
         .mount("/", rocket::routes![index, finish, health])
@@ -179,24 +177,21 @@ async fn main() -> Result<()> {
     // before onboarding or bootstrap, so a misconfigured node fails before it
     // gets or generates root keys: the handover path, and the admin listener
     // serving it (enabled with no credential fails here).
-    config::check_key_handover(&config, &figment)?;
+    let listeners = config::ListenersConfig::load(&figment)?;
+    config::check_key_handover(&config, &listeners, &figment)?;
+    let listener_figment = |name: &str| -> Result<Figment> {
+        let value = figment.find_value(&format!("listeners.{name}"))?;
+        Ok(Figment::from(rocket::Config::default()).merge(Serialized::defaults(value)))
+    };
     let admin_config = config.admin.clone();
-    let admin_setup = if admin_config.enabled {
-        let admin_value = figment
-            .find_value("core.admin")
-            .context("core.admin section not found")?;
-        let admin_figment =
-            Figment::from(rocket::Config::default()).merge(Serialized::defaults(admin_value));
+    let admin_setup = if listeners.admin.enabled {
         let admin_fairing = admin_auth::AdminAuthFairing::from_config(&admin_config)?;
-        Some((admin_figment, admin_fairing))
+        Some((listener_figment("admin")?, admin_fairing))
     } else {
         None
     };
-    let readonly_figment = if config.readonly.enabled {
-        let value = figment
-            .find_value("core.readonly")
-            .context("core.readonly section not found")?;
-        Some(Figment::from(rocket::Config::default()).merge(Serialized::defaults(value)))
+    let readonly_figment = if listeners.readonly.enabled {
+        Some(listener_figment("readonly")?)
     } else {
         None
     };
@@ -241,7 +236,7 @@ async fn main() -> Result<()> {
     let admin_quote_verifier = QuoteVerifier::new(state.attestation_verifier());
     let figment = figment
         .clone()
-        .merge(Serialized::defaults(figment.find_value("rpc")?));
+        .merge(Serialized::defaults(figment.find_value("listeners.rpc")?));
     let mut rocket = rocket::custom(figment)
         // Verify client certificates by their attestation rather than by issuer. The
         // certificates guests and onboarding mint from the temp CA today keep working

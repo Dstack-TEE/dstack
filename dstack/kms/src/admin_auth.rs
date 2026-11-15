@@ -107,7 +107,6 @@ mod tests {
         std::env::remove_var(ENV_ADMIN_TOKEN);
         std::env::remove_var(ENV_ADMIN_TOKEN_COMPAT);
         let cfg = AdminConfig {
-            enabled: true,
             ..Default::default()
         };
         assert!(AdminAuthFairing::from_config(&cfg).is_err());
@@ -116,7 +115,6 @@ mod tests {
     #[test]
     fn insecure_no_auth_is_allowed() {
         let cfg = AdminConfig {
-            enabled: true,
             insecure_no_auth: true,
             ..Default::default()
         };
@@ -126,7 +124,6 @@ mod tests {
     #[test]
     fn a_token_hash_admits_its_token() {
         let cfg = AdminConfig {
-            enabled: true,
             auth_token_hash: hex::encode(Sha256::digest(b"secret")),
             ..Default::default()
         };
@@ -143,7 +140,6 @@ mod tests {
     #[test]
     fn configured_token_builds() {
         let cfg = AdminConfig {
-            enabled: true,
             auth_token: "secret".into(),
             ..Default::default()
         };
