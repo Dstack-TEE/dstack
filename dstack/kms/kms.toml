@@ -13,6 +13,10 @@ log_level = "info"
 [rpc]
 address = "0.0.0.0"
 port = 8000
+# Require a PROXY protocol (v1 or v2) header on every connection and log its
+# source address as the client. Enable only behind a proxy that sends one, such
+# as HAProxy with `send-proxy-v2`; connections without it are dropped.
+proxy_protocol = false
 
 [rpc.tls]
 key = "/etc/kms/certs/rpc.key"
@@ -93,6 +97,8 @@ enabled = true
 # Bind address/port for the admin listener (keep it off the public network).
 address = "127.0.0.1"
 port = 8001
+# As in [rpc].
+proxy_protocol = false
 # Shared admin token required by every admin RPC. Can also be supplied via the
 # `DSTACK_KMS_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env vars. Clients send it as
 # `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
@@ -124,6 +130,8 @@ certs = "/etc/kms/certs/rpc.crt"
 enabled = false
 address = "0.0.0.0"
 port = 8002
+# As in [rpc].
+proxy_protocol = false
 
 [core.readonly.tls]
 key = "/etc/kms/certs/rpc.key"

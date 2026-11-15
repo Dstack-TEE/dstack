@@ -18,6 +18,7 @@ dstack-build-info.workspace = true
 hex.workspace = true
 hex_fmt.workspace = true
 rocket.workspace = true
+rocket-proxy-listener.workspace = true
 serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
