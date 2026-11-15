@@ -205,6 +205,7 @@ async fn gen_debug_certs(
             csr: csr.to_vec(),
             signature,
             vm_config: vm_config_json.to_string(),
+            ..Default::default()
         })
         .await
         .context("Failed to sign certificate via KMS")?;

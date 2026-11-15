@@ -478,6 +478,7 @@ impl HostShared {
                 vm_config: self.sys_config.vm_config.clone(),
                 root_epoch: epochs.map(|(root, _)| root),
                 app_epoch: epochs.map(|(_, app)| app),
+                launch_ticket: self.sys_config.launch_ticket.clone().unwrap_or_default(),
             })
             .await
             .context("Failed to get app key")?;
@@ -749,7 +750,7 @@ impl<'a> GatewayContext<'a> {
         let cert_client = CertRequestClient::create(
             self.keys,
             self.shared.sys_config.pccs_url.as_deref(),
-            self.shared.sys_config.vm_config.clone(),
+            &self.shared.sys_config,
         )
         .await
         .context("Failed to create cert client")?;
