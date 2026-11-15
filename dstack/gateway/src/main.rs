@@ -13,6 +13,7 @@ use rocket::{
     fairing::AdHoc,
     figment::{providers::Serialized, Figment},
 };
+use rocket_proxy_listener::launch;
 use std::sync::Arc;
 use tracing::{info, warn};
 
@@ -227,7 +228,7 @@ async fn main() -> Result<()> {
         .manage(state.clone());
     let verifier = QuoteVerifier::new(attestation_verifier);
     rocket = rocket.manage(verifier);
-    let main_srv = rocket.launch();
+    let main_srv = launch(rocket);
     let admin_state = state.clone();
     let debug_state = state;
     let admin_srv = async move {
@@ -251,19 +252,18 @@ async fn main() -> Result<()> {
             admin_state
                 .lock()
                 .set_admin_shutdown(admin_rocket.shutdown());
-            admin_rocket.launch().await
+            launch(admin_rocket).await
         } else {
             std::future::pending().await
         }
     };
     let debug_srv = async move {
         if debug_config.insecure_enable_debug_rpc {
-            rocket::custom(debug_figment)
+            let debug_rocket = rocket::custom(debug_figment)
                 .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
                 .mount("/", web_routes::health_routes())
-                .manage(debug_state)
-                .launch()
-                .await
+                .manage(debug_state);
+            launch(debug_rocket).await
         } else {
             std::future::pending().await
         }

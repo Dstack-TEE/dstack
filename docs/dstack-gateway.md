@@ -173,6 +173,19 @@ The admin server is fail-closed: if it is enabled with no `auth_token` and no `h
 
 Clients authenticate by sending `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
 
+## PROXY protocol on the gateway's own listeners
+
+Behind a TCP proxy such as HAProxy, the gateway's RPC and admin listeners see
+the proxy's address. Set `proxy_protocol = true` at the top level of
+`gateway.toml` (RPC listener), in `[core.admin]` or in `[core.debug]` to read
+the client address from a PROXY protocol (v1 or v2) header; the RPC request logs
+then carry it as `remote`. With it on, the listener drops connections that send
+no header within five seconds, and trusts the header as sent, so make it
+reachable only through the proxy (HAProxy `send-proxy-v2`, plus
+`check-send-proxy` for health checks). This is separate from
+`[core.proxy] inbound_pp_enabled`, which covers the app traffic the gateway
+proxies.
+
 ## Metrics
 
 The admin server exposes Prometheus metrics at `GET /metrics`. It is part of the

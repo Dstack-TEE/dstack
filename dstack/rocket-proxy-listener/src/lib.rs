@@ -21,7 +21,7 @@ use rocket::{
     listener::{tcp::TcpListener, Bind, Connection, Endpoint, Listener},
     tls::TlsListener,
     tokio::io::{AsyncRead, AsyncWrite, ReadBuf},
-    Build, Ignite, Rocket,
+    Ignite, Phase, Rocket,
 };
 use serde::Deserialize;
 use tokio::{
@@ -40,7 +40,7 @@ const READY_QUEUE: usize = 128;
 /// Launch `rocket` on a [`ProxyListener`] when its config sets
 /// `proxy_protocol = true`, with TLS when it has a `tls` section, and on
 /// Rocket's default listener otherwise.
-pub async fn launch(rocket: Rocket<Build>) -> Result<Rocket<Ignite>, rocket::Error> {
+pub async fn launch<P: Phase>(rocket: Rocket<P>) -> Result<Rocket<Ignite>, rocket::Error> {
     #[derive(Deserialize)]
     struct Config {
         #[serde(default)]
