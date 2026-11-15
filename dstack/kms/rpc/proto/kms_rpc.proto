@@ -138,6 +138,15 @@ service KMS {
   rpc SignCert(SignCertRequest) returns (SignCertResponse);
 }
 
+// The read-only subset of the KMS service, served on the optional
+// `[core.readonly]` listener. None of these release secrets or need a client
+// certificate.
+service ReadOnly {
+  rpc GetMeta(google.protobuf.Empty) returns (GetMetaResponse);
+  rpc GetAppEnvEncryptPubKey(AppId) returns (PublicKeyResponse);
+  rpc GetSealedEnvPubKey(AppId) returns (SealedEnvPubKeyResponse);
+}
+
 // The KMS admin RPC service. Served on a separate admin listener
 // (`[core.admin]`) behind the shared HTTP authenticator, so the credential
 // travels in the `Authorization`/`X-Admin-Token` header rather than the

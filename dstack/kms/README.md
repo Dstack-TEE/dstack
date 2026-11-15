@@ -111,6 +111,26 @@ repeated requests for one app reach the backend once. Requests for random app
 IDs still pass through and, on an Ethereum backend, cost chain RPC calls; rate
 limit them per source in the reverse proxy or gateway in front of the KMS.
 
+## Read-only listener
+
+The RPC listener serves the key-releasing RPCs (`GetAppKey`, `SignCert`,
+`GetTempCaCert`, `GetKmsKey`) next to the read-only ones. To restrict it on its
+own, enable `[core.readonly]`: a second listener serving only `GetMeta`,
+`GetAppEnvEncryptPubKey` and `GetSealedEnvPubKey`, at the same `/prpc/<Method>`
+paths, so deployers, verifiers and `vmm-cli.py` can point at it unchanged. The
+RPC listener keeps serving all of them.
+
+```toml
+[core.readonly]
+enabled = true
+address = "0.0.0.0"
+port = 8002
+
+[core.readonly.tls]
+key = "/etc/kms/certs/rpc.key"
+certs = "/etc/kms/certs/rpc.crt"
+```
+
 
 ## KMS Implementation
 

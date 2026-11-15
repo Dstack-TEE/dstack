@@ -2210,6 +2210,7 @@ dependencies = [
  "dstack-types",
  "dstack-verifier",
  "fs-err",
+ "futures",
  "hex",
  "hex_fmt",
  "http-client",

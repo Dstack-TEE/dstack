@@ -89,6 +89,18 @@ pub(crate) struct KmsConfig {
     /// `ClearImageCache`) are served here, behind the shared HTTP authenticator.
     #[serde(default)]
     pub admin: AdminConfig,
+    /// Optional listener serving only the read-only RPCs (`GetMeta` and the env
+    /// public keys), so the key-releasing listener can be restricted on its own.
+    #[serde(default)]
+    pub readonly: ReadOnlyConfig,
+}
+
+/// The listen `address`/`port`/`tls` are read from the same `[core.readonly]`
+/// section by Rocket.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct ReadOnlyConfig {
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
