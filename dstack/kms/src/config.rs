@@ -11,40 +11,35 @@ use std::{path::PathBuf, time::Duration};
 pub const DEFAULT_CONFIG: &str = include_str!("../kms.toml");
 
 pub fn load_config_figment(config_file: Option<&str>) -> Figment {
-    with_legacy_listeners(load_config("kms", DEFAULT_CONFIG, config_file, false))
+    load_config("kms", DEFAULT_CONFIG, config_file, false)
 }
 
-/// Where older configs, and generators that must stay compatible with older
-/// KMS versions, put the settings now under `[listeners.*]`: all of `[rpc]`, and
-/// the listener keys of `[core.admin]` and `[core.onboard]`.
-const LEGACY_LISTENERS: [(&str, &str, Option<&[&str]>); 3] = [
-    ("rpc", "listeners.guest", None),
-    (
-        "core.admin",
-        "listeners.admin",
-        Some(&["enabled", "address", "port", "tls", "proxy_protocol"]),
-    ),
-    (
-        "core.onboard",
-        "listeners.onboard",
-        Some(&["address", "port", "tls"]),
-    ),
+/// Settings that moved to `[listeners.*]`. The defaults (`kms.toml`) have none
+/// of them, so one present was set by the operator and would otherwise be
+/// silently ignored.
+const MOVED_SETTINGS: [(&str, &str); 6] = [
+    ("rpc", "listeners.guest"),
+    ("core.admin", "listeners.admin"),
+    ("core.onboard.address", "listeners.onboard.address"),
+    ("core.onboard.port", "listeners.onboard.port"),
+    ("core.onboard.tls", "listeners.onboard.tls"),
+    ("default", "listeners.default"),
 ];
 
-/// Copy legacy listener keys to `[listeners.*]`. The defaults (`kms.toml`) use
-/// only the new names, so a legacy key comes from the operator and wins.
-fn with_legacy_listeners(mut figment: Figment) -> Figment {
-    for (legacy, listener, keys) in LEGACY_LISTENERS {
-        let Some(section) = figment.find_value(legacy).ok().and_then(|v| v.into_dict()) else {
-            continue;
-        };
-        for (key, value) in section {
-            if keys.is_none_or(|keys| keys.contains(&key.as_str())) {
-                figment = figment.merge(Serialized::default(&format!("{listener}.{key}"), value));
-            }
-        }
+/// Refuse a config that sets a moved setting.
+pub(crate) fn reject_moved_settings(figment: &Figment) -> Result<()> {
+    let moved: Vec<String> = MOVED_SETTINGS
+        .iter()
+        .filter(|(old, _)| figment.find_value(old).is_ok())
+        .map(|(old, new)| format!("{old} -> {new}"))
+        .collect();
+    if !moved.is_empty() {
+        bail!(
+            "the config sets listener settings at their old locations; move them: {}",
+            moved.join(", ")
+        );
     }
-    figment
+    Ok(())
 }
 
 /// The `enabled` switches of the optional listeners. Their bind settings
@@ -53,7 +48,7 @@ fn with_legacy_listeners(mut figment: Figment) -> Figment {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ListenersConfig {
     #[serde(default)]
-    pub admin: ListenerSwitch,
+    pub admin: AdminConfig,
     #[serde(default)]
     pub public: ListenerSwitch,
 }
@@ -159,10 +154,6 @@ pub(crate) struct KmsConfig {
     #[serde(default = "default_true")]
     pub enforce_self_authorization: bool,
     pub metrics: MetricsConfig,
-    /// Admin API authentication. The admin RPCs (e.g. `ClearImageCache`) are
-    /// served on `[listeners.admin]`, behind the shared HTTP authenticator.
-    #[serde(default)]
-    pub admin: AdminConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -171,10 +162,13 @@ pub(crate) struct MetricsConfig {
     pub enabled: bool,
 }
 
-/// Admin API authentication, mirroring the gateway `[core.admin]` section. The
-/// token travels in the `Authorization`/`X-Admin-Token` header.
+/// The admin listener, `[listeners.admin]`: whether it is served and its
+/// authentication. The token travels in the `Authorization`/`X-Admin-Token`
+/// header.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct AdminConfig {
+    #[serde(default)]
+    pub enabled: bool,
     /// Shared admin token required to call any admin RPC. Can also be supplied
     /// via `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN`. Required unless
     /// `insecure_no_auth = true`.
@@ -227,9 +221,9 @@ pub(crate) fn check_key_handover(
     };
     bail!(
         "no key handover path for onboarding other KMS nodes: {missing} is not set. \
-         Configure the admin listener with TLS ([listeners.admin] enabled = true, with tls \
-         key and certs in [listeners.admin.tls] or [listeners.default.tls] and an admin \
-         credential in [core.admin]), or set core.onboard.public_key_handover = true"
+         Configure the admin listener with TLS ([listeners.admin] enabled = true with an \
+         admin credential, and tls key and certs in [listeners.admin.tls] or \
+         [listeners.default.tls]), or set core.onboard.public_key_handover = true"
     )
 }
 
@@ -374,10 +368,10 @@ mod tests {
         check_key_handover(&config, &listeners, &figment)
             .expect("the default config has a handover path");
         assert!(
-            config.admin.auth_token.is_empty(),
+            listeners.admin.auth_token.is_empty(),
             "default admin token must be empty (fail-closed)"
         );
-        assert!(!config.admin.insecure_no_auth);
+        assert!(!listeners.admin.insecure_no_auth);
         assert!(
             !config.onboard.public_key_handover,
             "public key handover must be off by default"
@@ -391,44 +385,28 @@ mod tests {
     }
 
     #[test]
-    fn legacy_listener_sections_are_still_read() {
-        let legacy = r#"
-            [rpc]
-            port = 9100
-            [rpc.tls]
-            key = "/legacy/rpc.key"
-            [core.admin]
-            enabled = false
-            port = 9101
-            auth_token = "token"
-            [core.onboard]
-            port = 9102
-        "#;
-        let figment = with_legacy_listeners(
-            Figment::from(Toml::string(DEFAULT_CONFIG)).merge(Toml::string(legacy)),
-        );
-        let listener = |name| listener_figment(&figment, name).unwrap();
-        let guest = listener("guest");
-        assert_eq!(guest.extract_inner::<u16>("port").unwrap(), 9100);
-        assert_eq!(
-            guest.extract_inner::<String>("tls.key").unwrap(),
-            "/legacy/rpc.key"
-        );
-        assert_eq!(
-            guest.extract_inner::<String>("tls.certs").unwrap(),
-            "/etc/kms/certs/rpc.crt"
-        );
-        let admin = listener("admin");
-        assert_eq!(admin.extract_inner::<u16>("port").unwrap(), 9101);
-        assert_eq!(
-            admin.extract_inner::<String>("address").unwrap(),
-            "127.0.0.1"
-        );
-        let onboard = listener("onboard");
-        assert_eq!(onboard.extract_inner::<u16>("port").unwrap(), 9102);
-        assert!(onboard.find_value("tls").is_err());
-        assert!(!ListenersConfig::load(&figment).unwrap().admin.enabled);
-        assert!(figment.find_value("listeners.admin.auth_token").is_err());
+    fn moved_listener_settings_are_refused() {
+        reject_moved_settings(&load_config_figment(None)).expect("kms.toml uses the new names");
+        for (toml, old) in [
+            ("[rpc]\nport = 9100\n", "rpc -> listeners.guest"),
+            (
+                "[core.admin]\nport = 9101\n",
+                "core.admin -> listeners.admin",
+            ),
+            (
+                "[core.admin]\nauth_token = \"t\"\n",
+                "core.admin -> listeners.admin",
+            ),
+            ("[core.onboard]\nport = 9102\n", "core.onboard.port -> "),
+            ("[default]\nworkers = 8\n", "default -> listeners.default"),
+        ] {
+            let figment = load_config_figment(None).merge(Toml::string(toml));
+            let err = reject_moved_settings(&figment).unwrap_err().to_string();
+            assert!(err.contains(old), "{err}");
+        }
+        let onboarding = "[core.onboard]\nenabled = false\n";
+        reject_moved_settings(&load_config_figment(None).merge(Toml::string(onboarding)))
+            .expect("onboarding options stay in core");
     }
 
     #[test]

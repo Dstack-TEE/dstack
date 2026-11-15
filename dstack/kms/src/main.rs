@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
     }
 
     let figment = config::load_config_figment(args.config.as_deref());
+    config::reject_moved_settings(&figment)?;
     let config: KmsConfig = figment.focus("core").extract()?;
 
     if !config.attest_rpc_cert {
@@ -177,7 +178,7 @@ async fn main() -> Result<()> {
     // serving it (enabled with no credential fails here).
     let listeners = config::ListenersConfig::load(&figment)?;
     config::check_key_handover(&config, &listeners, &figment)?;
-    let admin_config = config.admin.clone();
+    let admin_config = listeners.admin.clone();
     let admin_setup = if listeners.admin.enabled {
         let admin_fairing = admin_auth::AdminAuthFairing::from_config(&admin_config)?;
         Some((config::listener_figment(&figment, "admin")?, admin_fairing))

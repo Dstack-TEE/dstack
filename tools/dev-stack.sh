@@ -163,15 +163,26 @@ build_cfg() {
         (umask 077 && openssl rand -hex 32 >kms-admin-token)
     fi
     cat <<EOF >kms.toml
+[listeners.default]
 log_level = "info"
 
-[rpc]
+[listeners.default.tls]
+key = "$CERTS_DIR/rpc.key"
+certs = "$CERTS_DIR/rpc.crt"
+
+[listeners.guest]
 address = "127.0.0.1"
 port = $KMS_RPC_LISTEN_PORT
 
-[rpc.tls]
-key = "$CERTS_DIR/rpc.key"
-certs = "$CERTS_DIR/rpc.crt"
+[listeners.admin]
+enabled = true
+address = "127.0.0.1"
+port = $(($BASE_PORT + 5))
+auth_token = "$(cat kms-admin-token)"
+
+[listeners.onboard]
+address = "127.0.0.1"
+port = $KMS_RPC_LISTEN_PORT
 
 [core]
 cert_dir = "$CERTS_DIR"
@@ -184,19 +195,7 @@ enabled = $VMM_ENABLE_GPU
 [core.auth_api]
 type = "dev"
 
-[core.admin]
-enabled = true
-address = "127.0.0.1"
-port = $(($BASE_PORT + 5))
-auth_token = "$(cat kms-admin-token)"
-
-[core.admin.tls]
-key = "$CERTS_DIR/rpc.key"
-certs = "$CERTS_DIR/rpc.crt"
-
 [core.onboard]
-address = "127.0.0.1"
-port = $KMS_RPC_LISTEN_PORT
 auto_bootstrap_domain = "$KMS_DOMAIN"
 EOF
 

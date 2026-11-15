@@ -4,8 +4,8 @@
 
 # Listeners. `[listeners.default]` applies to every listener unless the
 # listener's own section overrides it; it also takes Rocket settings such as
-# `workers` or `keep_alive`. Older configs put these settings in `[rpc]`,
-# `[core.admin]` and `[core.onboard]`, which are still read.
+# `workers` or `keep_alive`. The KMS refuses the older locations of these
+# settings (`[rpc]`, `[core.admin]`, `[core.onboard]`, `[default]`).
 [listeners.default]
 # Require a PROXY protocol (v1 or v2) header on every connection and log its
 # source address as the client. Enable only behind a proxy that sends one, such
@@ -25,14 +25,31 @@ address = "0.0.0.0"
 port = 8000
 
 # Operator RPCs (e.g. ClearImageCache) and the key handover to onboarding KMS
-# nodes, behind the admin credential in [core.admin]. Unless
-# core.onboard.public_key_handover = true, the KMS requires this listener with
-# TLS, so that other KMS nodes can onboard. Keep it off the public network; to
-# serve KMS onboarding, bind to an address the new KMS can reach.
+# nodes, behind the admin credential below. It fails closed: the KMS does not
+# start until auth_token (or DSTACK_KMS_ADMIN_TOKEN), auth_token_hash or
+# htpasswd_file is set. Unless core.onboard.public_key_handover = true, the KMS
+# requires this listener with TLS, so that other KMS nodes can onboard. Keep it
+# off the public network; to serve KMS onboarding, bind to an address the new
+# KMS can reach.
 [listeners.admin]
 enabled = true
 address = "127.0.0.1"
 port = 8001
+# Shared admin token required by every admin RPC. Can also be supplied via the
+# `DSTACK_KMS_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env vars. Clients send it as
+# `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
+# Required unless insecure_no_auth = true. Generate with: openssl rand -hex 32
+auth_token = ""
+# Or the token's hex SHA-256, for a config that is not secret (an app compose).
+# The hash is public there, so the token must be high-entropy random, or it can
+# be brute-forced offline: TOKEN=$(openssl rand -hex 32)
+# printf '%s' "$TOKEN" | sha256sum
+auth_token_hash = ""
+# Optional Apache bcrypt htpasswd file (create with `htpasswd -B -c file admin`).
+htpasswd_file = ""
+# Development/testing escape hatch only. Never enable this on an admin
+# interface that is reachable from the network.
+insecure_no_auth = false
 
 # For deployers and verifiers: only the read-only RPCs (GetMeta,
 # GetAppEnvEncryptPubKey, GetSealedEnvPubKey) at the same paths, so the guest
@@ -107,26 +124,6 @@ insecure_allow_external_trust_anchors = false
 cache_dir = "/usr/share/dstack/images"
 download_url = "http://localhost:8000/{OS_IMAGE_HASH}.tar.gz"
 download_timeout = "2m"
-
-# Admin API authentication, for [listeners.admin]. It fails closed: the KMS
-# does not start until auth_token (or DSTACK_KMS_ADMIN_TOKEN), auth_token_hash
-# or htpasswd_file is set.
-[core.admin]
-# Shared admin token required by every admin RPC. Can also be supplied via the
-# `DSTACK_KMS_ADMIN_TOKEN` or `ADMIN_API_TOKEN` env vars. Clients send it as
-# `Authorization: Bearer <token>` or the `X-Admin-Token: <token>` header.
-# Required unless insecure_no_auth = true. Generate with: openssl rand -hex 32
-auth_token = ""
-# Or the token's hex SHA-256, for a config that is not secret (an app compose).
-# The hash is public there, so the token must be high-entropy random, or it can
-# be brute-forced offline: TOKEN=$(openssl rand -hex 32)
-# printf '%s' "$TOKEN" | sha256sum
-auth_token_hash = ""
-# Optional Apache bcrypt htpasswd file (create with `htpasswd -B -c file admin`).
-htpasswd_file = ""
-# Development/testing escape hatch only. Never enable this on an admin
-# interface that is reachable from the network.
-insecure_no_auth = false
 
 [core.metrics]
 # Expose unauthenticated Prometheus metrics on /metrics.

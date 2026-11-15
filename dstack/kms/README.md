@@ -38,7 +38,7 @@ The KMS serves on up to four listeners, each configured in its own
 | Listener | For | Serves | On |
 |---|---|---|---|
 | `[listeners.guest]` | CVMs | All KMS RPCs, including those that release keys | Always |
-| `[listeners.admin]` | Operators, other KMS nodes | Admin RPCs and the key handover, behind `[core.admin]` auth | `enabled = true` (default) |
+| `[listeners.admin]` | Operators, other KMS nodes | Admin RPCs and the key handover, behind its admin credential | `enabled = true` (default) |
 | `[listeners.public]` | Deployers, verifiers | Only the read-only RPCs | `enabled = true` |
 | `[listeners.onboard]` | Operators | The setup page, before the KMS has keys | `[core.onboard] enabled = true` |
 
@@ -47,16 +47,17 @@ overrides: `tls`, `proxy_protocol` (see below) and Rocket settings such as
 `workers`. The onboard listener serves plain HTTP and does not inherit the
 default `tls`, nor support `proxy_protocol`.
 
-Older configs put these settings in `[rpc]` (now `guest`), `[core.admin]`
-(`enabled`, `address`, `port`, `tls`) and `[core.onboard]` (`address`, `port`,
-`tls`). Those are still read and take precedence, so configs that must also
-work with older KMS versions can keep them.
+KMS 0.6.4 and earlier read these settings from `[rpc]` (now `guest`),
+`[core.admin]` (now `admin`, credentials included), `[core.onboard]`
+(`address`, `port`, `tls`) and the top-level `[default]`. The KMS refuses to
+start on a config that still sets any of them, naming where each moved, so
+update the config together with the KMS image.
 
 ## Admin API authentication
 
 The KMS public RPCs authenticate callers by RA-TLS attestation. Operator-facing
 admin RPCs are instead served on a **separate admin
-listener** (`[listeners.admin]`, with its credentials in `[core.admin]`) behind the same shared HTTP
+listener** (`[listeners.admin]`) behind the same shared HTTP
 authenticator used by the VMM and gateway, configured identically to the gateway
 admin API, so the credential travels in the `Authorization: Bearer <token>` or
 `X-Admin-Token: <token>` header:
@@ -67,8 +68,6 @@ enabled = true
 address = "127.0.0.1"
 port = 8001
 # TLS from [listeners.default.tls], unless set in [listeners.admin.tls].
-
-[core.admin]
 # generate with: openssl rand -hex 32
 auth_token = "<token>"
 # htpasswd_file = "/etc/kms/admin.htpasswd"   # bcrypt (htpasswd -B), optional

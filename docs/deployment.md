@@ -122,7 +122,7 @@ Production KMS requires:
 
 #### Auth Server Options
 
-> **Note:** the boot-authorization webhook below (dstack-auth / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[core.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Note:** the boot-authorization webhook below (dstack-auth / auth-eth) is a *different* mechanism from the KMS admin-API authentication. The webhook allowlists which CVMs may boot and receive keys; the admin API (`[listeners.admin]` in `kms.toml`) guards operator RPCs. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 
 | Server | Use Case | Configuration |
 |--------|----------|---------------|
@@ -519,14 +519,12 @@ Every KMS needs this, or `core.onboard.public_key_handover = true`: without a ha
 enabled = true
 address = "0.0.0.0"          # reachable by the new KMS; firewall it to KMS nodes only
 port = 8001
+auth_token = "<source-admin-token>"
 
 [listeners.default.tls]
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
 # No `mutual` section: client certificates are verified by their attestation.
-
-[core.admin]
-auth_token = "<source-admin-token>"
 ```
 
 **Configure new KMS for onboarding:**
@@ -563,7 +561,7 @@ curl http://<new-kms>:9203/finish
 >
 > If you skip this, `Onboard.Onboard` or later trusted RPCs will fail with KMS authorization errors.
 
-> **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[listeners.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[listeners.admin] enabled = true` and a `[core.admin]` `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
+> **Admin authentication.** The KMS *admin* RPCs (for example `ClearImageCache`) are served on a dedicated `[listeners.admin]` listener behind the shared HTTP authenticator, just like the VMM and gateway: set `[listeners.admin] enabled = true` with an `auth_token` (or the `DSTACK_KMS_ADMIN_TOKEN` / `ADMIN_API_TOKEN` env vars), and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with neither `auth_token` nor `htpasswd_file` (and `insecure_no_auth = false`) fails closed — the KMS refuses to start. See [dstack-kms admin authentication](../dstack/kms/README.md#admin-api-authentication).
 >
 > **Source pinning.** Before sending anything secret, the new KMS requires the source's RPC certificate, at the TLS handshake, to be a `kms:rpc` leaf signed by the current root CA its own auth API reports (`rootCaPubkey` in `GET /`), so `source_url` must be `https://`. A source without the registered roots never sees the launch ticket or `source_token`; onboarding fails if the auth API reports no root CA key. Right after a root epoch is activated, a source still serving the RPC certificate of the previous one fails the handshake until it restarts; onboarding attempts do not trigger that restart, so restart the source. Upgrade the auth backend before the KMS: a custom webhook must report `rootCaPubkey`. A KMS with `auth_api.type = "dev"` registers no roots and pins nothing.
 >

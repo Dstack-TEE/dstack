@@ -123,7 +123,7 @@ The VMM, gateway, and KMS management surfaces must have authentication enabled i
 
 - VMM: set `[auth] enabled = true` with `tokens` (or `htpasswd_file`) — this guards the entire VMM HTTP/pRPC/UI surface. Never bind to a non-localhost address without it. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
 - Gateway: set `[core.admin] admin_token` (or `htpasswd_file`) and keep `insecure_no_auth = false`. Clients send `Authorization: Bearer <token>` or `X-Admin-Token`.
-- KMS: enable `[listeners.admin]` and set a `[core.admin]` `auth_token` (or `htpasswd_file`); the admin RPCs are served on that dedicated listener and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with no credential denies all admin RPCs (fail-closed).
+- KMS: enable `[listeners.admin]` with an `auth_token` (or `htpasswd_file`); the admin RPCs are served on that dedicated listener and clients send `Authorization: Bearer <token>` or `X-Admin-Token`. Enabled with no credential denies all admin RPCs (fail-closed).
 
 All three share the same HTTP authenticator: bcrypt-only htpasswd (via `htpasswd -B`), constant-time token comparison, and fail-closed behavior.
 
