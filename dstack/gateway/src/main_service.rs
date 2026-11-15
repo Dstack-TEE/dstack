@@ -21,7 +21,7 @@ use dstack_gateway_rpc::{
     QuotedPublicKey, RegisterCvmRequest, RegisterCvmResponse, WireGuardConfig, WireGuardPeer,
 };
 use or_panic::ResultOrPanic;
-use ra_rpc::{CallContext, RpcCall, VerifiedAttestation};
+use ra_rpc::{CallContext, RemoteEndpoint, RpcCall, VerifiedAttestation};
 use ra_tls::attestation::AppInfo;
 use rand::seq::IteratorRandom;
 use rinja::Template as _;
@@ -2785,6 +2785,7 @@ fn validated_agent_token(instance_id: &str, token: Option<String>) -> Option<Str
 }
 
 pub struct RpcHandler {
+    remote_endpoint: Option<RemoteEndpoint>,
     remote_app_id: Option<Vec<u8>>,
     remote_app_info: Option<AppInfo>,
     attestation: Option<VerifiedAttestation>,
@@ -2815,50 +2816,74 @@ impl GatewayRpc for RpcHandler {
                     .context("failed to decode app-info from attestation")?
             }
         };
-        self.state
-            .auth_client
-            .ensure_app_authorized(&app_info)
-            .await
-            .context("App authorization failed")?;
         let app_id = hex::encode(&app_info.app_id);
         let instance_id = hex::encode(&app_info.instance_id);
-        let compose_hash = hex::encode(&app_info.compose_hash);
-        let port_policy = request
-            .port_policy
-            .map(|policy| -> Result<PortPolicy> {
-                let ports = policy
-                    .ports
-                    .into_iter()
-                    .map(|attr| {
-                        let port = u16::try_from(attr.port)
-                            .with_context(|| format!("port {} out of u16 range", attr.port))?;
-                        if port == 0 {
-                            bail!("port must be between 1 and 65535");
-                        }
-                        Ok((port, crate::kv::PortFlags { pp: attr.pp }))
+        let result = async {
+            self.state
+                .auth_client
+                .ensure_app_authorized(&app_info)
+                .await
+                .context("App authorization failed")?;
+            let compose_hash = hex::encode(&app_info.compose_hash);
+            let port_policy = request
+                .port_policy
+                .map(|policy| -> Result<PortPolicy> {
+                    let ports = policy
+                        .ports
+                        .into_iter()
+                        .map(|attr| {
+                            let port = u16::try_from(attr.port)
+                                .with_context(|| format!("port {} out of u16 range", attr.port))?;
+                            if port == 0 {
+                                bail!("port must be between 1 and 65535");
+                            }
+                            Ok((port, crate::kv::PortFlags { pp: attr.pp }))
+                        })
+                        .collect::<Result<_>>()?;
+                    Ok(PortPolicy {
+                        ports,
+                        restrict_mode: policy.restrict_mode,
                     })
-                    .collect::<Result<_>>()?;
-                Ok(PortPolicy {
-                    ports,
-                    restrict_mode: policy.restrict_mode,
                 })
-            })
-            .transpose()?;
-        let agent_token = validated_agent_token(&instance_id, request.agent_token);
-        self.state
-            .register_cvm_async(
-                app_id,
-                instance_id,
-                request.client_public_key,
-                compose_hash,
-                ReportedCapabilities {
-                    port_policy,
-                    // A real CVM always states its intent, either way.
-                    health_check: Some(request.health_check),
-                    agent_token,
-                },
-            )
-            .await
+                .transpose()?;
+            let agent_token = validated_agent_token(&instance_id, request.agent_token);
+            self.state
+                .register_cvm_async(
+                    app_id.clone(),
+                    instance_id.clone(),
+                    request.client_public_key,
+                    compose_hash,
+                    ReportedCapabilities {
+                        port_policy,
+                        // A real CVM always states its intent, either way.
+                        health_check: Some(request.health_check),
+                        agent_token,
+                    },
+                )
+                .await
+        }
+        .await;
+        match &result {
+            Ok(response) => info!(
+                target: "dstack_gateway::audit",
+                operation = "register_cvm",
+                app_id = %app_id,
+                instance_id = %instance_id,
+                client_ip = response.wg.as_ref().map_or("", |wg| wg.client_ip.as_str()),
+                remote = ?self.remote_endpoint,
+                "cvm registered"
+            ),
+            Err(err) => warn!(
+                target: "dstack_gateway::audit",
+                operation = "register_cvm",
+                app_id = %app_id,
+                instance_id = %instance_id,
+                remote = ?self.remote_endpoint,
+                error = %ra_rpc::log_text(&format_args!("{err:#}")),
+                "cvm registration refused"
+            ),
+        }
+        result
     }
 
     async fn acme_info(self) -> Result<AcmeInfoResponse> {
@@ -2903,6 +2928,7 @@ impl RpcCall<Proxy> for RpcHandler {
 
     fn construct(context: CallContext<'_, Proxy>) -> Result<Self> {
         Ok(RpcHandler {
+            remote_endpoint: context.remote_endpoint,
             remote_app_id: context.remote_app_id,
             remote_app_info: context.remote_app_info,
             attestation: context.attestation,
