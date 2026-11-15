@@ -512,7 +512,7 @@ Additional KMS instances can onboard from an existing KMS to share the same root
 
 Every KMS needs this, or `core.onboard.public_key_handover = true`: without a handover path it refuses to start, before onboarding or bootstrap, naming the missing setting. In a public config such as an app compose, set `auth_token_hash` (the token's SHA-256) instead of `auth_token`, with a high-entropy random token (`openssl rand -hex 32`), since the hash can be brute-forced offline.
 
-`Admin.GetKmsKey` only works on an admin listener with `[listeners.admin.tls]`: without TLS the listener speaks plain HTTP, so the new KMS can present no RA-TLS certificate and the call fails with `No attestation provided`. The admin listener binds to `127.0.0.1` by default; bind it to an address the new KMS can reach and restrict access to the KMS nodes at the network layer.
+`Admin.GetKmsKey` only works on an admin listener with TLS (`[listeners.default.tls]`, or `[listeners.admin.tls]` to override it): without TLS the listener speaks plain HTTP, so the new KMS can present no RA-TLS certificate and the call fails with `No attestation provided`. The admin listener binds to `127.0.0.1` by default; bind it to an address the new KMS can reach and restrict access to the KMS nodes at the network layer.
 
 ```toml
 [listeners.admin]
@@ -520,10 +520,10 @@ enabled = true
 address = "0.0.0.0"          # reachable by the new KMS; firewall it to KMS nodes only
 port = 8001
 
-[listeners.admin.tls]
+[listeners.default.tls]
 key = "/etc/kms/certs/rpc.key"
 certs = "/etc/kms/certs/rpc.crt"
-# No [listeners.admin.tls.mutual]: client certificates are verified by their attestation.
+# No `mutual` section: client certificates are verified by their attestation.
 
 [core.admin]
 auth_token = "<source-admin-token>"
@@ -569,7 +569,7 @@ curl http://<new-kms>:9203/finish
 >
 > **Launch ticket.** When the KMS contract requires one (`setRequireKmsLaunchTicket`), pass this instance's ticket as `launch_ticket` in the onboarding request; the source checks its hash against `kmsLaunchTickets()` before handing over the keys. Remove the ticket from the contract once the instance has joined. See [launch tickets](../dstack/kms/README.md#launch-tickets).
 >
-> **Key handover.** It is served as `Admin.GetKmsKey` on the `[listeners.admin]` listener, which needs `[listeners.admin.tls]` so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request; the token is required unless the source enables the public handover. The legacy public `KMS.GetKmsKey` is off by default; set `core.onboard.public_key_handover = true` on the source only when an onboarding KMS cannot use the admin listener, such as a 0.5.x KMS or an onboarding request without `source_token`.
+> **Key handover.** It is served as `Admin.GetKmsKey` on the `[listeners.admin]` listener, which needs TLS so it can verify the onboarding KMS's RA-TLS certificate. Pass the source admin URL (`https://`) and its token (`source_token`) in the onboarding request; the token is required unless the source enables the public handover. The legacy public `KMS.GetKmsKey` is off by default; set `core.onboard.public_key_handover = true` on the source only when an onboarding KMS cannot use the admin listener, such as a 0.5.x KMS or an onboarding request without `source_token`.
 
 #### Rotating KMS Root Keys
 

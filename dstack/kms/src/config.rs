@@ -18,7 +18,7 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
 /// KMS versions, put the settings now under `[listeners.*]`: all of `[rpc]`, and
 /// the listener keys of `[core.admin]` and `[core.onboard]`.
 const LEGACY_LISTENERS: [(&str, &str, Option<&[&str]>); 3] = [
-    ("rpc", "listeners.rpc", None),
+    ("rpc", "listeners.guest", None),
     (
         "core.admin",
         "listeners.admin",
@@ -48,14 +48,14 @@ fn with_legacy_listeners(mut figment: Figment) -> Figment {
 }
 
 /// The `enabled` switches of the optional listeners. Their bind settings
-/// (`address`, `port`, `tls`, `proxy_protocol`) are read by Rocket from the same
-/// `[listeners.<name>]` section.
+/// (`address`, `port`, `tls`, `proxy_protocol`) are read by Rocket, see
+/// [`listener_figment`].
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ListenersConfig {
     #[serde(default)]
     pub admin: ListenerSwitch,
     #[serde(default)]
-    pub readonly: ListenerSwitch,
+    pub public: ListenerSwitch,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -68,6 +68,24 @@ impl ListenersConfig {
     pub fn load(figment: &Figment) -> Result<Self> {
         Ok(figment.extract_inner("listeners")?)
     }
+}
+
+/// The Rocket config of listener `name`: `[listeners.default]` overridden by
+/// `[listeners.<name>]`. The onboard listener does not inherit the default
+/// `tls`, since it runs before the KMS has certificates.
+pub(crate) fn listener_figment(figment: &Figment, name: &str) -> Result<Figment> {
+    let mut defaults = figment
+        .find_value("listeners.default")
+        .ok()
+        .and_then(|value| value.into_dict())
+        .unwrap_or_default();
+    if name == "onboard" {
+        defaults.remove("tls");
+    }
+    let listener = figment.find_value(&format!("listeners.{name}"))?;
+    Ok(Figment::from(rocket::Config::default())
+        .merge(Serialized::defaults(defaults))
+        .merge(Serialized::defaults(listener)))
 }
 
 const TEMP_CA_CERT: &str = "tmp-ca.crt";
@@ -190,8 +208,9 @@ pub(crate) fn check_key_handover(
     if config.onboard.public_key_handover {
         return Ok(());
     }
+    let admin = listener_figment(figment, "admin")?;
     let set = |key: &str| {
-        figment
+        admin
             .find_value(key)
             .ok()
             .and_then(|value| value.into_string())
@@ -199,18 +218,18 @@ pub(crate) fn check_key_handover(
     };
     let missing = if !listeners.admin.enabled {
         "[listeners.admin] enabled = true"
-    } else if !set("listeners.admin.tls.key") {
-        "[listeners.admin.tls] key"
-    } else if !set("listeners.admin.tls.certs") {
-        "[listeners.admin.tls] certs"
+    } else if !set("tls.key") {
+        "the admin listener's tls key"
+    } else if !set("tls.certs") {
+        "the admin listener's tls certs"
     } else {
         return Ok(());
     };
     bail!(
         "no key handover path for onboarding other KMS nodes: {missing} is not set. \
-         Configure the admin listener with TLS ([listeners.admin] enabled = true and \
-         [listeners.admin.tls] key and certs, with an admin credential in [core.admin]), \
-         or set core.onboard.public_key_handover = true"
+         Configure the admin listener with TLS ([listeners.admin] enabled = true, with tls \
+         key and certs in [listeners.admin.tls] or [listeners.default.tls] and an admin \
+         credential in [core.admin]), or set core.onboard.public_key_handover = true"
     )
 }
 
@@ -351,7 +370,7 @@ mod tests {
             .expect("kms.toml must parse into KmsConfig");
         let listeners = ListenersConfig::load(&figment).unwrap();
         assert!(listeners.admin.enabled);
-        assert!(!listeners.readonly.enabled);
+        assert!(!listeners.public.enabled);
         check_key_handover(&config, &listeners, &figment)
             .expect("the default config has a handover path");
         assert!(
@@ -388,14 +407,26 @@ mod tests {
         let figment = with_legacy_listeners(
             Figment::from(Toml::string(DEFAULT_CONFIG)).merge(Toml::string(legacy)),
         );
-        let get = |key: &str| figment.extract_inner::<String>(key).unwrap();
-        let port = |key: &str| figment.extract_inner::<u16>(key).unwrap();
-        assert_eq!(port("listeners.rpc.port"), 9100);
-        assert_eq!(get("listeners.rpc.tls.key"), "/legacy/rpc.key");
-        assert_eq!(get("listeners.rpc.tls.certs"), "/etc/kms/certs/rpc.crt");
-        assert_eq!(port("listeners.admin.port"), 9101);
-        assert_eq!(get("listeners.admin.address"), "127.0.0.1");
-        assert_eq!(port("listeners.onboard.port"), 9102);
+        let listener = |name| listener_figment(&figment, name).unwrap();
+        let guest = listener("guest");
+        assert_eq!(guest.extract_inner::<u16>("port").unwrap(), 9100);
+        assert_eq!(
+            guest.extract_inner::<String>("tls.key").unwrap(),
+            "/legacy/rpc.key"
+        );
+        assert_eq!(
+            guest.extract_inner::<String>("tls.certs").unwrap(),
+            "/etc/kms/certs/rpc.crt"
+        );
+        let admin = listener("admin");
+        assert_eq!(admin.extract_inner::<u16>("port").unwrap(), 9101);
+        assert_eq!(
+            admin.extract_inner::<String>("address").unwrap(),
+            "127.0.0.1"
+        );
+        let onboard = listener("onboard");
+        assert_eq!(onboard.extract_inner::<u16>("port").unwrap(), 9102);
+        assert!(onboard.find_value("tls").is_err());
         assert!(!ListenersConfig::load(&figment).unwrap().admin.enabled);
         assert!(figment.find_value("listeners.admin.auth_token").is_err());
     }
@@ -416,8 +447,8 @@ mod tests {
         }
         for (toml, setting) in [
             (no_admin, "[listeners.admin] enabled = true"),
-            (no_key, "[listeners.admin.tls] key"),
-            (no_certs, "[listeners.admin.tls] certs"),
+            (no_key, "the admin listener's tls key"),
+            (no_certs, "the admin listener's tls certs"),
         ] {
             let err = handover_check(toml).unwrap_err().to_string();
             assert!(err.contains(setting), "{err}");

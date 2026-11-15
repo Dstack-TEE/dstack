@@ -33,21 +33,24 @@ CVMs running in dstack support three boot modes:
 ## Listeners
 
 The KMS serves on up to four listeners, each configured in its own
-`[listeners.<name>]` section of `kms.toml` with `address`, `port` and an
-optional `tls` section:
+`[listeners.<name>]` section of `kms.toml` with `address` and `port`:
 
-| Listener | Serves | On |
-|---|---|---|
-| `[listeners.rpc]` | The KMS RPCs, including those that release keys | Always |
-| `[listeners.admin]` | Admin RPCs and the key handover, behind `[core.admin]` auth | `enabled = true` (default) |
-| `[listeners.readonly]` | Only the read-only RPCs | `enabled = true` |
-| `[listeners.onboard]` | The setup page, before the KMS has keys | `[core.onboard] enabled = true` |
+| Listener | For | Serves | On |
+|---|---|---|---|
+| `[listeners.guest]` | CVMs | All KMS RPCs, including those that release keys | Always |
+| `[listeners.admin]` | Operators, other KMS nodes | Admin RPCs and the key handover, behind `[core.admin]` auth | `enabled = true` (default) |
+| `[listeners.public]` | Deployers, verifiers | Only the read-only RPCs | `enabled = true` |
+| `[listeners.onboard]` | Operators | The setup page, before the KMS has keys | `[core.onboard] enabled = true` |
 
-`rpc`, `admin` and `readonly` also take `proxy_protocol` (see below). Older
-configs put these settings in `[rpc]`, `[core.admin]` (`enabled`, `address`,
-`port`, `tls`) and `[core.onboard]` (`address`, `port`, `tls`). Those are still
-read and take precedence, so configs that must also work with older KMS
-versions can keep them.
+`[listeners.default]` holds what they share, which a listener's own section
+overrides: `tls`, `proxy_protocol` (see below) and Rocket settings such as
+`workers`. The onboard listener serves plain HTTP and does not inherit the
+default `tls`, nor support `proxy_protocol`.
+
+Older configs put these settings in `[rpc]` (now `guest`), `[core.admin]`
+(`enabled`, `address`, `port`, `tls`) and `[core.onboard]` (`address`, `port`,
+`tls`). Those are still read and take precedence, so configs that must also
+work with older KMS versions can keep them.
 
 ## Admin API authentication
 
@@ -63,10 +66,7 @@ admin API, so the credential travels in the `Authorization: Bearer <token>` or
 enabled = true
 address = "127.0.0.1"
 port = 8001
-
-[listeners.admin.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
+# TLS from [listeners.default.tls], unless set in [listeners.admin.tls].
 
 [core.admin]
 # generate with: openssl rand -hex 32
@@ -82,7 +82,7 @@ config that is not secret, such as a KMS app compose. The hash is then public,
 so the token must be high-entropy random, such as `openssl rand -hex 32`: a
 weak token can be brute-forced offline from its hash. The admin
 listener fails closed: enabled with neither `auth_token` nor `htpasswd_file`
-(and `insecure_no_auth = false`) refuses to start. With `[listeners.admin.tls]` the
+(and `insecure_no_auth = false`) refuses to start. With TLS the
 listener serves HTTPS (use `http://` without it). Call it with, for example:
 
 ```bash
@@ -97,14 +97,14 @@ below, which decides whether a CVM may boot and receive keys.
 
 KMS-to-KMS onboarding calls `Admin.GetKmsKey` with a self-issued RA-TLS client
 certificate plus the source's admin bearer token, so it requires
-`[listeners.admin.tls]` and an admin address the new KMS can reach; other admin RPCs
+TLS on the admin listener and an admin address the new KMS can reach; other admin RPCs
 need no client certificate. `core.onboard.public_key_handover` is off by default; set it to
 `true` only to also serve `KMS.GetKmsKey` on the public listener for older
 clients.
 
 A KMS refuses to start serving without a handover path, so that other nodes can
 always onboard from it: unless `public_key_handover = true`, it requires
-`[listeners.admin] enabled = true` and `[listeners.admin.tls]` with `key` and `certs`, and
+`[listeners.admin] enabled = true` with a TLS `key` and `certs`, and
 the error names the missing setting. The check runs at startup, before
 onboarding or bootstrap, so a misconfigured node fails before it gets or
 generates root keys. There is no opt-out, `auth_api = "dev"` included. The default `kms.toml`
@@ -132,33 +132,29 @@ repeated requests for one app reach the backend once. Requests for random app
 IDs still pass through and, on an Ethereum backend, cost chain RPC calls; rate
 limit them per source in the reverse proxy or gateway in front of the KMS.
 
-## Read-only listener
+## Public listener
 
-The RPC listener serves the key-releasing RPCs (`GetAppKey`, `SignCert`,
-`GetTempCaCert`, `GetKmsKey`) next to the read-only ones. To restrict it on its
-own, enable `[listeners.readonly]`: a second listener serving only `GetMeta`,
-`GetAppEnvEncryptPubKey` and `GetSealedEnvPubKey`, at the same `/prpc/<Method>`
-paths, so deployers, verifiers and `vmm-cli.py` can point at it unchanged. The
-RPC listener keeps serving all of them.
+The guest listener serves the key-releasing RPCs (`GetAppKey`, `SignCert`,
+`GetTempCaCert`, `GetKmsKey`) next to the read-only ones. To restrict it to
+the CVMs, enable `[listeners.public]`: a second listener serving only
+`GetMeta`, `GetAppEnvEncryptPubKey` and `GetSealedEnvPubKey`, at the same
+`/prpc/<Method>` paths, so deployers, verifiers and `vmm-cli.py` can point at
+it unchanged. The guest listener keeps serving all of them.
 
 ```toml
-[listeners.readonly]
+[listeners.public]
 enabled = true
 address = "0.0.0.0"
 port = 8002
-
-[listeners.readonly.tls]
-key = "/etc/kms/certs/rpc.key"
-certs = "/etc/kms/certs/rpc.crt"
 ```
 
 ## PROXY protocol
 
 A proxy in front of the KMS must pass TLS through, since the KMS verifies the
 client's RA-TLS certificate itself, so the KMS sees the proxy's address rather
-than the client's. Set `proxy_protocol = true` in `[listeners.rpc]`,
-`[listeners.admin]` or `[listeners.readonly]` to read the client address from a PROXY protocol (v1 or v2)
-header instead. The request logs then carry it as `remote`. A listener with
+than the client's. Set `proxy_protocol = true` in `[listeners.default]`, or in
+one listener's section, to read the client address from a PROXY protocol (v1
+or v2) header instead. The request logs then carry it as `remote`. A listener with
 `proxy_protocol = true` drops connections that send no header within five
 seconds, so only enable it behind a proxy that sends one, such as HAProxy with
 `send-proxy-v2` (and `check-send-proxy` for health checks). The header is

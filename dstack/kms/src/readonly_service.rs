@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//! The read-only KMS RPCs, served on the `[listeners.readonly]` listener.
+//! The read-only KMS RPCs, served on the `[listeners.public]` listener.
 
 use anyhow::Result;
 use dstack_kms_rpc::{
