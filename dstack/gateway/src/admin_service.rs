@@ -26,7 +26,7 @@ use dstack_gateway_rpc::{
     StatusResponse, StoreSyncStatus, TombstoneGcConfigResponse, UpdateDnsCredentialRequest,
     WaveKvStatusResponse, ZtDomainCertStatus, ZtDomainConfig as ProtoZtDomainConfig, ZtDomainInfo,
 };
-use ra_rpc::{CallContext, RpcCall};
+use ra_rpc::{CallContext, RemoteEndpoint, RpcCall};
 use tracing::{info, warn};
 use wavekv::node::NodeStatus as WaveKvNodeStatus;
 
@@ -44,9 +44,30 @@ use crate::{
 
 pub struct AdminRpcHandler {
     state: Proxy,
+    remote_endpoint: Option<RemoteEndpoint>,
 }
 
 impl AdminRpcHandler {
+    /// Log a state-changing admin operation and its outcome to the audit target.
+    fn audit<T>(&self, operation: &str, subject: &str, result: Result<T>) -> Result<T> {
+        match &result {
+            Ok(_) => info!(
+                target: "dstack_gateway::audit",
+                operation,
+                remote = ?self.remote_endpoint,
+                "admin: {subject}"
+            ),
+            Err(err) => warn!(
+                target: "dstack_gateway::audit",
+                operation,
+                remote = ?self.remote_endpoint,
+                error = %ra_rpc::log_text(&format_args!("{err:#}")),
+                "admin refused: {subject}"
+            ),
+        }
+        result
+    }
+
     pub(crate) async fn status(self) -> Result<StatusResponse> {
         tokio::task::spawn_blocking(move || {
             self.state.refresh_state()?;
@@ -108,31 +129,47 @@ impl AdminRpcHandler {
 
 impl AdminRpc for AdminRpcHandler {
     async fn exit(self, request: ExitRequest) -> Result<()> {
-        self.state.lock().exit(request.force)
+        let subject = format!("force={}", request.force);
+        let result = async { self.state.lock().exit(request.force) }.await;
+        self.audit("exit", &subject, result)
     }
 
     async fn renew_cert(self) -> Result<RenewCertResponse> {
-        // Renew all domains with force=true
-        let renewed = self.state.renew_cert(None, true).await?;
-        Ok(RenewCertResponse { renewed })
+        let subject = "all domains, forced".to_string();
+        let result = async {
+            // Renew all domains with force=true
+            let renewed = self.state.renew_cert(None, true).await?;
+            Ok(RenewCertResponse { renewed })
+        }
+        .await;
+        self.audit("renew_cert", &subject, result)
     }
 
     async fn set_caa(self) -> Result<()> {
-        self.state.certbot.set_caa_all().await
+        let subject = "all domains".to_string();
+        let result = async { self.state.certbot.set_caa_all().await }.await;
+        self.audit("set_caa", &subject, result)
     }
 
     async fn reload_cert(self) -> Result<()> {
-        self.state.reload_all_certs_from_kvstore()
+        let subject = "all domains".to_string();
+        let result = async { self.state.reload_all_certs_from_kvstore() }.await;
+        self.audit("reload_cert", &subject, result)
     }
 
     async fn rotate_acme_credentials(self) -> Result<RotateAcmeCredentialsResponse> {
-        let outcome = self.state.rotate_acme_credentials().await?;
-        Ok(RotateAcmeCredentialsResponse {
-            account_uri: outcome.account_uri,
-            domains_updated: outcome.domains_updated.try_into().unwrap_or(u32::MAX),
-            required_dns_records: outcome.required_dns_records,
-            repin_failed_domains: outcome.repin_failed,
-        })
+        let subject = String::new();
+        let result = async {
+            let outcome = self.state.rotate_acme_credentials().await?;
+            Ok(RotateAcmeCredentialsResponse {
+                account_uri: outcome.account_uri,
+                domains_updated: outcome.domains_updated.try_into().unwrap_or(u32::MAX),
+                required_dns_records: outcome.required_dns_records,
+                repin_failed_domains: outcome.repin_failed,
+            })
+        }
+        .await;
+        self.audit("rotate_acme_credentials", &subject, result)
     }
 
     async fn status(self) -> Result<StatusResponse> {
@@ -205,27 +242,35 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_node_url(self, request: SetNodeUrlRequest) -> Result<()> {
-        let kv_store = self.state.kv_store();
-        // Writing a node's address back is the explicit re-admission
-        // decision, so it clears the removal marker the sync lockout reads.
-        if kv_store.clear_peer_removed(request.id)? {
-            info!("cleared the removal marker for node {}", request.id);
+        let subject = format!("node {} url {}", request.id, request.url);
+        let result = async {
+            let kv_store = self.state.kv_store();
+            // Writing a node's address back is the explicit re-admission
+            // decision, so it clears the removal marker the sync lockout reads.
+            if kv_store.clear_peer_removed(request.id)? {
+                info!("cleared the removal marker for node {}", request.id);
+            }
+            kv_store.register_peer_url(request.id, &request.url)?;
+            Ok(())
         }
-        kv_store.register_peer_url(request.id, &request.url)?;
-        info!("Updated peer URL: node {} -> {}", request.id, request.url);
-        Ok(())
+        .await;
+        self.audit("set_node_url", &subject, result)
     }
 
     async fn set_node_status(self, request: SetNodeStatusRequest) -> Result<()> {
-        let kv_store = self.state.kv_store();
-        let status = match request.status.as_str() {
-            "up" => NodeStatus::Up,
-            "down" => NodeStatus::Down,
-            _ => anyhow::bail!("invalid status: expected 'up' or 'down'"),
-        };
-        kv_store.set_node_status(request.id, status)?;
-        info!("Updated node status: node {} -> {:?}", request.id, status);
-        Ok(())
+        let subject = format!("node {} status {}", request.id, request.status);
+        let result = async {
+            let kv_store = self.state.kv_store();
+            let status = match request.status.as_str() {
+                "up" => NodeStatus::Up,
+                "down" => NodeStatus::Down,
+                _ => anyhow::bail!("invalid status: expected 'up' or 'down'"),
+            };
+            kv_store.set_node_status(request.id, status)?;
+            Ok(())
+        }
+        .await;
+        self.audit("set_node_status", &subject, result)
     }
 
     async fn wave_kv_status(self) -> Result<WaveKvStatusResponse> {
@@ -352,22 +397,27 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn remove_cvm(self, request: RemoveCvmRequest) -> Result<RemoveCvmResponse> {
-        let instance_id = request.instance_id.as_str();
-        // Same bound the KV import boundary puts on identifiers. Legitimate
-        // gateways never write an instance_id outside it, so this rejects only
-        // typos — and keeps the ID safe to embed in logs and KV keys.
-        crate::kv::import::validate_id("instance_id", instance_id)?;
+        let subject = format!("instance {}", request.instance_id);
+        let result = async {
+            let instance_id = request.instance_id.as_str();
+            // Same bound the KV import boundary puts on identifiers. Legitimate
+            // gateways never write an instance_id outside it, so this rejects only
+            // typos — and keeps the ID safe to embed in logs and KV keys.
+            crate::kv::import::validate_id("instance_id", instance_id)?;
 
-        let removal = self.state.remove_cvm(instance_id)?;
-        warn!(
-            "admin removed CVM {instance_id} from WaveKV and the local data plane \
-             (record existed: {}, present locally: {})",
-            removal.record_existed, removal.removed_locally
-        );
-        Ok(RemoveCvmResponse {
-            record_existed: removal.record_existed,
-            removed_locally: removal.removed_locally,
-        })
+            let removal = self.state.remove_cvm(instance_id)?;
+            warn!(
+                "admin removed CVM {instance_id} from WaveKV and the local data plane \
+                 (record existed: {}, present locally: {})",
+                removal.record_existed, removal.removed_locally
+            );
+            Ok(RemoveCvmResponse {
+                record_existed: removal.record_existed,
+                removed_locally: removal.removed_locally,
+            })
+        }
+        .await;
+        self.audit("remove_cvm", &subject, result)
     }
 
     async fn list_rejected_instances(self) -> Result<ListRejectedInstancesResponse> {
@@ -389,16 +439,21 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn remove_node(self, request: RemoveNodeRequest) -> Result<RemoveNodeResponse> {
-        let removal = self.state.remove_node(request.node_id)?;
-        warn!(
-            "admin removed node {} from WaveKV and the sync peer set \
-             (record existed: {}, was a sync peer: {})",
-            request.node_id, removal.record_existed, removal.removed_from_peer_set
-        );
-        Ok(RemoveNodeResponse {
-            record_existed: removal.record_existed,
-            removed_from_peer_set: removal.removed_from_peer_set,
-        })
+        let subject = format!("node {}", request.node_id);
+        let result = async {
+            let removal = self.state.remove_node(request.node_id)?;
+            warn!(
+                "admin removed node {} from WaveKV and the sync peer set \
+                 (record existed: {}, was a sync peer: {})",
+                request.node_id, removal.record_existed, removal.removed_from_peer_set
+            );
+            Ok(RemoveNodeResponse {
+                record_existed: removal.record_existed,
+                removed_from_peer_set: removal.removed_from_peer_set,
+            })
+        }
+        .await;
+        self.audit("remove_node", &subject, result)
     }
 
     // ==================== DNS Credential Management ====================
@@ -432,108 +487,123 @@ impl AdminRpc for AdminRpcHandler {
         self,
         request: CreateDnsCredentialRequest,
     ) -> Result<DnsCredentialInfo> {
-        let kv_store = self.state.kv_store();
+        let subject = format!("name {} provider {}", request.name, request.provider_type);
+        let result = async {
+            let kv_store = self.state.kv_store();
 
-        // Validate provider type
-        let provider = match request.provider_type.as_str() {
-            "cloudflare" => DnsProvider::Cloudflare {
-                api_token: request.cf_api_token,
-                api_url: request.cf_api_url,
-            },
-            _ => bail!("unsupported provider type: {}", request.provider_type),
-        };
+            // Validate provider type
+            let provider = match request.provider_type.as_str() {
+                "cloudflare" => DnsProvider::Cloudflare {
+                    api_token: request.cf_api_token,
+                    api_url: request.cf_api_url,
+                },
+                _ => bail!("unsupported provider type: {}", request.provider_type),
+            };
 
-        let now = now_secs();
-        let id = generate_cred_id();
-        let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
-        let max_dns_wait_secs = request.max_dns_wait.unwrap_or(60 * 5);
-        if dns_txt_ttl == 0 {
-            bail!("dns_txt_ttl must be greater than zero");
+            let now = now_secs();
+            let id = generate_cred_id();
+            let dns_txt_ttl = request.dns_txt_ttl.unwrap_or(60);
+            let max_dns_wait_secs = request.max_dns_wait.unwrap_or(60 * 5);
+            if dns_txt_ttl == 0 {
+                bail!("dns_txt_ttl must be greater than zero");
+            }
+            if max_dns_wait_secs == 0 {
+                bail!("max_dns_wait must be greater than zero");
+            }
+            let max_dns_wait = Duration::from_secs(max_dns_wait_secs.into());
+            let cred = DnsCredential {
+                id: id.clone(),
+                name: request.name,
+                provider,
+                created_at: now,
+                updated_at: now,
+                dns_txt_ttl,
+                max_dns_wait,
+            };
+
+            kv_store.save_dns_credential(&cred)?;
+
+            // Set as default if requested
+            if request.set_as_default {
+                kv_store.set_default_dns_credential_id(&id)?;
+                info!("Set DNS credential {} as default", id);
+            }
+
+            Ok(dns_cred_to_proto(cred))
         }
-        if max_dns_wait_secs == 0 {
-            bail!("max_dns_wait must be greater than zero");
-        }
-        let max_dns_wait = Duration::from_secs(max_dns_wait_secs.into());
-        let cred = DnsCredential {
-            id: id.clone(),
-            name: request.name,
-            provider,
-            created_at: now,
-            updated_at: now,
-            dns_txt_ttl,
-            max_dns_wait,
-        };
-
-        kv_store.save_dns_credential(&cred)?;
-        info!("Created DNS credential: {} ({})", cred.name, cred.id);
-
-        // Set as default if requested
-        if request.set_as_default {
-            kv_store.set_default_dns_credential_id(&id)?;
-            info!("Set DNS credential {} as default", id);
-        }
-
-        Ok(dns_cred_to_proto(cred))
+        .await;
+        self.audit("create_dns_credential", &subject, result)
     }
 
     async fn update_dns_credential(
         self,
         request: UpdateDnsCredentialRequest,
     ) -> Result<DnsCredentialInfo> {
-        let kv_store = self.state.kv_store();
+        let subject = format!("id {}", request.id);
+        let result = async {
+            let kv_store = self.state.kv_store();
 
-        let mut cred = kv_store
-            .get_dns_credential(&request.id)?
-            .context("dns credential not found")?;
+            let mut cred = kv_store
+                .get_dns_credential(&request.id)?
+                .context("dns credential not found")?;
 
-        // Update name if provided
-        if let Some(name) = request.name {
-            cred.name = name;
-        }
+            // Update name if provided
+            if let Some(name) = request.name {
+                cred.name = name;
+            }
 
-        // Update provider fields if provided
-        match &mut cred.provider {
-            DnsProvider::Cloudflare { api_token, api_url } => {
-                if let Some(new_token) = request.cf_api_token {
-                    *api_token = new_token;
-                }
-                if let Some(new_url) = request.cf_api_url {
-                    *api_url = Some(new_url);
+            // Update provider fields if provided
+            match &mut cred.provider {
+                DnsProvider::Cloudflare { api_token, api_url } => {
+                    if let Some(new_token) = request.cf_api_token {
+                        *api_token = new_token;
+                    }
+                    if let Some(new_url) = request.cf_api_url {
+                        *api_url = Some(new_url);
+                    }
                 }
             }
+
+            cred.updated_at = now_secs();
+            kv_store.save_dns_credential(&cred)?;
+            info!("Updated DNS credential: {} ({})", cred.name, cred.id);
+
+            Ok(dns_cred_to_proto(cred))
         }
-
-        cred.updated_at = now_secs();
-        kv_store.save_dns_credential(&cred)?;
-        info!("Updated DNS credential: {} ({})", cred.name, cred.id);
-
-        Ok(dns_cred_to_proto(cred))
+        .await;
+        self.audit("update_dns_credential", &subject, result)
     }
 
     async fn delete_dns_credential(self, request: DeleteDnsCredentialRequest) -> Result<()> {
-        let kv_store = self.state.kv_store();
+        let subject = format!("id {}", request.id);
+        let result = async {
+            let kv_store = self.state.kv_store();
 
-        // Check if this is the default credential
-        if let Some(default_id) = kv_store.get_default_dns_credential_id()? {
-            if default_id == request.id {
-                bail!("cannot delete the default DNS credential; set a different default first");
+            // Check if this is the default credential
+            if let Some(default_id) = kv_store.get_default_dns_credential_id()? {
+                if default_id == request.id {
+                    bail!(
+                        "cannot delete the default DNS credential; set a different default first"
+                    );
+                }
             }
-        }
 
-        // Check if any ZT-Domain configs reference this credential
-        let configs = kv_store.list_zt_domain_configs();
-        for config in configs {
-            if config.dns_cred_id.as_deref() == Some(&request.id) {
-                bail!(
-                    "cannot delete DNS credential: domain {} uses it",
-                    config.domain
-                );
+            // Check if any ZT-Domain configs reference this credential
+            let configs = kv_store.list_zt_domain_configs();
+            for config in configs {
+                if config.dns_cred_id.as_deref() == Some(&request.id) {
+                    bail!(
+                        "cannot delete DNS credential: domain {} uses it",
+                        config.domain
+                    );
+                }
             }
-        }
 
-        kv_store.delete_dns_credential(&request.id)?;
-        info!("Deleted DNS credential: {}", request.id);
-        Ok(())
+            kv_store.delete_dns_credential(&request.id)?;
+            Ok(())
+        }
+        .await;
+        self.audit("delete_dns_credential", &subject, result)
     }
 
     async fn get_default_dns_credential(self) -> Result<GetDefaultDnsCredentialResponse> {
@@ -554,16 +624,20 @@ impl AdminRpc for AdminRpcHandler {
         self,
         request: SetDefaultDnsCredentialRequest,
     ) -> Result<()> {
-        let kv_store = self.state.kv_store();
+        let subject = format!("id {}", request.id);
+        let result = async {
+            let kv_store = self.state.kv_store();
 
-        // Verify the credential exists
-        kv_store
-            .get_dns_credential(&request.id)?
-            .context("dns credential not found")?;
+            // Verify the credential exists
+            kv_store
+                .get_dns_credential(&request.id)?
+                .context("dns credential not found")?;
 
-        kv_store.set_default_dns_credential_id(&request.id)?;
-        info!("Set default DNS credential: {}", request.id);
-        Ok(())
+            kv_store.set_default_dns_credential_id(&request.id)?;
+            Ok(())
+        }
+        .await;
+        self.audit("set_default_dns_credential", &subject, result)
     }
 
     // ==================== ZT-Domain Management ====================
@@ -599,93 +673,114 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn add_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
-        let kv_store = self.state.kv_store();
-        let cert_resolver = &self.state.cert_resolver;
+        let subject = format!("domain {}", request.domain);
+        let result = async {
+            let kv_store = self.state.kv_store();
+            let cert_resolver = &self.state.cert_resolver;
 
-        // Nothing stored to preserve: an omitted challenge is the default.
-        let config = proto_to_zt_domain_config(&request, kv_store, None)?;
+            // Nothing stored to preserve: an omitted challenge is the default.
+            let config = proto_to_zt_domain_config(&request, kv_store, None)?;
 
-        // Uniqueness is checked after normalization so wildcard, case, and a
-        // trailing root dot cannot silently overwrite the same DNS name.
-        if kv_store.get_zt_domain_config(&config.domain).is_some() {
-            bail!("ZT-Domain config already exists: {}", config.domain);
+            // Uniqueness is checked after normalization so wildcard, case, and a
+            // trailing root dot cannot silently overwrite the same DNS name.
+            if kv_store.get_zt_domain_config(&config.domain).is_some() {
+                bail!("ZT-Domain config already exists: {}", config.domain);
+            }
+
+            kv_store.save_zt_domain_config(&config)?;
+
+            let records = self.state.certbot.required_dns_records(&config);
+            Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
         }
-
-        kv_store.save_zt_domain_config(&config)?;
-        info!("Added ZT-Domain config: {}", config.domain);
-
-        let records = self.state.certbot.required_dns_records(&config);
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
+        .await;
+        self.audit("add_zt_domain", &subject, result)
     }
 
     async fn update_zt_domain(self, request: ProtoZtDomainConfig) -> Result<ZtDomainInfo> {
-        let kv_store = self.state.kv_store();
-        let cert_resolver = &self.state.cert_resolver;
+        let subject = format!("domain {}", request.domain);
+        let result = async {
+            let kv_store = self.state.kv_store();
+            let cert_resolver = &self.state.cert_resolver;
 
-        // Read the stored record first: an omitted `challenge` means "leave it
-        // alone", and this is the only place its current value is known. Looked
-        // up on the normalized key rather than the caller's presentation.
-        let domain = normalize_zt_domain(&request.domain)?;
-        let stored = kv_store
-            .get_zt_domain_config(&domain)
-            .context("ZT-Domain config not found")?;
+            // Read the stored record first: an omitted `challenge` means "leave it
+            // alone", and this is the only place its current value is known. Looked
+            // up on the normalized key rather than the caller's presentation.
+            let domain = normalize_zt_domain(&request.domain)?;
+            let stored = kv_store
+                .get_zt_domain_config(&domain)
+                .context("ZT-Domain config not found")?;
 
-        let config = proto_to_zt_domain_config(&request, kv_store, Some(stored.challenge))?;
+            let config = proto_to_zt_domain_config(&request, kv_store, Some(stored.challenge))?;
 
-        kv_store.save_zt_domain_config(&config)?;
-        info!("Updated ZT-Domain config: {}", config.domain);
+            kv_store.save_zt_domain_config(&config)?;
 
-        let records = self.state.certbot.required_dns_records(&config);
-        Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
+            let records = self.state.certbot.required_dns_records(&config);
+            Ok(zt_domain_to_proto(config, kv_store, cert_resolver, records))
+        }
+        .await;
+        self.audit("update_zt_domain", &subject, result)
     }
 
     async fn delete_zt_domain(self, request: DeleteZtDomainRequest) -> Result<()> {
-        let kv_store = self.state.kv_store();
+        let subject = format!("domain {}", request.domain);
+        let result = async {
+            let kv_store = self.state.kv_store();
 
-        let domain = normalize_zt_domain(&request.domain)?;
-        // A corrupt config must still be deletable, so check for the record
-        // itself: get_zt_domain_config cannot tell missing from unreadable,
-        // and refusing would leave a corrupt record permanently stuck.
-        ensure!(
-            kv_store.zt_domain_config_exists(&domain),
-            "ZT-Domain config not found"
-        );
+            let domain = normalize_zt_domain(&request.domain)?;
+            // A corrupt config must still be deletable, so check for the record
+            // itself: get_zt_domain_config cannot tell missing from unreadable,
+            // and refusing would leave a corrupt record permanently stuck.
+            ensure!(
+                kv_store.zt_domain_config_exists(&domain),
+                "ZT-Domain config not found"
+            );
 
-        // Delete config (cert data, acme, attestations are kept for historical purposes)
-        kv_store.delete_zt_domain_config(&domain)?;
-        info!("Deleted ZT-Domain config: {domain}");
-        Ok(())
+            // Delete config (cert data, acme, attestations are kept for historical purposes)
+            kv_store.delete_zt_domain_config(&domain)?;
+            Ok(())
+        }
+        .await;
+        self.audit("delete_zt_domain", &subject, result)
     }
 
     async fn renew_zt_domain_cert(
         self,
         request: RenewZtDomainCertRequest,
     ) -> Result<RenewZtDomainCertResponse> {
-        let domain = normalize_zt_domain(&request.domain)?;
-        let certbot = &self.state.certbot;
-        let renewed = certbot
-            .try_renew(&domain, request.force)
-            .await
-            .context("certificate renewal failed")?;
+        let subject = format!("domain {} force {}", request.domain, request.force);
+        let result = async {
+            let domain = normalize_zt_domain(&request.domain)?;
+            let certbot = &self.state.certbot;
+            let renewed = certbot
+                .try_renew(&domain, request.force)
+                .await
+                .context("certificate renewal failed")?;
 
-        if renewed {
-            // Get the new certificate data for response
-            let kv_store = self.state.kv_store();
-            let cert_data = kv_store.get_cert_data(&domain);
-            let not_after = cert_data.map(|d| d.not_after).unwrap_or(0);
-            Ok(RenewZtDomainCertResponse { renewed, not_after })
-        } else {
-            Ok(RenewZtDomainCertResponse {
-                renewed: false,
-                not_after: 0,
-            })
+            if renewed {
+                // Get the new certificate data for response
+                let kv_store = self.state.kv_store();
+                let cert_data = kv_store.get_cert_data(&domain);
+                let not_after = cert_data.map(|d| d.not_after).unwrap_or(0);
+                Ok(RenewZtDomainCertResponse { renewed, not_after })
+            } else {
+                Ok(RenewZtDomainCertResponse {
+                    renewed: false,
+                    not_after: 0,
+                })
+            }
         }
+        .await;
+        self.audit("renew_zt_domain_cert", &subject, result)
     }
 
     async fn force_release_cert_lock(self, request: ForceReleaseCertLockRequest) -> Result<()> {
-        let domain = force_release_zt_domain_cert_lock(self.state.kv_store(), &request.domain)?;
-        info!("force released certificate lock for domain: {domain}");
-        Ok(())
+        let subject = format!("domain {}", request.domain);
+        let result = async {
+            let domain = force_release_zt_domain_cert_lock(self.state.kv_store(), &request.domain)?;
+            Ok(())
+        }
+        .await;
+        self.audit("force_release_cert_lock", &subject, result)
     }
 
     async fn list_cert_attestations(
@@ -726,20 +821,24 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn import_cert(self, request: ImportCertRequest) -> Result<()> {
-        let domain = normalize_zt_domain(&request.domain)?;
-        let not_after =
-            get_cert_expiry(&request.cert_pem).context("failed to read the certificate expiry")?;
-        let data = CertData {
-            cert_pem: request.cert_pem,
-            key_pem: request.key_pem,
-            not_after,
-            issued_by: self.state.kv_store().my_node_id(),
-            issued_at: now_secs(),
-        };
-        self.state.cert_resolver.update_cert(&domain, &data)?;
-        self.state.kv_store().save_cert_data(&domain, &data)?;
-        info!("imported certificate for *.{domain}");
-        Ok(())
+        let subject = format!("domain {}", request.domain);
+        let result = async {
+            let domain = normalize_zt_domain(&request.domain)?;
+            let not_after = get_cert_expiry(&request.cert_pem)
+                .context("failed to read the certificate expiry")?;
+            let data = CertData {
+                cert_pem: request.cert_pem,
+                key_pem: request.key_pem,
+                not_after,
+                issued_by: self.state.kv_store().my_node_id(),
+                issued_at: now_secs(),
+            };
+            self.state.cert_resolver.update_cert(&domain, &data)?;
+            self.state.kv_store().save_cert_data(&domain, &data)?;
+            Ok(())
+        }
+        .await;
+        self.audit("import_cert", &subject, result)
     }
 
     // ==================== Global Certbot Configuration ====================
@@ -756,18 +855,23 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_certbot_config(self, request: SetCertbotConfigRequest) -> Result<()> {
-        let kv_store = self.state.kv_store();
-        let config = merge_certbot_config(kv_store.get_certbot_config(), request)?;
-        kv_store.set_certbot_config(&config)?;
-        info!(
-            "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}, issuer_domain_name={:?}",
-            config.renew_interval,
-            config.renew_before_expiration,
-            config.renew_timeout,
-            config.acme_url,
-            config.issuer_domain_name
-        );
-        Ok(())
+        let subject = String::new();
+        let result = async {
+            let kv_store = self.state.kv_store();
+            let config = merge_certbot_config(kv_store.get_certbot_config(), request)?;
+            kv_store.set_certbot_config(&config)?;
+            info!(
+                "Updated certbot config: renew_interval={:?}, renew_before_expiration={:?}, renew_timeout={:?}, acme_url={:?}, issuer_domain_name={:?}",
+                config.renew_interval,
+                config.renew_before_expiration,
+                config.renew_timeout,
+                config.acme_url,
+                config.issuer_domain_name
+            );
+            Ok(())
+        }
+        .await;
+        self.audit("set_certbot_config", &subject, result)
     }
 
     // ==================== Tombstone GC Configuration ====================
@@ -786,32 +890,43 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_tombstone_gc_config(self, request: SetTombstoneGcConfigRequest) -> Result<()> {
-        let config = GlobalTombstoneGcConfig {
-            writes_per_collection: request.writes_per_collection,
-        };
-        self.state.kv_store().set_tombstone_gc_config(&config)?;
-        info!(
-            "updated tombstone GC config: writes_per_collection={}",
-            config.writes_per_collection
-        );
-        Ok(())
+        let subject = format!("writes_per_collection {:?}", request.writes_per_collection);
+        let result = async {
+            let config = GlobalTombstoneGcConfig {
+                writes_per_collection: request.writes_per_collection,
+            };
+            self.state.kv_store().set_tombstone_gc_config(&config)?;
+            Ok(())
+        }
+        .await;
+        self.audit("set_tombstone_gc_config", &subject, result)
     }
 
     async fn set_instance_port_policy(self, request: SetInstancePortPolicyRequest) -> Result<()> {
-        let proto = request.policy.context("port policy is required")?;
-        let policy = port_policy_from_proto(proto)?;
-        self.state
-            .lock()
-            .set_admin_port_policy(&request.instance_id, policy)
+        let subject = format!("instance {}", request.instance_id);
+        let result = async {
+            let proto = request.policy.context("port policy is required")?;
+            let policy = port_policy_from_proto(proto)?;
+            self.state
+                .lock()
+                .set_admin_port_policy(&request.instance_id, policy)
+        }
+        .await;
+        self.audit("set_instance_port_policy", &subject, result)
     }
 
     async fn clear_instance_port_policy(
         self,
         request: ClearInstancePortPolicyRequest,
     ) -> Result<()> {
-        self.state
-            .lock()
-            .clear_admin_port_policy(&request.instance_id)
+        let subject = format!("instance {}", request.instance_id);
+        let result = async {
+            self.state
+                .lock()
+                .clear_admin_port_policy(&request.instance_id)
+        }
+        .await;
+        self.audit("clear_instance_port_policy", &subject, result)
     }
 
     async fn get_instance_port_policy(
@@ -827,14 +942,19 @@ impl AdminRpc for AdminRpcHandler {
     }
 
     async fn set_instance_ready(self, request: SetInstanceReadyRequest) -> Result<()> {
-        // Absent is not false. Over the JSON transport an omitted -- or
-        // misspelled, since unknown keys are ignored -- `ready` would decode to
-        // the field's default and quietly pull the instance out of rotation,
-        // answering 200 while doing the opposite of nothing.
-        let ready = request
-            .ready
-            .context("`ready` is required: say true to put the instance back into rotation, false to take it out")?;
-        self.state.lock().set_ready(&request.instance_id, ready)
+        let subject = format!("instance {} ready {:?}", request.instance_id, request.ready);
+        let result = async {
+            // Absent is not false. Over the JSON transport an omitted -- or
+            // misspelled, since unknown keys are ignored -- `ready` would decode to
+            // the field's default and quietly pull the instance out of rotation,
+            // answering 200 while doing the opposite of nothing.
+            let ready = request
+                .ready
+                .context("`ready` is required: say true to put the instance back into rotation, false to take it out")?;
+            self.state.lock().set_ready(&request.instance_id, ready)
+        }
+        .await;
+        self.audit("set_instance_ready", &subject, result)
     }
 }
 
@@ -921,6 +1041,7 @@ impl RpcCall<Proxy> for AdminRpcHandler {
     fn construct(context: CallContext<'_, Proxy>) -> Result<Self> {
         Ok(AdminRpcHandler {
             state: context.state.clone(),
+            remote_endpoint: context.remote_endpoint,
         })
     }
 }
