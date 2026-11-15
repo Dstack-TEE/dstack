@@ -29,9 +29,11 @@ use crate::cert_store::CertResolver;
 use crate::config::{CryptoProvider, ProxyConfig, TlsVersion};
 use crate::main_service::Proxy;
 
+use super::access_log::AccessLog;
 use super::io_bridge::bridge;
 use super::port_policy::{filter_allowed_addresses, should_send_pp};
 use super::tls_passthough::connect_multiple_hosts;
+use super::DstInfo;
 
 #[pin_project::pin_project]
 struct IgnoreUnexpectedEofStream<S> {
@@ -355,10 +357,10 @@ impl Proxy {
         inbound: TcpStream,
         pp_header: ProxyHeader,
         buffer: Vec<u8>,
-        app_id: &str,
-        port: u16,
-        h2: bool,
+        dst: &DstInfo,
+        log: &mut AccessLog,
     ) -> Result<()> {
+        let (app_id, port, h2) = (dst.app_id.as_str(), dst.port, dst.is_h2);
         if app_id == "health" {
             return self.handle_health_check(inbound, buffer, port, h2).await;
         }
@@ -380,7 +382,7 @@ impl Proxy {
                 // itself worth the offload, then hand it to the kernel.
                 let tls_stream = self.tls_accept_corked(inbound, buffer, h2).await?;
                 let (mut outbound, _counter, instance_id) =
-                    self.connect_upstream(addresses, port, app_id).await?;
+                    self.connect_upstream(addresses, port, app_id, log).await?;
                 self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
                     .await?;
                 return super::adaptive_ktls::relay_with_adaptive_offload(
@@ -398,7 +400,7 @@ impl Proxy {
                 // of view, so the payload can be relayed with splice and never
                 // enters this process at all.
                 let (mut outbound, _counter, instance_id) =
-                    self.connect_upstream(addresses, port, app_id).await?;
+                    self.connect_upstream(addresses, port, app_id, log).await?;
                 self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
                     .await?;
                 let (drained, stream) = tls_stream.into_raw();
@@ -440,11 +442,11 @@ impl Proxy {
                 .await
                 .context("ktls splice error");
             }
-            self.relay_to_app(tls_stream, addresses, port, app_id, pp_header)
+            self.relay_to_app(tls_stream, addresses, port, app_id, pp_header, log)
                 .await
         } else {
             let tls_stream = self.tls_accept(inbound, buffer, h2).await?;
-            self.relay_to_app(tls_stream, addresses, port, app_id, pp_header)
+            self.relay_to_app(tls_stream, addresses, port, app_id, pp_header, log)
                 .await
         }
     }
@@ -459,15 +461,18 @@ impl Proxy {
         addresses: super::AddressGroup,
         port: u16,
         app_id: &str,
+        log: &mut AccessLog,
     ) -> Result<(TcpStream, crate::models::EnteredCounter, String)> {
         let max_connections = self.config.proxy.max_connections_per_app;
-        timeout(
+        let upstream = timeout(
             self.config.proxy.timeouts.connect,
             connect_multiple_hosts(addresses, port, max_connections, app_id),
         )
         .await
         .map_err(|_| anyhow!("connecting timeout"))?
-        .context("failed to connect to app")
+        .context("failed to connect to app")?;
+        log.instance(&upstream.2);
+        Ok(upstream)
     }
 
     /// Forward the client's address to the app when its port policy asks for it.
@@ -493,12 +498,13 @@ impl Proxy {
         port: u16,
         app_id: &str,
         pp_header: ProxyHeader,
+        log: &mut AccessLog,
     ) -> Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
         let (mut outbound, _counter, instance_id) =
-            self.connect_upstream(addresses, port, app_id).await?;
+            self.connect_upstream(addresses, port, app_id, log).await?;
         self.send_pp_header(&mut outbound, &instance_id, port, pp_header)
             .await?;
         bridge(

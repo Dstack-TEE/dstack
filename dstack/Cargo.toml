@@ -144,7 +144,7 @@ fs-err = "3.1.0"
 fuser = "0.16.0"
 path-absolutize = "3.1.1"
 futures = "0.3.31"
-libc = "0.2.171"
+libc = "0.2.189"
 log = "0.4.26"
 moka = { version = "0.12.15", default-features = false, features = ["sync"] }
 notify = "8.0.0"
