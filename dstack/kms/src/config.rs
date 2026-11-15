@@ -17,10 +17,9 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
 /// Settings that moved to `[listeners.*]`. The defaults (`kms.toml`) have none
 /// of them, so one present was set by the operator and would otherwise be
 /// silently ignored.
-const MOVED_SETTINGS: [(&str, &str); 7] = [
+const MOVED_SETTINGS: [(&str, &str); 6] = [
     ("rpc", "listeners.guest"),
     ("core.admin", "listeners.admin"),
-    ("core.readonly", "listeners.public"),
     ("core.onboard.address", "listeners.onboard.address"),
     ("core.onboard.port", "listeners.onboard.port"),
     ("core.onboard.tls", "listeners.onboard.tls"),
@@ -416,10 +415,6 @@ mod tests {
             ),
             ("[core.onboard]\nport = 9102\n", "core.onboard.port -> "),
             ("[default]\nworkers = 8\n", "default -> listeners.default"),
-            (
-                "[core.readonly]\nenabled = true\n",
-                "core.readonly -> listeners.public",
-            ),
         ] {
             let figment = load_config_figment(None).merge(Toml::string(toml));
             let err = reject_moved_settings(&figment).unwrap_err().to_string();
