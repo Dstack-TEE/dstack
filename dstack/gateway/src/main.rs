@@ -9,10 +9,7 @@ use dstack_guest_agent_rpc::v0::{dstack_guest_client::DstackGuestClient, GetTlsK
 use http_client::prpc::PrpcClient;
 use ra_rpc::{prpc_routes as prpc, rocket_helper::QuoteVerifier};
 use ra_tls::attestation::AttestationVerifier;
-use rocket::{
-    fairing::AdHoc,
-    figment::{providers::Serialized, Figment},
-};
+use rocket::fairing::AdHoc;
 use rocket_proxy_listener::launch;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -133,15 +130,18 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
     let figment = config::load_config_figment(args.config.as_deref());
+    config::reject_moved_settings(&figment)?;
 
     let mut config = figment.focus("core").extract::<Config>()?;
+    let listeners = config::ListenersConfig::load(&figment)?;
+    let guest_figment = config::listener_figment(&figment, "guest")?;
     // Validate node_id
     if config.sync.enabled && config.sync.node_id == 0 {
         anyhow::bail!("node_id must be greater than 0");
     }
-    if config.debug.insecure_localhost_backend {
+    if config.proxy.insecure_localhost_backend {
         warn!(
-            "core.debug.insecure_localhost_backend = true; the app address \"localhost\" now \
+            "core.proxy.insecure_localhost_backend = true; the app address \"localhost\" now \
              resolves to 127.0.0.1 on this host. App addresses also come from the \
              _dstack-app-address TXT record of arbitrary custom domains, so any DNS zone owner \
              can reach this host's loopback on a port of their choosing, bypassing port_policy. \
@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
 
     config::setup_wireguard(&config.wg)?;
 
-    let tls_config = figment
+    let tls_config = guest_figment
         .focus("tls")
         .extract::<TlsConfig>()
         .context("Failed to extract tls config")?;
@@ -181,13 +181,13 @@ async fn main() -> Result<()> {
         AttestationVerifier::load(&config.attestation)
             .context("failed to load attestation verifier")?,
     );
-    let admin_auth = if config.admin.enabled {
-        Some(admin_auth::AdminAuthFairing::from_config(&config.admin)?)
+    let admin_auth = if listeners.admin.enabled {
+        Some(admin_auth::AdminAuthFairing::from_config(&listeners.admin)?)
     } else {
         None
     };
-    let admin_insecure = config.admin.insecure_no_auth;
-    let debug_config = config.debug.clone();
+    let admin_insecure = listeners.admin.insecure_no_auth;
+    let debug_enabled = listeners.debug.enabled;
     let state = Proxy::new(ProxyOptions {
         config,
         my_app_id,
@@ -200,22 +200,10 @@ async fn main() -> Result<()> {
 
     proxy::start(proxy_config, state.clone()).context("failed to start the proxy")?;
 
-    let admin_value = figment
-        .find_value("core.admin")
-        .context("admin section not found")?;
-    let debug_value = figment
-        .find_value("core.debug")
-        .context("debug section not found")?;
+    let admin_figment = config::listener_figment(&figment, "admin")?;
+    let debug_figment = config::listener_figment(&figment, "debug")?;
 
-    let admin_figment = Figment::new()
-        .merge(rocket::Config::default())
-        .merge(Serialized::defaults(admin_value));
-
-    let debug_figment = Figment::new()
-        .merge(rocket::Config::default())
-        .merge(Serialized::defaults(debug_value));
-
-    let mut rocket = rocket::custom(figment)
+    let mut rocket = rocket::custom(guest_figment)
         .mount("/prpc", prpc!(Proxy, RpcHandler, trim: "Tproxy."))
         .mount("/", web_routes::health_routes())
         // Mount WaveKV sync endpoint (requires mTLS gateway auth)
@@ -258,7 +246,7 @@ async fn main() -> Result<()> {
         }
     };
     let debug_srv = async move {
-        if debug_config.insecure_enable_debug_rpc {
+        if debug_enabled {
             let debug_rocket = rocket::custom(debug_figment)
                 .mount("/prpc", prpc!(Proxy, DebugRpcHandler, trim: "Debug."))
                 .mount("/", web_routes::health_routes())

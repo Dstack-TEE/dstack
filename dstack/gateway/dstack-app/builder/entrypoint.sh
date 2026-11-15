@@ -63,17 +63,22 @@ echo "RPC_DOMAIN: $RPC_DOMAIN"
 
 # Create gateway.toml configuration
 cat >$CONFIG_PATH <<EOF
-keep_alive = 10
-log_level = "info"
+[listeners.guest]
 address = "0.0.0.0:8000"
 
-[tls]
+[listeners.guest.tls]
 key = "$CERTS_DIR/gateway-rpc.key"
 certs = "$CERTS_DIR/gateway-rpc.cert"
 
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "$CERTS_DIR/gateway-ca.cert"
 mandatory = false
+
+[listeners.admin]
+enabled = true
+address = "${ADMIN_LISTEN_ADDR:-0.0.0.0}"
+port = ${ADMIN_LISTEN_PORT:-8001}
+auth_token = "${ADMIN_API_TOKEN}"
 
 [core]
 set_ulimit = true
@@ -90,12 +95,6 @@ data_dir = "$DATA_DIR"
 persist_interval = "${SYNC_PERSIST_INTERVAL:-5m}"
 sync_connections_enabled = ${SYNC_CONNECTIONS_ENABLED:-true}
 sync_connections_interval = "${SYNC_CONNECTIONS_INTERVAL:-30s}"
-
-[core.admin]
-enabled = true
-address = "${ADMIN_LISTEN_ADDR:-0.0.0.0}"
-port = ${ADMIN_LISTEN_PORT:-8001}
-auth_token = "${ADMIN_API_TOKEN}"
 
 [core.wg]
 public_key = "$PUBLIC_KEY"

@@ -10,6 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 figment = { workspace = true, features = ["json", "toml"] }
 rocket.workspace = true
 tracing.workspace = true

@@ -227,6 +227,19 @@ pub struct ProxyConfig {
     pub connection_rebalance: bool,
     pub app_address_ns_prefix: String,
     pub app_address_ns_compat: bool,
+    /// Let the app-address `localhost` resolve to 127.0.0.1, so a hostname can
+    /// be routed to a service on the gateway host itself.
+    ///
+    /// This carries the `insecure_` prefix because the app address is not only
+    /// read from the platform's own `<id>.<base_domain>` grammar: it also comes
+    /// from the `_dstack-app-address` TXT record of an arbitrary custom domain.
+    /// With this on, anyone who controls any DNS zone can point the gateway at
+    /// its own loopback -- where the admin and debug listeners bind precisely
+    /// because being unreachable is their access control -- and pick the port,
+    /// since the `localhost` shortcut is not a registered instance and so
+    /// bypasses `port_policy` entirely.
+    #[serde(default)]
+    pub insecure_localhost_backend: bool,
     /// Dedicated DNS servers for app-address TXT lookups.
     /// The system resolver is used when this list is empty.
     #[serde(default)]
@@ -621,31 +634,8 @@ pub struct Config {
     pub recycle: RecycleConfig,
     pub set_ulimit: bool,
     pub rpc_domain: String,
-    pub admin: AdminConfig,
-    /// Debug server configuration (separate port for debug RPCs)
-    pub debug: DebugConfig,
     pub sync: SyncConfig,
     pub auth: AuthConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct DebugConfig {
-    /// Enable debug server
-    #[serde(default)]
-    pub insecure_enable_debug_rpc: bool,
-    /// Let the app-address `localhost` resolve to 127.0.0.1, so a hostname can
-    /// be routed to a service on the gateway host itself.
-    ///
-    /// This lives under `debug` and carries the `insecure_` prefix because the
-    /// app address is not only read from the platform's own `<id>.<base_domain>`
-    /// grammar: it also comes from the `_dstack-app-address` TXT record of an
-    /// arbitrary custom domain. With this on, anyone who controls any DNS zone
-    /// can point the gateway at its own loopback -- where the admin and debug
-    /// listeners bind precisely because being unreachable is their access
-    /// control -- and pick the port, since the `localhost` shortcut is not a
-    /// registered instance and so bypasses `port_policy` entirely.
-    #[serde(default)]
-    pub insecure_localhost_backend: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -695,6 +685,29 @@ impl Config {
     }
 }
 
+/// The optional listeners. Their bind settings (`address`, `tls`,
+/// `proxy_protocol`) are read by Rocket, see [`listener_figment`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListenersConfig {
+    pub admin: AdminConfig,
+    pub debug: DebugConfig,
+}
+
+impl ListenersConfig {
+    pub fn load(figment: &Figment) -> Result<Self> {
+        Ok(figment.extract_inner("listeners")?)
+    }
+}
+
+/// `[listeners.debug]`: unauthenticated debug RPCs, for development only.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DebugConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// `[listeners.admin]`: whether the admin listener is served, and its
+/// authentication.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminConfig {
     pub enabled: bool,
@@ -732,6 +745,34 @@ pub fn load_config_figment(config_file: Option<&str>) -> Figment {
     load_config("gateway", DEFAULT_CONFIG, config_file, false)
 }
 
+/// Settings that moved to `[listeners.*]` or `[core.proxy]`. Other top-level
+/// keys of a config file move to `[listeners.default]`.
+const MOVED_SETTINGS: [(&str, &str); 6] = [
+    ("address", "listeners.guest.address"),
+    ("port", "listeners.guest.port"),
+    ("tls", "listeners.guest.tls"),
+    ("core.admin", "listeners.admin"),
+    (
+        "core.debug.insecure_localhost_backend",
+        "core.proxy.insecure_localhost_backend",
+    ),
+    (
+        "core.debug",
+        "listeners.debug (insecure_enable_debug_rpc is now enabled)",
+    ),
+];
+
+/// Refuse a config that sets a moved setting.
+pub fn reject_moved_settings(figment: &Figment) -> Result<()> {
+    load_config::reject_moved_settings(figment, &MOVED_SETTINGS)
+}
+
+/// The Rocket config of listener `name`: `[listeners.default]` overridden by
+/// `[listeners.<name>]`.
+pub fn listener_figment(figment: &Figment, name: &str) -> Result<Figment> {
+    load_config::listener_figment(figment, name, &[])
+}
+
 pub fn setup_wireguard(config: &WgConfig) -> Result<()> {
     config.validate().context("Invalid wireguard config")?;
 
@@ -763,6 +804,33 @@ mod tests {
     use super::*;
     use rocket::figment::providers::{Format, Toml};
     use std::str::FromStr;
+
+    #[test]
+    fn moved_listener_settings_are_refused() {
+        let defaults = load_config_figment(None);
+        reject_moved_settings(&defaults).expect("gateway.toml uses the new names");
+        let listeners = ListenersConfig::load(&defaults).unwrap();
+        assert!(!listeners.admin.enabled && !listeners.debug.enabled);
+        for (toml, moved) in [
+            ("[tls]\nkey = \"k\"\n", "tls -> listeners.guest.tls"),
+            (
+                "[core.admin]\nenabled = true\n",
+                "core.admin -> listeners.admin",
+            ),
+            (
+                "[core.debug]\ninsecure_localhost_backend = true\n",
+                "-> core.proxy.insecure_localhost_backend",
+            ),
+            (
+                "proxy_protocol = true\n",
+                "-> listeners.default.proxy_protocol",
+            ),
+        ] {
+            let figment = load_config_figment(None).merge(Toml::string(toml));
+            let err = reject_moved_settings(&figment).unwrap_err().to_string();
+            assert!(err.contains(moved), "{err}");
+        }
+    }
 
     #[test]
     fn admin_auth_token_reads_new_and_legacy_keys() {

@@ -63,10 +63,10 @@ When a CVM starts, it registers with one of the Gateways. The Gateway cluster au
 Production security configuration example:
 
 ```toml
-[core.debug]
-insecure_enable_debug_rpc = false  # Disable Debug port
+[listeners.debug]
+enabled = false  # Disable Debug port
 
-[core.admin]
+[listeners.admin]
 enabled = true
 address = "unix:/run/dstack/admin.sock"  # Use Unix Domain Socket
 ```
@@ -219,28 +219,31 @@ node loses its store while retaining its identity.
 gateway-1.toml:
 
 ```toml
+[listeners.default]
 log_level = "info"
+
+[listeners.guest]
 address = "0.0.0.0"
 port = 9012
 
-[tls]
+[listeners.guest.tls]
 key = "/var/lib/gateway/certs/gateway-rpc.key"
 certs = "/var/lib/gateway/certs/gateway-rpc.cert"
 
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "/var/lib/gateway/certs/gateway-ca.cert"
 mandatory = false
 
 [core]
 rpc_domain = "rpc.gateway-1.demo.dstack.org"
 
-[core.admin]
+[listeners.admin]
 enabled = true
 port = 9016
 address = "0.0.0.0"
 
-[core.debug]
-insecure_enable_debug_rpc = true
+[listeners.debug]
+enabled = true
 port = 9015
 address = "0.0.0.0"
 
@@ -272,15 +275,18 @@ listen_port = 9014
 gateway-2.toml:
 
 ```toml
+[listeners.default]
 log_level = "info"
+
+[listeners.guest]
 address = "0.0.0.0"
 port = 9012
 
-[tls]
+[listeners.guest.tls]
 key = "/var/lib/gateway/certs/gateway-rpc.key"
 certs = "/var/lib/gateway/certs/gateway-rpc.cert"
 
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "/var/lib/gateway/certs/gateway-ca.cert"
 mandatory = false
 
@@ -332,7 +338,7 @@ Important:
 
 ### 2.8 Verify Cluster Sync
 
-The admin API requires a bearer token (see `core.admin.auth_token` in `gateway.toml`,
+The admin API requires a bearer token (see `listeners.admin.auth_token` in `gateway.toml`,
 or the `ADMIN_API_TOKEN` env injected by `deploy-to-vmm.sh`). Export it once:
 
 ```bash

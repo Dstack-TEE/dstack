@@ -5,7 +5,7 @@
 use anyhow::{bail, Result};
 use dstack_attest::attestation::AttestationVerifierConfig;
 use load_config::load_config;
-use rocket::figment::{providers::Serialized, Figment, Profile, Provider, Source};
+use rocket::figment::Figment;
 use serde::Deserialize;
 use std::{path::PathBuf, time::Duration};
 pub const DEFAULT_CONFIG: &str = include_str!("../kms.toml");
@@ -29,33 +29,7 @@ const MOVED_SETTINGS: [(&str, &str); 6] = [
 /// Refuse a config that sets a moved setting, including a Rocket setting at the
 /// top level of a config file, which the old guest and onboard listeners read.
 pub(crate) fn reject_moved_settings(figment: &Figment) -> Result<()> {
-    let mut moved: Vec<String> = MOVED_SETTINGS
-        .iter()
-        .filter(|(old, _)| figment.find_value(old).is_ok())
-        .map(|(old, new)| format!("{old} -> {new}"))
-        .collect();
-    let top_level = figment
-        .data()?
-        .remove(&Profile::Default)
-        .unwrap_or_default();
-    moved.extend(
-        top_level
-            .keys()
-            .filter(|key| !["core", "listeners", "rpc", "default"].contains(&key.as_str()))
-            .filter(|key| {
-                figment
-                    .find_metadata(key)
-                    .is_some_and(|meta| matches!(meta.source, Some(Source::File(_))))
-            })
-            .map(|key| format!("{key} -> listeners.default.{key}")),
-    );
-    if !moved.is_empty() {
-        bail!(
-            "the config sets listener settings at their old locations; move them: {}",
-            moved.join(", ")
-        );
-    }
-    Ok(())
+    load_config::reject_moved_settings(figment, &MOVED_SETTINGS)
 }
 
 /// The `enabled` switches of the optional listeners. Their bind settings
@@ -81,22 +55,11 @@ impl ListenersConfig {
     }
 }
 
-/// The Rocket config of listener `name`: `[listeners.default]` overridden by
-/// `[listeners.<name>]`. The onboard listener does not inherit the default
-/// `tls`, since it runs before the KMS has certificates.
+/// The Rocket config of listener `name`. The onboard listener does not inherit
+/// the default `tls`, since it runs before the KMS has certificates.
 pub(crate) fn listener_figment(figment: &Figment, name: &str) -> Result<Figment> {
-    let mut defaults = figment
-        .find_value("listeners.default")
-        .ok()
-        .and_then(|value| value.into_dict())
-        .unwrap_or_default();
-    if name == "onboard" {
-        defaults.remove("tls");
-    }
-    let listener = figment.find_value(&format!("listeners.{name}"))?;
-    Ok(Figment::from(rocket::Config::default())
-        .merge(Serialized::defaults(defaults))
-        .merge(Serialized::defaults(listener)))
+    let uninherited: &[&str] = if name == "onboard" { &["tls"] } else { &[] };
+    load_config::listener_figment(figment, name, uninherited)
 }
 
 const TEMP_CA_CERT: &str = "tmp-ca.crt";

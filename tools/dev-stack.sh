@@ -201,15 +201,15 @@ EOF
 
     # dstack-gateway
     cat <<EOF >gateway.toml
-log_level = "info"
+[listeners.guest]
 address = "127.0.0.1"
 port = $GATEWAY_RPC_LISTEN_PORT
 
-[tls]
+[listeners.guest.tls]
 key = "$CERTS_DIR/gateway-rpc.key"
 certs = "$CERTS_DIR/gateway-rpc.cert"
 
-[tls.mutual]
+[listeners.guest.tls.mutual]
 ca_certs = "$CERTS_DIR/gateway-ca.cert"
 mandatory = false
 
